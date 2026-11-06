@@ -32,7 +32,8 @@ async function pageNotes() {
       <button type="button" role="tab" data-review="pending" aria-selected="false">Pending <span class="meet-pending-n" id="meet-pending-count"></span></button>
       <button type="button" role="tab" data-review="dismissed" aria-selected="false">Dismissed</button></div>
       <div class="meet-sources" id="meet-sources" hidden></div>
-      <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac">Get Tico Recorder</a>
+      <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac" hidden>Get Tico Recorder</a>
+      <a class="linkish" id="meet-recorder-update" href="${MEET_RECORDER_DMG}" hidden>Recorder update available</a>
       <button class="linkish" type="button" id="meet-settings">Settings</button></div>
     <p class="sr-only" id="mg-live" aria-live="polite"></p>
     <div class="meet-review-help muted" id="meet-review-help" hidden></div>
@@ -202,13 +203,18 @@ async function meetSettingsOpen(state) {
 // Tico Recorder for Mac: the newest release's disk image.
 const MEET_RECORDER_DMG = 'https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg';
 // In the Mac app with Tico Recorder installed, Record opens the Recorder on this org instead (app/src/recorder.rs).
-// A browser can't tell, so it keeps the download.
+// Elsewhere the download shows until Tico has seen one of the person's copies lately (backend/recorder_installs.py),
+// and one quiet link says when the copy they used last is older than the newest release.
 async function meetRecorderLink() {
-  if (!nativeHas('openRecorder')) return;
-  let installed = false;
-  try { installed = await nativeHandler('hasRecorder')?.postMessage(null) === true; } catch {}
-  const link = $('#meet-recorder');
-  if (!installed || !link) return;
+  const hasRecorder = async () => {
+    if (!nativeHas('openRecorder')) return false;
+    try { return await nativeHandler('hasRecorder')?.postMessage(null) === true; } catch { return false; }
+  };
+  const [installed, mine] = await Promise.all([hasRecorder(), get('/v2/meetings/recorder').catch(() => null)]);
+  const link = $('#meet-recorder'), update = $('#meet-recorder-update');
+  if (!link) return;
+  if (update) update.hidden = !mine?.update_available;
+  if (!installed) { link.hidden = !!mine?.recent; return; }
   const button = document.createElement('button');
   Object.assign(button, {type: 'button', className: 'linkish', id: 'meet-recorder', textContent: 'Record'});
   button.onclick = () => { try { Promise.resolve(nativeHandler('openRecorder')?.postMessage(null)).catch(() => {}); } catch {} };
@@ -255,7 +261,7 @@ function meetTile(state, source) {
   const st = mine || (known ? meetSourceState(row, source.id) : {key: '', word: ''});
   const when = mine ? (mine.when ? ago(mine.when) : '') : st.key === 'on' ? ago(row.last_import || row.last_succeeded_at) : '';
   const label = `${source.name}: ${st.word || 'Connect'}${when ? (mine ? ', synced ' : ', last import ') + when : ''}`;
-  const attrs = source.id === 'close' ? `href="${INTEGRATIONS}/close-crm"` : `type="button" data-msrc="${esc(source.id)}"${S.me?.role === 'owner' || account ? '' : ' disabled title="The owner connects sources"'}`;
+  const attrs = source.id === 'close' ? `href="#/tools/close-crm"` : `type="button" data-msrc="${esc(source.id)}"${S.me?.role === 'owner' || account ? '' : ' disabled title="The owner connects sources"'}`;
   return `<${source.id === 'close' ? 'a' : 'button'} class="meet-tile big" data-state="${st.key}" ${attrs} aria-label="${esc(label)}">
       ${meetLogo(source.id, 40)}<span class="mt-text"><b>${esc(source.name)}</b><span class="mt-status">${st.key && st.key !== 'off' ? '<i class="dot" aria-hidden="true"></i>' : ''}${esc(st.word)}${when ? ` <span class="mt-when">${esc(when)}</span>` : ''}</span></span></${source.id === 'close' ? 'a' : 'button'}>`;
 }

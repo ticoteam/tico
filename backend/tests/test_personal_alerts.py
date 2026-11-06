@@ -367,7 +367,7 @@ def test_private_legal_alert_audit_is_recipient_only_and_keeps_task_provenance(a
         assert not task_privacy.event_readable(c, ("human:ben", "human:ana"), event)
     # Even a reader of the task cannot read someone else's alert activity.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET guest='human:ana' WHERE id=?", (task["id"],))
+        c.execute("UPDATE tasks SET readers=json_array('human:ana') WHERE id=?", (task["id"],))
     assert post(api, "sql", {"sql": query})["rows"] == []
     assert post(api, "sql", {"sql": "SELECT id FROM events WHERE action='alerts.verified'"})["rows"] == []
 
@@ -378,7 +378,7 @@ def test_recent_alerts_filter_all_non_test_states_after_task_access_is_revoked(a
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "human:ana", "Private legal filing", "Private to Ana.", "human:ana",
                              private=True, lint=False, deduplicate=False)
-        c.execute("UPDATE tasks SET guest='human:ben' WHERE id=?", (task["id"],))
+        c.execute("UPDATE tasks SET readers=json_array('human:ben') WHERE id=?", (task["id"],))
         A.legal_mail(c, api.app.state.auth, task["id"], "private-letter")
         alert = c.execute("SELECT id FROM personal_alerts WHERE person_id='ben'").fetchone()[0]
         for state in ("pending", "sending", "accepted", "canceled", "failed"):
@@ -387,7 +387,7 @@ def test_recent_alerts_filter_all_non_test_states_after_task_access_is_revoked(a
         test = A.enqueue(c, "ben", "test", "", "test:visible")
     assert len(get(api, "alerts/me", "ben-test")["recent"]) == 7
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET guest=NULL WHERE id=?", (task["id"],))
+        c.execute("UPDATE tasks SET readers=NULL WHERE id=?", (task["id"],))
     assert api.app.state.personal_alerts.dispatch(alert)["status"] == "canceled"
     recent = get(api, "alerts/me", "ben-test")["recent"]
     assert [row["id"] for row in recent] == [test]

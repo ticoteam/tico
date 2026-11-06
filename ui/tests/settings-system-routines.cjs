@@ -30,7 +30,7 @@ function system(role) {
     job('due_reminders', 'Due reminders', {schedule: 'Every 10 seconds', group: 'reminders', when: ['every 10 seconds'], then: ['tell a bot when one of its tasks reaches its due time']}),
     job('approval_expiry', 'Approval expiry', {group: 'reminders', then: ['take approvals and asks nobody will act on out of Needs you']}),
     job('stall_checks', 'Stall checks', {needed: true, schedule: 'Every minute', when: ['every minute']}),
-    job('topic_fresh', 'Start fresh when the topic changes', {switch: true, can_change: admin, on: false, records: false, group: 'chat', schedule: 'When it happens',
+    job('topic_fresh', 'Start fresh when the topic changes', {switch: true, can_change: admin, on: false, group: 'chat', schedule: 'When it happens',
       when: ['a message in a direct chat changes the topic'], then: ['start a fresh session, like Clear']}),
   ];
   jobs.push(job('task-rule-close-after-done', 'Close 24h after done', {kind: 'task_rule', group: 'task_rules', switch: true, on: true, can_change: role !== 'member', preset: '15m', presets: ALL, department: {id: 'engineering', name: 'Engineering', in_chart: true}, triggers: [{key: 'done_untouched', hours: 24}], actions: ['close'], when: ['a task has been done and untouched for 24 hours'], then: ['close it']}));

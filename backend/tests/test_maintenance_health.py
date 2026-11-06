@@ -1,10 +1,9 @@
 """Check health (backend/maintenance_steps/check_health.py) and the Tico bug path (backend/maintenance_health.py).
 
-Each run reads the code checks, the production checks, the Health page's warn and bad checks and the mail asks, and files
+Each run reads the code checks, the production checks, the Health page's warn and bad checks, and files
 what they find as the tags say: an urgent problem at once, a noisy one on its second run. One BotOps task per problem however
 many computers have it: a repeat adds to its count, a problem that clears gets a cleared comment that wakes BotOps, and a task
-BotOps closed is opened again when the problem returns. A mail ask gets one approval, which turns mail sending on when a person
-approves it. A Tico bug goes to the Tico team once (a comment when it comes back worse), or as a support approval a person reads
+BotOps closed is opened again when the problem returns. A Tico bug goes to the Tico team once (a comment when it comes back worse), or as a support approval a person reads
 first while the team rule is off. Check health never writes to a person.
 """
 
@@ -21,7 +20,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from backend import (bot_settings as BS, diagnostics, health, hosted_updates, invariants, mail_settings,
+from backend import (bot_settings as BS, diagnostics, health, hosted_updates, invariants,
                      maintenance as M, maintenance_health as MH, maintenance_limits as L,
                      providers, replication, routines, support, task_check_backs, task_roundup)
 from backend.enqueue import enqueue_stored
@@ -40,10 +39,9 @@ SECRET_BOT = "acme-payroll-bot"
 
 @pytest.fixture
 def readers(monkeypatch):
-    """Only the findings a test sets: the Health page, the production checks and the mail asks read nothing here."""
+    """Only the findings a test sets: the Health page and the production checks read nothing here."""
     monkeypatch.setattr(health, "view", lambda c, *a, **k: {"checks": []})
     monkeypatch.setattr(invariants, "CHECKS", [])
-    monkeypatch.setattr(mail_settings, "alerts", lambda c: [])
     monkeypatch.setattr(hosted_updates, "notice", lambda *a, **k: {})
     monkeypatch.setattr(replication, "status", lambda *a, **k: {})
 
@@ -318,45 +316,11 @@ def test_no_person_gets_a_task_from_check_health(environment, readers, code_find
     assert len(tasks) == 2 and {t["owner_id"] for t in tasks} == {"bot:botops"}
 
 
-def test_a_mail_ask_is_one_botops_task_and_one_approval_that_a_restart_does_not_repeat(environment, readers, monkeypatch):
-    api, _ = built(environment)
-    monkeypatch.setattr(mail_settings, "alerts", lambda c: [("coo", {"outbound_send": True, "forward_to": []})])
-    run(api)
-    assert botops_tasks(api) == []                              # a noisy check files on its second run
-    run(api)
-    (task,) = botops_tasks(api)
-    assert task["title"] == "Health: Mail sending needs a person's approval"
-    (approval,) = open_approvals(api, "mail_alert")
-    assert registry(api, check_health.MAIL_CHECK)["approvals"] == {"coo": approval["id"]}
-    run(api)                                                    # the next run, as after a restart: kept, not raised again
-    assert [a["id"] for a in open_approvals(api, "mail_alert")] == [approval["id"]] and len(botops_tasks(api)) == 1
-
-
-def test_a_mail_approval_that_fails_to_raise_is_tried_again_on_the_next_run(environment, readers, monkeypatch):
-    api, _ = built(environment)
-    monkeypatch.setattr(mail_settings, "alerts", lambda c: [("coo", {"outbound_send": True, "forward_to": []})])
-    real, attempts = H.approval_request, []
-
-    def flaky(c, actor, kind, payload, **kw):
-        if kind == "mail_alert":
-            attempts.append(kind)
-            if len(attempts) == 1:
-                raise RuntimeError("the approval store is down")
-        return real(c, actor, kind, payload, **kw)
-
-    monkeypatch.setattr(H, "approval_request", flaky)
-    run(api)
-    run(api)                                                    # the task is filed; its approval fails once
-    assert botops_tasks(api) and open_approvals(api, "mail_alert") == []
-    run(api)                                                    # the next run raises it
-    assert len(open_approvals(api, "mail_alert")) == 1 and len(attempts) == 2
-
-
 def test_a_health_page_warning_is_filed_through_the_same_lifecycle(environment, readers, monkeypatch):
     api, _ = built(environment)
     page = [{"id": "disk:acme-mac", "label": "Disk space", "status": "warn", "summary": "92% full.",
              "fixes": [{"label": "Free space"}]},
-            {"id": "mail_sending", "label": "Mail sending", "status": "warn", "summary": "Waiting.", "fixes": []},
+            {"id": "invariant", "label": "Invariants", "status": "warn", "summary": "Read separately.", "fixes": []},
             {"id": "backups", "label": "Backups", "status": "ok", "summary": "", "fixes": []}]
     monkeypatch.setattr(health, "view", lambda c, *a, **k: {"checks": page})
     run(api)

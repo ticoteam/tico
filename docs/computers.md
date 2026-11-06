@@ -428,7 +428,7 @@ Choose **API key** when you pay the provider for each use:
   - **Add key** gives this computer a key of its own, for Codex, Claude Code, Cursor Agent and Muse Code. Only this
     computer uses it.
   - **Credentials** holds a key that several computers share (the company's key given to **Every computer**), and the
-    key of a tool whose key belongs to each bot, such as the Gemini CLI. **Add connection** offers **Open Credentials**
+    key of a tool whose key belongs to each bot, such as the Gemini CLI. **Add connection** offers **Open Keys**
     for those.
 
 ### Add one
@@ -448,7 +448,7 @@ In a computer's pop-up, **Add connection** (at the end of Connections) opens its
      [API keys on a Computer](#api-keys-on-a-computer)). A credential administrator can set **Shared with:** to other
      computers, or pick a key that is already shared instead of pasting one. An operator adds a key for this computer
      only. If a key already signs the tool in here, **Replace key** is on
-     its line instead. For any other tool, **Open Credentials**, where model keys are added and shared with computers.
+     its line instead. For any other tool, **Open Keys**, where model keys are added and shared with computers.
 4. The new connection's chip appears on the computer's row once the computer reports it; the computer does not need a
    restart.
 

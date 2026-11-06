@@ -170,7 +170,7 @@ def load(c, person):
 def source_readable(c, asker, task):
     """Whether the bot `asker` may read `task` in full: the ordinary task-read check (`auth.Auth.task_row`, the rule
     every task page applies), from the database alone, so the offer, the write and a reply forwarding judge it alike.
-    A private task admits its parties, their managers and its guest; a company task admits its parties, and otherwise
+    A private task admits its parties, their managers and its readers; a company task admits its parties, and otherwise
     each bot it involves must let the asker read its activity. Similarity of a question never grants it."""
     from . import teammate_access
     from .auth import Identity
@@ -839,7 +839,7 @@ def _shown(c, viewer, person, it, can_read=None):
     """Whether `viewer` may read a replayed item's title: the person their own tasks and questions, and a task the
     check kept with its bot only if they may read it; anyone else (an owner or admin) only a task they may read, never
     a bot's question to the person outside any task. `can_read(c, task)` is the full task-read policy for the viewer
-    (auth.task_row: a private task's guests, Read on every bot it involves); without it, privacy alone decides."""
+    (auth.task_row: a private task's readers, Read on every bot it involves); without it, privacy alone decides."""
     if it["kind"] == "loose":
         return viewer in (None, person)
     task = H.task(c, it["ref"])

@@ -81,7 +81,7 @@ const SETTINGS_TAB_KEY = 'tico.settings.tab';
 let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY) || 'you'; } catch { return 'you'; } })();
 // The address the shown group writes (settingsAddress) so it can be copied, bookmarked or shared; route() reads it as Settings.
 let SETTINGS_ADDRESS = '';
-// Inboxes keeps its own list, settings sections and detail addresses within the Connections group (ui/app/inboxes.js).
+// Connections holds repositories and webhooks; inboxes and tools have their own page under Tools.
 // The groups, in the list's order (settings stage 2, spec Appendix C): You is personal and sits above a divider, then
 // the company's ten. `shown` is who sees the group; its address is #/settings/<key>.
 const SETTINGS_GROUPS = [
@@ -129,6 +129,9 @@ let SETTINGS_TRANSITION_TIMER = null;
 let SETTINGS_REVEAL = '';
 let SETTINGS_SEARCH_HIGHLIGHT = false;
 const SETTINGS_MOVED_TO_MODELS = ['#settings-models', '#set-providers', '#set-gateway'];
+// The old tabs that are now sections of General.
+const SETTINGS_GENERAL = {team: '#settings-team', company: '#settings-company', assistant: '#settings-assistant-pane', privacy: '#settings-privacy', storage: '#settings-storage',
+  notifications: '#settings-notifications', alerts: '#settings-notifications'};
 const settingsReveal = selector => {
   if (!selector || SETTINGS_REVEAL !== selector) return;
   SETTINGS_REVEAL = '';
@@ -237,7 +240,7 @@ function settingsConfirm({title, text, ok = 'Confirm', danger = true}) {
 const settingsCanMakeTokens = () => S.me?.can_create_tokens ?? settingsIsAdmin();
 function pageSettings() {
   clearInterval(SETTINGS_TRANSITION_TIMER);
-  if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { SETTINGS_TAB = 'you'; location.hash = INTEGRATIONS; return; }
+  if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { location.hash = SETTINGS_TAB === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools'; SETTINGS_TAB = 'general'; return; }
   // A repeat visit to the page already on screen (a refresh, a same-route redraw) keeps it: rebuilding
   // it would snap back to the default group and drop whatever is half typed in a form.
   const built = $('#settings-tabs');
@@ -294,8 +297,7 @@ function pageSettings() {
       <section class="card" id="settings-roadmaps"></section>
       <section class="card" id="settings-tags-card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>`)}
-    ${pane('connections', `<div id="settings-inboxes"><div id="set-inboxes">${skelRows(4, {card: true, dot: false})}</div></div>
-      <div id="settings-repos"><section class="card repos-card" id="set-repos">${skelRows(3, {card: true, dot: false})}</section></div>
+    ${pane('connections', `<div id="settings-repos"><section class="card repos-card" id="set-repos">${skelRows(3, {card: true, dot: false})}</section></div>
       <div id="settings-webhooks"><section class="card"><header><h2>Webhooks</h2><div class="theme-seg" id="settings-webhooks-view" role="radiogroup" aria-label="Webhooks">${WH_TABS.map(([k, wide, narrow]) =>
         `<button type="button" role="radio" data-wh-tab="${k}" aria-checked="${k === WH.tab}">${narrow ? `<span class="sb-wide">${wide}</span><span class="sb-narrow">${narrow}</span>` : wide}</button>`).join('')}</div></header>
         <div id="set-webhooks">${skelRows(2, {card: true, dot: false})}</div></section></div>
@@ -343,9 +345,9 @@ function pageSettings() {
   // A group picked in the list (desktop) or the picker (phone) opens at its top: no old card to scroll to.
   $('#settings-tabs').onclick = event => {
     const button = event.target.closest('[data-settings-tab]');
-    if (button) { SETTINGS_REVEAL = ''; INBOXES_VIEW = ''; settingsShow(button.dataset.settingsTab, {group: true}); }
+    if (button) { SETTINGS_REVEAL = ''; settingsShow(button.dataset.settingsTab, {group: true}); }
   };
-  $('#settings-group-pick').onchange = event => { SETTINGS_REVEAL = ''; INBOXES_VIEW = ''; settingsShow(event.target.value, {group: true}); };
+  $('#settings-group-pick').onchange = event => { SETTINGS_REVEAL = ''; settingsShow(event.target.value, {group: true}); };
   settingsShow(SETTINGS_TAB);
   loadSettings();
 }
@@ -441,7 +443,7 @@ function settingsShow(tab, {group: picked = false} = {}) {
     load(renderSystemRoutines(), renderReleaseCard(), renderTaskManagerCard());
   }
   if (on('tasks')) load(roadmapSettingsMount(), askFilterSettingsLoad());
-  if (on('connections')) load(renderSettingsInboxes(), !formBusy($('#settings-repos')) && renderSettingsRepos(), !formBusy($('#settings-webhooks')) && renderSettingsWebhooks());
+  if (on('connections')) load(!formBusy($('#settings-repos')) && renderSettingsRepos(), !formBusy($('#settings-webhooks')) && renderSettingsWebhooks());
   if (on('policies')) {
     const privacy = $('#settings-privacy'), storage = $('#settings-storage'), company = $('#settings-company');
     load(privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(), company && settingsIsAdmin() && renderSettingsCompany(),
@@ -455,10 +457,7 @@ function settingsShow(tab, {group: picked = false} = {}) {
 // It replaces the entry: no hashchange, no new history step.
 function settingsAddress() {
   if (S.route !== SETTINGS) return;
-  // Inboxes keeps its page address while Connections remains the selected Settings group.
-  const inbox = SETTINGS_TAB === 'connections' && INBOXES_VIEW;
-  SETTINGS_ADDRESS = inbox ? `${SETTINGS}/inboxes${inboxesAddress()}`
-    : `${SETTINGS}/${SETTINGS_TAB}${SETTINGS_TAB === 'health' ? settingsHistoryQuery() : ''}`;
+  SETTINGS_ADDRESS = `${SETTINGS}/${SETTINGS_TAB}${SETTINGS_TAB === 'health' ? settingsHistoryQuery() : ''}`;
   if (location.hash !== SETTINGS_ADDRESS) history.replaceState(history.state, '', SETTINGS_ADDRESS);
 }
 // On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.

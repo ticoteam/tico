@@ -119,12 +119,28 @@ fn owner(row: &Value, people: &[Value]) -> String {
 }
 
 const DRAFT_PROMPT: &str = "You find action items in a meeting transcript while the meeting is \
-happening. An action item is something a person committed to, asked for, or the group agreed \
-should happen: a task, a follow-up to send, a document to change. Read the NEW lines (EARLIER \
+happening. Keep concrete commitments, requests and agreed changes, even small ones. Suggest \
+each distinct piece of real work; more of these is fine. Read the NEW lines (EARLIER \
 lines are context only). Return JSON only: {\"items\":[{\"title\":\"...\",\"quote\":\"...\",\"owner\":\"...\"}]}. \
-title: a short imperative sentence naming the deliverable and, when said, who it is for or by \
-when (\"Send Dana the revised pricing by Friday\"). quote: the exact words, copied character for \
+title: a short imperative sentence naming the actual deliverable or outcome and, when said, \
+who it is for or by when (\"Send Dana the revised pricing by Friday\"). A ping, message, \
+reminder or follow-up with stated work becomes that underlying work: \
+\"I'll ping Eli to get his sign-off on the pricing doc\" becomes \
+\"Get Eli's sign-off on the pricing doc\", still owned by the speaker. \
+Do not invent a purpose when none is stated. Drop bare communication steps: ping, message, \
+reach out, let someone know, remind, follow up or check in with no stated work. \
+Naming a bug, service issue or deliverable IS stated work, even in 'ping X about the issue': \
+keep it and title the outcome, such as 'Resolve the export bug', not 'Contact X about it'. \
+No detailed plan is needed. \
+\"Let's sync later\" alone is not an item. Sending a concrete deliverable is real work. \
+quote: the exact words, copied character for \
 character from one NEW line, that the item comes from (at most 25 words). \
+Before rewriting a retained ping or reminder, assign owner from the original speech: the \
+speaker committing to contact someone, or the person directly asked to contact them, owns \
+obtaining the outcome. Keep that owner after rewriting, even if the recipient performs the \
+fix. Do not clear it because the underlying doer is uncertain. Apply the ownership rules \
+below only to retained work; bare-ping ownership examples do not make them items. \
+Unclear ownership does not exclude real work: keep the item with owner \"\". \
 PEOPLE lists the org's people and bots (with jobs when known). ME identifies the signed-in \
 person; transcript speaker Me means ME. Keep named speakers and unknown Speaker N distinct. \
 speaker_actor identifies a speaker only when their label uniquely matches PEOPLE, or they are Me. \
@@ -141,10 +157,12 @@ when no bot is listed. 'Let's' does not assign that role's work to Me. In contra
 People being pinged or receiving a document are not its owners. Use surrounding lines to \
 resolve 'you' only when clear. Never invent an actor or infer who Speaker N is. If several \
 people could own it, the name is ambiguous, or the doer is absent from PEOPLE, use \"\". \
-Leave out small talk, \
-vague ideas, questions nobody took on, things finished during the meeting, and anything already \
-in EXISTING. TASKS lists active tasks. If new speech belongs to one, return \
-{\"link\":N,\"quote\":\"...\",\"owner\":\"...\"} instead of a title. N must be in TASKS. Return {\"items\":[]} when there are none.";
+Leave out small talk, vague ideas, questions nobody took on, things finished during the meeting, \
+and steps that will obviously happen in the next few minutes of this meeting, such as sharing \
+a screen or opening the agenda. Drop restatements of EXISTING items, even reworded or framed \
+as a ping about the same work. TASKS lists active tasks. If new speech belongs to one, return \
+{\"link\":N,\"quote\":\"...\",\"owner\":\"...\"} instead of a title. N must be in TASKS. Return {\"items\":[]} when there are none. \
+Return only the requested JSON object; do not explain your decisions or exclusions.";
 
 const ASK_PROMPT: &str = "You answer the user's private questions about their meeting, using \
 only its transcript and their notes. \"Me\" in the transcript is the user. Answer in a few \
@@ -194,7 +212,9 @@ fn complete(
         "{}/chat/completions",
         settings::safe_url(&config.transcription_url)?
     );
-    let mut body = json!({"model":config.assist_model,"messages":messages,"temperature":0.2,"max_tokens":1200});
+    // Structured drafts need room for model reasoning and several items in the same reply.
+    let max_tokens = if json_reply { 2400 } else { 1200 };
+    let mut body = json!({"model":config.assist_model,"messages":messages,"temperature":0.2,"max_tokens":max_tokens});
     if json_reply {
         body["response_format"] = json!({"type":"json_object"});
     }
@@ -775,6 +795,95 @@ mod tests {
         assert_eq!(store.context(&id).unwrap().items[0].owner, "human:eli");
     }
 
+    fn eval_title(item: &Item, expected: &Value, banned: &[Value]) -> bool {
+        let title = item.title.trim().to_lowercase();
+        !banned.iter().any(|prefix| {
+            title
+                .strip_prefix(&prefix.as_str().unwrap().to_lowercase())
+                .is_some_and(|rest| {
+                    rest.is_empty() || rest.starts_with(|c: char| !c.is_alphanumeric())
+                })
+        }) && expected["title_keywords"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|group| {
+                group
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|word| title.contains(&word.as_str().unwrap().to_lowercase()))
+            })
+    }
+
+    // Match without relying on model output order, including when several owners are the same.
+    fn eval_items(
+        items: &[Item],
+        expected: &[Value],
+        banned: &[Value],
+        titles: bool,
+        owners: bool,
+    ) -> bool {
+        if items.len() != expected.len() {
+            return false;
+        }
+        let Some((first, rest)) = expected.split_first() else {
+            return true;
+        };
+        items.iter().enumerate().any(|(at, item)| {
+            (!titles || eval_title(item, first, banned))
+                && (!owners || item.owner == first["owner"].as_str().unwrap())
+                && eval_items(
+                    &items
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| *i != at)
+                        .map(|(_, item)| item.clone())
+                        .collect::<Vec<_>>(),
+                    rest,
+                    banned,
+                    titles,
+                    owners,
+                )
+        })
+    }
+
+    #[test]
+    fn eval_checks_work_titles_and_owners_together_without_output_order() {
+        let banned = vec![json!("Ping"), json!("Remind")];
+        let expected = vec![
+            json!({"owner":"human:ana", "title_keywords":[["pricing"],["sign-off","approval"]]}),
+            json!({"owner":"human:dana", "title_keywords":[["invoice"],["tax"]]}),
+        ];
+        let mut items = vec![
+            Item {
+                title: "Correct the invoice tax total".into(),
+                owner: "human:dana".into(),
+                ..Default::default()
+            },
+            Item {
+                title: "Get approval on pricing".into(),
+                owner: "human:ana".into(),
+                ..Default::default()
+            },
+        ];
+        assert!(eval_items(&items, &expected, &banned, true, true));
+        items[1].title = "Ping Eli for pricing approval".into();
+        assert!(!eval_items(&items, &expected, &banned, true, true));
+        items[1].title = "Get pricing".into();
+        assert!(!eval_items(&items, &expected, &banned, true, true));
+        items[1].title = "Get pricing sign-off".into();
+        items.swap(0, 1);
+        items[0].owner = "human:dana".into();
+        items[1].owner = "human:ana".into();
+        assert!(eval_items(&items, &expected, &banned, false, true));
+        assert!(eval_items(&items, &expected, &banned, true, false));
+        assert!(!eval_items(&items, &expected, &banned, true, true));
+        assert!(!eval_items(&items, &[], &banned, true, true));
+        assert!(!eval_items(&[], &expected, &banned, true, true));
+        assert!(eval_items(&[], &[], &banned, true, true));
+    }
+
     /// Paid, opt-in eval through the same request, validation and persistence as automatic drafting.
     #[test]
     #[ignore = "needs a real model key; see bench/README.md"]
@@ -795,14 +904,33 @@ mod tests {
         let fixture: Value =
             serde_json::from_str(include_str!("../bench/assist_cases.json")).unwrap();
         let people: Vec<Person> = serde_json::from_value(fixture["people"].clone()).unwrap();
+        let banned = fixture["banned_title_starts"].as_array().unwrap();
         let mut correct = 0;
+        let mut owners_correct = 0;
+        let mut titles_correct = 0;
         let mut total = 0;
         for case in fixture["cases"].as_array().unwrap() {
+            let expected = case["expected"].as_array().unwrap();
             let mut case_correct = 0;
+            let mut case_owners = 0;
+            let mut case_titles = 0;
             for _ in 0..repeats {
                 let dir = tempfile::tempdir().unwrap();
                 let store = Store::open(dir.path()).unwrap();
                 let id = fixture_lines(&store, case["lines"].as_array().unwrap());
+                let mut context = store.context(&id).unwrap();
+                if let Some(existing) = case["existing"].as_array() {
+                    for title in existing {
+                        context.items.push(Item {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            kind: "task".into(),
+                            title: title.as_str().unwrap().into(),
+                            ..Default::default()
+                        });
+                    }
+                }
+                let existing = context.items.len();
+                store.save_context(&id, &context).unwrap();
                 let roster = Roster {
                     people: people
                         .iter()
@@ -823,30 +951,36 @@ mod tests {
                     );
                     continue;
                 }
-                let items = store.context(&id).unwrap().items;
-                let passed = items.len() == 1 && items[0].owner == case["owner"].as_str().unwrap();
+                let items = store.context(&id).unwrap().items[existing..].to_vec();
+                let owners = eval_items(&items, expected, banned, false, true);
+                let titles = eval_items(&items, expected, banned, true, false);
+                let passed = eval_items(&items, expected, banned, true, true);
                 if !passed {
                     println!(
                         "{}",
-                        json!({"case":case["id"],"expected":case["owner"],"items":items})
+                        json!({"case":case["id"],"expected":expected,"items":items})
                     );
                 }
                 case_correct += usize::from(passed);
+                case_owners += usize::from(owners);
+                case_titles += usize::from(titles);
             }
             total += repeats;
             correct += case_correct;
+            owners_correct += case_owners;
+            titles_correct += case_titles;
             println!(
                 "{}",
-                json!({"case":case["id"],"correct":case_correct,"total":repeats})
+                json!({"case":case["id"],"correct":case_correct,"owners_correct":case_owners,"titles_correct":case_titles,"total":repeats})
             );
         }
         println!(
             "{}",
-            json!({"requested_model":config.assist_model,"correct":correct,"total":total,"accuracy":correct as f64 / total as f64})
+            json!({"requested_model":config.assist_model,"correct":correct,"owners_correct":owners_correct,"titles_correct":titles_correct,"total":total,"accuracy":correct as f64 / total as f64,"owner_accuracy":owners_correct as f64 / total as f64,"title_accuracy":titles_correct as f64 / total as f64})
         );
         assert_eq!(
             correct, total,
-            "Owner eval missed cases; inspect the receipt above"
+            "Draft eval missed cases; inspect the receipt above"
         );
     }
 

@@ -1235,7 +1235,13 @@ GONE_JOBS = {"job:routine_timer": "Bot routine timer: the automations tick runs 
              "job:task_roundup": "Task roundup: scheduled lists moved to Maintenance Find stuck",
              "job:learnings": "Nightly learnings: Learn runs in Maintenance now",
              "job:propose_demotions": "Suggest quieter rules: rule suggestions went with the rules editor",
-             "job:health_scan": "Health scan: Check health runs in Maintenance now"}
+             "job:health_scan": "Health scan: Check health runs in Maintenance now",
+             "job:auto_dream": "Auto dream: Dream runs in Maintenance now",
+             "job:cleanup": "Cleanup: Clean up runs in Maintenance now",
+             "job:stall_triage": "Stall triage: Decide no longer reads a quiet task",
+             "job:engineering_exceptions": "Engineering exceptions: the task roundup lists them now",
+             "job:still_wanted": "Still wanted: no person is asked about an idle task any more",
+             "job:assignment_recovery": "Unstarted assignments: the task roundup lists them now"}
 
 
 def inventory(c):

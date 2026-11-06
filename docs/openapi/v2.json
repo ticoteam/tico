@@ -135,8 +135,8 @@
       "description": "Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again."
     },
     {
-      "name": "Connections",
-      "description": "Every connection in one list: who reads what it brings in, its bots and where to configure it."
+      "name": "Tools",
+      "description": "Every way the company reaches the outside world in one list, and API tools: their keys per level, who can use each, its checks and calls."
     },
     {
       "name": "Webhook relay",
@@ -625,6 +625,144 @@
             },
             "description": "1-200 characters. Reusing a key with the same body replays the first answer."
           }
+        ]
+      }
+    },
+    "/api/v2/api-tools/{tool_id}": {
+      "get": {
+        "summary": "One API tool: its keys (never a value), who can use it at which level, its last checks and calls",
+        "operationId": "getApiTool",
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tool Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiTool"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tools"
+        ]
+      }
+    },
+    "/api/v2/api-tools/{tool_id}/activity": {
+      "get": {
+        "summary": "Calls through the proxy and uses of its keys, newest first. Follow next with cursor",
+        "operationId": "listApiToolActivity",
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tool Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "default": "",
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "result",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 20,
+              "default": "",
+              "title": "Result"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiToolActivity"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tools"
         ]
       }
     },
@@ -6301,7 +6439,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ToolUpdate"
+                "$ref": "#/components/schemas/backend__models__ToolUpdate"
               }
             }
           }
@@ -9160,72 +9298,6 @@
         },
         "tags": [
           "Team"
-        ]
-      }
-    },
-    "/api/v2/connections": {
-      "get": {
-        "summary": "Slack, GitHub, mail bots, Tico addresses and numbers, meeting importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the company's they may read. Paged with cursor",
-        "operationId": "listConnections",
-        "parameters": [
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "default": 50,
-              "title": "Limit"
-            }
-          },
-          {
-            "name": "cursor",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 400,
-              "default": "",
-              "title": "Cursor"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ConnectionList"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Connections"
         ]
       }
     },
@@ -26263,6 +26335,47 @@
         ]
       }
     },
+    "/api/v2/meetings/recorder": {
+      "get": {
+        "summary": "Your most recently used Tico Recorder, the newest release's version and the download",
+        "operationId": "getMyRecorder",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyRecorder"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Meetings"
+        ]
+      }
+    },
     "/api/v2/meetings/review": {
       "post": {
         "summary": "Share or dismiss your Pending meetings",
@@ -39520,6 +39633,127 @@
         ]
       }
     },
+    "/api/v2/tasks/{tid}/make-page": {
+      "post": {
+        "summary": "Ask the caller's Assistant to make and pin a task page with their normal rights; 409 at 60 pins",
+        "operationId": "makeTaskPage",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MakePage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantSent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      },
+      "get": {
+        "summary": "The caller's latest Make page request: making, made, failed or update_required",
+        "operationId": "getTaskMakePage",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskMakePage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      }
+    },
     "/api/v2/tasks/{tid}/meetings": {
       "get": {
         "summary": "Readable linked meetings, newest first; limit 20 by default, at most 50, cursor and 64 KB cap",
@@ -42350,6 +42584,72 @@
         },
         "tags": [
           "Threads"
+        ]
+      }
+    },
+    "/api/v2/tool-index": {
+      "get": {
+        "summary": "API tools, mailboxes, Tico addresses and numbers, mailing mail, Slack, GitHub, meeting importers, Listening, outgoing webhooks and declared tools the caller may see, with status and who can use each. Follow next with cursor",
+        "operationId": "listToolIndex",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 500,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 20,
+              "default": "",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolIndex"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tools"
         ]
       }
     },
@@ -46711,6 +47011,262 @@
           "text"
         ],
         "title": "Answer"
+      },
+      "ApiTool": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string"
+              },
+              "base_url": {
+                "type": "string"
+              },
+              "auth_scheme": {
+                "type": "string"
+              },
+              "check_path": {
+                "type": "string"
+              },
+              "delivery": {
+                "enum": [
+                  "proxy",
+                  "computer"
+                ]
+              }
+            },
+            "required": [
+              "auth_scheme",
+              "base_url",
+              "check_path",
+              "delivery",
+              "id",
+              "name",
+              "service"
+            ],
+            "additionalProperties": true
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "preview": {
+                  "type": "string"
+                },
+                "access_level": {
+                  "enum": [
+                    "read",
+                    "read_write"
+                  ]
+                },
+                "expires_on": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "last_used_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "access_level",
+                "id",
+                "name",
+                "preview"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "access": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "subject": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "bot",
+                    "person"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "initials": {
+                  "type": "string"
+                },
+                "level": {
+                  "enum": [
+                    "read",
+                    "read_write"
+                  ]
+                },
+                "last_used_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "initials",
+                "kind",
+                "last_used_at",
+                "level",
+                "name",
+                "subject"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                },
+                "status_code": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "detail": {
+                  "type": "string"
+                },
+                "checked_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "checked_at",
+                "detail",
+                "ok",
+                "status_code"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "recent": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "status": {
+            "type": "object",
+            "properties": {
+              "tone": {
+                "enum": [
+                  "ok",
+                  "wait",
+                  "fail",
+                  "run",
+                  "idle"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "tone"
+            ],
+            "additionalProperties": true
+          },
+          "can_manage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "access",
+          "can_manage",
+          "checks",
+          "keys",
+          "recent",
+          "status",
+          "tool"
+        ],
+        "additionalProperties": true
+      },
+      "ApiToolActivity": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "call",
+                    "use"
+                  ]
+                },
+                "actor": {
+                  "type": "string"
+                },
+                "result": {
+                  "enum": [
+                    "sent",
+                    "refused",
+                    "failed",
+                    "use"
+                  ]
+                },
+                "at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "actor",
+                "at",
+                "id",
+                "kind",
+                "result"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "next",
+          "rows"
+        ],
+        "additionalProperties": true
       },
       "ApprovalCreate": {
         "properties": {
@@ -51625,113 +52181,6 @@
           "code"
         ],
         "title": "Confirmation"
-      },
-      "Connection": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "enum": [
-              "slack",
-              "github",
-              "mailbox",
-              "inbox",
-              "meetings",
-              "trigger",
-              "webhook",
-              "postal",
-              "listening"
-            ]
-          },
-          "name": {
-            "type": "string"
-          },
-          "detail": {
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "on",
-              "off",
-              "waiting",
-              "error",
-              "paused"
-            ]
-          },
-          "scope": {
-            "enum": [
-              "company",
-              "team",
-              "person"
-            ]
-          },
-          "readers": {
-            "type": "string"
-          },
-          "bots": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "slug": {
-                  "type": "string"
-                },
-                "name": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "name",
-                "slug"
-              ],
-              "additionalProperties": true
-            }
-          },
-          "more_bots": {
-            "type": "integer"
-          },
-          "configure": {
-            "type": "string"
-          },
-          "can_configure": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "bots",
-          "configure",
-          "id",
-          "kind",
-          "name",
-          "readers",
-          "scope",
-          "status"
-        ],
-        "additionalProperties": true
-      },
-      "ConnectionList": {
-        "type": "object",
-        "properties": {
-          "connections": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Connection"
-            }
-          },
-          "next": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "connections",
-          "next"
-        ],
-        "additionalProperties": true
       },
       "Contract": {
         "properties": {},
@@ -64010,6 +64459,22 @@
         "title": "MaintenanceUpdate",
         "description": "The schedule, the pause, the monthly judge spend cap and step changes (backend/maintenance.py save_settings and\nsave_step); only what is sent changes."
       },
+      "MakePage": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "MakePage"
+      },
       "MarketAnswers": {
         "properties": {
           "sell": {
@@ -65124,6 +65589,44 @@
           "action"
         ],
         "title": "Moderate"
+      },
+      "MyRecorder": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "Your most recently used copy's version; empty when none was seen"
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recent": {
+            "type": "boolean",
+            "description": "A copy was seen in the last 30 days"
+          },
+          "latest": {
+            "type": "string",
+            "description": "The newest release's version; empty when unknown"
+          },
+          "update_available": {
+            "type": "boolean"
+          },
+          "download_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "download_url",
+          "last_seen_at",
+          "latest",
+          "recent",
+          "update_available",
+          "version"
+        ],
+        "additionalProperties": true
       },
       "NeedsSummary": {
         "type": "object",
@@ -66717,6 +67220,19 @@
             ],
             "title": "Company Daily Cap"
           },
+          "max_outside_recipients": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Outside Recipients"
+          },
           "pacing_seconds": {
             "anyOf": [
               {
@@ -66776,6 +67292,17 @@
             ],
             "title": "Ask Many Recipients"
           },
+          "ask_outside_cc": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Outside Cc"
+          },
           "ask_legal_money": {
             "anyOf": [
               {
@@ -66786,6 +67313,58 @@
               }
             ],
             "title": "Ask Legal Money"
+          },
+          "ask_lint": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Lint"
+          },
+          "second_review": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Second Review"
+          },
+          "blocked_recipients": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Recipients"
+          },
+          "owner_handles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Handles"
           },
           "who_can_ok": {
             "anyOf": [
@@ -73204,12 +73783,12 @@
             ],
             "description": "The person a waiting task waits on; the task is in their Needs you"
           },
-          "guest": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The one person a private task with no person on it reached: its owning bot's first subtask, question or wait for them made them its guest. They read the task as its requester and owner do, and nothing else of its tree"
+          "readers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Who else can see a private task besides its requester and owner: people, bots and group:<id>s (a group by its members now). Empty on a company task. GET/PUT /api/v2/tasks/{id}/readers reads and changes it"
           },
           "holds": {
             "type": "array",
@@ -74307,6 +74886,16 @@
             ],
             "title": "Roles"
           },
+          "readers": {
+            "items": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Readers"
+          },
           "check_model": {
             "anyOf": [
               {
@@ -75007,6 +75596,47 @@
           "cursor",
           "next_offset",
           "tasks"
+        ],
+        "additionalProperties": true
+      },
+      "TaskMakePage": {
+        "type": "object",
+        "properties": {
+          "make_page": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "message_id": {
+                    "type": "string"
+                  },
+                  "conversation_id": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "making",
+                      "made",
+                      "failed",
+                      "update_required"
+                    ]
+                  }
+                },
+                "required": [
+                  "conversation_id",
+                  "message_id",
+                  "state"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "make_page"
         ],
         "additionalProperties": true
       },
@@ -77483,6 +78113,163 @@
         ],
         "additionalProperties": true
       },
+      "ToolIndex": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolIndexRow"
+            }
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "all": {
+                "type": "integer"
+              },
+              "needs_you": {
+                "type": "integer"
+              },
+              "api": {
+                "type": "integer"
+              },
+              "mail": {
+                "type": "integer"
+              },
+              "websites": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "all",
+              "api",
+              "mail",
+              "needs_you",
+              "websites"
+            ],
+            "additionalProperties": true
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "counts",
+          "next",
+          "rows"
+        ],
+        "additionalProperties": true
+      },
+      "ToolIndexRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "api",
+              "mailbox",
+              "number",
+              "address",
+              "slack",
+              "github",
+              "meetings",
+              "listening",
+              "webhook",
+              "declared",
+              "website"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "way": {
+            "type": "string"
+          },
+          "status": {
+            "type": "object",
+            "properties": {
+              "tone": {
+                "enum": [
+                  "ok",
+                  "wait",
+                  "fail",
+                  "run",
+                  "idle"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "tone"
+            ],
+            "additionalProperties": true
+          },
+          "who": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "bot",
+                    "person"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "initials": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "initials",
+                "kind",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "who_total": {
+            "type": "integer"
+          },
+          "needs_you": {
+            "type": "boolean"
+          },
+          "href": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail",
+          "href",
+          "id",
+          "kind",
+          "name",
+          "needs_you",
+          "status",
+          "way",
+          "who",
+          "who_total"
+        ],
+        "additionalProperties": true
+      },
       "ToolRegister": {
         "properties": {
           "service": {
@@ -77556,73 +78343,6 @@
         ],
         "title": "ToolRegister",
         "description": "A tool a person registers for a bot (backend/bot_tools.py). Names and verbs only: `env` is the\nvariable's name, and the server refuses a field that looks like a credential."
-      },
-      "ToolUpdate": {
-        "properties": {
-          "can": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array",
-                "maxItems": 20,
-                "minItems": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Can"
-          },
-          "scope": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object",
-                "maxProperties": 20
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Scope"
-          },
-          "note": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 500
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Note"
-          },
-          "mcp": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mcp"
-          },
-          "title_prefix": {
-            "type": "string",
-            "maxLength": 100,
-            "title": "Title Prefix",
-            "default": ""
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "ToolUpdate",
-        "description": "A change to a tool a bot already declares (backend/bot_tools.py): only what is sent changes. `scope` keys\nare set one by one (an empty value takes a key off); `note` \"\" clears the note."
       },
       "TriggerCreate": {
         "properties": {
@@ -79789,6 +80509,73 @@
         "additionalProperties": false,
         "type": "object",
         "title": "Settings"
+      },
+      "backend__models__ToolUpdate": {
+        "properties": {
+          "can": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 20,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Can"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object",
+                "maxProperties": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "mcp": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp"
+          },
+          "title_prefix": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Title Prefix",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ToolUpdate",
+        "description": "A change to a tool a bot already declares (backend/bot_tools.py): only what is sent changes. `scope` keys\nare set one by one (an empty value takes a key off); `note` \"\" clears the note."
       },
       "backend__presence__Heartbeat": {
         "properties": {

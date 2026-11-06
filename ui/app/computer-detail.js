@@ -180,7 +180,7 @@ function machineConnectionHTML(machine, conn, online, manage) {
 function machineTerminalSignInHTML(machine, runtime) {
   const command = machineLoginCommand(machine, runtime);
   if (command) return ` <span class="machine-login-command" title="Run on the computer${command.includes('<container>') ? '; docker ps shows the container name' : ''}"><code>${esc(command)}</code><button class="ghost machine-signin" type="button" data-machine-copy-login="${esc(command)}">Copy</button></span>`;
-  return harnessCaps(runtime).api_keys === 'bot' ? ' <a class="machine-signin-link" href="#/credentials">Add key</a>' : '';
+  return harnessCaps(runtime).api_keys === 'bot' ? ' <a class="machine-signin-link" href="#/tools/keys?show=credentials">Add key</a>' : '';
 }
 // Add connection: one button at the end of Connections, opening its own pop-up (computerAddOpen).
 function machineAddHTML(machine, online, manage) {
@@ -230,7 +230,7 @@ function computerAddStepHTML(machine, step) {
       : add ? `Add a key that ${esc(machine.label)} uses for ${esc(tool)}.`
       : `${esc(tool)} takes its key from Credentials; it is used on the computers it is shared with.`;
     const go = add ? `<span class="computer-add-terminal" data-add-key="${esc(step.runtime)}">${add}</span>`
-      : keyed ? '' : '<a class="primary" href="#/credentials" data-add-credentials>Open Credentials</a>';
+      : keyed ? '' : '<a class="primary" href="#/tools/keys?show=credentials" data-add-credentials>Open Keys</a>';
     return `${head(`Add ${esc(tool)} with an API key`, 'kind')}<div data-add-step="api_key"><p class="model-login-body">${body}</p>
       <div class="model-login-actions"><button class="ghost" type="button" data-add-close>Close</button>${go}</div></div></div>`;
   }

@@ -1,6 +1,7 @@
-"""Connections: every way the outside world reaches this company, in one list (Library › Connections).
+"""Connections: every way the outside world reaches this company, gathered for Tools (backend/api_tools.py
+`GET /api/v2/tool-index`, which replaced Library › Connections and its `/api/v2/connections`).
 
-`GET /api/v2/connections` gathers rows from where each connection already lives: the Slack app, the GitHub App, the
+The sources gather rows from where each connection already lives: the Slack app, the GitHub App, the
 mail bots' mailboxes, Tico addresses and numbers, the meeting importers, incoming webhooks (triggers), outgoing
 webhooks, the physical-mail intake and Listening. A row says what it is, whether it works, whose it is, who reads what
 it brings in, the bots on it and where to change it:
@@ -8,7 +9,8 @@ it brings in, the bots on it and where to change it:
     {id, kind, name, detail, status, scope, readers, bots: [{slug, name}], more_bots, configure, can_configure}
 
 `scope` is `company`, `team` or `person`; `readers` is who reads what comes in, in words. `status` is `on`, `off`,
-`waiting`, `error` or `paused`. `configure` is the app address of the existing card that changes it.
+`waiting`, `error` or `paused`. `configure` is the app address of the existing card that changes it. A Tico address
+or number's row also says its `channel` (`email` or `sms`): both open the same page under Tools.
 
 Who sees which rows: the owner and admins see every row; anyone else sees their own (their mailbox, the webhooks they
 made) and the company's rows they may read: Slack and GitHub once connected, a Tico address or number in their audience
@@ -18,8 +20,6 @@ see. The list is paged (`limit`, `cursor`) and byte-capped like every list. Each
 order with the reader's visibility already applied, from where the cursor left off (`<source>` or `<source>:<key>`), so
 no row is lost past a page and no page is empty while more follow.
 """
-
-from fastapi import Query, Request
 
 from .store import H, Problem, encode
 
@@ -108,7 +108,7 @@ def slack_rows(v):
             readers += [str(r).removeprefix("bot:") for r in (H._json(raw, []) or []) if isinstance(r, str)]
     bots, more = v.bots(readers)
     status = {"off": "off", "waiting": "waiting", "connected": "on"}.get(state["state"], "error")
-    return [row("slack", "", "Slack", status, "company", "Everyone", "#/library/tools/slack",
+    return [row("slack", "", "Slack", status, "company", "Everyone", "#/tools/slack",
                 detail=state["message"] if status == "error" else "", bots=bots, more=more, can=v.who.role == "owner")]
 
 
@@ -125,7 +125,7 @@ def github_rows(v):
         if app_row and table(v.c, "bot_repo_access") else []
     bots, more = v.bots(slugs)
     status = "off" if not app_row else "on" if app_row["installation_id"] else "waiting"
-    return [row("github", "", "GitHub", status, "company", "Bots with repository access", "#/library/tools/github",
+    return [row("github", "", "GitHub", status, "company", "Bots with repository access", "#/tools/github",
                 detail=app_row["org"] if app_row else "", bots=bots, more=more, can=v.who.role == "owner")]
 
 
@@ -150,13 +150,14 @@ def mailbox_rows(v):
         status = "error" if state and state["error"] else "on" if state and state["synced_at"] else "waiting"
         bots, more = v.bots([box["bot"]])
         out.append(row("mailbox", address, address, status, "person", v.name("human:" + box["person_id"]),
-                       "#/settings/inboxes", detail=state["error"] or "" if state else "", bots=bots, more=more,
+                       "#/tools/mailbox/" + address, detail=state["error"] or "" if state else "", bots=bots, more=more,
                        can=v.admin or v.who.actor == "human:" + box["person_id"]))
     return out
 
 
 def inboxes(v, after, n):
-    """Tico addresses and numbers the reader is in the audience of; each links to its page in Settings > Inboxes."""
+    """Tico addresses and numbers the reader is in the audience of; each links to its page under Tools (one page for
+    both, #/tools/number/<id>)."""
     from . import groups as G
     from . import inbound
     if not table(v.c, "inbound_inboxes"):
@@ -169,9 +170,9 @@ def inboxes(v, after, n):
         team = r["audience"] == "team" and r["group_id"]
         readers = (groups.get(team) or {}).get("name") or team if team else "Everyone"
         status = "on" if r["state"] == "active" else r["state"] if r["state"] in ("off", "error", "paused") else "waiting"
-        page = "#/settings/inboxes/" + ("number/" if r["kind"] == "sms" else "tico/") + r["inbox_id"]
+        page = "#/tools/number/" + r["inbox_id"]
         out.append((r["inbox_id"], row("inbox", r["inbox_id"], r["name"], status, "team" if team else "company",
-                                       readers, page, detail=r["address"], can=v.admin)))
+                                       readers, page, detail=r["address"], can=v.admin) | {"channel": r["kind"]}))
     return out
 
 
@@ -248,7 +249,7 @@ def postal_rows(v):
     if not intake and not letters:
         return []
     return [row("postal", "", "Physical mail", "on", "company", "Read grants and each letter's task readers",
-                "#/settings/inboxes/settings/letters-in",
+                "#/tools/address/intake",
                 detail=(intake["address"] or "") if intake else "", can=v.admin)]
 
 
@@ -353,17 +354,4 @@ def page(v, limit, cursor):
             used += size
             last = key
     return {"connections": shown, "next": None}
-
-
-def install(app, store, auth, settings):
-    @app.get("/api/v2/connections")
-    def connections_list(request: Request, limit: int = Query(default=50, ge=1, le=LIMIT_MAX),
-                         cursor: str = Query(default="", max_length=400)):
-        """Every connection the caller may see: Slack, GitHub, mail bots' mailboxes, Tico addresses and numbers, meeting
-        importers, incoming and outgoing webhooks, physical mail and Listening. Each row: name, status, scope, who reads
-        it, its bots and where to configure it. The owner and admins see every row; anyone else their own and the
-        company's they may read. Follow `next` with `cursor`."""
-        who = request.state.identity
-        with store.read_transaction() as c:
-            return page(view(c, auth, who, settings), limit, cursor)
 

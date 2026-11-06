@@ -1,12 +1,11 @@
-// Letters in (ui/app/inboxes-letters.js) in Settings > Inboxes against a fake server. Guards: Inboxes > Settings > Letters
+// Letters in (ui/app/inboxes-letters.js) under Tools against a fake server. Guards: Tools › Settings › Letters
 // in (where the old Mail address lands) lists each address's state, kind, the full address only once active, registered
 // agent and Form 1583 status, with open orders as Pending, each linking to its page; Get an address shows shared and
 // private, each with its price and line, and the scan price (Tico Gateway's `prices` win, else Tico's own), and sends
 // the order once with an Idempotency-Key, after which it shows as Pending; the intake inbox is picked from the company's
 // email inboxes and needs a sender, and a failed save goes back to the last saved inbox. An address's page shows its
 // Form 1583 progress and its letters (sender, summary, PDF, task), with no scan or forward request; a failed letter is
-// retried by an owner. Mail by email turned off stays listed as Not in use while it has letters, and its page keeps
-// them, with Retry. Read grants: Who can use it on all addresses (Letters in) and on one address's page gives Read,
+// retried by an owner. Mail by email turned off is Not in use, and its page keeps its letters, with Retry. Read grants: Who can use it on all addresses (Letters in) and on one address's page gives Read,
 // with an Idempotency-Key, lists it and takes it back; a pick waiting for its button survives a redraw; a bot that can't
 // take mail can't be picked. Legal mail goes to Counsel by its stable id, a refused change goes back to the saved one,
 // and a read from before a save can't put the old choice back. A member reads only: no grants, Legal mail as text.
@@ -164,7 +163,7 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       await page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
       // The route's fade would otherwise be caught mid-way by the first theme's picture.
       await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity));
-      await page.locator('#set-inboxes').screenshot({path: path.join(shots, `letters-${name}-${mode}.png`)});
+      await page.locator('#tools-inbox').screenshot({path: path.join(shots, `letters-${name}-${mode}.png`)});
     }
   };
   try {
@@ -173,10 +172,10 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       const {page, errors, state} = await open(browser);
       const pane = page.locator('#inboxes-letters-in');
       await pane.locator('[data-pm-address="as_1"]').waitFor();
-      assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/settings/letters-in', 'the old Mail address opens Letters in');
-      assert.equal(await page.locator('[data-settings-tab="connections"]').getAttribute('aria-selected'), 'true');
+      assert.equal(await page.evaluate(() => location.hash), '#/tools/settings/letters-in', 'the old Mail address opens Letters in');
+      assert.equal(await page.locator('#side a[data-nav="tools"].cur').count(), 1, 'Tools is current');
       assert.equal(await rowText(pane.locator('[data-pm-address="as_1"]')), 'Delaware Shared 8 The Green, Suite 4000, Dover DE 19901 Yes Connected');
-      assert.equal(await pane.locator('[data-pm-address="as_1"] a').getAttribute('href'), '#/settings/inboxes/postal/as_1');
+      assert.equal(await pane.locator('[data-pm-address="as_1"] a').getAttribute('href'), '#/tools/address/as_1');
       assert.equal(await rowText(pane.locator('[data-pm-address="as_2"]')), 'Texas Private — No Waiting for Form 1583', 'no address before Form 1583');
       assert.ok(!(await pane.innerText()).includes('Keller Pkwy'));
       assert.equal(await rowText(pane.locator('[data-pm-pending="mo_1"]')), 'Nevada Shared — Pending', 'an open order is pending');
@@ -226,7 +225,7 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       let release; state.holdRouting = new Promise(r => { release = r; });
       const reads = state.got['/api/v2/postal/settings'];
       await legal.selectOption('');
-      await page.evaluate(() => { window.pmRedraw = renderSettingsInboxes(); });
+      await page.evaluate(() => { window.pmRedraw = inboxesRender(); });
       await until(() => state.got['/api/v2/postal/settings'] > reads, 'the redraw reads Legal mail');
       await page.evaluate(() => window.pmRedraw);
       assert.equal(await legal.inputValue(), '', 'the choice being saved stays');
@@ -239,7 +238,7 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       await all.locator('[data-pm-grants-empty]').waitFor();
       assert.equal(await disabled(all.locator('[data-pm-grantee] option[value="bot:synced"]')), true, 'a chat-only bot cannot read mail');
       await all.locator('[data-pm-grantee]').selectOption('person:ana');
-      await page.evaluate(() => renderSettingsInboxes());
+      await page.evaluate(() => inboxesRender());
       assert.equal(await all.locator('[data-pm-grantee]').inputValue(), 'person:ana', 'a redraw keeps the pick');
       await all.locator('[data-pm-grant-form] button').click();
       await all.locator('[data-pm-grant="person:ana"]', {hasText: 'Ana · Read'}).waitFor();
@@ -276,8 +275,8 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       await page.locator('#inboxes-letters-in [data-pm-address="as_1"] a').click();
       const letters = page.locator('#inbox-letters');
       await letters.locator('[data-pm-letter="pm_2"]').waitFor();
-      assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/postal/as_1');
-      assert.equal(await page.locator('#inbox-head h2').textContent(), '8 The Green, Suite 4000, Dover DE 19901');
+      assert.equal(await page.evaluate(() => location.hash), '#/tools/address/as_1');
+      assert.equal(await page.locator('#inbox-head h1').textContent(), '8 The Green, Suite 4000, Dover DE 19901');
       assert.deepEqual(await letters.locator('[data-pm-letter]').evaluateAll(trs => trs.map(tr => tr.dataset.pmLetter)), ['pm_3', 'pm_2', 'pm_1']);
       assert.equal(await letters.locator('[data-pm-letter="pm_2"] [data-pm-task]').getAttribute('href'), '#/task/t-42');
       assert.equal(await letters.locator('[data-pm-letter="pm_2"] [data-pm-pdf]').getAttribute('href'), '/api/v2/postal/items/pm_2/file');
@@ -304,42 +303,32 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       assert.deepEqual(state.sent.filter(s => s.path.endsWith('/retry')).map(s => s.path), ['/api/v2/postal/items/pm_3/retry']);
       assert.equal(await page.locator('#inbox-letters [data-pm-retry]').count(), 0);
       // An address waiting for Form 1583 shows where it is, and not its address yet.
-      await go(page, '#/settings/inboxes/postal/as_2');
+      await go(page, '#/tools/address/as_2');
       await page.locator('[data-pm-progress="pending_1583"]').waitFor();
-      assert.equal(await page.locator('#inbox-head h2').textContent(), 'Texas · Private');
+      assert.equal(await page.locator('#inbox-head h1').textContent(), 'Texas · Private');
       assert.deepEqual(await page.locator('[data-pm-progress] li').evaluateAll(lis => lis.map(li => [li.textContent, li.className])),
         [['Ordered', 'done'], ['Form 1583', 'cur'], ['Receiving', '']]);
-      assert.ok(!(await page.locator('#set-inboxes').innerText()).includes('Keller Pkwy'));
+      assert.ok(!(await page.locator('#tools-inbox').innerText()).includes('Keller Pkwy'));
       await page.locator('#inbox-letters .empty', {hasText: 'No letters yet.'}).waitFor();
       assert.deepEqual(errors, []);
       await page.close();
     }
     {
-      // Mail by email turned off with letters in: listed as Not in use, its page keeps them, and a failed one is retried.
+      // Mail by email turned off with letters in: Not in use, its page keeps them, and a failed one is retried.
       const base = server();
       const state = Object.assign(base, {intake: null, items: [{id: 'pm_e1', provider: 'email', received_at: AGO(10), kind: null, summary: '',
         sender: '', status: 'failed', task_id: null, attempts: 5, error: 'unreadable'}, ...base.items]});
-      const {page, errors} = await open(browser, {state, hash: '#/settings/inboxes'});
-      const row = page.locator('[data-ib-row="postal:intake"]');
-      await row.waitFor();
-      assert.equal(await row.locator('[data-ib-status]').getAttribute('data-ib-status'), 'off');
-      assert.equal(await row.locator('[data-ib-status]').innerText(), 'Not in use');
-      await row.locator('.ib-name a').click();
+      const {page, errors} = await open(browser, {state, hash: '#/settings/inboxes/postal/intake'});
       const letters = page.locator('#inbox-letters');
       await letters.locator('[data-pm-letter="pm_e1"]').waitFor();
-      assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/postal/intake');
+      assert.equal(await page.evaluate(() => location.hash), '#/tools/address/intake');
       assert.deepEqual(await letters.locator('[data-pm-letter]').evaluateAll(trs => trs.map(tr => tr.dataset.pmLetter)), ['pm_e1'], 'only emailed letters');
       assert.equal(await page.locator('#inbox-head [data-ib-status]').getAttribute('data-ib-status'), 'off');
       assert.equal(await page.locator('[data-pm-intake-stop]').count(), 0, 'nothing to stop');
-      assert.equal(await page.locator('[data-pm-intake-on]').getAttribute('href'), '#/settings/inboxes/settings/letters-in');
+      assert.equal(await page.locator('[data-pm-intake-on]').getAttribute('href'), '#/tools/settings/letters-in');
       await letters.locator('[data-pm-retry="pm_e1"]').click();
       await page.locator('#inbox-letters [data-pm-letter="pm_e1"] [data-pm-task]').waitFor();
       assert.deepEqual(state.sent.filter(s => s.path.endsWith('/retry')).map(s => s.path), ['/api/v2/postal/items/pm_e1/retry']);
-      // With no emailed letters, mail by email that is off has no row.
-      state.items = state.items.filter(m => m.provider !== 'email');
-      await go(page, '#/settings/inboxes');
-      await page.locator('[data-ib-row="postal:as_1"]').waitFor();
-      assert.equal(await page.locator('[data-ib-row="postal:intake"]').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -354,7 +343,7 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       assert.equal(await pane.locator('#settings-mail-access').count(), 0, 'a member gives no Read');
       assert.equal(await pane.locator('[data-pm-order]').count(), 0);
       assert.equal(await pane.locator('[data-pm-intake-shown]').innerText(), 'mail@acme.example');
-      await go(page, '#/settings/inboxes/postal/as_1');
+      await go(page, '#/tools/address/as_1');
       await page.locator('#inbox-letters [data-pm-letter="pm_3"]').waitFor();
       assert.equal(await page.locator('[data-pm-retry]').count(), 0);
       assert.equal(await page.locator('#inbox-access [data-pm-grant-form]').count(), 0, 'no grants on the page for a member');
@@ -362,16 +351,12 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       await page.close();
     }
     {
-      // No Tico Gateway: the card says so, with the way to connect, nothing can be ordered, and the list shows no error.
+      // No Tico Gateway: the card says so, with the way to connect, and nothing can be ordered.
       const {page, errors} = await open(browser, {state: Object.assign(server(), {gateway: false})});
       const pane = page.locator('#inboxes-letters-in');
       await pane.locator('[data-pm-gateway]').waitFor();
       assert.equal(await pane.locator('[data-pm-gateway]').innerText(), 'Connect Tico Gateway first. Key and connection');
       assert.equal(await pane.locator('[data-pm-order]').isDisabled(), true);
-      await go(page, '#/settings/inboxes');
-      await page.locator('[data-ib-row="tico:ib_mail"]').waitFor();
-      assert.equal(await page.locator('[data-ib-error]').count(), 0);
-      assert.equal(await page.locator('[data-ib-kind="postal"]').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -393,7 +378,7 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       assert.equal(await dialog.locator('[data-pm-scan]').innerText(), 'Scans $1 each, $0.25 a page after 10');
       if (shots) await dialog.screenshot({path: path.join(shots, 'letters-order-phone.png')});
       await dialog.locator('[data-close]').click();
-      await go(page, '#/settings/inboxes/postal/as_1');
+      await go(page, '#/tools/address/as_1');
       await page.locator('#inbox-letters [data-pm-letter="pm_2"]').waitFor();
       await page.locator('#inbox-access [data-pm-grants-empty]').waitFor();
       assert.ok(await noSideways(page), 'an address page fits a phone');

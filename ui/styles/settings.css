@@ -74,7 +74,7 @@ input.people-switch:checked{background:var(--ink)}input.people-switch:checked::b
 input.people-switch:checked::before{transform:translateX(14px)}
 input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-list-card>header{align-items:center}
-.people-head,.people-row{display:grid;grid-template-columns:minmax(0,1fr) 120px 100px 36px;align-items:center;gap:var(--s3)}
+.people-head,.people-row{display:grid;grid-template-columns:minmax(0,1fr) 120px 100px 72px 36px;align-items:center;gap:var(--s3)}
 .people-head{padding:0 0 6px;border-bottom:1px solid var(--line);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .people-list{list-style:none;margin:0;padding:0}
 .people-row{padding:10px 0;border-bottom:1px solid var(--line)}
@@ -87,8 +87,11 @@ input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-role{font-size:var(--t-base)}.people-role[data-role=owner]{font-weight:600}
 .people-cell-signin{display:flex;align-items:center;gap:8px}
 .people-switch-label{display:none;font-size:var(--t-base);color:var(--muted)}
+.people-cell-recorder{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}.people-cell-recorder.is-old{color:var(--wait-ink)}
+.people-recorder-label{display:none}
 .people-cell-more{position:relative;display:flex;justify-content:flex-end;gap:var(--s1)}
-.people-more{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.people-more{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;overflow:hidden;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.people-more .nav-icon{width:20px;height:20px;font-size:20px}
 .people-more:hover,.people-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
 .people-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:30;min-width:180px;padding:var(--s1);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 8px 24px rgba(0,0,0,.16)}
 .people-menu[hidden]{display:none}
@@ -118,7 +121,8 @@ button.people-danger{background:var(--fail);color:var(--surface)}
   .people-mode{align-self:stretch}.people-mode button{flex:1;padding:8px 6px}
   .people-add{flex-wrap:wrap}.people-add input[name=email]{flex:1 1 100%}
   .people-head{display:none}
-  .people-row{grid-template-columns:auto minmax(0,1fr) 36px;grid-template-areas:"who who more" "role signin signin";row-gap:6px}
+  .people-row{grid-template-columns:auto minmax(0,1fr) 36px;grid-template-areas:"who who more" "role signin signin" "recorder recorder recorder";row-gap:6px}
+  .people-cell-recorder{grid-area:recorder;padding-left:42px}.people-cell-recorder:empty{display:none}.people-recorder-label{display:inline}
   .people-who{grid-area:who}.people-cell-role{grid-area:role;padding-left:42px}.people-cell-signin{grid-area:signin}.people-cell-more{grid-area:more}
   .people-row.is-left{grid-template-areas:"who more"}
   .people-switch-label{display:inline}
@@ -954,7 +958,8 @@ section.card>header .settings-head-act{margin-left:auto}
 .subs-owner{color:var(--muted)}
 .subs-count{color:var(--muted)}.subs-count .nav-icon{font-size:15px;vertical-align:-3px;margin-right:4px}
 .subs-usage{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}.subs-usage-w{min-width:2.4em}
-.subs-bar{display:inline-block;width:48px;height:4px;border-radius:2px;background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
+.subs-bar{display:inline-block;width:28px;height:4px;border-radius:2px;background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
+.subs-reset{white-space:nowrap}.subs-reset::before{content:'·';margin-right:6px;opacity:.6}
 .subs-bar b{display:block;height:100%;background:var(--ok)}.subs-bar.warn b{background:var(--wait)}.subs-bar.bad b{background:var(--fail)}
 .subs-more-cell{width:1%;text-align:right}
 .subs-more{min-height:var(--ctl-sm);padding:0 8px;line-height:1}

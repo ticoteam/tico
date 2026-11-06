@@ -1,13 +1,11 @@
 """Check health: the Maintenance run's plain-code step (no bot, no model). It finds what is wrong with this install now.
 
-Four readers feed it, each one read in the run's snapshot:
+Three readers feed it, each one read in the run's snapshot:
   - the code checks in backend/maintenance_health.py (the Health Monitor's old checks), and the busy-process records a
     computer posts hourly (`local_busy`, written by the server route, read here while fresh);
   - the production checks, backend/invariants.py CHECKS, through their `read` functions. The invariant sweep keeps only the
     Health page's state for them and files no task: every finding goes through this step's lifecycle, as `inv:<check id>`;
-  - the Health page's own checks (backend/health.py `view`), warn and bad ones, read as the owner (a read, no write). The
-    mail sending check is left out: the mail reader below files it with its approval;
-  - mail asks (backend/mail_settings.py `alerts`): a bot that asks to send mail, or to forward it, without a person's approval.
+  - the Health page's own checks (backend/health.py `view`), warn and bad ones, read as the owner (a read, no write).
 
 Lifecycle, per finding (its local key) and per signature (what it is, never where):
   - an urgent check files on the first run that finds it; a noisy check files on the second run (`pending` holds the first);
@@ -18,7 +16,6 @@ Lifecycle, per finding (its local key) and per signature (what it is, never wher
   - BotOps is woken once per run, not once per task: a new task, a back, or a cleared one adds to the run's wake, and the
     wake is one comment, on one of those tasks, that lists them (`_wake`). The gate `_wake_allowed` may refuse it, or
     only a task at its daily cap: refused tasks wait in the marker `health-wake:pending` for the next allowed run. Every other comment is quiet;
-  - a mail ask also gets an approval, raised by BotOps on its task, that turns mail sending on when a person approves it;
   - a Tico bug is not a task: it goes through the report path (backend/maintenance_health.py `report`). `run` calls it after
     its write transaction, for the signatures in `details.reports_due`, and the answers go to `details.reports`;
   - with no active BotOps bot nothing is written: the findings are listed in `details.unrouted` on the step's row.
@@ -33,7 +30,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from .. import health, hosted_updates, invariants, mail_settings, maintenance_limits, proposals, replication
+from .. import health, hosted_updates, invariants, maintenance_limits, replication
 from .. import maintenance_health as MH
 from .. import run_triggers as RT
 from ..store import H
@@ -41,8 +38,7 @@ from ..store import H
 log = logging.getLogger("tico.maintenance.check_health")
 
 BOTOPS = MH.BOTOPS
-REGISTRY_PREFIX = "health-task:"  # registry_metadata key per signature: {task, keys, count, last_comment, cleared, approvals}
-MAIL_CHECK = "mail_ask"
+REGISTRY_PREFIX = "health-task:"  # registry_metadata key per signature: {task, keys, count, last_comment, cleared}
 BUSY_FRESH_HOURS = 2         # a busy process not posted this long clears: its computer stopped sampling
 REREPORT_HOURS = 24          # a Tico bug already reported is reported again (a comment) at most this often
 COMMENT_HOURS = 24           # a repeat adds to a BotOps task's count at most this often
@@ -70,15 +66,12 @@ TAGS = {
     "relay_silent": "noisy", "recorder_drops": "noisy", "queue": "noisy", "computer_logins": "noisy", "tokens": "noisy",
     "slow": "noisy", "runner_load": "noisy", "performance": "noisy", "disk": "noisy", "turns": "noisy",
     "stalled_tasks": "noisy",                  # main's "Tasks not progressing" (hubdb.stalled_tasks): a task that may move on its own
-    MAIL_CHECK: "noisy",
 }
-# Health page checks this step files another way, so the page reader leaves them out: the mail reader files mail_sending
-# with its approval, and `invariant:<id>` rows are the production checks, which the invariant reader files as `inv:<id>`.
-PAGE_LEFT_OUT = {"mail_sending", "invariant"}
+# Health page checks this step files another way, so the page reader leaves them out: `invariant:<id>` rows are the
+# production checks, which the invariant reader files as `inv:<id>`.
+PAGE_LEFT_OUT = {"invariant"}
 FIX_PAGE = ("BotOps: open the check on Settings > Health for the detail, fix the cause it names, and the check clears on the "
             "next run. A fix only a person can make reaches a person as a Needs you card on this task.")
-FIX_MAIL = ("BotOps: ask the person who manages this bot to approve turning mail sending on. The approval on this task turns "
-            "the setting on when it is approved, and does nothing else.")
 FIX_RUN = "BotOps: nothing to do by hand; the check clears when the next run no longer finds it."
 
 
@@ -153,7 +146,6 @@ def gather(c, ctx):
     count, items = _page_findings(c, ctx, notes)
     checked += count
     found += items
-    found += _mail_findings(c, notes)
     checked += 1
     return checked, found, notes
 
@@ -229,24 +221,6 @@ def _page_findings(c, ctx, notes):
     return len(page.get("checks", [])), out
 
 
-def _mail_findings(c, notes):
-    """A bot that asks for mail sending (or forwarding) a person has not approved: one finding per bot, filed with its
-    approval on the BotOps task."""
-    try:
-        asks = mail_settings.alerts(c)
-    except Exception as exc:  # noqa: BLE001 - a read that fails is not an ask that cleared
-        log.warning("Check health: mail asks could not be read", exc_info=True)
-        notes["mail"] = f"failed: {type(exc).__name__}"
-        _unread(notes, "mail")
-        return []
-    out = []
-    for bot, extra in asks:
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
-        out.append(MH._finding(f"mail:{bot}", MAIL_CHECK, MH.SETUP, "Mail sending needs a person's approval",
-                               mail_settings.alert_text(name, extra), FIX_MAIL, severity=MH.WARN))
-    return out
-
-
 def _unread(notes, reader):
     """Marks a reader (or one production check) that failed this run: its findings were not read, so none of them clears."""
     notes.setdefault("unread", []).append(reader)
@@ -256,7 +230,7 @@ def _unread_key(key, unread):
     """Whether the reader of a finding failed this run, or the finding's own production check did."""
     if not unread:
         return False
-    reader = next((name for prefix, name in (("page:", "page"), ("mail:", "mail"), ("inv:", "inv"), ("local_busy:", "busy"))
+    reader = next((name for prefix, name in (("page:", "page"), ("inv:", "inv"), ("local_busy:", "busy"))
                    if key.startswith(prefix)), "code")
     return key in unread or reader in unread
 
@@ -268,11 +242,11 @@ def _row_item(row):
 
 # ------------------------------------------------------------------------------------------------------------- lifecycle
 def apply(c, ctx, checked, found, notes):
-    """Records what the readers found, files it as the tags say, and writes the tasks, comments and approvals. Returns the
+    """Records what the readers found, files it as the tags say, and writes the tasks and comments. Returns the
     step result."""
     now, botops = _now(ctx), _botops_active(c)
     details = {"notes": notes, "botops": botops, "filed": [], "pending": [], "cleared": [], "tasks": {}, "unrouted": [],
-               "reports_due": [], "approvals": []}
+               "reports_due": []}
     seen = {item["key"]: item for item in found}
     wakes = []                                  # BotOps tasks whose change wakes BotOps this run: new, back, cleared
 
@@ -286,7 +260,6 @@ def apply(c, ctx, checked, found, notes):
         if not row["pending"]:
             gone_sigs.add(row["signature"])
             details["cleared"].append(row["key"])
-        _forget_approval(c, row["key"])
 
     # 2. What the readers found now: urgent files now, noisy on its second run.
     filed_sigs = set()
@@ -357,12 +330,10 @@ def _task_for(c, sig, rows, now, details, wakes):
         if made is None:
             details["unrouted"].append({"signature": sig, "titles": [r["title"] for r in rows], "refused": True})
             return
-        reg = {"task": made["id"], "keys": places, "count": total, "last_comment": now, "cleared": False,
-               "approvals": reg.get("approvals", {})}
+        reg = {"task": made["id"], "keys": places, "count": total, "last_comment": now, "cleared": False}
         _reg_set(c, _reg_key(sig), reg)
         details["tasks"][sig] = made["id"]
         wakes.append(made["id"])
-        _mail_approvals(c, sig, rows, made["id"], reg, details, now)
         return
     if reg.get("cleared"):
         if _comment(c, task["id"], f"Back: {rows[0]['title']} (seen {total} times, last at {now[:16]} UTC). "
@@ -380,7 +351,6 @@ def _task_for(c, sig, rows, now, details, wakes):
     reg["count"] = total
     _reg_set(c, _reg_key(sig), reg)
     details["tasks"][sig] = task["id"]
-    _mail_approvals(c, sig, rows, task["id"], reg, details, now)
 
 
 def _cleared_comment(c, sig, now, wakes):
@@ -400,58 +370,6 @@ def _cleared_comment(c, sig, now, wakes):
     wakes.append(task["id"])
     reg["cleared"] = True
     _reg_set(c, _reg_key(sig), reg)
-
-
-def _mail_approvals(c, sig, rows, task_id, reg, details, now):
-    """A mail ask gets one approval on its task, raised by BotOps, until a person decides it. It turns the setting on when
-    approved (proposals.apply, mail_alert)."""
-    if sig != MH.signature(MAIL_CHECK):
-        return
-    asked = reg.setdefault("approvals", {})
-    for row in rows:
-        bot = row["key"].split(":", 1)[1]
-        if bot in asked:
-            continue
-        payload = _mail_payload(c, row)
-        if payload is None:
-            continue
-        try:
-            c.execute("SAVEPOINT check_health_approval")
-            proposals.check(c, "mail_alert", payload)
-            made = H.approval_request(c, "bot:" + BOTOPS, "mail_alert", payload, task_id=task_id,
-                                      to=proposals.decider(c))
-            c.execute("RELEASE check_health_approval")
-        except Exception:  # noqa: BLE001 - an approval that cannot be raised waits for the next run, the task stays
-            c.execute("ROLLBACK TO check_health_approval")
-            c.execute("RELEASE check_health_approval")
-            log.warning("Check health: could not raise the mail approval for %s", bot, exc_info=True)
-            continue
-        approval = made["id"] if isinstance(made, dict) else made
-        asked[bot] = approval
-        details["approvals"].append({"bot": bot, "approval": approval})
-    _reg_set(c, _reg_key(sig), reg)
-
-
-def _mail_payload(c, row):
-    """The payload a person approves: the bot and the exact setting (outbound and forward targets) the bot asks for now."""
-    bot = row["key"].split(":", 1)[1]
-    asks = [extra for ask_bot, extra in mail_settings.alerts(c) if ask_bot == bot]
-    if not asks:
-        return None
-    extra = asks[0]
-    return {"bot": bot, "outbound_send": bool(extra["outbound_send"]), "forward_to": list(extra.get("forward_to") or [])}
-
-
-def _forget_approval(c, key):
-    """A mail ask that cleared: its approval entry goes, so the next ask for that bot raises a new one."""
-    if not key.startswith("mail:"):
-        return
-    bot = key.split(":", 1)[1]
-    row = c.execute("SELECT signature FROM health_findings WHERE key=?", (key,)).fetchone()
-    sig = row["signature"] if row else MH.signature(MAIL_CHECK)
-    reg = _reg_get(c, _reg_key(sig))
-    if reg.get("approvals", {}).pop(bot, None) is not None:
-        _reg_set(c, _reg_key(sig), reg)
 
 
 def _report_due(c, sig, now):

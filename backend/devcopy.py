@@ -80,13 +80,15 @@ EMPTY = (
     # credentials
     "credentials", "credential_keys", "credential_grants", "credential_uses", "credential_requests", "credential_imports",
     "directory_credentials", "company_storage", "tico_storage",
+    # API tools: emptied with their keys, so a copy never calls a vendor or shows a real vendor's call log
+    "tools", "tool_checks", "tool_calls",
     # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
     "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "pending_subscription_fallbacks", "subscription_connects",
     # A frozen outbox, its operation receipts and preview proofs can authorize delivery on the source only.
     "email_sends", "email_send_operations", "email_send_previews", "email_legacy_automations",
     # mail, Slack, GitHub, Granola, meeting bots, support
-    "mail_mailboxes", "mailboxes", "mailbox_accesses", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
-    # Settings > Inboxes: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
+    "mail_mailboxes", "mailboxes", "mailbox_accesses", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
+    # Tools > Settings > Email: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
     # computer reported. A copy holds none of them (google_connects.client_id goes with its table).
     "google_workspaces", "google_setup_codes", "google_oauth_clients", "connector_reports",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
@@ -95,6 +97,8 @@ EMPTY = (
     "inbound_inboxes", "inbound_messages", "inbound_sync",
     # Personal phone consent and paid dispatch queues belong to the source install.
     "alert_preferences", "personal_alerts",
+    # Which Recorder each person's computers run (backend/recorder_installs.py): per-machine, the copy starts without it.
+    "recorder_installs",
     "bills_inbound",     # emailed bills: senders, subjects and HQ delivery ids
     "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
@@ -164,7 +168,7 @@ KEEP = frozenset((
     "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "market_pages", "market_turn_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
     "meeting_items", "meeting_task_links", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
     "message_links_seen", "notes", "pages", "page_identities", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
-    "recording_source_refs", "recording_transcripts", "org_rules", "org_rule_misses", "redesign_migrated", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_reads", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners", "runner_states",
+    "recording_source_refs", "recording_transcripts", "org_rules", "redesign_migrated", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_reads", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners", "runner_states",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "memory_tidy_cards", "memory_tidy_keeps", "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_versions",
     "system_runs", "tags", "task_assets",

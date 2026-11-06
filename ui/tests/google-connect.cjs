@@ -1,7 +1,7 @@
-// Offline browser regression: Settings > Inboxes > Settings > Email, Connect Google for your own mailbox
+// Offline browser regression: Tools › Settings › Email, Connect Google for your own mailbox
 // (ui/google-connect.js). A member connects their own mailbox (read only with Tico's shared app) and sees no setup; a
 // Workspace policy denial is shown as the admin's; only Google's own sign-in page is opened, and its return address
-// (#/settings/inbox) opens Inboxes > Settings > Email.
+// (#/settings/inbox) opens Tools › Settings › Email.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -49,9 +49,8 @@ const {unrouted} = require('./support/routes.cjs');
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
-    await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('[data-settings-tab=connections]').click();
-    await page.locator('[data-ib-settings]').click();
+    await page.goto('https://tico-ui.test/#/tools');
+    await page.locator('[data-tl-settings]').click();
     const pane = page.locator('#set-google');
     await pane.locator('[role=alert]').waitFor();
     // A member is never asked how to connect Google and never sees its setup or the team: only their own account.
@@ -71,11 +70,10 @@ const {unrouted} = require('./support/routes.cjs');
     await pane.locator('[data-google-connect]').click();
     await page.waitForURL(u => new URL(u).hostname === 'accounts.google.com');
 
-    // Connected: back on Inboxes > Settings > Email (Google returns to #/settings/inbox), read only, with Disconnect, which revokes.
+    // Connected: back on Tools › Settings › Email (Google returns to #/settings/inbox), read only, with Disconnect, which revokes.
     google = {...google, status: 'connected', kind: null, message: null, hint: null, can: ['read']};
     await page.goto('https://tico-ui.test/#/settings/inbox');
-    await page.locator('[data-settings-tab=connections][aria-selected=true]').waitFor();
-    await page.waitForFunction(() => location.hash === '#/settings/inboxes/settings/email');
+    await page.waitForFunction(() => location.hash === '#/tools/settings/email');
     await page.locator('#set-google [data-google-disconnect]').waitFor();
     assert.match(await page.locator('#set-google').innerText(), /Connected: Tico reads cara@acme\.example's mail and calendar, read only/);
 
@@ -117,7 +115,7 @@ const {unrouted} = require('./support/routes.cjs');
     // A server without Tico's Google app says so, with no button.
     google = {configured: false, mailbox: 'cara@acme.example', status: 'none'};
     await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
-    await page.waitForFunction(() => /Ask an admin to connect Google in Settings > Inboxes/.test(document.querySelector('#set-google')?.textContent || ''));
+    await page.waitForFunction(() => /Ask an admin to connect Google in Tools › Settings/.test(document.querySelector('#set-google')?.textContent || ''));
     assert.equal(await page.locator('#set-google [data-google-connect]').count(), 0);
     assert.deepEqual(errors, []);
   } finally {

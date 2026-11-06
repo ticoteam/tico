@@ -530,8 +530,9 @@ class HookRelay:
 
     async def loop(self, stop):
         while not stop.is_set():
+            from . import system_routines as SR   # each pull is one run of Gateway webhooks (Settings > Routines)
             try:
-                await asyncio.to_thread(self.tick)
+                await asyncio.to_thread(SR.pass_of, self.store, "gateway_webhooks", self.tick)
             except Exception:
                 pass                                # the next tick tries again; the error is in the state row
             try:

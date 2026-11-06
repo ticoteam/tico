@@ -32,6 +32,10 @@ pub(crate) fn client() -> Result<Client> {
         .build()?;
     Ok(HTTP.get_or_init(|| client).clone())
 }
+/// This build's version, the release's (build.rs), sent to Tico so it can show who runs an old Recorder.
+pub const VERSION: &str = env!("TICO_RECORDER_VERSION");
+pub const VERSION_HEADER: &str = "X-Tico-Recorder-Version";
+pub const INSTALL_HEADER: &str = "X-Tico-Recorder-Install";
 /// A Tico without an endpoint the recorder uses answers 404 or 405 with no Tico error code.
 pub const OLD_TICO: &str = "This Tico doesn't support this yet. Update Tico to use it.";
 pub(crate) fn response(response: reqwest::blocking::Response) -> Result<Value> {
@@ -193,7 +197,11 @@ pub fn transcribe_next_with(
     })();
     let (text, mut words, error) = match result {
         Ok((text, words)) => (text, words, String::new()),
-        Err(error) => (String::new(), vec![], error.to_string()),
+        Err(error) => (
+            String::new(),
+            vec![],
+            crate::retry::stored(&error, "Transcription is retrying"),
+        ),
     };
     for word in &mut words {
         word.start_ms += chunk.start_ms;
@@ -213,6 +221,15 @@ pub fn transcribe_next_with(
         &error,
         json!({"model":config.transcription_model,"outcome":outcome}),
     )?;
+    #[cfg(feature = "diarize")]
+    if chunk.channel == "them"
+        && error.is_empty()
+        && store.peek(&chunk.recording_id)?.state == "recording"
+    {
+        // Capture and transcription stay usable if the local model is unavailable. Stream labels
+        // remain provisional; the full voiceprint/diarization pass after Stop is still authoritative.
+        let _ = crate::diarize::label_provisional(store, &chunk.recording_id);
+    }
     Ok(true)
 }
 
@@ -386,6 +403,17 @@ impl Tico {
             oauth: false,
         })
     }
+    /// Every call to Tico carries the token, this build's version and this copy's install id. Only calls to Tico:
+    /// speech and chat providers never see the id.
+    fn signed(
+        &self,
+        request: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
+        request
+            .bearer_auth(&self.token)
+            .header(VERSION_HEADER, VERSION)
+            .header(INSTALL_HEADER, settings::install_id())
+    }
     pub fn call(&self, path: &str, body: Option<&Value>, key: &str) -> Result<Value> {
         ensure!(
             path.starts_with('/') && !path.starts_with("//"),
@@ -404,7 +432,7 @@ impl Tico {
                 .json(body),
             None => self.client.get(url),
         };
-        response(request.bearer_auth(&self.token).send()?)
+        response(self.signed(request).send()?)
             .with_context(|| format!("Tico request {path} failed"))
     }
     pub fn unlink_meeting_task(&self, meeting: &str, task: &str, key: &str) -> Result<Value> {
@@ -413,9 +441,7 @@ impl Tico {
             .map_err(|_| anyhow::anyhow!("Invalid Tico address"))?
             .extend(["api", "v2", "meetings", meeting, "tasks", task]);
         let reply = self
-            .client
-            .delete(url)
-            .bearer_auth(&self.token)
+            .signed(self.client.delete(url))
             .header("Idempotency-Key", key)
             .send()?;
         if reply.status() == reqwest::StatusCode::NOT_FOUND {
@@ -445,9 +471,7 @@ impl Tico {
             path
         );
         let reply = self
-            .client
-            .get(url)
-            .bearer_auth(&self.token)
+            .signed(self.client.get(url))
             .header("Accept", "text/event-stream")
             .send()
             .with_context(|| format!("Tico request {path} failed"))?;

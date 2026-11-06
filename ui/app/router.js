@@ -126,19 +126,7 @@ function route(hash = location.hash) {
     SETTINGS_TAB = 'webhooks'; location.replace(SETTINGS); return;
   }
   else if (S.route === '#/health') { SETTINGS_TAB = 'health'; location.replace(SETTINGS); return; }   // Health moved into Settings
-  // Settings > Inboxes (ui/app/inboxes.js): the list, Inboxes > Settings and its sections, or one inbox.
-  else if (S.route === '#/settings/inboxes' || /^#\/settings\/inboxes\/[A-Za-z0-9_.@%:-]+(?:\/[A-Za-z0-9_.@%:-]+)?\/?$/.test(S.route)) {
-    INBOXES_VIEW = S.route === '#/settings/inboxes' ? '' : inboxesRoute(S.route.slice('#/settings/inboxes/'.length));
-    SETTINGS_TAB = 'connections'; location.replace(SETTINGS); return;
-  }
-  // The tabs Inboxes replaced: Mailboxes and one mailbox, Email & Phone, Mail, and Google's sign-in return
-  // (backend/google_connect.py INBOX), which lands on the Connection card in Inboxes > Settings > Email.
-  else if (/^#\/settings\/(mailboxes|inbound|company-inbox|email-phone|mail|inbox|google)(\/[A-Za-z0-9-]+)?\/?$/.test(S.route)) {
-    const [, old, rest] = S.route.match(/^#\/settings\/([a-z-]+)(?:\/([A-Za-z0-9-]+))?/);
-    INBOXES_VIEW = old === 'mailboxes' ? (rest ? 'mailbox/' + rest : '') : old === 'mail' ? 'settings/letters-in'
-      : ['inbox', 'google'].includes(old) ? 'settings/email' : rest === 'set-inbound' ? 'settings/email' : '';
-    SETTINGS_TAB = 'connections'; SETTINGS_REVEAL = ''; location.replace(SETTINGS); return;
-  }
+  // Settings > Inboxes and the tabs it replaced are Tools pages now: ui/app/tools.js toolsRoute redirects them first.
   else if (S.route === '#/settings/roadmap') { SETTINGS_TAB = 'tasks'; ROADMAP_SETTINGS_REVEAL = true; location.replace(SETTINGS); return; }   // Health's roadmap suggestions fix
   else if (S.route === '#/settings/storage') { SETTINGS_TAB = 'storage'; location.replace(SETTINGS); return; }   // Health's Set up S3
   // The old Rules and Routines links open Automations without carrying their retired filters.
@@ -157,12 +145,11 @@ function route(hash = location.hash) {
   // the bar, so a tab can be bookmarked and shared: #/settings/gateway, #/settings/models, …
   else if (/^#\/settings\/[a-z-]+(?:\/[a-z0-9-]+)?\/?(\?.*)?$/.test(S.route)) {
     const [path, query] = S.route.slice(11).split('?'), [tab, card] = path.split('/');
-    if (tab === 'history' || tab === 'health') settingsHistoryAddress(query);   // History's view and filters (ui/app/settings-history.js)
-    SETTINGS_REVEAL = card ? '#' + card : ''; INBOXES_VIEW = '';
+    if (tab === 'history') settingsHistoryAddress(query);   // History's view and filters (ui/app/settings-history.js)
+    SETTINGS_REVEAL = card ? '#' + card : '';
     // The Models card and Company turn levels moved from Computers to Models.
     SETTINGS_TAB = tab === 'devices' && SETTINGS_MOVED_TO_MODELS.includes(SETTINGS_REVEAL) ? 'models' : tab; location.replace(SETTINGS); return;
   }
-  else if (S.route === CREDENTIALS) pageCredentials();
   else if (S.route === SQL_PAGE) pageSql();
   else if (S.route === MAIL || S.route.startsWith(MAIL + '?')) pageMail();
   else if (S.route === MESSAGING || S.route.startsWith(MESSAGING + '?')) pageMessaging();
@@ -178,7 +165,6 @@ function route(hash = location.hash) {
     return;
   }
   else if (S.route === DOCS || S.route.startsWith(DOCS + '/') || S.route.startsWith(DOCS + '?')) pageCompanyDocs();
-  else if (S.route === INTEGRATIONS || S.route.startsWith(INTEGRATIONS + '/')) pageIntegrations();
   else if (S.route === '#/runs') { SETTINGS_TAB = 'runs'; location.replace(SETTINGS); return; }   // Runs moved into Settings > History
   else if (S.route === LEARNINGS || S.route.startsWith(LEARNINGS + '?')) pageLearnings();
   else if (S.route === '#/usage') pageUsage();

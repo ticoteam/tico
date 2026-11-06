@@ -105,7 +105,7 @@ team on localhost with no setup ([docs/demo.md](docs/demo.md)).
 | Mode | Where the server runs | Status |
 |---|---|---|
 | Docker | Any Linux server, HTTPS by Caddy or Cloudflare Tunnel, built-in Google or Microsoft sign-in | the one-line installer; [docs/install.md](docs/install.md) |
-| Local only | The same Mac as the runner, bound to `127.0.0.1` | For trying Tico out; `scripts/tico env create --local` (below) |
+| Local only | The same Mac as the runner, bound to `127.0.0.1` | For trying Tico out; `scripts/tico-computer env create --local` (below) |
 
 The server runs no bots or model CLIs and may call your configured Decision provider, and a runner never holds team-wide authority: it works one
 leased run at a time. A bot is one git repository plus one row on the server. One environment
@@ -216,7 +216,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_OIDC_CLIENT_ID` | For `oidc`: the OAuth client id | `1234-abc.apps.googleusercontent.com` |
 | `TICO_OIDC_CLIENT_SECRET` or `TICO_OIDC_CLIENT_SECRET_FILE` | For `oidc`: the client secret, or a file holding it | `/etc/tico/oidc-secret` |
 | `TICO_OIDC_ALLOWED_DOMAINS` | For `oidc`, optional: comma-separated email domains that may sign in (Google also checks the `hd` claim) | `acme.com` |
-| `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET` | Optional: the server's Google OAuth web client, so each person can connect their own inbox and calendar, read only, from Settings > Inboxes ([docs/mail.md](docs/mail.md#connect-your-google-account)) | `1234-abc.apps.googleusercontent.com` |
+| `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET` | Optional: the server's Google OAuth web client, so each person can connect their own inbox and calendar, read only, from Tools > Settings > Email ([docs/mail.md](docs/mail.md#connect-your-google-account)) | `1234-abc.apps.googleusercontent.com` |
 | `TICO_SESSION_IDLE_SECONDS` and `TICO_SESSION_ABSOLUTE_SECONDS` | For `oidc`, optional: how long a sign-in lasts without use (default 30 days) and in all (default 90 days). Lower them to sign humans out sooner | `28800` |
 | `TICO_STREAM_KEEPALIVE_SECONDS` | Optional: how often a quiet event stream (pages, runners) sends a keepalive, 5 to 50 seconds (default 15). Keep it under the idle timeout of any proxy in front | `20` |
 | `TICO_SESSION_SECRET` | For `oidc`, optional: at least 32 characters, signs the sign-in round trip. Generated and kept in `tico-session-secret` beside the database (mode 0600) when unset | |
@@ -286,18 +286,22 @@ change, change this repository.
 
 ## Operating commands
 
-`scripts/tico` is the one command on a Mac that runs bots (on Linux it does the same with systemd user units, [install.md](docs/install.md#a-linux-checkout-systemd)). `scripts/tico help` prints the full usage; the groups are:
+`scripts/tico-computer` is the one command on a Mac that runs bots (on Linux it does the same with systemd user units, [install.md](docs/install.md#a-linux-checkout-systemd)). `scripts/tico-computer help` prints the full usage; the groups are:
 
 ```
-scripts/tico [-e ENV] install|uninstall|restart|status|doctor|logs|update|open
-scripts/tico env create|list|show|remove ...         the teams on this Mac
-scripts/tico -e ENV enroll --code-file F --label L   register this Mac for one team
-scripts/tico -e ENV profile add|list|login|assign    the subscriptions its bots run on
-scripts/tico -e ENV bot create SLUG --name "Display" [--template T]
-scripts/tico -e ENV server install|uninstall|start|stop|restart|status|logs
+scripts/tico-computer [-e ENV] install|uninstall|restart|status|doctor|logs|update|open
+scripts/tico-computer env create|list|show|remove ...         the teams on this Mac
+scripts/tico-computer -e ENV enroll --code-file F --label L   register this Mac for one team
+scripts/tico-computer -e ENV profile add|list|login|assign    the subscriptions its bots run on
+scripts/tico-computer -e ENV bot create SLUG --name "Display" [--template T]
+scripts/tico-computer -e ENV server install|uninstall|start|stop|restart|status|logs
 ```
 
 `-e ENV` (or `TICO_ENV`) picks a team environment.
+
+`install` links `~/.local/bin/tico-computer` and `~/.local/bin/tico`. `tico` takes the same commands and hands any
+other to `hub` (`tico task list` is `hub task list`); in a later release `tico` becomes the teamwork CLI and these
+commands stay on `tico-computer` only.
 
 `scripts/setup-runner.sh [--env <slug>] <enrollment.json> [workspace]` does the venv, the
 enrollment, the bot service and `doctor` in one go from a file downloaded by **Add computer**, and
@@ -324,8 +328,8 @@ dependency: `marked` and the icon font are vendored in `ui/vendor/` with their l
 The live checkout on an owner's Mac is what the runner executes: the launchd jobs run
 `python -m runner_support` with that directory as the working directory, and the bot job execs the Rust runner built
 from that tree (rebuilt on restart when `runner-rs/` changed). A pull without a restart leaves the old code
-running (`scripts/tico status` says so explicitly). Do development in a git worktree, never in the live checkout, and use
-`scripts/tico update`, which pulls and restarts after waiting for runs in flight.
+running (`scripts/tico-computer status` says so explicitly). Do development in a git worktree, never in the live checkout, and use
+`scripts/tico-computer update`, which pulls and restarts after waiting for runs in flight.
 
 ## License
 

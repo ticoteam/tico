@@ -1,34 +1,78 @@
-/* Update banner: a small floating note, bottom right. Styling is minimal; the page's own styles can take over. */
+/* Update banner: a small floating note, top right under the header (clear of the Record button). Styling is minimal; the page's own styles can take over. */
 .update-banner {
   position: fixed;
+  top: 64px;
   right: 16px;
-  bottom: 16px;
   z-index: 60;
+  max-width: calc(100% - 32px);
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 7px 8px 7px 12px;
   border: 1px solid var(--line-2);
   border-radius: 8px;
-  background: var(--bg);
-  color: inherit;
+  background: var(--raised);
+  color: var(--text);
   font: 13px/1.3 var(--font);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
 }
 .update-banner[hidden] {
   display: none;
 }
-.update-restart {
-  border: 0;
-  border-radius: 6px;
-  padding: 4px 10px;
-  background: var(--accent);
-  color: var(--accent-text);
-  font: inherit;
-  cursor: pointer;
-}
 .update-banner .btn {
   margin-left: 4px;
+}
+.update-banner .update-restart {
+  margin-left: 8px;
+}
+/* Update ready: the version's one line of notes, then Restart. */
+.update-title {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.update-note {
+  margin-left: 8px;
+  max-width: 240px;
+  overflow: hidden;
+  color: var(--text-3);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* The launch prompt to move: one line and two buttons, near the top. */
+.update-banner.update-prompt {
+  right: auto;
+  left: 50%;
+  transform: translateX(-50%);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+  width: 360px;
+  max-width: calc(100% - 32px);
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--sheet);
+  box-shadow: var(--shadow-lg);
+}
+.update-prompt p {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+.update-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.update-actions .btn {
+  margin-left: 0;
+}
+.update-actions .value {
+  margin-right: auto;
+  color: var(--text-3);
+}
+.update-actions .value.warn {
+  color: var(--amber);
 }
 .update-close {
   border: 0;

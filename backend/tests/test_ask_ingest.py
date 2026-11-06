@@ -15,8 +15,8 @@ from backend import ask_ingest as A
 from backend import call_slots as CS
 from backend import hubdb as H
 from backend.tests.test_api import unrelated_task_managers
-from backend.tests.test_task_guest import run_on
-from backend.tests.test_task_guest import task as private_task
+from backend.tests.test_task_readers import run_on
+from backend.tests.test_task_readers import task as private_task
 from backend.tests.test_api import setup_attempt  # noqa: F401
 from backend.tests.test_file_reviews import publish
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post   # noqa: F401
@@ -95,7 +95,7 @@ def write_state(api):
     with api.app.state.store.read() as c:
         return {table: [tuple(row) for row in c.execute(f"SELECT * FROM {table} ORDER BY rowid")]
                 for table in ("tasks", "messages", "jobs", "task_holds", "history_events", "idempotency",
-                              "refusals", "quarantine_holds", "org_rule_holds", "org_rule_misses")}
+                              "refusals", "quarantine_holds", "org_rule_holds")}
 
 
 def assert_refused(api, response, before=None):

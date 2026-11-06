@@ -246,13 +246,13 @@ def install(app, store, auth):
             elif kind == "credential.revealed":
                 subject = creds.get(r["target"]) or "A credential"
                 result = REVEALS.get(r["action"], r["action"])
-                link = "#/credentials"
+                link = "#/tools/keys?show=credentials"
             elif kind == "permission.changed":
                 action, target = r["action"], r["target"] or ""
                 if action in ("credential.granted", "credential.revoked"):
                     subject = creds.get(target) or "A credential"
                     result = PERMISSIONS[action] + (" to " if action == "credential.granted" else " from ") + name(r["subject_actor"])
-                    link = "#/credentials"
+                    link = "#/tools/keys?show=credentials"
                 elif action.startswith("bot."):
                     subject, result, link = name("bot:" + target), PERMISSIONS[action], "#/bot/" + target
                 elif action == "person.access_edited":

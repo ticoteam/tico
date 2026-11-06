@@ -1,28 +1,21 @@
-// Offline browser regression: Settings > Inboxes (ui/app/inboxes.js and its kind files) over fakes of every kind's
-// routes (ui/tests/support/mailboxes-fake.cjs). One table lists Google mailboxes, Tico addresses (apart from Google
-// email), numbers and phone requests, mailing addresses, open orders and mail by email, with one status vocabulary;
-// search and the Kind / Status / Used by filters narrow it, no match offers Clear filters, and a long list pages. An
-// admin without company email sees first run until they skip it (optional steps dismiss, and stay dismissed); empty
-// offers it again. A member sees only their own mailbox and the ones shared with them. The old Mailboxes, Email &
-// Phone, Mail and Google addresses open the tab. Inboxes > Settings has a section a channel with every setting, and
-// Coming soon where another change fills it. Add inbox > Email connects a mailbox. Phone width has no sideways scroll,
-// light and dark. TICO_SHOTS=<dir> saves the list, Settings and first run at desktop and phone width.
+// Offline browser regression: the inbox kinds under Tools (ui/app/inboxes.js and its kind files) over fakes of every
+// kind's routes (ui/tests/support/mailboxes-fake.cjs). The old Settings > Inboxes, Mailboxes, Email & Phone, Mail and
+// Google addresses open their Tools pages. Tools › Settings has a section a channel with every setting, and Coming soon
+// where another change fills it; What Tico may do never loses a pending save to an older read. Add tool > Email (Google)
+// connects a mailbox. Phone width has no sideways scroll, light and dark. TICO_SHOTS=<dir> saves Settings and a page.
+// (The one list of every tool is Tools itself: ui/tests/tools.cjs.)
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const {googleFake, row: workspace} = require('./support/google-fake.cjs');
-const {mailboxesFake, box, open, shot} = require('./support/mailboxes-fake.cjs');
+const {googleFake} = require('./support/google-fake.cjs');
+const {mailboxesFake, open, shot} = require('./support/mailboxes-fake.cjs');
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
 const SHOTS = process.env.TICO_SHOTS || '';
 const NOW = Date.now() / 1000;
 const AGO = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
-const LIST = '[data-ib-row]';
-const rows = page => page.$$eval('[data-ib-row]', trs => trs.map(tr => [tr.dataset.ibRow,
-  tr.querySelector('.ib-kind').textContent.trim(), tr.querySelector('[data-ib-status]').textContent.trim()]));
-const ids = async page => (await rows(page)).map(r => r[0]);
 const writesTo = (fake, path, method = 'POST') => fake.writes.filter(w => w.path === path && w.method === method);
 const fits = page => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
-const settle = page => page.waitForFunction(() => !document.querySelector('#set-inboxes .skel'));
+const settle = page => page.waitForFunction(() => !document.querySelector('#tools-inbox .skel'));
 
 // Every other kind: a Tico address, a number, a quoted phone request, two addresses, an open order and mail by email.
 function others({gateway = true} = {}) {
@@ -54,250 +47,45 @@ function others({gateway = true} = {}) {
   return {extra, writes, inbound, requests, postal};
 }
 
-// A Google side with company email not set up yet: no Workspace key and no OAuth client (google-fake's start).
-const bare = () => googleFake();
-
 const scenarios = {
-  'an admin sees every inbox in one table, one status vocabulary, each row opening its page': async browser => {
-    const fake = mailboxesFake(), more = others();
-    Object.assign(fake.state.mailboxes[0], {newest_epoch: Math.floor(NOW) - 7200, used_by: {people: 1, bots: 1, names: ['Ana', 'Ops']}});
-    const {page, seen} = await open(browser, fake, googleFake(), {ready: LIST, extra: more.extra});
-    await page.locator('[data-ib-row="postal:intake"]').waitFor();
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/connections');
-    assert.equal(await page.locator('[data-settings-tab="connections"]').getAttribute('aria-selected'), 'true');
-    assert.deepEqual(await rows(page), [
-      ['mailbox:mb-ana', 'Email', 'Connected'],
-      ['mailbox:mb-ben', 'Email', 'Connected'],
-      ['mailbox:mb-support', 'Email', 'Connected'],
-      ['mailbox:mb-dan', 'Email', 'Awaiting person'],
-      ['mailbox:mb-old', 'Email', 'Not in use'],
-      ['tico:ibx_a', 'Tico address', 'Connected'],
-      ['number:ibx_s', 'Texts in', 'Connected'],
-      ['number:prq_q', 'Texts in', 'Quote $14.00 / 30 days'],
-      ['postal:as_1', 'Letters in', 'Connected'],
-      ['postal:as_2', 'Letters in', 'Waiting for Form 1583'],
-      ['postal:order-mo_1', 'Letters in', 'Ordered'],
-      ['postal:intake', 'Letters in', 'Connected'],
-    ]);
-    assert.equal(await page.locator('[data-ib-count]').textContent(), '12');
-    const ana = page.locator('[data-ib-row="mailbox:mb-ana"]');
-    assert.equal((await ana.locator('.ib-name .muted').textContent()).trim(), 'Ana · Ana, Ops');
-    assert.equal(await ana.locator('.ib-latest').textContent(), '2h ago');
-    assert.equal(await page.locator('[data-ib-row="postal:as_1"] .ib-latest').textContent(), '2h ago', 'a letter dates its address');
-    assert.equal(await ana.locator('.ib-name a').getAttribute('href'), '#/settings/inboxes/mailbox/mb-ana');
-    assert.equal(await page.locator('[data-ib-row="tico:ibx_a"] .ib-name a').getAttribute('href'), '#/settings/inboxes/tico/ibx_a');
-    assert.deepEqual(await page.locator('[data-ib-filter=kind] option').allTextContents(), ['All kinds', 'Email', 'Texts in', 'Letters in', 'Letters out']);
-    assert.equal(await page.locator('[data-ib-settings]').getAttribute('href'), '#/settings/inboxes/settings');
-    await page.locator('[data-ib-add] > summary').click();
-    assert.deepEqual(await page.locator('[data-ib-add-kind]').allTextContents(), ['Email (Google)', 'Tico address', 'Phone number', 'Mailing address']);
-    await page.locator('[data-ib-add] > summary').click();
-    // Each row opens its page, with the three sections and no side panel.
-    await page.locator('[data-ib-row="tico:ibx_a"] .ib-name a').click();
-    await page.locator('#inbox-head h2', {hasText: 'Account logins'}).waitFor();
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/tico/ibx_a');
-    assert.deepEqual(await page.locator('[data-ib-detail-body] > .card > header h2').allTextContents(), ['Who can use it', 'Automations', 'Recent']);
-    assert.deepEqual(await page.locator('#inbox-head .ib-actions button').allTextContents(), ['Check connection', 'Edit', 'Stop using in Tico']);
-    await shot(page, `inboxes-detail-desktop-light.png`, 'light');
-    await page.locator('.ib-crumb a').click();
-    await page.locator('[data-ib-row="postal:as_2"] .ib-name a').click();
-    await page.locator('[data-pm-progress="pending_1583"]').waitFor();
-    assert.deepEqual(await page.locator('[data-pm-progress] li').evaluateAll(lis => lis.map(li => `${li.textContent}:${li.className}`)),
-      ['Ordered:done', 'Form 1583:cur', 'Receiving:']);
-    assert.deepEqual(seen.errors, []);
-    await page.close();
-  },
-
-  'search and the filters narrow the table; no match offers Clear filters': async browser => {
-    const fake = mailboxesFake(), more = others();
-    Object.assign(fake.state.mailboxes.find(m => m.id === 'mb-support'), {used_by: {people: 2, bots: 1, names: ['Cara', 'Support bot', 'Ben']}});
-    Object.assign(fake.state.mailboxes.find(m => m.id === 'mb-ben'), {used_by: {people: 1, bots: 0, names: ['Ben']}, sync: 'failed'});
-    const {page, seen} = await open(browser, fake, googleFake(), {ready: LIST, extra: more.extra});
-    await page.locator('[data-ib-row="postal:intake"]').waitFor();
-    const q = page.locator('[data-ib-q]');
-    await q.fill('front');
-    assert.deepEqual(await ids(page), ['number:ibx_s']);
-    await q.fill('support bot');
-    assert.deepEqual(await ids(page), ['mailbox:mb-support'], 'a bot that uses it finds it');
-    await q.fill('vendor portal');
-    assert.deepEqual(await ids(page), ['tico:ibx_a'], 'what an inbox is used for finds it');
-    await q.fill('');
-    await page.locator('[data-ib-filter=kind]').selectOption('letters-in');
-    assert.deepEqual(await ids(page), ['postal:as_1', 'postal:as_2', 'postal:order-mo_1', 'postal:intake']);
-    await page.locator('[data-ib-filter=kind]').selectOption('');
-    await page.locator('[data-ib-filter=status]').selectOption('attention');
-    assert.deepEqual(await ids(page), ['mailbox:mb-ben']);
-    await page.locator('[data-ib-filter=status]').selectOption('pending');
-    assert.deepEqual(await ids(page), ['mailbox:mb-dan', 'number:prq_q', 'postal:as_2', 'postal:order-mo_1']);
-    await page.locator('[data-ib-filter=status]').selectOption('');
-    await page.locator('[data-ib-filter=used]').selectOption('bots');
-    assert.deepEqual(await ids(page), ['mailbox:mb-support']);
-    await page.locator('[data-ib-filter=kind]').selectOption('letters-out');
-    await page.locator('[data-ib-none]').waitFor();
-    assert.equal(await page.locator(LIST).count(), 0);
-    await page.locator('[data-ib-clear]').click();
-    assert.equal(await page.locator(LIST).count(), 12);
-    assert.deepEqual(await page.$$eval('[data-ib-filter]', els => els.map(el => el.value)), ['', '', '']);
-    assert.equal(await q.inputValue(), '');
-    assert.deepEqual(seen.errors, []);
-    await page.close();
-  },
-
-  'a long list shows 25 rows and Show more pages the rest': async browser => {
+  'the old Settings > Inboxes, Mailboxes, Email & Phone, Mail and Google addresses open their Tools pages': async browser => {
     const fake = mailboxesFake();
-    fake.state.mailboxes = Array.from({length: 30}, (_, n) => box(`mb-${n}`, `person${String(n).padStart(2, '0')}@acme.example`));
-    const {page, seen} = await open(browser, fake, googleFake(), {ready: LIST});
-    assert.equal(await page.locator(LIST).count(), 25);
-    assert.match(await page.locator('.ib-more').textContent(), /^Showing 25 of 30/);
-    await page.locator('[data-ib-more]').click();
-    assert.equal(await page.locator(LIST).count(), 30);
-    assert.equal(await page.locator('.ib-more').count(), 0);
-    assert.deepEqual(seen.errors, []);
-    await page.close();
-  },
-
-  'a kind that fails to load says so, and the others still list': async browser => {
-    const fake = mailboxesFake(), more = others();
-    const extra = (p, method, body) => p === '/api/v2/inbound/inboxes'
-      ? {status: 503, body: {error: {code: 'inbound_unavailable', detail: 'Tico addresses and numbers did not answer. Please retry.'}}}
-      : more.extra(p, method, body);
-    const {page, seen} = await open(browser, fake, googleFake(), {ready: LIST, extra});
-    await page.locator('[data-ib-error]').first().waitFor();
-    assert.match(await page.locator('[data-ib-errors]').textContent(), /did not answer/);
-    assert.ok((await ids(page)).includes('mailbox:mb-ana'));
-    assert.deepEqual(seen.errors, []);
-    await page.close();
-  },
-
-  'first run: an admin with no company email sees setup until they skip it; empty offers it again': async browser => {
-    const fake = mailboxesFake();
-    fake.state.mailboxes = [];
-    const google = bare();
-    let {page, seen} = await open(browser, fake, google, {ready: '[data-ib-first]'});
-    assert.deepEqual(await page.locator('[data-ib-step] h3').allTextContents(),
-      ['Connect company email', 'Phone number', 'Receive letters', 'Send letters', 'Give inboxes to bots']);
-    assert.equal(await page.locator('[data-ib-step=email] [data-ib-dismiss]').count(), 0, 'the required step has no dismiss');
-    await page.locator('[data-ib-step=email] #set-google [data-google-mode]').waitFor();
-    const sendStep = page.locator('[data-ib-step="letters-out"]');   // its placeholder until letters out lands
-    if (await sendStep.locator('.pill', {hasText: 'Coming soon'}).count())
-      assert.equal(await sendStep.locator('button[disabled]').textContent(), 'Connect Click2Mail');
-    assert.ok(await fits(page));
-    await shot(page, `inboxes-first-run-desktop-light.png`, 'light');
-    await page.locator('[data-ib-dismiss=phone]').click();
-    assert.equal(await page.locator('[data-ib-step=phone]').count(), 0);
-    await page.reload();
-    await page.locator('[data-ib-first]').waitFor();
-    assert.equal(await page.locator('[data-ib-step=phone]').count(), 0, 'a dismissed step stays dismissed');
-    await page.locator('[data-ib-skip]').last().click();
-    await page.locator('[data-ib-empty]').waitFor();
-    assert.match(await page.locator('[data-ib-empty]').textContent(), /No inboxes yet/);
-    await page.reload();
-    await page.locator('[data-ib-empty]').waitFor();
-    assert.equal(await page.locator('[data-ib-first]').count(), 0, 'skipping is kept');
-    await page.locator('[data-ib-setup]').click();
-    await page.locator('[data-ib-first]').waitFor();
-    assert.equal(await page.locator('[data-ib-step=phone]').count(), 1, 'setting up again brings back dismissed steps');
-    // The demo starts set up without Google, so it opens on the list.
-    await page.evaluate(() => { S.config.demo = true; return renderSettingsInboxes(); });
-    await page.locator('[data-ib-empty]').waitFor();
-    assert.equal(await page.locator('[data-ib-first]').count(), 0);
-    assert.deepEqual(seen.errors, []);
-    await page.close();
-    // Phone width: first run fits.
-    ({page, seen} = await open(browser, fake, bare(), {ready: '[data-ib-first]', width: 390, height: 844, theme: 'dark'}));
-    await page.locator('[data-ib-step=email] #set-google [data-google-mode]').waitFor();
-    assert.ok(await fits(page), 'first run fits a phone');
-    await shot(page, `inboxes-first-run-phone-dark.png`, 'dark');
-    assert.deepEqual(seen.errors, []);
-    await page.close();
-    // Once company email is connected the list shows, and a member never sees first run.
-    const connected = bare();
-    connected.state.workspace = workspace('connected');
-    ({page, seen} = await open(browser, fake, connected, {ready: '[data-ib-empty]'}));
-    assert.equal(await page.locator('[data-ib-first]').count(), 0);
-    assert.equal(await page.locator('[data-ib-setup]').count(), 0, 'nothing was skipped, so nothing to bring back');
-    await page.close();
-    const member = mailboxesFake({admin: false, me: 'cara'});
-    member.state.mailboxes = [];
-    const google2 = bare();
-    google2.state.can_admin = false;
-    ({page, seen} = await open(browser, member, google2, {ready: '[data-ib-empty]'}));
-    assert.equal(await page.locator('[data-ib-first]').count(), 0);
-    assert.deepEqual(seen.errors, []);
-    await page.close();
-  },
-
-  'a member sees only their own mailbox and the ones shared with them': async browser => {
-    const fake = mailboxesFake({admin: false, me: 'cara'});
-    fake.state.mailboxes = [
-      box('mb-cara', 'cara@acme.example', {person_id: 'cara', person_name: 'Cara', level: 'read_write'}),
-      box('mb-support', 'support@acme.example', {kind: 'shared', level: 'read'}),
-      box('mb-ben', 'ben@acme.example', {person_id: 'ben', person_name: 'Ben', level: 'read'}),
-      box('mb-dan', 'dan@acme.example', {person_id: 'dan', person_name: 'Dan'}),
-    ];
-    const google = googleFake();
-    google.state.can_admin = false;
-    google.state.me = {mailbox: 'cara@acme.example', covered_by_workspace: true};
-    const {page, seen} = await open(browser, fake, google, {ready: LIST});
-    assert.deepEqual(await ids(page), ['mailbox:mb-cara', 'mailbox:mb-support', 'mailbox:mb-ben']);
-    await page.locator('[data-ib-add] > summary').click();
-    assert.deepEqual(await page.locator('[data-ib-add-kind]').allTextContents(), ['Tico address'], 'only Tico addresses are anyone\'s to add');
-    await page.locator('[data-ib-settings]').click();
-    await page.locator('[data-mb-mine-box]').waitFor();
-    assert.equal(await page.locator('#mailboxes-top h2').textContent(), 'Your mailbox');
-    assert.match((await page.locator('[data-mb-mine-box]').textContent()).replace(/\s+/g, ' '),
-      /cara@acme\.example · connected by your company.*Tico may read and organize\. Only you and your Assistant can use it\./);
-    assert.equal(await page.locator('#mailboxes-may').count(), 0);
-    assert.equal(await page.locator('#inbound-phone-card').count(), 0);
-    assert.equal(await page.locator('#inbound-connection').count(), 0);
-    assert.equal(await page.locator('[data-pm-order]').count(), 0);
-    assert.deepEqual(seen.errors, []);
-    await page.close();
-    // A mailbox the person signed in themselves (not the company's key) has no "connected by your company" line.
-    fake.state.mailboxes = [box('mb-cara', 'cara@acme.example', {person_id: 'cara', person_name: 'Cara', level: 'read_write', connection: 'personal'})];
-    google.state.me = {mailbox: 'cara@acme.example', covered_by_workspace: false};
-    const again = await open(browser, fake, google, {hash: '#/settings/inboxes/settings/email', ready: '#mailboxes-top #set-google'});
-    await again.page.locator('#set-google .google-card').first().waitFor();
-    assert.equal(await again.page.locator('[data-mb-mine-box]').count(), 0);
-    assert.deepEqual(again.seen.errors, []);
-    await again.page.close();
-  },
-
-  'the old Mailboxes, Email & Phone, Mail and Google addresses open Inboxes': async browser => {
-    const fake = mailboxesFake();
-    const {page, seen} = await open(browser, fake, googleFake(), {hash: '#/settings/mailboxes', ready: LIST});
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/connections');
+    const {page, seen} = await open(browser, fake, googleFake(), {hash: '#/settings/mailboxes', ready: '#tools-root', extra: others().extra});
+    assert.equal(await page.evaluate(() => location.hash), '#/tools?show=mail');
     for (const [from, to] of [
-      ['#/settings/inbound', '#/settings/connections'],
-      ['#/settings/company-inbox', '#/settings/connections'],
-      ['#/settings/email-phone', '#/settings/connections'],
-      ['#/settings/mailboxes/mb-support', '#/settings/inboxes/mailbox/mb-support'],
-      ['#/settings/mail', '#/settings/inboxes/settings/letters-in'],
-      ['#/settings/inbox', '#/settings/inboxes/settings/email'],
-      ['#/settings/google', '#/settings/inboxes/settings/email'],
-      ['#/settings/inboxes/texts', '#/settings/inboxes/settings/texts'],
+      ['#/settings/inboxes', '#/tools?show=mail'],
+      ['#/settings/inbound', '#/tools?show=mail'],
+      ['#/settings/company-inbox', '#/tools?show=mail'],
+      ['#/settings/email-phone', '#/tools?show=mail'],
+      ['#/settings/mailboxes/mb-support', '#/tools/mailbox/mb-support'],
+      ['#/settings/inboxes/mailbox/mb-support', '#/tools/mailbox/mb-support'],
+      ['#/settings/inboxes/tico/ibx_a', '#/tools/number/ibx_a'],
+      ['#/settings/inboxes/postal/as_1', '#/tools/address/as_1'],
+      ['#/settings/inboxes/messages', '#/tools/messages'],
+      ['#/settings/mail', '#/tools/settings/letters-in'],
+      ['#/settings/inbox', '#/tools/settings/email'],
+      ['#/settings/google', '#/tools/settings/email'],
+      ['#/settings/inboxes/settings/email', '#/tools/settings/email'],
+      ['#/settings/inboxes/texts', '#/tools/settings/texts'],
     ]) {
       await page.evaluate(hash => { location.hash = hash; }, from);
-      await page.waitForFunction(want => location.hash === want && SETTINGS_TAB === 'connections', to);
+      await page.waitForFunction(want => location.hash === want, to).catch(() => assert.fail(`${from} leads to ${to}`));
     }
-    await page.locator('#settings-group-connections [data-ib-section=texts]').waitFor();
-    // A reload keeps the page it was on, and another tab leaves it.
-    await page.evaluate(() => { location.hash = '#/settings/inboxes/mailbox/mb-support'; });
-    await page.locator('#inbox-head h2', {hasText: 'support@acme.example'}).waitFor();
+    await page.locator('#tools-inbox [data-ib-section=texts]').waitFor();
+    assert.equal(await page.locator('#side a[data-nav="tools"].cur').count(), 1, 'Tools is current');
+    // A reload keeps the page it was on.
+    await page.evaluate(() => { location.hash = '#/tools/mailbox/mb-support'; });
+    await page.locator('#inbox-head h1', {hasText: 'support@acme.example'}).waitFor();
     await page.reload();
-    await page.locator('#inbox-head h2', {hasText: 'support@acme.example'}).waitFor();
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/mailbox/mb-support');
-    await page.locator('[data-settings-tab="you"]').click();
-    await page.waitForFunction(() => SETTINGS_TAB === 'you');
-    await page.locator('[data-settings-tab="connections"]').click();
-    await page.waitForFunction(() => location.hash === '#/settings/connections');
-    await page.locator(LIST).first().waitFor();
+    await page.locator('#inbox-head h1', {hasText: 'support@acme.example'}).waitFor();
+    assert.equal(await page.evaluate(() => location.hash), '#/tools/mailbox/mb-support');
     assert.deepEqual(seen.errors, []);
     await page.close();
   },
 
-  'Inboxes > Settings: a section a channel, every setting in its section, Coming soon for what is still to come': async browser => {
+  'Tools › Settings: a section a channel, every setting in its section, Coming soon for what is still to come': async browser => {
     const fake = mailboxesFake(), more = others();
-    const {page, seen} = await open(browser, fake, googleFake(), {hash: '#/settings/inboxes/settings', ready: '[data-ib-settings-page]', extra: more.extra});
+    const {page, seen} = await open(browser, fake, googleFake(), {hash: '#/tools/settings', ready: '[data-ib-settings-page]', extra: more.extra});
     await page.locator('#settings-mail-addresses [data-pm-address="as_1"]').waitFor();
     await page.locator('#set-google [data-google-mode]').waitFor();
     await page.locator('#inboxes-email-sending [data-send-form]').waitFor();
@@ -316,9 +104,9 @@ const scenarios = {
     assert.equal(await page.locator('[data-mb-provider]').textContent(), 'Google Workspace · acme.example');
     assert.equal(await page.locator('[data-pm-intake-select]').inputValue(), 'ibx_a');
     assert.equal(await page.locator('[data-in-request="prq_q"] [data-inbound-phone-accept]').count(), 1);
-    assert.equal(await page.locator('.ib-crumb a').getAttribute('href'), '#/settings/inboxes');
+    assert.equal(await page.locator('#tools-inbox .tt-crumb a').getAttribute('href'), '#/tools');
     // A section's address opens Settings at it.
-    await page.evaluate(() => { location.hash = '#/settings/inboxes/settings/letters-in'; });
+    await page.evaluate(() => { location.hash = '#/tools/settings/letters-in'; });
     // At the top, or as far down as the page goes with the section in view (it is near the end).
     await page.waitForFunction(() => {
       const el = document.querySelector('#inboxes-letters-in');
@@ -330,7 +118,7 @@ const scenarios = {
     });
     assert.ok(await fits(page));
     if (SHOTS) {
-      await page.evaluate(() => document.querySelector('#set-inboxes').scrollIntoView({block: 'start'}));
+      await page.evaluate(() => document.querySelector('#tools-inbox').scrollIntoView({block: 'start'}));
       await shot(page, `inboxes-settings-desktop-light.png`, 'light');
     }
     assert.deepEqual(seen.errors, []);
@@ -340,7 +128,7 @@ const scenarios = {
   'a read from before a What Tico may do save cannot replace its controls during or after it': async browser => {
     for (const finishRead of ['during', 'after']) {
       const fake = mailboxesFake(), google = googleFake();
-      const {page, seen} = await open(browser, fake, google, {hash: '#/settings/inboxes/settings', ready: '#mailboxes-may [data-google-may]'});
+      const {page, seen} = await open(browser, fake, google, {hash: '#/tools/settings', ready: '#mailboxes-may [data-google-may]'});
       const card = page.locator('#mailboxes-may');
       const calendar = await card.locator('[data-google-may=change_calendar]').elementHandle();
       let readStarted, saveStarted;
@@ -348,7 +136,7 @@ const scenarios = {
       const saving = new Promise(resolve => { saveStarted = resolve; });
       await page.route('**/api/v2/mailboxes', route => readStarted(route));
       await page.route('**/api/v2/google/permissions', route => saveStarted(route));
-      await page.evaluate(() => { window.inboxesRead = renderSettingsInboxes(); });
+      await page.evaluate(() => { window.inboxesRead = inboxesRender(); });
       const read = await reading;
       const stale = fake.answer('/api/v2/mailboxes');
       await card.locator('[data-google-may=change_calendar]').check();
@@ -369,7 +157,7 @@ const scenarios = {
         assert.deepEqual(await controls(), pending, 'an old read cannot roll back or unlock a pending save');
       }
       await page.unroute('**/api/v2/mailboxes');
-      if (finishRead === 'during') await page.evaluate(() => renderSettingsInboxes());
+      if (finishRead === 'during') await page.evaluate(() => inboxesRender());
       assert.deepEqual(await controls(), pending, 'another draw leaves the pending save alone');
       assert.equal(await calendar.evaluate(el => el.isConnected), true);
       const answer = google.answer('/api/v2/google/permissions', save.request().url(), 'PUT', body);
@@ -382,7 +170,7 @@ const scenarios = {
       if (finishRead === 'after') await finish();
       const saved = pending.map(([field, checked]) => [field, checked, false]);
       assert.deepEqual(await controls(), saved);
-      await page.evaluate(() => renderSettingsInboxes());
+      await page.evaluate(() => inboxesRender());
       assert.deepEqual(await controls(), saved, 'a fresh read shows the saved settings');
       assert.deepEqual(seen.errors, []);
       await page.close();
@@ -391,7 +179,7 @@ const scenarios = {
 
   'What Tico may do: Read always, each box saves all three together, a refusal puts the box back': async browser => {
     const fake = mailboxesFake(), google = googleFake();
-    const {page, seen} = await open(browser, fake, google, {hash: '#/settings/inboxes/settings/email', ready: '#mailboxes-may'});
+    const {page, seen} = await open(browser, fake, google, {hash: '#/tools/settings/email', ready: '#mailboxes-may'});
     const card = page.locator('#mailboxes-may');
     assert.equal(await card.locator('[data-google-may-read] input').count(), 0, 'Read has no box');
     const boxes = () => card.locator('[data-google-may]').evaluateAll(els => els.map(el => [el.dataset.googleMay, el.checked]));
@@ -413,11 +201,12 @@ const scenarios = {
     await page.close();
   },
 
-  'Add inbox > Email connects a mailbox and opens its page; an address already in Tico says so in the dialog': async browser => {
+  'Add tool > Email (Google) connects a mailbox and opens its page; an address already in Tico says so in the dialog': async browser => {
     const fake = mailboxesFake();
-    const {page, seen} = await open(browser, fake, googleFake(), {ready: LIST});
-    await page.locator('[data-ib-add] > summary').click();
-    await page.locator('[data-ib-add-kind=mailbox]').click();
+    const {page, seen} = await open(browser, fake, googleFake(), {ready: '#tools-root [data-tl-add]'});
+    await page.locator('[data-tl-add] > summary').click();
+    assert.deepEqual(await page.locator('[data-tl-add-item]').allTextContents(), ['API', 'Email (Google)', 'Tico address', 'Phone number', 'Mailing address']);
+    await page.locator('[data-tl-add-item="kind:mailbox"]').click();
     const dialog = page.locator('dialog.mb-dialog');
     await dialog.locator('[name=address]').fill('ana@acme.example');
     await dialog.locator('[data-mb-connect]').click();
@@ -426,12 +215,12 @@ const scenarios = {
     await dialog.locator('[name=address]').fill(' Help@Acme.example ');
     await dialog.locator('[name=shared]').check();
     await dialog.locator('[data-mb-connect]').click();
-    await page.locator('#inbox-head h2', {hasText: 'help@acme.example'}).waitFor();
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/mailbox/mb-new1');
+    await page.locator('#inbox-head h1', {hasText: 'help@acme.example'}).waitFor();
+    assert.equal(await page.evaluate(() => location.hash), '#/tools/mailbox/help%40acme.example');
     assert.deepEqual(writesTo(fake, '/api/v2/mailboxes').map(w => w.body),
       [{address: 'ana@acme.example', shared: false}, {address: 'Help@Acme.example', shared: true}]);
     // Make shared inbox turns an address with no person into a shared inbox, from its page.
-    await page.evaluate(() => { location.hash = '#/settings/inboxes/mailbox/mb-dan'; });
+    await page.evaluate(() => { location.hash = '#/tools/mailbox/mb-dan'; });
     await page.locator('[data-mb-share]').click();
     await page.locator('[data-mb-status]', {hasText: /^Shared inbox/}).waitFor();
     assert.equal(writesTo(fake, '/api/v2/mailboxes/mb-dan/share').length, 1);
@@ -439,10 +228,10 @@ const scenarios = {
     await page.close();
   },
 
-  'leaving Settings mid-save and coming back keeps What Tico may do locked on what the save sends, then what the server kept': async browser => {
+  'leaving Tools › Settings mid-save and coming back keeps What Tico may do locked on what the save sends, then what the server kept': async browser => {
     const fake = mailboxesFake(), google = googleFake();
     fake.may.send = true;
-    const {page, seen} = await open(browser, fake, google, {hash: '#/settings/inboxes/settings', ready: '#mailboxes-may [data-google-may]'});
+    const {page, seen} = await open(browser, fake, google, {hash: '#/tools/settings', ready: '#mailboxes-may [data-google-may]'});
     const card = page.locator('#mailboxes-may');
     const controls = () => card.locator('[data-google-may]').evaluateAll(els => els.map(el => [el.dataset.googleMay, el.checked, el.disabled]));
     assert.deepEqual(await controls(), [['organize_mail', true, false], ['send_mail', true, false], ['change_calendar', false, false]]);
@@ -454,9 +243,9 @@ const scenarios = {
     const body = save.request().postDataJSON();
     assert.deepEqual(body, {organize_mail: true, send_mail: false, change_calendar: false});
     // Out by the breadcrumb and back while the save is in flight: the server still reads Send on.
-    await page.locator('#set-inboxes .ib-crumb a', {hasText: 'Inboxes'}).click();
-    await page.locator(LIST).first().waitFor();
-    await page.evaluate(() => { location.hash = '#/settings/inboxes/settings'; });
+    await page.locator('#tools-inbox .tt-crumb a', {hasText: 'Tools'}).click();
+    await page.locator('#tools-root').waitFor();
+    await page.evaluate(() => { location.hash = '#/tools/settings'; });
     await card.locator('[data-google-may]').first().waitFor();
     await settle(page);
     assert.deepEqual(await controls(), [['organize_mail', true, true], ['send_mail', false, true], ['change_calendar', false, true]],
@@ -475,37 +264,28 @@ const scenarios = {
     await page.close();
   },
 
-  'phone width: the list, Settings and a page fit with no sideways scroll, light and dark': async browser => {
+  'phone width: Add tool, Settings and a page fit with no sideways scroll, light and dark': async browser => {
     for (const theme of ['light', 'dark']) {
       const fake = mailboxesFake(), more = others();
-      let {page, seen} = await open(browser, fake, googleFake(), {ready: LIST, extra: more.extra, width: 390, height: 844, theme});
-      await page.locator('[data-ib-row="postal:intake"]').waitFor();
-      assert.ok(await fits(page), `the list fits a phone (${theme})`);
-      assert.equal(await page.locator('.ib-table thead').isHidden(), true, 'rows are cards on a phone');
-      await shot(page, `inboxes-list-phone-${theme}.png`, theme);
-      // Add inbox opens inside the screen, every item whole.
-      await page.locator('[data-ib-add] > summary').click();
-      const menu = await page.locator('.ib-add-menu').boundingBox();
-      assert.ok(menu.x >= 0 && menu.x + menu.width <= 390, `the Add inbox menu stays on screen (${menu.x}..${menu.x + menu.width})`);
+      const {page, seen} = await open(browser, fake, googleFake(), {ready: '#tools-root [data-tl-add]', extra: more.extra, width: 390, height: 844, theme});
+      // Add tool opens inside the screen, every item whole.
+      await page.locator('[data-tl-add] > summary').click();
+      const menu = await page.locator('.tt-add-menu').boundingBox();
+      assert.ok(menu.x >= 0 && menu.x + menu.width <= 390, `the Add tool menu stays on screen (${menu.x}..${menu.x + menu.width})`);
       assert.ok(await page.evaluate(() => { const m = document.querySelector('#main'); return !m || m.scrollWidth <= m.clientWidth; }),
         'opening it scrolls nothing sideways');
-      assert.ok(await page.locator('.ib-add-menu button').evaluateAll(bs => bs.every(b => b.scrollWidth <= b.clientWidth)), 'no item is cut off');
-      await page.locator('[data-ib-add] > summary').click();
-      await page.evaluate(() => { location.hash = '#/settings/inboxes/settings'; });
+      assert.ok(await page.locator('.tt-add-menu button').evaluateAll(bs => bs.every(b => b.scrollWidth <= b.clientWidth)), 'no item is cut off');
+      await page.locator('[data-tl-add] > summary').click();
+      await page.evaluate(() => { location.hash = '#/tools/settings'; });
       await page.locator('#settings-mail-addresses [data-pm-address="as_1"]').waitFor();
       await settle(page);
       assert.ok(await fits(page), `Settings fits a phone (${theme})`);
       await shot(page, `inboxes-settings-phone-${theme}.png`, theme);
-      await page.evaluate(() => { location.hash = '#/settings/inboxes/tico/ibx_a'; });
+      await page.evaluate(() => { location.hash = '#/tools/number/ibx_a'; });
       await page.locator('[data-inbound-read]').waitFor();
       assert.ok(await fits(page), `a page fits a phone (${theme})`);
       await shot(page, `inboxes-detail-phone-${theme}.png`, theme);
       assert.deepEqual(seen.errors, []);
-      await page.close();
-      if (!SHOTS) continue;
-      ({page, seen} = await open(browser, fake, googleFake(), {ready: LIST, extra: more.extra, theme}));
-      await page.locator('[data-ib-row="postal:intake"]').waitFor();
-      await shot(page, `inboxes-list-desktop-${theme}.png`, theme);
       await page.close();
     }
   },

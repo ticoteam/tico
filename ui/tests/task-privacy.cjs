@@ -44,7 +44,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     ];
     let staleTag = false, raceStarter = false;
     let tasks = [
-      task('Draft the newsletter', {private: true, rank: 2, labels: ['newsletter'], tags: [tags[0]], body: 'Review [packet](http://tico-ui.test/api/v2/files/doc).',
+      task('Draft the newsletter', {private: true, readers: ['human:ben'], rank: 2, labels: ['newsletter'], tags: [tags[0]], body: 'Review [packet](http://tico-ui.test/api/v2/files/doc).',
         attachments: [{id: 'doc', name: 'review-packet.md'}, {id: 'clip', name: 'first-cut.mp4'}, {id: 'archive', name: 'source.zip'}]}),
       task('Approve the budget', {owner_id: 'human:reviewer', requester_id: 'bot:coo', rank: 1, labels: ['finance'], note: 'Waiting on finance approval'}),
       task('Write the copy', {rank: 1, labels: ['newsletter', 'copy']}),
@@ -152,6 +152,13 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
         Object.assign(t, body, {version: t.version + 1}); delete t.close;
         return json({task: t});
       }
+      const rd = p.match(/^\/api\/v2\/tasks\/([^/]+)\/readers$/);
+      if (rd && req.method() === 'POST') {
+        const body = req.postDataJSON(); posted.push({path: p, body});
+        const t = tasks.find(x => x.id === decodeURIComponent(rd[1]));
+        t.readers = [...(t.readers || []).filter(a => !(body.remove || []).includes(a)), ...(body.add || [])];
+        return json({private: true, requester_id: t.requester_id, owner_id: t.owner_id, readers: t.readers});
+      }
       const cm = p.match(/^\/api\/v2\/tasks\/([^/]+)\/comments$/);
       if (cm && req.method() === 'POST') {
         const body = req.postDataJSON(); posted.push({path: p, body});
@@ -198,6 +205,31 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       await page.evaluate(() => { location.hash = '#/tasks'; });
       await page.locator('#task-new').waitFor();
     }
+    // Who can see: a private task's requester, owner and readers; × takes a reader off, + adds one. A company task: Public.
+    await page.setViewportSize({width: 1200, height: 900});
+    await page.evaluate(() => { location.hash = '#/task/' + encodeURIComponent('Draft the newsletter'); });
+    const seen = page.locator('#task-modal[open] [data-prop-row="readers"]');
+    await seen.locator('[data-prop-clear-reader="human:ben"]').waitFor();
+    assert.equal(await seen.locator('.prop-chip').count(), 3, 'requester, owner and one reader');
+    assert.equal(await seen.locator('.prop-x').count(), 1, 'only a reader comes off');
+    await seen.locator('[data-prop-clear-reader="human:ben"]').click();
+    await page.waitForFunction(() => !document.querySelector('#task-modal [data-prop-clear-reader]'));
+    assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/Draft%20the%20newsletter/readers', body: {remove: ['human:ben']}});
+    await seen.locator('[data-prop="readers"]').click();
+    const pick = page.locator('#task-modal .prop-pop [data-prop-pick="bot:cpo"]');
+    await pick.waitFor();
+    assert.equal(await page.locator('#task-modal .prop-pop [data-prop-pick="bot:cmo"]').count(), 0, 'the owner is not offered');
+    await pick.click();
+    await seen.locator('[data-prop-clear-reader="bot:cpo"]').waitFor();
+    assert.deepEqual(posted.at(-1).body, {add: ['bot:cpo']});
+    await shot('who-can-see-desktop');
+    await page.locator('#task-modal[open] [data-modal-close]').click();
+    await page.evaluate(() => { location.hash = '#/task/' + encodeURIComponent('Write the copy'); });
+    await page.locator('#task-modal[open] [data-prop-row="readers"]', {hasText: 'Public'}).waitFor();
+    assert.equal(await page.locator('#task-modal[open] [data-prop-row="readers"] [data-prop="readers"]').count(), 0);
+    await page.locator('#task-modal[open] [data-modal-close]').click();
+    await page.evaluate(() => { location.hash = '#/tasks'; });
+    await page.locator('#task-new').waitFor();
     await page.evaluate(() => openTaskCreate('bot:cpo'));
     const create = page.locator('#task-create[open]');
     await create.locator('[name=private]').uncheck();
@@ -223,6 +255,6 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved');
     assert.deepEqual(posted.find(p => p.path === '/api/v2/bots/cpo/definition').body.update_subscriptions, ['templates', 'tico']);
     assert.deepEqual(errors, []);
-    console.log('task privacy UI passed: desktop/phone create/edit, default, manual intent, private parent, explicit company payload');
+    console.log('task privacy UI passed: desktop/phone create/edit, default, manual intent, private parent, explicit company payload, who can see');
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});

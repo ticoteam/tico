@@ -1,12 +1,12 @@
-// Offline browser regression: the Connection card of Settings > Inboxes > Settings > Email (ui/google-connect.js) over the contract's
+// Offline browser regression: the Connection card of Tools › Settings › Email (ui/google-connect.js) over the contract's
 // GET /v2/google, with a fake hub (ui/tests/support/google-fake.cjs). An admin sees the two ways (Whole company, Each
 // person signs in) as one toggle: neither picked while nothing is set up, the way set up picked otherwise, one way shown
 // at a time. Each way's setup is a prompt for the person's own agent by default (the Workspace one makes its setup code
 // only on Make prompt), or the steps by hand: the Whole company key in three steps, the check polling on a 20 s timer for
 // 10 minutes (Playwright's fake clock), disconnect and replace confirming in the page. A member sees Connect Google for
 // their own mailbox only (nothing when the company's key covers it), and a phone width has no sideways scroll.
-// Leaving Inboxes > Settings and coming back keeps the card's state (ui/app/inboxes-email.js keeps one host). The Inboxes
-// list and What Tico may do are ui/tests/inboxes.cjs.
+// Leaving Tools › Settings and coming back keeps the card's state (ui/app/inboxes-email.js keeps one host, MB_GOOGLE_HOST,
+// off the page while away). What Tico may do is ui/tests/inboxes.cjs.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -30,11 +30,15 @@ const SHELL = {
   '/api/v2/me/tokens': {tokens: []},
 };
 
-// Opens Inboxes > Settings > Email on a fresh page. `clock` installs Playwright's fake timers before the page loads.
+// Opens Tools › Settings › Email on a fresh page. `clock` installs Playwright's fake timers before the page loads.
 const READY = '#set-google [data-google-mode], #set-google .google-card';
-const CARD = '#/settings/inboxes/settings/email';
+const CARD = '#/tools/settings/email';
 // Back to the card from another Settings tab, as its Settings link does.
 const back = page => page.evaluate(card => { location.hash = card; }, CARD);
+// Away to another page: the card's host is kept off the page, so what it shows is read from the host itself.
+const away = page => page.evaluate(() => { location.hash = '#/settings/general'; });
+const heldResult = page => page.evaluate(() => MB_GOOGLE_HOST?.querySelector('[data-ws-check-result]')?.textContent || '');
+const heldShows = async (page, re) => { const end = Date.now() + 8000; while (!re.test(await heldResult(page))) { if (Date.now() > end) throw new Error('Timed out waiting for ' + re); await new Promise(r => setTimeout(r, 50)); } };
 async function open(browser, fake, {width = 1440, clock = false, ready = READY} = {}) {
   const page = await browser.newPage({viewport: {width, height: 900}, serviceWorkers: 'block'});
   const seen = {errors: [], dialogs: 0, sent: []};
@@ -83,7 +87,7 @@ async function bySelf(page, path) {
   await page.locator(`[data-google-how=self][data-google-path=${path}][aria-pressed=true]`).waitFor();
 }
 const cards = page => page.$$eval('#set-google [data-google-card]', els => els.map(el => el.dataset.googleCard));
-const LINK = 'https://tico-ui.test/#/settings/inboxes/settings/email';
+const LINK = 'https://tico-ui.test/#/tools/settings/email';
 
 const until = async (check, what, ms = 8000) => {
   const end = Date.now() + ms;
@@ -146,7 +150,7 @@ const scenarios = {
     await bySelf(page, 'accounts');
     await page.locator('[data-oauth-form]').waitFor();
     assert.equal(await page.locator('[data-google-prompt]').count(), 0);
-    assert.equal(fake.peopleReads, 0, 'no team list: everyone else is on the Inboxes list');
+    assert.equal(fake.peopleReads, 0, 'no team list: everyone else is on the Tools list');
     assert.deepEqual(seen.errors, []);
   },
 
@@ -345,7 +349,7 @@ const scenarios = {
     assert.deepEqual(seen.errors, []);
   },
 
-  'a check paused in another Settings tab resumes, unless its ten minutes passed while away': async browser => {
+  'a check paused on another page resumes, unless its ten minutes passed while away': async browser => {
     const fake = googleFake();
     fake.state.workspace = row('pending');
     const {page, seen} = await open(browser, fake, {clock: true});
@@ -353,12 +357,12 @@ const scenarios = {
     await page.locator('[data-ws-check]').click();
     await until(() => checks().length === 1, 'the first check');
     let timer = await nextCheckTimer(page, null, 'the timer after the first check');
-    await page.locator('[data-settings-tab=you]').click();
+    await away(page);
     await page.clock.runFor(300000);
-    await page.locator('[data-ws-check-result]', {hasText: 'Still not accepted'}).waitFor({state: 'attached'});
+    await heldShows(page, /Still not accepted/);
     assert.equal(checks().length, 1, 'the hidden card does not check');
-    assert.equal(await page.locator('#set-google').evaluate(host => host._googleWatch.timer), null);
-    assert.doesNotMatch(await page.locator('[data-ws-check-result]').textContent(), /Checking again every 20 seconds/);
+    assert.equal(await page.evaluate(() => MB_GOOGLE_HOST._googleWatch.timer), null);
+    assert.doesNotMatch(await heldResult(page), /Checking again every 20 seconds/);
     await back(page);
     await until(() => checks().length === 2, 'the immediate check on returning');
     timer = await nextCheckTimer(page, timer, 'the timer after returning');
@@ -366,10 +370,10 @@ const scenarios = {
     await page.clock.runFor(20000);
     await until(() => checks().length === 3, 'the next check after 20 s');
     await nextCheckTimer(page, timer, 'the timer after the next check');
-    await page.locator('[data-settings-tab=you]').click();
+    await away(page);
     // Another five minutes passes the original deadline, but not a new ten minutes from the resumed check.
     await page.clock.runFor(300000);
-    await page.locator('[data-ws-check-result]', {hasText: 'Still not accepted'}).waitFor({state: 'attached'});
+    await heldShows(page, /Still not accepted/);
     await back(page);
     await page.locator('[data-ws-check]', {hasText: 'Check again'}).waitFor();
     assert.match(await page.locator('[data-ws-check-result]').innerText(), /Still not accepted/);
@@ -380,7 +384,7 @@ const scenarios = {
     assert.deepEqual(seen.errors, []);
   },
 
-  'a check paused in another Settings tab is dropped when another admin replaces the pending key': async browser => {
+  'a check paused on another page is dropped when another admin replaces the pending key': async browser => {
     const fake = googleFake();
     fake.state.workspace = row('connected');
     fake.state.pending = row('pending', {generation: 2});
@@ -389,9 +393,9 @@ const scenarios = {
     await page.locator('[data-ws-check]').click();
     await until(() => checks().length === 1, 'the first check');
     await nextCheckTimer(page, null, 'the timer after the first check');
-    await page.locator('[data-settings-tab=you]').click();
+    await away(page);
     await page.clock.runFor(300000);
-    await page.locator('[data-ws-check-result]', {hasText: 'Still not accepted'}).waitFor({state: 'attached'});
+    await heldShows(page, /Still not accepted/);
     assert.equal(checks().length, 1, 'the hidden card does not check');
     // Another admin uploads a newer pending key while this card is hidden.
     fake.state.pending = row('pending', {generation: 3});
@@ -424,7 +428,7 @@ const scenarios = {
     assert.equal(await page.locator('[data-google-mode]').count(), 0);
     assert.equal(await page.locator('[data-google-card=workspace]').count(), 0);
     assert.equal(await page.locator('[data-google-how], [data-oauth-setup]').count(), 0);
-    assert.match(await page.locator('[data-google-card=account]').innerText(), /Ask an admin to connect Google in Settings > Inboxes\./);
+    assert.match(await page.locator('[data-google-card=account]').innerText(), /Ask an admin to connect Google in Tools › Settings\./);
     assert.deepEqual(seen.errors, []);
     await page.close();
     // With Google sign-in set up: their own Connect Google, no heading, and no team list.

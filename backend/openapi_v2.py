@@ -369,6 +369,8 @@ STABLE = [
     ("/api/v2/meetings/import", "post", "Meetings", "importMeeting", "Import into your Pending queue unless shared explicitly or automatically", None),
     ("/api/v2/meetings/settings", "get", "Meetings", "getMeetingReviewSettings", "Your meeting review preference and Team default", "MeetingReviewPreferences"),
     ("/api/v2/meetings/settings", "post", "Meetings", "setMeetingReviewSettings", "Set auto-share; only the owner sets the Team default", "MeetingReviewPreferences"),
+    ("/api/v2/meetings/recorder", "get", "Meetings", "getMyRecorder",
+     "Your most recently used Tico Recorder, the newest release's version and the download", "MyRecorder"),
     ("/api/v2/meetings/review", "post", "Meetings", "reviewMeetings", "Share or dismiss your Pending meetings", "MeetingReviewList"),
     ("/api/v2/meetings/{id}/review", "post", "Meetings", "reviewMeeting", "Approve, dismiss or restore your own meeting", "ReviewedMeeting"),
     ("/api/v2/meetings/{id}", "get", "Meetings", "getMeeting", "Read a meeting with its notes and transcripts", "ReviewedMeeting"),
@@ -839,9 +841,9 @@ SCHEMAS = {
                 step_rank={"type": ["number", "null"], "description": "Its place within its step, lower first"},
                 waiting_on={"type": ["string", "null"], "description": "The person a waiting task waits on; "
                             "the task is in their Needs you"},
-                guest={"type": ["string", "null"], "description": "The one person a private task with no person on "
-                       "it reached: its owning bot's first subtask, question or wait for them made them its guest. "
-                       "They read the task as its requester and owner do, and nothing else of its tree"},
+                readers=items({"type": "string"}) | {"description": "Who else can see a private task besides its "
+                         "requester and owner: people, bots and group:<id>s (a group by its members now). Empty on a "
+                         "company task. GET/PUT /api/v2/tasks/{id}/readers reads and changes it"},
                 holds=items(ref("TaskHold")) | {"description": "What holds the task (docs/tasks.md, Holds): at most one "
                                                 "per kind, empty when nothing does"},
                 roles={"type": "object", "description": "Who is on the task, by role: each role a short name the team "
@@ -1109,6 +1111,10 @@ SCHEMAS = {
     "MeetingSearch": obj({"results": "a", "next_offset": {"type": ["integer", "null"]}, "mode": "s"}),
     "ReviewedMeeting": obj({"id": "s", "title": "s", "review_state": {"type": "string", "enum": ["pending", "live", "dismissed"]}}),
     "MeetingReviewList": obj({"meetings": items(ref("ReviewedMeeting")), "count": "i", "pending_count": "i"}),
+    "MyRecorder": obj({"version": {"type": "string", "description": "Your most recently used copy's version; empty when none was seen"},
+                       "last_seen_at": "n", "recent": {"type": "boolean", "description": "A copy was seen in the last 30 days"},
+                       "latest": {"type": "string", "description": "The newest release's version; empty when unknown"},
+                       "update_available": "b", "download_url": "s"}),
     "MeetingReviewPreferences": obj({"auto_share": {"type": ["boolean", "null"]},
                                      "review_default": {"type": "string", "enum": ["review", "auto"]}, "effective_auto_share": "b"}),
     "InternalDocRow": obj({"id": "s", "path": "s", "title": "s", "updated_at": "s", "updated_by_id": "s", "locked": "b", "version": "i"},
@@ -2222,20 +2228,41 @@ STABLE.extend([
     ('/api/v2/triggers/{trigger_id}/deliveries/{delivery}/replay','post','Triggers','replayTriggerDelivery','Run a kept call again as a new occurrence',None),
     ('/api/v2/triggers/{trigger_id}/recover','post','Triggers','recoverTrigger','Run again, under the current secret and preset, the calls refused in the last since_hours (1-720) whose body is kept; each keeps its delivery id',None),
 ])
-TAGS['Connections'] = 'Every connection in one list: who reads what it brings in, its bots and where to configure it.'
+TAGS['Tools'] = 'Every way the company reaches the outside world in one list, and API tools: their keys per level, who can use each, its checks and calls.'
 STABLE.extend([
-    ('/api/v2/connections','get','Connections','listConnections','Slack, GitHub, mail bots, Tico addresses and numbers, meeting '
-     'importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the '
-     'company\'s they may read. Paged with cursor','ConnectionList'),
+    ('/api/v2/tool-index','get','Tools','listToolIndex','API tools, mailboxes, Tico addresses and numbers, mailing mail, '
+     'Slack, GitHub, meeting importers, Listening, outgoing webhooks and declared tools the caller may see, with status '
+     'and who can use each. Follow next with cursor','ToolIndex'),
+    ('/api/v2/api-tools/{tool_id}','get','Tools','getApiTool','One API tool: its keys (never a value), who can use it at '
+     'which level, its last checks and calls','ApiTool'),
+    ('/api/v2/api-tools/{tool_id}/activity','get','Tools','listApiToolActivity','Calls through the proxy and uses of its '
+     'keys, newest first. Follow next with cursor','ApiToolActivity'),
 ])
-SCHEMAS['Connection'] = obj({'id': 's', 'kind': {'enum': ['slack', 'github', 'mailbox', 'inbox', 'meetings', 'trigger',
-                                                         'webhook', 'postal', 'listening']},
-                             'name': 's', 'detail': 's', 'status': {'enum': ['on', 'off', 'waiting', 'error', 'paused']},
-                             'scope': {'enum': ['company', 'team', 'person']}, 'readers': 's',
-                             'bots': items(obj({'slug': 's', 'name': 's'})), 'more_bots': 'i', 'configure': 's',
-                             'can_configure': 'b'},
-                            required=['id', 'kind', 'name', 'status', 'scope', 'readers', 'bots', 'configure'])
-SCHEMAS['ConnectionList'] = obj({'connections': items(ref('Connection')), 'next': 'n'})
+TOOL_STATUS = obj({'tone': {'enum': ['ok', 'wait', 'fail', 'run', 'idle']}, 'text': 's'})
+SCHEMAS['ToolIndexRow'] = obj({'id': 's', 'kind': {'enum': ['api', 'mailbox', 'number', 'address', 'slack', 'github',
+                                                           'meetings', 'listening', 'webhook', 'declared', 'website']},
+                               'name': 's', 'detail': 's', 'way': 's', 'status': TOOL_STATUS,
+                               'who': items(obj({'kind': {'enum': ['bot', 'person']}, 'id': 's', 'name': 's',
+                                                 'initials': 's'})),
+                               'who_total': 'i', 'needs_you': 'b', 'href': 's'})
+SCHEMAS['ToolIndex'] = obj({'rows': items(ref('ToolIndexRow')),
+                            'counts': obj({'all': 'i', 'needs_you': 'i', 'api': 'i', 'mail': 'i', 'websites': 'i'}),
+                            'next': 'n'})
+SCHEMAS['ApiTool'] = obj({'tool': obj({'id': 's', 'name': 's', 'service': 's', 'base_url': 's', 'auth_scheme': 's',
+                                       'check_path': 's', 'delivery': {'enum': ['proxy', 'computer']}}),
+                          'keys': items(obj({'id': 's', 'name': 's', 'preview': 's',
+                                             'access_level': {'enum': ['read', 'read_write']},
+                                             'expires_on': 'n', 'last_used_at': 'n'},
+                                            required=['id', 'name', 'preview', 'access_level'])),
+                          'access': items(obj({'subject': 's', 'kind': {'enum': ['bot', 'person']}, 'name': 's',
+                                               'initials': 's', 'level': {'enum': ['read', 'read_write']},
+                                               'last_used_at': 'n'})),
+                          'checks': items(obj({'ok': 'b', 'status_code': {'type': ['integer', 'null']}, 'detail': 's',
+                                               'checked_at': 's'})),
+                          'recent': items({'type': 'object'}), 'status': TOOL_STATUS, 'can_manage': 'b'})
+SCHEMAS['ApiToolActivity'] = obj({'rows': items(obj({'id': 's', 'kind': {'enum': ['call', 'use']}, 'actor': 's',
+                                                     'result': {'enum': ['sent', 'refused', 'failed', 'use']},
+                                                     'at': 's'})), 'next': 'n'})
 TAGS['Webhook relay'] = 'Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py).'
 STABLE.extend([
     ('/api/v2/relay', 'get', 'Webhook relay', 'getWebhookRelay', 'The Gateway key, how many relay addresses exist, the last '
@@ -2886,6 +2913,10 @@ STABLE.extend([
      'Remove a link as its creator, meeting owner, task owner or requester, or org owner', 'MeetingTaskRemoved'),
     ('/api/v2/tasks/{tid}/context', 'get', 'Tasks', 'getTaskContext',
      'Up to 10 pages and 10 meetings, newest first, filtered by your current read access; metadata only', 'TaskContext'),
+    ('/api/v2/tasks/{tid}/make-page', 'post', 'Tasks', 'makeTaskPage',
+     "Ask the caller's Assistant to make and pin a task page with their normal rights; 409 at 60 pins", 'AssistantSent'),
+    ('/api/v2/tasks/{tid}/make-page', 'get', 'Tasks', 'getTaskMakePage',
+     "The caller's latest Make page request: making, made, failed or update_required", 'TaskMakePage'),
     ('/api/v2/tasks/{tid}/meetings', 'get', 'Tasks', 'listTaskMeetings',
      'Readable linked meetings, newest first; limit 20 by default, at most 50, cursor and 64 KB cap', 'TaskMeetings'),
 ])
@@ -2902,6 +2933,9 @@ SCHEMAS.update({
     'TaskContextMeeting': obj({'id': 's', 'title': 's', 'date': 's'}),
     'TaskContext': obj({'pages': {**items(ref('TaskContextPage')), 'maxItems': 10},
                         'meetings': {**items(ref('TaskContextMeeting')), 'maxItems': 10}}),
+    'TaskMakePage': obj({'make_page': {'anyOf': [obj({'message_id': 's', 'conversation_id': 's',
+                                                  'state': {'enum': ['making', 'made', 'failed', 'update_required']}}),
+                                               {'type': 'null'}]}}),
     'MeetingTaskRemoved': obj({'ok': 'b'}),
 })
 
@@ -3239,7 +3273,7 @@ STABLE.extend([
 ])
 
 
-# Settings > Inboxes (backend/mailboxes.py): which inboxes Tico uses and who may use each.
+# Tools (backend/mailboxes.py): which inboxes Tico uses and who may use each.
 TAGS["Mailboxes"] = "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
 _MAILBOX_LEVEL = {"enum": ["none", "read", "read_write"]}
 _MAILBOX_REF = obj({"id": "s", "name": "s"})

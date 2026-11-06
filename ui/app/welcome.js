@@ -314,10 +314,10 @@ function onbCommands(state) {
   const file = state.enrollment || '<setup-file>.json';
   return [
     ['Register this Mac for the team',
-     `scripts/tico -e <slug> enroll --code-file "$HOME/Downloads/${file}" --label "${onbMachineLabel(state)}"`],
+     `scripts/tico-computer -e <slug> enroll --code-file "$HOME/Downloads/${file}" --label "${onbMachineLabel(state)}"`],
     ...signIns.map((row, i) => [`Add your ${row.label} subscription`,
-     `${i === 0 ? 'scripts/tico -e <slug> profile add default\n' : ''}scripts/tico -e <slug> profile login default ${row.runtime}`]),
-    ['Start the bot service', 'scripts/tico -e <slug> install bot'],
+     `${i === 0 ? 'scripts/tico-computer -e <slug> profile add default\n' : ''}scripts/tico-computer -e <slug> profile login default ${row.runtime}`]),
+    ['Start the bot service', 'scripts/tico-computer -e <slug> install bot'],
   ].filter(Boolean);
 }
 // A label's parenthetical is a hint in small type under it, so each step reads as one short line. The command wraps

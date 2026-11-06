@@ -8,10 +8,6 @@ reads: []                        # other bot repositories this one may clone rea
 # This must agree with the bot's settings on the server, or be left out of this file entirely.
 reasoning_effort: high
 
-# Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
-# the bot puts every draft on the task and drafts until a person turns mail sending on in Tico.
-outbound_send: false
-
 # What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
 # arrives in, never the value; declaring access here does not create it. Changing access is an
 # owner decision, so the bot files a task for the owner rather than editing this file.

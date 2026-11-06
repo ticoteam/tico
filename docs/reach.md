@@ -86,7 +86,7 @@ Never refused:
   wrote there, and any person's message there (a person brought its members together), counts. It still adds to the
   bot's chats a day;
 - anything on a task the bot and the receiver are both part of: requester, owner (now or at any earlier step), the one
-  it waits on, its guest, or a poster in or member of the task's thread. A message in a task's thread is on that task.
+  it waits on, its readers, or a poster in or member of the task's thread. A message in a task's thread is on that task.
   Handing a task back to its requester passes; handing it to someone new is checked;
 - system hand-offs: step flow and the allocator, check pools, routines and automations, rule wakes and the keeper. They
   write in the hub, not through a bot's route;

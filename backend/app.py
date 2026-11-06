@@ -30,6 +30,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, recruiting, harness_actions, model_login, oidc, personal_tokens, views
 from . import outcome_stats
+from . import recorder_installs
 from . import assistant_changes, why_here
 from . import teammate_access
 from . import sources as SRC
@@ -93,6 +94,7 @@ from .performance import listing as performance_listing
 from .credential_cards import install_credential_cards, scrub_attempt
 from .github import PATH as GITHUB_WEBHOOK_PATH
 from .triggers import PATH as TRIGGER_HOOK_PATH
+from .tool_proxy import PREFIX as TOOL_PROXY_PATH
 from .store import H, P, Problem, Store, bot_readiness, encode, message_page, refused, repo_url, task_message_page
 from . import bot_settings as BS
 
@@ -336,7 +338,7 @@ def create_app(settings=None):
                 except Exception as exc:
                     telemetry.capture("github_wakes", exc)
                 try:
-                    app.state.personal_alerts.tick()
+                    app.state.personal_alerts.tick()           # its pass records on its own thread (personal_alerts)
                     await asyncio.to_thread(scheduler.tick)
                     await asyncio.to_thread(recorded, "release_check", release_check)
                     await asyncio.to_thread(recorded, "repository_waits", repository_waits)
@@ -344,22 +346,35 @@ def create_app(settings=None):
                     telemetry.capture("scheduler", exc)
                     import logging
                     logging.getLogger("tico.scheduler").error("Scheduler tick failed: %s", type(exc).__name__)
+                def call_sweeps():
+                    # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py), and
+                    # calls kept to their threads: people and bots whose access ended, and a LiveKit that restarted.
+                    failed = None
+                    for name, sweep in (("live_meeting_sweep", app.state.live_meeting_routing.sweep),
+                                        ("calls_sweep", app.state.calls.sweep)):
+                        try:
+                            sweep()
+                        except Exception as exc:
+                            telemetry.capture(name, exc)
+                            failed = failed or exc
+                    if failed:
+                        raise failed
                 try:
-                    # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py).
-                    await asyncio.to_thread(app.state.live_meeting_routing.sweep)
-                except Exception as exc:
-                    telemetry.capture("live_meeting_sweep", exc)
+                    await asyncio.to_thread(system_routines.pass_of, store, "call_sweeps", call_sweeps)
+                except Exception:                              # noqa: S110 - captured above, and the run says it failed
+                    pass
                 try:
-                    # Calls keep to their threads: people and bots whose access ended, and a LiveKit that restarted.
-                    await asyncio.to_thread(app.state.calls.sweep)
-                except Exception as exc:
-                    telemetry.capture("calls_sweep", exc)
-                try:
-                    # Settings > Inboxes' pending and failing Workspace key is checked again (backend/google_workspace.py).
+                    # Tools > Settings > Email's pending and failing Workspace key is checked again (backend/google_workspace.py).
                     from . import google_workspace as workspace_checks
-                    await asyncio.to_thread(workspace_checks.tick, store)
+                    await asyncio.to_thread(system_routines.pass_of, store, "workspace_check", workspace_checks.tick, store)
                 except Exception as exc:
                     telemetry.capture("google_workspace", exc)
+                try:
+                    # Workspace inboxes' queued email, sent by the server itself after its undo window and pacing.
+                    from . import email_sending
+                    await asyncio.to_thread(email_sending.drain, store, auth)
+                except Exception as exc:
+                    telemetry.capture("email_drain", exc)
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=10)
                 except TimeoutError:
@@ -713,6 +728,10 @@ def create_app(settings=None):
             # A webhook trigger's address carries its own secret (backend/triggers.py).
             if request.url.path.startswith(TRIGGER_HOOK_PATH) and request.method == "POST":
                 return await call_next(request)
+            # A proxied tool call (backend/tool_proxy.py) carries its own signed token where the vendor's key goes, and
+            # no Tico identity: the route refuses anything not signed for that tool and a live run.
+            if request.url.path.startswith(TOOL_PROXY_PATH):
+                return await call_next(request)
             # An agent signing in to the MCP server over OAuth (backend/mcp_oauth.py): the metadata it reads first, and
             # the registration, token and revocation endpoints, which carry their own codes and secrets.
             if request.url.path.startswith(("/api/v2/oauth/", "/.well-known/oauth-", "/.well-known/openid-configuration/")) \
@@ -723,7 +742,7 @@ def create_app(settings=None):
                 return await call_next(request)
             # A Hermes profile with no credential pairs itself (backend/agents.py): it asks for a code, polls with its own
             # secret, and fetches the source-available connector it runs. The person's approval is the authenticated step.
-            # Settings > Inboxes' setup command (backend/google_workspace.py): the script, and the key upload and its keep
+            # Tools > Settings > Email's setup command (backend/google_workspace.py): the script, and the key upload and its keep
             # check when they carry the command's code. Nothing else passes without a session. The body is read here,
             # bounded, the way the relay's is, and the route reads it again from the buffer.
             from . import google_workspace as workspace_setup
@@ -750,7 +769,7 @@ def create_app(settings=None):
                     from . import support_access
                     raw = request.scope.get("raw_path") or b""
                     support_access.gate(who, raw.decode("latin-1") if raw else request.url.path, request.method)
-                if who.via == "assistant" and not who.confirmed and not who.task_actor:
+                if who.via == "assistant" and not who.confirmed and not who.task_actor and not who.attempt_id:
                     who = replace(who, task_actor="bot:" + settings.assistant_bot)
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
                 request.state.identity = who
@@ -769,6 +788,9 @@ def create_app(settings=None):
                     raise Problem("privacy", reason, 403)
                 if census.person_due(who):
                     await asyncio.get_running_loop().run_in_executor(None, census.note_person, who)
+                # Which Recorder a person runs (backend/recorder_installs.py): a write only when one is due.
+                if (recorder := app.state.recorder_seen.due(who, request.headers)) is not None:
+                    await asyncio.get_running_loop().run_in_executor(None, app.state.recorder_seen.note, *recorder)
                 if who.via:
                     # The Assistant acting for a person (backend/assistant.py): what it writes is
                     # recorded via assistant, and unless the person just confirmed a proposal it may
@@ -1248,6 +1270,7 @@ def create_app(settings=None):
         value = {"id": row["id"], "short_id": row["id"][:8], **row, "acceptance_criteria": json.loads(row.get("acceptance", "[]")),
                  "labels": H.task_labels(row), "lane": row.get("lane") or "company",
                  "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
+        value["readers"] = H.task_readers(row) if value["private"] else []
         if c is not None and row.get("next_run"):
             value["next_run_waiting"] = H.next_run_waiting(c, row)
         if c is not None and (deferred := quiet_work.view(c, row)):
@@ -1490,6 +1513,7 @@ def create_app(settings=None):
 
     def check_refs(c, who, refs):
         # Validate referenced objects rather than trusting an arbitrary ID in a payload.
+        H.check_message_refs(refs)
         for kind, values in refs.items():
             if kind in ("task", "task_id"):
                 # One task id, or a list of them (bots send `task:<id>` as a list); each must be one the caller can read.
@@ -2001,7 +2025,9 @@ def create_app(settings=None):
                     "invites": {pid: sent["at"] for pid, sent in invites.sent(c).items()},
                     "invite_email": invites.can_email(settings),
                     # Whether the issuer also makes accounts with a generated password (Create password).
-                    "account_password": bool(invites.can_make(auth, settings))}
+                    "account_password": bool(invites.can_make(auth, settings)),
+                    # Each person's most recently used Tico Recorder (backend/recorder_installs.py).
+                    "recorders": recorder_installs.everyone(c)}
 
     @app.post("/api/v2/access/people")
     def access_person_add(request: Request, body: M.AccessPersonAdd):
@@ -2875,7 +2901,12 @@ def create_app(settings=None):
         with store.read() as c:
             choice = Providers.load(c, settings)
             cat = gateway_page.catalog(c, settings)
-        return {"models": [row for row in MODEL_CATALOG if not row.get("held")], "harnesses": list(HARNESS_CATALOG),
+            # A held row (Dev 693) is listed only while a bot or the team default already runs it, so the Settings
+            # editor can keep the saved model and its efforts; the picker offers it to that bot alone (ui settings-bots).
+            in_use = {choice["model"]} | {(json.loads(row["config"] or "{}") or {}).get("model")
+                                          for row in c.execute(BS.ROW_SQL).fetchall()}
+        return {"models": [row for row in MODEL_CATALOG if not row.get("held") or row["id"] in in_use],
+                "harnesses": list(HARNESS_CATALOG),
                 "gateway": gateway_tiers.view(cat), "enabled_providers": choice["enabled"],
                 "default": {"runtime": choice["runtime"], "model": choice["model"]}}
 
@@ -4028,7 +4059,7 @@ def create_app(settings=None):
                                       "check_back_note", "check_back",
                                       "requester_count", "external_requesters", "internal_requesters", "important_requesters", "organization", "size"):
                             row.pop(field, None)
-                        for field in ("verdict", "verdict_head", "check_back_at", "done_at", "closed_at", "closed_by_id", "guest"):
+                        for field in ("verdict", "verdict_head", "check_back_at", "done_at", "closed_at", "closed_by_id"):
                             if row.get(field) is None:
                                 row.pop(field, None)
                         if isinstance(row.get("step"), dict):
@@ -4408,8 +4439,8 @@ def create_app(settings=None):
             asked_botops = assistant_instruction(c, who, request_id) if assistant_direct() else None
             request_id = None
         # The same checks the dry-run makes (task_privacy.require_create); a subtask for a person under a private
-        # task with no person on it, filed by the bot that owns it, makes them its one guest.
-        guest = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
+        # task with no person on it, filed by the bot that owns it, makes them its reader.
+        reach_to = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
                                        actor=who.actor, title=body.title, body=body.body,
                                        from_private_work=body.from_private, texts=privacy.create_texts(body),
                                        related=[other for other, _ in others])
@@ -4417,7 +4448,7 @@ def create_app(settings=None):
         kept = privacy.from_private(c, source, owner, H.task(c, parent_id) if parent_id else None) \
             if body.from_private else []
         # A private run's subtask for a bot that cannot read its parent: sealed, the history says so (Dev 632).
-        sealed = (not guest and not kept and privacy.private_execution(c, source)
+        sealed = (not reach_to and not kept and privacy.private_execution(c, source)
                   and privacy.sealed_for(c, source, owner, H.task(c, parent_id) if parent_id else None) is not None)
         auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
         # A subtask is the shape that parks the filer as `waiting` and makes it care when the
@@ -4521,7 +4552,7 @@ def create_app(settings=None):
                 raise Problem("privacy", "The verified requester cannot receive this private execution's other context", 403)
         if private and actual_bot and actual_bot not in (requester_actor or who.actor, owner):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
-        if guest:
+        if reach_to:
             H.task_reach(c, who.actor, parent, owner)
         row = H.task_create(c, who.actor, body.title, body.body, owner, body.due, parent_id,
                             requester_actor=requester_actor, visibility=body.visibility,
@@ -4614,9 +4645,13 @@ def create_app(settings=None):
             changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
             readback += TR.readback(c, row["id"], other, kind, changed=changed)
             own_subtask.append(TR.own_subtask_warning(c, row["id"], other, kind))
+        if body.readers:
+            # Who else sees it, before a meeting's audience is checked against everyone who will.
+            H.set_task_readers(c, who.actor, row["id"], add=body.readers, mover=mover(c, who) or None,
+                               check=lambda added: privacy.require_readers(c, who, row["id"], added, shared=parent_id))
         if body.live_meeting_id:
             meeting_audience.check(c, auth, who, owner, live_id=body.live_meeting_id,
-                                   roles=body.roles, guest=H.task(c, row["id"]).get("guest"),
+                                   roles=body.roles, readers=H.task_readers(H.task(c, row["id"])),
                                    requester=H.task(c, row["id"])["requester_id"])
             c.execute("UPDATE tasks SET live_meeting_id=? WHERE id=?", (body.live_meeting_id, row["id"]))
             meeting_audience.grant(c, row["id"], meeting_participants, who.actor)
@@ -5507,6 +5542,47 @@ def create_app(settings=None):
             task_id = auth.resolve_task(c, request.state.identity, tid)
             auth.task(c, request.state.identity, task_id)
             return {"links": H.task_links(c, task_id)}
+
+    def readers_answer(c, who, task_id):
+        row = H.task(c, task_id)
+        private = H.task_private(c, row)
+        view = teammate_access.Known(c, who, auth).task({**row, "readers": H.task_readers(row) if private else []})
+        return {"private": private, "requester_id": view["requester_id"], "owner_id": view["owner_id"],
+                "readers": view["readers"]}
+
+    @app.get("/api/v2/tasks/{tid}/readers")
+    def get_task_readers(request: Request, tid: str):
+        """Who can see the task: on a private one its requester, owner and reader list (docs/tasks.md)."""
+        with store.read() as c:
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            return readers_answer(c, who, task_id)
+
+    def change_readers(request, tid, body, what, **change):
+        def work(c):
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            if who.via == "botops" and not who.confirmed:
+                # BotOps acting for a person changes who sees a task only on that person's own tap (a Confirm card).
+                return app.state.botops_propose(c, who, request.method, f"/api/v2/tasks/{tid}/readers",
+                                                body.model_dump(exclude_none=True),
+                                                what + " “" + H.task(c, task_id)["title"] + "”")
+            H.set_task_readers(c, who.actor, task_id, mover=mover(c, who) or None,
+                               check=lambda added: privacy.require_readers(c, who, task_id, added, task_id), **change)
+            return readers_answer(c, who, task_id)
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/readers")
+    def task_readers(request: Request, tid: str, body: M.TaskReaders):
+        """Add and remove who else sees a private task; each change is in its history."""
+        return change_readers(request, tid, body, "Change who sees", add=body.add, remove=body.remove)
+
+    @app.put("/api/v2/tasks/{tid}/readers")
+    def put_task_readers(request: Request, tid: str, body: M.TaskReaderList):
+        """Replace the reader list of a private task."""
+        return change_readers(request, tid, body, "Change who sees", replace=body.readers)
 
     @app.delete("/api/v2/tasks/{tid}/links/{link_id}")
     def delete_task_link(request: Request, tid: str, link_id: M.ID):
@@ -7936,7 +8012,6 @@ def create_app(settings=None):
             choice = MODEL_BY_ID.get(body.model)
             if not choice:
                 raise Problem("model", "Choose one of the supported models", 422)
-            settings_admin.refuse_retired(choice)
             row = c.execute(BS.ROW_SQL + " WHERE bc.bot=?", (bot,)).fetchone()
             if not row:
                 raise Problem("not_found", "Bot not found", 404)
@@ -7944,6 +8019,9 @@ def create_app(settings=None):
                 raise Problem("version_conflict", "Bot configuration changed; refresh before changing models", 409)
             config = json.loads(row["config"])
             old_model = config.get("model") or ""
+            # A saved held model (Dev 693) stays editable: a save that keeps it is not a fresh pick (settings_admin._target).
+            if not (choice.get("held") and choice["id"] == old_model):
+                settings_admin.refuse_retired(choice)
             old_runtime = config.get("runtime") or ""
             old_effort = config.get("reasoning_effort") or H.bot(c, bot).get("effort")
             old_harness = resolve_harness(config, old_runtime)
@@ -8234,7 +8312,9 @@ def create_app(settings=None):
             if 0 < len(request.headers.get("idempotency-key", "")) <= 200:
                 with store.read_transaction() as c:
                     validate_identity(c, request.state.identity)
-                    fresh = execution.renew(c, request.state.identity, aid, if_fresh=True)
+                    fresh = (None if store.saved(c, request.state.identity, request.url.path,
+                                                 request.headers.get("idempotency-key")) else
+                             execution.renew(c, request.state.identity, aid, if_fresh=True))
                     if fresh is not None:
                         return fresh
             return mutate(request, body, lambda c: execution.renew(c, request.state.identity, aid, arrived=arrived))
@@ -8263,7 +8343,8 @@ def create_app(settings=None):
             # Warm neutral provenance in a read snapshot. The transaction checks current
             # permissions again, and only reuses this graph while its source clock matches.
             with store.read_transaction() as c:
-                execution.attempt(c, request.state.identity, aid, active=False)
+                if not store.saved(c, request.state.identity, request.url.path, request.headers.get("idempotency-key")):
+                    execution.attempt(c, request.state.identity, aid, active=False)
             return mutate(request, body, lambda c: execution.events(c, request.state.identity, aid, body))
 
     @app.post("/api/v2/attempts/{aid}/capture")
@@ -8536,10 +8617,15 @@ def create_app(settings=None):
     install_imports(app, store, auth, execution, mutate)
     from .granola_mcp import install_granola
     install_granola(app)
+    recorder_installs.install(app, store)   # before /api/v2/meetings/{id}
     from .meeting_review import install_meeting_review
     install_meeting_review(app, store, auth, mutate)
     from .credentials import install_credentials
     install_credentials(app, store, delegate=delegated_identity, propose=propose_card)
+    from . import api_tools
+    api_tools.install(app, store, auth, settings)      # Tools: API tools, their keys and levels, and the tool index
+    from . import tool_proxy
+    tool_proxy.install(app, store)
     from .finance import actions as finance_vault
     finance_vault.use_vault(app.state.vault)      # never one an earlier app left behind (the scheduler may be off)
     from .google_workspace import install as install_google_workspace
@@ -8632,8 +8718,6 @@ def create_app(settings=None):
     triggers.install(app, settings, store, auth, mutate)
     from . import webhooks
     webhooks.install(app, settings, store, auth, mutate)
-    from . import connections
-    connections.install(app, store, auth, settings)      # Library › Connections: every connection in one list
     # GitHub App per company: manifest setup, installation tokens for runners (docs/github-app.md).
     from .github_app import install_github_app
     install_github_app(app, settings, store)

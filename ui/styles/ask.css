@@ -1,4 +1,4 @@
-/* Ask (ui/app/ask-panel.js): on a computer "Ask Tico" is the sidebar's bottom row, above the account, and opens the
+/* Ask (ui/app/ask-panel.js): on a computer "Tico Assistant" is the sidebar's bottom row, above the account, and opens the
    person's chat bot in a panel straight above that row, over the sidebar; on a phone the Liquid Dot sits in the
    centre of the tab bar and opens it as a full page, from the top of the screen down to the tab bar. Its mark is the Liquid Dot
    (liquid-dot.css). While the panel is open the dot sits beside its name (ldotFly carries it there and back) and a

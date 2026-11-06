@@ -50,6 +50,57 @@ export type Answer = {
   unknown?: boolean;
 };
 
+export type ApiTool = {
+  access: Array<{
+  initials: string;
+  kind: "bot" | "person";
+  last_used_at: string | null;
+  level: "read" | "read_write";
+  name: string;
+  subject: string;
+}>;
+  can_manage: boolean;
+  checks: Array<{
+  checked_at: string;
+  detail: string;
+  ok: boolean;
+  status_code: number | null;
+}>;
+  keys: Array<{
+  access_level: "read" | "read_write";
+  expires_on?: string | null;
+  id: string;
+  last_used_at?: string | null;
+  name: string;
+  preview: string;
+}>;
+  recent: Array<Record<string, unknown>>;
+  status: {
+  text: string;
+  tone: "ok" | "wait" | "fail" | "run" | "idle";
+};
+  tool: {
+  auth_scheme: string;
+  base_url: string;
+  check_path: string;
+  delivery: "proxy" | "computer";
+  id: string;
+  name: string;
+  service: string;
+};
+};
+
+export type ApiToolActivity = {
+  next: string | null;
+  rows: Array<{
+  actor: string;
+  at: string;
+  id: string;
+  kind: "call" | "use";
+  result: "sent" | "refused" | "failed" | "use";
+}>;
+};
+
 export type ApprovalCreate = {
   kind: "send" | "spend" | "publish" | "merge" | "support" | "task_cap" | "spend_limit";
   payload: Record<string, unknown>;
@@ -1087,28 +1138,6 @@ export type Config = {
 
 export type Confirmation = {
   code: string;
-};
-
-export type Connection = {
-  bots: Array<{
-  name: string;
-  slug: string;
-}>;
-  can_configure?: boolean;
-  configure: string;
-  detail?: string;
-  id: string;
-  kind: "slack" | "github" | "mailbox" | "inbox" | "meetings" | "trigger" | "webhook" | "postal" | "listening";
-  more_bots?: number;
-  name: string;
-  readers: string;
-  scope: "company" | "team" | "person";
-  status: "on" | "off" | "waiting" | "error" | "paused";
-};
-
-export type ConnectionList = {
-  connections: Array<Connection>;
-  next: string | null;
 };
 
 export type Contract = Record<string, unknown>;
@@ -3555,6 +3584,10 @@ export type MaintenanceUpdate = {
   steps?: Array<MaintenanceStepChange> | null;
 };
 
+export type MakePage = {
+  text: string;
+};
+
 export type MarketAnswers = {
   buyers?: string;
   competitors?: string;
@@ -3794,6 +3827,15 @@ export type ModelSubscriptionList = {
 
 export type Moderate = {
   action: string;
+};
+
+export type MyRecorder = {
+  download_url: string;
+  last_seen_at: string | null;
+  latest: string;
+  recent: boolean;
+  update_available: boolean;
+  version: string;
 };
 
 export type NeedsSummary = {
@@ -4105,14 +4147,20 @@ export type PolicyUpdate = {
   approvers?: Array<string> | null;
   ask_attachments?: boolean | null;
   ask_legal_money?: boolean | null;
+  ask_lint?: boolean | null;
   ask_many_recipients?: boolean | null;
   ask_new_address?: boolean | null;
+  ask_outside_cc?: boolean | null;
+  blocked_recipients?: Array<string> | null;
   company_daily_cap?: number | null;
   daily_cap?: number | null;
   inherit?: boolean;
   mailbox_daily_cap?: number | null;
+  max_outside_recipients?: number | null;
   mode?: string | null;
+  owner_handles?: Array<string> | null;
   pacing_seconds?: number | null;
+  second_review?: boolean | null;
   to?: string | null;
   undo_seconds?: number | null;
   what?: string | null;
@@ -5291,7 +5339,6 @@ export type Task = {
   created_at: string;
   due_at: string | null;
   external_requesters?: number;
-  guest?: string | null;
   holds: Array<TaskHold>;
   id: string;
   important_requesters?: number;
@@ -5306,6 +5353,7 @@ export type Task = {
   private?: boolean;
   public_summary?: string;
   public_title?: string;
+  readers?: Array<string>;
   relations?: Record<string, Array<{
   direction: string;
   id: string;
@@ -5504,6 +5552,7 @@ export type TaskCreate = {
   public_title?: string | null;
   qa?: boolean | null;
   qa_not_checkable_live?: boolean;
+  readers?: Array<string>;
   relations?: Array<TaskRelationRef>;
   request_id?: string | null;
   roles?: Record<string, Array<string>> | null;
@@ -5620,6 +5669,14 @@ export type TaskList = {
   next_offset: number | null;
   reset?: boolean;
   tasks: Array<Task>;
+};
+
+export type TaskMakePage = {
+  make_page: {
+  conversation_id: string;
+  message_id: string;
+  state: "making" | "made" | "failed" | "update_required";
+} | null;
 };
 
 export type TaskMeeting = {
@@ -6082,6 +6139,39 @@ export type Token = {
   token_type: string;
 };
 
+export type ToolIndex = {
+  counts: {
+  all: number;
+  api: number;
+  mail: number;
+  needs_you: number;
+  websites: number;
+};
+  next: string | null;
+  rows: Array<ToolIndexRow>;
+};
+
+export type ToolIndexRow = {
+  detail: string;
+  href: string;
+  id: string;
+  kind: "api" | "mailbox" | "number" | "address" | "slack" | "github" | "meetings" | "listening" | "webhook" | "declared" | "website";
+  name: string;
+  needs_you: boolean;
+  status: {
+  text: string;
+  tone: "ok" | "wait" | "fail" | "run" | "idle";
+};
+  way: string;
+  who: Array<{
+  id: string;
+  initials: string;
+  kind: "bot" | "person";
+  name: string;
+}>;
+  who_total: number;
+};
+
 export type ToolRegister = {
   can: Array<string>;
   dry_run?: boolean;
@@ -6091,14 +6181,6 @@ export type ToolRegister = {
   note?: string;
   scope?: Record<string, unknown>;
   service: string;
-  title_prefix?: string;
-};
-
-export type ToolUpdate = {
-  can?: Array<string> | null;
-  mcp?: Record<string, unknown> | null;
-  note?: string | null;
-  scope?: Record<string, unknown> | null;
   title_prefix?: string;
 };
 
@@ -6527,6 +6609,14 @@ export type backend__letters__Settings = {
   mode?: "ask_first" | "on_their_own" | "never" | null;
   monthly_cap_micros?: number | null;
   return_address?: Address | null;
+};
+
+export type backend__models__ToolUpdate = {
+  can?: Array<string> | null;
+  mcp?: Record<string, unknown> | null;
+  note?: string | null;
+  scope?: Record<string, unknown> | null;
+  title_prefix?: string;
 };
 
 export type backend__presence__Heartbeat = {
@@ -7536,6 +7626,13 @@ export type GetAlertCompanyCapParams = Record<string, never>;
 export type GetAlertCompanyCapBody = never;
 export type GetAlertCompanyCapResponse = AlertCompanyCap;
 
+/** GET /api/v2/api-tools/{tool_id} */
+export type GetApiToolParams = {
+  tool_id: string;
+};
+export type GetApiToolBody = never;
+export type GetApiToolResponse = ApiTool;
+
 /** GET /api/v2/approvals/{aid} */
 export type GetApprovalParams = {
   aid: string;
@@ -8234,6 +8331,11 @@ export type GetMyAlertsParams = Record<string, never>;
 export type GetMyAlertsBody = never;
 export type GetMyAlertsResponse = PersonalAlerts;
 
+/** GET /api/v2/meetings/recorder */
+export type GetMyRecorderParams = Record<string, never>;
+export type GetMyRecorderBody = never;
+export type GetMyRecorderResponse = MyRecorder;
+
 /** GET /api/v2/needs-you */
 export type GetNeedsYouParams = {
   count?: boolean;
@@ -8465,6 +8567,13 @@ export type GetTaskContextParams = {
 };
 export type GetTaskContextBody = never;
 export type GetTaskContextResponse = TaskContext;
+
+/** GET /api/v2/tasks/{tid}/make-page */
+export type GetTaskMakePageParams = {
+  tid: string;
+};
+export type GetTaskMakePageBody = never;
+export type GetTaskMakePageResponse = TaskMakePage;
 
 /** GET /api/v2/task-manager */
 export type GetTaskManagerParams = Record<string, never>;
@@ -8733,6 +8842,16 @@ export type ListAllAutomationRunsParams = {
 export type ListAllAutomationRunsBody = never;
 export type ListAllAutomationRunsResponse = AutomationOverviewRuns;
 
+/** GET /api/v2/api-tools/{tool_id}/activity */
+export type ListApiToolActivityParams = {
+  cursor?: string;
+  limit?: number;
+  result?: string;
+  tool_id: string;
+};
+export type ListApiToolActivityBody = never;
+export type ListApiToolActivityResponse = ApiToolActivity;
+
 /** GET /api/v2/approvals */
 export type ListApprovalsParams = {
   before?: string | null;
@@ -8908,14 +9027,6 @@ export type ListComputerBrowserExitUsageResponse = BrowserExitUsage;
 export type ListComputerSubscriptionsParams = Record<string, never>;
 export type ListComputerSubscriptionsBody = never;
 export type ListComputerSubscriptionsResponse = ComputerSubscriptionList;
-
-/** GET /api/v2/connections */
-export type ListConnectionsParams = {
-  cursor?: string;
-  limit?: number;
-};
-export type ListConnectionsBody = never;
-export type ListConnectionsResponse = ConnectionList;
 
 /** GET /api/v2/conversations */
 export type ListConversationsParams = {
@@ -9804,6 +9915,14 @@ export type ListThreadsParams = {
 export type ListThreadsBody = never;
 export type ListThreadsResponse = ThreadSidebar;
 
+/** GET /api/v2/tool-index */
+export type ListToolIndexParams = {
+  cursor?: string;
+  limit?: number;
+};
+export type ListToolIndexBody = never;
+export type ListToolIndexResponse = ToolIndex;
+
 /** GET /api/v2/triggers/{trigger_id}/deliveries */
 export type ListTriggerDeliveriesParams = {
   trigger_id: string;
@@ -9871,6 +9990,14 @@ export type MakeTaskFromMessageParams = {
 };
 export type MakeTaskFromMessageBody = MessageTask;
 export type MakeTaskFromMessageResponse = TaskResult;
+
+/** POST /api/v2/tasks/{tid}/make-page */
+export type MakeTaskPageParams = {
+  "Idempotency-Key": string;
+  tid: string;
+};
+export type MakeTaskPageBody = MakePage;
+export type MakeTaskPageResponse = AssistantSent;
 
 /** POST /api/v2/bots/{bot}/onboarded */
 export type MarkBotOnboardedParams = {
@@ -11532,7 +11659,7 @@ export type UpdateBotToolParams = {
   bot: string;
   tool_id: string;
 };
-export type UpdateBotToolBody = ToolUpdate;
+export type UpdateBotToolBody = backend__models__ToolUpdate;
 export type UpdateBotToolResponse = BotToolUpdated;
 
 /** PATCH /api/v2/cards/{cid} */

@@ -42,7 +42,7 @@ def _card(tab, card=""):
 
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > Company & policies", "Settings > People", "Settings > Computers", "Settings > Bots"
 RULES, HOOKS, TASKS, REPOS = "Settings > Automation", "Settings > Connections > Webhooks", "Settings > Tasks", "Settings > Connections > Repositories"
-INBOXES, STRATEGY = "Settings > Connections > Inboxes", "Settings > Bots > Strategy Bot"
+INBOXES, STRATEGY = "Tools", "Settings > Bots > Strategy Bot"
 INBOUND, TEXTS, MAIL = (INBOXES + " > Settings > " + s for s in ("Email", "Texts", "Letters in"))
 MODELS = "Settings > AI models"
 

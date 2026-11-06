@@ -215,10 +215,12 @@ def test_mailbox_routine_class_does_not_override_other_automation_routes(api):
     now = H.now()
     with api.app.state.store.transaction() as c:
         ids = {}
-        for name, trigger in (("mail", {"type": "message", "inbox": "ana@acme.example"}),
-                              ("event", {"type": "event", "name": "task.created"})):
+        for name, trigger, steps in (("mail", {"type": "message", "inbox": "ana@acme.example"}, []),
+                                     ("event", {"type": "event", "name": "task.created"}, []),
+                                     ("outbound", {"type": "event", "name": "task.created"},
+                                      [{"action": "call_webhook", "url": "https://acme.example/hook"}])):
             ident = H.new_id()
-            flow = {"name": name, "owner": "person:ana", "trigger": trigger, "steps": []}
+            flow = {"name": name, "owner": "person:ana", "trigger": trigger, "steps": steps}
             c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,builtin,flow,version,created_at,"
                       "created_by_id,updated_at) VALUES(?,?,?,?,1,0,?,1,?,?,?)",
                       (ident, name, "person:ana", trigger["type"], json.dumps(flow), now, "human:ana", now))
@@ -227,7 +229,8 @@ def test_mailbox_routine_class_does_not_override_other_automation_routes(api):
         classes = {name: settings_catalog.stored_class(
             c, "PATCH", "automations/" + ident, {"name": "renamed"}) for name, ident in ids.items()}
     assert classes["mail"][2] == "confirm"  # The route keeps its existing Assistant confirmation behavior.
-    assert classes["event"] is None       # An unrelated automation is not a mailbox Settings catalogue entry.
+    assert classes["event"][2] == "direct"  # A safe event edit keeps the route's direct behavior.
+    assert classes["outbound"][2] == "confirm"  # An external send keeps the route's confirmation gate.
 
 
 def test_someone_without_the_rights_is_told_who_can(api, botops):

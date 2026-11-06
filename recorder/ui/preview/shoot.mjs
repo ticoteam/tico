@@ -45,6 +45,14 @@ const scenes = {
   connect: [],
   demo: [],
   meeting: [open('m1')],
+  // A saved meeting's live task card: Title and Owner, then Send.
+  'live-card': ['library', async (page) => page.evaluate(() => {
+    const a = window.__PREVIEW__.state.meetings.m1.actions;
+    a.saved = true; a.shared_url = 'https://hub.tico.team';
+    a.shared = { can_send: true, presence: { actors: [] }, sections: { task: [{ version: 1, id: 's1', section: 'task', text: 'Send the pricing recap to Dana', quote: "I'll send Dana the pricing recap.", at_ms: 1150000, status: 'proposed', detail: { owner: 'human:dana', due: '2026-12-01T17:00:00.000Z', body: 'Older details' } }] } };
+  }), open('m1')],
+  // A created task's row is the way into Tico.
+  'task-open': ['meeting', open('m1'), async (page) => { await page.focus('[data-act="add-open"]'); await page.keyboard.press('Tab'); }],
   'task-picker': ['meeting', open('m1'), async (page) => { await page.click('[data-act="task-picker-open"]'); await page.waitForSelector('[data-act="task-pick"]'); await page.click('[data-id="t42"]'); await page.click('[data-id="t44"]'); }],
   owner: [open('m1'), async (page) => page.click('.owner.empty')],
   'add-mention': ['meeting', open('m1'), async (page) => { await page.click('[data-act="add-open"]'); await page.keyboard.type('Send notes to @me'); }],
@@ -152,7 +160,7 @@ if (!only.length || only.includes('checks')) {
     await context.close();
   };
   const go = async (page, scene) => { await page.goto(`${base}?scene=${scene}`); await page.waitForSelector('#r-page > *'); };
-  await check('task links and detail drafts', async (page) => {
+  await check('task links and drafts', async (page) => {
     await go(page, 'meeting'); await open('m1')(page);
     await page.click('[data-act="task-picker-open"]');
     await page.waitForSelector('[data-act="task-pick"]');
@@ -160,24 +168,17 @@ if (!only.length || only.includes('checks')) {
     await page.click('[data-act="task-picker-link"]');
     await page.waitForSelector('.item.task:has-text("Review pricing")');
     await page.evaluate(() => { window.__PREVIEW__.state.meetings.m1.actions.items.find((it) => it.id === 't42').pending = true; });
-    await page.waitForSelector('.item.task:has-text("Review pricing") .sub:has-text("Pending")');
+    await page.waitForSelector('.item.task:has-text("Review pricing") .sub:has-text("Linking")');
     if (await page.locator('.item.task:has-text("Review pricing") .check.done').count()) throw Error('pending link shown as committed');
     await page.evaluate(() => { window.__PREVIEW__.state.meetings.m1.actions.items.find((it) => it.id === 't42').pending = false; });
     await page.waitForSelector('.item.task:has-text("Review pricing") .check.done');
     await page.click('.item.task:has-text("Review pricing") [data-act="unlink-item"]');
     await page.waitForSelector('.item.task:has-text("Review pricing")', { state: 'detached' });
     if (!(await page.locator('.item.task:has-text("Test recovery")').count())) throw Error('second link lost');
-    await page.click('[data-act="task-detail"][data-id="i1"]');
-    await page.fill('[data-model="detailDue"]', '2026-12-01');
-    await page.fill('[data-model="detailBody"]', 'Synthetic details');
-    await page.click('[data-act="task-detail-save"]');
-    const due = await page.evaluate(() => window.__PREVIEW__.state.meetings.m1.actions.items.find((i) => i.id === 'i1').due);
-    const expectedDue = await page.evaluate(() => new Date(2026, 11, 1, 17, 0).toISOString());
-    if (due !== expectedDue) throw Error('due date is not the task API timestamp');
-    await page.click('[data-act="task-detail"][data-id="i1"]');
-    if (await page.inputValue('[data-model="detailBody"]') !== 'Synthetic details') throw Error('details lost');
-    await page.keyboard.press('Escape');
-    await page.waitForSelector('[aria-label="Task details"]', { state: 'detached' });
+    if (await page.locator('.item.proposal :text-is("Details")').count()) throw Error('draft still has a Details control');
+    // An older draft with a due date and details shows no editor for them.
+    await page.evaluate(() => Object.assign(window.__PREVIEW__.state.meetings.m1.actions.items.find((i) => i.id === 'i1'), { due: '2026-12-01T22:00:00.000Z', body: 'Synthetic details' }));
+    if (await page.locator('.item.proposal :is(input, textarea, select)').count()) throw Error('draft shows a field editor');
     await page.click('[data-act="create-item"][data-id="i1"]');
     await page.waitForSelector('.item.task:has-text("Confirm the transcript link")');
   });

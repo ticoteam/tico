@@ -181,7 +181,7 @@ CREATE TABLE IF NOT EXISTS attempts(
  token_hash TEXT UNIQUE, state TEXT, lease_until TEXT,
  created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, thread_id TEXT,
  result TEXT, final_text TEXT, last_seq INTEGER NOT NULL DEFAULT 0,
- stop_requested_at TEXT, gateway_key_id TEXT, handed_runtime TEXT, handed_model TEXT,
+ stop_requested_at TEXT, gateway_key_id TEXT, handed_runtime TEXT, handed_model TEXT, acting_person TEXT,
  lane TEXT NOT NULL DEFAULT 'main', wake TEXT, model TEXT,
  settled_at TEXT, trigger TEXT, message_id TEXT, task_id TEXT, exit TEXT, summary TEXT,
  trigger_kind TEXT, trigger_source TEXT, purpose TEXT, rule_id TEXT, writes INTEGER, outcome TEXT,
@@ -297,7 +297,8 @@ CREATE TABLE IF NOT EXISTS credentials(
  kind TEXT NOT NULL, env TEXT NOT NULL DEFAULT '', preview TEXT NOT NULL DEFAULT '',
  ciphertext BLOB, nonce BLOB, source TEXT NOT NULL DEFAULT '',
  revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0);
+ updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0,
+ tool_id TEXT REFERENCES tools(id), access_level TEXT NOT NULL DEFAULT 'read_write', expires_on TEXT);
 -- Person-owned remote MCP credentials use the same vault cipher, with no reveal/grant door.
 CREATE TABLE IF NOT EXISTS granola_connections(
  actor TEXT PRIMARY KEY, id TEXT NOT NULL, email TEXT NOT NULL,
@@ -305,7 +306,7 @@ CREATE TABLE IF NOT EXISTS granola_connections(
 CREATE TABLE IF NOT EXISTS credential_grants(
  id TEXT PRIMARY KEY, credential_id TEXT NOT NULL REFERENCES credentials(id),
  subject TEXT NOT NULL, granted_by TEXT NOT NULL, parent_id TEXT REFERENCES credential_grants(id),
- created_at TEXT NOT NULL, revoked_at TEXT, revoked_by TEXT);
+ created_at TEXT NOT NULL, revoked_at TEXT, revoked_by TEXT, access_level TEXT NOT NULL DEFAULT 'read_write');
 CREATE UNIQUE INDEX IF NOT EXISTS credential_grant_active ON credential_grants(credential_id,subject) WHERE revoked_at IS NULL;
 CREATE TABLE IF NOT EXISTS archives(
  source TEXT PRIMARY KEY, digest TEXT NOT NULL, imported_at TEXT NOT NULL,
@@ -1179,8 +1180,6 @@ class Store:
             _doc_sources.ensure_schema(c)
             from . import bot_tools as _bot_tools
             c.executescript(_bot_tools.SCHEMA)
-            from . import mail_settings as _mail_settings
-            c.executescript(_mail_settings.SCHEMA)
             from . import company_storage as _company_storage
             c.executescript(_company_storage.SCHEMA)
             from . import tico_storage as _tico_storage
@@ -2008,13 +2007,13 @@ class Store:
                                    # row_clock and task_privacy name this with INDEXED BY. hubdb.migrate also makes
                                    # it, but runs before cloud migration 57 adds tasks.private on an upgraded database.
                                    ("tasks_private_status",
-                                    "tasks(id, requester_id, owner_id, guest, private, status, waiting_on) WHERE private IS NOT 0"),
+                                    "tasks(id, requester_id, owner_id, readers, private, status, waiting_on) WHERE private IS NOT 0"),
                                    # The task list's and status rows' covering indexes (hubdb.migrate), for the same reason.
-                                   ("tasks_queue_cover", "tasks(rank, created_at, id, owner_id, requester_id, private, guest)"),
+                                   ("tasks_queue_cover", "tasks(rank, created_at, id, owner_id, requester_id, private, readers)"),
                                    ("tasks_owner_status_cover",
-                                    "tasks(owner_id, status, id, requester_id, private, guest, waiting_on)"),
+                                    "tasks(owner_id, status, id, requester_id, private, readers, waiting_on)"),
                                    ("tasks_requester_status_cover",
-                                    "tasks(requester_id, status, id, owner_id, private, guest, waiting_on)"),
+                                    "tasks(requester_id, status, id, owner_id, private, readers, waiting_on)"),
                                    # A person's view of a bot's settings changes (settings_admin.history): the manager
                                    # bots' changes, found by seek and in id order within a timestamp. It needs the `via`
                                    # column, added above.
@@ -2340,32 +2339,24 @@ class Store:
                     legacy = retry_body(c, result) if retry_body else None
                     if legacy is None or row["request_hash"] != digest(encode(legacy)):
                         raise Problem("idempotency_conflict", "This key was used for different content", 409)
-                from .auth import Auth, Identity
+                from .auth import Auth
                 from . import task_privacy as privacy
                 replay_auth = Auth(self)
                 replay_auth.sync_access(c)
-                replay_principal = identity
+                aid = saved = None
                 if identity.role == "runner" and isinstance(result, dict):
                     saved = result.get("attempt")
                     aid = result.get("attempt_id") or (saved.get("id") if isinstance(saved, dict) else None)
-                    if aid:
-                        # A finished attempt can replay its receipt without a live bot lease, but
-                        # the computer must still own that generation and the bot must still see it.
-                        hosted = c.execute("SELECT a.bot_id FROM attempts a JOIN assignments x ON x.bot=a.bot_id "
-                                           "JOIN bots b ON b.id=a.bot_id WHERE a.id=? AND a.runner_id=? "
-                                           "AND x.runner_id=? AND x.generation=a.generation AND b.state='active'",
-                                           (aid, identity.runner_id, identity.runner_id)).fetchone()
-                        if not hosted:
-                            raise Problem("privacy", "This execution is no longer assigned to this computer", 403)
-                        replay_principal = Identity("bot:" + hosted["bot_id"], "bot", runner_id=identity.runner_id,
-                                                    attempt_id=aid)
-                        if not privacy.attempt_readable(c, replay_principal.actor, aid):
-                            raise Problem("privacy", "This execution is no longer available", 403)
-                        if operation == "/api/v2/jobs/claim" and isinstance(saved, dict):
-                            from . import task_context
-                            attempt = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
-                            acting = replay_auth.assistant_principal(c, attempt) or replay_principal
-                            saved["task_context"] = task_context.for_turn(c, replay_auth, acting, saved.get("task"))
+                    # Several receipts contain only an acknowledgement; the route or file request still binds the turn.
+                    if operation.startswith("/api/v2/attempts/"):
+                        aid = operation.split("/")[4]
+                    elif operation in ("/api/v2/files/uploads", "/api/v2/files/imports"):
+                        aid = body.get("attempt") or aid
+                replay_principal = replay_auth.runner_receipt_principal(c, identity, aid)
+                if identity.role == "runner" and operation == "/api/v2/jobs/claim" and isinstance(saved, dict):
+                    from . import task_context
+                    task = (saved.get("make_page") or {}).get("task") or saved.get("task")
+                    saved["task_context"] = task_context.for_turn(c, replay_auth, replay_principal, task)
                 # Cached results keep their retry semantics, but access is current on every retry.
                 task_ids = set()
                 for part in operation.split("/"):

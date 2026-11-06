@@ -388,7 +388,7 @@ plans and diagnostics, and stay in setup's 0600 private environment copy for ret
 excluded from public setup state and runner settings. An explicit nonempty environment value replaces its saved value.
 
 For an existing workspace with an Inbox key, a signed-in owner or admin can connect its Inbox to a company in the
-customer portal. In **Settings > Inboxes > Settings > Email**, open **Join your company's shared Inbox** and follow the
+customer portal. In **Tools > Settings > Email**, open **Join your company's shared Inbox** and follow the
 portal link to obtain a five-minute connection code. Paste it into the workspace, preview the company name and ID,
 then confirm sharing in both directions: existing workspace inboxes and messages join the company's shared Inbox,
 and the workspace's agents can read that shared Inbox. The key stays on the server; no agent receives it. A saved
@@ -854,7 +854,7 @@ allowed, take control. The computer itself decides whether it offers one:
   once the computer is idle, since that recreates the runner's container and cuts off a running turn.
   `install.sh --runner --screen` writes `TICO_SCREEN=1` too. The `$([ -f runner.override.yaml ] && ...)` part adds the
   override file a named or `--server-network` runner has, as every compose call for that runner must.
-- A Linux checkout: `sudo apt-get install xvfb x11vnc matchbox-window-manager`, then `scripts/tico screen on`
+- A Linux checkout: `sudo apt-get install xvfb x11vnc matchbox-window-manager`, then `scripts/tico-computer screen on`
   (`screen off` and `screen status` too; a running runner follows within seconds).
 
 In **Bot → Settings → Screen**, use the switch to enable or disable screen access. If setup is needed, the switch
@@ -891,7 +891,7 @@ it with Rust 1.92 or newer. `TICO_SCREEN_RELAY_BIN` can supply a matching execut
 fingerprint is checked before startup. Use `CARGO_HOME`, `CARGO_TARGET_DIR`, `RUSTUP_HOME` and
 `TMPDIR` on your work disk to keep build files there. Docker ships the binary and needs no compiler.
 
-Existing native launchd/systemd server jobs need a one-time `scripts/tico -e <env> server install`
+Existing native launchd/systemd server jobs need a one-time `scripts/tico-computer -e <env> server install`
 after updating, so they run `backend.server` rather than a direct Uvicorn listener. New jobs already
 use that entry point. The server creates a fresh private control secret and allocated loopback ports
 on every start; no relay option or manually managed secret is required. The public listener refuses
@@ -933,14 +933,14 @@ TICO_SCREEN_RELAY_BIN=/path/on/work-disk/to/tico-screen-relay \
 
 The native runner is unchanged and fully supported: a Mac keeps its own logins, desktop apps and files. Choose **Mac**
 in Add computer and **Use a Tico checkout instead**, then in the Tico checkout on that Mac run the command it prints
-(`scripts/setup-runner.sh "$HOME/Downloads/<setup-file>.json"`, or `scripts/tico -e <env> enroll --code-file <file>
---label "Studio Mac"`, then `scripts/tico -e <env> install bot`; see the README). It connects to
+(`scripts/setup-runner.sh "$HOME/Downloads/<setup-file>.json"`, or `scripts/tico-computer -e <env> enroll --code-file <file>
+--label "Studio Mac"`, then `scripts/tico-computer -e <env> install bot`; see the README). It connects to
 `https://<TICO_DOMAIN>`, runs under launchd, and reconnects on its own after the server restarts.
 
 **Mac updates.** The runner follows the server's release by itself ([updates.md](updates.md#a-mac-or-linux-checkout)).
 After a healthy update it also restarts the side jobs installed beside it (`connectors`, `close-calls`, `importers`), and
 each side job exits and restarts when it sees the checkout move to another revision (checked about once a minute), so no job
-keeps old code in memory. `scripts/tico restart` does the same by hand.
+keeps old code in memory. `scripts/tico-computer restart` does the same by hand.
 
 ### Windows PC (WSL 2)
 
@@ -965,13 +965,13 @@ Docker Desktop is not needed; if its WSL integration is on for Ubuntu, the runne
 
 ### A Linux checkout (systemd)
 
-A Linux computer can also run the native runner from a Tico checkout, the way a Mac does. `scripts/tico` drives it with
+A Linux computer can also run the native runner from a Tico checkout, the way a Mac does. `scripts/tico-computer` drives it with
 systemd **user** units instead of launchd; no root is needed:
 
 ```
-scripts/tico -e <env> enroll --code-file <file> --label "Build box"     # or scripts/setup-runner.sh
-scripts/tico -e <env> install            # tico-bot, tico-connectors, tico-close-calls, tico-importers: Restart=always
-scripts/tico -e <env> status
+scripts/tico-computer -e <env> enroll --code-file <file> --label "Build box"     # or scripts/setup-runner.sh
+scripts/tico-computer -e <env> install            # tico-bot, tico-connectors, tico-close-calls, tico-importers: Restart=always
+scripts/tico-computer -e <env> status
 ```
 
 `install` writes `~/.config/systemd/user/tico-<job>.service` (`tico-<env>-<job>.service` with `-e`), enables and starts
@@ -979,8 +979,8 @@ each, and tells you to run `loginctl enable-linger $USER` when linger is off (ot
 does not start at boot). It needs a user session: over a bare ssh login that has none, set
 `XDG_RUNTIME_DIR=/run/user/$(id -u)` first. `restart`, `logs`, `doctor`, `uninstall` and `update` behave as on a Mac.
 Run `install` once: it is also what lets the runner update itself when the server does
-([updates.md](updates.md#linux-from-a-checkout-run-scriptstico-install-once)); until then Settings > Computers and Health say
-"run `scripts/tico install` once".
+([updates.md](updates.md#linux-from-a-checkout-run-scriptstico-computer-install-once)); until then Settings > Computers and Health say
+"run `scripts/tico-computer install` once".
 
 ## Slack
 

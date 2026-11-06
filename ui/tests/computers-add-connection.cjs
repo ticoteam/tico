@@ -92,7 +92,7 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
     // API key, for a tool whose key is not the computer's own: the way there, and Back (ui/tests/model-keys.cjs: Add key).
     await add.locator('[data-add-kind=api_key]').click();
     assert.match(await add.innerText(), /Codex takes its key from Credentials/);
-    assert.equal(await add.locator('a[href="#/credentials"]').count(), 1);
+    assert.equal(await add.locator('a[href="#/tools/keys?show=credentials"]').count(), 1);
     await add.locator('[data-add-back=kind]').click();
     assert.equal(await add.locator('input[name=profile]').count(), 0, 'no name: the computer has one login per tool');
     await add.locator('[data-add-own]').click();

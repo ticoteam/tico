@@ -100,7 +100,7 @@ const sourceCarriesCard = m => { const r = m?.refs || {};
   return m?.kind === 'ask' || !!(r.action || r.credential_request || r.approval || r.questions || r.chat_goal || r.read_back || r.update || r.card || r.reconnect); };
 const isSourceLine = (m, by) => SOURCE_LINES.has(rowSource(m, by).kind) && !sourceCarriesCard(m);
 // Plain words for a gray line: names for actor ids, markdown marks and link targets dropped.
-const sourcePlain = text => plainActors(text).replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>~|]/g, '').trim();
+const sourcePlain = text => plainActors(String(text ?? '').replace(/^New task from keeper: /, 'New task: ')).replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>~|]/g, '').trim();
 // The name a gray line leads with: bold for a built-in, a link for an automation, nothing for a task update or system.
 function sourceLeadHTML(src) {
   if (!src.name || !['builtin', 'automation'].includes(src.kind)) return '';
@@ -108,10 +108,10 @@ function sourceLeadHTML(src) {
     ? `<a class="src-name" href="${esc(src.link)}">${esc(src.name)}</a> ` : `<b class="src-name">${esc(src.name)}</b> `;
 }
 // One gray line for a row no person or bot wrote. `cls` and `attrs` let each surface keep its own row hooks; the
-// hover says what made it and when.
+// hover says what made it and when, and the whole text when the line may be cut.
 function sourceLineHTML(m, {src = rowSource(m), at = m.created_at, text = m.body, cls = '', attrs = '', tail = ''} = {}) {
   const words = sourcePlain(text || ''), first = words.split('\n').map(s => s.trim()).find(Boolean) || '';
-  const tip = [src.name, at ? fmt(at) : ''].filter(Boolean).join(' · ') + (words.length > first.length ? '\n\n' + words.slice(0, 600) : '');
+  const tip = [src.name, at ? fmt(at) : ''].filter(Boolean).join(' · ') + (words.length > first.length || first.length > 60 ? '\n\n' + words.slice(0, 600) : '');
   const when = at ? `<time class="src-time" data-ago="${esc(at)}">${esc(ago(at))}</time>` : '';
   return `<div class="src-line src-${esc(src.kind)}${cls ? ' ' + cls : ''}"${m.id ? ` data-message="${esc(m.id)}"` : ''}${attrs} title="${esc(tip)}">${
     sourceLeadHTML(src)}<span class="src-text">${esc(first)}</span>${when}${tail}</div>`;

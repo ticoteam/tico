@@ -281,8 +281,8 @@ def test_participant_grants_end_with_removal_narrowing_and_discard(api):
             tid = post(api, 'tasks', {'title':action+' source followup', 'body':'Words', 'owner':'human:ana', 'live_meeting_id':mid})['id']
         store, auth = api.app.state.store, api.app.state.auth
         with store.transaction() as c:
-            # A task guest keeps independent access after the participant grant is removed.
-            c.execute("UPDATE tasks SET guest='human:cara' WHERE id=?", (tid,))
+            # A task reader keeps independent access after the participant grant is removed.
+            c.execute("UPDATE tasks SET readers=json_array('human:cara') WHERE id=?", (tid,))
             who = auth.identity_for_actor(c, 'human:ben')
             after = events.latest(c)
         watch = events.Watch(store, auth, who, tasks=[tid]); watch()
@@ -373,12 +373,12 @@ def test_participant_queries_recheck_source_even_if_a_historical_grant_remains(a
     assert api.get('/api/v2/tasks/'+tid,headers=headers('ben-test')).status_code in (403,404)
 
 
-def test_deleting_a_saved_meeting_revokes_grants_but_keeps_task_parties_and_guests(api):
+def test_deleting_a_saved_meeting_revokes_grants_but_keeps_task_parties_and_readers(api):
     rid = record(api, {'private':True,'participants':['ben@acme.example','cara@acme.example']})
     iid = add(api,rid,{'section':'task','text':'Saved source','detail':{'owner':'human:ana'}})['item']['id']
     tid = push(api,rid,iid)['item']['result_ref']
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET guest='human:cara' WHERE id=?",(tid,))
+        c.execute("UPDATE tasks SET readers=json_array('human:cara') WHERE id=?",(tid,))
     assert get(api,'tasks/'+tid,'ben-test')['task']['id'] == tid
     response = api.post(f'/api/v2/meetings/{rid}/delete',json={},headers=headers())
     assert response.status_code == 200, response.text

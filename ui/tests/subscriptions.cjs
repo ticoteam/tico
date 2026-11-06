@@ -49,7 +49,7 @@ function fixtures() {
       {id: 's1', name: 'Claude Max (Ana)', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'working', status_detail: '',
         computers: ['r1', 'r2', 'r3'], usage: {window: '5h', used_pct: 62, cost_usd_month: null}, added_by: 'ana', owner_id: 'human:ana', owner_name: 'Ana'},
       {id: 's2', name: 'ChatGPT Pro (Ana)', kind: 'codex_login', runtime: 'codex', label: 'ChatGPT plan', status: 'working', status_detail: '',
-        computers: ['r1'], usage: {window: 'week', used_pct: 13, cost_usd_month: null}, added_by: 'ana'},
+        computers: ['r1'], usage: {window: 'week', used_pct: 13, cost_usd_month: null, resets_at: new Date(Date.now() + ((4 * 24 + 15) * 60 + 30) * 60000).toISOString()}, added_by: 'ana'},
       {id: 's3', name: 'OpenAI key (company)', kind: 'openai_key', runtime: 'codex', label: 'OpenAI API key', status: 'working', status_detail: '',
         computers: [], usage: {window: null, used_pct: null, cost_usd_month: 41.2}, added_by: 'ana', owner_id: '', owner_name: ''},
       {id: 's4', name: 'Claude Max (Sam)', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'needs_reconnect', status_detail: 'Token expired',
@@ -232,7 +232,7 @@ async function navigation(browser) {
     assert.equal(await page.locator('#settings-group-tasks').isVisible(), true, `${alias} opens Tasks`);
   }
   for (const alias of ['credentials', 'cloud']) {
-    assert.equal(await page.evaluate(alias => { settingsShow(alias); return location.hash; }, alias), '#/integrations');
+    assert.equal(await page.evaluate(alias => { settingsShow(alias); return location.hash; }, alias), alias === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools');
   }
   assert.deepEqual(errors, []);
   await page.close();
@@ -253,11 +253,14 @@ async function modelsTab(browser) {
     [...r.querySelector('.subs-use').querySelectorAll('.subs-usage-w, .tnum, .subs-usage:not(:has(.tnum)), .pill')].map(e => e.textContent).join(' ')]));
   assert.deepEqual(rows, [
     ['Claude Max (Ana)', 'Claude plan', 'Ana', '3', '5h 62%'],
-    ['ChatGPT Pro (Ana)', 'ChatGPT plan', '', '1', 'week 13%'],
+    ['ChatGPT Pro (Ana)', 'ChatGPT plan', '', '1', 'week 13% resets in 4d 15h'],
     ['OpenAI key (company)', 'OpenAI API key', '', '0', '$41.20 this month'],
     ['Claude Max (Sam)', 'Claude plan', 'Sam', '0', 'Reconnect'],
     ['ChatGPT Team (Cy)', 'ChatGPT plan', '', '1', 'week 0%'],
     ['Claude Max (Dee)', 'Claude plan', '', '1', 'Waiting for a computer to report']]);
+  // The time until the window resets sits after the share; the tooltip adds the share left and the reset time.
+  assert.match(await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'), /^13% used in the week · 87% left · resets \S/);
+  assert.equal(await pane.locator('[data-subs-row=s1] .subs-reset').count(), 0);
   // A reading of 0% still draws its bar, and a plan with no reading says why in muted text.
   assert.equal(await pane.locator('[data-subs-row=s5] .subs-bar b').getAttribute('style'), 'width:0%');
   assert.equal(await pane.locator('[data-subs-row=s6] .subs-bar').count(), 0);

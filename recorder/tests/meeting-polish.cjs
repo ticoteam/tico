@@ -1,5 +1,6 @@
 // Recorder meeting polish: task search that follows the typing, a type filter, obvious picks, @me in Add a task,
-// Enter to add, the transcript's copy button, and Stop as the one end action.
+// Enter to add, the transcript's copy button, Stop as the one end action, and suggested tasks without a Details
+// sheet: a created task's row opens it in Tico.
 require('../../ui/tests/support/browser.cjs');
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -100,6 +101,38 @@ const rows = page => page.locator('#sheet [data-act="task-pick"] .grow').allInne
     await page.locator('.side-head [data-act="copy-transcript"][aria-label="Copied"]').waitFor();
     await page.close();
 
+    // ---- Suggested tasks: no Details sheet; a created task's whole row opens it in Tico ----
+    page = await open(browser, 'meeting', errors);
+    await page.evaluate(() => {
+      const original = window.__TAURI__.core.invoke;
+      window.opened = [];
+      window.__TAURI__.core.invoke = async (cmd, args) => {
+        if (cmd === 'open_url') window.opened.push(args.url);
+        return original(cmd, args);
+      };
+    });
+    await page.click('.row[data-id="m1"]');
+    const draft = page.locator('.item.proposal', {hasText:'Confirm the transcript link'});
+    await draft.waitFor();
+    assert.equal(await page.locator('.item.proposal').getByRole('button', {name:'Details'}).count(), 0);
+    assert.equal(await page.locator('.item.proposal', {hasText:'Details'}).count(), 0);
+    assert.equal(await page.locator('[aria-label="Task details"]').count(), 0);
+    assert.equal(await draft.locator('textarea, input, select').count(), 0);
+    await draft.getByRole('button', {name:'Create', exact:true}).click();
+    const created = page.locator('.item.task', {hasText:'Confirm the transcript link'});
+    await created.waitFor();
+    const url = await page.evaluate(() => window.__PREVIEW__.state.meetings.m1.actions.items.find(i => i.id === 'i1').task_url);
+    assert.match(url, /^https:\/\/hub\.tico\.team\/#\/tasks\/\d+$/);
+    assert.equal(await created.getAttribute('data-url'), url);
+    assert.equal(await created.getByRole('button', {name:'Open', exact:true}).count(), 0);
+    await created.locator('.sub').click();
+    await page.waitForFunction(() => window.opened.length === 1);
+    await created.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.opened.length === 2);
+    assert.deepEqual(await page.evaluate(() => window.opened), [url, url]);
+    await page.close();
+
     // ---- Stop, not shared: the recording stops and Finish asks where it goes ----
     page = await open(browser, 'recording', errors);
     await page.click('.row[data-id="m0"]');
@@ -137,6 +170,6 @@ const rows = page => page.locator('#sheet [data-act="task-pick"] .grow').allInne
     await page.close();
 
     assert.deepEqual(errors, []);
-    console.log('Recorder: task search, picks, @me, Enter, copy transcript and Stop passed');
+    console.log('Recorder: task search, picks, @me, Enter, copy transcript, Stop, no Details sheet and tap-to-open tasks passed');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
