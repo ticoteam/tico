@@ -113,13 +113,21 @@ class Context:
 # These ran beside Scheduler.tick in backend/app.py `schedule_loop`; moved here as they were.
 def github_sync(ctx):
     github_app = ctx.app.state.github_app
-    from .github import flush_wakes, reconcile_worktree_prs, refresh_deployed_tasks, refresh_pending_checks
+    from .github import (
+        flush_wakes,
+        reconcile_worktree_prs,
+        refresh_deployed_tasks,
+        refresh_pending_checks,
+        refresh_queue_removals,
+    )
 
     with ctx.store.transaction() as c:
         flush_wakes(c)
     refresh_deployed_tasks(github_app)
     # Checks pending with no word from GitHub are read afresh: a suite that never starts sends none (Dev 646).
     refresh_pending_checks(github_app)
+    # A merge-queue removal that was not a merge is read afresh before its owner is woken (github.refresh_queue_removals).
+    refresh_queue_removals(github_app)
     # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
     reconcile_worktree_prs(github_app)
     # A merge or release a task waits for whose webhook never came is asked of GitHub (Dev 256).

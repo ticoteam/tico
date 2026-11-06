@@ -20,7 +20,8 @@ step. A person moves the task. The repository's webhook posts here signed with
 - a push to main                    -> the commits are recorded, in order, in `main_pushes`
 
 A merge queue (`enqueued`, `dequeued`) sets the link's `merge_queue` state. A removal from the queue for any reason but a
-merge wakes the owner once (`_queue_event`); nothing else about a queued pull request is news.
+merge wakes the owner once, after the maintenance pass has read the pull request and found it still open
+(`_queue_event`, `refresh_queue_removals`); nothing else about a queued pull request is news.
 
 The last hop is a fact of the deploy, not of GitHub: the release manifest names the commit the
 running code was built from (`release.py` writes it from CI), and `ship_deployed` marks a merged
@@ -349,28 +350,97 @@ def record_health_wait(link, detail, *, check_flow=False):
         detail["health_wait"] = {"reason": reason, "since": H.now(), "head": head}
 
 
-# GitHub's `dequeued` payload has a required `reason` but documents no values, and no value for a merge. Every reason but
-# a merge is a removal, unknown ones included.
-MERGED_REASONS = ("merged",)
+# GitHub's `dequeued` payload has a required `reason`. Its schema types the field as a plain string and documents no values:
+# octokit's webhook schema and GraphQL's RemovedFromMergeQueueEvent.reason are both String, with no enum. The values below
+# are the queue merge's as named for this change, not checked against a delivery. Nothing relies on the list being
+# complete: any other reason is read again before its owner is woken (refresh_queue_removals).
+MERGE_REASONS = ("merge", "already_merged", "merged")  # compared lower-cased
 
 
-def _queue_event(c, task, link, detail, action, payload, pr, head):
-    """A pull request's merge-queue state (`detail["merge_queue"]`): queued on `enqueued`, and on `dequeued` the reason it
-    was taken out. Returns the owner's notice for a removal that was not a merge, once per head and reason, else None.
-    A removal also records `merge_queue_failed` on the task: the head's next merge wake is then due again
-    (verdict_moves.pr_notice_seen)."""
+def _queue_event(detail, action, payload, pr, head):
+    """A pull request's merge-queue state (`detail["merge_queue"]`): queued on `enqueued`; on `dequeued`, the reason it was
+    taken out. A removal that was not a merge is marked `verify`, and the maintenance pass reads the pull request and wakes
+    the owner once if it is still open at this head (refresh_queue_removals). The webhook sends nothing itself."""
     if action == "enqueued":
         detail["merge_queue"] = {"state": "queued", "head": head, "at": H.now()}
-        return None
+        return
     reason = str(payload.get("reason") or "").strip()
     before = detail.get("merge_queue") or {}
-    detail["merge_queue"] = {"state": "dequeued", "reason": reason, "head": head, "at": H.now()}
-    if reason.lower() in MERGED_REASONS or pr.get("merged"):
-        return None
     if (before.get("state"), before.get("head"), before.get("reason")) == ("dequeued", head, reason):
-        return None  # a redelivery of the removal it already wrote
+        return  # a redelivery of the removal already recorded; its read is pending or done
+    detail["merge_queue"] = {"state": "dequeued", "reason": reason, "head": head, "at": H.now()}
+    if reason.lower() not in MERGE_REASONS and not pr.get("merged"):
+        detail["merge_queue"]["verify"] = True
+
+
+QUEUE_READS_PER_PASS = 20
+
+
+def refresh_queue_removals(service):
+    """The maintenance pass's read of merge-queue removals that were not merges (`_queue_event` marks them `verify`), on open
+    pull requests of active tasks. Each is read from GitHub first: one that has merged or closed is no news here (its closed
+    event and reconcile say what happened), and one pushed since the removal is not news about that head. An open pull
+    request still at the removed head gets the owner's wake once, and the head's merge wake is due again
+    (verdict_moves.pr_notice_seen). A read that fails keeps `verify` for the next pass."""
+    with service.store.read() as c:
+        app = service.row(c)
+        if not app:
+            return
+        marks = ",".join("?" * len(H.ACTIVE_STATUSES))
+        rows = H._rows(
+            c.execute(
+                "SELECT l.id,l.task_id,l.url,l.repo,l.number FROM task_links l "
+                "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
+                "WHERE l.kind='pr' AND l.state='open' AND json_extract(l.detail,'$.merge_queue.verify')=1 "
+                "AND l.number IS NOT NULL AND r.reachable=1 "
+                f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) "
+                "ORDER BY coalesce(l.updated_at,l.created_at),l.id LIMIT ?",
+                (str(app["org"] or "").lower() + "/%", *H.ACTIVE_STATUSES, QUEUE_READS_PER_PASS),
+            )
+        )
+    for r in rows:
+        try:
+            token, _ = service.mint([r["repo"]], {"pull_requests": "read"})
+            response = service._call(
+                "GET",
+                f"/repos/{quote(r['repo'], safe='/')}/pulls/{r['number']}",
+                headers={"Authorization": "Bearer " + token},
+            )
+            if response.status_code not in (200, 404):
+                continue  # still marked: the next pass reads it again
+            pr = response.json() if response.status_code == 200 else {"state": "closed"}
+        except Exception:
+            logging.getLogger("tico.github").exception("Queue removal read failed for %s #%s", r["repo"], r["number"])
+            continue
+        with service.store.transaction() as c:
+            _settle_removal(c, r["id"], pr)
+
+
+def _settle_removal(c, link_id, pr):
+    """Clear a removal's `verify`; wake its owner once when the pull request is still open at the removed head."""
+    found = H._rows(c.execute("SELECT id,task_id,url,detail FROM task_links WHERE id=?", (link_id,)))
+    if not found:
+        return
+    link = found[0]
+    detail = H._json(link["detail"], {}) or {}
+    queue = detail.get("merge_queue") or {}
+    if not queue.get("verify"):
+        return
+    head = str((pr.get("head") or {}).get("sha") or "")
+    reason = str(queue.get("reason") or "")
+    queue.pop("verify", None)
+    detail["merge_queue"] = queue
+    c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link_id))
+    moved = pr.get("merged") or pr.get("state") != "open" or (bool(queue.get("head")) and head != queue["head"])
+    if moved:
+        return
+    task = H.task(c, link["task_id"])
     H._task_event(c, task["id"], H.KEEPER, "merge_queue_failed", None, f"{link['url']}@{head}", reason)
-    return f"Removed from the merge queue ({reason or 'unknown'}) at {(head or 'unknown')[:12]}: fix and merge again"
+    queue_wake(
+        c,
+        task,
+        f"Removed from the merge queue ({reason or 'unknown'}) at {(head or 'unknown')[:12]}: fix and merge again",
+    )
 
 
 def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=False):
@@ -459,7 +529,6 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
                 else:
                     detail.pop("head_login", None)
         wake_once = False
-        queue_item = None
         if (
             state == "merged"
             and link["state"] != "merged"
@@ -472,7 +541,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
                 f"Merged: {link['title']}; it is not in the repository Tico releases, so no shipped wake follows {url}",
             )
         if action in ("enqueued", "dequeued"):
-            queue_item = _queue_event(c, task, link, detail, action, payload, pr, detail.get("head_sha") or "")
+            _queue_event(detail, action, payload, pr, detail.get("head_sha") or "")
         conflict_head = detail.get("head_sha") or "unknown"
         conflict_wake = mergeable == "conflict" and detail.get("conflict_head") != conflict_head
         if mergeable == "conflict":
@@ -525,8 +594,6 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             )
         if wake_once:
             queue_wake(c, task, detail["wake_once_fired"]["item"])
-        if queue_item:
-            queue_wake(c, task, queue_item)
         if state == "closed" and link["state"] != state and link["id"] not in registered or conflict_wake:
             # Closed without merging is news; a conflict is a blocker on the bot's own work.
             queue_wake(
