@@ -105,3 +105,5 @@ flight file, not the database.
   compiles it to `build/ui/` (`npm run watch:ui` while editing; tests and `backend.server` build it when they can), and the
   server refuses a missing or stale build (ui/README.md).
 - Comments say why in the present tense; they do not name who asked or when.
+- New hub tools go in `clients/hubtools_<area>.py` (a new module when none fits), registered with `@tool` from
+  `clients/hubtools_core.py`; `scripts/check_module_size.py` stops `clients/hubtools.py` and `clients/hubcli.py` from growing.

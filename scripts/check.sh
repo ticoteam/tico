@@ -98,7 +98,7 @@ rust_fmt() {  # CRATE: cargo fmt --check as rust_checks.sh runs it
 }
 
 # 1. Python lint: the ruff baseline, compared with the merge-base so a grown baseline fails here as it does in CI.
-if [ "$ALL" = 1 ] || changed_matches '\.py$|^ruff(-baseline)?\.toml$|^scripts/lint_baseline\.py$'; then
+if [ "$ALL" = 1 ] || changed_matches '\.py$|^ruff(-baseline)?\.toml$|^scripts/lint_baseline\.py$|^scripts/module_size_limits\.json$'; then
   run "lint (ruff baseline)" env LINT_BASE_REF="$base" bash scripts/lint.sh
 else
   skip "lint (ruff baseline)" "no Python or ruff config changed"
