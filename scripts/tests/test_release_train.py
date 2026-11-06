@@ -29,6 +29,7 @@ class FakeGitHub:
         self.releases = {"v0.5.200": {"draft": False, "published_at": published.isoformat()}} if published else {}
         self.dispatched, self.tagged, self.comments, self.closed = [], [], [], []
         self.open_issues, self.blockers, self.created, self.latest = [], [], [], []
+        self.latest_ = "v0.5.200"      # GitHub's latest release before this run
         self.on_dispatch = None
 
     def _sha(self, ref):
@@ -79,6 +80,9 @@ class FakeGitHub:
 
     def release(self, tag):
         return self.releases.get(tag)
+
+    def latest_tag(self):
+        return self.latest[-1] if self.latest else self.latest_
 
     def make_latest(self, release):
         self.latest.append(release["tag_name"])
@@ -358,6 +362,23 @@ def test_a_rolled_back_or_unreadable_update_fails(installs):
         rt.update_install(rt.install("STABLE", ENV), "v0.5.201")
 
 
+def test_a_near_instant_failure_is_judged_at_once(monkeypatch):
+    polls = []
+    answers = iter([{"state": "healthy", "running": "0.5.200", "to": "0.5.200", "message": ""},
+                    {"state": "failed", "running": "0.5.200", "to": "0.5.201", "message": "pull: manifest unknown"}])
+
+    def call(target, method, path, body=None):
+        if method == "POST":
+            return 200, {"ok": True}
+        polls.append(path)
+        return 200, next(answers)
+
+    monkeypatch.setattr(rt.rollout, "call", call)
+    with pytest.raises(rt.Fail, match="manifest unknown"):
+        rt.update_install(rt.install("CANARY", ENV), "v0.5.201")
+    assert len(polls) == 2          # the snapshot, then the first poll
+
+
 def test_an_earlier_updates_outcome_is_not_judged(monkeypatch):
     """A rollback to the same version left from before this request, still shown until the updater picks it up."""
     stale = {"state": "rolled_back", "running": "0.5.200", "to": "0.5.201", "message": "earlier"}
@@ -479,6 +500,45 @@ def test_a_failed_image_move_is_reported_and_the_release_stays_not_latest(instal
     gh = publishes(FakeGitHub([run(C)]))
     assert rt.cmd_window(gh, ENV, False, NOW) == 1
     assert gh.latest == [] and "permission_denied" in gh.created[0]["body"]
+
+
+def test_latest_never_moves_backwards(installs):
+    gh = publishes(FakeGitHub([run(C)]))
+    gh.latest_ = "v0.5.202"              # pushed by a person while the canary was updating
+    assert rt.mark_latest(gh, "v0.5.201") is False and COMMANDS == [] and gh.latest == []
+    assert rt.cmd_window(gh, ENV, False, NOW) == 0
+    assert ("canary", "0.5.201") in installs["updated"] and gh.latest == [] and COMMANDS == []
+    assert gh.created[0]["title"] == "Release v0.5.201 shipped, not marked latest (a newer release is)"
+    assert "v0.5.202, a newer release" in gh.created[0]["body"]
+
+
+def test_the_github_release_is_marked_only_after_every_image_moved(installs, monkeypatch):
+    monkeypatch.setattr(rt, "run_command", lambda argv, timeout=180: (
+        COMMANDS.append(argv) or ((1, "manifest blob unknown") if "tico-runner" in argv[-1] else (0, ""))))
+    with pytest.raises(rt.Fail, match="tico-runner"):
+        rt.mark_latest(publishes(FakeGitHub()), "v0.5.200")
+    assert not any("tico-updater" in argv[-1] for argv in COMMANDS)
+
+
+def lagging():
+    """v0.5.201 was published and the canary updated, but marking it latest did not finish."""
+    gh = FakeGitHub([run(C)], tags={"v0.5.200": A, "v0.5.201": C}, head=C)
+    gh.releases["v0.5.201"] = released("v0.5.201")
+    return gh
+
+
+def test_a_missed_latest_is_caught_up_once_the_canary_runs_it_healthy(installs, tmp_path, monkeypatch):
+    gh = lagging()
+    assert rt.lagging_latest(gh) == "v0.5.201"
+    # The guard cannot read the canary: the backstop runs the job, a push with nothing else to do does not.
+    on = {"RELEASE_TRAINS": "on"}
+    assert guard(gh, dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON), tmp_path, monkeypatch)["go"] == "true"
+    assert guard(gh, dict(on, GITHUB_EVENT_NAME="push"), tmp_path, monkeypatch)["go"] == "false"
+    # The canary still runs the older release (rolled back): it stays not latest, quietly.
+    assert rt.cmd_window(gh, ENV, False, NOW) == 0 and gh.latest == [] and gh.created == []
+    installs["canary"].update(running="0.5.201", state="healthy")
+    assert rt.cmd_window(gh, ENV, False, NOW) == 0 and gh.latest == ["v0.5.201"] and len(COMMANDS) == 3
+    assert rt.lagging_latest(gh) is None
 
 
 def test_an_unpublished_tag_is_released_again_once_and_recorded(installs):
@@ -642,6 +702,15 @@ def test_hotfix_without_promote_leaves_stable_and_records_the_reason(installs, t
     assert installs["updated"] == [("canary", "0.5.201")]
     assert gh.created and gh.created[0]["title"].startswith("Hotfix v0.5.201: Tasks vanish")
     assert gh.closed == [gh.created[0]["number"]]
+
+
+def test_each_failed_hotfix_run_gets_its_own_comment(installs, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    gh = FakeGitHub()
+    for run_id in ("1", "2"):
+        monkeypatch.setenv("GITHUB_RUN_ID", run_id)
+        rt.cmd_hotfix(gh, ENV, D, "Tasks vanish from the board after an update", True)
+    assert len(gh.created) == 1 and len(gh.comments) == 1
 
 
 def test_failed_hotfix_validation_stops_before_tagging(installs, tmp_path, monkeypatch):

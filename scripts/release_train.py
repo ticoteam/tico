@@ -285,6 +285,15 @@ class GitHub:
             raise Fail("GitHub GET releases/tags/%s: %s %s" % (tag, code, data.get("message", "")))
         return data
 
+    def latest_tag(self):
+        """The tag of GitHub's latest release, or "" when there is none."""
+        code, data, _ = self.call("GET", "releases/latest")
+        if code == 404:
+            return ""
+        if code != 200:
+            raise Fail("GitHub GET releases/latest: %s %s" % (code, data.get("message", "")))
+        return data.get("tag_name") or ""
+
     def make_latest(self, release):
         code, data, _ = self.call("PATCH", "releases/%s" % release["id"], {"make_latest": "true"})
         if code != 200:
@@ -388,7 +397,8 @@ def update_install(target, version, timeout=UPDATE_WAIT):
     rollback or failure fails the step. Only the update key's routes are used, never /healthz.
 
     A rollback or failure counts only once this update is seen under way (the updater answers the request with
-    `pulling`, then restarts the server): an earlier update's outcome, even one to the same version, is never judged."""
+    `pulling`, then restarts the server; or its state, target or message is no longer what it said before the request):
+    an earlier update's outcome, even one to the same version, is never judged."""
     want, name = rollout.plain(version), target["name"]
     snapshot = update_status(target)
     before = rollout.plain((snapshot or {}).get("running"))
@@ -414,8 +424,9 @@ def update_install(target, version, timeout=UPDATE_WAIT):
             started = True                                          # the server is restarting
             continue
         state = status.get("state") or ""
-        if rollout.plain(status.get("to")) == want and state in BUSY:
-            started = True
+        if (rollout.plain(status.get("to")) == want and state in BUSY) or any(
+                status.get(field) != snapshot.get(field) for field in ("state", "to", "message")):
+            started = True                                          # not what the updater said before the request
         if started and rollout.plain(status.get("to")) == want and state in ("rolled_back", "failed"):
             raise Fail("%s: update to v%s %s (%s)" % (name, want, state, status.get("message") or ""))
         if state == "healthy" and rollout.plain(status.get("to")) == want and rollout.plain(status.get("running")) == want:
@@ -435,8 +446,13 @@ def run_command(argv, timeout=180):
 
 
 def mark_latest(gh, version):
-    """Once the canary runs `version` healthy: point the images' `latest` tags at it and make it the latest GitHub
-    release, which is what new installs, update checks and desktop apps follow."""
+    """Once the canary runs `version` healthy: point the images' `latest` tags at it and then (only when all three
+    moved) make it the latest GitHub release, which is what new installs, update checks and desktop apps follow. Safe to
+    run again. Returns False, and changes nothing, when a newer release is already latest (a tag pushed meanwhile)."""
+    current = gh.latest_tag()
+    if parse_version(current) and parse_version(current) > parse_version(version):
+        note("Not marking %s latest: %s, a newer release, already is" % (version, current))
+        return False
     for image in IMAGES:
         source, latest = "%s/%s:%s" % (REGISTRY, image, version), "%s/%s:latest" % (REGISTRY, image)
         for attempt in range(4):
@@ -451,6 +467,37 @@ def mark_latest(gh, version):
         raise Fail("marking %s latest: no published release" % version)
     gh.make_latest(found)
     note("Marked %s latest (the GitHub release and the images' latest tags)" % version)
+    return True
+
+
+def lagging_latest(gh):
+    """The newest vX.Y.Z when it is published but GitHub's latest release is an older one (a mark_latest that failed or
+    did not finish), else None."""
+    newest = newest_stable(gh.tags())
+    found = gh.release(newest) if newest else None
+    if not found or found.get("draft") or not found.get("published_at"):
+        return None
+    current = gh.latest_tag()
+    if parse_version(current) and parse_version(current) >= parse_version(newest):
+        return None
+    return newest
+
+
+def catch_up_latest(gh, env):
+    """Mark the newest release latest if an earlier step published it, the canary runs it healthy, and the marking
+    failed or did not finish."""
+    version = lagging_latest(gh)
+    if not version:
+        return
+    canary = install("CANARY", env)
+    status = update_status(canary) if canary else None
+    if not status or rollout.plain(status.get("running")) != rollout.plain(version) \
+            or status.get("state") not in ("healthy", "idle"):
+        note("%s is published but not latest; the canary does not run it healthy (%s), so it stays that way" % (
+            version, "%s, %s" % (status.get("running"), status.get("state")) if status else "no status"))
+        return
+    note("%s is published and healthy on the canary but not latest: marking it again" % version)
+    mark_latest(gh, version)
 
 
 # ---- the window: what to do now ----
@@ -590,6 +637,13 @@ def cmd_guard(gh, env, now):
             lines = problems(plan)
             go = plan["action"] in ("ship", "dispatch") or bool(lines and not reported(gh, lines))
             note("Window step: %s" % plan["why"])
+            # The guard cannot read the canary (no environment), so only the backstop checks a lagging latest: at most
+            # every 20 minutes, the window job retries it when the canary runs that release healthy.
+            if not go and event == "schedule":
+                lagging = lagging_latest(gh)
+                if lagging:
+                    go = True
+                    note("Window step: %s is published but not latest" % lagging)
     output(go=str(go).lower(), open=str(go and opening).lower())
     return 0
 
@@ -774,6 +828,8 @@ def cmd_window(gh, env, opening, now=None):
             failures.append("%s crashed: %s: %s" % (name, type(exc).__name__, exc))
             note("FAILED %s: %s: %s" % (name, type(exc).__name__, exc))
 
+    record = None
+    step("latest", lambda: catch_up_latest(gh, env))
     if opening:
         step("promote", lambda: promote(gh, env, now))
         promoted = True
@@ -791,22 +847,23 @@ def cmd_window(gh, env, opening, now=None):
                 step("promote", lambda: promote(gh, env, now))
 
             def ship():
-                nonlocal shipped
+                nonlocal shipped, record
                 canary = install("CANARY", env)
                 if not canary:
                     raise Fail("ship: %s; nothing tagged" % missing("CANARY"))
                 publish(gh, plan["sha"], plan["version"])
                 shipped = True
                 update_install(canary, plan["version"])
-                mark_latest(gh, plan["version"])
+                if not mark_latest(gh, plan["version"]):
+                    record = "Release %s shipped, not marked latest (a newer release is)" % plan["version"]
             step("ship", ship)
         elif plan["action"] == "dispatch":
             step("validate", lambda: dispatch_candidate(gh, plan["sha"], plan["version"], plan["newest"]))
     if failures:
         report(gh, False, list(LOG), key=failures)
     elif shipped:
-        report(gh, True, list(LOG), close_title=(
-            "Release %s republished" % plan["version"]) if plan.get("republish") else None)
+        report(gh, True, list(LOG), close_title=record or (
+            "Release %s republished" % plan["version"] if plan.get("republish") else None))
     output(reported="true")
     return 1 if failures else 0
 
@@ -896,7 +953,7 @@ def cmd_hotfix(gh, env, sha, reason, promote_stable, override_hold=False):
         failure = "%s: %s" % (type(exc).__name__, exc)
         note("FAILED hotfix: %s" % failure)
     short = " ".join(str(reason or "").split())[:80]
-    report(gh, failure is None, list(LOG), key=[short, failure or ""], title_="Hotfix failing: " + short,
+    report(gh, failure is None, list(LOG), key=[run_url(), short, failure or ""], title_="Hotfix failing: " + short,
            close_title="Hotfix %s: %s" % (version, short))
     output(reported="true")
     return 1 if failure else 0

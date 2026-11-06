@@ -64,7 +64,9 @@ Tico's own releases (ticoteam/tico) ship from two windows a day, run by `.github
   publishes it (`release.yml`, dispatched on the tag) and updates the canary. That closes the window. The release is
   published as not latest; only once the canary runs it healthy does the window make it the latest GitHub release and
   move the images' `latest` tags, so new installs, update checks and desktop apps never get a release the canary has
-  not run. The canary's updater installs that exact version, latest or not.
+  not run. The canary's updater installs that exact version, latest or not. Latest never moves backwards (a newer
+  release that is already latest stays so, and the issue says so), and a marking that failed or did not finish is
+  retried by the backstop and each window step once the canary runs that release healthy.
 - **Notes.** When a release publishes, the monitoring Release Manager files the Technical Writer's "Release notes for
   vX.Y.Z" task.
 - **A red candidate keeps the window open.** The failure goes on the one open `release-train` issue, once: a failure

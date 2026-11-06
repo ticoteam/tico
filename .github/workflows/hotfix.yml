@@ -90,5 +90,6 @@ jobs:
           gh = t.GitHub(os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_TOKEN"])
           t.report(gh, False, ["Hotfix reason: " + os.environ.get("REASON", ""),
                                "The hotfix job ended before it reported (canceled, timed out or crashed); see the run log."],
+                   key=[t.run_url(), "hotfix did not finish"],
                    title_="Hotfix failing: " + " ".join(os.environ.get("REASON", "").split())[:80])
           EOF
