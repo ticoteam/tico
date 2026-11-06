@@ -366,18 +366,29 @@ def access_rows(c, who, tool_id, admins, auth=None):
     return sorted(out, key=lambda r: (r["kind"] != "person", r["name"].lower()))
 
 
+def _finance_sources(c, key_ids):
+    """The Finance connections (fin_connections: reading its status and key is allowed outside backend/finance) that
+    read one of these keys and are not disconnected, oldest first; none on an install without Finance's tables."""
+    ids = [str(k) for k in key_ids if k]
+    if not ids:
+        return []
+    try:
+        return c.execute(f"SELECT credential_ref, name, provider, last_sync_at FROM fin_connections WHERE credential_ref "
+                         f"IN ({','.join('?' * len(ids))}) AND status<>'disconnected' ORDER BY created_at, id",
+                         ids).fetchall()
+    except sqlite3.OperationalError as exc:      # no Finance here
+        if "no such table" not in str(exc):
+            raise
+        return []
+
+
 def finance_rows(c, tool_id):
     """Who can use it, Finance's part: one row while a Finance connection (fin_connections, on installs with Finance)
     reads one of the tool's keys, at Read and write when that is the Read and write key, last used at its last sync.
     Read-only here: it goes when the source is disconnected."""
-    from . import connections as CN
     keys = {k["id"]: k for k in _keys(c, tool_id)}
-    if not keys or not CN.table(c, "fin_connections"):
-        return []
-    marks = ",".join("?" * len(keys))
     level, used = None, None
-    for row in c.execute(f"SELECT credential_ref, last_sync_at FROM fin_connections WHERE credential_ref IN ({marks}) "
-                         "AND status<>'disconnected'", list(keys)):
+    for row in _finance_sources(c, keys):
         lv = "read_write" if keys[row["credential_ref"]]["access_level"] == "read_write" else "read"
         level = lv if RANK[lv] > RANK.get(level, 0) else level
         if (row["last_sync_at"] or "") > (used or ""):
@@ -800,13 +811,8 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
 def finance_user(c, key_ids):
     """The name of a Finance connection (fin_connections, on installs with Finance) that still reads one of these keys:
     any status but disconnected. None when none does."""
-    from . import connections as CN
-    ids = [str(k) for k in key_ids if k]
-    if not ids or not CN.table(c, "fin_connections"):
-        return None
-    row = c.execute(f"SELECT name, provider FROM fin_connections WHERE credential_ref IN ({','.join('?' * len(ids))}) "
-                    "AND status<>'disconnected' ORDER BY created_at, id LIMIT 1", ids).fetchone()
-    return (row["name"] or row["provider"] or "it") if row else None
+    rows = _finance_sources(c, key_ids)
+    return (rows[0]["name"] or rows[0]["provider"] or "it") if rows else None
 
 
 def refuse_finance_key(c, key_ids):
