@@ -20,6 +20,7 @@ async function save(page, version) {
 run('redesign-e2e-build', ['org', 'toured', 'automations'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/automations'});
   // Ask sits beside + New on a computer; a phone has the tab bar's Assistant instead.
+  await page.locator('.au-new').waitFor();
   assert.equal(await page.locator('.au-ph [data-ask-open]').isVisible(), !phone, `${tag}: Ask beside + New on a computer only`);
   await page.locator('.au-new').click();
   await page.locator('.au-newm [data-new="schedule"]').click();

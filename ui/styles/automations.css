@@ -46,6 +46,7 @@
 .au-tabs{display:flex;gap:2px}
 .au-tabs button{padding:4px 10px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-weight:600;cursor:pointer}
 .au-tabs button[aria-selected="true"]{background:var(--surface2);color:var(--ink)}
+.au-sels{display:contents}
 .au-sel{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:var(--t-sm)}
 .au-sel select{width:auto;height:28px;padding:0 6px;font-size:var(--t-sm)}
 .au-tbl{flex:1;min-height:0;overflow:auto;container-type:inline-size}
