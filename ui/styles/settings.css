@@ -967,6 +967,7 @@ section.card>header .settings-head-act{margin-left:auto}
 .models-gw-table{width:100%;max-width:560px;border-collapse:collapse;margin-top:12px;font-size:var(--t-sm)}
 .models-gw-table th,.models-gw-table td{padding:5px 10px 5px 0;border-bottom:1px solid var(--line);text-align:left;font-weight:400}
 .models-gw-table th{color:var(--muted)}
+.models-gw-table th:first-child{white-space:normal}
 .models-gw-table .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .models-gw-table tbody tr:last-child td{border-bottom:0}
 .models-gw-keys{display:flex;align-items:center;gap:12px;max-width:560px;margin:12px 0 0;font-size:var(--t-sm)}

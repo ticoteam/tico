@@ -55,7 +55,13 @@ const NOTE = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for lat
       if (p.endsWith('/watch') || p === '/api/v2/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
-    const shot = async name => { if (shotsDir) { fs.mkdirSync(shotsDir, {recursive: true}); await page.screenshot({path: path.join(shotsDir, name)}); } };
+    // A route change cross-fades (router.js): the shot waits for it to end.
+    const shot = async name => {
+      if (!shotsDir) return;
+      fs.mkdirSync(shotsDir, {recursive: true});
+      await page.waitForFunction(() => !document.querySelector(':root:active-view-transition'));
+      await page.screenshot({path: path.join(shotsDir, name)});
+    };
     const line = page.locator('#settings-health-line');
     const counts = () => line.locator('[data-hl-counts]').innerText();
     const redraw = () => page.evaluate(async () => { await loadSettings(); await hlRefresh(); });

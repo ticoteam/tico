@@ -43,6 +43,8 @@ const shotsDir = process.env.TICO_SHOTS || '';
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
+        contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true});
       if (p === '/api/v2/config') return json({version: '0.1.0', app_name: 'Tico', local: true});
@@ -208,11 +210,13 @@ const shotsDir = process.env.TICO_SHOTS || '';
     // Both themes (the settings pane scrolls, not the page).
     await services.locator('summary').click();
     const theme = mode => page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
+    await page.setViewportSize({width: 1440, height: 900});
     for (const mode of ['dark', 'light']) {
       await theme(mode);
       await card.scrollIntoViewIfNeeded();
       await shot(`desktop-models-gateway-${mode}.png`);
     }
+    await page.setViewportSize({width: 1280, height: 900});
     await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
     // An admin who is not the owner sees prices and picks, no keys row, and nothing to change under Advanced; a member
     // sees no prices, picks or services. No
@@ -262,6 +266,9 @@ const shotsDir = process.env.TICO_SHOTS || '';
     await phoneCard.locator('[data-gateway-prices]').waitFor();
     await phoneCard.locator('[data-gateway-services-row] > summary').click();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll on Models');
+    assert.equal(await phoneCard.evaluate(c => { const box = c.getBoundingClientRect(), pad = parseFloat(getComputedStyle(c).paddingRight);
+      return [...c.querySelectorAll('.models-gw-table')].every(t => t.getBoundingClientRect().right <= box.right - pad + 1); }), true,
+      'on a phone, the price and picks tables fit inside the card');
     const [keysName, keysOpen] = await Promise.all(['span', 'a'].map(sel => phoneCard.locator(`[data-gateway-api-keys] ${sel}`).boundingBox()));
     assert.ok(Math.abs(keysName.y - keysOpen.y) < 4 && keysOpen.x > keysName.x, 'on a phone, Open sits beside API keys');
     await phoneCard.locator('[data-gateway-services-row] > summary').click();
