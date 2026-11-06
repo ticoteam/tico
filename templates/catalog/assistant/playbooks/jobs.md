@@ -62,8 +62,6 @@ tasks they own. The owned tasks are one kind of many.
    memory tidy card, a setup or reconnect card. Name the ones left, and say they clear them in Tico. Never guess a command.
 6. Recount: `hub needs-you show --by kind`. Reply in a few lines: the Needs you count before and after; what was closed,
    answered and declined, with counts and links; the kept items; what is left; "say undo to put the tasks back".
-   A walk through each item one by one (`hub needs-you start --all`, `respond`, `commit`, backend/batch.py) works too, but
-   for a big clear the per-kind commands above take fewer calls.
 
 ## Bots and work
 
