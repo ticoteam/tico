@@ -446,7 +446,7 @@ resumes the old primary; unknown effects and final answers keep their settlement
 erase an already recorded continuation decision. The result field is sent only when the server advertises `source_continue`;
 older runners are not handed these continuations. Other turns try the bot's own provider first, so the
 bot moves back on its own once the limit resets. The owner turns this off in **Settings → Models**
-(*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
+(*Fall back when a plan runs out*, `auto_fallback`). Company › Campus lists how many bots are on a fallback and
 since when, and how many are limited.
 
 **Held runs after a usage limit (Unreleased).** Safe runs previously held after the primary hit its limit and the fallback failed to start recover automatically.

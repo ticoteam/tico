@@ -195,7 +195,7 @@ release moved into its group's Read once on upgrade: whoever both the page and t
 audience when Read was Everyone), never more; See was left as it was. A bot pins only its own pages and cards, to its own
 sidebar or a task it holds or asked for; a person who manages a bot may pin another bot's page to its sidebar. A page a
 person pins to the Dashboard or a team page may be read by that place's audience, and a private task's file is never
-pinned there ([Overview](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who
+pinned there ([Company](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who
 asked (`hub card`, `hub pin`).
 
 ## History's Log
