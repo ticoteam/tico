@@ -312,7 +312,8 @@ def test_scheduler_jobs_and_background_passes_record_their_runs(api, monkeypatch
     assert steps["company_page"]["last_result"] == "Nothing due" and steps["company_page"]["last_did_at"] is None
     assert runs_of(api, "company_page") == []
     with db(api).read() as c:
-        assert c.execute("SELECT count(*) FROM heartbeat_beats").fetchone()[0] == 0, "quiet beats are counted, not kept"
+        kept = [r["steps"] for r in c.execute("SELECT steps FROM heartbeat_beats")]
+    assert kept == [], kept
     # a failing block records its failure
     from backend import milestone_waits
 
