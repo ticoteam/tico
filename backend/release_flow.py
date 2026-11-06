@@ -25,10 +25,13 @@ the team named in the schedule setting, else the one active bot built from the `
 With none found the feature is idle for that role and says so (`GET /api/v2/release-schedule`).
 
 A release carries the Dev tickets at the Pending Release step when it is published that have a pull request merged in
-its repository; the rest of the factory's steps stay a person's or bot's to move (docs/software-factory.md).
+its repository, and moves each to the step after Pending Release (Post Release QA), noting "Shipped in vX.Y.Z"; when
+nothing is left at Pending Release the schedule's open Release task closes. The rest of the factory's steps stay a
+person's or bot's to move (docs/software-factory.md).
 """
 
 import json
+import logging
 import re
 from datetime import datetime, timedelta
 
@@ -49,6 +52,7 @@ MANAGER, WRITER, QA = "release-notes", "docs-writer", "issue-triage"  # starter 
 PENDING = "pending release"
 QA_CHILD = re.compile(r"^QA\b", re.I)
 EVENT = "release_published"
+log = logging.getLogger(__name__)
 
 
 def zone():
@@ -357,12 +361,64 @@ def next_at(cfg, at):
 # ----------------------------------------------------------------------------- after a release
 def carried(c, repo):
     """The Dev tickets a release in `repo` carries: at Pending Release with a pull request merged (or shipped) there."""
-    repo = str(repo or "").lower()
+    repo = norm_repo(repo)
     return [
         t
         for t in pending(c)
-        if any(p.get("state") in ("merged", "shipped") and str(p.get("repo") or "").lower() == repo for p in t["prs"])
+        if any(p.get("state") in ("merged", "shipped") and norm_repo(p.get("repo")) == repo for p in t["prs"])
     ]
+
+
+def norm_repo(value):
+    """`owner/repo` in lower case: a github.com url, a `.git` end and stray slashes or spaces do not tell repositories apart."""
+    text = re.sub(r"^(?:https?://)?(?:www\.)?github\.com/", "", str(value or "").strip(), flags=re.I)
+    return re.sub(r"\.git$", "", text.strip("/"), flags=re.I).lower()
+
+
+def _move_on(c, ticket, tag):
+    """Move a ticket a release carried from Pending Release to the step after it (Post Release QA when the type has
+    it, else the next step), as Tico, through the normal move so the step's own rules run. A ticket that is no longer
+    at Pending Release is left alone. Returns the step's name, or None when nothing moved."""
+    from . import step_flow as F
+
+    row = H.task(c, ticket["id"])
+    here = F.step(c, row.get("step_id")) if row else None
+    if not here or here["name"].strip().lower() != PENDING:
+        return None
+    after = next((s for s in F.steps(c, here["type_id"]) if s["position"] > here["position"]), None)
+    if not after:
+        return None
+    c.execute("SAVEPOINT release_move")
+    try:
+        H.task_update(c, H.KEEPER, row["id"], step=after["id"], note=f"Shipped in {tag}", strict=False)
+    except Exception:  # a release's follow-up is never lost to one ticket that will not move
+        c.execute("ROLLBACK TO release_move")
+        c.execute("RELEASE release_move")
+        log.exception("release %s could not move %s to %s", tag, row["id"], after["name"])
+        return None
+    c.execute("RELEASE release_move")
+    return after["name"]
+
+
+def _close_release_tasks(c, tag):
+    """Nothing is at Pending Release any more: close the Release task(s) the schedule filed for the Release Manager,
+    naming the version. A task the manager made itself is none of ours. Returns the closed ids."""
+    manager = release_manager(c)
+    if not manager or pending(c):
+        return []
+    owner = H.bot_actor(manager)
+    ids = [
+        r[0]
+        for r in c.execute(
+            "SELECT id FROM tasks WHERE owner_id=? AND requester_id=? AND title LIKE 'Release: %' AND status IN ("
+            + ",".join("?" * len(H.ACTIVE_STATUSES))
+            + ")",
+            (owner, H.KEEPER, *H.ACTIVE_STATUSES),
+        )
+    ]
+    for tid in ids:
+        H.task_close(c, H.KEEPER, tid, note=f"{tag} is published; nothing is left at Pending Release.", strict=False)
+    return ids
 
 
 def _docs_task(c, writer, tag, tickets, url):
@@ -393,7 +449,8 @@ def published(c, target, url="", release_repo=""):
     repo, _, tag = target.partition("@")
     # Asks for this release or an older one in its channel are stale now, in any connected repository.
     supersede(c, repo, tag)
-    if release_repo and repo.lower() != str(release_repo).lower():
+    if norm_repo(release_repo) and norm_repo(repo) != norm_repo(release_repo):
+        log.info("release %s skipped: it is not in this server's release repository %s", target, release_repo)
         return []
     if "-" in tag:
         return []
@@ -427,8 +484,14 @@ def published(c, target, url="", release_repo=""):
                 source=target,
             )
     docs = _docs_task(c, writer, tag, tickets, url) if writer and tickets else None
+    moved = {t["id"]: name for t in tickets if (name := _move_on(c, t, tag))}
+    closed = _close_release_tasks(c, tag) if tickets else []
     H.event(
-        c, H.KEEPER, "release.published", target, {"tickets": [t["id"] for t in tickets], "woke": sent, "docs": docs}
+        c,
+        H.KEEPER,
+        "release.published",
+        target,
+        {"tickets": [t["id"] for t in tickets], "woke": sent, "docs": docs, "moved": moved, "closed": closed},
     )
     H.hook(
         c,

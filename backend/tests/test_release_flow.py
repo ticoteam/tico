@@ -311,3 +311,68 @@ def test_only_the_docs_task_tells_its_reader_to_skip_private_tickets(api):
         assert visible["title"] in body and "Cut one release for them" in body
         docs = RF._docs_task(c, "cpo", "v1.2.3", tickets, RELEASE_URL)
         assert "1 private ticket. Skip them: their owners handle any docs." in H.task(c, docs)["body"]
+
+
+def _step_of(api, ticket):
+    with api.app.state.store.read() as c:
+        return c.execute(
+            "SELECT s.name FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.id=?", (ticket["id"],)
+        ).fetchone()[0]
+
+
+def _published(api, repo="ticoteam/tico", tag="v1.2.3"):
+    hook(
+        api,
+        "release",
+        {
+            "action": "published",
+            "release": {"tag_name": tag, "html_url": RELEASE_URL.replace("v1.2.3", tag)},
+            "repository": {"full_name": repo},
+        },
+    )
+
+
+def test_a_published_release_moves_its_carried_tickets_to_post_release_qa(api):
+    dev = _team(api)
+    carried = _ticket(api, dev, "Visual replies", 412)
+    _published(api)
+    assert _step_of(api, carried) == "Post Release QA"
+    with api.app.state.store.read() as c:
+        notes = [r[0] for r in c.execute("SELECT note FROM task_events WHERE task_id=?", (carried["id"],))]
+    assert any("Shipped in v1.2.3" in (n or "") for n in notes)
+    # a second delivery for the same tag changes nothing; a ticket moved on by hand is left where it is
+    _published(api)
+    assert _step_of(api, carried) == "Post Release QA"
+
+
+def test_a_ticket_without_a_merged_pull_request_in_the_repository_stays_at_pending_release(api):
+    dev = _team(api)
+    other = post(
+        api,
+        "tasks",
+        {"owner": "cpo", "title": "No PR", "body": "x", "type": dev["id"], "step": "Pending Release"},
+    )
+    _published(api)
+    assert _step_of(api, other) == "Pending Release"
+
+
+def test_the_repository_name_is_compared_without_case(api):
+    dev = _team(api)
+    carried = _ticket(api, dev, "Visual replies", 412)
+    _published(api, repo="TicoTeam/Tico")
+    assert _step_of(api, carried) == "Post Release QA"
+    assert RF.norm_repo("https://github.com/TicoTeam/Tico.git/") == "ticoteam/tico"
+
+
+def test_a_release_closes_the_schedule_filed_release_task_but_not_one_the_manager_made(api):
+    dev = _team(api)
+    store = api.app.state.store
+    _ticket(api, dev, "Visual replies", 412)
+    with store.transaction() as c:
+        assert RF.request(c, H.KEEPER, source="release_schedule")["sent"] is True
+        mine = H.task_create(c, "bot:cmo", "Release: notes for the team", "x", "bot:cmo", deduplicate=False)
+    _published(api)
+    with store.read() as c:
+        rows = {r["title"]: r["status"] for r in c.execute("SELECT title, status FROM tasks WHERE owner_id='bot:cmo'")}
+    assert rows["Release: 1 ticket at Pending Release"] in ("closed", "done")
+    assert rows["Release: notes for the team"] not in ("closed", "done") and mine
