@@ -119,7 +119,10 @@ def test_review_question_is_filed_when_every_hosted_check_passes_at_the_current_
     with api.app.state.store.transaction() as c:
         task_blocked.sweep(c, H.now())
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and not hold(current).get('since')
+    # The task waits on Ana's question task as on any dependency, and on no review gate.
+    assert current['step']['name'] == 'In Progress' and hold(current).get('reason') == 'Waiting on a dependency'
+    with api.app.state.store.read() as c:
+        assert H.task(c, task['id'])['blocked_kind'] != 'gate'
 
 
 def test_fresh_green_checks_do_not_clear_a_waiting_reviewers_hold(api, monkeypatch):
