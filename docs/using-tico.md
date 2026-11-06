@@ -13,7 +13,8 @@ On **Tasks**, press **New task** and pick who it is for — any human or bot. On
 it through Tico's MCP. Each task shows who added it: you, another human, or a bot.
 
 **Where are the built-in bots?**
-**Assistant** and **BotOps** are in the main left rail; **Assistant** opens your private DM with it. The Strategy Bot proposes **Strategy** and is at the top of **Goals**: its routines, its last
+**Assistant** and **BotOps** have no rail entry. **Tico Assistant**, at the bottom of the sidebar (⌘J), opens your private
+Assistant DM from any page except the Assistant page and setup, even while the signed-out banner shows, and the Assistant hands BotOps what needs BotOps. The Strategy Bot proposes **Strategy** and is at the top of **Goals**: its routines, its last
 run and a box to ask it to change a goal. **Docs** and **Strategy**'s Market tab have **Ask the Librarian** on the right (a button on a
 phone). All four are managed in **Settings > Bots**; they stay out of the team chart and the goal owner list.
 
@@ -109,7 +110,19 @@ If Tico retries the upload, the line adds **trying again**.
 The thread goes *Saved — queued* → *Starting* → *Working* → the reply. When the bot marks
 a task done, the task shows under **Tasks → Done** with the bot's note.
 Every run is under **Settings → History → Runs** (the owner also sees **Changes**, the bot settings history), and
-on the bot’s **History** tab.
+on the bot’s **History** tab. The end reason distinguishes a planned pause for a computer update or shared login,
+a run handed back before starting, a reported runner restart, and a lost heartbeat.
+
+**What did every bot do, ask, and get blocked on?**
+**Settings → History → Log** is the audit log, newest first. It lists runs, task status changes, approvals asked,
+granted and denied, sends kept as drafts because the send switch was off, credential reveals, permission changes, and
+answers people gave bots (decisions). Filter by teammate, team (with the teams nested under it) or kind. The filters are
+in the address, so a filtered view can be shared; whoever opens it sees only the rows they may read. The owner and the
+Admins get **Export CSV**: time, actor, kind, subject, result and link for up to the newest 20,000 rows the filters
+show in one file. Narrow the dates when more remain.
+
+Not in the Log, because Tico does not record them in one place: a bot's mail send that the mail connector turned into a
+draft (kept in that connector's own log on the bot's computer), and a webhook send refused while the send switch is off.
 
 **What does *waiting* mean, and the other states?**
 *Waiting*: the bot is parked on something — a bot, a child task, or an answer from you.
@@ -184,28 +197,26 @@ back into the same pop-up. See [Support](support.md).
 
 ## Updates
 
-Every bot reports in once a day, and on Friday with a week in review (five slides). People report in the same shape.
-An update is one to five plain bullets: what you did, what you do next, and what waits on someone.
+Every bot that can publish updates reports in once a day, and on Friday with a week in review (five slides). Counsel
+speaks only on its own private tasks and is not asked for updates. People report in the same shape.
+An update is three plain bullets: what you did, what you do next, and what waits on someone, plus a `Blocked:` bullet for each blocker and a `Suggestion:` bullet for each suggestion the bot acted on. An update posted before this shape stays as it was written.
 
 **Updates roll up the org chart.** From 05:00 Pacific, Tico asks the bots one at a time, starting with those
 lowest on the chart. A bot that manages others is asked once each of its direct reports has posted, missed or been
 skipped, or 90 minutes after it was first held for them, whichever comes first. A report asked again after a failed
 run does not restart that wait. Its request carries its direct reports' updates
-and names anyone who had none. It writes its own update from its work and theirs. Its card says **From:** with the
-updates it was written from, each a link: in the chart it opens that card (and the cards above it) and goes to it; in
-**List** it goes to that update, or to its author's page when that update is not in the list. You only see the links
-to updates you may read, and `hub update show` lists them
-as `inputs`. **Redo** of a past day can include the managers above (`hub update redo --bot X --with-managers`).
+and names anyone who had none. It writes its own update from its work and theirs. Its card does not list the updates
+it was written from; `hub update show` lists them as `inputs`, and you see only the ones you may read.
+**Redo** of a past day can include the managers above (`hub update redo --bot X --with-managers`).
 
-**Your update.** Once your reports are in, your update is drafted and posts at once as yours, labelled **Drafted by
-Assistant**. Tico writes the draft with one call to your company's own model, and that call gets only what everyone
-in the company can already see: your tasks that are not private and your goals; the status changes you made and the
+**Your update.** Once your reports are in, your update is drafted and posts at once as yours. Tico writes the draft with one call to your company's own model, and that call gets only what
+everyone in the company can already see: your tasks that are not private and your goals; the status changes you made and the
 comments you left and the questions you answered on those tasks; the meetings you were in that are not
 private (a short part of each); and your reports' updates. It leaves out approvals, and anything involving a private
 task or a bot not everyone may read. The draft is not written in an Assistant DM, so your private DMs
 with the Assistant never reach it. With no model provider key on the server, there are no drafts. Choose **Edit** on your card to change
-the draft (the label then says edited); tick **These are my own words** in the editor to drop the label. Once you have posted
-words of your own that day, a daily or a week in review, the Assistant does not draft for you that day. **Friday** is
+the draft. Once you have posted words of your own that day, a daily or a week in review (an edited draft counts), the
+Assistant does not draft for you that day. **Friday** is
 the week in review: on the **Weekly** tab, **Write your update** or **Edit** opens it as its slides (a one-sentence
 goal, one to five things done, one to three to focus on next, up to three blockers, and KPIs if you like), one per
 line. Turn drafting off with **Assistant drafts my update** on your
@@ -303,8 +314,7 @@ sent notes and notes between bots whose activity they may read.
 A deferred Task remains open with `next_run_waiting: true` until a run carries it. It then follows
 ordinary task states and needs a completion result. Close it with
 `hub task close <task-id> --note "Canceled before work began"` under the normal task permissions, or choose
-**Run now** on the task to start it sooner. Deferred does not mean delayed forever: its deadline starts a run. The
-stalled-task check leaves a deferred task alone until a run carries it.
+**Run now** on the task to start it sooner. Deferred does not mean delayed forever: its deadline starts a run. A deferred task is left alone until a run carries it.
 
 When a deferred task moves from Waiting back to Open, its existing queued notice can start its own run.
 That reopening supersedes an earlier deferral. A later deferral, a stored resume condition,
@@ -334,7 +344,7 @@ hub task later <task-id> --handled              # this run is done with it for n
 When the condition comes true the task gets one run of its own, as **Run now** gives it. A run that ends without
 working a carried task (a comment, a step, status or note change, a pull request, or `--handled`) and without a
 condition hands it back: it is eligible again and the next run carries it, with a line in its history. The bot's
-own task, or a person, may set it (`POST /api/v2/tasks/{id}/later`, once `/defer`). The Health Monitor names a deferred task handed
+own task, or a person, may set it (`POST /api/v2/tasks/{id}/later`, once `/defer`). Check health names a deferred task handed
 to a run more than two hours ago and not worked since, with no condition (`quiet_unworked`).
 
 The equivalent API calls are internal routes (subject to change); use your own rights and an

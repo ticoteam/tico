@@ -20,6 +20,7 @@ from . import gateway_tiers, models_preset
 from .batch_work import shared_check
 from .harnesses import attach_harnesses, normalize_fallback
 from .store import Problem
+from . import bot_settings as BS
 
 KEY = "providers"
 # What a bot's config says when it has no opinion and follows the company default.
@@ -67,6 +68,9 @@ MODEL_KEYS = {row["runtime"]: tuple(row["capabilities"]["api_key_env"]) for row 
 # The runtime that serves every provider with no CLI of its own (pi, through OpenRouter).
 CATCH_ALL_RUNTIME = next(row["runtime"] for row in PROVIDERS if row.get("catch_all"))
 MODEL_KEY_NAMES = frozenset(name for names in MODEL_KEYS.values() for name in names)
+# Every variable any runtime's CLI reads a model key from, whether computers sign in with it or a bot is granted it
+# (Gemini, pi through OpenRouter, Grok). A key under one of these names is a model key, never a tool's.
+RUNTIME_KEY_NAMES = frozenset(name for row in manifests.load().values() for name in row["capabilities"].get("api_key_env") or ())
 # One provider speaks for a runtime when a bot names only the runtime: the catch-all row for a
 # shared runtime, else the only one.
 PROVIDER_BY_RUNTIME = {}
@@ -85,6 +89,12 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
     {"id": "gpt-6.1-sol", "context_tokens": 1_050_000, "label": "gpt 6.1 sol", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "medium"},
+    # Gated (Dev 693): priced, not offered. `held` rows are never listed or picked, and `deprecated` gives them the
+    # refusals every retired row gets (a bot cannot choose them, the cloud and memory pickers skip them). Product
+    # opens customer availability separately; until then this row stays held, even if Tico HQ publishes a tier for the id.
+    {"id": "gpt-6.1-terra", "context_tokens": 1_050_000, "label": "gpt 6.1 terra", "runtime": "codex", "provider": "openai",
+     "efforts": ("low", "medium", "high", "xhigh", "max"), "default_effort": "medium",
+     "deprecated": True, "held": True},
     {"id": "gpt-6-sol", "context_tokens": 1_050_000, "label": "gpt 6 sol", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "medium", "deprecated": True},
@@ -202,7 +212,7 @@ class _ById(dict):
 MODEL_BY_ID = _ById((row["id"], row) for row in MODEL_CATALOG)
 
 # What a model costs at the provider's public list price, in USD per 1M tokens: (input, cached input,
-# output). Usage (backend/usage.py) multiplies a run's token counts by these to estimate spend, so a
+# output). The one exception is gpt-6.1-terra, Tico's approved rate (its row says so). Usage (backend/usage.py) multiplies a run's token counts by these to estimate spend, so a
 # model missing here shows its tokens and no cost. Standard tier, prompts under the long-context
 # threshold; batch, priority, regional and cache-write premiums are not modelled (a cache write is
 # counted as input). A bot that names a model by another id than these gets no estimate.
@@ -211,6 +221,10 @@ MODEL_BY_ID = _ById((row["id"], row) for row in MODEL_CATALOG)
 #              0.025x input on Fable 5.1, 0.05x on Opus 5.5 and Sonnet 5.5, 0.1x on the rest)
 #              claude-haiku-5-5 read 2026-10-17: the rate for prompts up to 100,000 tokens (LONG_PROMPT below).
 #   OpenAI     developers.openai.com/api/docs/pricing (standard, short context)
+#              gpt-6.1-terra read 2026-11-03 (standard, short context; its model page gives the same rates)
+#              gpt-6.1-terra at 272,000 or more prompt tokens: Tico's approved long-prompt rate (LONG_PROMPT below).
+#              OpenRouter's public list (read 2026-11-05) gives openai/gpt-6.1-terra an override at min_prompt_tokens
+#              272000 of $2.00 in / $0.10 cached / $7.50 out per 1M. A citation only: it changes no rate here.
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
 #   pi models  OpenRouter's public model list, openrouter.ai/api/v1/models (what the pi runtime is billed)
@@ -254,6 +268,7 @@ PRICES = _Priced({
     "gpt-6-sol": (2.0, 0.20, 10.0),
     "gpt-6-luna": (0.10, 0.01, 0.50),
     "gpt-6.1-sol": (2.0, 0.10, 10.0),
+    "gpt-6.1-terra": (1.25, 0.062, 6.25),    # Tico's approved rate (Chris, 2026-10-28): OpenAI standard +25%, not OpenAI's list price; cached input rounded down to 0.062 (ruling 2026-11-03)
     "gpt-5.6-sol": (4.0, 0.40, 20.0),
     "gpt-5.6-terra": (2.0, 0.20, 12.0),
     "gpt-5.6-luna": (0.20, 0.02, 1.20),
@@ -275,10 +290,25 @@ PRICES = _Priced({
 # included, and each request is priced on its own. Anthropic's pricing page ("Long context pricing"), read
 # 2026-10-17: only Claude Haiku 5.5; Claude 4.6 and later models bill their whole context at the standard rate.
 # The Gateway's (Low tiers, Cheap 1.1) come from its own price (backend/gateway_tiers.py), not Anthropic's page.
+# gpt-6.1-terra's row is Tico's approved long-prompt tier (Product, 2026-11-01), set at or over 272,000 tokens
+# as ruled on 2026-11-03 (Product confirmed the wording that day). OpenRouter's public model list gives
+# openai/gpt-6.1-terra a pricing override at min_prompt_tokens 272000 (read 2026-11-05); its override rates differ.
 LONG_PROMPT_AS_OF = "2026-10-17"
 LONG_PROMPT = _Priced({
     "claude-haiku-5-5": (100_000, (0.50, 0.05, 2.50)),
+    # At or over 272,000 prompt tokens (OpenRouter's min_prompt_tokens; Gateway owner ruling 2026-11-03). The rule
+    # below is strictly over, so the limit is one token lower.
+    "gpt-6.1-terra": (271_999, (2.50, 0.125, 9.375)),
 }, gateway_tiers.long_prompt_for)
+# The models whose long-prompt tier is billed per request in the judge and memory-tidy calls: each call is one request,
+# and its prompt pays the tier when over the limit. Claude Haiku 5.5 is not listed: its tier stays off these calls until
+# its rate for them is approved.
+PER_REQUEST_LONG_TIER = frozenset({"gpt-6.1-terra"})
+
+
+def per_request_long_tier(model):
+    """Whether a judge or memory-tidy call to `model` is priced as one request (PER_REQUEST_LONG_TIER)."""
+    return str(model or "").strip().lower() in PER_REQUEST_LONG_TIER
 
 
 def price_of(model):
@@ -347,7 +377,7 @@ def serves(provider, row):
 def provider_models(provider, *, current=True, meeting=False):
     """The catalog models a provider serves. A bot's picks leave out the meeting models unless `meeting` asks for them."""
     return [row for row in MODEL_CATALOG
-            if serves(provider, row) and not (current and row.get("deprecated"))
+            if serves(provider, row) and not row.get("held") and not (current and row.get("deprecated"))
             and bool(row.get("meeting")) == meeting]
 
 
@@ -395,7 +425,9 @@ def complete_choice(enabled, runtime="", model="", kept=""):
         return "", ""
     if model:
         row = MODEL_BY_ID.get(model)
-        if not row or not row["provider"]:
+        # A held row stays refused for a fresh pick only: the saved default may stay, so a save about something else
+        # never fails on it (the same exemption a retired row gets below).
+        if not row or not row["provider"] or (row.get("held") and model != kept):
             raise ProviderError("model", f"Unknown default model {model!r}", 422)
         if runtime and runtime != row["runtime"]:
             raise ProviderError("model", f"{model} runs on {row['runtime']}, not {runtime}", 422)
@@ -486,7 +518,8 @@ def meeting_choice(record, model):
     if not model:
         return ""
     row = MODEL_BY_ID.get(model)
-    if not row or not row["provider"] or row.get("deprecated") or not runtime_enabled(row["runtime"], record["enabled"], row):
+    if not row or not row["provider"] or row.get("deprecated") or row.get("held") \
+            or not runtime_enabled(row["runtime"], record["enabled"], row):
         raise ProviderError("meeting_model", "Choose one of the models this company can run for meetings", 422)
     return model
 
@@ -774,8 +807,8 @@ def runtimes_run_on(c, settings):
     from .shared_bots import follow
     from .task_models import of as task_model_of
     record, found = load(c, settings), {}
-    for row in c.execute("SELECT a.runner_id, a.bot, bc.config FROM assignments a "
-                         "LEFT JOIN bot_config bc ON bc.bot=a.bot"):
+    for row in c.execute(f"SELECT a.runner_id, a.bot, {BS.CONFIG} AS config FROM assignments a "
+                         f"LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"):
         try:
             config = follow(c, row["bot"], json.loads(row["config"] or "{}"))
         except ValueError:
@@ -797,8 +830,8 @@ def runtimes_needed(c, settings):
     record = load(c, settings)
     wanted = wanted_runtimes(record)
     need = {}
-    for row in c.execute("SELECT a.runner_id, bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
-                         "AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot"):
+    for row in c.execute(f"SELECT a.runner_id, {BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+                         f"AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"):
         try:
             config = json.loads(row["config"] or "{}")
         except ValueError:

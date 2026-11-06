@@ -6,6 +6,9 @@
 //    Every other card is the same element after the rebuild, so a "Show more" opened on one stays open and where it
 //    was, and focus stays put: on a card being read, and on the card whose Confirm was pressed from the keyboard.
 //    A Confirm that fails leaves the card waiting with its buttons usable.
+//  - while a Confirm / Cancel is on its way (the server runs every step before it answers), the pressed button spins
+//    and says so ("Confirming…", aria-busy), the other is off, a rebuild meanwhile draws the same, then the card says
+//    how it went; one that fails gets its buttons back as they were. TICO_SCREENSHOT_DIR keeps a shot of it.
 //  - a repository card stored before the plain wording ("access to chosen") reads as the server now sends it: a plain
 //    title, and the old line only under Details (backend/assistant.py action_view).
 const {chromium} = require('playwright');
@@ -15,6 +18,7 @@ const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 const {assistantView} = require('./support/assistant-chat.cjs');
+const shots = process.env.TICO_SCREENSHOT_DIR;
 
 const at = n => new Date(Date.UTC(2026, 9, 17, 9, n)).toISOString();
 const say = (id, from, body, n, refs = {}) => ({id, sender_id: from, body, refs, created_at: at(n), kind: 'say'});
@@ -94,6 +98,7 @@ async function open(browser, state) {
       return route.fulfill({contentType: 'application/json', body: `{"action":${then}}`});
     }
     const act = p.match(/^\/api\/v2\/assistant\/actions\/([^/]+)\/(confirm|cancel)$/);
+    if (act && state.hold) await state.hold;       // held by the test, to see the card while it waits
     if (act && state.refuse) return route.fulfill({status: 500, contentType: 'application/json', body: JSON.stringify({detail: 'It could not be reached'})});
     if (act) {
       if (state.slowPost) await new Promise(done => setTimeout(done, state.slowPost));
@@ -230,12 +235,47 @@ async function open(browser, state) {
     await page.locator('.asst-card[data-action="act1"][data-status="done"]').waitFor();
     Object.assign(state, {slowGet: 0, slowPost: 0});
 
+    // While it is on its way: the pressed button spins and says so, the other is off, and a rebuild draws the same.
+    const buttons = id => page.locator(`.asst-card[data-action="${id}"] button`)
+      .evaluateAll(bs => bs.map(b => [b.innerText.trim(), b.disabled, b.getAttribute('aria-busy')]));
+    const busyOn = id => page.waitForFunction(id => document.querySelector(`.asst-card[data-action="${id}"] [aria-busy="true"]`), id);
+    const hold = () => { let go; state.hold = new Promise(done => { go = done; }); return () => { state.hold = null; go(); }; };
+    let release = hold();
+    await page.locator('.asst-card[data-action="act4"] [data-confirm]').click();
+    await busyOn('act4');
+    assert.deepEqual(await buttons('act4'), [['Confirming…', true, 'true'], ['Cancel', true, null]], 'confirm: the pressed button says it is working');
+    assert.equal(await page.locator('.asst-card[data-action="act4"] [aria-busy="true"]').evaluate(b => getComputedStyle(b, '::before').animationName), 'p-spin', 'confirm: it spins');
+    await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('mid', 'bot:botops', 'Meanwhile.', state.n++));
+    await page.locator('[data-message="mid"]').waitFor({state: 'attached'});
+    assert.deepEqual(await buttons('act4'), [['Confirming…', true, 'true'], ['Cancel', true, null]], 'confirm: a rebuild keeps it working');
+    if (shots) {
+      fs.mkdirSync(shots, {recursive: true});
+      await page.locator('.asst-card[data-action="act4"]').screenshot({path: path.join(shots, 'confirm-pending.png'), animations: 'disabled'});
+    }
+    release();
+    await page.locator('.asst-card[data-action="act4"][data-status="done"]').waitFor();
+    assert.equal(await page.locator('.asst-card[data-action="act4"] > .asst-state').innerText(), 'Done.', 'confirm: then it says how it went');
+    assert.equal(await page.locator('.asst-card[data-action="act4"] button').count(), 0, 'confirm: no buttons once done');
+    // Cancel says so the same way.
+    release = hold();
+    await page.locator('.asst-card[data-action="act0"] [data-cancel]').click();
+    await busyOn('act0');
+    assert.deepEqual(await buttons('act0'), [['Confirm', true, null], ['Canceling…', true, 'true']], 'cancel: the pressed button says it is working');
+    release();
+    await page.locator('.asst-card[data-action="act0"][data-status="canceled"]').waitFor();
+    assert.equal(await page.locator('.asst-card[data-action="act0"] > .asst-state').innerText(), 'Canceled.');
+
     // A Confirm that does not go through leaves the card waiting, its buttons usable again.
     state.refuse = true;
+    release = hold();
     await page.locator('.asst-card[data-action="act3"] [data-confirm]').click();
+    await busyOn('act3');
+    assert.deepEqual(await buttons('act3'), [['Confirming…', true, 'true'], ['Cancel', true, null]], 'refused: working while it waits');
+    release();
     await page.locator('.toast.err').first().waitFor();
     await page.waitForFunction(() => document.querySelector('.asst-card[data-action="act3"] [data-confirm]')?.disabled === false);
     assert.equal(await page.locator('.asst-card[data-action="act3"]').getAttribute('data-status'), 'pending', 'a failed Confirm leaves it pending');
+    assert.deepEqual(await buttons('act3'), [['Confirm', false, null], ['Cancel', false, null]], 'refused: the buttons are back as they were');
     assert.deepEqual(errors, [], 'no page errors');
     console.log('action cards: plain titles, Details, no jump on Confirm: ok');
     await page.close();

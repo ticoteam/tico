@@ -6,6 +6,7 @@ import pytest
 from backend import hubdb as H, task_relations as TR
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post  # noqa: F401
 from backend.tests.test_api import hold
+from backend import bot_settings as BS
 
 
 @pytest.fixture(params=['bot', 'person'])
@@ -89,11 +90,12 @@ def test_manager_comment_and_question_wake_owner_without_mention(api, manager):
     # The manager is not the direct boss: add a second bot layer for bot and human cases.
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {'middle': {'name': 'Middle', 'runtime': 'fake', 'status': 'active'}}, {})
-        c.execute("INSERT INTO bot_config(bot,config,reports_to,owner_id) VALUES('middle','{}','cpo','ana')")
+        c.execute("INSERT INTO bot_config(bot,reports_to,owner_id) VALUES('middle','cpo','ana')")
+        BS.write(c, 'middle', {})
         c.execute("UPDATE bot_config SET reports_to='middle' WHERE bot='ops'")
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config['bot_contact'] = 'tasks'
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     for fields in ({'text': 'Please continue the work.'}, {'text': 'Which approach works?', 'ask': {
             'questions': [{'id': 'approach', 'header': 'Approach', 'question': 'Which approach works?', 'other': True}]}}):
         result = post(api, 'tasks/' + task['id'] + '/comments', fields, token=token)

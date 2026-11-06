@@ -211,8 +211,8 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
         'funnels only', 'Credential missing on Test Mac', '#ops, #launch', 'SLACK_TOKEN', 'nothing to check', 'account 3'])
         assert(text.includes(expected), scheme + ': the list says ' + expected + '\n' + text);
       assert.equal(await list.locator('[data-tool=repo] summary a').getAttribute('href'), 'https://github.com/acme-co/emp-cmo');
-      // Who else has a tool, and its credentials, are one link away in Library › Tools.
-      assert.match(await list.locator('[data-tool=repo] .bt-open').getAttribute('href'), /^#\/library\/tools\/github\?who=bot:cmo$/);
+      // Who else has a tool, and its keys, are one link away: the tool's page under Tools.
+      assert.equal(await list.locator('[data-tool=repo] .bt-open').getAttribute('href'), '#/tools/github');
       // The repository's name opens GitHub (window.open is stubbed: nothing leaves the test) and leaves its line as it was.
       await page.evaluate(() => { window.opened = []; window.open = url => { window.opened.push(url); return null; }; });
       await list.locator('[data-tool=repo]').evaluate(d => { d.open = false; });

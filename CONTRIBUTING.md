@@ -6,8 +6,8 @@ and [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). This lets
 include your contribution in the current Tico or in a future Apache 2.0 release. It does not
 license Tico as a whole under Apache 2.0.
 
-There is no separate contributor license agreement (CLA): you sign off each commit instead
-(see below). Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+There is no separate contributor license agreement (CLA): outside contributors sign off each
+commit instead (see below). Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Before you start
 
@@ -71,7 +71,7 @@ documented in `app/vendor/README.md`; retain them when updating Cargo locks.
 
 ## Developer Certificate of Origin
 
-Every commit in a pull request must be signed off, which says you wrote it or have the right to
+Every commit in an outside contributor's pull request must be signed off, which says you wrote it or have the right to
 submit it under the contribution licenses above, as set out in the
 [Developer Certificate of Origin](https://developercertificate.org/). Add the sign-off with `-s`:
 
@@ -83,6 +83,9 @@ That appends `Signed-off-by: Your Name <you@example.com>`, using your git `user.
 `user.email`, which must be your real name and an address you use. To add it to commits you
 have already made: `git rebase --signoff main` (then `git push --force-with-lease`). A pull request
 with unsigned commits will be asked to sign them before it is merged.
+
+This applies to outside contributors. Tico team members and the company's own bots commit work the
+company already owns, so their commits need no sign-off, and their pull requests are never held for one.
 
 ## Pull requests
 
@@ -100,12 +103,19 @@ with unsigned commits will be asked to sign them before it is merged.
   the fictional team Acme (`acme.example`).
 - Describe the behavior change and how you checked it in the pull request.
 
+## How we work
+
+- Trunk-based: everything lands on `main` through short-lived branches named `<who>/<topic>`, one ticket per PR.
+- Draft PRs run no CI. Mark the PR ready for review to start the checks.
+- The author merges, once the checks are green and the PR is reviewed.
+- If a release candidate goes red because of your merge, fixing it comes before anything else.
+
 ## Releases
 
 Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's notes after it is published.
 
-A release is a version tag. Once the release checks are green on the frozen commit, the Release
-Manager pushes `vX.Y.Z` on `main`. The tag builds the Docker images and publishes the GitHub release,
-and running installs then offer the update; the version's section in [CHANGELOG.md](CHANGELOG.md)
-follows. Contributors do not tag.
-The steps are in [docs/releasing.md](docs/releasing.md).
+A release is a version tag, and contributors do not tag. Tico releases from two windows a day (14:30 and 22:00 UTC):
+GitHub Actions validates main's head, ships the first green candidate to Tico Team's install, and promotes it to
+stable after it has baked. A hotfix is for major production issues only. The Release Manager bot no longer tags or
+rolls out Tico releases; it only monitors them. The details are in
+[docs/releasing.md](docs/releasing.md#release-windows).

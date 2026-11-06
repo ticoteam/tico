@@ -17,6 +17,8 @@ OS can be released on its own. `--dry-run` prints the manifest and uploads nothi
 manifest using public GitHub asset URLs, without credentials or S3. `--tag` preserves a tag suffix.
 `--kind recorder` does the same for Tico Recorder (macOS only, so only the darwin platforms and the mac
 installer are required); its manifest is recorder-latest.json, read by the recorder's updater.
+`--changes FILE` fills `notes` with the first line of the file's newest "## " section, unless `--shown` (the notes of
+the last shipped build) already carried it; otherwise `--notes` stays.
 """
 import argparse
 import json
@@ -62,10 +64,31 @@ def classify(directory):
     return found
 
 
+def changes_note(text, shown=None):
+    """The first line of the newest ("## ...", topmost) section in a CHANGES.md text, or None. None too when it
+    is `shown`, the note the last shipped build already carried, so a line shows once, with the next build after
+    it lands, whatever version numbers releases were cut at in between."""
+    heading = False
+    for line in text.splitlines():
+        if re.match(r"##\s", line):
+            if heading:
+                return None
+            heading = True
+        elif heading and line.strip():
+            if line.startswith("#"):
+                return None
+            note = re.sub(r"^[-*]\s+", "", line.strip())
+            return None if note == (shown or "").strip() else note
+    return None
+
+
 def manifest(version, base, scans, previous, notes="", signed=False, notarized=False, github=False, tag=None,
              kind="app"):
     asset_base = f"https://github.com/ticoteam/tico/releases/download/{quote(tag or 'v' + version, safe='')}"
-    platforms = dict((previous or {}).get("platforms") or {})
+    # Another version's updates are signed for that version, and the updater refuses a signature whose version is
+    # not the one announced. So only a publish of the same version keeps platforms it does not bring itself.
+    same = (previous or {}).get("version") == version
+    platforms = dict((previous or {}).get("platforms") or {}) if same else {}
     installers = dict((previous or {}).get("installers") or {})
     for scan in scans:
         for target, entry in scan["platforms"].items():
@@ -93,6 +116,8 @@ def main(argv):
     parser.add_argument("--tag", help="GitHub tag (defaults to v<version>)")
     parser.add_argument("--output", default="latest.json", help="manifest path for --github")
     parser.add_argument("--notes", default="")
+    parser.add_argument("--changes", help="a CHANGES.md whose section for this version gives the notes")
+    parser.add_argument("--shown", help="with --changes: the last shipped build's notes, so a line shows only once")
     parser.add_argument("--signed", action="store_true")
     parser.add_argument("--notarized", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -123,7 +148,10 @@ def main(argv):
                 previous = None
         except Exception:
             previous = None
-    value = manifest(args.version, (args.base or "").rstrip("/"), scans, previous, args.notes, args.signed,
+    notes = args.notes
+    if args.changes and Path(args.changes).is_file():
+        notes = changes_note(Path(args.changes).read_text(), args.shown) or notes
+    value = manifest(args.version, (args.base or "").rstrip("/"), scans, previous, notes, args.signed,
                      args.notarized, args.github, args.tag, args.kind)
     if args.kind == "recorder":
         required, installers_needed = {"darwin-aarch64", "darwin-x86_64"}, {"mac"}

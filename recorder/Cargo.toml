@@ -31,11 +31,11 @@ hound = "3.5"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rtrb = "0.3"
 rusqlite = { version = "0.37", features = ["bundled"] }
-# The window. Cargo.lock keeps its runtime crates (tauri-runtime 2.11.3, tauri-runtime-wry
-# 2.11.4, tauri-utils 2.9.3, wry 0.55.1, tao 0.35.3) at the versions 2.11.5 builds with.
-tauri = { version = "=2.11.5", optional = true, features = ["custom-protocol"] }
+# The window. Cargo.lock keeps its runtime crates (tauri-runtime 2.12.2, tauri-runtime-wry
+# 2.12.3, tauri-utils 2.10.2, wry 0.57.1, tao 0.37.2) at the versions 2.12.5 builds with.
+tauri = { version = "=2.12.5", optional = true, features = ["custom-protocol"] }
 # Self-updates from the signed release feed (src/app/update.rs). The same version the Tico desktop app locks.
-tauri-plugin-updater = { version = "=2.11.0", optional = true, default-features = false, features = ["rustls-tls", "system-proxy"] }
+tauri-plugin-updater = { version = "=2.14.1", optional = true, default-features = false, features = ["rustls-tls", "system-proxy"] }
 # Realtime streaming transcription: a blocking websocket on its own thread, TLS through the
 # same rustls/ring stack reqwest already uses.
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
@@ -44,7 +44,7 @@ serde_json = "1"
 sha2 = "0.10"
 tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 uuid = { version = "1", features = ["v4", "serde"] }
-webpki-roots = "=1.0.10"
+webpki-roots = "=1.0.11"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # CoreML runs the speaker models about 3x faster than the CPU path.
@@ -65,7 +65,8 @@ objc2-core-video = "0.3.2"
 dispatch2 = "0.3"
 
 [build-dependencies]
-tauri-build = { version = "=2.6.3", optional = true }
+cc = "1"
+tauri-build = { version = "=2.7.4", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

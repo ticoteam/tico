@@ -14,6 +14,7 @@ from . import hubdb as H
 from . import read_cache
 from .auth import validate_identity
 from .store import Problem
+from . import bot_settings as BS
 
 SETTINGS = 'repos_new_bot_default'
 # {bot: [owner/name, ...]}: write grants an Owner or admin let start and manage workflow runs (Actions: write).
@@ -87,11 +88,11 @@ def migrate(c):
     for bot, repos in metadata(c, 'github-extra-repos').items():
         if not repos:
             continue
-        row = c.execute('SELECT config FROM bot_config WHERE bot=?', (bot,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         if row:
             config = json.loads(row[0] or '{}')
             config['repo_access_mode'] = 'chosen'
-            c.execute('UPDATE bot_config SET config=? WHERE bot=?', (json.dumps(config), bot))
+            BS.write(c, bot, config)
         for repo in repos:
             c.execute('INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) '
                       'ON CONFLICT(full_name) DO UPDATE SET enabled=1', (uuid.uuid4().hex, repo, H.now()))
@@ -181,9 +182,9 @@ class Reads:
         from .shared_bots import _json, source_of
         self.c = c
         bots = list(dict.fromkeys(bots))
-        self.configs = self._rows('SELECT bot,config,repo FROM bot_config WHERE bot IN ({})', bots)
+        self.configs = self._rows(f'SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN (', bots)
         sources = {source_of(_json(row['config'])) for row in self.configs.values()} - {''} - set(self.configs)
-        self.configs.update(self._rows('SELECT bot,config,repo FROM bot_config WHERE bot IN ({})', sorted(sources)))
+        self.configs.update(self._rows(f'SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN (', sorted(sources)))
         self.chosen = {bot: [] for bot in bots}
         for part in H.chunks(bots):
             for r in c.execute('SELECT bot,full_name,access FROM bot_repo_access WHERE bot IN (%s) ORDER BY bot,full_name'
@@ -197,9 +198,11 @@ class Reads:
         self._enabled = self._bot_repos = self._all = None
 
     def _rows(self, sql, keys):
+        """`sql` ends where the key list goes: the marks for `keys` are added after it (no str.format, since the
+        declaration's SQL has braces of its own)."""
         out = {}
         for part in H.chunks(keys):
-            out.update((r[0], r) for r in self.c.execute(sql.format(','.join('?' * len(part))), part))
+            out.update((r[0], r) for r in self.c.execute(sql + ','.join('?' * len(part)) + ')', part))
         return out
 
     def enabled(self, name):
@@ -297,7 +300,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
             raise Problem('github_repo', 'Choose a repository in the connected organization', 422)
         existing = c.execute('SELECT enabled,bot_repo FROM repositories WHERE full_name=?', (name,)).fetchone()
         if legacy and not team_list and (not existing or not existing['enabled']):
-            raise Problem('github_repo', 'Ask an Owner or admin to tick it in Settings > Repositories', 422)
+            raise Problem('github_repo', 'Ask an Owner or admin to tick it in Settings > General › Repositories', 422)
         previous = {r['full_name'].lower(): r['access'] for r in before['chosen']}
         bot_repo = name.split('/')[1].lower().startswith('bot-') or any(
             str(repo_of(r[0], org) or '').lower() == name.lower() for r in c.execute('SELECT repo FROM bot_config'))
@@ -316,7 +319,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
             if value is not None and value != (name.lower() in was[flag]) and (
                     not team_list or not H.is_human(actor) or not own_click):
                 raise Problem('forbidden', 'Only an Owner or admin lets a bot ' + verb + ', themselves in Settings > '
-                              'Repositories', 403)
+                              'General › Repositories', 403)
             # Left out, a grant keeps its setting while it stays write.
             if value or value is None and name.lower() in was[flag] and grant.access == 'write':
                 flagged[flag].add(name.lower())
@@ -341,8 +344,8 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
             if value is not None and value != (name.lower() in all_was[flag]) and (
                     not team_list or not H.is_human(actor) or not own_click):
                 raise Problem('forbidden', 'Only an Owner or admin lets a bot ' + verb + ', themselves in Settings > '
-                              'Repositories', 403)
-            # One since unticked in Settings > Repositories may keep its tick or lose it, never gain one.
+                              'General › Repositories', 403)
+            # One since unticked in Settings > General › Repositories may keep its tick or lose it, never gain one.
             if value and name.lower() not in reach and name.lower() not in all_was[flag]:
                 raise Problem('github_repo', name + ' is not one of the ticked repositories All ticked repos reaches', 422)
             if value:
@@ -358,9 +361,9 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
             if not flags[bot]:
                 flags.pop(bot)
             save_metadata(c, stored, flags)
-    config = json.loads(c.execute('SELECT config FROM bot_config WHERE bot=?', (bot,)).fetchone()[0] or '{}')
+    config = json.loads(c.execute(BS.ONE_SQL, (bot,)).fetchone()[0] or '{}')
     config.update(repo_access_mode=body.mode, repo_all_access=all_access)
-    c.execute('UPDATE bot_config SET config=? WHERE bot=?', (json.dumps(config), bot))
+    BS.write(c, bot, config)
     if body.chosen is not None:
         c.execute('DELETE FROM bot_repo_access WHERE bot=?', (bot,))
         c.executemany('INSERT INTO bot_repo_access VALUES(?,?,?)', [(bot, name, level) for name, level in wanted.values()])
@@ -392,7 +395,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
         if any(r.get(flag) and r['full_name'].lower() not in had for r in after['effective']) and (
                 not team_list or not H.is_human(actor) or not own_click):
             raise Problem('forbidden', 'Only an Owner or admin lets a bot ' + verb + ', themselves in Settings > '
-                          'Repositories', 403)
+                          'General › Repositories', 403)
     save_extra_repos(c, bot, [r['full_name'] for r in after['chosen'] if r['access'] == 'write'] if body.mode == 'chosen' else [])
     lost = stopped(before, after)
     H.event(c, actor, 'bot.repos_changed', bot, {'before': before, 'after': after, **lost})
@@ -701,7 +704,7 @@ def repository_health(service):
             'SELECT full_name,enabled FROM repositories WHERE reachable=0 ORDER BY full_name')
             if r['full_name'].lower() in confirmed and r['enabled'] and r['full_name'].lower() not in own]
     note_github_token(service.store, '; '.join(missing) or None,
-                      'Refresh Settings > Repositories or check the GitHub App installation.')
+                      'Refresh Settings > General › Repositories or check the GitHub App installation.')
 
 
 def workflow_health(service, accepted, refused=False, flag='run_workflows'):
@@ -997,12 +1000,12 @@ def install(app, store, service):
                 # The person's Assistant cannot make this change on its words: it is their card in Settings, or one
                 # proposed (`hub assistant propose`) for them to confirm.
                 raise Problem('confirm_required', 'That lets a bot run workflows, edit workflow files or create product '
-                              'repositories: the person confirms it in Settings > Repositories', 403)
+                              'repositories: the person confirms it in Settings > General › Repositories', 403)
             if gains:
                 raise Problem('forbidden', 'Only an Owner or admin lets a bot run workflows, edit workflow files or '
-                              'create product repositories, themselves in Settings > Repositories', 403)
+                              'create product repositories, themselves in Settings > General › Repositories', 403)
             raise Problem('forbidden', 'This takes ' + describe_stopped(result) + ' away from ' + name + '; a person '
-                          'who manages it makes that change in Settings > Repositories', 403)
+                          'who manages it makes that change in Settings > General › Repositories', 403)
 
     def computer(request):
         who = request.state.identity

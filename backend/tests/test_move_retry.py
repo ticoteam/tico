@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import hubdb as H, move_retry
 from backend.tests.test_github import api, get, headers  # noqa: F401
 from backend.tests.test_review_gate import ticket, move, HEAD, BASE
@@ -24,7 +25,7 @@ def step(api, task):
 def retries(api, task):
     with api.app.state.store.read() as c:
         return [json.loads(r[0]) for r in c.execute(
-            "SELECT new FROM task_events WHERE task_id=? AND field='move_retry' ORDER BY created_at, rowid", (task['id'],))]
+            "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move_retry' ORDER BY created_at, rowid", (task['id'],))]
 
 
 def tick(api):
@@ -50,7 +51,7 @@ def test_refused_for_missing_receipt_moves_itself_when_the_receipt_is_posted(api
     assert tick(api) == [task['id']]
     assert step(api, task) == 'Review 1'
     with api.app.state.store.read() as c:
-        mover = c.execute("SELECT actor FROM task_events WHERE task_id=? AND field='step' ORDER BY created_at DESC, rowid DESC",
+        mover = c.execute("SELECT actor_id AS actor FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' ORDER BY created_at DESC, rowid DESC",
                           (task['id'],)).fetchone()[0]
     assert mover == H.KEEPER
     assert owned_by(api, 'cmo') == []       # the type's manager heard nothing
@@ -104,7 +105,8 @@ def unreadable(api, monkeypatch, mode, response=None):
     state = {'down': True}
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('devops-engineer','devops-engineer','DevOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('devops-engineer','{\"runtime\":\"fake\"}','ana')")
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('devops-engineer','ana')")
+        BS.write(c, "devops-engineer", {"runtime": "fake"})
     service = api.app.state.github_app
     # A configured app row: truthy for the gate's snapshot, mapping-shaped for link refreshes.
     monkeypatch.setattr(service, 'row', lambda c=None: {"org": "ticoteam"})
@@ -352,9 +354,9 @@ def test_retries_refused_again_expire_three_days_after_the_first_refusal(api):
     assert move(api, task).status_code == 422
     first = (datetime.now(timezone.utc) - timedelta(days=2, hours=12)).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
     with api.app.state.store.transaction() as c:    # the first refusal was two and a half days ago
-        c.execute('UPDATE task_events SET created_at=? WHERE task_id=?', (first, task['id']))
-        c.execute("UPDATE task_events SET new=json_set(new,'$.at',?,'$.since',?) "
-                  "WHERE task_id=? AND field='move_retry'", (first, first, task['id']))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (first, task['id']))
+        c.execute("UPDATE history_events SET new=json_set(new,'$.at',?,'$.since',?) "
+                  "WHERE subject_type='task' AND subject_id=? AND kind='move_retry'", (first, first, task['id']))
         c.execute('UPDATE tasks SET note=? WHERE id=?', ('Still building the fix.', task['id']))
     assert tick(api) == []                          # retried now and refused again
     assert retries(api, task)[-1]['since'] == first
@@ -444,8 +446,8 @@ def test_a_gate_hold_with_no_live_retry_goes_back_to_its_earlier_step(api):
     task = ticket(api)
     assert move(api, task).status_code == 422
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_events SET new=json_set(new,'$.since','2020-01-01T00:00:00.000000Z') "
-                  "WHERE task_id=? AND field='move_retry'", (task['id'],))
+        c.execute("UPDATE history_events SET new=json_set(new,'$.since','2020-01-01T00:00:00.000000Z') "
+                  "WHERE subject_type='task' AND subject_id=? AND kind='move_retry'", (task['id'],))
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
         task_blocked.sweep(c, datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z')
     assert step(api, task) == 'In Progress'
@@ -504,20 +506,3 @@ def test_a_refused_move_onto_another_board_is_retried_onto_that_board(api, revie
 def task_type(api):
     with api.app.state.store.read() as c:
         return H.type_get(c, 'Dev tickets')['id']
-
-
-@pytest.mark.parametrize('review_step', ['Review 1', 'Review 2'])
-def test_the_stranded_sweep_releases_another_boards_gate_hold_only_once_no_retry_will(api, review_step):
-    """Only engineering tickets have reconciliation; on another board the retry is what clears a gate hold, so the
-    hourly sweep leaves it while Tico still retries and releases it after, or it would be held forever."""
-    from datetime import datetime, timedelta, timezone
-    task = general(api, ticket(api))
-    assert cross_move(api, task, review_step).status_code == 422
-    stamp = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
-    with api.app.state.store.transaction() as c:
-        assert H.sweep_stranded(c, stamp) == []     # past the sweep's grace, inside the retry's
-        c.execute("UPDATE task_events SET new=json_set(new,'$.since','2020-01-01T00:00:00.000000Z') "
-                  "WHERE task_id=? AND field='move_retry'", (task['id'],))
-        assert H.sweep_stranded(c, stamp) == [(task['id'], 'open')]
-    released = get(api, 'tasks/' + task['id'])['task']
-    assert released['status'] == 'open' and not hold(released)

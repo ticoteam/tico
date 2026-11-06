@@ -50,7 +50,7 @@ const PAGES = [
     await page.locator('.use-line').first().click();
     await page.locator('.use-col').first().waitFor();
   }},
-  {name: 'settings-health', route: '#/settings', tab: 'health', ready: 'Setup check'},
+  {name: 'settings-health', route: '#/settings/health', ready: 'Setup check'},
   {name: 'devices', route: '#/settings', tab: 'devices', ready: "Ana's MacBook"},
   {name: 'support', route: '#/updates', ready: 'Write your update', steps: async page => {
     await page.evaluate(() => window.supportOpen());
@@ -89,7 +89,7 @@ const PAGES = [
   {name: 'threads', route: '#/threads', ready: 'Threads'},
   {name: 'recruit', route: async page => '#/seat/' + encodeURIComponent(await page.evaluate(async () =>
     (await (await fetch('/api/v2/seats')).json()).seats[0].id)), ready: 'Job post'},
-  {name: 'settings-email-phone', route: '#/settings', tab: 'inbound', ready: 'Email & Phone'},
+  {name: 'settings-inboxes', route: '#/settings', tab: 'inboxes', ready: 'Customer care'},
 ];
 
 function argument(name, fallback = '') {
@@ -175,7 +175,7 @@ async function main() {
           await page.keyboard.press('Escape').catch(() => {});
           const route = typeof spec.route === 'function' ? await spec.route(page) : spec.route;
           await page.evaluate(hash => { location.hash = hash; }, route);
-          // Settings renders after the route, and keeps Health, Email & Phone and Mail in a More group that starts closed.
+          // Settings renders after the route, and keeps System, Webhooks and Billing in a More group that starts closed.
           if (spec.tab) {
             const tab = page.locator(`[data-settings-tab="${spec.tab}"]`);
             await page.locator('#settings-more').waitFor({state: 'attached'}).catch(() => {});

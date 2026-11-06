@@ -54,7 +54,7 @@ const assistantBot = () => S.config.assistant_bot || CONFIG_DEFAULTS.assistant_b
 // The built-in Counsel's slug (backend/hubdb.py COUNSEL): Tico's own name, so a team's own bot named counsel stays theirs.
 const COUNSEL_BOT = 'tico-counsel';
 // The assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager and Counsel are built in to every team: pause and rename
-// them, never archive or delete. None is on the org chart: their settings are Settings > Bots and Settings > System.
+// them, never archive or delete. None is on the org chart: their settings are Settings > Bots and their bot page's Settings.
 const isBuiltInBot = slug => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'goal-manager' || slug === 'task-manager' || slug === 'bookkeeper' || slug === COUNSEL_BOT;
 // The Assistant's helpers (backend/assistant.py HELPERS): everyone's one chat is their Assistant, which hands these the
 // work. Nobody chats with them: their bot pages have no composer, and every "ask" on a page opens the Ask panel.
@@ -152,8 +152,11 @@ async function applyAuthenticatedConfig(config, expected = nativeVisualVersion()
 }
 // A page reload is not evidence that the previous browser session is still valid.
 void clearNativeVisualOrigin();
+// Whether a config was read yet: until then S.config holds only the defaults, which say nothing about this server.
+let CONFIG_READ = false;
 function applyConfig(config) {
   S.config = {...CONFIG_DEFAULTS, ...(config && typeof config === 'object' ? config : {})};
+  CONFIG_READ = true;
   document.title = (S.config.demo ? 'Demo · ' : S.config.rehearsal ? 'Rehearsal · ' : '') + appName();
   // The strip is shown by the server's say-so alone: only a demo's config carries `demo`, a rehearsal's `rehearsal`.
   const strip = !!(S.config.demo || S.config.rehearsal);
@@ -164,6 +167,8 @@ function applyConfig(config) {
   if (S.config.demo && S.config.demo_public) $('#demo-banner').innerHTML = '<strong>Read only demo</strong>';
   renderOnboardingNav();
   renderNewVersion();
+  renderAdministration();
+  if (typeof nativeOrgSync === 'function') nativeOrgSync();
   window.renderChangelogNotice?.();
   noticeUpdatedServer();
   void renderAppUpdate();
@@ -172,7 +177,6 @@ function applyConfig(config) {
   renderVersionMessage();
   renderFeedbackAsk();
   document.documentElement.classList.toggle('no-support', S.config.support_on === false);
-  window.redesignApply?.();
   return S.config;
 }
 // Beta: the server's one list (backend/beta.py), so the app, Help, the manual and support diagnostics agree. The pill

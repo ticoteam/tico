@@ -3,6 +3,8 @@
 'use strict';
 
 let LAST_ROUTE = '', ROUTE_FADING = false, ROUTE_SEQ = 0, ROUTE_PENDING = '', ROUTE_FADE = null;
+// The page an address draws: its path, with every thread one page (the rail stays while the thread beside it changes).
+const routePage = h => { const p = String(h || '').split('?')[0]; return p === THREADS_ROUTE || p.startsWith(THREAD_ROUTE) ? THREADS_ROUTE : p; };
 function route(hash = location.hash) {
   if (hash.startsWith('#/settings?recruit=')) {
     try {
@@ -38,7 +40,7 @@ function route(hash = location.hash) {
   main.className = '';
   // A new page fades in (opacity only); a query change within the same page does not. A view transition
   // (routeChanged) already cross-fades it, so this is the fallback for a browser without one.
-  const newPath = !from || from.split('?')[0] !== S.route.split('?')[0];
+  const newPath = !from || routePage(from) !== routePage(S.route);
   if (from && newPath && !ROUTE_FADING && main.animate && !matchMedia('(prefers-reduced-motion: reduce)').matches)
     main.animate({opacity: [0, 1]}, {duration: 120, easing: 'cubic-bezier(.2,0,0,1)'});
   document.body.classList.remove('task-peek-open');
@@ -59,10 +61,11 @@ function route(hash = location.hash) {
   if (!S.route.startsWith('#/replay')) replayStop();
   if (!/^#\/computers\/[^/?]+\/screen$/.test(S.route)) screenStop();
   if (!/^#\/computers\/[^/?]+\/performance$/.test(S.route)) perfStop();
-  if (!(S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) { if (UPD) { UPD.io?.disconnect(); void updFlush(UPD); UPD = null; } updcStop(); }
+  if (!(S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) { if (UPD) { UPD.io?.disconnect(); void updFlush(UPD); UPD = null; } }
   if (!S.route.startsWith('#/bot/')) botStopped();
   if (!S.route.startsWith('#/seat/')) recruitStop();
-  threadsSync();      // the Threads and DMs sidebar sections (ui/app/threads.js)
+  threadsSync();      // the sidebar's Threads link and the rail's lists (ui/app/threads.js)
+  setupMark();        // the wizard's mark first: Ask stays away from it (ui/app/notices.js)
   askSync();          // Ask's button: away on the Assistant page and in setup (ui/app/ask-panel.js)
   renderTree();
   if (redesignRoute(S.route)) { /* Strategy's tabs, Automations, Connections and the old addresses that moved (ui/app/redesign.js) */ }
@@ -113,36 +116,38 @@ function route(hash = location.hash) {
   }
   else if (S.route === UPDATES || S.route.startsWith(UPDATES + '?')) pageUpdates();
   else if (S.route === SETTINGS) pageSettings();
-  else if (S.route === HELP) { location.replace(OVERVIEW); window.supportOpen?.(); return; }   // Help is the Support pop-up, over Overview
+  else if (S.route === HELP) { location.replace(OVERVIEW); window.supportOpen?.(); return; }   // Help is the Support pop-up, over Company
   else if (S.route === '#/getting-started') { location.replace(TASKS); return; }   // the checklist is gone
-  else if (S.route === '#/repositories') { SETTINGS_TAB = 'repos'; location.replace(SETTINGS); return; }   // Settings > Repositories
-  // Settings > Webhooks (it was Triggers); #/settings/webhooks/outgoing and /gateway open that tab.
+  else if (S.route === '#/repositories') { SETTINGS_TAB = 'repos'; location.replace(SETTINGS); return; }   // Settings > General › Repositories
+  // Settings > Webhooks (it was Triggers) and its parts: incoming on Automations, outgoing on Tools, through the
+  // Gateway on Models (ui/app/settings-webhooks.js whOldAddress).
   else if (['#/triggers', '#/webhooks', '#/settings/triggers', '#/settings/webhooks'].includes(S.route) || S.route.startsWith('#/settings/webhooks/')) {
-    const tab = S.route.split('/')[3];
-    if (WH_TABS.some(([k]) => k === tab)) Object.assign(WH, {tab, trigger: '', hook: '', shown: null, hookShown: null});
-    SETTINGS_TAB = 'webhooks'; location.replace(SETTINGS); return;
+    location.replace(whOldAddress(S.route)); return;
   }
   else if (S.route === '#/health') { SETTINGS_TAB = 'health'; location.replace(SETTINGS); return; }   // Health moved into Settings
-  else if (['#/settings/company-inbox', '#/settings/email-phone'].includes(S.route)) { SETTINGS_TAB = 'inbound'; location.replace(SETTINGS); return; }
-  else if (S.route === '#/settings/inbox') { SETTINGS_TAB = 'inbox'; location.replace(SETTINGS); return; }   // Google's sign-in returns here
+  // Settings > Inboxes and the tabs it replaced are Tools pages now: ui/app/tools.js toolsRoute redirects them first.
   else if (S.route === '#/settings/roadmap') { SETTINGS_TAB = 'tasks'; ROADMAP_SETTINGS_REVEAL = true; location.replace(SETTINGS); return; }   // Health's roadmap suggestions fix
   else if (S.route === '#/settings/storage') { SETTINGS_TAB = 'storage'; location.replace(SETTINGS); return; }   // Health's Set up S3
-  // Settings > System (it was Rules, before that Routines): Tico's own jobs. Wake rules and routines are Automations now.
-  else if (['#/settings/rules', '#/settings/routines'].includes(S.route.split('?')[0])) { SETTINGS_TAB = 'system'; location.replace(SETTINGS); return; }
+  // Settings > System (it was Rules, before that Routines): Tico's own jobs are Automations' System jobs now.
+  else if (['#/settings/rules', '#/settings/routines'].includes(S.route.split('?')[0])) { location.replace(settingsMovedOut('system')); return; }
   else if (S.route === '#/settings/people') { SETTINGS_TAB = 'people'; location.replace(SETTINGS); return; }   // setup's people to invite
   else if (S.route === '#/settings/computers') { SETTINGS_TAB = 'devices'; location.replace(SETTINGS); return; }
   else if (['#/settings/subscriptions', '#/subscriptions'].includes(S.route)) { SETTINGS_TAB = 'models'; location.replace(SETTINGS); return; }   // Subscriptions are on Models
-  // Old links and bookmarks to the Strategy Bot's settings address still open its card (Settings > System).
+  // Old links and bookmarks to the Strategy Bot's settings address still open its card (its bot page's Settings).
   else if (S.route === '#/settings/ceo') { location.replace(SETTINGS + '/strategy-bot'); return; }
   // Every other #/settings/<tab>[/<card>] opens that tab, and the card when named (the settings catalogue's links,
   // backend/settings_entries.py). settingsShow maps old names and sections and puts the tab's own address back in
-  // the bar, so a tab can be bookmarked and shared: #/settings/gateway, #/settings/models, …
+  // the bar, so a tab can be bookmarked and shared: #/settings/people, #/settings/models, …
   else if (/^#\/settings\/[a-z-]+(?:\/[a-z0-9-]+)?\/?(\?.*)?$/.test(S.route)) {
-    const [tab, card] = S.route.slice(11).split('?')[0].split('/'); SETTINGS_REVEAL = card ? '#' + card : '';
+    const [path, query] = S.route.slice(11).split('?'), [tab, card] = path.split('/');
+    // A System card (or the tab) that moved out of Settings opens where it went; Releases reads its bot first.
+    const moved = settingsMovedOut(tab, card);
+    if (moved) { if (moved !== 'wait') location.replace(moved); return; }
+    if (tab === 'history') settingsHistoryAddress(query);   // History's view and filters (ui/app/settings-history.js)
+    SETTINGS_REVEAL = card ? '#' + card : '';
     // The Models card and Company turn levels moved from Computers to Models.
     SETTINGS_TAB = tab === 'devices' && SETTINGS_MOVED_TO_MODELS.includes(SETTINGS_REVEAL) ? 'models' : tab; location.replace(SETTINGS); return;
   }
-  else if (S.route === CREDENTIALS) pageCredentials();
   else if (S.route === SQL_PAGE) pageSql();
   else if (S.route === MAIL || S.route.startsWith(MAIL + '?')) pageMail();
   else if (S.route === MESSAGING || S.route.startsWith(MESSAGING + '?')) pageMessaging();
@@ -158,7 +163,6 @@ function route(hash = location.hash) {
     return;
   }
   else if (S.route === DOCS || S.route.startsWith(DOCS + '/') || S.route.startsWith(DOCS + '?')) pageCompanyDocs();
-  else if (S.route === INTEGRATIONS || S.route.startsWith(INTEGRATIONS + '/')) pageIntegrations();
   else if (S.route === '#/runs') { SETTINGS_TAB = 'runs'; location.replace(SETTINGS); return; }   // Runs moved into Settings > History
   else if (S.route === LEARNINGS || S.route.startsWith(LEARNINGS + '?')) pageLearnings();
   else if (S.route === '#/usage') pageUsage();
@@ -177,7 +181,7 @@ function route(hash = location.hash) {
 // change, reduced motion, a hidden window and a browser without view transitions draw at once. An error in route()
 // still surfaces as an error (not a rejected transition).
 function routeChanged() {
-  const path = h => (h || UPDATES).split('?')[0], seq = ++ROUTE_SEQ;
+  const path = h => routePage(h || UPDATES), seq = ++ROUTE_SEQ;
   // The address changed again before its fade drew (a quick second click, a script): that address's page is drawn now
   // and this one right after it, in this task and without a fade, as they would be without the fade. An address the
   // first page writes for itself (Settings names its tab) gives way to the newer one.

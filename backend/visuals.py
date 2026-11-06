@@ -280,6 +280,13 @@ def loading_references(data):
 # page has a width and reports again on every resize (ui/tests/visual-reporter.cjs runs the same file). It reports
 # the content's own height when the content fits the frame, not scrollHeight, which never goes below the frame: a
 # page measured once too tall (wrapped at a passing narrow width) could otherwise never come back down.
+# It also marks the page's view. A card frame names its view in the fragment, which never reaches the server:
+# `#tico-view=card&tico-size=small|medium|large`. The reporter sets `data-tico-view` ("card" or "full") and
+# `data-tico-size` on <html> from it, and again on hashchange, so a page's own CSS can show a compact layout under
+# `[data-tico-view=card]`. No fragment is the full view.
+# Pages are dark by default: a page that colours neither <html> nor <body> gets a dark background, and light text
+# unless it chose its own dark text (then it stays as it was, a light page). A page with its own background keeps
+# its look. It runs as the page's last script.
 REPORTER = Path(__file__).with_name("visual-reporter.js").read_text().strip()
 REPORTER_HASH = "sha256-" + base64.b64encode(hashlib.sha256(REPORTER.encode()).digest()).decode()
 
@@ -354,27 +361,34 @@ def _unb64(text):
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
-def mint(key, actor, fid, version, part="", now=None):
+def mint(key, actor, fid, version, part="", now=None, *, task_actor=""):
     """A signed address for one reader, file version and part ("" or "poster"). Tokens are minted per hour bucket and
     live two hours, so the same reader gets the same address while more than half its life remains."""
     now = int(now if now is not None else time.time())
     expires = (now // (LIFE // 2) + 2) * (LIFE // 2)
-    body = _b64(json.dumps([actor, fid, int(version), part, expires], separators=(",", ":")).encode())
+    body = _b64(json.dumps([actor, fid, int(version), part, expires, task_actor], separators=(",", ":")).encode())
     return body + "." + _b64(hmac.new(key, body.encode(), hashlib.sha256).digest())
 
 
-def read(key, token, now=None):
+def read(key, token, now=None, *, principals=False):
     """(actor, file id, version, part) from a token this server signed that has not expired, else None."""
     try:
         body, mac = token.split(".", 1)
         if not hmac.compare_digest(_unb64(mac), hmac.new(key, body.encode(), hashlib.sha256).digest()):
             return None
-        actor, fid, version, part, expires = json.loads(_unb64(body))
+        fields = json.loads(_unb64(body))
+        actor, fid, version, part, expires = fields[:5]
+        if len(fields) != 6:
+            return None
+        task_actor = fields[5]
+        if not isinstance(task_actor, str):
+            return None
     except (ValueError, TypeError):
         return None
     if int(now if now is not None else time.time()) >= int(expires):
         return None
-    return str(actor), str(fid), int(version), str(part)
+    found = (str(actor), str(fid), int(version), str(part))
+    return (*found, task_actor) if principals else found
 
 
 def ancestors(settings):
@@ -476,6 +490,7 @@ def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
     Each is a version of a file on that task (task_review.comment_file's rule) or in that conversation. A page or SVG
     whose bytes would still load something from elsewhere gets a cleaned new version, and that version is the one
     posted. Over a size limit or of another type it is attached as a plain file (kind "file"), never a visual."""
+    from .bot_home_merge import file_in_room
     from .counsel import no_attachments
     from .store import H, Problem
     from .task_review import comment_file
@@ -487,7 +502,7 @@ def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
             fid, version = comment_file(c, files.auth, files, who, task_id, fid, number)
         else:
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
-            if not row or row["scope"] != "conversation:" + conversation_id or row["archived"] \
+            if not row or not file_in_room(c, row["scope"], conversation_id) or row["archived"] \
                     or not files.visible(c, who, row, {}):
                 raise Problem("not_found", "File version not found in this conversation", 404)
             version = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?",
@@ -545,13 +560,19 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     cache, rows, served = {}, {}, {}
     # The visual route rebuilds a bot reader without its run (serve, token_reader), so a file this run sees but that
     # bare bot does not, a chat's file among them, gets no address: a file chip, not a link that always 404s.
-    # A token names one reader: the caller itself, even when it acts for someone else (task_privacy.actor is then a pair).
+    # A delegated token keeps both principals; serving checks the same pair as the ordinary file read.
     route = token_reader(c, files.auth, who.actor) if who.role == "bot" else who
     # Counsel sees each file a message carries as its plain ref, never an address or what the file is: what it reads is
     # the one version its run was asked to read (backend/counsel.py run_read), through its own tool.
     from .counsel import is_counsel
     plain = is_counsel(who)
     for message in messages:
+        from .files import readable_page_refs
+        if message:
+            shown = readable_page_refs(c, files.auth, who, message)
+            if shown != message:
+                message.clear()
+                message.update(shown)
         items = ((message or {}).get("refs") or {}).get("attachments") or []
         if not any(isinstance(a, dict) and a.get("file_id") for a in items):
             continue
@@ -583,17 +604,20 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
             if v is not None:
                 actor = who.actor
                 here = base if route is who or (route and files.visible(c, route, row, served)) else None
-                inline = full or a["kind"] in MEDIA or bool(hosted and here is not None and hosted(v))
-                view["src"] = here + "/visuals/" + mint(key, actor, fid, number) if inline and here is not None else None
+                page = c.execute("SELECT audience FROM pages WHERE file_id=?", (fid,)).fetchone()
+                restricted = bool(page and page["audience"] is not None)
+                inline = full or a["kind"] in MEDIA or bool(not restricted and hosted and here is not None and hosted(v))
+                delegated = getattr(who, "task_actor", "")
+                view["src"] = here + "/visuals/" + mint(key, actor, fid, number, task_actor=delegated) if inline and here is not None else None
                 if not inline:
                     view["open"] = True
                     if v["thumb_blob_id"] and here is not None:
-                        view["preview_url"] = here + "/visuals/" + mint(key, actor, fid, number, "preview")
+                        view["preview_url"] = here + "/visuals/" + mint(key, actor, fid, number, "preview", task_actor=delegated)
                 for field in ("width", "height", "duration_ms"):
                     if v[field] is not None:
                         view[field] = v[field]
                 if a["kind"] == "video" and v["poster_blob_id"] and here is not None:
-                    view["poster_url"] = here + "/visuals/" + mint(key, actor, fid, number, "poster")
+                    view["poster_url"] = here + "/visuals/" + mint(key, actor, fid, number, "poster", task_actor=delegated)
             fresh.append(view)
         message["refs"] = {**message["refs"], "attachments": fresh}
     return messages
@@ -659,7 +683,8 @@ def token_reader(c, auth, actor):
     try:
         if actor.startswith("human:"):
             return auth.identity_for_actor(c, actor)
-        return Identity(actor, "bot") if actor.startswith("bot:") and H.bot(c, H.actor_id(actor)) else None
+        bot = H.bot(c, H.actor_id(actor)) if actor.startswith("bot:") else None
+        return Identity(actor, "bot") if bot and bot.get("state") != "archived" else None
     except Problem:
         return None
 
@@ -675,18 +700,25 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
     from fastapi.responses import Response
     from .file_delivery import serve as deliver
     gone = Response(status_code=404, headers=_headers("default-src 'none'; sandbox", "attachment"))
-    found = read(key, token)
+    found = read(key, token, principals=True)
     if not found:
         return gone
-    actor, fid, number, part = found
+    actor, fid, number, part, task_actor = found
     with store.read() as c:
         who = token_reader(c, auth, actor)
+        if task_actor:
+            from dataclasses import replace
+            if not token_reader(c, auth, task_actor):
+                return gone
+            who = replace(who, task_actor=task_actor) if who else None
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
         if not who or not row or row["archived"] or row["locator"] != "tico_blob" or not files.visible(c, who, row, {}):
             return gone
         v = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)).fetchone()
         if not v:
             return gone
+        page = c.execute("SELECT audience FROM pages WHERE file_id=?", (fid,)).fetchone()
+        restricted = bool(page and page["audience"] is not None)
         mime = (v["mime"] or "").split(";", 1)[0].strip().lower()
         kind = kind_of(mime, v["size"])
         if part in ("poster", "preview"):
@@ -708,7 +740,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
     if kind in ("page", "svg") and not part:
         from .tico_storage import visual_link
         # A page with live blocks never has a hosted copy (tico_storage.make_visual), so it is filled in below.
-        link = visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
+        link = None if restricted else visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
         if link:
             return Response(status_code=302, headers={"Location": link, "Cache-Control": "private, no-store",
                                                       "Referrer-Policy": "no-referrer"})

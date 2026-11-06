@@ -78,9 +78,21 @@ pub fn own_keys() -> bool {
 /// How soon to ask again after the Tico could not be asked.
 const RETRY: Duration = Duration::from_secs(15);
 
+struct Known {
+    base_url: String,
+    version: u64,
+    at: Instant,
+    answer: Result<Services, String>,
+}
+impl Known {
+    fn applies(&self, destination: &Destination) -> bool {
+        self.base_url == destination.base_url
+            // Capabilities keep their TTL, but an auth failure must not outlive a credential save.
+            && (self.answer.is_ok() || self.version == settings::version())
+    }
+}
 /// The last answer per connection, and when it came: what it can do, or why it could not say.
-static KNOWN: Mutex<BTreeMap<String, (Instant, Result<Services, String>)>> =
-    Mutex::new(BTreeMap::new());
+static KNOWN: Mutex<BTreeMap<String, Known>> = Mutex::new(BTreeMap::new());
 
 /// The last services answer for this connection, however old; None before the first. A Tico
 /// that could not be asked can do nothing for now.
@@ -89,20 +101,33 @@ pub fn known(destination: &Destination) -> Option<Services> {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .get(&destination.id)
-        .map(|(_, answer)| answer.clone().unwrap_or_default())
+        .filter(|entry| entry.applies(destination))
+        .map(|entry| entry.answer.clone().unwrap_or_default())
 }
 
 /// Remembers what a Tico can do (also how tests and fixtures stand in for one).
 pub fn remember(destination: &Destination, answer: Result<Services, String>) {
+    remember_at(destination, answer, settings::version());
+}
+fn remember_at(destination: &Destination, answer: Result<Services, String>, version: u64) {
     KNOWN
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .insert(destination.id.clone(), (Instant::now(), answer));
+        .insert(
+            destination.id.clone(),
+            Known {
+                base_url: destination.base_url.clone(),
+                version,
+                at: Instant::now(),
+                answer,
+            },
+        );
 }
 
 /// Asks the Tico what it can do now, and remembers the answer. A Tico without the relay
 /// answers as one that can do nothing.
 pub fn refresh(destination: &Destination) -> Result<Services> {
+    let version = settings::version();
     let result = crate::signin::token(&destination.id).and_then(|token| fetch(destination, &token));
     let answer = match &result {
         Ok(services) => Ok(*services),
@@ -111,7 +136,7 @@ pub fn refresh(destination: &Destination) -> Result<Services> {
         }
         Err(error) => Err(format!("{error:#}")),
     };
-    remember(destination, answer);
+    remember_at(destination, answer, version);
     result
 }
 
@@ -135,8 +160,9 @@ pub fn current(destination: &Destination) -> Result<Services> {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .get(&destination.id)
-        .filter(|(at, answer)| at.elapsed() < if answer.is_ok() { FRESH } else { RETRY })
-        .map(|(_, answer)| answer.clone());
+        .filter(|entry| entry.applies(destination))
+        .filter(|entry| entry.at.elapsed() < if entry.answer.is_ok() { FRESH } else { RETRY })
+        .map(|entry| entry.answer.clone());
     match recent {
         Some(Ok(services)) => Ok(services),
         Some(Err(error)) => Err(anyhow::anyhow!(error)),

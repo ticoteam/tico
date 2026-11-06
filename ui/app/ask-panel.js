@@ -3,11 +3,11 @@
 'use strict';
 
 // Ask (docs/assistant.md). The one way in to the Assistant ("Tico Assistant" here), to the helpers behind it (BotOps,
-// the Strategy Bot, the Librarian). The Tico team has its own chat (ui/support.js), opened by the ? beside Search. On a computer the "Ask Tico" row at the bottom of the sidebar
+// the Strategy Bot, the Librarian). The Tico team has its own chat (ui/support.js), opened by the ? beside Search. On a computer the "Tico Assistant" row at the bottom of the sidebar
 // (or ⌘J) opens a panel beside the rail, rising from the bottom left; on a phone the Liquid Dot in the middle of the tab bar opens it as a sheet over
 // the page, and closes it again. It is the same conversation as the Assistant page (#/assistant): GET /v2/assistant
 // reads it and POST /v2/assistant/messages sends with the page the person is on (`page`), so the turn knows what "this"
-// means. Like the Updates chat it keeps its own small state, never the bot pages' (chat.js V2C), and drops the
+// means. It keeps its own small state, never the bot pages' (chat.js V2C), and drops the
 // Assistant page's cached copy when it sends.
 // What waits on the person from anyone else sits in the thread by when it was asked, like every other line: a Confirm
 // card a bot such as BotOps left in its own chat (GET /v2/assistant `pending`), and bots' questions (Needs you),
@@ -27,7 +27,7 @@ function askPage() {
   return {path: path.slice(0, 300), title: heading.slice(0, 200)};
 }
 // The Assistant page is this chat already, and setup has no room for it.
-const askAway = () => !S.me || S.route === ASSISTANT || document.body.classList.contains('in-setup');
+const askAway = () => !S.me || S.route === ASSISTANT || document.documentElement.classList.contains('in-setup');
 // Open or closed is a class, never `hidden`: the app's `:has(… :not([hidden]))` rules make any change of a `hidden`
 // attribute restyle the whole page (6-30 ms on a real hub), and a panel shown from display:none lays itself out cold
 // (11-45 ms). Closed, the panel keeps its box but draws nothing, is inert and is out of the accessibility tree
@@ -36,18 +36,23 @@ const askAway = () => !S.me || S.route === ASSISTANT || document.body.classList.
 const askShown = () => !!$('#ask-panel')?.classList.contains('ask-shown');
 const askSet = (el, key, value) => { if (el && el[key] !== value) el[key] = value; };
 const askOn = (el, on) => { on = !!on; if (el && el.classList.contains('ask-on') !== on) el.classList.toggle('ask-on', on); };
+// The row is there from the first paint (index.html); a click before /me answers opens Ask once the first page is
+// drawn (router.js calls askSync), and boot that never gets a person hides the row (boot.js).
+let ASK_EARLY = false;
 function askSync() {
   const row = $('#ask-row'), tab = $('#mobile-ask'), panel = $('#ask-panel');
   if (!row || !panel) return;
+  if (ASK_EARLY && S.me) { ASK_EARLY = false; if (!askAway()) { askToggle(true); return; } }
   const name = askName(), away = askAway(), open = !!ASK?.open && !away;
   askSet(row, 'hidden', away);
+  document.documentElement.classList.toggle('ask-away', away);   // ui/theme.js set it for the first paint
   if (askShown() !== open) { panel.classList.toggle('ask-shown', open); panel.inert = !open; }
   document.body.classList.toggle('ask-open', open);
   askSet(row, 'title', name + ' (⌘J)');
   // While the panel is open a close mark holds the row's (and the phone tab's) dot place (ask.css).
   for (const el of [row, tab].filter(Boolean)) {
     el.setAttribute('aria-expanded', String(open));
-    if (open) el.setAttribute('aria-label', 'Close Ask Tico'); else el.removeAttribute('aria-label');
+    if (open) el.setAttribute('aria-label', 'Close Tico Assistant'); else el.removeAttribute('aria-label');
   }
   for (const el of document.querySelectorAll('[data-ask-dot]')) ldotWatch(el);
   askDot();
@@ -204,12 +209,28 @@ let ASK_PEEK_TIMER = 0;
 // On a computer the peek sits just past the rail, level with the Ask row (ask.css --ask-row-y). Measured only while a
 // peek shows, never on the way in or out of the panel.
 function askPeekPlace(el) {
+  if (el.classList.contains('ask-peek-row')) return;
   const r = !askPhone() && $('#ask-row')?.getBoundingClientRect();
   if (r?.height) el.style.setProperty('--ask-row-y', `${Math.round(innerHeight - r.bottom + r.height / 2)}px`);
 }
+// The peek's element, held here: docked above a thread's composer it sits inside the thread view, which a new page
+// replaces, so a lookup by id would lose it.
+let ASK_PEEK_EL = null;
+const askPeekEl = () => ASK_PEEK_EL ||= $('#ask-peek');
+// With a thread's composer on screen the peek is its own row above it, never over the words; elsewhere it floats by the dot.
+function askPeekDock() {
+  const el = askPeekEl(); if (!el) return;
+  const slot = [...document.querySelectorAll('#main .thv-peek-slot')].find(s => s.parentElement?.getClientRects().length);
+  const home = slot || document.body;
+  if (el.parentElement !== home) home.append(el);
+  el.classList.toggle('ask-peek-row', !!slot);
+}
+window.askPeekDock = askPeekDock;
+addEventListener('hashchange', () => setTimeout(askPeekDock, 0));
 function askPeek() {
-  const el = $('#ask-peek');
+  const el = askPeekEl();
   if (!el) return;
+  askPeekDock();
   clearTimeout(ASK_PEEK_TIMER);
   const now = Date.now(), open = !!ASK?.open, away = askAway() || !S.me;
   const items = away ? [] : askQuestions().map(it => ({id: String(it.id)}))
@@ -234,12 +255,12 @@ function askPeek() {
 }
 // Dismissed or tapped, the line is done with every item it spoke for.
 function askPeekDone() {
-  const el = $('#ask-peek'), store = askPeekStore();
+  const el = askPeekEl(), store = askPeekStore();
   askPeekSave({...store, dismissed: [...store.dismissed, ...(el.dataset.items || '').split(' ').filter(Boolean)]});
   askOn(el, false); delete el.dataset.item;
 }
-$('#ask-peek')?.addEventListener('click', ev => {
-  const el = $('#ask-peek'), id = el.dataset.item;
+askPeekEl()?.addEventListener('click', ev => {
+  const el = askPeekEl(), id = el.dataset.item;
   if (!id) return;
   if (ev.target.closest('[data-peek-x]')) { askPeekDone(); return; }
   if (!ev.target.closest('[data-peek-go]')) return;
@@ -389,8 +410,8 @@ function askRowsIn(thread, seen, animate) {
       {duration: 260, easing: 'cubic-bezier(.2,0,0,1)', fill: 'backwards'});
   }
 }
-$('#ask-row')?.addEventListener('click', () => askToggle());
-$('#mobile-ask')?.addEventListener('click', () => askToggle());
+$('#ask-row')?.addEventListener('click', () => { if (S.me) askToggle(); else ASK_EARLY = true; });
+$('#mobile-ask')?.addEventListener('click', () => { if (S.me) askToggle(); else ASK_EARLY = true; });
 $('#ask-panel')?.addEventListener('click', askClick);
 $('#ask-panel')?.addEventListener('change', ev => {
   const choose = ev.target.closest('[data-ask-choose]');
@@ -432,4 +453,6 @@ document.addEventListener('click', ev => {
   if (ASK?.open && askPhone() && ev.target.closest?.('#mobile-nav .mobile-nav-item:not(#mobile-ask)')) askToggle(false, false);
 }, true);
 addEventListener('resize', () => { if (ASK?.open) askFoot(askFootNow()); askSync(); });
-setTimeout(askPeek, ASK_PEEK_WAIT_MS + 100);
+// Its first check, a few seconds after load, is announced: a support reply waiting at load opens its chat only after it
+// (ui/support.js), so the chat never opens over a peek that is due.
+setTimeout(() => { askPeek(); document.dispatchEvent(new CustomEvent('tico:ask-peek-checked')); }, ASK_PEEK_WAIT_MS + 100);

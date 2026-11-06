@@ -1,11 +1,9 @@
-"""Shared setup for the stage-2 tests: a temp projects root, a temp policy file, fake services.
+"""Shared setup for the stage-2 tests: a temp projects root, fake services, and a fake Tico send queue.
 
 Not a test module (discovery only collects test*.py). `Stage2` gives every test its own
-projects directory, its own mail.db, its own audit file and its own copy of the policy, so a
-test can pause a mailbox or flip the kill switch without touching the hub's real registry.
-
-The reviewer is `none` throughout: the suite is offline, and the reviewer's own behaviour is
-tested against a fake backend in test_review.py.
+projects directory, its own mail.db and its own audit file. Tico's answers are seams: `queue_send`
+records each request in `queue_requests` and answers `queue_answer` (pending unless a test changes it),
+and the sending policy reads Ask first. The decision model is off throughout: the suite is offline.
 """
 
 import contextlib, io, json, os, sys, tempfile, unittest
@@ -16,52 +14,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fake                    # noqa: E402,F401  (puts the hub on sys.path)
 
 from connectors.mail import access, audit as audit_log, calendar as cal   # noqa: E402
-from connectors.mail import db, gmail as gm, policy as pl, review as rv   # noqa: E402
+from connectors.mail import db, gmail as gm, policy as pl                # noqa: E402
 from connectors.mail import __main__ as cli                              # noqa: E402
-
-POLICY = """
-global:
-  send_enabled: true
-sandbox_mailbox: hub-test@acme.example
-internal_domains: [acme.example]
-mailboxes:
-  ana@acme.example: { paused: false }
-defaults:
-  max_sends_per_day: 20
-  per_recipient_cooldown_days: 14
-  max_external_recipients: 1
-  allow_cc_external: false
-  allow_attachments: false
-scheduling:
-  mailbox: ana@acme.example
-  employee: inbox
-blocklist:
-  addresses: [blocked@nope.example]
-  domains: [banned.example]
-owner_handles_personally:
-  addresses: [investor@fund.example]
-  domains: [board.example]
-allowances:
-  - employee: influencer
-    mailbox: ana@acme.example
-    purpose: Cold outreach to creators.
-    recipients:
-      source: csv
-      path: emp-influencer/data/creators.csv
-      column: email
-      require_column: { fit: keep }
-    caps:
-      per_day: 10
-      per_recipient_cooldown_days: 365
-    urls:
-      required_pattern: '^https://acme\\.example/rentals\\?utm_source=influencer&utm_medium=email&utm_campaign=[a-z0-9][a-z0-9-]*$'
-      forbidden: [calendly.com, acme.example/demo, go.acme.example]
-"""
 
 MANIFESTS = {
     "influencer": """
 name: influencer
-outbound_send: true
 access:
   - service: gmail
     identity: "ana@acme.example"
@@ -72,7 +30,6 @@ access:
 """,
     "inbox": """
 name: inbox
-outbound_send: false
 access:
   - service: gmail
     identity: "ana@acme.example"
@@ -80,7 +37,6 @@ access:
 """,
     "legal": """
 name: legal
-outbound_send: false
 access:
   - service: gmail
     identity: "legal@acme.example"
@@ -113,27 +69,11 @@ Founder, Acme
 """
 
 
-def gh_answer(state="CLOSED", labels=(f"owner:{access.OWNER}", "type:decision"), title="", body="",
-              returncode=0, stdout=None):
-    """A stand-in for subprocess.run(['gh', 'issue', 'view', ...])."""
-    payload = {"state": state, "labels": [{"name": l} for l in labels],
-               "title": title, "body": body}
-
-    class R:
-        pass
-    r = R()
-    r.returncode = returncode
-    r.stdout = json.dumps(payload) if stdout is None else stdout
-    r.stderr = ""
-    return lambda *a, **k: r
-
-
 class Stage2(unittest.TestCase):
-    """A temp world: manifests, a policy file, a fake Gmail and a fake Calendar."""
+    """A temp world: manifests, a fake Gmail, a fake Calendar and a fake Tico queue."""
 
     manifests = MANIFESTS
     creators = CREATORS
-    policy_yaml = POLICY
 
     # A bot's run carries these; with them a draft would upload its files to the run's live task.
     HUB_ENV = ("HUB_API_URL", "HUB_TOKEN", "HUB_TASK_ID")
@@ -157,28 +97,44 @@ class Stage2(unittest.TestCase):
         data = self.root / "emp-influencer" / "data"
         data.mkdir()
         (data / "creators.csv").write_text(self.creators)
-        self.policy_file = self.root / "mail-policy.yaml"
-        self.write_policy(self.policy_yaml)
 
-        self._saved = {"access": access.PROJECTS, "policy_projects": pl.PROJECTS,
-                       "policy_file": pl.POLICY_FILE, "review_projects": rv.PROJECTS,
-                       "audit": audit_log.AUDIT_PATH, "run": pl.RUN, "hub_get": pl.HUB_GET, "hub_post": pl.HUB_POST,
-                       "server_get": pl.SERVER_GET,
-                       "gmail": cli.open_gmail, "db": cli.open_db, "cal": cli.open_calendar,
-                       "reviewer": os.environ.get("MAIL_REVIEWER"), "judge": os.environ.get("MAIL_DECISIONS")}
-        access.PROJECTS = pl.PROJECTS = rv.PROJECTS = self.root
-        pl.POLICY_FILE = self.policy_file
-        # A person has already confirmed in Tico what each bot.yaml asks (backend/mail_settings.py); the tests of the
-        # server-held switch itself replace this.
+        self._saved = {"access": access.PROJECTS, "audit": audit_log.AUDIT_PATH, "hub_get": pl.HUB_GET,
+                       "hub_post": pl.HUB_POST, "server_get": pl.SERVER_GET, "runner_get": pl.RUNNER_GET,
+                       "gmail": cli.open_gmail, "db": cli.open_db, "cal": cli.open_calendar}
+        access.PROJECTS = self.root
+        # The bot's mail setting as Tico answers it (backend/mail_settings.py): What Tico may do, all on.
         pl.SERVER_GET = self.confirmed_setting
-        pl.HUB_POST = lambda path, body, key=None: None    # no Tico to ask the org rule check of: sends go on
+        pl.HUB_GET = lambda path: {"effective": {"mode": "ask_first"}} if path.endswith("/sending-policy") else None
+        pl.HUB_POST = lambda path, body, key=None: None    # nothing reaches a real Tico
+        # An owner run reads What Tico may do over the runner's registration: all on here; test_company.py turns it off.
+        pl.RUNNER_GET = lambda path: {"company": dict.fromkeys(pl.COMPANY_FIELDS, True)}
         audit_log.AUDIT_PATH = self.root / "audit.jsonl"
-        os.environ["MAIL_REVIEWER"] = "none"
-        os.environ["MAIL_DECISIONS"] = "none"        # no judge either; test_judge.py injects a fake engine
+        # Tico answers who may use which mailbox (fake.mail_access: grants that match each bot.yaml); a test changes
+        # it with fake.MAIL_LEVELS. Only mail-action / connector-event lease the connector its writes.
+        fake.install_mail_access()
+        self._levels = mock.patch.dict(fake.MAIL_LEVELS, clear=True)
+        self._levels.start()
+        self.addCleanup(self._levels.stop)
+        os.environ["MAIL_DECISIONS"] = "none"        # no decision model; a test injects a fake engine
+        os.environ["TICO_INTERNAL_DOMAINS"] = "acme.example"
         os.environ.pop("HUB_EMPLOYEE", None)
 
         self.dbfile = self.root / "mail.db"
         self.service = fake.FakeGmailService(self.corpus())
+        self.queue_requests = []
+        self.queue_answer = {"state": "pending"}     # what Tico answers each queued send; a test changes it
+
+        def queued(mailbox, raw, thread_id="", reply_to_id="", approval_id="", automation_action_id="", draft_id="",
+                   calendar_action_id=""):
+            import hashlib
+            self.queue_requests.append({"mailbox": mailbox, "raw": raw, "thread_id": thread_id,
+                                        "reply_to_id": reply_to_id, "approval_id": approval_id, "draft_id": draft_id})
+            return {"id": hashlib.sha256(raw.encode()).hexdigest(), "approval_id": approval_id,
+                    "send_after": "2026-11-04T12:02:00Z", "detail": "", "decision": {"reasons": []},
+                    **self.queue_answer}
+        queue_patch = mock.patch.object(pl, "queue_send", side_effect=queued)
+        queue_patch.start()
+        self.addCleanup(queue_patch.stop)
         self.calendar = fake.FakeCalendarService()
         cli.open_gmail = lambda mailbox: gm.Gmail(self.service, mailbox, sleep=lambda s: None)
         cli.open_calendar = lambda mailbox: self.calendar
@@ -186,51 +142,29 @@ class Stage2(unittest.TestCase):
 
     def tearDown(self):
         access.PROJECTS = self._saved["access"]
-        pl.PROJECTS = self._saved["policy_projects"]
-        pl.POLICY_FILE = self._saved["policy_file"]
-        pl.RUN = self._saved["run"]
         pl.HUB_GET = self._saved["hub_get"]
         pl.HUB_POST = self._saved["hub_post"]
         pl.SERVER_GET = self._saved["server_get"]
-        rv.PROJECTS = self._saved["review_projects"]
+        pl.RUNNER_GET = self._saved["runner_get"]
         audit_log.AUDIT_PATH = self._saved["audit"]
         cli.open_gmail, cli.open_db = self._saved["gmail"], self._saved["db"]
         cli.open_calendar = self._saved["cal"]
-        if self._saved["reviewer"] is None:
-            os.environ.pop("MAIL_REVIEWER", None)
-        else:
-            os.environ["MAIL_REVIEWER"] = self._saved["reviewer"]
-        if self._saved["judge"] is None:
-            os.environ.pop("MAIL_DECISIONS", None)
-        else:
-            os.environ["MAIL_DECISIONS"] = self._saved["judge"]
         cli.TASK_ATTACH = self._task_attach
         self._env.stop()
         self.dir.cleanup()
 
     def confirmed_setting(self, slug):
-        """The server's mail setting as if a person had turned on what `slug`'s manifest asks."""
-        try:
-            manifest = access.load(slug)
-        except Exception:
-            return {"bot": slug, "set": False, "outbound_send": False, "forward_to": []}
-        return {"bot": slug, "set": True, "outbound_send": bool(manifest.get("outbound_send")),
-                "forward_to": access.forward_to(manifest), "updated_by": "human:ana"}
+        """The bot's mail setting as Tico answers it, What Tico may do all on."""
+        return {"bot": slug, "company_organize": True, "company_send": True, "company_calendar": True}
 
     # -- knobs ------------------------------------------------------
     def corpus(self):
         return []
 
-    def write_policy(self, text):
-        self.policy_file.write_text(text)
-
     def body_file(self, text, name="body.txt"):
         p = self.root / name
         p.write_text(text)
         return str(p)
-
-    def policy(self):
-        return pl.load(self.policy_file)
 
     def conn(self):
         return db.connect(self.dbfile)

@@ -3,6 +3,7 @@ person lives and dies with its own task, and its asker hears when it is withdraw
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.store import H
 from backend import approval_expiry, still_needed, task_holds
+from backend.tests.hold_rows import set_holds
 
 
 def bot_task(c, title, owner="bot:ops", parent=None, actor="human:ben"):
@@ -27,22 +28,19 @@ def withdrawn_label(c, ask_id):
     return (H._json(H.message(c, ask_id)["refs"], {}) or {}).get("withdrawn")
 
 
-def test_a_question_on_an_open_subtask_outlives_its_parent_ending(api):
-    """Criterion 2: the bot asks on a subtask, then marks the parent done; the question stays."""
+def test_finishing_parent_closes_its_subtask_and_withdraws_its_question(api):
+    """A subtask closes with its parent, clearing the question and its hold."""
     with api.app.state.store.transaction() as c:
         parent = bot_task(c, "Spec Settings search")
-        child = bot_task(c, "Ask Ana about search scope", parent=parent)
+        child = bot_task(c, "Ask Ana about search scope", parent=parent, actor="bot:ops")
         question = ask(c, child, "Search titles only, or bodies too?")
         wait(c, child)
         H.task_update(c, "bot:ops", parent, status="done", note="Spec written")
-        assert not H.message(c, question["id"])["superseded_at"]
+        assert H.message(c, question["id"])["superseded_at"]
         row = H.task(c, child)
-        assert row["status"] == "waiting"
-        ana = task_holds.name(c, "human:ana")
-        assert row["blocked_reason"] == f"Waiting on {ana}: Search titles only, or bodies too?"
+        assert row["status"] == "closed" and not row["blocked_reason"]
         assert approval_expiry.sweep(c)["asks"] == []
-        assert not H.message(c, question["id"])["superseded_at"]
-        assert child in [t["id"] for t in H.tasks_asked_of(c, "human:ana")]
+        assert child not in [t["id"] for t in H.tasks_asked_of(c, "human:ana")]
 
 
 def test_ending_the_question_s_own_task_tells_the_asker_whether_the_person_saw_it(api):
@@ -84,7 +82,7 @@ def test_still_needed_returns_the_question_and_reopens_its_bot_task_without_a_se
         assert withdrawn_label(c, question["id"]).startswith(f"Withdrawn before {ana} saw it: no answer in two")
         row = H.task(c, tid)
         assert row["status"] == "open" and "nothing left to wait on" in row["note"]
-        assert notices(c, "bot:ops") == []      # still needed? sent its own one notice
+        assert notices(c, "bot:ops") == []      # still needed? sends no notice of its own: the roundup lists it
 
 
 def test_the_last_child_finishing_reopens_a_bot_task_and_one_of_two_keeps_it_waiting_on_the_other(api):
@@ -137,11 +135,6 @@ def test_a_note_only_update_keeps_the_tracked_reason_and_never_names_an_untracke
         assert row["blocked_reason"] == task_holds.NOTHING
         H.task_update(c, "bot:ops", loose, note="Still waiting on Chris Hawkins")
         assert H.task(c, loose)["blocked_reason"] == task_holds.NOTHING
-        # The stranded clock runs from when the wait on nothing began, not from the note.
-        old = H.shift(H.now(), hours=-3)
-        c.execute("UPDATE tasks SET blocked_since=? WHERE id=?", (old, loose))
-        assert (loose, "open") in H.sweep_stranded(c)
-        assert held not in [t for t, _ in H.sweep_stranded(c, H.shift(H.now(), hours=3))]
 
 
 def test_a_person_s_task_stays_put_and_an_owner_s_own_hold_is_kept(api):
@@ -159,8 +152,7 @@ def test_a_person_s_task_stays_put_and_an_owner_s_own_hold_is_kept(api):
         manual = bot_task(c, "Hold the newsletter")
         sub = bot_task(c, "Proofread it", owner="bot:cpo", parent=manual, actor="bot:ops")
         wait(c, manual)
-        c.execute("UPDATE tasks SET blocked_kind='manual', blocked_reason='Held until the legal review' WHERE id=?",
-                  (manual,))
+        set_holds(c, manual, blocked_kind='manual', blocked_reason='Held until the legal review')
         H.task_update(c, "bot:cpo", sub, status="done", note="Proofread")
         row = H.task(c, manual)
         assert row["status"] == "waiting" and row["blocked_reason"] == "Held until the legal review"
@@ -173,15 +165,15 @@ def test_backfill_puts_every_waiting_task_right_once_with_one_wake_per_bot(api):
         stale = [bot_task(c, f"Stale wait {n}") for n in range(3)]
         for tid in stale:
             wait(c, tid)
-        c.execute(f"UPDATE tasks SET blocked_reason='Waiting on Chris Hawkins', blocked_kind='dependency' "
-                  f"WHERE id IN ({','.join('?' * len(stale))})", stale)
+        for tid in stale:
+            set_holds(c, tid, blocked_reason='Waiting on Chris Hawkins', blocked_kind='dependency')
         held = bot_task(c, "Really waiting")
         ask(c, held, "Which plan?")
         wait(c, held)
-        c.execute("UPDATE tasks SET blocked_reason='Waiting on Chris Hawkins' WHERE id=?", (held,))
+        set_holds(c, held, blocked_reason='Waiting on Chris Hawkins')
         person = bot_task(c, "Ana's own wait", owner="human:ana", actor="human:ana")
         wait(c, person, owner="human:ana")
-        c.execute("UPDATE tasks SET blocked_reason='Waiting on Chris Hawkins' WHERE id=?", (person,))
+        set_holds(c, person, blocked_reason='Waiting on Chris Hawkins')
         before = len(notices(c, "bot:ops", news="assignment"))
         result = task_holds.backfill(c)
         assert result == {"fixed": 2, "opened": 3, "woken": 1}
@@ -190,7 +182,7 @@ def test_backfill_puts_every_waiting_task_right_once_with_one_wake_per_bot(api):
         assert H.task(c, person)["blocked_reason"] == task_holds.NOTHING
         assert len(notices(c, "bot:ops", news="assignment")) == before + 1
         assert task_holds.backfill(c) is None
-        waiting = H._rows(c.execute("SELECT blocked_reason FROM tasks WHERE status='waiting'"))
+        waiting = H._rows(c.execute(f"SELECT blocked_reason FROM {H.TASKS} tasks WHERE status='waiting'"))
         assert not [r for r in waiting if "Chris Hawkins" in (r["blocked_reason"] or "")]
 
 
@@ -411,7 +403,8 @@ def test_a_person_s_plain_reply_ends_a_wait_with_no_question_open(api):
         tid = bot_task(c, "Report month")
         wait(c, tid, note="Which month should the report use?")
         # Legacy waits can name a person without an ask card. This task still has a tracked dependency hold.
-        c.execute("UPDATE tasks SET waiting_on='human:ana', blocked_kind='dependency' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (tid,))
+        set_holds(c, tid, blocked_kind='dependency')
         task_holds.refresh(c, tid)
         assert H.task(c, tid)["blocked_reason"] == f"Waiting on {task_holds.name(c, 'human:ana')}"
         assert not H.open_task_asks(c, H.task(c, tid))
@@ -436,3 +429,87 @@ def test_taking_off_a_stale_finished_blocker_releases_nothing(api):
         TR.remove_blocker(c, H.KEEPER, tid, blocker)
         row = H.task(c, tid)
         assert (row["status"], row["blocked_reason"]) == ("waiting", "Nothing tracked to wait on")
+
+
+def test_an_asker_withdrawing_its_own_question_through_the_resolve_route_recomputes_the_reason(api):
+    """The resolve route with no quote: the Blocked reason follows the holds, as an answer's does."""
+    with api.app.state.store.transaction() as c:
+        ben = task_holds.name(c, "human:ben")
+        tid = bot_task(c, "Choose a vendor")
+        question = ask(c, tid, "Vendor A or B?")
+        other = ask(c, tid, "Which invoice month?", to="human:ben")     # a newer question to Ana would replace this one
+        row = wait(c, tid)
+        assert row["blocked_reason"].startswith("Waiting on ") and row["blocked_reason"].endswith(" (and 1 more)")
+        H.task_ask_resolve(c, "bot:ops", tid, question["id"])
+        row = H.task(c, tid)
+        assert row["status"] == "waiting" and row["blocked_reason"] == f"Waiting on {ben}: Which invoice month?"
+        H.task_ask_resolve(c, "bot:ops", tid, other["id"])
+        row = H.task(c, tid)
+        assert row["waiting_on"] is None and row["status"] == "open"
+        assert row["note"] == f"{task_holds.name(c, 'bot:ops')} withdrew your question to {ben}; nothing left to wait on"
+        assert not (row["blocked_reason"] or "").startswith("Waiting on")
+
+
+def test_withdrawing_the_only_question_a_bot_waits_on_reopens_it_through_the_resolve_route(api):
+    """The last question to the person a bot waits on: its clear of the wait must not hide the reason from the recompute."""
+    with api.app.state.store.transaction() as c:
+        ana = task_holds.name(c, "human:ana")
+        tid = bot_task(c, "Choose a vendor")
+        question = ask(c, tid, "Vendor A or B?")
+        H.task_update(c, "bot:ops", tid, status="waiting", waiting_on="human:ana", note="Waiting on Ana's pick.")
+        row = H.task(c, tid)
+        assert row["waiting_on"] == "human:ana" and row["blocked_reason"].startswith(f"Waiting on {ana}")
+        H.task_ask_resolve(c, "bot:ops", tid, question["id"])
+        row = H.task(c, tid)
+        assert row["waiting_on"] is None and row["status"] == "open"
+        assert row["note"] == f"{task_holds.name(c, 'bot:ops')} withdrew your question to {ana}; nothing left to wait on"
+        assert not (row["blocked_reason"] or "").startswith("Waiting on")
+
+
+def test_an_asker_withdrawing_a_question_to_someone_else_keeps_a_bot_s_wait_on_a_person(api):
+    """The bot waits on Ana by hand; withdrawing its own question to Ben leaves that wait and its reason as they are."""
+    with api.app.state.store.transaction() as c:
+        tid = bot_task(c, "Choose a vendor")
+        question = ask(c, tid, "Which invoice month?", to="human:ben")
+        wait(c, tid, note="Waiting on Ana's pick.")
+        c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (tid,))     # set by hand, as a legacy wait is
+        task_holds.refresh(c, tid)
+        row = H.task(c, tid)
+        assert row["blocked_reason"].startswith("Waiting on Ben: Which invoice month?")
+        H.task_ask_resolve(c, "bot:ops", tid, question["id"])
+        row = H.task(c, tid)
+        assert (row["status"], row["waiting_on"]) == ("waiting", "human:ana")
+        assert row["blocked_reason"] == "Waiting on Ana"
+        assert row["note"] == "Waiting on Ana's pick."
+        assert not (row["note"] or "").endswith("nothing left to wait on")
+
+
+def test_a_person_s_task_names_what_cleared_when_they_withdraw_their_own_question(api):
+    """Ben's own waiting task: withdrawing his question to Ana leaves it waiting and says what cleared."""
+    with api.app.state.store.transaction() as c:
+        mine = bot_task(c, "Pick the offsite venue", owner="human:ben", actor="human:ben")
+        question = ask(c, mine, "Indoor or outdoor?", asker="human:ben", to="human:ana")
+        wait(c, mine, owner="human:ben")
+        assert H.task(c, mine)["blocked_reason"].startswith("Waiting on ")
+        H.task_ask_resolve(c, "human:ben", mine, question["id"])
+        row = H.task(c, mine)
+        assert row["status"] == "waiting"
+        assert row["blocked_reason"] == "Nothing left to wait on: Ben withdrew your question to Ana"
+
+
+def test_a_teammate_withdrawing_its_question_leaves_the_bot_s_own_hold_and_its_reason_unchanged(api):
+    """The bot waits on its own question to Ben; a teammate's question to Ana is not a hold of this task, so its
+    withdrawal changes status, waiting_on and reason in no way and writes no withdrawal note."""
+    with api.app.state.store.transaction() as c:
+        tid = bot_task(c, "Choose a vendor")
+        ask(c, tid, "Vendor A or B?", to="human:ben")
+        teammate = ask(c, tid, "Is the budget approved?", asker="bot:cpo", to="human:ana")
+        wait(c, tid)
+        before = H.task(c, tid)
+        assert before["blocked_reason"] == "Waiting on Ben: Vendor A or B?"
+        H.task_ask_resolve(c, "bot:cpo", tid, teammate["id"])
+        row = H.task(c, tid)
+        assert (row["status"], row["waiting_on"]) == (before["status"], before["waiting_on"]) == ("waiting", None)
+        assert row["blocked_reason"] == before["blocked_reason"]
+        assert row["note"] == before["note"]
+        assert "withdrew" not in (row["note"] or "")

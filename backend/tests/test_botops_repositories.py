@@ -9,6 +9,7 @@ from backend.tests.test_api import api, get, headers, post, put  # noqa: F401  (
 from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixture)
 from backend.tests.test_botops_parity import act
 from backend.store import H
+from backend import bot_settings as BS
 
 
 @pytest.fixture
@@ -19,9 +20,8 @@ def repos(api):
         for name in ("Acme/product", "Acme/docs"):
             c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)", (H.new_id(), name, H.now()))
         for bot, name, level in (("ops", "Acme/product", "write"), ("botops", "Acme/docs", "read")):
-            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0] or "{}")
-            c.execute("UPDATE bot_config SET config=? WHERE bot=?",
-                      (json.dumps({**config, "repo_access_mode": "chosen"}), bot))
+            config = json.loads(c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot=?", (bot,)).fetchone()[0] or "{}")
+            BS.write(c, bot, {**config, 'repo_access_mode': 'chosen'})
             c.execute("INSERT INTO bot_repo_access VALUES(?,?,?)", (bot, name, level))
 
 
@@ -392,7 +392,7 @@ RAW_WORDS = {"own", "all", "chosen", "none"}
 
 
 def test_the_new_bot_repository_default_reads_as_what_new_bots_get(api, botops):
-    """{"new_bot_default": "all"} is the card a person confirms for Settings > Repositories > New bots get."""
+    """{"new_bot_default": "all"} is the card a person confirms for Settings > General › Repositories > New bots get."""
     from backend import rooms
     from backend.assistant import create_proposal
     state = api.app.state
@@ -402,7 +402,7 @@ def test_the_new_bot_repository_default_reads_as_what_new_bots_get(api, botops):
         cards = [create_proposal(c, state.store.settings, ana, room, "botops", "Open up new bots",
                                  "PUT", "/api/v2/repositories/settings", {"new_bot_default": v})["action"] for v in ("all", "own", "x")]
     assert [a["description"] for a in cards] == [
-        "New bots get every repository ticked in Settings > Repositories", "New bots get only their own repository",
+        "New bots get every repository ticked in Settings > General › Repositories", "New bots get only their own repository",
         "Change which repositories new bots get"]
 
 

@@ -28,6 +28,7 @@
         "bot:ops"
       ],
       "path": "/<conversation>/",
+      "pinned_for_everyone_at": null,
       "retention_days": null,
       "room_key": "ops",
       "root_id": "<conversation>",
@@ -67,6 +68,11 @@
         "sender_id": "human:ana",
         "sender_name": "Ana",
         "seq": 3,
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "superseded_at": null,
         "wait_s": null
       },
@@ -94,6 +100,11 @@
         "sender_id": "human:ana",
         "sender_name": "Ana",
         "seq": 4,
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "superseded_at": null,
         "wait_s": null
       },
@@ -121,6 +132,11 @@
         "sender_id": "human:ana",
         "sender_name": "Ana",
         "seq": 5,
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "superseded_at": null,
         "wait_s": null
       },
@@ -157,6 +173,11 @@
         "revision": 0,
         "sender_id": "keeper",
         "seq": 9,
+        "source": {
+          "kind": "task_update",
+          "link": null,
+          "name": "Task update"
+        },
         "superseded_at": null,
         "wait_s": null
       },
@@ -193,6 +214,11 @@
         "revision": 0,
         "sender_id": "keeper",
         "seq": 11,
+        "source": {
+          "kind": "task_update",
+          "link": null,
+          "name": "Task update"
+        },
         "superseded_at": null,
         "wait_s": null
       },
@@ -220,6 +246,11 @@
         "sender_id": "human:ana",
         "sender_name": "Ana",
         "seq": 13,
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "superseded_at": null,
         "wait_s": null
       },
@@ -265,6 +296,11 @@
         "sender_id": "bot:ops",
         "sender_name": "ops",
         "seq": 17,
+        "source": {
+          "kind": "bot",
+          "link": null,
+          "name": "ops"
+        },
         "superseded_at": null,
         "wait_s": null
       }

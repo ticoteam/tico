@@ -10,13 +10,14 @@ import json
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import hubdb as H
+from backend import mailbox_access as MA
 from backend.finance import actions as FA
 from backend.finance import delivery
 from backend.finance import jobs
 from backend.finance.core.errors import CONFLICT, DENIED, NOT_AVAILABLE, FinanceError
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
-from connectors.mail import policy as pl
 
 BOT = "bot:bookkeeper"
 EMAIL = "ap@acme-retail.example"
@@ -30,8 +31,10 @@ LATER = "2026-10-16T13:00:00.000000Z"
 
 def _mailbox(c, can=("read", "send"), box=BOX) -> None:
     tools = [{"service": "gmail", "identity": box, "can": list(can)}]
-    c.execute("UPDATE bot_config SET config=? WHERE bot='bookkeeper'",
-              (json.dumps({"team": "eng", "tools": tools}),))
+    BS.write(c, "bookkeeper", {"team": "eng", "tools": tools})
+    row = MA.ensure_mailbox(c, box, kind="shared", created_by=OWNER)
+    MA.grant(c, OWNER, row["id"], "bot", "bookkeeper", "read_write" if "send" in can else "read")
+    MA.grant(c, OWNER, row["id"], "person", "ana", "read_write")
 
 
 def _customer(c, emails=(EMAIL,)) -> str:
@@ -78,11 +81,6 @@ def _approved_reminder(c, stage=7) -> tuple[str, str, str]:
     return iid, str(done.result["send_approval_id"]), str(done.result["text"])
 
 
-def _mail_reads(c, monkeypatch) -> None:
-    """The mail connector reads a Tico approval through the hub; here it reads this test's database."""
-    monkeypatch.setattr(pl, "HUB_GET", lambda path: H.approval(c, path.split("/", 1)[1]))
-
-
 def test_a_bots_reminder_asks_a_person_and_records_nothing_until_they_say_yes(books):
     with books.transaction() as c:
         iid = _sent_invoice(c)
@@ -92,30 +90,19 @@ def test_a_bots_reminder_asks_a_person_and_records_nothing_until_they_say_yes(bo
         assert c.execute("SELECT COUNT(*) FROM fin_invoice_reminders").fetchone()[0] == 0
 
 
-def test_a_person_yes_records_the_reminder_and_issues_a_send_approval_for_its_exact_text(books):
+def test_finance_yes_records_the_reminder_but_the_frozen_email_still_needs_its_own_preview(books):
     with books.transaction() as c:
         iid, send_id, text = _approved_reminder(c)
         appr = H.approval(c, send_id)
-        assert appr["kind"] == "send" and appr["decision"] == "approved" and appr["decided_by_id"] == OWNER, appr
+        assert appr["kind"] == "send" and appr["decision"] is None, appr
         payload = appr["payload"]
         assert payload["to"] == [EMAIL] and payload["cc"] == [] and payload["mailbox"] == BOX, payload
         assert payload["body_sha256"] == delivery.digest(text)
+        queued = c.execute("SELECT * FROM email_sends WHERE id=?", (payload["email_send_id"],)).fetchone()
+        assert queued["state"] == "waiting_approval" and payload["content_sha256"] == queued["content_sha256"]
+        assert payload["bcc"] == [] and not c.execute("SELECT * FROM email_send_previews").fetchone()
         assert c.execute("SELECT send_approval_id FROM fin_invoice_reminders WHERE invoice_id=?",
                          (iid,)).fetchone()[0] == send_id
-
-
-def test_the_mail_connector_sends_the_exact_text_to_the_exact_recipients_and_nothing_else(books, monkeypatch):
-    with books.transaction() as c:
-        _iid, send_id, text = _approved_reminder(c)
-        _mail_reads(c, monkeypatch)
-        exact = pl.approval_check(send_id, [EMAIL], [], "", slug="bookkeeper", body=text)
-        assert exact["full"] is True, exact
-        changed = pl.approval_check(send_id, [EMAIL], [], "", slug="bookkeeper", body=text.replace("300", "30"))
-        assert changed["full"] is False and "another text" in changed["detail"], changed
-        other = pl.approval_check(send_id, ["dan@other.example"], [], "", slug="bookkeeper", body=text)
-        assert other["full"] is False and "names to=" in other["detail"], other
-        extra = pl.approval_check(send_id, [EMAIL, "dan@other.example"], [], "", slug="bookkeeper", body=text)
-        assert extra["full"] is False, extra
 
 
 def test_a_bot_cannot_issue_or_decide_a_send_approval(books):
@@ -140,6 +127,18 @@ def test_no_bookkeeper_mailbox_refuses_the_reminder_at_planning_and_uses_no_stag
         assert c.execute("SELECT COUNT(*) FROM fin_invoice_reminders").fetchone()[0] == 0
         _mailbox(c)
         assert act(c, OWNER, "invoice_remind", {"invoice_id": iid, "stage": 7}).status == "committed"
+
+
+def test_finance_does_not_queue_email_when_the_requester_lacks_inbox_send_access(books):
+    with books.transaction() as c:
+        iid = _sent_invoice(c)
+        _mailbox(c)
+        row = c.execute("SELECT id FROM mailboxes WHERE address=?", (BOX,)).fetchone()
+        c.execute("DELETE FROM mailbox_accesses WHERE mailbox_id=? AND grantee_type='person'", (row[0],))
+        c.execute("UPDATE mailboxes SET kind='personal',person_id='ben' WHERE id=?", (row[0],))
+        refused = act(c, OWNER, "invoice_remind", {"invoice_id": iid, "stage": 7})
+        assert refused.status == "failed" and "sender cannot send" in refused.reason
+        assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == 0
 
 
 def test_a_failed_send_raises_one_needs_you_and_a_retry_that_delivers_clears_it(books):

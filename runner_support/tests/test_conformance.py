@@ -23,6 +23,7 @@ from backend.store import H, encode
 from backend.tests.test_api import api, assign, get, headers, post, runner, settled  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 from runner_support import engine
+from backend import bot_settings as BS
 
 pytestmark = pytest.mark.slow
 
@@ -84,9 +85,7 @@ class Computer:
         assign(api, self.registration, "ops")
         self.runtime = RUNTIMES.get(harness, harness)
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                      (encode({"name": "ops", "runtime": self.runtime, "harness": harness, "model": MODELS[harness],
-                               "status": "active", **(bot or {})}),))
+            BS.write(c, 'ops', {'name': 'ops', 'runtime': self.runtime, 'harness': harness, 'model': MODELS[harness], 'status': 'active', **(bot or {})})
         if harness in GRANTED_KEYS:
             # The Gemini CLI and Pi sign in with the bot's own key; readiness wants it granted.
             from backend.tests.test_credentials import create, setup
@@ -181,7 +180,8 @@ class Computer:
     def calls(self):
         if not self.log_path.exists():
             return []
-        return [json.loads(line) for line in self.log_path.read_text().splitlines() if line.strip()]
+        # A running fake can be midway through appending its last JSONL record.
+        return [json.loads(line) for line in self.log_path.read_text().split("\n")[:-1] if line.strip()]
 
     def prompts(self):
         return [call for call in self.calls() if "prompt" in call]
@@ -200,6 +200,23 @@ class Computer:
     def keys(self):
         with self.api.app.state.store.read() as c:
             return {r[0] for r in c.execute("SELECT key FROM idempotency")}
+
+
+def test_live_call_log_waits_for_complete_records(tmp_path):
+    computer = Computer.__new__(Computer)
+    computer.log_path = tmp_path / "harness.jsonl"
+    started = {"method": "turn/start", "turn": "first"}
+    completed = {"method": "turn/completed", "turn": "first"}
+    tail = json.dumps(completed)
+    computer.log_path.write_text(json.dumps(started) + "\n" + tail[:-2])
+    assert computer.calls() == [started]
+    with computer.log_path.open("a") as log:
+        log.write(tail[-2:] + "\n")
+    assert computer.calls() == [started, completed]
+    with computer.log_path.open("a") as log:
+        log.write("not JSON\n")
+    with pytest.raises(json.JSONDecodeError):
+        computer.calls()
 
 
 @pytest.fixture(params=["claude", "codex", "gemini", "antigravity", "musecode", "pi", "cursor", "grok"])
@@ -278,7 +295,7 @@ def test_native_packet_runs_in_private_workspace_and_delivers_without_parent_tur
         assert "Do not send to the child." not in call["prompt"] and "Outside text must not reach the child." not in call["prompt"]
     assert row["cost_usd"] > 0
     with api.app.state.store.read() as c:
-        assert c.execute('SELECT output_tokens FROM turns WHERE task_id=?', (row['check_task_id'],)).fetchone()[0] == 4, "both provider turns count toward pilot spend"
+        assert c.execute('SELECT output_tokens FROM attempts WHERE task_id=?', (row['check_task_id'],)).fetchone()[0] == 4, "both provider turns count toward pilot spend"
         assert H.task(c, row["parent_task_id"])["status"] == H.task(c, row["check_task_id"])["status"] == "closed"
         assert c.execute("SELECT count(*) FROM memory_tidy_cards WHERE pass_id=?", (row["id"],)).fetchone()[0] == 1
         assets = c.execute("SELECT blob_id FROM task_assets WHERE task_id=?", (row["check_task_id"],)).fetchall()
@@ -294,7 +311,7 @@ def add_bot(api, computer, tmp_path, slug, bot=None):
     config = {"name": slug, "runtime": computer.runtime, "harness": computer.harness, "model": MODELS[computer.harness],
               "status": "active", **(bot or {})}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(config), slug))
+        BS.write(c, slug, config)
     repo = tmp_path / "projects" / f"bot-{slug}"
     repo.mkdir(parents=True)
     (repo / "AGENT.md").write_text(f"# {slug.title()}\n\nAnswer the Acme team.\n")
@@ -1268,9 +1285,7 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
     git(base, "remote", "set-url", "origin", "https://github.com/org/product.git")
     git(base, "worktree", "add", "-q", "-b", "tico/feature", str(projects / "work" / "product"))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                  (encode({"name": "ops", "runtime": computer.harness, "model": MODELS[computer.harness],
-                           "status": "active", "session": "task"}),))
+        BS.write(c, 'ops', {'name': 'ops', 'runtime': computer.harness, 'model': MODELS[computer.harness], 'status': 'active', 'session': 'task'})
     computer.start()
 
     task = post(api, "tasks", {"owner": "ops", "title": "Build product", "body": "Please build the product."})
@@ -1283,8 +1298,7 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
     def certified():
         # Each config change is a full readiness pass, which inspects the computer's worktrees.
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config=json_set(config,'$.touched',?) WHERE bot='ops'",
-                      (time.monotonic(),))
+            BS.update(c, 'ops', {'touched': time.monotonic()})
             row = c.execute("SELECT state, detail FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
         time.sleep(0.5)
         return row["state"] == "present" and json.loads(row["detail"])["checkout_state"] == "ready"

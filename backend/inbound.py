@@ -185,7 +185,7 @@ class Inbound:
 
     def remote(self, method, path, body=None):
         if self.off:
-            raise Problem('inbound_unconfigured','Email & Phone is not connected. Ask your owner to set it up.',409)
+            raise Problem('inbound_unconfigured','Tico addresses and numbers are not connected. Ask your owner to set them up in Tools > Settings > Email.',409)
         try:
             with httpx.Client(transport=TRANSPORT,timeout=35,follow_redirects=False,verify=outbound_tls.context()) as client:
                 response = client.request(method,self.url+'/v1/inbound/'+path,json=body,
@@ -206,7 +206,7 @@ class Inbound:
                     raise ValueError('oversized_delivery')
                 return response.json()
         except (httpx.HTTPError,ValueError,KeyError):
-            raise Problem('inbound_unavailable','Email & Phone did not answer. Please retry.',503) from None
+            raise Problem('inbound_unavailable','Tico addresses and numbers did not answer. Please retry.',503) from None
 
     def list_inboxes(self, who, after="", limit=100):
         with self.store.read_transaction() as c:
@@ -589,7 +589,11 @@ class Inbound:
 
     async def loop(self,stop):
         while not stop.is_set():
-            try:await asyncio.to_thread(self.tick)
+            # Each pass is one run of Inbound mail (Settings > Routines), on a server whose timers run; a copy with
+            # them off (a rehearsal, the tests) still keeps its retention, unrecorded.
+            from . import system_routines as SR
+            timers = getattr(self.settings,'scheduler_enabled',False) and not getattr(self.settings,'rehearsal',False)
+            try:await (asyncio.to_thread(SR.pass_of,self.store,'inbound_mail',self.tick) if timers else asyncio.to_thread(self.tick))
             except Exception:pass  # stable error code in Settings, never message content or a supplier traceback
             try:await asyncio.wait_for(stop.wait(),15)
             except TimeoutError:pass

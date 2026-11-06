@@ -220,6 +220,8 @@ def save(c, meta, *, transcript=None, notes=None, readable=None):
     MS.snapshot(meta, transcript if transcript is not None else (old or {}).get("transcript_original", ""),
                 notes if notes is not None else (old or {}).get("notes", ""), conn=c, readable=readable)
     control(c, meta["id"])
+    from . import meeting_audience
+    meeting_audience.revoke_saved(c, meta["id"])
     # Typed notes need version history too, including intentionally empty edits.
     c.execute("INSERT OR IGNORE INTO meeting_versions(meeting_id,content_hash,metadata,"
               "transcript_original,transcript_readable,notes,created_at) "
@@ -231,8 +233,17 @@ def may_write(who, record):
     """Only the company owner and the person the source belongs to may change or send it."""
     if record.get("review_state", "live") != "live":
         return MS.filed_for(record, who)
-    return who.role == "owner" or (who.role == "human" and bool(who.email)
-                                   and record["owner"].lower() == who.email.lower())
+    # A meeting saved for its participants only is the recorder's, not the company owner's too.
+    owner = who.role == "owner" and effective_audience(record["metadata"]) != "participants"
+    return owner or (who.role in ("human", "owner") and bool(who.email)
+                     and record["owner"].lower() == who.email.lower())
+
+
+def effective_audience(meta):
+    """The explicit participant restriction wins over a historical private:false flag."""
+    if meta.get("audience") == "participants":
+        return "participants"
+    return "private" if meta.get("private") else "team"
 
 
 def shared_meeting(record, who):
@@ -247,15 +258,21 @@ def shared_meeting(record, who):
         return False
     if meta.get("kind") != "meeting":
         return False
-    if not meta.get("private"):
-        return True
     email = (who.email or "").lower()
+    audience = effective_audience(meta)
+    if audience == "participants":
+        return bool(email) and email in {str(a).strip().lower() for a in meta.get("audience_emails") or []}
+    if audience == "team":
+        return True
     attendees = [*((meta.get("calendar") or {}).get("attendees") or []),
                  *(p.get("email", "") for p in meta.get("participants") or [] if isinstance(p, dict))]
     return bool(email) and any(str(a).strip().lower() == email for a in attendees)
 
 
 def authorized(c, who, rid, *, include_deleted=False, write=False):
+    if who.role == "bot" and not write:
+        from .context_search import readable
+        return readable(c, who, rid)
     record = MS.get(rid, c)
     if not record:
         raise Problem("not_found", "Note or meeting not found", 404)
@@ -271,7 +288,7 @@ def authorized(c, who, rid, *, include_deleted=False, write=False):
     raise Problem("forbidden", "This source belongs to another person", 403)
 
 
-def view(c, who, rid, *, include_transcripts=False):
+def view(c, who, rid, *, auth, include_transcripts=False):
     record = authorized(c, who, rid)
     meta = record["metadata"]
     state = c.execute("SELECT * FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
@@ -283,7 +300,10 @@ def view(c, who, rid, *, include_transcripts=False):
               "version": state["version"] if state else 1, "turns": meta.get("turns", []),
               "can_edit": may_write(who, record)}
     result["outcome"] = note_outcomes.outcome(c, result, who.actor, who.role == "owner")
-    result["outbox"] = outbox(c, rid)
+    result["outbox"] = outbox(c, rid, who, auth)
+    # The live meeting it was filed from holds its chat and attached bots; that read keeps the live meeting's own rules.
+    live = c.execute("SELECT id FROM live_meetings WHERE imported_meeting_id=? AND discarded_at IS NULL", (rid,)).fetchone()
+    result["live_meeting_id"] = live["id"] if live else None
     if include_transcripts:
         result["transcript_sources"] = [{"id": row["id"], "source": row["source"],
             "resource_type": row["resource_type"], "transcript_index": row["transcript_index"],
@@ -299,19 +319,21 @@ def view(c, who, rid, *, include_transcripts=False):
     return result
 
 
-def outbox(c, rid):
+def outbox(c, rid, who, auth):
     """Doc updates, tasks and feature requests still on this meeting — the structured outcomes."""
     groups = {"doc": [], "task": [], "feature": []}
     try:
-        rows = c.execute("SELECT id,section,text,status,result_ref FROM meeting_items WHERE meeting_id=? "
+        rows = c.execute("SELECT * FROM meeting_items WHERE meeting_id=? "
                          "AND status!='dismissed' AND section IN ('doc','task','feature') "
                          "ORDER BY created_at", (rid,)).fetchall()
     except Exception:
         return groups
     for row in rows:
         groups[row["section"]].append({"id": row["id"], "text": row["text"], "status": row["status"],
-                                       "result_ref": row["result_ref"]})
-    return groups
+                                       "result_ref": row["result_ref"],
+                                       **({"proposed_task_id": row["proposed_task_id"]} if "proposed_task_id" in row.keys() else {})})
+    from .meeting_items import redact
+    return redact(c, who, auth, groups)
 
 
 def attachments(c, who, rid, uploads):
@@ -418,10 +440,21 @@ def blob_for(c, auth, who, bid):
     row = c.execute("SELECT * FROM blobs WHERE id=?", (bid,)).fetchone()
     if not row:
         raise Problem("not_found", "File not found", 404)
+    from . import letters
+    letter = letters.blob_access(c, auth, who, bid)
+    if letter is False:
+        raise Problem("forbidden", "You cannot read this letter's source or proof", 403)
+    from .files import file_visible, page_blobs
+    linked_pages = page_blobs(c, bid)
+    if linked_pages:
+        if not all(file_visible(c, auth, who, f, {}) for f in linked_pages):
+            raise Problem("not_found", "File not found", 404)
+    if letter is not None or linked_pages:
+        return row
     from . import task_privacy as privacy
     if not privacy.blob_readable(c, privacy.actor(who), bid):
         raise Problem("not_found", "File not found", 404)
-    # A letter's scan follows the letter's own policy (backend/postal_mail.py), its task's or the owner's alone.
+    # Scan grants are checked for the represented person and the actual bot independently.
     from . import postal_mail
     scan = postal_mail.scan_access(c, auth, who, bid)
     if scan is not None:
@@ -433,6 +466,13 @@ def blob_for(c, auth, who, bid):
     # object below, using the same authorization as its conversation or task.
     allowed = who.role in ("owner", "human") and row["owner"] == who.actor
     if not allowed and who.role in ("owner", "human", "bot"):
+        for linked in c.execute("SELECT meeting_id FROM media_assets WHERE blob_id=?", (bid,)):
+            try:
+                authorized(c, who, linked[0])
+                allowed = True
+                break
+            except Problem:
+                pass
         for linked in c.execute("SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id WHERE a.blob_id=?", (bid,)):
             try:
                 auth.conversation(c, who, linked["conversation_id"])
@@ -558,10 +598,10 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     def question_readable_by(c, who, person, private, parent):
         """The person reads the task a question makes, by every rule a read checks: a company-visible one by the bot's
         activity access; a private one as its other party, given they read the run's private work. A question under a
-        private task with no person on it, from the bot that owns it, makes the person that task's one guest
-        (task_privacy.guest_for); returned for the write to make."""
-        guest = privacy.guest_for(c, who, person, parent) if private else None
-        if private and not privacy.question_party(c, who, person, parent, guest):
+        private task with no person on it, from the bot that owns it, makes the person that task's reader
+        (task_privacy.reach_for); returned for the write to make."""
+        reach = privacy.reach_for(c, who, person, parent) if private else None
+        if private and not privacy.question_party(c, who, person, parent, reach):
             raise question_unreadable(c, person)
         try:
             auth.task_row(c, auth.identity_for_actor(c, person),
@@ -569,7 +609,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                            "private": int(private)})
         except Problem as exc:
             raise question_unreadable(c, person) from exc
-        return guest
+        return reach
 
     def question_text(body, review_text=""):
         """What a task question says, as the org rule check reads it, one output: every line its card and task show
@@ -659,7 +699,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         title = body.title or question
         person, parent = question_checked(c, who, body)
         private = question_private(c, who, body, parent)
-        guest = question_readable_by(c, who, person, private, parent)
+        reach = question_readable_by(c, who, person, private, parent)
         # Files under review (backend/file_reviews.py): versions the person can open, and the options they make. What
         # their card shows is judged with the question.
         review = attachments = None
@@ -677,7 +717,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule)
         said_text = org_rule_check.warned_text(rule, question) if rule else question
-        if guest:
+        if reach:
             H.task_reach(c, who.actor, parent, person)
         topic = H.question_topic(body.topic)
         # One open question per topic: asked again while the first waits, it joins that one (hubdb.fold_question).
@@ -719,7 +759,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 fid, number = files.attach_task(c, who, tid, blob, digest, H.actor_id(who.actor))
                 c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, blob["id"]))
                 c.execute("INSERT INTO blob_media(blob_id,poster_blob_id) VALUES(?,NULL)", (blob["id"],))
-                H._task_event(c, tid, who.actor, "file", None, blob["name"], "")
+                name, data = H.sourced_text(blob["name"], [{"file": fid, "version": number}])
+                H._task_event(c, tid, who.actor, "file", None, name, "", data=data)
                 choice["file"] = f"{fid}@{number}"
             choices.append(choice)
         from .task_review import check_ask
@@ -737,9 +778,22 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         # so Replay can tell a task question from a comment ask (ask_ingest._judged_text).
         ask["task_question"] = True
         if review:
+            # A generated pick label keeps its source even after its review attachment is projected away.
+            if body.pick:
+                sources = {e["label"]: {"file": e["file"], "version": e["version"]} for e in review}
+                for question in ask["questions"]:
+                    for option in question["options"]:
+                        if option["label"] in sources:
+                            option["source"] = sources[option["label"]]
+                from .task_review import default_source
+                default_source(ask)
             ask["review"] = {"files": review, **({"pick": True} if body.pick else {})}
             ask["attachments"] = attachments
         if spend:
+            sources = [o["source"] for q in ask["questions"] for o in q["options"]
+                       if o["label"] == spend["label"] and o.get("source")]
+            if sources:
+                spend["source"] = sources
             ask["spend"] = spend
         gate = None
         if found:
@@ -834,8 +888,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         review_text, review_seal = question_review_preflight(who, body) if rule_check else ("", None)
         rc = rule_check(who, "task_question", question_text(body, review_text),
                         lambda c: [H.resolve_actor(c, body.on)]) if rule_check else None
-        # Ask ingest (backend/ask_ingest.py): judged before the write. Sent back with the filter on, the question is
-        # withdrawn as soon as it is asked and the task does not wait on the person.
+        # Ask ingest (backend/ask_ingest.py): judged before the write. A refused question is
+        # rolled back with its task, attachments and wait.
         with store.read() as c:
             retry = store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
         ingest = None if org_rule_check.holds(rc) or retry else question_ingest(who, body)
@@ -984,6 +1038,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             digest = await asyncio.to_thread(blobs.put, data, content_type)
         def work(c):
             task = comment_rights(c, auth, who, tid)
+            H._writer(c, who.actor, task_id=tid)
             item = register(c, who, digest, size, body.name, content_type)
             bot_actor = next((a for a in (who.actor, task["owner_id"], task["requester_id"]) if H.is_bot(a)), None)
             fid, number = files.attach_task(c, who, tid, item, digest,
@@ -1031,7 +1086,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             else:
                 status = "delayed"
             extra = []
-            from .meeting_importers import IMPORTERS, status_of
+            from .meeting_importers import ERROR_TEXT, IMPORTERS, status_of
             for r in c.execute("SELECT source FROM meeting_importers WHERE enabled=1"):
                 if r["source"] not in IMPORTERS:
                     continue
@@ -1044,7 +1099,10 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                               "last_succeeded_at": health["last_succeeded_at"] if health else None,
                               "last_attempt": detail.get("last_attempt"), "last_import": detail.get("last_import"),
                               "pending": 0, "imported": detail.get("imported_total", 0),
-                              "error_code": detail.get("error_code", "")})
+                              "error_code": detail.get("error_code", ""),
+                              # Why it fails, in words, so the Sources panel can say it to anyone who opens it.
+                              "error": (detail.get("message") or ERROR_TEXT.get(detail.get("error_code") or "", ""))
+                              if detail.get("error_code") else ""})
             return {"sources": [
                 {"id": "import", "name": "Import", "status": "available", "last_succeeded_at": None},
                 {"id": "close", "name": "Close", "status": status,
@@ -1064,7 +1122,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             rows = []
             for r in c.execute("SELECT id FROM meetings ORDER BY created_at DESC"):
                 try:
-                    item = view(c, who, r[0])
+                    item = view(c, who, r[0], auth=auth)
                 except Problem:
                     continue
                 if item["review_state"] != review:
@@ -1077,7 +1135,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     @app.get("/api/meetings/{rid}")
     def read(request: Request, rid: str):
         with store.read() as c:
-            return view(c, request.state.identity, rid, include_transcripts=True)
+            return view(c, request.state.identity, rid, include_transcripts=True, auth=auth)
 
     @app.get("/api/meetings/{rid}/versions")
     def versions(request: Request, rid: str):
@@ -1095,7 +1153,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             meta = new_note(c, request.state.identity, body, uploads)
             if request.url.path == "/api/send":
                 return deliver(c, auth, request.state.identity, meta["id"], Send(bot_id=body.bot_id), [])
-            return view(c, request.state.identity, meta["id"])
+            return view(c, request.state.identity, meta["id"], auth=auth)
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     def writable(who, rid):
@@ -1114,7 +1172,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             meta["attachments"] = meta.get("attachments", []) + attachments(
                 c, request.state.identity, rid, uploads)
             save(c, meta)
-            return view(c, request.state.identity, rid)
+            return view(c, request.state.identity, rid, auth=auth)
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     @app.post("/api/v2/meetings/{rid}/edit")
@@ -1133,9 +1191,12 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 meta["preview"] = body.note[:160]
             if body.private is not None:
                 meta["private"] = bool(body.private)
+                if not body.private:
+                    meta.pop("audience", None)
+                    meta.pop("audience_emails", None)
             save(c, meta)
             c.execute("UPDATE media_control SET version=version+1 WHERE meeting_id=?", (rid,))
-            return view(c, request.state.identity, rid)
+            return view(c, request.state.identity, rid, auth=auth)
         return mutate(request, body, work)
 
     @app.post("/api/meetings/{rid}/send")
@@ -1153,6 +1214,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             authorized(c, request.state.identity, rid, include_deleted=True, write=True)
             control(c, rid)
             c.execute("UPDATE media_control SET deleted_at=coalesce(deleted_at,?),version=version+1 WHERE meeting_id=?", (H.now(), rid))
+            from . import meeting_audience
+            meeting_audience.revoke_saved(c, rid)
+            c.execute("DELETE FROM presences WHERE place=?", ("meeting:" + rid,))
             H.event(c, request.state.identity.actor, "note.deleted", rid, {"recoverable": True})
             return {"ok": True, "recoverable": True}
         return mutate(request, body, work)

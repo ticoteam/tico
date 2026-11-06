@@ -9,11 +9,6 @@ slack_channel: "#marketing"
 reasoning_effort: high
 max_run_minutes: 60
 
-# Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
-# the bot puts the draft on the task and drafts until a person turns mail sending on in Tico. Review invitations stay off even
-# then: they are sent from the product's own email, or by a human, never by this bot.
-outbound_send: false
-
 # The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
 # (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 # One sweep to start with. A midweek pass earns its place once someone has read a month of these.

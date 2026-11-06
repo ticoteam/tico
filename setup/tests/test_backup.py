@@ -67,8 +67,11 @@ def test_the_bucket_is_versioned_encrypted_private_and_expires_old_versions():
     assert s3.called("put_bucket_versioning")[0]["VersioningConfiguration"] == {"Status": "Enabled"}
     assert s3.called("put_bucket_encryption")[0]["ServerSideEncryptionConfiguration"]["Rules"][0]["ApplyServerSideEncryptionByDefault"] == {"SSEAlgorithm": "AES256"}
     assert all(s3.called("put_public_access_block")[0]["PublicAccessBlockConfiguration"].values())
-    (rule,) = s3.called("put_bucket_lifecycle_configuration")[0]["LifecycleConfiguration"]["Rules"]
-    assert rule["NoncurrentVersionExpiration"]["NoncurrentDays"] == 90 and "AbortIncompleteMultipartUpload" in rule
+    rule, litestream = s3.called("put_bucket_lifecycle_configuration")[0]["LifecycleConfiguration"]["Rules"]
+    assert rule["Filter"] == {"Prefix": ""} and rule["NoncurrentVersionExpiration"]["NoncurrentDays"] == 90
+    assert litestream["Filter"] == {"Prefix": "tico/000"} and litestream["NoncurrentVersionExpiration"]["NoncurrentDays"] == 3
+    assert rule["Expiration"] == {"ExpiredObjectDeleteMarker": True}
+    assert rule["AbortIncompleteMultipartUpload"] == {"DaysAfterInitiation": 1}
     assert '"aws:SecureTransport": "false"' in s3.called("put_bucket_policy")[0]["Policy"]
     assert values == {"TICO_BACKUP_URL": "s3://tico-backup-tico-example-com-123456789012/tico", "TICO_BACKUP_REGION": "us-west-2",
                       "LITESTREAM_ACCESS_KEY_ID": "AKIANEW", "LITESTREAM_SECRET_ACCESS_KEY": "s3cr3t"}

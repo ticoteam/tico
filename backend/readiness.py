@@ -25,12 +25,13 @@ Callers refuse only on can_run False; None never blocks.
 from . import models_preset, read_cache
 from .harnesses import EXTERNAL_HARNESSES, bot_key, harness_caps, resolve_harness, runtime_of
 from .store import H, readiness_document
+from . import bot_settings as BS
 
 ONLINE_SECONDS = 60
 SIGNED_OUT = ("missing", "failed", "rejected")
 
 
-CONFIG_SQL = "SELECT config FROM bot_config WHERE bot=?"
+CONFIG_SQL = BS.ONE_SQL
 # One computer's row, and the row of the computer a bot is on: read through read_cache, so a page that judges the same
 # bot for many harnesses and moves (backend/health.py runtime_choice) reads each once per snapshot, not once per check.
 RUNNER_SQL = "SELECT id,label,last_seen_at,revoked_at,readiness,capabilities FROM runners_with_state WHERE id=?"
@@ -188,7 +189,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
     if name:
         if name not in _held(c, bot):
             return verdict(False, "This bot has no " + name + " Credential", "Give the bot the " + name +
-                           " Credential in Credentials", "#/credentials")
+                           " Credential in Tools > Keys", "#/tools/keys?show=credentials")
         return verdict(True)
     # A company subscription given to this computer for the runtime signs its CLI turns in, whatever the computer's own
     # login says (backend/model_subscriptions.py). An older runner is never given one (in_effect), so nothing changes

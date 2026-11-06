@@ -5,7 +5,7 @@ import pytest
 
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_task_guest import dry_run, refused, run_on, subtask, task
+from backend.tests.test_task_readers import dry_run, refused, run_on, subtask, task
 from backend.tests.test_tasks_board import bot_token
 
 REPAIR = {"title": "Fix the upload refusal order", "body": "Check the chat setting before writing the upload bytes; "
@@ -139,14 +139,14 @@ def test_done_wakes_the_parents_owner_and_no_words_reach_its_requester(api):
     assert not any("checked the setting first" in r["body"] for r in jobs["cpo"]), jobs["cpo"]
 
 
-@pytest.mark.parametrize("on", ["requester", "guest"])
+@pytest.mark.parametrize("on", ["requester", "reader"])
 def test_a_private_task_with_a_person_on_it_names_them_and_the_route(api, on):
     if on == "requester":
         row = task(api, "human:cara", "bot:ops", "Cara's vendor dispute")
     else:
         row = task(api, "bot:cpo", "bot:ops", "Zip triage")
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE tasks SET guest='human:cara' WHERE id=?", (row["id"],))
+            c.execute("UPDATE tasks SET readers=json_array('human:cara') WHERE id=?", (row["id"],))
     attempt = run_on(api)
     body = repair(row["id"])
     words = refused(api, body, attempt["token"])

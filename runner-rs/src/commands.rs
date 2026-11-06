@@ -37,8 +37,9 @@ pub async fn enroll(config_path: &Path, url: &str, code_file: &Path, label: &str
         .cloned()
         .ok_or_else(|| failed(format!("{} has no code", code_file.display())))?;
     let client = Client::new(url, "", 15, 3).map_err(failed)?;
-    let body = json!({"code": code, "label": label, "platform": crate::runner::platform()});
-    let result = client.post("runners/enroll", &body, None).await.map_err(|e| failed(crate::runner::describe(&e)))?;
+    let mut body = json!({"code": code, "label": label, "platform": crate::runner::platform()});
+    crate::device_id::report(&mut body);
+    let result = enroll_request(&client, body).await.map_err(|e| failed(crate::runner::describe(&e)))?;
     let Value::Object(mut data) = result else { return Err(failed("Tico returned an invalid enrollment".into())) };
     data.insert("url".into(), json!(url));
     let projects = projects.canonicalize().or_else(|_| std::path::absolute(projects)).unwrap_or_else(|_| projects.to_path_buf());
@@ -61,6 +62,18 @@ pub async fn enroll(config_path: &Path, url: &str, code_file: &Path, label: &str
     let config = Config { path: config_path.to_path_buf(), data };
     crate::mail_key::carry_protected(&config);
     Ok(json!({"runner_id": config.data.get("runner_id").cloned().unwrap_or(Value::Null), "config": config_path.to_string_lossy(), "operator": config.data.get("operator").cloned().unwrap_or(Value::Null)}))
+}
+
+async fn enroll_request(client: &Client, mut body: Value) -> Result<Value, crate::client::ApiError> {
+    match client.post("runners/enroll", &body, None).await {
+        // Runners and servers update independently. An older server can learn the identity from a later check-in.
+        Err(e) if e.status == 422 && body.get("device_id").is_some()
+            && e.detail.contains("body.device_id") && e.detail.to_lowercase().contains("extra") => {
+            body.as_object_mut().unwrap().remove("device_id");
+            client.post("runners/enroll", &body, None).await
+        }
+        other => other,
+    }
 }
 
 /// `adopt --team T | --bot B...`: move the matching eligible bots to this computer, each at the generation the
@@ -206,10 +219,27 @@ mod tests {
         assert_eq!(saved["environment"], "env1");
         assert_eq!(saved["projects_dir"], json!(dir.canonicalize().unwrap().to_string_lossy()));
         assert!(seen.lock().unwrap()[0].contains(r#""code":"abc""#));
+        let request: Value = serde_json::from_str(seen.lock().unwrap()[0].splitn(3, ' ').nth(2).unwrap()).unwrap();
+        assert_eq!(request.get("device_id"), crate::device_id::get().as_ref().map(|id| json!(id)).as_ref());
         let again = enroll(&config, &url, &dir.join("code.json"), "Mac", &dir, "").await.unwrap_err();
         assert_eq!(again.0, 2);
         assert_eq!(seen.lock().unwrap().len(), 1, "no second enrollment request");
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn device_id_is_optional_when_enrolling_with_an_older_server() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (422, r#"{"error":{"code":"validation","detail":"body.device_id: Extra inputs are not permitted"}}"#),
+            (200, r#"{"runner_id":"r9","token":"t","operator":"u1"}"#),
+        ]).await;
+        let client = Client::new(&url, "", 5, 0).unwrap();
+        let result = enroll_request(&client, json!({"code": "abc", "label": "Mac", "platform": "darwin", "device_id": "a".repeat(64)})).await.unwrap();
+        assert_eq!(result["runner_id"], "r9");
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].contains("device_id"));
+        assert!(!seen[1].contains("device_id"));
+        assert!(seen[1].contains(r#""code":"abc""#));
     }
 
     #[tokio::test]
@@ -231,7 +261,7 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
-    /// The keys scripts/tico `summarize` reads, and not ready (exit 1) for a bot with no checkout, which is also
+    /// The keys scripts/tico-computer `summarize` reads, and not ready (exit 1) for a bot with no checkout, which is also
     /// how an unsupported harness shows: a problem on that bot's row, not a refusal to start.
     #[tokio::test]
     async fn doctor_reports_the_summarized_keys_and_a_bot_that_is_not_ready() {

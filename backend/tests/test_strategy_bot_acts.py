@@ -11,6 +11,8 @@ from backend.tests.test_strategy_bot_level import level
 from backend.tests.test_strategy_bot_suggests import bot_task
 from backend.tests.test_company import bot, with_strategy_bot
 from backend.tests.test_kpis import goal_with_kpi
+from backend import bot_settings as BS
+from backend import mailbox_access
 
 OWNER, STRATEGY_BOT = "human:ana", "bot:goal-manager"
 
@@ -53,7 +55,7 @@ def test_at_level_3_one_decision_changes_bot_tasks_under_one_action_id_and_the_o
     assert task(api, first)["owner_id"] == "bot:finance" and task(api, stale)["status"] == "closed"
     new = made["done"][0]["task_id"]
     with api.app.state.store.read() as c:
-        stamped = {r[0] for r in c.execute("SELECT DISTINCT task_id FROM task_events WHERE action_id=?", (made["id"],))}
+        stamped = {r[0] for r in c.execute("SELECT DISTINCT subject_id AS task_id FROM history_events WHERE subject_type='task' AND action_id=?", (made["id"],))}
     assert {first, second, stale} <= stamped
 
     log = get(api, "strategy-bot/log")
@@ -111,6 +113,9 @@ def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_ins
     goal, kpi = goal_with_kpi(api)
     with api.app.state.store.transaction() as c:          # a task it asked for, so it may otherwise change it
         mine = H.task_create(c, STRATEGY_BOT, "Write the onboarding email", "Work it.", "bot:ops", lint=False)["id"]
+        # Ana gave it her calendar (Read and write on her mailbox), so the invitation reaches the owner's list.
+        mailbox_access.give(c, mailbox_access.ensure_mailbox(c, "ana@acme.example"), "bot", STRATEGY_BOT[4:],
+                            "read_write", "person:ana")
     tries = [
         ("cost", "bots/ops/model", {"model": "opus", "expected_revision": 1}),
         ("publish", "tasks", {"title": "Share the roadmap", "body": "Publish it.", "owner": "bot:ops",
@@ -189,7 +194,7 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
         H.task_update(c, OWNER, back, rank=-60, mover=True)                        # ...and away and back
         H.task_update(c, OWNER, back, rank=decided, mover=True)
         H.task_update(c, OWNER, new, owner=OWNER, status="doing", mover=True)      # a person takes on what it made
-        c.execute("UPDATE bot_config SET config=? WHERE bot='coo'", ('{"harness": "dots"}',))
+        BS.write(c, 'coo', {'harness': 'dots'})
     held = task(api, ticket)["version"]
     post(api, f"strategy-bot/log/{made['id']}/undo", {}, token="ben-test", expected=403)        # an admin doesn't undo
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
@@ -289,9 +294,8 @@ def test_a_decision_never_makes_a_task_private_and_undo_puts_back_one_made_priva
         bot(api, slug)
     level(api, 3)
     with api.app.state.store.transaction() as c:
-        config = H._json(c.execute("SELECT config FROM bot_config WHERE bot='finance'").fetchone()[0], {})
-        c.execute("UPDATE bot_config SET config=? WHERE bot='finance'",
-                  (encode({**config, "private_tasks_default": True}), ))
+        config = H._json(c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='finance'").fetchone()[0], {})
+        BS.write(c, 'finance', {**config, 'private_tasks_default': True})
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
     held = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "finance"}])
     assert held["state"] == "proposed" and "keeps its tasks private" in held["left"][0]["why"]
@@ -316,9 +320,8 @@ def test_a_decision_never_creates_a_task_for_a_bot_that_keeps_its_tasks_private(
     bot(api, "finance")
     level(api, 3)
     with api.app.state.store.transaction() as c:
-        config = H._json(c.execute("SELECT config FROM bot_config WHERE bot='finance'").fetchone()[0], {})
-        c.execute("UPDATE bot_config SET config=? WHERE bot='finance'",
-                  (encode({**config, "private_tasks_default": True}), ))
+        config = H._json(c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='finance'").fetchone()[0], {})
+        BS.write(c, 'finance', {**config, 'private_tasks_default': True})
     held = decide(api, strategy_token, [{"do": "create", "owner": "finance", "title": "Review the vendor contract"}])
     assert held["state"] == "proposed" and not held["done"]
     assert "keeps its tasks private" in held["left"][0]["why"]
@@ -392,8 +395,8 @@ def test_the_log_pages_through_entries_made_in_the_same_instant(api):
     assert sorted(seen) == [f"a{n:02d}" for n in range(53)] and len(seen) == len(set(seen))
 
 
-def test_undo_keeps_a_guest_given_the_task_since_and_says_why_its_owner_stays(api):
-    """A new owner drops a task's guest, so a reassign whose task has a guest now keeps its owner, and Undo says so."""
+def test_undo_puts_the_owner_back_and_keeps_readers_given_the_task_since(api):
+    """Readers survive a new owner, so Undo gives the task back to its owner and the readers stay."""
     strategy_token = with_strategy_bot(api)
     for slug in ("ops", "coo"):
         bot(api, slug)
@@ -401,11 +404,10 @@ def test_undo_keeps_a_guest_given_the_task_since_and_says_why_its_owner_stays(ap
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
     made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "coo"}])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1, visibility='private', guest='human:ben' WHERE id=?", (work,))
+        c.execute("""UPDATE tasks SET private=1, visibility='private', readers=json_array('human:ben') WHERE id=?""", (work,))
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
     after = task(api, work)
-    assert after["owner_id"] == "bot:coo" and after["guest"] == "human:ben"
-    assert "has a guest now, so its owner stays" in undone["undo"]["text"], undone["undo"]["text"]
+    assert after["owner_id"] == "bot:ops" and H.task_readers(after) == ["human:ben"], (after, undone["undo"])
 
 
 def test_a_decision_never_touches_a_company_task_hidden_from_the_strategy_bot_by_its_bots_access(api):

@@ -1,6 +1,6 @@
 // The redesign's shell (ui/app/redesign.js, ui/app/strategy-budget.js) against fixtures shaped per the redesign CONTRACT
 // (fixtures/redesign-*.json, the Acme example): the sidebar's order, helpers off the Team list, old addresses
-// redirected, Settings with its System tab and no design switch, the Strategy tabs with no Strategy Bot
+// redirected (System's to Automations' System jobs), Settings with no design switch, the Strategy tabs with no Strategy Bot
 // beside them (it is a helper of the Assistant; Ask is the way in), the Budget tab drawing (its tree and edits are
 // strategy-budget.cjs), a task cap's 409 read as its message, and no "CEO Bot" anywhere. Phone first (390×844), then desktop.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots.
@@ -19,7 +19,7 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
 const shot = async (page, name) => { if (shots) await page.screenshot({animations: 'disabled', path: path.join(shots, `redesign-${name}.png`)}); };
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
-const PHONE_BAR = ['Team', 'Search', 'Ask Tico', 'Tasks', 'Updates', 'More'];   // Ask Tico: the Liquid Dot in the centre slot
+const PHONE_BAR = ['Team', 'Search', 'Assistant', 'Tasks', 'Updates', 'More'];   // Assistant: the Liquid Dot in the centre slot
 // The sliding current-row bar (motion.js .nav-ind) is decoration, not a rail entry.
 const railKeys = page => page.$$eval('#side .side-scroll > :not(.nav-ind)', els => els.map(el =>
   el.dataset.nav || (el.classList.contains('nav-row') && el.querySelector(':scope > [data-nav]')?.dataset.nav) || el.id || el.className.split(' ')[0]));
@@ -29,7 +29,7 @@ const shownRail = page => page.$$eval('#side .side-scroll a.nav-link, #side .sid
     return c.textContent.replace(/\s+/g, ' ').trim();
   }));
 
-async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay = 0} = {}) {
+async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay = 0, messageBot = false} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
   const errors = [], sent = [], goals = {asked: 0};
   page.on('pageerror', e => errors.push(e.message));
@@ -45,6 +45,17 @@ async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay 
     });
   });
   const config = {};
+  const employees = [...roster.employees], humans = structuredClone(roster.humans);
+  const messaging = {bots: []};
+  if (messageBot) {
+    employees.push(
+      {name: 'counsel', display_name: 'Counsel', reports_to: 'eng-lead', org_parent: 'b:eng-lead', team: 'eng', status: 'active', can_chat: true},
+      {name: 'tico-counsel', display_name: 'Built-in Counsel', org_parent: 'b:eng-lead', status: 'active'},
+    );
+    humans.people.push({id: 'legal-mailbox', name: 'Legal mailbox', email: 'legal@acme.example', inbox_bot: 'counsel', org_parent: ''});
+    messaging.bots.push({bot: 'counsel', name: 'Counsel', sources: [{kind: 'slack', id: 'slack:CLEGAL', name: '#legal'}]},
+      {bot: 'builder', name: 'Builder', sources: [{kind: 'slack', id: 'slack:CBUILD', name: '#build'}]});
+  }
   await page.route('**/*', async r => {
     const req = r.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => r.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -55,9 +66,10 @@ async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay 
     if (p === '/api/v2/events') return;
     if (method !== 'GET') sent.push([method, p + url.search, req.postData() ? req.postDataJSON() : null]);
     if (p === '/api/v2/config') return json(config);
-    if (p === '/api/employees') return json(roster.employees);
+    if (p === '/api/employees') return json(employees);
     if (p === '/api/me') return json({id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true, config});
-    if (p === '/api/humans') return json(roster.humans);
+    if (p === '/api/humans') return json(humans);
+    if (p === '/api/v2/messaging/bots') return json(messaging);
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/goals/tree') goals.asked++;
@@ -86,14 +98,55 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
+    // A custom mailbox bot is an employee: keep its reporting line and nest its sources beneath it on both widths.
+    for (const [tag, viewport] of [['phone', PHONE], ['desktop', DESKTOP]]) {
+      const {page, errors} = await open(browser, {viewport, messageBot: true});
+      if (tag === 'phone') await page.locator('#mobile-more').click();
+      await page.locator('#tree [data-toggle="b:eng-lead"]').click();
+      const counsel = page.locator('#tree [data-org="b:counsel"]');
+      await counsel.waitFor({state: 'visible'});
+      const manager = page.locator('#tree [data-org="b:eng-lead"]').locator('xpath=ancestor::li[1]');
+      assert.equal(await manager.locator(':scope > ul > li > .noderow > [data-org="b:counsel"]').count(), 1, tag + ': Counsel reports to its manager');
+      assert.equal(await counsel.getAttribute('data-helper'), null, tag + ': reading mail does not make Counsel a helper');
+      const sources = counsel.locator('xpath=ancestor::li[1]').locator(':scope > .node-sources');
+      await sources.getByText('#legal', {exact: true}).waitFor();
+      assert.deepEqual(await sources.locator('a').allTextContents().then(rows => rows.map(s => s.replace(/^mail/, '').trim())),
+        ['legal@acme.example', '#legal'], tag + ': mailbox and channel nest under Counsel');
+      assert.equal(await sources.locator('a').first().getAttribute('href'), '#/messaging?bot=counsel&source=email%3Alegal%40acme.example');
+      assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': sources are not duplicated in a separate section');
+      assert.equal(await page.locator('#tree a[href*="slack%3ACBUILD"]').count(), 0, tag + ': other chart bots keep Slack in Tools');
+      for (const helper of ['botops', 'tico-counsel', 'mail-sorter'])
+        assert.equal(await page.locator(`#tree [data-org="b:${helper}"]`).count(), 0, tag + ': built-in and explicit helpers stay off Team');
+      assert.deepEqual(await page.evaluate(() => ({
+        recruiting: recruitPlaces().some(([id]) => id === 'counsel'),
+        audience: cpSourceChoices().some(([id]) => id === 'counsel'),
+        financeHelper: finHelper('bot:counsel'),
+        budgetParent: budgetTree({bots: {}}).nodes.get('bot:counsel')?.parent.key,
+      })), {recruiting: true, audience: true, financeHelper: false, budgetParent: 'bot:eng-lead'}, tag + ': chart pickers and spending keep Counsel on the team');
+      await page.evaluate(() => { location.hash = '#/strategy/org'; });
+      await page.locator('.rd-org [data-rdo-ref="bot:counsel"]').waitFor();
+      assert.equal(await page.locator('.rd-org [data-rdo-ref="bot:tico-counsel"]').count(), 0);
+      await page.evaluate(() => { location.hash = '#/strategy/goals'; });
+      await page.locator('#goal-tree [data-owner="bot:counsel"]').waitFor();
+      assert.equal(await page.locator('#goal-tree [data-owner="bot:tico-counsel"]').count(), 0);
+      // Removing the manager leaves the bot at the root, still with its mailbox beneath it.
+      await page.evaluate(() => {
+        const bot = botRow('counsel'); bot.reports_to = ''; bot.org_parent = ''; bot.team = ''; renderTree();
+      });
+      assert.equal(await page.locator('#tree > li > .noderow > [data-org="b:counsel"]').count(), 1, tag + ': no manager means top level');
+      assert.equal(await counsel.locator('xpath=ancestor::li[1]').locator(':scope > .node-sources a').count(), 2);
+      assert.deepEqual(errors, [], tag + ': no page errors with a custom message bot');
+      await page.close();
+    }
+
     // Phone first: the rail, old addresses redirected, the Strategy tabs with no Strategy Bot.
     {
       const tag = 'phone';
       // The goals tree answers slowly: #/goals/g-1 is left before it arrives, as a person tapping on would.
       const {page, errors, goals} = await open(browser, {goalsDelay: 400});
       await page.locator('#tree li').first().waitFor();
-      assert.deepEqual(await railKeys(page), ['side-update', 'overview', 'welcome', 'strategy', 'growth', 'updates', 'tasks', 'automations',
-        'library', 'rd-lib', 'rules', 'rd-rules', 'nav-pins', 'nav-inbox-section',
+      assert.deepEqual(await railKeys(page), ['side-update', 'overview', 'rd-co', 'welcome', 'updates', 'tasks', 'automations', 'tools',
+        'library', 'rd-lib', 'rules', 'rd-rules', 'nav-pins', 'threads',
         'side-section', 'nav-inboxes-section'], tag + ': the order');
       assert.equal(await page.getAttribute('a[data-nav="automations"]', 'href'), '#/automations', tag + ': Automations');
       for (const helper of ['b:mail-sorter', 'b:botops', 'b:librarian'])
@@ -145,7 +198,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       const {page, errors} = await open(browser, {viewport: DESKTOP, route: '#/strategy/budget'});
       await page.locator('[data-bt-open="bot:builder"]').waitFor();
       const shown = await shownRail(page);
-      assert.deepEqual(shown, ['Overview', 'Strategy', 'Growth', 'Updates', 'Tasks', 'Automations', 'Library', 'Docs', 'Files', 'Meetings', 'Tools', 'Connections', 'Rules'], tag + ': the rail, with no Strategy Bot entry');
+      assert.deepEqual(shown, ['Company', 'Strategy', 'Growth', 'Updates', 'Tasks', 'Automations', 'Tools', 'Library', 'Docs', 'Files', 'Meetings', 'Rules'], tag + ': the rail, with no Strategy Bot entry');
       assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0, tag + ': the Strategy Bot is off the Team list');
       assert.ok(!shown.includes('Goals'), tag + ': Goals left the rail');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': Message bots hidden');
@@ -153,6 +206,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       assert.equal(await page.locator('#sbot, #sbot-fab').count(), 0, tag + ': no Strategy Bot rail');
       assert.equal(await page.locator('#main').evaluate(el => el.classList.contains('sbot-open')), false);
       await shot(page, 'desktop-budget');
+      if (shots) { await page.evaluate(() => window.ticoTheme.set('light')); await shot(page, 'desktop-budget-light'); await page.evaluate(() => window.ticoTheme.set('dark')); }
 
       // A task cap's 409: the message is what a person reads, in a toast's words and in the bot's chat.
       const said = await page.evaluate(() => post('/v2/tasks', {title: 'Check the Acme release'}).then(() => '', e => e.message));
@@ -184,11 +238,12 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       await shot(page, 'desktop-settings');
       for (const old of ['#/settings/rules', '#/settings/routines', '#/settings/recurring']) {
         await page.evaluate(h => { location.hash = h; }, old);
-        assert.ok(await hashSoon(page, '#/settings/system'), `${tag}: ${old} lands on System`);
+        assert.ok(await hashSoon(page, '#/automations/system-jobs'), `${tag}: ${old} lands on System jobs`);
       }
-      assert.equal(await page.locator('[data-settings-tab="system"][aria-selected="true"], [data-settings-tab="system"].cur, [data-settings-tab="system"][aria-current]').count(), 1, tag + ': System is the tab shown');
-      assert.equal(await page.locator('#settings-system #set-rules-card, #settings-system [data-bot-routines]').count(), 0, tag + ': no wake rules or bot routines');
-      await shot(page, 'desktop-settings-system');
+      assert.equal(await page.locator('[data-settings-tab="system"]').count(), 0, tag + ': no System tab');
+      await page.locator('#set-system-routines').waitFor();
+      assert.equal(await page.locator('#set-rules-card, [data-bot-routines]').count(), 0, tag + ': no wake rules or bot routines');
+      await shot(page, 'desktop-automations-system-jobs');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }

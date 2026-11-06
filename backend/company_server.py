@@ -71,6 +71,8 @@ ERRORS = {
     "rate_limited": (429, "Too many tries. Wait a few minutes and try again."),
 }
 COMPANY_NAME_MAX = 100
+PORTAL_HOME = "https://app.tico.dev/"
+TICO_ISSUERS = ("https://accounts.tico.dev", "https://accounts.tico.team")
 SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 WORKSPACE = re.compile(r"[A-Za-z0-9_-]{1,100}")
 SERVER_KEY = re.compile(r"tsk_[A-Za-z0-9_-]{16,200}")
@@ -138,6 +140,32 @@ def view(c):
         return {"company": None}
     return {k: record.get(k) for k in ("company", "workspace_id", "portal_url", "credit", "checked", "heartbeat",
                                        "connected_at")}
+
+
+def administration_url(c, settings):
+    """The account portal, using only local configuration: opening the menu never asks HQ."""
+    if off(settings):
+        return ""
+    record = _row(c)
+    if record.get("key"):
+        return _admin_destination(record.get("portal_url"))
+    from . import cloud_access
+    cloud = cloud_access.state(c)
+    if cloud:
+        return _admin_destination(cloud.get("billing_url"))
+    # Hosting alone says nothing about a portal account; the configured Tico issuer does.
+    tico_signin = (settings.proxy_kind == "oidc" and settings.oidc_client_id
+                   and settings.oidc_issuer.rstrip("/") in TICO_ISSUERS)
+    return PORTAL_HOME if tico_signin else ""
+
+
+def _admin_destination(value):
+    """A page on the portal itself, path only: a custom Gateway can name any https address, and a query or fragment
+    could carry a token, so anything else is the portal home."""
+    parsed = urlparse(value) if isinstance(value, str) and _text(value, 2048) else None
+    if not parsed or parsed.scheme != "https" or parsed.netloc != urlparse(PORTAL_HOME).netloc:
+        return PORTAL_HOME
+    return f"{PORTAL_HOME.rstrip('/')}{parsed.path or '/'}"
 
 
 def manager(auth, who):

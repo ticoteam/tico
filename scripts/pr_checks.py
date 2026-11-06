@@ -20,6 +20,11 @@ UI_MAP = {"ui/app/chat.js": ["chat", "imported-history"],
           "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
           "ui/app/visual-media.js": ["visual-media", "visual-media-app"]}
 CONFORMANCE = "runner_support/tests/test_conformance.py"
+# These release contracts are marked slow and absent from default collection. Run them together on a separate VM:
+# recorded release times are CLI 108s, MCP 34s and goldens 3s; four workers keep it below the 180s job target with setup.
+CONTRACT_TESTS = ("backend/tests/test_e2e_mcp.py", "backend/tests/test_e2e_cli.py", "e2e/tests/test_contract.py")
+CONTRACT_INPUTS = ("backend/", "clients/", "e2e/", "templates/", "skills/", "roles/", "company/", "companies/",
+                   "company.yaml", "employees.yaml", "roles.yaml")
 # Each crate's `cargo test --locked` runs in the conformance job when any of its test inputs change:
 # runner-rs tests read runner_support/ and runner/ (the Python helpers they compare against: source_id, the redactor)
 # and the backend's gateway enroll contract fixture, which gateway_relay's tests check the runner against, and the runner wire
@@ -32,10 +37,16 @@ CHANGELOG_REFUSAL = ("No PR edits CHANGELOG.md; the Technical Writer writes note
 RELEASE_TRAILER = re.compile(r"^Changelog-Release:[ \t]*v?(\d+\.\d+\.\d+)[ \t]*$", re.M)
 # Each check VM has 4 vCPUs and runs 4 test workers. Groups are sized so a VM finishes in about
 # TICO_CI_JOB_SECONDS, setup included: short Spot jobs are rarely interrupted and lose little when one is.
+# The cap only guards against a runaway plan. At 16 it held the suite to 16 VMs once the measured default suite grew
+# past 16 x 540 s (Oct 23: 3,300 one-worker seconds; Nov 5: 39,900), so every full run's shards took 11-14 minutes.
 WORKERS = 4
 JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 180))
 SETUP_SECONDS = {"python": 45, "browser": 70}  # measured boot, checkout and warm install
-MAX_JOBS = 16
+MAX_JOBS = int(os.environ.get("TICO_CI_MAX_JOBS", 64))
+# Python jobs pass the release gate's own flags: restore a worker-local schema snapshot instead of migrating a fresh
+# database for every API test (about half of each file's time), and hand out at most two tests at a time so expensive
+# tests spread across the workers.
+PYTEST_FLAGS = ("--api-database-snapshots", "--maxschedchunk=2")
 UNTIMED_SCRIPT_SECONDS = 20  # a browser script with no measured time yet
 
 
@@ -84,6 +95,11 @@ def is_test(name):
     """A file pytest collects by name (pytest's default python_files); prepare() keeps the ones in the default run."""
     base = Path(name).name
     return base.endswith(".py") and (base.startswith("test_") or base.endswith("_test.py"))
+
+
+def is_check(name):
+    """A Python test file or a browser script (ui/tests/*.cjs)."""
+    return is_test(name) or (str(Path(name).parent) == "ui/tests" and name.endswith(".cjs"))
 
 
 def dotted_name(node):
@@ -163,14 +179,17 @@ class DependencyMap:
                 except (OSError, SyntaxError, ValueError):
                     self.unparsed.add(path)
                     self.everything.add(path)
+        # One breadth-first pass per tree (ast.walk's order) feeds every scan: walking each tree once per scan was
+        # most of the map's build time, which every PR's plan pays and the selector's tests pay once per worker.
+        walked = {path: self.walk(tree) for path, tree in trees.items()}
         # Top-level names imported through sys.path (`import hubcli` with clients/ on the path).
-        self.bare = {a.name.split(".")[0] for tree in trees.values() for node in ast.walk(tree)
+        self.bare = {a.name.split(".")[0] for nodes, _ in walked.values() for node in nodes
                      if isinstance(node, ast.Import) for a in node.names}
-        self.bare |= {node.module.split(".")[0] for tree in trees.values() for node in ast.walk(tree)
+        self.bare |= {node.module.split(".")[0] for nodes, _ in walked.values() for node in nodes
                       if isinstance(node, ast.ImportFrom) and not node.level and node.module}
         self.bare = {name for name in self.bare - set(self.modules) if any(m.endswith("." + name) for m in self.modules)}
         for path, tree in trees.items():
-            self.python(path, tree)
+            self.python(path, tree, walked.pop(path))
         for path in self.files:
             if Path(path).suffix in CODE - {".py"} or (not Path(path).suffix and self.shebang(path)):
                 self.text(path)
@@ -179,6 +198,16 @@ class DependencyMap:
             for path, targets in edges.items():
                 for target in targets - {path}:
                     reverse[target].add(path)
+
+    @staticmethod
+    def walk(tree):
+        """Every node, in ast.walk's order, and each node's parent by id."""
+        nodes, parents = [tree], {}
+        for node in nodes:
+            for child in ast.iter_child_nodes(node):
+                parents[id(child)] = node
+                nodes.append(child)
+        return nodes, parents
 
     def shebang(self, path):
         try:
@@ -282,17 +311,18 @@ class DependencyMap:
                 for token in TOKEN.findall(text):
                     self.path(token, runs, reads, bare_word=True)
 
-    def python(self, path, tree):
+    def python(self, path, tree, walked):
         runs, reads, names = set(), set(), set()
         package = path.split("/")[:-1]
+        nodes, parents = walked
         self.consts = {}
         for statement in tree.body:
             if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name) \
                     and isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
                 self.consts[statement.targets[0].id] = statement.value.value
-        bodies = [tree.body] + [n.body for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+        bodies = [tree.body] + [n.body for n in nodes if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
         docstrings = {id(b[0].value) for b in bodies if b and isinstance(b[0], ast.Expr) and isinstance(b[0].value, ast.Constant)}
-        nested = {id(n.left) for n in ast.walk(tree) if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div)}
+        nested = {id(n.left) for n in nodes if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div)}
         scope = {}
         # Module-level names that hold a path found from __file__: ROOT = Path(__file__).parents[2]; DOCS = ROOT / "docs".
         # A name whose path joins a literal ("docs") names that folder, which its definition reads.
@@ -307,12 +337,11 @@ class DependencyMap:
                     found = {n.id for n in ast.walk(target) if isinstance(n, ast.Name)}
                     located |= found
                     named_here |= found if literal else set()
-        parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
         # Names bound to a literal path (FIXTURES = Path(__file__).parent / "fixtures"): where such a name is joined
         # further, the joined path is what is read; where it is listed, only the listing.
         self.values, deferred = defaultdict(set), set()
         for _ in range(2):
-            for node in ast.walk(tree):
+            for node in nodes:
                 if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
                     found = self.paths_of(node.value)
                     if found:
@@ -321,15 +350,15 @@ class DependencyMap:
         # A listing uses only names when nothing in the file reads file contents: a read elsewhere in the module (at
         # module level, in another function or a helper it calls) may read what was listed, so edits reach it too.
         reads_content = any(isinstance(n, ast.Call) and dotted_name(n.func).rsplit(".", 1)[-1] in CONTENT
-                            for n in ast.walk(tree))
+                            for n in nodes)
         listed = set()
-        for node in ast.walk(tree):
+        for node in nodes:
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in GLOBS | LISTINGS:
                 listed.add(id(node.func.value))
             elif isinstance(node, ast.Call) and dotted_name(node.func) in OS_LISTINGS and node.args:
                 listed.add(id(node.args[0]))
         if Path(path).name == "conftest.py":
-            for node in ast.walk(tree):
+            for node in nodes:
                 for decorator in getattr(node, "decorator_list", []) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else []:
                     call = decorator if isinstance(decorator, ast.Call) else None
                     keywords = {k.arg: k.value for k in call.keywords} if call else {}
@@ -340,7 +369,7 @@ class DependencyMap:
                         name = name.value if isinstance(name, ast.Constant) else node.name
                         self.fixtures[path][name] = (set(), set())
                         scope.update({id(n): self.fixtures[path][name] for n in ast.walk(node)})
-        for node in ast.walk(tree):
+        for node in nodes:
             runs_, reads_ = scope.get(id(node), (runs, reads))
             if isinstance(node, ast.arg):
                 names.add(node.arg)
@@ -462,6 +491,36 @@ class DependencyMap:
             if IDENTIFIER.match(token) and "." in token:
                 self.runs[path] |= self.module(token, bare=True)
 
+    def readers(self, name, added):
+        """The files that read a changed file: by its path, through a folder that holds it, a glob on an unknown
+        folder, or a listing (one that uses only names sees it only when it is new)."""
+        users = set(self.read_by.get(name, set()))
+        for parent in list(Path(name).parents)[:-1]:
+            users |= self.read_by.get(str(parent) + "/", set())
+        users |= {p for p, patterns in self.globs.items()
+                  if any(fnmatch.fnmatchcase(Path(name).name, g) for g in patterns)}
+        folder = str(Path(name).parent)
+        users |= {p for p, listings in self.listings.items() if any(
+            (folder == d or recursive and folder.startswith(d + "/")) and fnmatch.fnmatchcase(Path(name).name, g)
+            and (not names_only or name in added) for d, g, recursive, names_only in listings)}
+        return users
+
+    def fixture_users(self, name, read):
+        """Tests that use a non-autouse conftest fixture whose body runs `name` (or reads it, when `read`)."""
+        users = set()
+        for conftest, fixtures in self.fixtures.items():
+            used = {f for f, (runs, reads) in fixtures.items() if name in runs or read and (
+                name in reads or any(name.startswith(d) for d in reads if d.endswith("/")))}
+            if used:
+                folder = str(Path(conftest).parent)
+                users |= {p for p, names in self.names.items() if is_test(p) and used & names
+                          and (folder == "." or p.startswith(folder + "/"))}
+        return users
+
+    def below(self, conftest):
+        folder = str(Path(conftest).parent)
+        return {p for p in self.files if is_test(p) and (folder == "." or p.startswith(folder + "/"))}
+
     def affected(self, changed, added=None):
         """Changed files, and every tracked file that runs one of them, directly or through files that run each
         other, or that reads one; files that depend on everything and whatever runs them. A listing that uses only
@@ -474,37 +533,47 @@ class DependencyMap:
             name = pending.pop()
             users = set(self.run_by.get(name, ()))
             if name in changed:
-                users |= self.read_by.get(name, set())
-                for parent in list(Path(name).parents)[:-1]:
-                    users |= self.read_by.get(str(parent) + "/", set())
-                users |= {p for p, patterns in self.globs.items()
-                          if any(fnmatch.fnmatchcase(Path(name).name, g) for g in patterns)}
-                folder = str(Path(name).parent)
-                users |= {p for p, listings in self.listings.items() if any(
-                    (folder == d or recursive and folder.startswith(d + "/")) and fnmatch.fnmatchcase(Path(name).name, g)
-                    and (not names_only or name in added) for d, g, recursive, names_only in listings)}
-            for conftest, fixtures in self.fixtures.items():
-                used = {f for f, (runs, reads) in fixtures.items() if name in runs or name in changed and (
-                    name in reads or any(name.startswith(d) for d in reads if d.endswith("/")))}
-                if used:
-                    folder = str(Path(conftest).parent)
-                    users |= {p for p, names in self.names.items() if is_test(p) and used & names
-                              and (folder == "." or p.startswith(folder + "/"))}
+                users |= self.readers(name, added)
+            users |= self.fixture_users(name, name in changed)
             if Path(name).name == "conftest.py":
-                folder = str(Path(name).parent)
-                users |= {p for p in self.files if is_test(p) and (folder == "." or p.startswith(folder + "/"))}
+                users |= self.below(name)
             for user in users - seen:
                 seen.add(user)
                 pending.append(user)
         return seen
 
+    def read_by_tests(self, changed, added=None):
+        """For data that only code reads (read_only below): the files that read a changed one, and of the checks, the
+        tests and browser scripts among those readers and the ones that run a reader directly (a conftest reader: the
+        tests below it). Not everything that imports a reader: backend/manual.py reads docs/ and backend.app imports
+        it, which would make every page edit run the suite. A test that sees such a file only through the app must
+        name its path or folder literally. Files that depend on everything (they list the repository) read it too."""
+        changed = set(changed)
+        added = changed if added is None else set(added)
+        readers, out = set(self.everything), set(changed)
+        for name in changed:
+            readers |= self.readers(name, added)
+            out |= self.fixture_users(name, True)
+        out |= readers
+        for reader in readers:
+            if Path(reader).name == "conftest.py":
+                out |= self.below(reader)
+            elif not is_check(reader):
+                out |= {user for user in self.run_by.get(reader, ()) if is_check(user)}
+                out |= self.fixture_users(reader, False)
+        return out
 
-# Changes that steer every test rather than particular ones: CI, dependency pins, pytest's own configuration
-# (conftest hooks and autouse fixtures, pytest.ini) and this selector and its installer. Tests and the Assistant read
-# docs pages (the committed OpenAPI spec, the API guide, the manual) and CHANGELOG.md's shipped sections, so those
-# run everything too; no test or script reads screenshots, retired designs or the other top-level pages.
-FULL_SUITE = ("CHANGELOG.md", "pytest.ini", "package.json", "package-lock.json", ".gitignore",
-              "scripts/pr_checks.py", "scripts/ci_install.sh", "scripts/playwright-system-packages.json")
+
+# Changes that steer every test rather than particular ones: dependency pins and pytest's own configuration (conftest
+# hooks and autouse fixtures, pytest.ini).
+FULL_SUITE = ("pytest.ini", "package.json", "package-lock.json", ".gitignore")
+# How the checks run: the workflow, its installer and the browser system packages. A change runs the tests that read or
+# run them (the selector's own tests among them) and one short core browser script, so both kinds of check VM boot,
+# install and run under the changed setup; a workflow change also builds the Caddy image, whose job only it defines.
+# The selector, scripts/pr_checks.py, is code: its tests run like any other module's.
+PR_WORKFLOW = ".github/workflows/pr-checks.yml"
+CI_INPUTS = (PR_WORKFLOW, "scripts/ci_install.sh", "scripts/playwright-system-packages.json")
+SMOKE_SCRIPT = "sign-in-redirect"
 # The Caddy container job builds the server image (Dockerfile, docker/, the screen relay it compiles) and runs its
 # entrypoint's caddy-config, backend/caddy_assets.py. The image also compiles and imports the Python source; a plan
 # that skips the job runs those checks itself (image_checks).
@@ -514,12 +583,20 @@ UI_RUNNER = "scripts/ui-tests.cjs"
 
 
 def unread(name):
+    """No test or script reads screenshots, retired designs or the top-level pages other than CHANGELOG.md."""
     return name.startswith(("docs/images/", "docs/history/")) or (
         "/" not in name and name.endswith(".md") and name != "CHANGELOG.md")
 
 
+def read_only(name):
+    """Data that code reads but no test imports: docs pages (the manual, the OpenAPI copy, the API guide), CHANGELOG.md
+    (the changelog API, release-notes guards) and GitHub files (release tests parse the workflows). A change runs the
+    tests that read it (DependencyMap.read_by_tests), not everything that imports a reader."""
+    return name == "CHANGELOG.md" or name.startswith(("docs/", ".github/"))
+
+
 def full_suite(name):
-    return (name in FULL_SUITE or name.startswith((".github/", "docs/")) or Path(name).name == "conftest.py"
+    return (name in FULL_SUITE or Path(name).name == "conftest.py"
             or re.fullmatch(r"requirements[\w.-]*\.txt", Path(name).name) is not None)
 
 
@@ -527,9 +604,11 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     """None means the full default suite; an empty list means explicitly unaffected.
 
     A pull request runs the default tests that use a changed file (DependencyMap) and, of the browser scripts that
-    do, the core ones the full suite runs; a UI change runs its mapped scripts or all of them. `added` names the new
-    files (None: any may be new) and `core` the core browser scripts (None: read from scripts/ui-tests.cjs)."""
-    full = {"python": None, "browser": None, "caddy": True, "reason": "full default suite"}
+    do, the core ones the full suite runs; a UI change runs its mapped scripts or all of them. A docs page,
+    CHANGELOG.md or a GitHub file runs the tests that read it (read_only); a CI input adds a short browser smoke
+    (CI_INPUTS). `added` names the new files (None: any may be new) and `core` the core browser scripts (None: read
+    from scripts/ui-tests.cjs)."""
+    full = {"python": None, "browser": None, "caddy": True, "contracts": True, "reason": "full default suite"}
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
     runner = bool(rust) or any(p.startswith(("runner/", "runner_support/", "runner-rs/", "relay-rs/")) or
                                p in ("backend/harness_actions.py", "backend/runner_versions.py") for p in changed)
@@ -556,9 +635,10 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         return {**full, "browser": ["--all"] if browser else None, "conformance": runner,
                 "reason": "unmapped, shared, deleted or uncertain change: full default suite", "uncertain": uncertain}
     if not changed:
-        return {"python": [], "browser": [], "conformance": False, "rust": [], "caddy": False,
+        return {"python": [], "browser": [], "conformance": False, "rust": [], "caddy": False, "contracts": False,
                 "reason": "documentation that no test or script reads"}
-    affected = graph.affected(changed, added)
+    data = [n for n in changed if read_only(n) and not graph.code(n)]
+    affected = graph.affected([n for n in changed if n not in data], added) | (graph.read_by_tests(data, added) if data else set())
     python = sorted(p for p in affected if is_test(p) and not p.startswith("ui/"))
     if "--all" not in browser:
         scripts = {Path(p).stem for p in affected if Path(p).parent == Path("ui/tests") and p.endswith(".cjs")}
@@ -568,8 +648,13 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             except (OSError, subprocess.CalledProcessError, RuntimeError):
                 core = scripts
         browser |= scripts & set(core)
-    caddy = any(n.startswith(CADDY_INPUTS) for n in changed) or bool(affected & set(CADDY_ROOTS))
+        if any(n in CI_INPUTS for n in changed) and not browser:
+            browser.add(SMOKE_SCRIPT)
+    caddy = (any(n.startswith(CADDY_INPUTS) for n in changed) or bool(affected & set(CADDY_ROOTS))
+             or PR_WORKFLOW in changed)
+    contracts = any(n.startswith(CONTRACT_INPUTS) for n in changed) or bool(affected & set(CONTRACT_TESTS))
     return {"python": python, "browser": sorted(browser), "conformance": runner, "rust": rust, "caddy": caddy,
+            "contracts": contracts,
             "reason": "measured dependency map"}
 
 
@@ -584,6 +669,12 @@ def changed_files(base, head="HEAD", root=ROOT, only=None):
 
 
 def collect(root=ROOT):
+    # Reuse the plan's existing collection as the sharding coverage guard: no extra collection or CI job.
+    # Direct script execution puts scripts/ on sys.path; package imports (including tests) use the relative form.
+    if __package__:
+        from .release_checks import validate_shard_coverage
+    else:
+        from release_checks import validate_shard_coverage
     result = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0"],
                             cwd=root, capture_output=True, text=True)
     if result.returncode:
@@ -592,6 +683,7 @@ def collect(root=ROOT):
                      if "::" in line and not line.startswith(" "))
     if not counts:
         raise RuntimeError("Default suite collected no tests")
+    validate_shard_coverage(counts, selection=(), root=root)
     return counts
 
 
@@ -669,6 +761,10 @@ def prepare(event, base, output, timings_path=None):
         for path in paths:
             timings.update(json.loads(path.read_text()))
     split, loads = groups(counts, timings)
+    if loads and max(loads) / WORKERS + SETUP_SECONDS["python"] > 1.5 * JOB_SECONDS:
+        # Visible in the plan job's annotations: the cap (TICO_CI_MAX_JOBS) or one huge file holds a VM past the target.
+        print(f"::warning::A Python VM is planned for {max(loads) / WORKERS + SETUP_SECONDS['python']:.0f}s against the "
+              f"{JOB_SECONDS:.0f}s target ({len(split)} VMs, cap {MAX_JOBS}): raise TICO_CI_MAX_JOBS or split the file")
     jobs = [{"suite": f"python-{i + 1}", "files": files} for i, files in enumerate(split) if files]
     if picked["browser"] != []:
         scripts = browser_scripts(picked["browser"] or [])
@@ -679,6 +775,8 @@ def prepare(event, base, output, timings_path=None):
         loads += browser_loads
     if picked["conformance"]:
         jobs.append({"suite": "conformance", "files": [CONFORMANCE], "crates": picked["rust"]})
+    if picked["contracts"]:
+        jobs.append({"suite": "contracts", "files": list(CONTRACT_TESTS)})
     # Actions rejects an empty matrix. Keep an explicit successful selection job
     # for documented no-test changes, without invoking bare pytest.
     if not jobs:
@@ -708,7 +806,7 @@ def run(plan_path, suite):
     job = next(j for j in plan["matrix"]["include"] if j["suite"] == suite)
     files = job["files"]
     if suite == "selection":
-        if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"]:
+        if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"] or plan["contracts"]:
             raise RuntimeError("Selection-only job requires an explicitly unaffected plan")
         print("Documentation-only change: no affected tests")
         return 0
@@ -721,9 +819,9 @@ def run(plan_path, suite):
     else:
         if not files or any(not (ROOT / f).is_file() for f in files):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")
-        command = [sys.executable, "-m", "pytest", "-q", "-n", str(WORKERS),
+        command = [sys.executable, "-m", "pytest", "-q", "-n", str(WORKERS), *PYTEST_FLAGS,
                    "-o", "junit_family=xunit1", f"--junitxml=ci-results/{suite}.xml"]
-        if suite == "conformance":
+        if suite in ("conformance", "contracts"):
             command += ["-m", "slow"]
         command += files
     (ROOT / "ci-results").mkdir(exist_ok=True)
@@ -784,6 +882,32 @@ def receipt(jobs):
     return "\n".join(rows) + "\n"
 
 
+RECEIPT_INCOMPLETE = "The GitHub API returned an error for part of this receipt, so it may be incomplete."
+JOB_FIELDS = ("name", "html_url", "status")
+
+
+def receipt_jobs(text):
+    """The jobs on the pages of `gh api --paginate --slurp` output that are jobs pages, and whether any page was not.
+
+    An error object (GitHub's body for a 502), a page without a list of well-formed jobs, a top level that is not a
+    list, and empty or invalid JSON are pages that were not read. The receipt is cosmetic: it never fails the gate.
+    """
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return [], True
+    pages = data if isinstance(data, list) else [data]
+    jobs, incomplete = [], False
+    for page in pages:
+        page_jobs = page.get("jobs") if isinstance(page, dict) else None
+        if isinstance(page_jobs, list) and all(isinstance(j, dict) and all(f in j for f in JOB_FIELDS)
+                                               for j in page_jobs):
+            jobs += page_jobs
+        else:
+            incomplete = True
+    return jobs, incomplete
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -808,9 +932,11 @@ def main():
             raise RuntimeError("No Python timings were collected")
         Path("durations.json").write_text(json.dumps(measured, indent=2))
     else:
-        data = json.load(sys.stdin)
         # gh --paginate --slurp emits one jobs response per page.
-        print(receipt([j for page in data for j in page["jobs"]]))
+        jobs, incomplete = receipt_jobs(sys.stdin.buffer.read())
+        print(receipt(jobs))
+        if incomplete:
+            print(RECEIPT_INCOMPLETE)
     return 0
 
 

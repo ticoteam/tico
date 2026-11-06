@@ -1,8 +1,8 @@
 # Close out a marketing task
 
-When: a test has ended or been stopped, and the task and its numbers show what happened. The weekly meeting finds these;
-the owner may also ask. The outcome is the task on one step, Won, Lost, Inconclusive or Dropped, with a comment saying
-what we learned.
+When: a test has ended or been stopped, and the task and its numbers show what happened. The task is Live or Working. The
+weekly meeting finds these; the owner may also ask. The outcome is the task on one step, Succeeded, Failed, Inconclusive or
+Dropped, with a comment saying what we learned.
 
 ---
 
@@ -17,9 +17,9 @@ you write must be one you read, with its source.
 
 ## 2. Choose the step
 
-- **Won**: the change moved the numbers the way it was meant to, by enough to keep. The comment says by how much and over
+- **Succeeded**: the change moved the numbers the way it was meant to, by enough to keep. The comment says by how much and over
   which weeks.
-- **Lost**: it did not move them, or it moved them the wrong way.
+- **Failed**: it did not move them, or it moved them the wrong way.
 - **Inconclusive**: the numbers do not settle it, for example too few customers or a mixed signal. The comment says what
   would settle it.
 - **Dropped**: it was stopped for a reason outside the test, such as the owner's decision or a channel closing. It says
@@ -28,15 +28,15 @@ you write must be one you read, with its source.
 ## 3. Comment what we learned
 
 The learning is a claim about customers, not about the test. "Price shoppers churn in two weeks" is a learning;
-"the price test lost" is not. Put the learning in `memory/learnings.md` as well, dated.
+"the price test lost" is not. Every finished task gets this one line, a Failed one too. Put the learning in `memory/learnings.md` as well, dated.
 
     hub task comment <id> "<the numbers, their source, the window, and the learning>"
 
 ## 4. Move the task
 
-    hub task update <id> --step Won
+    hub task update <id> --step Succeeded
 
-Use Lost, Inconclusive or Dropped in place of Won as the evidence gives it.
+Use Failed, Inconclusive or Dropped in place of Succeeded as the evidence gives it.
 
 ## 5. Follow up
 

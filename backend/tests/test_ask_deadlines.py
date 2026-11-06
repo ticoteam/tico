@@ -14,7 +14,7 @@ def _ask(c, title, default=None, days=0):
     H.task_update(c, "bot:ops", task["id"], status="waiting", waiting_on="human:ana", note=title)
     then = H.shift(H.now(), days=-days)
     c.execute("UPDATE messages SET created_at=? WHERE id=?", (then, said["id"]))
-    c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (then, task["id"]))
+    c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (then, task["id"]))
     c.execute("UPDATE tasks SET created_at=? WHERE id=?", (then, task["id"]))
     return task, said
 
@@ -57,7 +57,7 @@ def test_an_undated_ask_waits_for_the_batch_and_a_task_handed_to_a_person_closes
                               H.shift(H.now(), days=40)[:10], lint=False)
         for row in (handed, touched, later):
             c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-15), row["id"]))
-            c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), days=-15), row["id"]))
+            c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), days=-15), row["id"]))
         H.task_comment(c, "human:ana", touched["id"], "Still looking, give me a few days")
         H.task_comment(c, "human:ana", H.message_task_id(spoken), "Thinking about it")
         done = ask_deadlines.sweep(c)
@@ -76,11 +76,11 @@ def test_an_undated_ask_waits_for_the_batch_and_a_task_handed_to_a_person_closes
         card = H.task_update(c, "bot:ops", task["id"], status="waiting", waiting_on="human:ana",
                              note="Approve the venue for Friday? If yes, I will book it.")["asked_in"]
         c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-15), card["id"]))
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), days=-15), card["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (H.shift(H.now(), days=-15), card["id"]))
         assert ask_deadlines.sweep(c)["closed"] == [card["id"]]
         back = H.task(c, task["id"])
         assert back["status"] == "open" and back["note"].startswith(
-            f"Tico closed the ask to {H.person_name(c, 'human:ana')}: No answer from")
+            f"The system closed the ask to {H.person_name(c, 'human:ana')}: No answer from")
 
     # A go-ahead date after day 14 is refused when asked; here one is set anyway: the ask waits for its date, then
     # goes ahead and closes.

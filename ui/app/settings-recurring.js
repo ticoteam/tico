@@ -1,4 +1,4 @@
-/* ui/app/settings-recurring.js — Settings > System: what Tico runs on its own, and task rules
+/* ui/app/settings-recurring.js — Automations > System jobs (#/automations/system-jobs): what Tico runs on its own, and task rules
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -6,12 +6,12 @@
 // no group headings, with a search box that matches name, trigger, action, department tag and group word. Each row reads
 // WHEN <trigger> THEN <action>, with its department tag, schedule, last and next run and, for a job that asks Decide,
 // which route answered and this month's spend. An owner or admin switches the six AI/people jobs (and Topic changed),
-// picks their schedule preset and runs them now; Health scan only the owner (`can_change`, enforced by the server too).
-// Fetched again at most once a minute while the tab is open.
+// picks their schedule preset and runs them now. Who may change a job is the server's `can_change`, enforced there too.
+// Fetched again at most once a minute while the screen is open (ui/app/automations-maintenance.js auSysJobsPane).
 let SYSTEM_ROUTINES = null, SYSTEM_ROUTINES_AT = 0, SYSTEM_ROUTINES_Q = '', SYSTEM_ROUTINES_HELD = false;
 const SYSTEM_ROUTINE_BUSY = new Set();
 // Jobs a happening starts, not a clock: they keep no run log, so the row says so in place of a last run.
-const SYSTEM_ROUTINE_ON_EVENT = new Set(['topic_fresh', 'stall_triage']);
+const SYSTEM_ROUTINE_ON_EVENT = new Set(['topic_fresh']);
 function systemRoutineLastHTML(j) {
   if (!j.records) return SYSTEM_ROUTINE_ON_EVENT.has(j.key) ? '<span class="muted">Runs when it happens</span>' : '<span class="muted">Each connection shows its own</span>';
   if (!j.last) return '<span class="muted">Not run yet</span>';
@@ -33,10 +33,10 @@ const systemRoutineHours = text => String(text || '').replace(/(\d\d:\d\d) to (\
 function systemRoutineScheduleHTML(j) {
   const busy = SYSTEM_ROUTINE_BUSY.has(j.key);
   if (!(j.presets || []).length || !j.can_change) return `<span data-sysr-schedule>${esc(systemRoutineHours(j.schedule))}</span>`;
-  const options = j.presets.map(p => `<option value="${esc(p.key)}"${p.key === j.preset ? ' selected' : ''}>${esc(p.key === 'daily' ? (['learnings', 'memory_tidy', 'auto_dream'].includes(j.key) ? 'Nightly at' : 'Daily at') : systemRoutineHours(p.label))}</option>`).join('');
+  const options = j.presets.map(p => `<option value="${esc(p.key)}"${p.key === j.preset ? ' selected' : ''}>${esc(p.key === 'daily' ? (['learnings', 'memory_tidy'].includes(j.key) ? 'Nightly at' : 'Daily at') : systemRoutineHours(p.label))}</option>`).join('');
   // One choice is no choice: its words alone (Nightly at with the time box, or Weekly).
   const one = j.presets[0], pick = j.presets.length === 1
-    ? `<span>${esc(one.key !== 'daily' ? systemRoutineHours(one.label) : ['learnings', 'memory_tidy', 'auto_dream'].includes(j.key) ? 'Nightly at' : 'Daily at')}</span>`
+    ? `<span>${esc(one.key !== 'daily' ? systemRoutineHours(one.label) : ['learnings', 'memory_tidy'].includes(j.key) ? 'Nightly at' : 'Daily at')}</span>`
     : `<select class="settings-inline-select" data-sysr-preset aria-label="${esc(j.name)} schedule"${busy ? ' disabled' : ''}>${options}</select>`;
   return `${pick}
     ${j.preset === 'daily' ? `<input type="time" step="60" data-sysr-at value="${esc(j.at || '')}" aria-label="${esc(j.name)} time (Pacific)" title="Pacific time"${busy ? ' disabled' : ''}>` : ''}`;
@@ -45,7 +45,7 @@ function systemRoutineControlHTML(j) {
   if (!j.switch) return j.needed ? '<span class="muted sysr-needed">Tico needs this to run</span>' : '';
   const busy = SYSTEM_ROUTINE_BUSY.has(j.key);
   if (!j.can_change) {
-    // A member reads on or off; an admin looking at Health scan sees why they cannot change it.
+    // A member reads on or off; an admin looking at a job only the owner changes sees why they cannot change it.
     return `<span class="sysr-state" data-sysr-state>${j.on ? 'On' : 'Off'}</span>${j.owner_only && settingsIsAdmin() ? '<span class="muted sysr-owner" data-sysr-owner>Only the owner changes this</span>' : ''}`;
   }
   return `<label class="sysr-switch">${peopleSwitch('data-sysr-on', j.on, busy, j.name)}<span>${j.on ? 'On' : 'Off'}</span></label>
@@ -204,7 +204,7 @@ function memoryTidyEditor(job) {
   const choices = job.pilot_models || [];
   dialog.innerHTML = `<form class="task-rule-form"><header><h2>Nightly memory tidy pilot</h2><button type="button" class="ghost" data-close>Cancel</button></header>
     <p>Up to three bots. Use each bot's slug. These models apply only to the tidy pass. The pilot stops at $50.</p>
-    <p class="muted">Only models enabled in Settings > Computers > Models are offered. Haiku-tier models cannot be used.</p>
+    <p class="muted">Only models enabled in Settings > Models are offered. Haiku-tier models cannot be used.</p>
     <div data-pilot-rows></div><button type="button" class="ghost" data-add>Add bot</button>
     <p class="err" role="status" data-error></p><footer><button type="submit" class="primary">Save pilot list</button></footer></form>`;
   const rows = dialog.querySelector('[data-pilot-rows]'), add = dialog.querySelector('[data-add]');

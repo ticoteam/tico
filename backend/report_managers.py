@@ -4,6 +4,7 @@ description, as itself. Two switches turn that off: the team rule `managers_mana
 import json
 
 from . import team_rules
+from . import bot_settings as BS
 
 # The `via` every change a manager bot makes to its report is recorded with (settings_changes, the events it writes).
 VIA = "report_manager"
@@ -24,7 +25,7 @@ def manages(c, slug):
     """Whether bot `slug` manages its direct reports now: the team rule and its own switch both on."""
     if not team_rules.load(c)["managers_manage_reports"]:
         return False
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
     return bool(row) and switch_on(json.loads(row["config"]) if row["config"] else {})
 
 
@@ -59,7 +60,7 @@ def cap_limit(c, op):
 def person_above(c, slug):
     """The person a bot reports up to: the first human on its `reports_to` chain, or "" when none."""
     seen, parent = {slug}, ""
-    row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    row = c.execute(f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
     if row:
         parent = row["reports_to"] or (json.loads(row["config"] or "{}") or {}).get("reports_to") or ""
     while parent and parent not in seen:

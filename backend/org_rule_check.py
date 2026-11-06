@@ -66,9 +66,9 @@ import secrets
 import sqlite3
 import threading
 import weakref
-from datetime import datetime, timedelta, timezone
 
 from clients import judge as J
+from . import bot_settings as BS
 from . import judge as B
 from . import org_rules as R
 from . import groups as G
@@ -76,6 +76,7 @@ from . import team_rules
 from . import threads as T
 from .call_slots import NEUTRAL, Calls
 from .store import H, Problem
+from . import sources as SRC
 
 LOG = logging.getLogger("tico.org_rule_check")
 QUESTION_SET = "rule-check"
@@ -93,6 +94,7 @@ HOLD_LIST_MAX = 50
 # One hold's text as its readers get it: past this many characters it is cut (`text_cut`); Send anyway sends it whole.
 HOLD_TEXT_CHARS = 20_000
 HOLD_LIST_BYTES = 100_000     # one page of hold summaries stops here too (a page always holds at least one)
+BOTS_BELOW = 500             # bots read as the authors whose holds one person may be shown (`held_for`)
 TEAM_RULE = "org_rule_checks"
 UNCHECKED_SHARE, UNCHECKED_MIN = 0.2, 10    # a day's unchecked share at or over this, of at least this many checks
 ACTIONS = ("rules.blocked", "rules.escalated", "rules.warned", "rules.unchecked")
@@ -115,15 +117,7 @@ SCHEMA = (
     "call_id TEXT, created_at TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS org_rule_verdicts_created ON org_rule_verdicts(created_at)",
     "CREATE INDEX IF NOT EXISTS org_rule_holds_task ON org_rule_holds(task_id) WHERE task_id IS NOT NULL",
-    # Mails a bot's connector sent after a check that got no answer from Tico, by the id the connector gave each:
-    # one `rules.unchecked` per id, however often it is reported (`record_misses`).
-    "CREATE TABLE IF NOT EXISTS org_rule_misses(author TEXT NOT NULL, id TEXT NOT NULL, created_at TEXT NOT NULL, "
-    "PRIMARY KEY (author, id))",
-    "CREATE INDEX IF NOT EXISTS org_rule_misses_created ON org_rule_misses(created_at)",
 )
-MISSES_MAX = 100              # ids one report carries (connectors/mail keeps at most this many per bot)
-MISSES_KEPT_DAYS = 90         # how long a reported id is remembered, so a late repeat still counts once
-MISSES_DAY_MAX = 200          # connector-reported misses one bot can add to a UTC day's unchecked count
 
 # Send anyway's writes, by operation: fn(c, bot identity, hold, replay data, ingest) -> the write's answer. Registered
 # by the module that owns the write (backend/app.py, execution, automations), so the replay is the normal write.
@@ -401,6 +395,7 @@ def _place_now(c, place, author, recipients):
     return place or None
 
 
+@SRC.scoped("rule-check")
 def check_as(store, primary, principal, sender, via, operation, output, recipients=(), *, context=None, obj="",
              draft=False, skip=(), place=None, attempt_id="", origin=None):
     """Check one output held as `principal` (a person or a bot). `sender` is who made it and `via` the route
@@ -529,6 +524,7 @@ def refused(problem):
     return {"refused": problem}
 
 
+@SRC.scoped("rule-check")
 def outside_edition(store, primary, output, to=""):
     """A Company page edition against the rules whose Who is Outside editions. Not `preflight`: that one skips a person's
     writes and fails open, and an edition goes outside the company whoever wrote it. Here anything short of the judge
@@ -654,6 +650,7 @@ def _repeats(c, author, rule_id):
                      (author, "org_rule:" + rule_id, _day())).fetchone()[0]
 
 
+@SRC.scoped("rule-check")
 def _tell_bot(c, author, text):
     """A note on the bot's next run, as the keeper (a plain row: a paused bot's note waits, nothing is refused)."""
     if not H.is_bot(author):
@@ -671,6 +668,7 @@ def _author_name(c, author):
     return (H.bot(c, H.actor_id(author)) or {}).get("display_name") or H.actor_id(author)
 
 
+@SRC.scoped("rule-check")
 def _review_task(c, hold_id, author, rule, reviewer):
     """The review task for a hold (or its appeal). Its title is the plain REVIEW_TITLE, which is also its thread's row in
     the sidebar, so it names no one and no rule: the hold's text is in the body's Hold line, opened from there."""
@@ -736,8 +734,9 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     write the bot does not see answered: a completion reply, an automation). `obj_now`: the object as the write reads
     it (`current_obj`). Moved since the check, a verdict that holds still holds (a version bump never releases a
     Block); any other comes back as {"moved": True}, and the caller does not write: its next try checks again.
-    `audience_now`: the recipients the write reads now (the route's audience, read inside the write). A hold is only made
-    for the audience the check named, so a different one comes back as {"moved": True} as well. A refused verdict
+    `audience_now`: the recipients the write reads now (the route's audience, read inside the write). Every verdict
+    belongs to the audience it checked, including a route recorded with `outcome=no_rules` when no rule matched,
+    so a different one comes back as {"moved": True}. A refused verdict
     (`refused`) raises its error here, so the write fails with it."""
     if verdict and "refused" in verdict:
         raise verdict["refused"]
@@ -748,9 +747,9 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     if obj_now is not None and verdict.get("obj") and obj_now != verdict["obj"] and not holds(verdict):
         return {"moved": True}
     author, operation = verdict["author"], verdict["operation"]
+    if audience_now is not None and _people(audience_now, author) != list(verdict["recipients"]):
+        return {"moved": True}
     if verdict["outcome"] in ("broken", "too_large"):
-        if audience_now is not None and _people(audience_now, author) != list(verdict["recipients"]):
-            return {"moved": True}
         # The rules in force now must be the ones checked: a rule edited, retired or added since is a new check, which
         # cannot run here (no engine under the write lock), so the output goes through unchecked.
         now = {(r["id"], r["version"])
@@ -812,11 +811,22 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
         if task_id is None and reviewer:
             task_id = _review_task(c, hold_id, author, strictest, reviewer)
     text = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True, default=str)
+    body = (replay or {}).get("body") or {}
+    if operation == "task_answer":
+        asked = H.answer_question(c, body.get("target") or {})
+        text, text_refs = H.answer_text(asked, body.get("answers") or {}, text=text)
+    elif operation in ("answer", "reply"):
+        text, text_refs = H.answer_text(H.message(c, replay["message"]),
+                                        replay.get("text") or body.get("text") or "", text=text)
+    else:
+        text_refs = {}
+    from .files import page_references
+    text, text_refs = H.sourced_text(text, [{"file": fid} for fid in sorted(page_references(replay, c))], text_refs)
     # The run the output came from: Send anyway writes as the bot with it, so the run's private tasks and meetings are
     # checked against the destination again, as the original write was.
     # The check's own input (`input`) too: a rule changed since is checked on what this check was shown, and Send anyway
     # refuses once the object moved. `path` is the write's route, whose privacy guard Send anyway runs again.
-    stored = {"text": text, "replay": replay,
+    stored = {"text": text, **text_refs, "replay": replay,
               "provenance": {"attempt_id": verdict.get("attempt_id") or "", "path": PATH.get(),
                              "authenticated": verdict.get("sender") or author, "via": verdict.get("via") or "",
                              "place": verdict.get("place"), "origin": verdict.get("origin")},
@@ -996,6 +1006,9 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
     if not (author or reviewer or stands_in):
         raise Problem("not_found", "There is no hold " + hold["id"], 404)
     stored = {} if summary else json.loads(hold["payload"] or "{}")
+    if not summary:
+        from .files import readable_page_refs
+        stored = readable_page_refs(c, auth, who, stored)
     verdict = json.loads(hold["verdict"] or "{}")
     rule_ids = json.loads(hold["rule_ids"] or "[]")
     destinations = json.loads(hold["destinations"] or "[]")
@@ -1061,13 +1074,34 @@ def _reader_sql(who):
     return None, (), False
 
 
-def held_for(c, who, operations):
+def _bots_below(c, person):
+    """The bots that may report up to `person` first (report_managers.person_above), as actors, at most BOTS_BELOW: the
+    authors whose holds can be held for them. More than that is fine; `represented` settles each hold."""
+    found, frontier, seen = [], [person], {person}
+    while frontier and len(found) < BOTS_BELOW:
+        rows = c.execute(f"SELECT bc.bot FROM bot_config bc {BS.JOIN} WHERE bc.reports_to IN (SELECT value FROM json_each(?)) OR "
+                         "(COALESCE(bc.reports_to,'')='' AND "
+                         "json_extract(s.extra,'$.reports_to') IN (SELECT value FROM json_each(?)))",
+                         (json.dumps(frontier), json.dumps(frontier))).fetchall()
+        frontier = [r[0] for r in rows if r[0] not in seen]
+        seen.update(frontier)
+        found += frontier
+    return [f"bot:{b}" for b in found[:BOTS_BELOW]]
+
+
+def held_for(c, who, operations, limit=None):
     """The held writes of these operations that this person reads as their reviewer, as their author, or as the person
-    it is held for, oldest first, each with its `role`. The owner's and Admins' fallback is not listed: a hold with no reviewer is for
-    their review page, not a person's list."""
+    it is held for, oldest first, each with its `role`, at most `limit`. The owner's and Admins' fallback is not listed:
+    a hold with no reviewer is for their review page, not a person's list. Only their own candidates are read: their
+    own holds and their bots' (the author index) and the ones they review (org_rule_holds_reviewer)."""
     marks = ",".join("?" * len(operations))
-    rows = c.execute(f"SELECT id, author, reviewer, created_at FROM org_rule_holds WHERE state='held' AND operation IN "
-                     f"({marks}) ORDER BY created_at, id", tuple(operations)).fetchall()
+    authors = [who.actor, *(_bots_below(c, who.actor) if H.is_human(who.actor) else [])]
+    most = -1 if limit is None else max(0, int(limit))
+    pick = f"SELECT id, author, reviewer, created_at FROM org_rule_holds WHERE state='held' AND operation IN ({marks}) "
+    rows = c.execute(f"SELECT * FROM ({pick}AND author IN (SELECT value FROM json_each(?)) ORDER BY created_at, id "
+                     f"LIMIT ?) UNION SELECT * FROM ({pick}AND reviewer=? ORDER BY created_at, id LIMIT ?) "
+                     "ORDER BY created_at, id LIMIT ?",
+                     (*operations, json.dumps(authors), most, *operations, who.actor, most, most)).fetchall()
     out = []
     for row in rows:
         role = _reader(who, dict(row), c)
@@ -1135,6 +1169,7 @@ def holds_for_task(c, who, task_id, cursor=None, limit=HOLD_LIST_MAX, auth=None)
     return holds_listed(c, who, task_id=task_id, cursor=cursor, limit=limit, auth=auth)
 
 
+@SRC.scoped("rule-check")
 def _finish_task(c, hold):
     """The review task closes once none of its holds waits."""
     tid = hold["task_id"]
@@ -1143,10 +1178,11 @@ def _finish_task(c, hold):
     left = c.execute("SELECT 1 FROM org_rule_holds WHERE task_id=? AND state='held' LIMIT 1", (tid,)).fetchone()
     task = H.task(c, tid)
     if not left and task and task["status"] not in ("done", "closed"):
-        H.task_close(c, H.KEEPER, tid, "Every hold on this task is decided.", quiet=True)
+        H.task_close(c, H.KEEPER, tid, "Every hold on this task is decided.", quiet=True, strict=False)
 
 
 def _decide(c, who, hold, state, event=""):
+    H._writer(c, who.actor, task_id=hold["task_id"])
     c.execute("UPDATE org_rule_holds SET state=?, decided_at=?, decided_by=?, nonce=? WHERE id=? AND state='held'",
               (state, H.now(), who.actor, "used:" + secrets.token_hex(8), hold["id"]))
     from . import audit_log
@@ -1370,6 +1406,7 @@ def appeal(c, who, hold_id, why):
         raise Problem("not_found", "There is no hold " + hold_id, 404)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
+    H._writer(c, who.actor, task_id=hold["task_id"])
     why = str(why or "").strip()[:2000]
     task_id = hold["task_id"]
     if not hold["reviewer"]:
@@ -1493,8 +1530,8 @@ def supersede_mail(c, hold_id):
 
 @replayer("mail")
 def _replay_mail(c, bot, hold, replay, ingest, gate=None):
-    """A mail is sent by its bot's own mail tool, not the server: Send anyway lets that exact mail pass its next check,
-    once, and tells the bot to send it again."""
+    """A held mail is never queued: Send anyway lets that exact mail pass its next check in the send queue
+    (backend/email_sending.py), once, and tells the bot to send it again."""
     _tell_bot(c, hold["author"], "The email you were told was held may go now: send that exact draft again "
               f"(hold {hold['id']}).")
     return {"approved": True}
@@ -1578,7 +1615,7 @@ def stats(c, settings):
 
 
 def health_findings(c, settings):
-    """A high share of unchecked outputs in a day: the rules are not being enforced (backend/health_monitor.py)."""
+    """A high share of unchecked outputs in a day: the rules are not being enforced (backend/maintenance_health.py)."""
     try:
         if not on(c):
             return []
@@ -1598,55 +1635,60 @@ def health_findings(c, settings):
 
 
 # ----------------------------------------------------------------------------- HTTP
-MISS_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+def mail_prepare(store, primary, who, author, to, cc, subject, body):
+    """The org rule check of one mail, before its write: None when no rule is in force, else what `mail_decide` needs.
+    `author` is the teammate the mail is checked as (a person, when BotOps sends it for one): its holds and approvals
+    are found under it; `who` stays the caller, for the write's permission and audit. An approved mail (Send anyway) is
+    not judged again on the rules it was held on; rules changed or added since are a new check, as for any Send anyway.
+    Otherwise the whole mail is checked."""
+    key = mail_digest(to, cc, subject, body)
+    output = (f"Subject: {subject}\n\n" if subject else "") + body
+    with store.read() as c:
+        if not in_force(c):
+            return None                     # no rule in force: no roster read for the recipients, nothing written
+        approved = mail_approved(c, author, key)
+        recipients = mail_recipients(c, [*to, *cc])
+    check = recheck(store, primary, approved) if approved else None
+    verdict = check[1] if approved else \
+        preflight(store, primary, who, "mail", output, recipients, context={"to": [a.lower() for a in [*to, *cc]]})
+    return {"author": author, "key": key, "output": output, "approved": approved, "check": check, "verdict": verdict}
 
 
-def keep_miss(c, author, check_id):
-    """The mail check `check_id` (its Idempotency-Key) is counted unchecked for this bot: a later report of the same
-    id counts nothing. Inside the write that counted it."""
-    if check_id:
-        return c.execute("INSERT OR IGNORE INTO org_rule_misses(author, id, created_at) VALUES(?,?,?)",
-                         (author, check_id, H.now())).rowcount == 1
-    return False
+def mail_decide(c, prep):
+    """Inside the mail's write: {"outcome": "pass" | "unchecked" | "warn" (with `warning_line`) | "held" (with
+    `held`, whose `text` says the rule and whom to appeal to)}. A held mail is never sent."""
+    if prep is None:
+        return {"outcome": "pass"}
+    author, key, output, approved, verdict = (prep[k] for k in ("author", "key", "output", "approved", "verdict"))
 
+    def outcome(gate):
+        if gate and gate.get("held"):
+            return {"outcome": "held", **answer(gate)}
+        if gate and gate.get("warned"):
+            return {"outcome": "warn", "warning_line": mail_warning_line(gate), **answer(gate)}
+        return {"outcome": "unchecked" if verdict and verdict["outcome"] == "unchecked" else "pass"}
 
-def check_id_of(request):
-    """A mail check's id: its Idempotency-Key, when the mail tool made it a UUID (connectors/mail)."""
-    key = str(request.headers.get("idempotency-key") or "").strip().lower()
-    return key if MISS_ID.fullmatch(key) else ""
-
-
-def record_misses(c, author, ids):
-    """Inside the write: each id not yet counted for this bot (by the check itself, or an earlier report) is claimed
-    and is one `rules.unchecked`, when a rule in force covers the bot whatever the recipients (Who names it, With
-    empty: an id says nothing of whom the mail went to), up to MISSES_DAY_MAX a UTC day. An id not counted is not
-    kept. Every id is taken (the connector forgets them on the 2xx). Ids older than MISSES_KEPT_DAYS are forgotten."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=MISSES_KEPT_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
-    c.execute("DELETE FROM org_rule_misses WHERE created_at<?", (cutoff,))
-    counted = on(c) and bool(R.matching(c, author))
-    room = MISSES_DAY_MAX - c.execute(
-        "SELECT count(*) FROM events WHERE action='rules.unchecked' AND actor=? AND created_at>=? "
-        "AND json_extract(detail,'$.reason')='connector'", (author, _day())).fetchone()[0] if counted else 0
-    known, recorded, over = [], 0, 0
-    for miss in ids:
-        if counted and recorded < room:
-            # Claimed before counted: the check itself, still running, then finds it claimed and counts nothing.
-            if keep_miss(c, author, miss):
-                H.event(c, author, "rules.unchecked", "mail", {"operation": "mail", "reason": "connector",
-                                                              "bot": H.actor_id(author)})
-                recorded += 1
-            else:
-                known.append(miss)
-            continue
-        # Not counted here (no rule without With, or over the day's cap): not kept either, so the check, if it is
-        # still running, can count it.
-        if c.execute("SELECT 1 FROM org_rule_misses WHERE author=? AND id=?", (author, miss)).fetchone():
-            known.append(miss)
-        elif counted:
-            over += 1
-    if over:
-        LOG.warning("%s reported %s more unchecked mails than a day counts (%s)", author, over, MISSES_DAY_MAX)
-    return {"recorded": recorded, "known": known}
+    waiting = open_mail_hold(c, author, key) if holds(verdict) else None
+    if approved:
+        if current_matched(c, approved) != {tuple(x) for x in prep["check"][0]}:
+            return {"outcome": "held", "held": {"id": approved["id"], "text": "The rules changed while this "
+                    "email was checked. Send it again to check it."}}
+        if holds(verdict):
+            # A newer rule holds an approved mail: the old approval is spent, and the mail has one hold.
+            supersede_mail(c, approved["id"])
+            if waiting:
+                return {"outcome": "held", "held": held_again(c, waiting, verdict)}
+            return outcome(apply(c, verdict, output, {"mail_digest": key}))
+        if not claim_mail(c, approved["id"]):
+            # Another send already used this approval: this one stays a draft.
+            return {"outcome": "held", "held": {"id": approved["id"], "text": "This email's approval was "
+                    "already used. It stays a draft."}}
+        gate = apply(c, verdict, output, {"mail_digest": key}) if verdict else None
+        return {**outcome(gate), "outcome": "warn" if gate and gate.get("warned") else "pass",
+                "approved": approved["id"]}
+    if waiting:
+        return {"outcome": "held", "held": held_again(c, waiting, verdict)}
+    return outcome(apply(c, verdict, output, {"mail_digest": key}))
 
 
 def seal(app):
@@ -1688,136 +1730,22 @@ def install(app, store, auth, mutate):
         subject: str = Field(default="", max_length=2000)
         body: str = Field(default="", max_length=500_000)
 
-    class MailMisses(Contract):
-        ids: list[str] = Field(min_length=1, max_length=MISSES_MAX)
-
-    def mail_unchecked(author, bot, body, reason, check_id=""):
-        """A mail check that could not run (refused, or the server failed): the connector sends the mail unchecked, so
-        it counts as unchecked here, for the Rules header and the Health finding, when a rule applies to that bot."""
-        try:
-            with store.transaction() as c:
-                if not R.any_active(c) or not on(c):
-                    return
-                # The rule is read for whose mail it is: the person's, when a person's mail is sent, else the bot's. The
-                # event keeps the caller as its actor, as before.
-                subject = author if H.is_human(author) else "bot:" + bot
-                rules = R.matching(c, subject, mail_recipients(c, [*body.to, *body.cc]))
-                # Claimed before counted: a report of this check that landed first already counted it.
-                if rules and (not check_id or keep_miss(c, author, check_id)):
-                    H.event(c, author, "rules.unchecked", "mail", {"operation": "mail", "reason": reason,
-                                                                  "rules": [r["id"] for r in rules], "bot": bot})
-        except Exception as exc:  # noqa: BLE001 - recording a failure never adds one
-            LOG.warning("Recording a failed mail check failed: %s", type(exc).__name__)
-
-    @app.post("/api/v2/bots/{bot}/mail-check/misses")
-    def mail_check_misses(request: Request, bot: str, body: MailMisses):
-        """Mails the bot's mail tool sent after a check that brought back no verdict (any failure), reported once Tico
-        answers again by each check's id, its Idempotency-Key: one `rules.unchecked` each (reason `connector`,
-        `record_misses`). An id the check itself already counted, or an earlier report, counts nothing (`known`).
-        A person's own token reports nothing: a person's mail is not sent through the bot's mail tool."""
-        who = request.state.identity
-        found = checked_as(who, store.settings.assistant_bot)
-        if not found or not H.is_bot(found[1]):
-            return {"recorded": 0, "known": []}
-        author, sender = found[0], found[1]
-        with store.read() as c:
-            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
-        if sender != "bot:" + bot:
-            raise Problem("forbidden", "A bot reports only its own mail", 403)
-        ids = list(dict.fromkeys(body.ids))
-        if any(not MISS_ID.fullmatch(i) for i in ids):
-            raise Problem("validation", "Each id is a UUID", 422)
-        return mutate(request, body, lambda c: record_misses(c, author, ids))
-
     @app.post("/api/v2/bots/{bot}/mail-check")
     def mail_check(request: Request, bot: str, body: MailCheck):
-        """The org rule check of one mail, asked by the bot's mail tool before it sends (connectors/mail): held, the
-        mail stays a draft. Only the bot itself asks, and BotOps asks for a person it acts for, whose mail is checked as
-        that person (`checked_as`). A person's own mail is not sent by the bot's tool and is not checked here
-        (`not_checked`). Another bot's token is refused, and a refusal or a server error is recorded as unchecked: the
-        connector sends on a failed check."""
+        """The org rule check of one mail without sending it (a draft read before it goes): the same check the send
+        queue runs on every bot's email (backend/email_sending.py `rule_gate`). Only the bot itself asks, and BotOps
+        asks for a person it acts for, whose mail is checked as that person (`checked_as`). A person's own mail is not
+        checked (`not_checked`); another bot's token is refused."""
         who = request.state.identity
         found = checked_as(who, store.settings.assistant_bot)
         if not found or not H.is_bot(found[1]):
             return {"outcome": "not_checked"}
-        author, sender = found[0], found[1]
-        check_id = check_id_of(request)
         with store.read() as c:
             named = H.resolve_bot(c, bot) or {}
-        bot = named.get("id", bot)
-        if sender != "bot:" + bot:
-            LOG.warning("A mail check for %s came with another bot's token", named.get("slug", bot))
-            mail_unchecked(author, bot, body, "forbidden", check_id)
+        if found[1] != "bot:" + named.get("id", bot):
             raise Problem("forbidden", "A bot checks only its own mail", 403)
-        try:
-            return mail_checked(request, who, author, body, check_id)
-        except Problem as exc:
-            if exc.status >= 500:
-                mail_unchecked(author, bot, body, "error", check_id)
-            raise
-        except Exception:
-            mail_unchecked(author, bot, body, "error", check_id)
-            raise
-
-    def mail_checked(request, who, author, body, check_id=""):
-        """`author` is the teammate the mail is checked as (a person, when BotOps sends it for one): its holds and
-        approvals are found under it; `who` stays the caller, for the write's permission and audit. A check counted
-        unchecked keeps `check_id`, so the mail tool's later report of it (it never got this answer) counts nothing
-        more."""
-        key = mail_digest(body.to, body.cc, body.subject, body.body)
-        output = (f"Subject: {body.subject}\n\n" if body.subject else "") + body.body
-        with store.read() as c:
-            if not in_force(c):
-                return {"outcome": "pass"}      # no rule in force: no roster read for the recipients, nothing written
-            approved = mail_approved(c, author, key)
-            recipients = mail_recipients(c, [*body.to, *body.cc])
-        # An approved mail (Send anyway) is not judged again on the rules it was held on; rules changed or added
-        # since are a new check, as for any Send anyway. Otherwise the whole mail is checked.
-        check = recheck(store, app.state.judge, approved) if approved else None
-        verdict = check[1] if approved else \
-            preflight(store, app.state.judge, who, "mail", output, recipients,
-                      context={"to": [a.lower() for a in [*body.to, *body.cc]]})
-
-        def outcome(gate):
-            if gate and gate.get("held"):
-                return {"outcome": "held", **answer(gate)}
-            if gate and gate.get("warned"):
-                return {"outcome": "warn", "warning_line": mail_warning_line(gate), **answer(gate)}
-            return {"outcome": "unchecked" if verdict and verdict["outcome"] == "unchecked" else "pass"}
-
-        def work(c):
-            mark = c.execute("SELECT coalesce(max(rowid), 0) FROM events").fetchone()[0]
-            out = decide(c)
-            # The check claims its id with the unchecked it wrote; a report of it that landed first (the mail tool gave
-            # up waiting) already counted it, and this write's own unchecked comes out again.
-            if check_id and c.execute("SELECT 1 FROM events WHERE rowid>? AND action='rules.unchecked' AND actor=? "
-                                      "LIMIT 1", (mark, author)).fetchone() and not keep_miss(c, author, check_id):
-                c.execute("DELETE FROM events WHERE rowid>? AND action='rules.unchecked' AND actor=?", (mark, author))
-            return out
-
-        def decide(c):
-            waiting = open_mail_hold(c, author, key) if holds(verdict) else None
-            if approved:
-                if current_matched(c, approved) != {tuple(x) for x in check[0]}:
-                    return {"outcome": "held", "held": {"id": approved["id"], "text": "The rules changed while this "
-                            "email was checked. Send it again to check it."}}
-                if holds(verdict):
-                    # A newer rule holds an approved mail: the old approval is spent, and the mail has one hold.
-                    supersede_mail(c, approved["id"])
-                    if waiting:
-                        return {"outcome": "held", "held": held_again(c, waiting, verdict)}
-                    return outcome(apply(c, verdict, output, {"mail_digest": key}))
-                if not claim_mail(c, approved["id"]):
-                    # Another send already used this approval: this one stays a draft.
-                    return {"outcome": "held", "held": {"id": approved["id"], "text": "This email's approval was "
-                            "already used. It stays a draft."}}
-                gate = apply(c, verdict, output, {"mail_digest": key}) if verdict else None
-                return {**outcome(gate), "outcome": "warn" if gate and gate.get("warned") else "pass",
-                        "approved": approved["id"]}
-            if waiting:
-                return {"outcome": "held", "held": held_again(c, waiting, verdict)}
-            return outcome(apply(c, verdict, output, {"mail_digest": key}))
-        return mutate(request, body, work)
+        prep = mail_prepare(store, app.state.judge, who, found[0], body.to, body.cc, body.subject, body.body)
+        return mutate(request, body, lambda c: mail_decide(c, prep))
 
     @app.get("/api/v2/rules/stats")
     def rules_stats(request: Request):
@@ -1876,7 +1804,9 @@ def install(app, store, auth, mutate):
                     ingest = prepare[hold["operation"]](store, ident, stored.get("replay") or {})
                 except Exception as exc:  # noqa: BLE001 - ask ingest's own preflight never stops the send
                     LOG.warning("Hold replay preflight failed: %s", type(exc).__name__)
-        return mutate(request, body, lambda c: send(c, who, hold_id, body.nonce, ingest, table, check, auth, audience))
+        from . import ask_ingest
+        return ask_ingest.judged(store, ingest, lambda: mutate(
+            request, body, lambda c: send(c, who, hold_id, body.nonce, ingest, table, check, auth, audience)))
 
     @app.post("/api/v2/rule-holds/{hold_id}/appeal")
     def rule_hold_appeal(request: Request, hold_id: str, body: HoldAppeal):

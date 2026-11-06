@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const {startHub, PHONE, DESKTOP} = require('./real-hub.cjs');
 const {run, go, shot, sideways, t} = require('./redesign-e2e.cjs');
 
-const SEEDS = ['org', 'toured', 'roster', 'finance'];   // the scenario org, the first-visit tour seen, Gina (the guest), Finance set up
+const SEEDS = ['org', 'toured', 'roster', 'finance'];   // the scenario org, the first-visit tour seen, Gina (a reader), Finance set up
 const HUB_PATH = /^\/api\//;
 
 // Watches one page: uncaught errors, console errors (a failed resource is counted once, as the API answer below), and
@@ -75,9 +75,6 @@ async function open(browser, hub, who, {phone = false, hash = '', timezone = ''}
       const sw = navigator.serviceWorker;
       if (sw) sw.register = async () => { console.warn('Service Worker registration blocked by the test harness'); };
     } catch {}
-  });
-  await context.addInitScript(() => {
-    try { localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 864e5})); } catch {}
   });
   const page = watch(await context.newPage());
   await page.goto(hub.url + '/' + (hash ? '#' + hash.replace(/^#/, '') : ''));

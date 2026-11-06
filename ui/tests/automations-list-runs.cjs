@@ -28,16 +28,31 @@ const screen = page => page.locator('#au-root').getAttribute('data-screen');
       assert.equal(await sideways(page), false);
       await shot(page, 'phone-list');
 
-      // Filters sit behind a button; a trigger narrows the list, and so does the search.
-      assert.equal(await page.locator('.au-rail').isVisible(), false);
-      await page.locator('[data-filters]').click();
-      await page.waitForSelector('.au-rail .au-q', {state: 'visible'});
-      await page.fill('.au-q', 'deploy');
+      // The header: Automations | Runs and the range, then search, filters and +; no title and no Ask (the tab bar has
+      // the Assistant). The search is on the page and narrows the list.
+      assert.equal(await page.locator('.au-ph h1').isVisible(), false);
+      assert.equal(await page.locator('.au-ph [data-ask-open]').isVisible(), false);
+      assert.equal(await page.locator('.au-ph .au-tabs [data-tab="list"]').isVisible(), true);
+      await page.fill('.au-ph .au-q', 'deploy');
       assert.deepEqual(await rows(page), ['au_deploy']);
       await page.fill('.au-q', '');
+      // Filters sit behind a button, in sections that start closed; the search is not repeated there.
+      assert.equal(await page.locator('.au-rail').isVisible(), false);
+      await page.getByRole('button', {name: 'Filters'}).click();
+      await page.waitForSelector('.au-rail [data-fsec="trig"]', {state: 'visible'});
+      assert.equal(await page.locator('.au-q').count(), 1, 'one search');
+      assert.ok((await page.locator('.au-fh').evaluateAll(b => b.map(x => x.getAttribute('aria-expanded')))).every(x => x === 'false'));
+      assert.equal(await page.locator('[data-ftrig]').count(), 0);
+      await page.locator('[data-fsec="trig"]').click();
       await page.locator('[data-ftrig="message"]').click();
       assert.deepEqual(await rows(page), ['au_inbox']);
-      assert.match(await page.locator('[data-filters]').innerText(), /Filters · 1/);
+      assert.equal(await page.locator('[data-filters] .au-fbn').innerText(), '1');
+      assert.equal(await page.locator('[data-fsec="trig"] .au-fhn').innerText(), '1');
+      // Opened again, the section with a filter on starts open and the others closed.
+      await page.locator('[data-filters]').click();
+      await page.locator('[data-filters]').click();
+      assert.equal(await page.locator('[data-fsec="trig"]').getAttribute('aria-expanded'), 'true');
+      assert.equal(await page.locator('[data-fsec="status"]').getAttribute('aria-expanded'), 'false');
       await page.locator('[data-filters]').click();
 
       await page.locator('tr.au-row[data-row="au_inbox"] a').click();
@@ -86,6 +101,44 @@ const screen = page => page.locator('#au-root').getAttribute('data-screen');
       await page.close();
     }
 
+    // A small phone: the header's two rows fit (tabs and range; search, filters and +) on the list and on Runs, + opens
+    // its menu, and nothing scrolls sideways.
+    {
+      const W = 320, {page, errors} = await openAutomations(browser, {viewport: {width: W, height: 640}});
+      await page.waitForSelector('tr.au-row');
+      const box = sel => page.locator(sel).boundingBox();
+      for (const tab of ['list', 'runs']) {
+        await page.locator(`[data-tab="${tab}"]`).click();
+        const b = {};
+        for (const sel of ['.au-tabs', '.au-range', '.au-q', '[data-filters]', '.au-new']) {
+          b[sel] = await box(sel);
+          assert.ok(b[sel] && b[sel].x >= 0 && b[sel].x + b[sel].width <= W, `${tab}: ${sel} fits`);
+        }
+        const mid = x => x.y + x.height / 2;
+        assert.ok(Math.abs(mid(b['.au-tabs']) - mid(b['.au-range'])) < 2, `${tab}: tabs and range share a row`);
+        assert.ok(Math.abs(mid(b['.au-q']) - mid(b['.au-new'])) < 2 && b['.au-q'].y > b['.au-tabs'].y, `${tab}: search row under it`);
+        assert.ok(b['.au-new'].width >= 40 && b['[data-filters]'].width >= 40, `${tab}: + and filters are full-size targets`);
+        assert.equal(await sideways(page), false);
+      }
+      await page.locator('[data-tab="list"]').click();
+      await page.getByRole('button', {name: 'New automation'}).click();
+      assert.equal(await page.locator('.au-newm').isVisible(), true);
+      await page.keyboard.press('Escape');
+      assert.equal(await page.locator('.au-newm').isVisible(), false);
+      // Widened to a computer, the tabs and a typed search move back to the bar and the filters, and return on a phone.
+      await page.fill('.au-q', 'deploy');
+      await page.setViewportSize(DESKTOP);
+      await page.waitForSelector('.au-rail .au-q', {state: 'visible'});
+      assert.equal(await page.locator('.au-ctl .au-tabs').isVisible(), true);
+      assert.equal(await page.locator('.au-q').inputValue(), 'deploy');
+      assert.deepEqual(await rows(page), ['au_deploy']);
+      await page.setViewportSize({width: W, height: 640});
+      await page.waitForSelector('.au-ph .au-q', {state: 'visible'});
+      assert.equal(await page.locator('.au-ph .au-tabs').isVisible(), true);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
     // A computer: the overview stays put, the range is kept, Runs lists every run, and a run opens its automation.
     {
       const {page, errors, writes, hold} = await openAutomations(browser, {viewport: DESKTOP});
@@ -93,6 +146,14 @@ const screen = page => page.locator('#au-root').getAttribute('data-screen');
       await page.waitForTimeout(200);
       assert.match(page.url(), /#\/automations$/, 'no automation opens by itself');
       assert.equal(await page.locator('.au-rail').isVisible(), true);
+      // The header is one row (title, range, Ask, + New); search, the tabs and every filter section show in place.
+      assert.equal(await page.locator('.au-ph h1').isVisible(), true);
+      assert.equal(await page.locator('.au-new').innerText(), '+ New');
+      assert.equal(await page.locator('[data-filters]').isVisible(), false);
+      assert.equal(await page.locator('.au-rail .au-q').isVisible(), true);
+      assert.equal(await page.locator('.au-ctl .au-tabs').isVisible(), true);
+      assert.equal(await page.locator('.au-fh').count(), 0);
+      assert.equal(await page.locator('[data-ftrig="message"]').isVisible(), true);
       assert.equal(await page.locator('.au-side').isVisible(), false, 'no side panel until an editor opens');
       assert.equal(await page.locator('.au-range [aria-pressed="true"]').innerText(), '1h');
       const runsOf = id => page.locator(`tr.au-row[data-row="${id}"] td.au-n`).first();

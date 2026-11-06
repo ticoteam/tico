@@ -3,16 +3,18 @@
 # workflow publishes those binaries and points the version tags at those image digests, after checking each image says
 # it is this version. The server release never waits for Mac or desktop builds.
 # The Mac runner and relay (no gate part runs on a Mac) are carried forward from the previous release when their sources
-# did not change, and published with it. When they did change they are built here, beside the publication, and added to
+# did not change, and published with it. When they did change they are built here, after the publication, and added to
 # the published release with the checksum files rewritten after them; until then a Mac checkout's update waits
 # (runner_support/release_update.py) instead of failing.
 # The desktop app follows: built only when the shell changed since the previous release, otherwise the previous release's
 # desktop files and updater manifest are carried forward. Either way they are added to the published release afterwards,
 # and a desktop failure leaves the server release in place. Tico Recorder (recorder.yml) follows the same way, with
 # its own updater manifest (recorder-latest.json). See docs/releasing.md.
-# Linux jobs run on RunsOn in Tico's own AWS account, on-demand rather than Spot: an interruption must never leave
-# a release half-published. The two jobs between the tag and the published release (validated, release) run on
-# GitHub-hosted Ubuntu, which starts faster and is never interrupted either. macOS builds stay on GitHub-hosted runners.
+# Linux jobs run on RunsOn Spot VMs in Tico's own AWS account: an interrupted job is rerun automatically, and every upload
+# uses --clobber with the manifest last, so a rerun finishes the same release. The three jobs between the tag and the
+# published release (validated, runner-changes, release) run on GitHub-hosted Ubuntu, which starts faster and is never
+# interrupted. macOS builds stay on GitHub-hosted runners.
+# Optional build fan-out starts after publication so it cannot compete for job slots with the core release.
 name: Release
 
 on:
@@ -30,6 +32,10 @@ on:
         description: Dry run only (from a branch), the Release validation run ID to check publication from
         type: string
         default: ''
+      latest:
+        description: Make it the latest release and move the images' latest tags (release windows pass false and do it once the canary is healthy)
+        type: boolean
+        default: true
 
 # Read-only by default; only the two jobs that write to the GitHub release (release, desktop-assets) get contents: write.
 permissions:
@@ -124,7 +130,7 @@ jobs:
             local names name platform sums
             names="$(gh release view "$1" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null)" || return 1
             sums="$(mktemp -d)"
-            gh release download "$1" -R "$GITHUB_REPOSITORY" -D "$sums" -p tico-runner-SHA256SUMS -p tico-screen-relay-SHA256SUMS 2>/dev/null || return 1
+            bash scripts/ci/retry.sh --clear "$sums" --permanent 'HTTP (404|410)|no assets match|release not found' -- gh release download "$1" -R "$GITHUB_REPOSITORY" -D "$sums" -p tico-runner-SHA256SUMS -p tico-screen-relay-SHA256SUMS || return 1
             for platform in macos-arm64 macos-x86_64; do
               for name in tico-runner tico-screen-relay; do
                 grep -qx "$name-$platform.gz" <<<"$names" || return 1
@@ -165,6 +171,7 @@ jobs:
       RUN: ${{ needs.validated.outputs.run }}
       VERSION: ${{ needs.validated.outputs.version }}
       DRY_RUN: ${{ needs.validated.outputs.dry_run }}
+      LATEST: ${{ github.event_name != 'workflow_dispatch' || inputs.latest }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -172,8 +179,8 @@ jobs:
           persist-credentials: false
       - name: Download the validated runner binaries and image digests
         run: |
-          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'runner-linux-*' -D "$RUNNER_TEMP/runner"
-          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'image-*' -D "$RUNNER_TEMP/images"
+          bash scripts/ci/retry.sh --clear "$RUNNER_TEMP/runner" -- gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'runner-linux-*' -D "$RUNNER_TEMP/runner"
+          bash scripts/ci/retry.sh --clear "$RUNNER_TEMP/images" -- gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'image-*' -D "$RUNNER_TEMP/images"
           mkdir -p dist/runner
           find "$RUNNER_TEMP/runner" -name '*.gz' -exec mv {} dist/runner/ \;
           for platform in linux-x86_64 linux-arm64; do
@@ -188,7 +195,7 @@ jobs:
         env:
           PREVIOUS: ${{ needs.runner-changes.outputs.previous }}
         run: |
-          gh release download "$PREVIOUS" -R "$GITHUB_REPOSITORY" -D dist/runner \
+          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" -R "$GITHUB_REPOSITORY" -D dist/runner --clobber \
             -p 'tico-runner-macos-*.gz' -p 'tico-screen-relay-macos-*.gz'
           for platform in macos-arm64 macos-x86_64; do
             for name in tico-runner tico-screen-relay; do
@@ -214,7 +221,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # Before the release exists, so an installer never runs against a tag whose images are missing. A prerelease
-      # (v1.2.0-rc1) never moves latest; a dry run only prints the manifests it would push.
+      # (v1.2.0-rc1) never moves latest, nor does latest=false (a release window moves it after the canary); a dry run
+      # only prints the manifests it would push.
       - name: Point the version tags at the validated images
         run: |
           # The three images at once, each in its own subshell; any failure fails the step.
@@ -229,7 +237,7 @@ jobs:
               sources+=("ghcr.io/ticoteam/$image@$digest")
             done
             tags=(-t "ghcr.io/ticoteam/$image:$VERSION")
-            case "$VERSION" in *-*) ;; *) tags+=(-t "ghcr.io/ticoteam/$image:latest") ;; esac
+            case "$VERSION" in *-*) ;; *) [ "$LATEST" = false ] || tags+=(-t "ghcr.io/ticoteam/$image:latest") ;; esac
             flags=()
             [ "$DRY_RUN" = true ] && flags+=(--dry-run)
             # The registry sometimes drops the manifest upload; retry instead of failing the release.
@@ -257,13 +265,17 @@ jobs:
           gh release view "$VERSION" >/dev/null 2>&1 && { echo "The $VERSION release already exists."; exit 0; }
           flags=()
           case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+          [ "$LATEST" = false ] && flags+=(--latest=false)
           gh release create "$VERSION" "${files[@]}" --title "$VERSION" --notes "" --verify-tag "${flags[@]}"
 
-  # The Mac runner and relay, built from the tag when runner-changes says so, beside the publication. A GitHub-hosted
+  # The Mac runner and relay, built from the tag when runner-changes says so, after the publication. A GitHub-hosted
   # macOS runner can take 5-15 minutes to start; nothing waits for it but macos-assets.
   macos:
-    needs: [validated, runner-changes]
-    if: needs.validated.outputs.dry_run != 'true' && needs.runner-changes.outputs.build == 'true'
+    needs: [validated, runner-changes, release]
+    if: >-
+      ${{ !cancelled() && needs.validated.result == 'success' && needs.runner-changes.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
+      && needs.validated.outputs.dry_run != 'true' && needs.runner-changes.outputs.build == 'true' }}
     strategy:
       matrix:
         include:
@@ -310,7 +322,7 @@ jobs:
   macos-assets:
     needs: [validated, release, macos]
     if: >-
-      ${{ !cancelled() && needs.macos.result == 'success'
+      ${{ !cancelled() && needs.validated.result == 'success' && needs.macos.result == 'success'
       && (needs.release.result == 'success' || needs.release.result == 'skipped') }}
     runs-on: ubuntu-24.04
     permissions:
@@ -326,8 +338,15 @@ jobs:
           merge-multiple: true
       - name: Add the Mac binaries and their checksums to the release
         run: |
-          mkdir -p dist/sums
-          gh release download "$VERSION" -R "$GITHUB_REPOSITORY" -D dist/sums -p tico-runner-SHA256SUMS -p tico-screen-relay-SHA256SUMS
+          # No checkout in this job, so the retry is inline (scripts/ci/retry.sh's schedule): 8 attempts, 30s to 120s apart.
+          for attempt in 1 2 3 4 5 6 7 8; do
+            rm -rf dist/sums && mkdir -p dist/sums
+            gh release download "$VERSION" -R "$GITHUB_REPOSITORY" -D dist/sums -p tico-runner-SHA256SUMS -p tico-screen-relay-SHA256SUMS && break
+            [ "$attempt" -lt 8 ] || { echo "::error::gh release download failed on all 8 attempts"; exit 1; }
+            wait_s=$((attempt * 30)); [ "$wait_s" -gt 120 ] && wait_s=120
+            echo "::warning::download attempt $attempt/8 failed; retrying in ${wait_s}s"
+            sleep "$wait_s"
+          done
           for name in tico-runner tico-screen-relay; do
             for platform in macos-arm64 macos-x86_64; do
               test -s "dist/mac/$name-$platform.gz" || { echo "::error::no $name-$platform.gz was built"; exit 1; }
@@ -340,9 +359,12 @@ jobs:
 
   # Does this tag need new desktop apps? Only when what the shell is built from changed since the previous release.
   desktop-changes:
-    needs: validated
-    if: needs.validated.outputs.dry_run != 'true'
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    needs: [validated, release]
+    if: >-
+      ${{ !cancelled() && needs.validated.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
+      && needs.validated.outputs.dry_run != 'true' }}
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
     permissions:
       contents: read
     outputs:
@@ -362,9 +384,12 @@ jobs:
             | while read -r tag; do git merge-base --is-ancestor "$tag" "$GITHUB_SHA" && { echo "$tag"; break; }; done)"
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           build=true
+          # Tests, fixtures and Markdown docs do not enter the desktop bundle.
           if [ "$FORCE" != true ] && [ -n "$previous" ] \
              && git diff --quiet "$previous" "$GITHUB_SHA" -- app scripts/app_release.py scripts/company_apps.py \
                   .github/workflows/app.yml .github/workflows/company-app.yml \
+                  ':!app/tests/**' ':!app/src/testdata/**' ':!app/vendor/glib/tests/**' \
+                  ':!app/vendor/glib/benches/**' ':!app/*.md' \
              && gh release view "$previous" --json assets -q '.assets[].name' | grep -qx latest.json; then
             build=false
           fi
@@ -373,7 +398,9 @@ jobs:
 
   desktop:
     needs: desktop-changes
-    if: needs.desktop-changes.outputs.build == 'true'
+    if: >-
+      ${{ !cancelled() && needs.desktop-changes.result == 'success'
+      && needs.desktop-changes.outputs.build == 'true' }}
     uses: ./.github/workflows/app.yml
     # inherit + id-token as main's app.yml expects (it declares no secrets and asks for id-token). Narrowing these
     # needs app.yml and company-app.yml to declare them first: the follow-up hardening batch, not this one.
@@ -390,7 +417,7 @@ jobs:
       ${{ !cancelled() && needs.desktop-changes.result == 'success'
       && (needs.release.result == 'success' || needs.release.result == 'skipped')
       && (needs.desktop.result == 'success' || needs.desktop.result == 'skipped') }}
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
     permissions:
       contents: write   # uploads the desktop files to the published release
     steps:
@@ -423,7 +450,7 @@ jobs:
           PREVIOUS: ${{ needs.desktop-changes.outputs.previous }}
         run: |
           mkdir -p dist/desktop
-          gh release download "$PREVIOUS" --dir dist/desktop --pattern '*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
+          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/desktop --clobber --pattern '*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
             --pattern '*-setup.exe' --pattern '*-setup.exe.sig' --pattern '*.AppImage' --pattern '*.AppImage.sig' --pattern '*.deb' --pattern latest.json
           # Tico-Recorder's files match the patterns above. They belong to recorder-assets, and a copy here could
           # overwrite a newer recorder build of this tag.
@@ -440,9 +467,12 @@ jobs:
   # previous release, otherwise its files are carried forward. Its own jobs, so a failure here never touches the
   # desktop or server release.
   recorder-changes:
-    needs: validated
-    if: needs.validated.outputs.dry_run != 'true'
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    needs: [validated, release]
+    if: >-
+      ${{ !cancelled() && needs.validated.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
+      && needs.validated.outputs.dry_run != 'true' }}
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
     permissions:
       contents: read
     outputs:
@@ -462,8 +492,13 @@ jobs:
             | while read -r tag; do git merge-base --is-ancestor "$tag" "$GITHUB_SHA" && { echo "$tag"; break; }; done)"
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           build=true
+          # These Rust modules are cfg(test)-only; preview assets are outside the bundled ui/app.
+          # Check CHANGES.md separately because it feeds updater notes and must survive the Markdown exclusion.
           if [ "$FORCE" != true ] && [ -n "$previous" ] \
              && git diff --quiet "$previous" "$GITHUB_SHA" -- recorder scripts/app_release.py .github/workflows/recorder.yml \
+                  ':!recorder/tests/**' ':!recorder/bench/**' ':!recorder/ui/preview/**' ':!recorder/*.md' \
+                  ':!recorder/src/network_tests.rs' ':!recorder/src/stream_tests.rs' ':!recorder/src/app/tests.rs' \
+             && git diff --quiet "$previous" "$GITHUB_SHA" -- recorder/CHANGES.md \
              && gh release view "$previous" --json assets -q '.assets[].name' | grep -qx recorder-latest.json; then
             build=false
           fi
@@ -472,7 +507,9 @@ jobs:
 
   recorder:
     needs: recorder-changes
-    if: needs.recorder-changes.outputs.build == 'true'
+    if: >-
+      ${{ !cancelled() && needs.recorder-changes.result == 'success'
+      && needs.recorder-changes.outputs.build == 'true' }}
     uses: ./.github/workflows/recorder.yml
     secrets: inherit   # recorder.yml reads the desktop app's signing secrets (see the desktop job)
     permissions:
@@ -486,7 +523,7 @@ jobs:
       ${{ !cancelled() && needs.recorder-changes.result == 'success'
       && (needs.release.result == 'success' || needs.release.result == 'skipped')
       && (needs.recorder.result == 'success' || needs.recorder.result == 'skipped') }}
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
     permissions:
       contents: write   # uploads the recorder files to the published release
     steps:
@@ -503,12 +540,21 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS: ${{ needs.recorder-changes.outputs.previous }}
         run: |
           flags=()
           [ -n "$APPLE_SIGNING_IDENTITY" ] && flags+=(--signed)
           [ -n "$APPLE_ID" ] && flags+=(--notarized)
+          # The newest recorder/CHANGES.md line shows once: unless the last shipped recorder (carried-forward releases
+          # keep its manifest) already carried it. The updater banner shows it.
+          shown=""
+          [ -n "$PREVIOUS" ] && shown="$(gh release download "$PREVIOUS" --pattern recorder-latest.json --output - 2>/dev/null \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("notes",""))' 2>/dev/null || true)"
+          flags+=(--shown "$shown")
           python3 scripts/app_release.py --github --kind recorder --version "${GITHUB_REF_NAME#v}" --tag "$GITHUB_REF_NAME" \
-            --output dist/recorder/recorder-latest.json --notes "Built from ${GITHUB_SHA::7}" "${flags[@]}" dist/recorder
+            --output dist/recorder/recorder-latest.json --notes "Built from ${GITHUB_SHA::7}" \
+            --changes recorder/CHANGES.md "${flags[@]}" dist/recorder
       - name: Carry the previous release's recorder files forward
         if: needs.recorder-changes.outputs.build != 'true'
         env:
@@ -516,7 +562,7 @@ jobs:
           PREVIOUS: ${{ needs.recorder-changes.outputs.previous }}
         run: |
           mkdir -p dist/recorder
-          gh release download "$PREVIOUS" --dir dist/recorder --pattern 'Tico-Recorder*' \
+          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/recorder --clobber --pattern 'Tico-Recorder*' \
             --pattern recorder-latest.json
           sed -i "s#/releases/download/$PREVIOUS/#/releases/download/$GITHUB_REF_NAME/#g" dist/recorder/recorder-latest.json
       - name: Add the recorder files to the release
@@ -528,8 +574,10 @@ jobs:
 
   company-matrix:
     needs: desktop-changes
-    if: needs.desktop-changes.outputs.build == 'true'
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    if: >-
+      ${{ !cancelled() && needs.desktop-changes.result == 'success'
+      && needs.desktop-changes.outputs.build == 'true' }}
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
     permissions:
       contents: read
     outputs:
@@ -549,7 +597,9 @@ jobs:
   # keeps its current latest.json, so installed company apps stay on their version.
   companies:
     needs: company-matrix
-    if: needs.company-matrix.outputs.enabled == 'true'
+    if: >-
+      ${{ !cancelled() && needs.company-matrix.result == 'success'
+      && needs.company-matrix.outputs.enabled == 'true' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.company-matrix.outputs.matrix) }}

@@ -11,7 +11,7 @@ text/plain, or HTML stripped), attachments listed but not downloaded, and whethe
 carries an unsubscribe link.
 """
 
-import base64, binascii, html, re, time
+import base64, binascii, contextlib, html, re, time
 from datetime import datetime, timezone
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 
@@ -63,17 +63,30 @@ class Gmail:
     def __init__(self, service, mailbox, sleep=time.sleep):
         self.service, self.mailbox, self.sleep = service, mailbox, sleep
         self.granted = getattr(service, "_tico_granted", None)   # a connected account's scopes; None: service account
+        self.company = None          # the company's What Tico may do for this run (oauth.company_allows); None: unset
+        self._part_of = None         # the draft or send Tico's own markers belong to (marking); None: Organize mail
         self._labels = None
 
+    @contextlib.contextmanager
+    def marking(self, capability):
+        """Tico's own markers on a draft or send it just made (hub/drafted, hub/handled/<bot>) are part of that write, so
+        the company's box for it holds them, not Organize mail: Send mail on with Organize mail off still sends."""
+        was, self._part_of = self._part_of, capability
+        try:
+            yield self
+        finally:
+            self._part_of = was
+
     # -- plumbing ---------------------------------------------------
-    def _exec(self, request, what):
+    def _exec(self, request, what, *, retry=True):
         last = None
-        for attempt in range(MAX_ATTEMPTS):
+        attempts = MAX_ATTEMPTS if retry else 1
+        for attempt in range(attempts):
             try:
                 return request.execute()
             except Exception as e:                      # HttpError, socket errors
                 last = e
-                if attempt == MAX_ATTEMPTS - 1 or not _retryable(e):
+                if attempt == attempts - 1 or not _retryable(e):
                     break
                 self.sleep(2 ** attempt)
         raise Failure(f"Gmail {what} failed for {self.mailbox}: {last}",
@@ -108,6 +121,7 @@ class Gmail:
 
     def create_label(self, name):
         oauth.require(self.granted, "labels", self.mailbox, "create labels")
+        oauth.company_allows(self.company, self._part_of or "labels", self.mailbox, "create labels")
         body = {"name": name, "labelListVisibility": "labelShow",
                 "messageListVisibility": "show"}
         lab = self._exec(self.service.users().labels().create(userId="me", body=body),
@@ -177,6 +191,7 @@ class Gmail:
     # -- state changes ----------------------------------------------
     def modify(self, msg_id, add=(), remove=()):
         oauth.require(self.granted, "labels", self.mailbox, "label, archive or mark mail read")
+        oauth.company_allows(self.company, self._part_of or "labels", self.mailbox, "label, archive or mark mail read")
         body = {"addLabelIds": list(add), "removeLabelIds": list(remove)}
         return self._exec(
             self.service.users().messages().modify(userId="me", id=msg_id, body=body),
@@ -185,12 +200,14 @@ class Gmail:
     # -- drafts and sending (stage 2; every caller is behind policy.py and lint.py) --
     def create_draft(self, raw, thread_id=""):
         oauth.require(self.granted, "drafts", self.mailbox, "write drafts")
+        oauth.company_allows(self.company, "drafts", self.mailbox, "write drafts")
         body, media = _draft_body(raw, thread_id)
         return self._exec(self.service.users().drafts().create(userId="me", body=body, **media),
                           "drafts.create")
 
     def update_draft(self, draft_id, raw, thread_id=""):
         oauth.require(self.granted, "drafts", self.mailbox, "write drafts")
+        oauth.company_allows(self.company, "drafts", self.mailbox, "write drafts")
         body, media = _draft_body(raw, thread_id)
         return self._exec(
             self.service.users().drafts().update(userId="me", id=draft_id, body=body, **media),
@@ -207,15 +224,17 @@ class Gmail:
 
     def delete_draft(self, draft_id):
         oauth.require(self.granted, "drafts", self.mailbox, "delete drafts")
+        oauth.company_allows(self.company, "drafts", self.mailbox, "delete drafts")
         return self._exec(self.service.users().drafts().delete(userId="me", id=draft_id),
                           "drafts.delete")
 
-    def send_draft(self, draft_id):
-        """The only path out of the company. Policy, lint and the reviewer sit in front of it."""
+    def send_raw(self, raw, thread_id=""):
+        """Send exactly the frozen MIME in this request, with no mutable draft lookup or automatic retry."""
         oauth.require(self.granted, "drafts", self.mailbox, "send mail")
-        return self._exec(
-            self.service.users().drafts().send(userId="me", body={"id": draft_id}),
-            "drafts.send")
+        oauth.company_allows(self.company, "send", self.mailbox, "send mail")
+        draft_body, media = _draft_body(raw, thread_id)
+        return self._exec(self.service.users().messages().send(userId="me", body=draft_body.get("message", {}), **media),
+                          "messages.send", retry=False)
 
 
 def _draft_body(raw, thread_id=""):
@@ -548,6 +567,9 @@ def normalize(msg, label_names=None, tz_name=DEFAULT_TZ):
         or "method=request" in str(hdrs.get("content-type", "")).lower()
         or any(a["name"].lower().endswith(".ics") for a in atts),
         "headers": hdrs,
+        "send_facts": {**{key: str(hdrs.get(key) or "")[:1000] for key in ("auto-submitted", "precedence", "return-path", "message-id")},
+                       "delivery-status": "\n".join(decode(p.get("body") or {}, charset_of(p)) for p in walk(payload)
+                                                     if p.get("mimeType") == "message/delivery-status")[:4096]},
     }
 
 

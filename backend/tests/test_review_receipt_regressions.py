@@ -7,6 +7,7 @@ import pytest
 from backend import hubdb as H, test_receipts, review_gate
 from backend.tests.test_github import api, headers, post, PR
 from backend.tests.test_review_gate import HEAD, OLD, ticket, move
+from backend import bot_settings as BS
 
 
 def github(api, monkeypatch, checks=(), statuses=()):
@@ -53,7 +54,7 @@ def test_absent_pending_or_only_skipped_checks_still_need_passing_receipt(api, m
 
 
 def test_cached_webhook_green_does_not_supply_the_receipt(api):
-    # Without a fresh GitHub read the gate has only the webhook-built cache, where a skipped check reads as passing.
+    # Without a fresh GitHub read the gate has only the webhook-built cache, where a neutral check reads as passing and a re-run replaces a failure.
     task = ticket(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE task_links SET detail=json_set(detail,'$.checks',json(?)) WHERE task_id=? AND kind='pr'",
@@ -275,7 +276,8 @@ def test_manager_chain_and_editing_person_can_supply_no_ci_receipt(api, author):
         for slug, parent in [('cpo', 'cmo'), ('cmo', 'boss')]:
             c.execute('UPDATE bot_config SET reports_to=? WHERE bot=?', (parent, slug))
         c.execute("INSERT INTO bots(id,slug,state) VALUES('boss','boss','active')")
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('boss','{}','ana')")
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('boss','ana')")
+        BS.write(c, 'boss', {})
         if author == 'outsider':
             c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot='cpo'")
         actor = {'manager': 'bot:cmo', 'grandmanager': 'bot:boss', 'person': 'human:ana', 'outsider': 'bot:cmo'}[author]

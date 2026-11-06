@@ -7,8 +7,8 @@
 
 A PR runs only the tests for what it changed, so the full suite runs here, once, right before a release. `--release`
 runs the journey's previous-release install while it builds the candidate images once. After all builds finish,
-it runs Python tests except Docker isolation (`pytest -m "slow or not slow"`) and every browser test
-(`node scripts/ui-tests.cjs --all`), alongside the Docker isolation tests
+it runs Python tests except Docker isolation (parallel, then `alone` wall-clock budget tests with no workers) and
+every browser test (`node scripts/ui-tests.cjs --all`), alongside the Docker isolation tests
 and whole-product checks against the successfully built images: docker/smoke.sh,
 docker/side-jobs-smoke.sh and `scripts/journey-test.sh --release` (install and seed the previous release, upgrade
 to the candidate, bot turns on the previous and the candidate runner, roll back a migrating update, a second updater
@@ -25,7 +25,7 @@ runs on this machine, as before, with the desktop part only where the Linux app 
 `--shard K/N` without `--release` runs the Kth of N file groups of the default Python suite (plain `pytest`, what PR
 checks run), balanced the same way, so the PR-check Python job can spread over several VMs. The N groups together run
 every file the single default run collects, each once. Groups balance by each file's recorded seconds in
-scripts/test-timings.json (a file with no record by its test count); refresh it with `--record-timings DEFAULT_XML
+scripts/test-timings.json (a file with no record by its estimated test count); refresh it with `--record-timings DEFAULT_XML
 SLOW_XML` from junit reports of a full run. Browser shards balance by the 'browser' seconds there; refresh those with
 `--record-browser-timings LOG...` from the browser logs of a release validation, every shard's.
 
@@ -38,12 +38,17 @@ Run locally, it first takes one of the computer's heavy-job slots (scripts/heavy
 runs at once on a box, the others waiting their turn. Hosted CI goes straight on.
 """
 import argparse
+import ast
+from collections import deque
+import configparser
+import fnmatch
 import ipaddress
 import json
 import os
 from pathlib import Path
 import socket
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -218,6 +223,48 @@ def parse_shard(text):
 RELEASE_SELECTION = ('-m', 'slow or not slow', f'--ignore={ISOLATION_FILE}')
 
 
+def python_test_commands(workers, files):
+    """Both release passes cover the same files; collection and weighting still include every test."""
+    common = [f'--ignore={ISOLATION_FILE}', '--api-database-snapshots', *files]
+    pytest = [sys.executable, '-m', 'pytest', '-q']
+    # Count-based batches can strand several expensive migration tests on one worker when a shard also has
+    # hundreds of cheap tests. Keep batches small so the other workers can share the expensive tests.
+    return [pytest + ['-n', workers, '--maxschedchunk=2', '-m', '(slow or not slow) and not alone', *common],
+            pytest + ['-n', '0', '-m', 'alone', *common]]
+
+
+def python_tests(workers, files):
+    """Run parallel then alone in one Check, preserving both summaries and the hosted gate's junit report."""
+    commands = python_test_commands(workers, files)
+    # CI supplies its report path through PYTEST_ADDOPTS. The alone pass must not overwrite the parallel cases.
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument('--junitxml', '--junit-xml')
+    report = parser.parse_known_args(shlex.split(os.environ.get('PYTEST_ADDOPTS', '')))[0].junitxml
+    summaries = []
+    with tempfile.TemporaryDirectory(prefix='tico-alone-junit-') as directory:
+        alone_report = Path(directory) / 'alone.xml'
+        if report:
+            commands[1].append(f'--junitxml={alone_report}')
+        for label, command in zip(('Parallel Python', 'Alone Python'), commands, strict=True):
+            process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            tail = deque(maxlen=5)
+            with process.stdout:
+                for line in process.stdout:
+                    print(line, end='', flush=True)
+                    tail.append(line.strip())
+            code = process.wait()
+            summaries.append(f'{label}: ' + ' | '.join(tail))
+            if label == 'Parallel Python' and code:
+                return code
+        if report:
+            combined = ElementTree.parse(report)
+            combined.getroot().extend(ElementTree.parse(alone_report).getroot())
+            combined.write(report, encoding='utf-8', xml_declaration=True)
+    # An empty alone pass can print enough lines to hide the parallel pass from Check's no-test-passed guard.
+    print('\n'.join(summaries), flush=True)
+    return 0 if code == 5 else code   # a shard need not contain any alone tests
+
+
 # Each test file's recorded seconds, per selection ('default' for PR checks, 'release' for the release Python step), so
 # shards balance by time. Refresh with --record-timings after a full run with junit output (see record_timings)
 # when the shard logs show many unrecorded files or shard times drift apart: a stale record never drops a test, it
@@ -229,8 +276,9 @@ TIMINGS = ROOT / 'scripts' / 'test-timings.json'
 # gate gives them python shards 1-2 (NATIVE_SHARDS), the only python VMs that wait for the native-linux build; the rest start at once.
 NATIVE_TEST = re.compile(r'rust_binary|TICO_RUNNER_BIN|TICO_SCREEN_RELAY_BIN|target/release|"target" / "release"|'
                          r'engine\.current|screen_binary|from runner(?:_support)? import engine|runner(?:_support)?\.engine|'
-                         # scripts/tico runs the checkout's runner (install, status: runner_support/engine.py finds the binary).
-                         r'"scripts" / "tico"\)|scripts/tico"')
+                         # scripts/tico-computer runs the checkout's runner (install, status: runner_support/engine.py finds
+                         # the binary).
+                         r'"scripts" / "tico(?:-computer)?"\)|scripts/tico(?:-computer)?"')
 NATIVE_BINARIES = ('runner-rs/target/release/tico-runner', 'relay-rs/target/release/tico-screen-relay')
 # A test module importing another test module (test_screen borrows test_screen_relay_contract's running_service).
 TEST_IMPORT = re.compile(r'from\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
@@ -272,21 +320,127 @@ def native_test_files(names):
 NATIVE_SHARDS = 2
 
 
-def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=False):
-    """The test files of shard `index` of `total`: every file pytest collects with `selection` (by default the
-    release Python step's), grouped so each shard takes about the same time: the slowest file by its recorded
-    seconds first, into the lightest shard. A file with no record weighs its test count times the recorded files'
-    seconds per test. Deterministic, so the N shards together cover each collected file exactly once."""
+def test_file_counts(selection=RELEASE_SELECTION, env=None, root=None):
+    """Filesystem candidates and cheap test-count estimates, without importing pytest or any test module.
+
+    Read pytest.ini's discovery settings (pytest defaults when absent), literal conftest collect_ignore/glob lists,
+    and --ignore/--ignore-glob in the selection and addopts. Markers deliberately do not affect the file list: a
+    slow-only or dynamically generated module still belongs to one shard. check_shard_coverage verifies this
+    discovery against real collection once in CI, outside the per-shard startup path.
+    """
+    root = ROOT if root is None else root
+    config = configparser.ConfigParser(interpolation=None)
+    config.read(root / 'pytest.ini')
+    patterns = shlex.split(config.get('pytest', 'python_files', fallback='test_*.py *_test.py'))
+    norecurse = shlex.split(config.get('pytest', 'norecursedirs',
+                                     fallback='*.egg .* _darcs build CVS dist node_modules venv {arch}'))
+    testpaths = shlex.split(config.get('pytest', 'testpaths', fallback=''))
+    starts = sorted({path for pattern in testpaths for path in root.glob(pattern)}) or [root]
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument('--ignore', action='append', default=[])
+    parser.add_argument('--ignore-glob', action='append', default=[])
+    options, _ = parser.parse_known_args([
+        *shlex.split(config.get('pytest', 'addopts', fallback='')),
+        *shlex.split((os.environ if env is None else env).get('PYTEST_ADDOPTS', '')), *selection])
+    ignored = {Path(os.path.abspath(root / name)) for name in options.ignore}
+    ignored_globs = [str(root / pattern) for pattern in options.ignore_glob]
+    counts = {}
+
+    def matches(pattern, path):
+        # pytest's fnmatch_ex matches a basename unless the pattern contains a separator.
+        value = str(path) if '/' in pattern else path.name
+        if '/' in pattern and not os.path.isabs(pattern):
+            pattern = '*/' + pattern
+        return fnmatch.fnmatch(value, pattern)
+
+    def conftest_ignores(folder, inherited):
+        path = folder / 'conftest.py'
+        values = dict(inherited)
+        if path.is_file():
+            for node in ast.parse(path.read_bytes(), filename=str(path)).body:
+                targets = (node.targets if isinstance(node, ast.Assign)
+                           else [node.target] if isinstance(node, ast.AnnAssign) else [])
+                for target in targets:
+                    if isinstance(target, ast.Name) and target.id in ('collect_ignore', 'collect_ignore_glob'):
+                        try:
+                            entries = ast.literal_eval(node.value)
+                            if not isinstance(entries, (list, tuple)) or not all(isinstance(n, str) for n in entries):
+                                raise ValueError('expected a literal list of paths')
+                        except (ValueError, TypeError) as error:
+                            raise RuntimeError(f'{path}: sharding requires literal {target.id}') from error
+                        values[target.id] = [os.path.abspath(folder / name) for name in entries]
+        return values
+
+    def visit(folder, inherited):
+        ignores = conftest_ignores(folder, inherited)
+        with os.scandir(folder) as scan:
+            entries = sorted(scan, key=lambda entry: entry.name)
+        for entry in entries:
+            path = Path(entry.path)
+            if path.name == '__pycache__' or path in ignored or str(path) in ignores.get('collect_ignore', ()):
+                continue
+            if any(fnmatch.fnmatch(str(path), pattern)
+                   for pattern in [*ignored_globs, *ignores.get('collect_ignore_glob', ())]):
+                continue
+            if entry.is_dir():
+                if (any(matches(pattern, path) for pattern in norecurse) or (path / 'pyvenv.cfg').is_file()
+                        or (path / 'conda-meta/history').is_file()):
+                    continue
+                visit(path, ignores)
+            elif entry.is_file() and path.suffix == '.py' and any(matches(pattern, path) for pattern in patterns):
+                add(path)
+
+    def add(path):
+        # Parametrization and generated tests need no special handling for coverage. A module with no visible
+        # test functions still weighs at least one test, so new dynamically generated tests get a shard too.
+        counts[path.relative_to(root).as_posix()] = max(1, len(re.findall(
+            r'^\s*(?:async\s+)?def\s+test_\w*\s*\(', path.read_text(errors='replace'), re.M)))
+
+    for start in starts:
+        inherited = {}
+        for parent in reversed(start.relative_to(root).parents):
+            inherited = conftest_ignores(root / parent, inherited)
+        if start.is_dir():
+            visit(start, inherited)
+        elif start.is_file() and start.suffix == '.py':
+            add(start)
+    return dict(sorted(counts.items()))
+
+
+def validate_shard_coverage(collected, selection=RELEASE_SELECTION, env=None, root=None):
+    """Fail if real collection contains a file the filesystem plan would omit; empty candidates are harmless."""
+    listed = set(test_file_counts(selection, env, root))
+    missing = sorted(set(collected) - listed)
+    if missing:
+        raise RuntimeError('collected test files absent from the shard file list: ' + ', '.join(missing))
+    print(f'Shard coverage: {len(collected)} collected files covered; '
+          f'{len(listed - set(collected))} additional candidates (empty or deselected)', flush=True)
+    return 0
+
+
+def check_shard_coverage(env, selection=RELEASE_SELECTION):
+    """One real single-process collection, shared by the gate rather than repeated on every shard."""
     result = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', '-n', '0', *selection],
                             cwd=ROOT, env=env, capture_output=True, text=True)
     if result.returncode:
         print(result.stdout[-4000:] + result.stderr[-4000:], flush=True)
         raise RuntimeError(f'test collection failed (exit {result.returncode})')
-    counts = {}
-    for line in result.stdout.splitlines():
-        if '::' in line and not line.startswith(' '):
-            name = line.split('::', 1)[0]
-            counts[name] = counts.get(name, 0) + 1
+    collected = {line.split('::', 1)[0] for line in result.stdout.splitlines()
+                 if '::' in line and not line.startswith(' ')}
+    if not collected:
+        raise RuntimeError('test collection returned no test files')
+    return validate_shard_coverage(collected, selection, env)
+
+
+def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=False):
+    """Choose shard `index` of `total` without pytest collection: discover filesystem candidates using pytest.ini,
+    conftest ignores and selection ignores, then put the slowest file into the lightest shard, by recorded seconds.
+    Unrecorded files weigh their source test-function estimate times recorded seconds per estimated test. Sorted
+    paths break ties, so identical checkouts yield identical plans and every candidate belongs to exactly one shard.
+    CI's once-per-plan collection guard verifies every collected file is a candidate; empty/deselected files are
+    allowed. Native-first reserves shards 1..NATIVE_SHARDS for native files and bins the remainder separately.
+    """
+    counts = test_file_counts(selection, env)
     if len(counts) < total:
         raise RuntimeError(f'{len(counts)} test files cannot fill {total} shards')
     timings = recorded_timings('release' if selection else 'default')
@@ -301,7 +455,7 @@ def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=Fal
             groups, loads, _ = bin_shards({name: counts[name] for name in native}, timings, NATIVE_SHARDS)
             mine = sorted(groups[index - 1])
             print(f'Python shard {index}/{total}: {len(mine)} of the {len(native)} native test files, '
-                  f'{sum(counts[n] for n in mine)} of {sum(counts.values())} tests, about {loads[index - 1]:.0f} seconds',
+                  f'{sum(counts[n] for n in mine)} estimated tests, about {loads[index - 1]:.0f} seconds',
                   flush=True)
             return mine
         counts = {name: n for name, n in counts.items() if name not in native}
@@ -311,8 +465,8 @@ def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=Fal
         groups, loads, unrecorded = bin_shards(counts, timings, total)
     mine = groups[index - 1]
     print(f'Python shard {index}/{total}: {len(mine)} files, {sum(counts[name] for name in mine)} of '
-          f'{sum(counts.values())} tests, about {loads[index - 1]:.0f} of {sum(loads):.0f} seconds, recorded or estimated '
-          f'({len(unrecorded)} of {len(counts)} files unrecorded, weighed by test count)', flush=True)
+          f'{sum(counts.values())} estimated tests, about {loads[index - 1]:.0f} of {sum(loads):.0f} seconds, recorded or estimated '
+          f'({len(unrecorded)} of {len(counts)} files unrecorded, weighed by source test count)', flush=True)
     return sorted(mine)
 
 
@@ -355,8 +509,8 @@ def recorded_timings(kind):
 
 
 def file_weights(counts, timings):
-    """Each collected file's weight: its recorded seconds, or for a file with no record its test count times the
-    recorded files' seconds per test (1 when nothing is recorded). Also the unrecorded files."""
+    """Each file's weight: its recorded seconds, or for a file with no record its count estimate times the
+    recorded files' seconds per estimated test (1 when nothing is recorded). Also the unrecorded files."""
     recorded = [name for name in counts if name in timings]   # a recorded 0.0 (a file under 5 ms) is a record
     tests = sum(counts[name] for name in recorded)
     per_test = sum(timings[name] for name in recorded) / tests if tests else 1.0
@@ -395,9 +549,10 @@ def record_timings(default_report, slow_report):
 
 def record_shard_timings(report_dir):
     """Refresh the 'release' seconds in TIMINGS from the per-shard junit reports of a release validation (every `*.xml`
-    under `report_dir`, written with `-o junit_family=xunit1`). Each file's tests run in one shard, so its seconds are
-    the sum of its cases. A file that did not run keeps its recorded seconds while it still exists in the checkout;
-    the 'default' record is only pruned, since these reports are the release selection's. Browser seconds are kept."""
+    under `report_dir`, written with `-o junit_family=xunit1`). Each file's tests run in one shard; its seconds sum
+    all cases across the parallel and alone suites. A file that did not run keeps its recorded seconds while it
+    still exists in the checkout; the 'default' record is only pruned, since these reports are the release selection's.
+    Browser seconds are kept."""
     reports = sorted(Path(report_dir).rglob('*.xml'))
     if not reports:
         raise RuntimeError(f'no junit reports under {report_dir}')
@@ -524,12 +679,11 @@ def release(args):
         built = all(code == 0 for code in build_codes)
         ready.write_text('ok' if built else 'failed')
     if runs('python'):
-        python_cmd = [sys.executable, '-m', 'pytest', '-q', '-n', workers, '-m', 'slow or not slow',
-                      f'--ignore={ISOLATION_FILE}', '--api-database-snapshots']
+        python_cmd = [sys.executable, str(ROOT / 'scripts/release_checks.py'), '--python-tests', workers]
         name = 'all-python'
         if shard:
             files = shard_files(shard[0], shard[1], test_env, native_first=True)
-            # Never skip a native test for want of its binary: only shard 1's VM waits for the native-linux build.
+            # Never skip a native test for want of its binary: the native shards' VMs wait for the native-linux build.
             missing = [b for b in NATIVE_BINARIES if not (ROOT / b).exists()]
             if missing and native_test_files(files):
                 raise RuntimeError(f'python shard {shard[0]} has native tests but no release binaries: {missing}')
@@ -583,8 +737,11 @@ def release(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--release', action='store_true', help='every test and the whole-product checks (the release gate)')
+    parser.add_argument('--check-shard-coverage', action='store_true',
+                        help='collect once and verify filesystem sharding covers every collected file; --release includes slow tests')
     parser.add_argument('--previous', help='with --release: the release the journey upgrades from (default: newest tag)')
     parser.add_argument('--part', choices=PARTS, help='with --release: run only this slice of the gate')
+    parser.add_argument('--python-tests', nargs='+', help=argparse.SUPPRESS)   # the Python Check's subprocess
     parser.add_argument('--record-timings', nargs=2, metavar=('DEFAULT_XML', 'SLOW_XML'),
                         help='rewrite scripts/test-timings.json from junit reports of the default suite and the slow tests')
     parser.add_argument('--record-shard-timings', metavar='JUNIT_DIR',
@@ -606,6 +763,10 @@ def main(argv=None):
         return record_shard_timings(args.record_shard_timings)
     if args.record_browser_timings:
         return record_browser_timings(*args.record_browser_timings)
+    if args.python_tests:
+        return python_tests(args.python_tests[0], args.python_tests[1:])
+    if args.check_shard_coverage:
+        return check_shard_coverage(dict(os.environ), RELEASE_SELECTION if args.release else ())
     if args.release:
         return release(args)
     return python_shard(*args.shard) if args.shard else full()
@@ -617,7 +778,8 @@ def in_slot(env=os.environ):
 
 
 if __name__ == '__main__':
-    if not in_slot() and not {'--record-timings', '--record-shard-timings', '--record-browser-timings'} & set(sys.argv):
+    if not in_slot() and not {'--record-timings', '--record-shard-timings', '--record-browser-timings',
+                             '--check-shard-coverage'} & set(sys.argv):
         # A local run first takes one of the box's heavy-job slots, at low priority (scripts/heavy.sh).
         os.execvp('bash', ['bash', str(ROOT / 'scripts/heavy.sh'), sys.executable, __file__, *sys.argv[1:]])
     raise SystemExit(main())

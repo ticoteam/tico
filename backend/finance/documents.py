@@ -779,8 +779,8 @@ def _late_enough(inv: Any, today: str, stage: int) -> None:
 
 def invoice_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Send a draft invoice: Dr AR / Cr its income lines, marked sent. When the customer has an email and the Bookkeeper
-    has a mailbox that can send, the invoice email is approved on commit (delivery.issue) for this exact text and
-    document, and the Bookkeeper sends it and reports back (`invoice_delivery`). Otherwise the result carries the document
+    has a mailbox that can send, the invoice email is frozen on commit (delivery.issue) for this exact text and
+    document, then needs its send preview and approval; the Bookkeeper reports back (`invoice_delivery`). Otherwise the result carries the document
     for whoever delivers it (`delivery: "caller"`). The email's intent is resolved here (Plan.resolved), so an ask for it
     is void and asked again if its address, text, document or mailbox changes before it is decided."""
     V.only(p, ("invoice_id", delivery.MAIL))
@@ -828,7 +828,7 @@ def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Remind the customer that a sent invoice is unpaid, once for each stage (1, 7, 30, 60 or 90 days late). The text
     is fixed: the number, what is left, the due date and the payment link when there is one; no free text. The reminder
     is recorded on commit under a Tico send approval (delivery.issue) for that text and the customer's addresses; the
-    Bookkeeper sends it and reports back (`invoice_delivery`). A paid or draft invoice, an invoice with no due date, one
+    shared queue dispatches it and the Bookkeeper reports back (`invoice_delivery`). A paid or draft invoice, an invoice with no due date, one
     not yet past due or not yet at the stage's days late, a stage already reminded, a customer with no email and no
     Bookkeeper mailbox are refused with the reason, before any stage is used. The days late are the action's own day's
     (ctx.today), checked again when the approval is decided (actions.approval_decided)."""

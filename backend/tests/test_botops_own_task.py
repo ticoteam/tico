@@ -135,8 +135,8 @@ def test_a_worktree_refusal_says_who_can_give_the_access(api, botops):
     tried = api.post(path, json={"repo": "acme/site"}, headers=headers(attempt["token"]))
     assert tried.status_code == 403
     error = tried.json()["error"]
-    assert "owner or admin" in error["fix"] and "Settings > Repositories" in error["fix"]
-    assert error["link"].endswith("#/repositories")
+    assert "owner or admin" in error["fix"] and "Settings > General › Repositories" in error["fix"]
+    assert error["link"].endswith("#/settings/general/set-repos")
 
 
 def test_another_persons_comment_on_a_carried_request_lends_only_the_bots_rights(api, botops, monkeypatch):
@@ -188,7 +188,7 @@ def test_botops_own_ask_is_a_plain_ask(api, botops):
     assert (tried.json()["actor"], tried.json()["role"]) == ("bot:botops", "bot")
 
 
-def test_private_subtask_from_bot_requested_run_is_judged_in_default_rehearsal(api, botops):
+def test_private_subtask_from_bot_requested_run_is_judged_on_by_default(api, botops):
     from backend.tests.test_ask_ingest import FakeModel, items, calls
     model = FakeModel(kind="own_work")
     api.app.state.judge = model
@@ -202,15 +202,12 @@ def test_private_subtask_from_bot_requested_run_is_judged_in_default_rehearsal(a
         "owner": "ana", "title": "Which mailbox should Ops send from?",
         "body": "Choose support@ or hello@", "visibility": "private",
         "relations": [{"task": task["id"], "kind": "parent"}]})
-    assert filed.status_code == 200, filed.text
-    made = filed.json()["task"]
-    assert (made["owner_id"], made["requester_id"]) == ("human:ana", "bot:ops")
+    assert filed.status_code == 422 and filed.json()["error"]["code"] == "ask_refused", filed.text
     [item], [call] = items(api), calls(api)
-    assert (item["mode"], item["outcome"], item["would"]) == ("rehearsal", "through", "sent_back")
-    assert item["asker"] == "bot:ops" and item["ref"] == made["id"] and item["call_id"] == call["id"]
+    assert (item["mode"], item["outcome"], item["would"]) == ("on", "sent_back", "sent_back")
+    assert item["asker"] == "bot:ops" and item["ref"] == "" and item["call_id"] == call["id"]
     assert len(model.calls) == 1
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM ask_ingest_settings").fetchone()[0] == 0
-        event = c.execute("SELECT detail FROM events WHERE action='task.create' AND target=?",
-                          (made["id"],)).fetchone()
-        assert '"via": "botops"' in event["detail"]
+        assert not c.execute("SELECT 1 FROM tasks WHERE title='Which mailbox should Ops send from?'").fetchone()
+        assert not c.execute("SELECT 1 FROM refusals").fetchone()

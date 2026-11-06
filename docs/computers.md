@@ -4,10 +4,17 @@ A computer runs your bots. **Settings → Computers** lists every computer: its 
 Codex use there, the other AI tools' logins, and what it is doing now. To add a computer, click **Add computer** or see
 [Install](install.md#add-computers-to-run-your-bots).
 
+Re-enrolling the same physical computer can leave an older registration behind. The hourly cleanup removes that
+registration after more than 24 hours offline only when a newer, active registration has the same reported device
+identity, owner, name and platform, and was enrolled or contacted Tico after the old registration's last contact.
+The old registration must have no assigned bots, cloud machine, shared browser access, saved or reported sign-ins,
+keys, subscriptions, profiles or app delivery. Computers with an unknown device identity stay listed. The runner
+reports an app-salted hash of the OS device identity; the raw identity stays on the computer.
+
 **Settings → Models** holds the company's model settings:
 
 - **Subscriptions**: the company's Claude and ChatGPT plans and API keys, each given to the computers that use it.
-- **Tico Gateway**: one switch, **Use when a computer has no subscription, or a plan runs out**. The
+- **Tico Gateway**: one switch, **Use as fallback** (used when a computer has no subscription, or a plan runs out). The
   [Tico AI Gateway](ai-gateway.md) key, address and spend are under **Advanced**.
 - **Defaults**: **Default model**, **Decisions**, **Meeting model**, **Fall back when a plan runs out** and **Check model**.
 - **Limits**: the [company turn levels](#change-the-company-turn-levels).
@@ -53,22 +60,28 @@ The computers list, each computer's pop-up and **Settings → Health** show four
 |---|---|
 | **Running** | The turn has started. |
 | **Starting** | The computer has reserved a place and is preparing the turn. |
-| **Waiting** | The turn needs a login, quota, a free lane or another pre-start requirement. Each reason shows its count and oldest wait. |
+| **Waiting** | The turn needs a login, quota, available memory, a free lane or another pre-start requirement. Each reason shows its count and oldest wait. |
 | **Queued** | The work is in line to be picked up. |
 
 For example, **3 running · 2 starting · 7 waiting for quota (oldest 2 h) · 5 queued** separates work from its waits.
 The counts describe the computer's total load, including work belonging to other people. Wait reasons never name
 bots, tasks, people or accounts. The bot list still follows each viewer's access.
 
-On an upgraded runner, only running and starting turns occupy a place. A login, quota or other pre-start wait holds
-none, so unrelated work can start. Waiting for a lane or login releases the place; continuing requires a fresh atomic
-reservation. Two turns cannot take the last place together. Codex's shared ChatGPT login does not normally queue
-turns ([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
+On an upgraded runner, a turn holds its place from its claim until it ends. A computer runs up to its turn limit, and
+holds at most twice that in claimed work, waiting turns included; the rest stays queued on the server, unleased, until
+a claim ends. A turn claimed past the limit holds no place: its start is refused as "computer busy" until one frees. A
+login, quota or other pre-start wait is parked: the turn keeps its claim but takes no start place, so
+other work can start beside it. Waiting for
+a lane or login releases only the start reservation; continuing requires a fresh atomic reservation. Two turns cannot
+take the last start reservation together. Codex's shared ChatGPT login does not normally queue turns
+([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
 
 A starting turn reserves a place for up to **3 minutes (180 seconds)**, including active Git and runtime preparation.
 Keeping that preparation active does not extend the deadline. If the turn has not started, its place is released and
-its work returns to the queue without changing the task. After 10 missed starts for one job since the server last
-started, Tico reports a pre-start failure instead of retrying forever. Check the computer named in the failure.
+its work returns to the queue without changing the task. After 10 missed starts for one job within the last 24 hours,
+including starts missed before a server restart, Tico reports a pre-start failure instead of retrying forever.
+Leases cut by a hub restart or update and planned pauses do not count as missed starts. Check the computer named
+in the failure.
 
 CPU or memory strictly above **90% for 5 minutes** holds new starts on that computer with **waiting: computer busy**.
 Memory at **85% or more** holds them too, with **waiting: computer busy: memory N%**; they start again once memory is
@@ -77,9 +90,26 @@ with **waiting: computer not reporting**, because a computer that stops reportin
 never reported is not held. The server also ends a run that has gone silent (no heartbeat or event for 5 minutes)
 once it is past its bot's max_run_minutes plus 5 minutes, without waiting for the computer.
 This includes turns with a reservation that have not started yet. Running turns continue. New starts resume when
-the hold clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
-the waiting turns, when the computer has a free turn; Tico's notices and messages between bots wait. This brake does
-not change your account, model or computer size.
+the hold clears. A person's own message to a bot (a chat, a message in its task) passes CPU overload and stale
+reports, ahead of the waiting turns, when the computer has a free turn. On Linux computers (including cloud machines
+and Docker), memory pressure also holds a person's messages. On Macs and computers whose platform is unknown,
+a person's messages pass the server's memory hold too.
+
+The Linux runner also checks current memory before starting a harness or preparing its thread, including when a
+fallback is the first harness for the turn. Its local hold uses the same 85% and 80% thresholds, even with diagnostics
+off. While waiting it gives its start place back and keeps its delivery lease. The run, Computers and Health say
+**waiting: computer busy: memory N%**. Memory admission ends only when a harness process actually launches or the turn
+acquires a live pooled process. Preparing a lazy host or its thread (such as Claude before its first send) does not
+cross that boundary: waits for sign-in renewal still check current memory before launching. The runner reports an
+allocated process on start-place and started requests, so neither the runner nor the hub parks that turn on its own
+allocation’s memory use. The boundary stays crossed through fallback. If a lazy harness acknowledges its start but
+fails to launch, its fallback checks memory locally until it allocates a process, keeping the running turn's place.
+It does not request pre-start admission again. Runners advertise allocation reporting through the
+`harness_allocation_v1` heartbeat capability. For runners without it, memory pressure never revokes an existing
+start grant. A runner talking to an older hub drops the new field or capability if that hub refuses it.
+The Mac runner never parks a turn on local memory readings;
+macOS's Memory Used includes memory it can reclaim through compression and swap. This does not cap the memory of
+tools already running inside a turn, or change your account, model or computer size.
 
 During an update, server and runner negotiate the start rules through heartbeat and claim. Older runners retain
 their existing delivery leases, including preparation already underway, until they update. Those starts have no new
@@ -123,7 +153,6 @@ One person, or no people with sign-in access, gives **40** and **100**.
 
 Just below the stop, while the count is still at or above the warning, work that waited through the stop keeps first claim on each freed place, in order across computers. Below the warning that list is cleared and each computer starts from its own queue again. Work still waiting for a login, quota or computer remains held for that reason.
 Below the warning level, Health marks the incident resolved and records the time. Crossing the warning again opens a new incident.
-The Health record works even when the optional [Health Monitor](health-monitor.md) is off.
 
 These settings provide the warning record and start limit. See [The turn fixer](#the-turn-fixer) for automatic recovery.
 The company-limit message does not confirm that an automatic repair has run.
@@ -223,12 +252,15 @@ Connecting a saved subscription is **Reconnect**, and asks first as a pasted val
 who added it. Owners and admins add, rename, reconnect and remove them in **Settings > Models**; anyone who sees that
 page sees the list (name, kind, status, computers, usage), never a value.
 
-Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many
-computers. Every bot on that computer then runs that tool on it. Automatic fallback can use it too when
-that tool is installed and the company allows automatic fallback. On an updated runner, an unused automatic
-candidate's login is fetched only when the bot is about to use it. Changing or removing that login leaves a turn
-still running on another tool alone. Once the fallback fetches the login, changing it stops that turn too. Older
-runners fetch fallback logins up front and restart those turns when a login changes.
+Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many computers.
+Every bot on that computer then runs that tool on it. A bot with no fallback of its own, or whose named fallback is another
+model on the same login (that fallback is skipped once the login is spent), can use it too when that tool is installed,
+the company has that tool's provider turned on (adding a subscription for that tool turns it on, and the first-run setup
+lists the providers to switch on), and **Fall back when a plan runs out** is on in **Settings > Models**. On an updated
+runner, an unused automatic candidate's login is fetched only when the bot is about to use it.
+Changing or removing that login leaves a turn still running on another tool alone. Once the fallback fetches the login,
+changing it stops that turn too. Older runners fetch fallback logins up front and restart those turns when a login
+changes.
 
 - Giving, switching or taking off a computer's subscription, reconnecting it, or removing one in use, restarts that tool there: its
   running turns stop and go back in the queue (a turn that may already have acted outside Tico is held for review
@@ -278,7 +310,8 @@ registered: choose **Add computer**.
 
 ## A computer's pop-up
 
-Click a row to open its pop-up. Its sections, top to bottom:
+Click a row to open its pop-up. Owners and admins rename the computer with the pencil next to its name (1 to 100
+characters; a cloud machine made again keeps the name). Its sections, top to bottom:
 
 1. **Connections**: one line per AI tool, the computer's login for it: the tool, "Computer's login" (or "Shared key"),
    the signed-in account and plan, sign-in state, usage (weekly and, where the tool reports one, the 5-hour window) and
@@ -398,7 +431,7 @@ Choose **API key** when you pay the provider for each use:
   - **Add key** gives this computer a key of its own, for Codex, Claude Code, Cursor Agent and Muse Code. Only this
     computer uses it.
   - **Credentials** holds a key that several computers share (the company's key given to **Every computer**), and the
-    key of a tool whose key belongs to each bot, such as the Gemini CLI. **Add connection** offers **Open Credentials**
+    key of a tool whose key belongs to each bot, such as the Gemini CLI. **Add connection** offers **Open Keys**
     for those.
 
 ### Add one
@@ -418,7 +451,7 @@ In a computer's pop-up, **Add connection** (at the end of Connections) opens its
      [API keys on a Computer](#api-keys-on-a-computer)). A credential administrator can set **Shared with:** to other
      computers, or pick a key that is already shared instead of pasting one. An operator adds a key for this computer
      only. If a key already signs the tool in here, **Replace key** is on
-     its line instead. For any other tool, **Open Credentials**, where model keys are added and shared with computers.
+     its line instead. For any other tool, **Open Keys**, where model keys are added and shared with computers.
 4. The new connection's chip appears on the computer's row once the computer reports it; the computer does not need a
    restart.
 
@@ -636,7 +669,7 @@ The rest of this page is for administrators and integrators: where readings come
 
 Weekly reports are scoped to a Computer, profile and runtime. Codex reports its seven-day window when its running host emits one. Claude Code may report the seven-day reset and limit state without a percentage; that percentage stays unknown. No API calls or token-to-percentage estimates are used to invent a provider balance. Usage elsewhere on the same provider account counts toward that allowance.
 
-The last provider report includes its observation time and reset. Reports older than a day are labelled as possibly out of date. After reset they stay labelled as the previous week and never read as a fresh allowance. Reports survive a runner restart on the server. An updated computer can refresh Codex weekly usage directly; other providers need a supported subscription-backed run or a manual reading. An unnamed computer-default login has no named subscription snapshot; it remains unknown rather than being assigned to another profile. When that default login keeps stopping on a usage limit, **Settings → Health** says it is out of quota ([Health Monitor](health-monitor.md), `default_login_limited`).
+The last provider report includes its observation time and reset. Reports older than a day are labelled as possibly out of date. After reset they stay labelled as the previous week and never read as a fresh allowance. Reports survive a runner restart on the server. An updated computer can refresh Codex weekly usage directly; other providers need a supported subscription-backed run or a manual reading. An unnamed computer-default login has no named subscription snapshot; it remains unknown rather than being assigned to another profile. When that default login keeps stopping on a usage limit, **Settings → Health** says it is out of quota ([Check health](health-monitor.md), `default_login_limited`).
 
 Computers report the account each login is signed in to: email, plan and organization from `claude auth status --json`, and email and plan from Codex app-server's `account/read`, always requested with `refreshToken: false`. A Codex turn's or refresh's `planType` keeps the plan current. This deliberately reverses the earlier rule that Tico kept no account records: it is the first stored account identity, so the page can show which account each Computer and profile uses (`signed in as <email> · <plan>`). Credential files and `codex login status` output are never read for it, only allow-listed fields are kept, and a value that looks like a key or token is dropped on the computer and refused by the server, without affecting the sign-in state. The account is read alongside the existing one-minute sign-in probe; Codex's app-server read runs in the background at most every ten minutes. A signed-out login shows no account. An account stays one login's report: two profiles that show the same email are not merged.
 

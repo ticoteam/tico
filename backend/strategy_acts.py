@@ -173,9 +173,9 @@ class Caller:
     def reads(self, row):
         return bool(row) and reads(self.c, self.visible)(row)
 
-    def would_read(self, owner, requester, private=0, guest=None):
-        return bool(self.c.execute(f"SELECT 1 FROM (SELECT ? AS owner_id, ? AS requester_id, ? AS private, ? AS guest) "
-                                   f"WHERE ({self.visible})", (owner, requester, private, guest)).fetchone())
+    def would_read(self, owner, requester, private=0, readers=None):
+        return bool(self.c.execute(f"SELECT 1 FROM (SELECT NULL AS id, ? AS owner_id, ? AS requester_id, ? AS private, ? AS readers) tasks "
+                                   f"WHERE ({self.visible})", (owner, requester, private, readers)).fetchone())
 
     def give(self, owner, task_id=None):
         return self._give(owner, task_id)
@@ -200,7 +200,7 @@ class Caller:
 def _bot_task(c, task_id):
     """A task the Strategy Bot may change alone: live, owned by a bot, and company-visible. None otherwise. It never
     acts alone on a private task, even one it may read: the log would carry the task's words (its note), and Undo, made
-    as the owner, could neither write it nor give back its guest. One it can't read never gets here (`Caller.task`)."""
+    as the owner, could not write it. One it can't read never gets here (`Caller.task`)."""
     row = H.task(c, str(task_id or ""))
     if not row or row["status"] not in H.ACTIVE_STATUSES or not H.is_bot(row["owner_id"]):
         return None
@@ -273,8 +273,8 @@ def _check(c, change, caller):
         return "name a live bot task (a finished or private one can't be changed)", None
     if do == "reassign" and change["owner"] == row["owner_id"]:
         return f"{TASK} is already {caller.name(row['owner_id'])}'s", None
-    if do == "reassign" and not caller.would_read(change["owner"], row["requester_id"], row.get("private") or 0):
-        # A new owner drops the guest (task_update), so the task is read as it would be then.
+    if do == "reassign" and not caller.would_read(change["owner"], row["requester_id"], row.get("private") or 0,
+                                                  row.get("readers")):
         return f"giving {TASK} to {_name(c, change['owner'])} would put it out of the Strategy Bot's sight", None
     if do == "reassign" and (private := _keeps_private(c, change["owner"], TASK)):
         return private, None
@@ -310,7 +310,7 @@ def _undone(c, change):
 
 
 FIELDS = ("status", "step_id", "step_rank", "owner_id", "rank", "note", "closed_at", "closed_by_id", "version", "private",
-          "guest")
+          "readers")
 
 
 def _snapshot(row):
@@ -340,7 +340,7 @@ def _apply(c, change, goal_id, reason):
     elif do == "reassign":
         H.task_update(c, STRATEGY_BOT, row["id"], owner=change["owner"], mover=True)
     else:
-        H.task_close(c, H.KEEPER, row["id"], change["note"] or f"Closed by the {strategy_bot.name(c)}: {reason}")
+        H.task_close(c, H.KEEPER, row["id"], change["note"] or f"Closed by the {strategy_bot.name(c)}: {reason}", strict=False)
         c.execute("UPDATE tasks SET closed_by_id=? WHERE id=?", (STRATEGY_BOT, row["id"]))
     _bump(c, row["id"])
     return {"task_id": row["id"], "made": False, "before": before, "after": _snapshot(H.task(c, row["id"]))}
@@ -484,7 +484,7 @@ def _stored(c, action_id):
 
 def reads(c, visible):
     """Whether a reader may open a task, by the SQL that decides what they read (auth.task_sql): a private task's
-    parties and guest, and a company task unless its owner or requester is a bot hidden from them."""
+    parties and readers, and a company task unless its owner or requester is a bot hidden from them."""
     return lambda row: bool(c.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({visible})", (row["id"],)).fetchone())
 
 
@@ -535,7 +535,7 @@ def _as_read_by(c, can_read, row):
 
 def receipt(row):
     """What the Strategy Bot is told of its own decision: each line as it may read it, without the task fields Undo
-    keeps (owner, status, queue place, guest). The log with those is the owner's (GET /api/v2/strategy-bot/log)."""
+    keeps (owner, status, queue place, readers). The log with those is the owner's (GET /api/v2/strategy-bot/log)."""
     def item(x):
         return {k: v for k, v in x.items() if k not in ("before", "after")}
     return {**row, "done": [item(x) for x in row["done"]], "left": [item(x) for x in row["left"]]}
@@ -580,7 +580,7 @@ def undo(c, actor, action_id):
                 continue
             if not item.get("made") and _was_private(c, item, task):
                 # The decision never acts on a private task (_bot_task); one logged as private before it is left
-                # alone, so nothing is refused and its guest keeps it.
+                # alone, so nothing is refused and its readers keep it.
                 note(f"{TASK} is private, so Undo leaves it as it is")
                 continue
             c.execute("SAVEPOINT strategy_undo")
@@ -620,7 +620,8 @@ def _per_task(done):
 def _later(c, task_id, fields, since, action_id):
     """Who last changed any of these task event fields after the decision, or None."""
     marks = ",".join("?" * len(fields))
-    found = c.execute(f"SELECT actor FROM task_events WHERE task_id=? AND field IN ({marks}) AND created_at>? "
+    found = c.execute(f"SELECT actor_id FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN ({marks}) "
+                      "AND created_at>? "
                       "AND coalesce(action_id,'')!=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
                       (task_id, *fields, since, action_id)).fetchone()
     return found[0] if found else None
@@ -671,11 +672,6 @@ def _restore(c, actor, task, item, since, note):
             note(f"{TASK}: {PLAIN[field]} was changed since by {_name(c, who)}, so their change stays")
         else:
             back.append(field)
-    if "owner_id" in back and task.get("guest") and task["guest"] != before.get("guest"):
-        # A new owner drops the guest (task_update): a guest given the task since keeps it, so its owner stays, with
-        # its place in that owner's queue.
-        back = [f for f in back if f not in ("owner_id", "rank")]
-        note(f"{TASK} has a guest now, so its owner stays")
     if not back:
         return None
     put = {}

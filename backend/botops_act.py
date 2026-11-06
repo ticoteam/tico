@@ -133,7 +133,8 @@ def _untouched(c, task, writer):
     """Nobody but `writer` (who opened it) and BotOps changed the task's words or said anything on it."""
     from .store import H
     botops = "bot:" + H.FLEET_MAINTAINER
-    if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field IN ('title','body') AND actor NOT IN (?,?) LIMIT 1",
+    if c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN ('title','body') "
+                 "AND actor_id NOT IN (?,?) LIMIT 1",
                  (task["id"], writer, H.KEEPER)).fetchone():
         return False
     said = c.execute("SELECT 1 FROM message_refs m WHERE m.ref_task_id=? AND m.sender_id NOT IN (?,?,?) "
@@ -157,8 +158,8 @@ def lend_lapsed(c, task):
     requester last spoke on it more than LEND_MAX_DAYS ago."""
     from .store import H
     requester = task["requester_id"]
-    for row in c.execute("SELECT * FROM task_events WHERE task_id=? AND field='status' AND old IN (?,?,?) "
-                         "AND new NOT IN (?,?,?)", (task["id"], *TERMINAL, *TERMINAL)):
+    for row in c.execute("SELECT actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='status' AND old IN (?,?,?) AND new NOT IN (?,?,?)", (task["id"], *TERMINAL, *TERMINAL)):
         if row["actor"] != requester or dict(row).get("via"):
             # Re-asking on the same task can't clear this: the reopening stays in its history. The person's own new
             # words start a run with their rights anyway (a comment on the open task, or their BotOps chat).
@@ -200,6 +201,7 @@ THREADS = _routes(
     ("POST", r"threads"), ("PATCH", rf"threads/{_S}"),
     ("POST", rf"threads/{_S}/(messages|read|read-all|members)"), ("DELETE", rf"threads/{_S}/members/{_S}"),
     ("PUT", rf"threads/{_S}/follow"), ("DELETE", rf"threads/{_S}/follow"),
+    ("PUT", rf"threads/{_S}/pin"), ("DELETE", rf"threads/{_S}/pin"),
     ("PATCH", rf"messages/{_S}"), ("DELETE", rf"messages/{_S}"), ("POST", rf"threads/messages/{_S}/task"),
     ("PUT", rf"messages/{_S}/reactions/{_S}"), ("DELETE", rf"messages/{_S}/reactions/{_S}"),
     ("POST", r"threads/dm"), ("POST", rf"threads/{_S}/open-earlier"), ("POST", rf"uploads/threads/{_S}/messages"),
@@ -277,9 +279,9 @@ DO = _routes(
     ("DELETE", rf"credentials/{_S}"),
     # Computers: a restart, a model sign-in (its code is pasted in the app, never here), who may open its screen (opening
     # one is the person's own, in the app), inbox sharing where one owner runs
-    # everything (the route says where). Limits are spending: lowering one is always direct; raising one, and the providers,
+    # everything (the route says where), its name and how many turns it runs at once (owners and admins, which the routes check). Limits are spending: lowering one is always direct; raising one, and the providers,
     # are direct unless the owner's rule says otherwise (TIGHTENED).
-    ("POST", rf"(runners|computers)/{_S}/(restart|inbox-only|logins|screen)"), ("POST", rf"(runners|computers)/{_S}/logins/{_S}/cancel"),
+    ("POST", rf"(runners|computers)/{_S}/(restart|inbox-only|logins|screen|label|turns-at-once)"), ("POST", rf"(runners|computers)/{_S}/logins/{_S}/cancel"),
     ("PUT", r"providers"), ("PUT", r"usage/limits"), ("PUT", rf"usage/limits/{_S}"), ("PUT", rf"usage/pools/(company|groups/{_S})"),
     # The Tico AI Gateway address, off or back to automatic is a provider change too (the owner's, which the route
     # checks). Saving its key is a secret, refused in the request; checking it changes nothing.
@@ -327,6 +329,13 @@ LIMITS = re.compile(API + rf"usage/limits(/{_S})?")
 
 # Comes back as a Confirm card; it runs only on the person's own click, as them.
 CONFIRM = _routes(
+    ("PUT", r"letters/settings"),
+    ("PUT", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
+    ("DELETE", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
+    ("PUT", rf"letters/bots/{_S}/settings"),
+    ("PUT", rf"postal/addresses/{_S}/grants/(bot|person)/{_S}"),
+    ("DELETE", rf"postal/addresses/{_S}/grants/(bot|person)/{_S}"),
+    ("PUT", r"postal/settings"),
     ("POST", rf"(people|humans)/{_S}"),
     ("PUT", r"access/limits"), ("PUT", r"access/allow"),
     ("DELETE", rf"automations/{_S}"), ("POST", rf"automations/{_S}/delete"),
@@ -352,6 +361,9 @@ MESSAGES = re.compile(API + r"messages")
 
 # Confirm-card routes only an owner or an admin may ask for: a member is told so at once, not handed a card that fails.
 ADMIN_ONLY = _routes(
+    ("PUT", r"letters/settings"),
+    ("PUT", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
+    ("DELETE", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
     ("PUT", r"providers"), ("PUT", r"access/(limits|allow)"), ("PUT", r"usage/limits"), ("PUT", rf"usage/pools/(company|groups/{_S})"),
     ("POST", rf"(runners|computers)/{_S}/member-bots"),
     ("POST", r"system/update"), ("PUT", r"directory"), ("POST", r"directory/(sync|preview)"),
@@ -414,6 +426,9 @@ def classify(method, path, body=None, rules=None, to_bot=None):
         return None
     if method == "GET":
         return None if NO_READ.fullmatch(path) else "do"
+    if method == "PUT" and path == API + "system/suggestions":
+        # Outcome reporting follows the owner's words; sharing counts needs the owner's own consent in Settings.
+        return "do" if isinstance(body, dict) and set(body) == {"report_suggestion_outcomes"} else None
     if any(m == method and p.fullmatch(path) for m, p in CONFIRM) or enables_audience(method, path, body):
         return "confirm"
     if method == "POST" and MESSAGES.fullmatch(path):
@@ -657,11 +672,11 @@ def _place(path):
         what = "its repository access" if parts[2:3] == ["repositories"] else "its settings"
         return "#/bot/" + slug + "/more", slug, what
     if parts[0] == "repositories":
-        return "#/repositories", "", "Settings > Repositories"
+        return "#/settings/general/set-repos", "", "Settings > General › Repositories"
     if parts[0] == "tasks" and len(parts) > 1 and parts[1]:
         return "#/task/" + parts[1], "", "the task"
     if parts[0] == "credentials":
-        return "#/credentials", "", "Credentials"
+        return "#/tools/keys?show=credentials", "", "Tools > Keys"
     if parts[0] in ("runners", "computers"):
         return "#/settings", "", "Settings > Computers"
     return "#/settings", "", "Settings"
@@ -705,8 +720,8 @@ def fix(path, code, status, acting, names, base=""):
         # A worktree is made with the task's owner bot's own repository access (backend/worktrees.py), so no one's
         # request lends it: say who gives that access.
         text = ("The task's bot needs write access to that repository: an owner or admin gives it in Settings > "
-                "Repositories; then BotOps can add the worktree itself")
-        link = "#/repositories"
+                "General › Repositories; then BotOps can add the worktree itself")
+        link = "#/settings/general/set-repos"
     elif code == "on_behalf_of":
         # The cited request lends nothing (closed, too old, another person's, words others wrote): the detail says why.
         text = ("BotOps can't act on that earlier request: ask it again in your BotOps chat so it acts with your "

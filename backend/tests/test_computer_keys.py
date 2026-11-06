@@ -314,7 +314,7 @@ def test_botops_never_clears_or_replaces_a_key_and_all_of_them_waits_for_every_c
                   (old["runner_id"], older["runner_id"]))
     stale = call(api, "POST", f"runners/{rid}/keys/clear", {"runtime": "codex", "scope": "all"}, expected=409)
     assert stale["error"]["detail"].startswith("Update Old box, Older box to clear")
-    assert "Credentials" in stale["error"]["detail"]
+    assert "Tools > Keys" in stale["error"]["detail"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM model_login_cleared").fetchone()[0] == 0
     # Updated, an offline computer is marked to clear its copy when it is back.

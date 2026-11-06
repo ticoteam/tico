@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import hubdb as H
 from backend import invites
 from backend import migrations
@@ -67,16 +68,207 @@ def test_booting_again_changes_nothing(tmp_path):
     assert snapshot(path) == first
 
 
+def test_native_hub_participant_access_observes_meeting_deletion_without_cloud_boot(tmp_path):
+    from backend import meeting_audience
+    c = H.connect(tmp_path / 'native.sqlite')
+    try:
+        H.sync_registry(c, {}, {'people': [{'id': 'ana', 'email': 'ana@acme.example'},
+                                         {'id': 'ben', 'email': 'ben@acme.example'}]})
+        task = H.task_create(c, 'human:ana', 'Prepare the plan', '', 'human:ana', private=True, lint=False)
+        c.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) "
+                  "VALUES('source','Planning','ana@acme.example',?, 'now','now')",
+                  (json.dumps({'kind': 'meeting', 'private': True,
+                               'participants': [{'email': 'ben@acme.example'}]}),))
+        c.execute("INSERT INTO meeting_items(id,meeting_id,section,text,status,created_by,result_ref,created_at,updated_at) "
+                  "VALUES('sent','source','task','Prepare the plan','pushed','human:ana',?,'now','now')", (task['id'],))
+        meeting_audience.grant(c, task['id'], ['human:ben'], 'human:ana')
+        assert H.task_private_readable(c, 'human:ben', task)
+        c.execute("INSERT INTO media_control(meeting_id,deleted_at) VALUES('source','now')")
+        assert not H.task_private_readable(c, 'human:ben', task)
+        assert H.task_private_readable(c, 'human:ana', task)
+    finally:
+        c.close()
+
+
+def test_an_existing_cloud_machine_gains_the_pending_start_marker_without_losing_its_wake(tmp_path):
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("ALTER TABLE cloud_machines DROP COLUMN start_asked_at")
+        c.execute("DELETE FROM schema_migrations WHERE version='20261105004523_cloud_machine_start_asked'")
+        c.execute("INSERT INTO cloud_machines(bot,state,wake_key,woke_at) VALUES('ops','stopped','job:a',1000)")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT state,wake_key,woke_at,start_asked_at FROM cloud_machines WHERE bot='ops'").fetchone() == (
+            "stopped", "job:a", 1000, None)
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
+def test_pending_machine_deletions_upgrade_without_losing_their_claim_fence(tmp_path):
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("DROP TABLE cloud_machine_deletions")
+        c.execute("DELETE FROM schema_migrations WHERE version='20261105120026_cloud_machine_deletions'")
+        c.execute("DELETE FROM schema_migrations WHERE version='20261105134042_cloud_machine_deletion_age'")
+        c.execute("INSERT INTO cloud_machines(bot,machine_id,runner_id,problem,mode,placement) "
+                  "VALUES('ops','m1','r1','delete_unknown','computer','shared')")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT machine_id,bot,runner_id,failures FROM cloud_machine_deletions").fetchall() == [
+            ('m1', 'ops', 'r1', 0)]
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
+def test_cloud_machine_codes_upgrade_without_losing_existing_enrollment(tmp_path):
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("ALTER TABLE cloud_machine_codes DROP COLUMN replacement_for")
+        c.execute("DELETE FROM schema_migrations WHERE version='20261105122651_cloud_machine_replacement_codes'")
+        c.execute("INSERT INTO cloud_machine_codes VALUES('existing-code','ops','now')")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT code_hash,bot,replacement_for FROM cloud_machine_codes").fetchall() == [
+            ('existing-code', 'ops', None)]
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
+def test_failed_machine_ids_upgrade_without_losing_or_double_counting_attempts(tmp_path):
+    version = "20261105131220_cloud_machine_enrollment_failures"
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("DROP TABLE cloud_machine_enrollment_failures")
+        c.execute("ALTER TABLE cloud_machines DROP COLUMN create_asked_at")
+        c.execute("DELETE FROM schema_migrations WHERE version=?", (version,))
+        c.executemany("INSERT INTO cloud_machines(bot,machine_id,state,enroll_fails) VALUES(?,?,?,?)",
+                      [("counted", "m1", "deleted", 2), ("failed", "m2", "failed", 1),
+                       ("pending", "m3", "starting", 0), ("adopted", "m5", "starting", 0),
+                       ("kept", "m7", "starting", 2)])
+        c.executemany("INSERT INTO cloud_machine_deletions(machine_id,bot,reason) VALUES(?,?,?)",
+                      [("m1", "counted", "never_enrolled"), ("m3", "pending", "never_enrolled"),
+                       ("m4", "adopted", "never_enrolled"), ("manual", "adopted", "manual"),
+                       ("m6", "kept", "never_enrolled")])
+        for bot, mid in (("counted", "m1"), ("kept", "m6")):
+            H.event(c, H.KEEPER, "cloud_machine.deleted", bot, {"machine": mid, "reason": "never_enrolled", "tries": 2})
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT bot,enroll_fails,create_asked_at FROM cloud_machines ORDER BY bot").fetchall() == [
+            ("adopted", 1, None), ("counted", 2, None), ("failed", 1, None), ("kept", 2, None), ("pending", 1, None)]
+        assert c.execute("SELECT machine_id FROM cloud_machine_enrollment_failures ORDER BY machine_id").fetchall() == [
+            ("m1",), ("m2",), ("m3",), ("m4",), ("m6",)]
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT enroll_fails FROM cloud_machines WHERE bot='adopted'").fetchone()[0] == 1
+
+
+def test_enrollment_failure_migration_stands_alone_without_other_machine_migrations():
+    up = _migration("20261105131220_cloud_machine_enrollment_failures").up
+    with sqlite3.connect(":memory:") as c:
+        up(c)
+        assert "cloud_machine_enrollment_failures" in _tables(c)
+        c.execute("CREATE TABLE cloud_machines(bot TEXT PRIMARY KEY,machine_id TEXT,state TEXT,enroll_fails INTEGER)")
+        c.execute("INSERT INTO cloud_machines VALUES('ops','m1','failed',1)")
+        up(c)
+        assert c.execute("SELECT * FROM cloud_machine_enrollment_failures").fetchall() == [("m1", "ops")]
+        assert c.execute("SELECT enroll_fails,create_asked_at FROM cloud_machines").fetchone() == (1, None)
+
+
+def test_deletion_fence_age_upgrade_keeps_old_ids_and_retry_clocks(tmp_path):
+    path = fresh(tmp_path)
+    receipt = H.shift(H.now(), hours=-25)
+    with sqlite3.connect(path) as c:
+        c.execute("ALTER TABLE cloud_machine_deletions DROP COLUMN created_at")
+        c.execute("DELETE FROM schema_migrations WHERE version='20261105134042_cloud_machine_deletion_age'")
+        c.executemany("INSERT INTO cloud_machine_deletions(machine_id,bot,runner_id,next_try_at,failures) VALUES(?,?,?,?,?)",
+                      [("old", "ops", "r1", 1000, 3), ("unknown", "_shared", "r2", 2000, 2)])
+        H.event(c, H.KEEPER, "cloud_machine.deleted", "ops", {"machine": "old"})
+        c.execute("UPDATE events SET created_at=? WHERE action='cloud_machine.deleted'", (receipt,))
+    boot(path)
+    with sqlite3.connect(path) as c:
+        rows = c.execute("SELECT machine_id,bot,runner_id,next_try_at,failures,created_at "
+                         "FROM cloud_machine_deletions ORDER BY machine_id").fetchall()
+        assert [r[:5] for r in rows] == [("old", "ops", "r1", 1000, 3), ("unknown", "_shared", "r2", 2000, 2)]
+        assert rows[0][5] == c.execute("SELECT CAST(strftime('%s',?) AS REAL)", (receipt,)).fetchone()[0]
+        assert rows[1][5] > rows[0][5] + 24 * 60 * 60
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT machine_id,bot,runner_id,next_try_at,failures,created_at "
+                         "FROM cloud_machine_deletions ORDER BY machine_id").fetchall() == rows
+
+
+def test_deletion_fence_age_migration_stands_alone_and_does_not_reset_an_age():
+    up = _migration("20261105134042_cloud_machine_deletion_age").up
+    with sqlite3.connect(":memory:") as c:
+        up(c)
+        c.execute("INSERT INTO cloud_machine_deletions(machine_id,bot) VALUES('old','ops')")
+        up(c)
+        age = c.execute("SELECT created_at FROM cloud_machine_deletions").fetchone()[0]
+        assert age > 0
+        up(c)
+        assert c.execute("SELECT created_at FROM cloud_machine_deletions").fetchone()[0] == age
+
+
+def test_meeting_links_upgrade_a_database_at_main_newest(tmp_path, monkeypatch):
+    known = migrations.files()
+    # Freeze the upgrade's starting point so later migrations do not move this regression's baseline.
+    # The module code reads tasks.readers, so its migration comes along.
+    main = [m for m in known if m.version <= '0093_withdraw_still_wanted' and not m.version.endswith('_meeting_task_links')
+            or m.version.endswith('_task_readers')]
+    assert main[-2].version == '0093_withdraw_still_wanted'
+    path = tmp_path / 'main.sqlite'
+    with monkeypatch.context() as patch:
+        patch.setattr(migrations, 'files', lambda directory=None: main)
+        boot(path)
+    with sqlite3.connect(path) as c:
+        assert '0093_withdraw_still_wanted' in _versions(c)
+        assert 'meeting_task_links' not in _tables(c)
+        before = c.execute('SELECT * FROM schema_migrations ORDER BY version').fetchall()
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert '20261105003629_meeting_task_links' in _versions(c)
+        assert 'meeting_task_links' in _tables(c)
+        assert c.execute('PRAGMA foreign_key_check').fetchall() == []
+        after = c.execute('SELECT * FROM schema_migrations').fetchall()
+        assert all(row in after for row in before)
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
 def test_every_migration_adopts_a_database_that_already_has_its_change(tmp_path):
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
         c.execute("INSERT INTO audit_log VALUES('a1','2026-01-01T00:00:00.000000Z','human:ana','task_cap:1',NULL,NULL,NULL)")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
         assert c.execute("SELECT id FROM audit_log").fetchall() == [("a1",)]
         versions = _versions(c)
         assert all(versions.count(m.version) == 1 for m in migrations.files())
+
+
+def test_personal_alert_migration_preserves_consent_caps_and_dispatches_when_adopted(tmp_path):
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("INSERT INTO humans(id,name,email) VALUES('alert-person','Alert recipient','alerts@acme.example')")
+        c.execute("INSERT INTO alert_preferences(person_id,phone,phone_version,verified_at,call_consent,monthly_cap,updated_at) "
+                  "VALUES('alert-person','+14155550123','consent-1','now',1,3,'now')")
+        c.execute("UPDATE alert_company_settings SET monthly_cap=7 WHERE id=1")
+        c.execute("INSERT INTO personal_alerts(id,person_id,incident_key,kind,subject_id,phone_version,state,reserved,created_at) "
+                  "VALUES('paid','alert-person','incident-1','test','','consent-1','accepted',1,'now')")
+        before = {table: c.execute('SELECT * FROM ' + table).fetchall()
+                  for table in ('alert_preferences', 'alert_company_settings', 'personal_alerts')}
+        c.execute("DELETE FROM schema_migrations WHERE version='20261105040931_personal_alerts'")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert {table: c.execute('SELECT * FROM ' + table).fetchall() for table in before} == before
 
 
 def test_the_migrations_run_before_the_module_schema_code(tmp_path, monkeypatch):
@@ -108,6 +300,7 @@ def test_a_rename_lands_before_startup_code_that_uses_the_new_name(tmp_path):
         c.execute("CREATE UNIQUE INDEX google_connects_state ON google_connects(state) WHERE state IS NOT NULL")
         c.execute("INSERT INTO google_connects(person_id,mailbox,status,state,created_at,updated_at) "
                   "VALUES('p1','ana@acme.example','signing_in','nonce-1','t','t')")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0003' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
@@ -125,6 +318,7 @@ def test_an_existing_database_loses_the_redundant_task_indexes_once(tmp_path):
         c.execute("CREATE INDEX tasks_requester_status ON tasks(requester_id, status)")
         c.execute("CREATE INDEX tasks_private ON tasks(id) WHERE private IS NOT 0")
         # 0011 and every file after it run again (each is safe to repeat), as on a file that never had them
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0011' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
@@ -143,6 +337,7 @@ def test_an_existing_database_loses_the_two_duplicate_indexes_once(tmp_path):
     with sqlite3.connect(path) as c:
         c.execute("CREATE INDEX invariants_lease ON attempts(lease_until) WHERE state IN ('leased','running')")
         c.execute("CREATE INDEX invariants_open_approvals ON approvals(created_at) WHERE decision IS NULL")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0042' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
@@ -161,8 +356,9 @@ def test_an_existing_database_loses_the_private_parties_index_and_the_parties_re
     from backend import row_clock
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
-        c.execute("CREATE INDEX tasks_private_parties ON tasks(id, requester_id, owner_id, guest, private) "
+        c.execute("CREATE INDEX tasks_private_parties ON tasks(id, requester_id, owner_id, readers, private) "
                   "WHERE private IS NOT 0")
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0042' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
@@ -238,7 +434,7 @@ def test_failed_migration_rolls_back_its_ddl_and_row_then_runs_once_fixed(tmp_pa
     directory = tmp_path / "migrations"
     directory.mkdir()
     (directory / "0001_base.sql").write_text("CREATE TABLE base(x);\n")
-    later = directory / f"0002_half.{kind}"
+    later = directory / f"20261104235959_half.{kind}"
     later.write_text(BROKEN[kind])
     conn = sqlite3.connect(tmp_path / "hub.sqlite", isolation_level=None)
     try:
@@ -249,26 +445,91 @@ def test_failed_migration_rolls_back_its_ddl_and_row_then_runs_once_fixed(tmp_pa
         later.write_text(GOOD[kind])
         migrations.apply(conn, directory)
         assert "half" in _tables(conn)
-        assert _versions(conn) == ["0001_base", "0002_half"]
+        assert _versions(conn) == ["0001_base", "20261104235959_half"]
     finally:
         conn.close()
 
 
-def test_a_changed_applied_file_refuses_to_boot(tmp_path, monkeypatch):
+@pytest.mark.parametrize("name", ["0001_audit_log.sql", "20261104235959_probe.sql"])
+def test_a_changed_applied_file_refuses_to_boot(tmp_path, monkeypatch, name):
     directory = tmp_path / "migrations"
     directory.mkdir()
     for migration in migrations.files():
         shutil.copy(migration.path, directory / migration.path.name)
-    shipped = directory / "0001_audit_log.sql"
+    shipped = directory / name
+    if not shipped.exists():
+        shipped.write_text("CREATE TABLE probe(x);\n")
     monkeypatch.setattr(migrations, "DIRECTORY", directory)
     path = tmp_path / "hub.sqlite"
     boot(path)
     shipped.write_text(shipped.read_text() + "\n-- edited after it ran\n")
-    with pytest.raises(migrations.MigrationError, match="0001_audit_log was applied"):
+    before = snapshot(path)
+    with pytest.raises(migrations.MigrationError, match=f"{shipped.stem} was applied"):
         boot(path)
+    assert snapshot(path) == before
 
 
-@pytest.mark.parametrize("version", ["0099_from_the_future", f"legacy_user_version_{migrations.NEWEST_USER_VERSION + 1}"])
+def test_pending_files_run_in_mixed_version_order_even_below_an_applied_version(tmp_path):
+    conn = sqlite3.connect(tmp_path / "hub.sqlite", isolation_level=None)
+    conn.execute("CREATE TABLE ran(version TEXT)")
+    (tmp_path / "0002_base.sql").write_text("INSERT INTO ran VALUES('0002_base');\n")
+    (tmp_path / "20261105000000_newer.py").write_text(
+        "def up(conn):\n    conn.execute(\"INSERT INTO ran VALUES('20261105000000_newer')\")\n")
+    try:
+        migrations.apply(conn, tmp_path)
+        recorded = conn.execute("SELECT * FROM schema_migrations ORDER BY version").fetchall()
+        # Another PR lands after the newer migration has run, with both legacy and timestamp pending files.
+        (tmp_path / "0001_earlier.sql").write_text("INSERT INTO ran VALUES('0001_earlier');\n")
+        (tmp_path / "20261104235959_pending.py").write_text(
+            "def up(conn):\n    conn.execute(\"INSERT INTO ran VALUES('20261104235959_pending')\")\n")
+        (tmp_path / "20261106000000_last.sql").write_text("INSERT INTO ran VALUES('20261106000000_last');\n")
+        expected = ["0001_earlier", "0002_base", "20261104235959_pending", "20261105000000_newer", "20261106000000_last"]
+        assert [m.version for m in migrations.files(tmp_path)] == expected
+        migrations.apply(conn, tmp_path)
+        assert _versions(conn) == expected
+        assert conn.execute("SELECT version FROM ran ORDER BY rowid").fetchall() == [(v,) for v in (
+            "0002_base", "20261105000000_newer", "0001_earlier", "20261104235959_pending", "20261106000000_last")]
+        assert conn.execute("SELECT * FROM schema_migrations WHERE version IN (?,?) ORDER BY version",
+                            ("0002_base", "20261105000000_newer")).fetchall() == recorded
+        before = conn.execute("SELECT * FROM schema_migrations ORDER BY version").fetchall()
+        migrations.apply(conn, tmp_path)
+        assert conn.execute("SELECT * FROM schema_migrations ORDER BY version").fetchall() == before
+        assert conn.execute("SELECT count(*) FROM ran").fetchone()[0] == 5
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("version", ["0001", "20261104235959"])
+def test_duplicate_versions_across_sql_and_python_are_refused_before_either_runs(tmp_path, version):
+    (tmp_path / f"{version}_a.sql").write_text("CREATE TABLE should_not_exist(x);\n")
+    (tmp_path / f"{version}_b.py").write_text("def up(conn): pass\n")
+    conn = sqlite3.connect(":memory:", isolation_level=None)
+    try:
+        with pytest.raises(migrations.MigrationError, match="Two migration files share a number"):
+            migrations.apply(conn, tmp_path)
+        assert "should_not_exist" not in _tables(conn)
+        assert _versions(conn) == []
+    finally:
+        conn.close()
+
+
+def test_every_shipped_migration_file_keeps_its_checksum():
+    """The fixture lists each migration that shipped (v0.5.109; 0070 on as of v0.5.178) with the SHA-256 of its file then. A database that applied
+    one records that checksum, and a start refuses a file whose checksum changed (`_verify`): a shipped file is never
+    edited, a fix is a new migration. A shipped file that is gone fails too."""
+    shipped = [line.split() for line in (FIXTURES / "shipped_migration_checksums.txt").read_text().splitlines()]
+    assert shipped and all(len(row) == 2 for row in shipped)
+    changed = []
+    for name, digest in shipped:
+        path = migrations.DIRECTORY / name
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            changed.append(name)
+    assert not changed, "Shipped migrations edited or removed (write a new migration instead): " + ", ".join(changed)
+
+
+@pytest.mark.parametrize("version", ["0099_from_the_future", "20261104235959_from_the_future",
+                                     f"legacy_user_version_{migrations.NEWEST_USER_VERSION + 1}",
+                                     f"legacy_cloud_{migrations.CLOUD_VERSION + 1}"])
 def test_a_database_with_a_migration_this_code_does_not_know_is_refused_untouched(tmp_path, version):
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
@@ -294,9 +555,26 @@ def test_cloud_version_is_the_newest_cloud_step_store_writes():
     assert migrations.CLOUD_VERSION == newest
 
 
+def restore_config(c):
+    """Before migration 0070, the migrations 0043 and 0061 read bot_config.config, which 0070 drops: a rerun of them from
+    before 0070 needs the column back, each declaration copied into it from bot_settings. A no-op while it is there."""
+    if "config" in {row[1] for row in c.execute("PRAGMA table_info(bot_config)")}:
+        return
+    c.execute("ALTER TABLE bot_config ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
+    c.execute(f"UPDATE bot_config SET config=coalesce((SELECT {BS.CONFIG} FROM bot_settings s "
+              "WHERE s.bot_id=bot_config.bot), '{}')")
+
+
+def _config_restored(path):
+    with sqlite3.connect(path) as c:
+        restore_config(c)
+
+
 def _back_to_before(path, version):
     """The file as it was before `version` ran: the migration rows from it on are forgotten, so the next boot runs them."""
     with sqlite3.connect(path) as c:
+        if version <= "0070_bot_settings":
+            restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy_%'", (version,))
 
 
@@ -368,6 +646,7 @@ def test_an_existing_bots_runtime_model_and_host_move_into_its_config_then_the_c
     the six legacy columns are dropped. cwd, thread_id and token_hash have nothing to move."""
     path = fresh(tmp_path)
     slug = "acme-bot"
+    _config_restored(path)
     with sqlite3.connect(path) as c:
         for column in ("runtime", "model", "host", "cwd", "thread_id", "token_hash"):
             c.execute(f"ALTER TABLE bots ADD COLUMN {column} TEXT")
@@ -381,7 +660,7 @@ def test_an_existing_bots_runtime_model_and_host_move_into_its_config_then_the_c
     boot(path)
     with sqlite3.connect(path) as c:
         columns = {row[1] for row in c.execute("PRAGMA table_info(bots)")}
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+        config = json.loads(c.execute(BS.ONE_SQL, (slug,)).fetchone()[0])
     assert not {"runtime", "model", "host", "cwd", "thread_id", "token_hash"} & columns
     assert {"id", "slug", "effort", "state"} <= columns
     # boot adds its own defaults to every config (profile, wake_preset, ...); only the three keys this moves are checked
@@ -401,6 +680,7 @@ def test_a_null_config_takes_the_columns_and_one_not_an_object_stops_0043(tmp_pa
     """Migration 0043: a config of JSON null counts as {} and gets the column values; a config that is not a JSON object
     stops the migration instead of dropping a runtime or model it cannot copy."""
     path = fresh(tmp_path)
+    _config_restored(path)
     with sqlite3.connect(path) as c:
         for column in ("runtime", "model", "host", "cwd", "thread_id", "token_hash"):
             c.execute(f"ALTER TABLE bots ADD COLUMN {column} TEXT")
@@ -416,7 +696,7 @@ def test_a_null_config_takes_the_columns_and_one_not_an_object_stops_0043(tmp_pa
     _back_to_before(path, "0043")
     boot(path)
     with sqlite3.connect(path) as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='null-bot'").fetchone()[0])
+        config = json.loads(c.execute(BS.ONE_SQL, ("null-bot",)).fetchone()[0])
     assert (config.get("runtime"), config.get("model")) == ("codex", "m1")
 
 
@@ -484,6 +764,45 @@ def _migration(name):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_a_private_tasks_guest_becomes_its_first_reader_and_the_guest_column_goes():
+    """20261105213649_task_readers: each guest is copied into `readers` (tasks and the trash), the indexes and
+    triggers that named `guest` go, the covering indexes come back with `readers`, and running again changes nothing."""
+    up = _migration("20261105213649_task_readers").up
+    with sqlite3.connect(":memory:") as c:
+        c.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY, requester_id TEXT, owner_id TEXT, private INTEGER, "
+                  "status TEXT, waiting_on TEXT, rank REAL, created_at TEXT, guest TEXT)")
+        c.execute("CREATE INDEX tasks_private_status ON tasks(id, requester_id, owner_id, guest, private, status, "
+                  "waiting_on) WHERE private IS NOT 0")
+        c.execute("CREATE TRIGGER tasks_guest_seen AFTER UPDATE OF guest ON tasks BEGIN SELECT 1; END")
+        c.execute("CREATE TABLE task_trash(task_id TEXT PRIMARY KEY, rows TEXT, guest TEXT)")
+        c.executemany("INSERT INTO tasks(id,requester_id,owner_id,private,status,guest) VALUES(?,?,?,1,'open',?)",
+                      [("t1", "bot:cpo", "bot:ops", "human:ben"), ("t2", "bot:cpo", "bot:ops", None),
+                       ("t3", "human:ana", "bot:ops", "")])
+        c.execute("INSERT INTO task_trash VALUES('t9','[]','human:cara')")
+        up(c)
+        assert "guest" not in {row[1] for row in c.execute("PRAGMA table_info(tasks)")}
+        assert "guest" not in {row[1] for row in c.execute("PRAGMA table_info(task_trash)")}
+        moved = dict(c.execute("SELECT id, readers FROM tasks").fetchall())
+        assert moved == {"t1": '["human:ben"]', "t2": None, "t3": None}
+        assert c.execute("SELECT readers FROM task_trash").fetchone()[0] == '["human:cara"]'
+        schema = {row[0]: row[1] for row in c.execute("SELECT name, sql FROM sqlite_master WHERE tbl_name='tasks'")}
+        assert "tasks_guest_seen" not in schema and "readers" in schema["tasks_private_status"]
+        assert {"tasks_queue_cover", "tasks_owner_status_cover", "tasks_requester_status_cover"} <= set(schema)
+        before = c.execute("SELECT type, name, sql FROM sqlite_master ORDER BY name").fetchall()
+        up(c)
+        assert c.execute("SELECT type, name, sql FROM sqlite_master ORDER BY name").fetchall() == before
+        assert dict(c.execute("SELECT id, readers FROM tasks").fetchall()) == moved
+
+
+def test_a_fresh_database_has_task_readers_and_no_guest(tmp_path):
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        for table in ("tasks", "task_trash"):
+            columns = {row[1] for row in c.execute(f"PRAGMA table_info({table})")}
+            assert "readers" in columns and "guest" not in columns, (table, columns)
+        assert not c.execute("SELECT name FROM sqlite_master WHERE sql LIKE '%guest%' AND tbl_name='tasks'").fetchall()
 
 
 def test_a_session_link_keeps_its_thread_once_in_its_url():
@@ -581,6 +900,7 @@ def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_
             ("rev-pending", "r1", None), ("rev-done", "r2", '{"id": 1}'),
         ])
         before = dict(c.execute("SELECT key, rowid FROM idempotency").fetchall())
+        restore_config(c)
         c.execute("DELETE FROM schema_migrations WHERE version>='0050' AND version NOT LIKE 'legacy_%'")
     boot(path)
 
@@ -651,3 +971,65 @@ def test_the_threads_delivery_trigger_follows_hubdbs_task_news_rule(tmp_path):
         sql = c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='threads_primary_delivery'").fetchone()[0]
     condition = H.delivery_counts_sql("NEW", "NEW.recipient_id", "'addressed'")
     assert " ".join(condition.split()) in " ".join(sql.split())
+
+
+def test_migration_0065_gives_the_mail_queue_its_chain_columns_and_keeps_its_rows(tmp_path):
+    """Migration 0065: the mail action queue gets the `step` and `after` columns a chain needs. A file whose queue was
+    made before them keeps its rows (their chain columns stay NULL, so nothing chains), and a second boot changes nothing."""
+    path = fresh(tmp_path)
+    new = _shape(path)
+    with sqlite3.connect(path) as c:
+        c.execute("ALTER TABLE automation_mail_actions DROP COLUMN step")
+        c.execute('ALTER TABLE automation_mail_actions DROP COLUMN "after"')
+        c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,created_at,"
+                  "result) VALUES('ma_old','auto_old','run_old','ana@acme.example','m1','archive','{}','done',"
+                  "'2026-10-01T00:00:00Z','{\"ok\": true}')")
+    _back_to_before(path, "0065")
+    boot(path)
+    assert _shape(path) == new
+    with sqlite3.connect(path) as c:
+        assert c.execute('SELECT id, state, step, "after" FROM automation_mail_actions').fetchall() == [
+            ("ma_old", "done", None, None)]
+        assert c.execute("SELECT 1 FROM schema_migrations WHERE version LIKE '0065%'").fetchone()
+    once = snapshot(path)
+    boot(path)
+    assert snapshot(path) == once
+
+
+def test_a_settled_message_whose_task_list_was_read_as_none_is_requeued_with_what_read_it(tmp_path):
+    """Migration 0076 queues each message naming a list of tasks, and every row that read it, transitively, for another
+    walk. A scalar message, a message with refs that are not JSON, and a row that read only scalars stay settled. The
+    migration runs again without changing the queue, and a database without the read tables has nothing to requeue."""
+    up = _migration("0076_requeue_list_task_refs").up
+    conn = sqlite3.connect(":memory:")
+    conn.executescript("""
+        CREATE TABLE messages(id TEXT PRIMARY KEY, refs TEXT);
+        CREATE TABLE read_index(key TEXT PRIMARY KEY) WITHOUT ROWID;
+        CREATE TABLE read_deps(dep TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY(dep, key)) WITHOUT ROWID;
+        CREATE TABLE read_dirty(key TEXT PRIMARY KEY) WITHOUT ROWID;
+    """)
+    refs = {"list": '{"task": ["t-known", "t-missing"]}', "task-id-list": '{"task_id": []}',
+            "scalar": '{"task": "t-known"}', "broken": '{"task": [', "plain": None,
+            "reply": '{"task": "t-known"}', "deeper": '{"task": "t-known"}', "other": '{"task": "t-known"}',
+            # Python reads the last of a repeated key, and an escaped key name is the same key: SQLite reads neither.
+            "repeated": '{"task": "t-known", "task": []}', "escaped": '{"tas\\u006b": []}',
+            "repeated-scalar": '{"task": [], "task": "t-known"}'}
+    conn.executemany("INSERT INTO messages VALUES(?,?)", list(refs.items()))
+    settled = ["m:" + mid for mid in refs]
+    conn.executemany("INSERT INTO read_index VALUES(?)", [(key,) for key in settled])
+    # 'reply' read 'list' as a node, 'deeper' read 'reply', and 'other' read only the scalar message.
+    conn.executemany("INSERT INTO read_deps VALUES(?,?)",
+                     [("m:list", "m:reply"), ("m:reply", "m:deeper"), ("m:scalar", "m:other")])
+    up(conn)
+    index = {row[0] for row in conn.execute("SELECT key FROM read_index")}
+    dirty = {row[0] for row in conn.execute("SELECT key FROM read_dirty")}
+    assert dirty == {"m:list", "m:task-id-list", "m:reply", "m:deeper", "m:repeated", "m:escaped"}
+    assert index == {"m:scalar", "m:broken", "m:plain", "m:other", "m:repeated-scalar"}
+    up(conn)
+    assert {row[0] for row in conn.execute("SELECT key FROM read_dirty")} == dirty
+    assert {row[0] for row in conn.execute("SELECT key FROM read_index")} == index
+    bare = sqlite3.connect(":memory:")
+    bare.execute("CREATE TABLE messages(id TEXT PRIMARY KEY, refs TEXT)")
+    bare.execute("INSERT INTO messages VALUES('list', '{\"task\": []}')")
+    up(bare)
+    assert _tables(bare) == {"messages"}

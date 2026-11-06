@@ -11,6 +11,9 @@ there is nothing to choose, and no model is called. With no decision model, the 
 daily decision cap reached, nobody is woken: the message stays in the thread, read by whoever reads it. A failed call
 retries for ROUTE_GIVE_UP_SECONDS, one `judge.call` however many tries it took. A bot's own unaddressed post is not routed:
 bots posting into a routed thread would pay for a model call per post and wake each other.
+
+Who it asked is kept per message (`message_routes`, the timeline's `routed`): the bots picked, or none when it looked at
+the message with a bot there to ask and asked nobody.
 """
 import logging
 import threading
@@ -122,9 +125,21 @@ def chosen(answers, fleet, settings):
     return ["bot:" + slug for slug in picked[:min(MAX_RECIPIENTS, settings.slack_max_recipients)]]
 
 
-def _drop(store, message_id):
+def record(c, message_id, thread_id, actors):
+    """Who routing asked for this message (message_routes; the timeline's `routed`): `actors`, none when it asked
+    nobody."""
+    now = H.now()
+    c.execute("INSERT INTO message_routes(message_id,thread_id,bot_ids,created_at,updated_at) VALUES(?,?,?,?,?) "
+              "ON CONFLICT(message_id) DO UPDATE SET bot_ids=excluded.bot_ids, updated_at=excluded.updated_at",
+              (message_id, thread_id, H._dump(list(actors)), now, now))
+
+
+def _drop(store, message_id, thread_id=None):
+    """The row is done with. With `thread_id`, routing looked at the message and asked nobody: that is recorded."""
     with store.transaction() as c:
         c.execute("DELETE FROM thread_routings WHERE message_id=?", (message_id,))
+        if thread_id and H.message(c, message_id):
+            record(c, message_id, thread_id, [])
 
 
 def _due(c, now):
@@ -132,8 +147,12 @@ def _due(c, now):
                                        "LIMIT ?", (now, BATCH)).fetchall()]
 
 
+NOBODY = "nobody"         # _plan: done with, and routing asked nobody (a bot was there to ask)
+
+
 def _plan(store, row, primary):
-    """Outside any transaction's lock on writers: what this row needs, or None when it is done with."""
+    """Outside any transaction's lock on writers: what this row needs, None when it is done with and routing did not
+    look at it (no thread, a mention since, no bot to ask), or NOBODY when it asked nobody."""
     with store.read() as c:
         message = H.message(c, row["message_id"])
         thread = threads.thread_row(c, row["thread_id"]) if message else None
@@ -142,16 +161,18 @@ def _plan(store, row, primary):
                                        (message["id"],)).fetchone():
             return None
         actors = candidates(c, thread, message.get("sender_id"))
-        if len(actors) < 2:
+        if not actors:
             return None
+        if len(actors) < 2:
+            return NOBODY
         settings = store.settings
         author = message.get("sender_id")
         role = "owner" if (H.human(c, H.actor_id(author)) or {}).get("email") == settings.owner_email else "human"
         if not row["attempts"] and B.used_today(c, author) >= B.daily_cap(settings, role):
-            return None
+            return NOBODY
         engine = B.server_engine(store, c, primary if primary is not None else B.primary_engine(settings, store))
         if engine is None:
-            return None
+            return NOBODY
         fleet = _fleet(c, actors)
         return {"message": message, "thread": thread, "fleet": fleet, "engine": engine,
                 "state": _state(c, thread, message, fleet)}
@@ -171,6 +192,7 @@ def _apply(store, row, plan, result):
         if thread is None or c.execute("SELECT 1 FROM message_mentions WHERE message_id=? AND in_audience=1 LIMIT 1",
                                        (message["id"],)).fetchone():
             return []
+        record(c, message["id"], row["thread_id"], picked)
         root = threads.root_of(c, thread)
         woken = []
         for actor in picked:
@@ -189,15 +211,15 @@ def _apply(store, row, plan, result):
 def route_one(store, row, primary=None):
     """One queued message. Returns the bots woken."""
     plan = _plan(store, row, primary)
-    if plan is None:
-        _drop(store, row["message_id"])
+    if plan is None or plan is NOBODY:
+        _drop(store, row["message_id"], row["thread_id"] if plan is NOBODY else None)
         return []
     try:
         result = plan["engine"](plan["state"], questions(plan["fleet"]), JUDGE_LABEL)
     except J.JudgeError as exc:
         if exc.code == "spend_cap" or row["created_at"] <= H.shift(H.now(), seconds=-ROUTE_GIVE_UP_SECONDS):
             LOG.info("A thread message was left unrouted: %s", exc.code)
-            _drop(store, row["message_id"])
+            _drop(store, row["message_id"], row["thread_id"])
         else:
             with store.transaction() as c:
                 c.execute("UPDATE thread_routings SET attempts=attempts+1, next_attempt_at=?, updated_at=? WHERE message_id=?",
@@ -217,13 +239,21 @@ def drain(store, primary=None):
             woken += route_one(store, row, primary)
         except Exception as exc:  # noqa: BLE001 - one message must not stop the others
             LOG.warning("Routing a thread message failed: %s", type(exc).__name__)
-            _drop(store, row["message_id"])
+            _drop(store, row["message_id"], row["thread_id"])
     return woken
 
 
 def _worker(store):
+    # One run of Thread routing per pass, in Settings > Routines and on its Automations row; the tick starts a pass only
+    # when a message waits, so a quiet pass is rare and folds into the last row.
+    from . import system_routines as SR
     try:
-        drain(store)
+        with SR.recording(store, "thread_routing") as run:
+            woken = drain(store)
+            run.did(SR.count_words(len(woken), "bot woken", "bots woken") if woken else "Nobody to wake",
+                    quiet=not woken)
+    except Exception as exc:  # noqa: BLE001 - recorded as the run's failure; the next kick tries again
+        LOG.warning("Thread routing pass failed: %s", type(exc).__name__)
     finally:
         _running.release()
 

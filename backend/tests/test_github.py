@@ -16,6 +16,7 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
 from backend.store import encode
+from backend import bot_settings as BS
 
 SECRET = "hook-secret"
 PR = "https://github.com/ticoteam/tico/pull/412"
@@ -33,8 +34,8 @@ def api(tmp_path):
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": [
                 {"id": "ana", "email": "ana@acme.example", "team": "leadership", "primary_for": ["*"]}]}),))
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                          (slug, encode(config), "product" if slug == "cpo" else "marketing", "ana"))
+                c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product' if slug == 'cpo' else 'marketing', 'ana'))
+                BS.write(c, slug, config)
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
         yield client
 
@@ -466,6 +467,32 @@ def test_wake_once_on_a_commit_status_that_finishes_last_names_it_when_it_fails(
     assert 'wake_once' not in detail
 
 
+def test_an_all_skipped_head_reads_pending_never_green(api):
+    """A draft pull request's run skips every job; nothing on main requires a check, so a head whose every check was
+    skipped has not been checked. It reads pending and finishes nothing; one real pass beside the skips is green."""
+    assert G._overall({'suite:github-actions#1': 'skipped', 'plan': 'skipped'}) == 'pending'
+    assert G._overall({'plan': 'skipped', 'static': 'passing'}) == 'passing'
+    assert G._overall({'plan': 'skipped', 'static': 'failing'}) == 'failing'
+    assert G._check_state('skipped') == 'skipped' and G._check_state('neutral') == 'passing'
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Draft CI', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
+        'name': 'plan', 'status': 'in_progress', 'conclusion': None, 'head_sha': 'a' * 40,
+        'pull_requests': [{'number': 412}]}})
+    hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
+        'name': 'plan', 'status': 'completed', 'conclusion': 'skipped', 'head_sha': 'a' * 40,
+        'pull_requests': [{'number': 412}]}})
+    _suite(api, 'github-actions', 'completed', 'skipped', id=1)
+    link = get(api, 'tasks/' + task['id'] + '/links')['links'][0]
+    assert link['checks'] == 'pending' and _burst(api, task['id']) == []
+    assert json.loads(link['detail'])['checks'] == {'plan': 'skipped', 'suite:github-actions#1': 'skipped'}
+    hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
+        'name': 'python', 'status': 'completed', 'conclusion': 'success', 'head_sha': 'a' * 40,
+        'pull_requests': [{'number': 412}]}})
+    assert get(api, 'tasks/' + task['id'] + '/links')['links'][0]['checks'] == 'passing'
+
+
 def test_wake_once_holds_while_a_finished_runs_own_suite_still_runs(api):
     _app(api)
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on CI', 'body': 'x', 'links': [PR]})
@@ -576,7 +603,6 @@ def test_wake_once_needs_the_app_and_waits_only_on_a_pr_github_reports(api):
         assert H.waiting_for(c, H.task(c, task['id'])) == 'GitHub on tico#412'
         H.task_update(c, 'bot:cpo', task['id'], status='waiting', note='Waiting on CI for tico#412')
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-3), task['id']))
-        assert H.sweep_stranded(c) == []
     hook(api, 'pull_request', pr_event('closed'))             # a closed PR has nothing left to wait for
     with api.app.state.store.transaction() as c:
         assert H.waiting_for(c, H.task(c, task['id'])) is None

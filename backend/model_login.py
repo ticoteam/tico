@@ -45,6 +45,7 @@ import re
 from clients import harness_manifests as manifests
 
 from .store import H, Problem
+from . import bot_settings as BS
 
 # The runtimes whose manifest has a [login] the runner can relay, and those whose CLI asks for a code to be pasted
 # back. A runner too old for one of them answers that browser sign-in is not available.
@@ -533,8 +534,8 @@ def _bots_on(c, rid, runtime, profile, settings, every):
     record = providers.load(c, settings)
     out = []
     active = "" if every else "AND b.state='active' "
-    for row in c.execute("SELECT a.bot, b.display_name, bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
-                         f"{active}LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE a.runner_id=? "
+    for row in c.execute(f"SELECT a.bot, b.display_name, {BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+                         f"{active}LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} WHERE a.runner_id=? "
                          "ORDER BY a.bot", (rid,)):
         try:
             config = providers.fill(record, follow(c, row["bot"], json.loads(row["config"] or "{}")))
@@ -849,7 +850,7 @@ def clear_key(c, who, rid, runtime, scope="this", auth=None):
     stale = [row["label"] for row in rows if not _handles_keys(row)]
     if stale:
         raise Problem("runner_version", "Update " + ", ".join(stale) + " to clear its key from here, or delete the "
-                      "shared key in Credentials", 409)
+                      "shared key in Tools > Keys", 409)
     out = []
     for row in rows:
         job = _clear_here(c, who, row, runtime, _online(row))
@@ -901,7 +902,7 @@ def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vaul
             raise Problem("env", f"A {runtime} key is stored as " + " or ".join(computer_keys.names(runtime)), 422)
         if env not in shared:
             raise Problem("env", "The shared key is " + " and ".join(shared) + ", not " + env + "; replace it as that "
-                          "kind, or add a " + env + " in Credentials", 409)
+                          "kind, or add a " + env + " in Tools > Keys", 409)
         row = shared[env]
         value = str(key or "").strip()
         if not value or len(value) > 4000 or any(ch in value for ch in "\r\n\0"):

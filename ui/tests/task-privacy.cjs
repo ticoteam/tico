@@ -44,7 +44,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     ];
     let staleTag = false, raceStarter = false;
     let tasks = [
-      task('Draft the newsletter', {private: true, rank: 2, labels: ['newsletter'], tags: [tags[0]], body: 'Review [packet](http://tico-ui.test/api/v2/files/doc).',
+      task('Draft the newsletter', {private: true, readers: ['human:ben'], rank: 2,
+        followers: [{actor: 'bot:cmo', notify: 'live', reason: 'owner'}, {actor: 'human:ben', notify: 'digest', reason: 'manual'}], labels: ['newsletter'], tags: [tags[0]], body: 'Review [packet](http://tico-ui.test/api/v2/files/doc).',
         attachments: [{id: 'doc', name: 'review-packet.md'}, {id: 'clip', name: 'first-cut.mp4'}, {id: 'archive', name: 'source.zip'}]}),
       task('Approve the budget', {owner_id: 'human:reviewer', requester_id: 'bot:coo', rank: 1, labels: ['finance'], note: 'Waiting on finance approval'}),
       task('Write the copy', {rank: 1, labels: ['newsletter', 'copy']}),
@@ -152,6 +153,23 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
         Object.assign(t, body, {version: t.version + 1}); delete t.close;
         return json({task: t});
       }
+      const rd = p.match(/^\/api\/v2\/tasks\/([^/]+)\/readers$/);
+      if (rd && req.method() === 'POST') {
+        const body = req.postDataJSON(); posted.push({path: p, body});
+        const t = tasks.find(x => x.id === decodeURIComponent(rd[1]));
+        t.readers = [...(t.readers || []).filter(a => !(body.remove || []).includes(a)), ...(body.add || [])];
+        return json({private: true, requester_id: t.requester_id, owner_id: t.owner_id, readers: t.readers});
+      }
+      const fl = p.match(/^\/api\/v2\/tasks\/([^/]+)\/followers$/);
+      if (fl && req.method() === 'PUT') {
+        const body = req.postDataJSON(); posted.push({path: p, body});
+        const t = tasks.find(x => x.id === decodeURIComponent(fl[1])), who = body.actor || 'human:reviewer';
+        const had = (t.followers || []).find(f => f.actor === who);
+        t.followers = (t.followers || []).filter(f => f.actor !== who);
+        if (body.following) t.followers.push({actor: who, notify: body.notify || had?.notify || 'live', reason: had?.reason || 'manual'});
+        const mine = t.followers.find(f => f.actor === 'human:reviewer');
+        return json({task_id: t.id, following: !!mine, notify: mine?.notify ?? null, followers: t.followers});
+      }
       const cm = p.match(/^\/api\/v2\/tasks\/([^/]+)\/comments$/);
       if (cm && req.method() === 'POST') {
         const body = req.postDataJSON(); posted.push({path: p, body});
@@ -198,14 +216,60 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       await page.evaluate(() => { location.hash = '#/tasks'; });
       await page.locator('#task-new').waitFor();
     }
+    // Who can see: a private task's requester, owner and readers; × takes a reader off, + adds one. A company task: Public.
+    await page.setViewportSize({width: 1200, height: 900});
+    await page.evaluate(() => { location.hash = '#/task/' + encodeURIComponent('Draft the newsletter'); });
+    const seen = page.locator('#task-modal[open] [data-prop-row="readers"]');
+    await seen.locator('[data-prop-clear-reader="human:ben"]').waitFor();
+    assert.equal(await seen.locator('.prop-chip').count(), 3, 'requester, owner and one reader');
+    assert.equal(await seen.locator('.prop-x').count(), 1, 'only a reader comes off');
+    await seen.locator('[data-prop-clear-reader="human:ben"]').click();
+    await page.waitForFunction(() => !document.querySelector('#task-modal [data-prop-clear-reader]'));
+    assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/Draft%20the%20newsletter/readers', body: {remove: ['human:ben']}});
+    await seen.locator('[data-prop="readers"]').click();
+    const pick = page.locator('#task-modal .prop-pop [data-prop-pick="bot:cpo"]');
+    await pick.waitFor();
+    assert.equal(await page.locator('#task-modal .prop-pop [data-prop-pick="bot:cmo"]').count(), 0, 'the owner is not offered');
+    await pick.click();
+    await seen.locator('[data-prop-clear-reader="bot:cpo"]').waitFor();
+    assert.deepEqual(posted.at(-1).body, {add: ['bot:cpo']});
+    await shot('who-can-see-desktop');
+    // Followers: each name, with its level when not live; Follow or Following for you, × and + for others.
+    const fol = page.locator('#task-modal[open] [data-prop-row="followers"]');
+    const followerWords = () => fol.locator('.prop-chip .prop-txt').allTextContents();
+    const named = await followerWords();
+    assert.equal(named.length, 2, 'the owner and one chosen follower');
+    assert.match(named[1], / · Digest$/, 'a level shows when it is not live');
+    assert.doesNotMatch(named[0], /·/, 'live shows no level');
+    await fol.locator('[data-prop-follow]').click();
+    await fol.locator('[data-prop="follow-me"]').waitFor();
+    assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/Draft%20the%20newsletter/followers', body: {following: true}});
+    await fol.locator('[data-prop="follow-me"]').click();
+    await page.locator('#task-modal .prop-pop [data-prop-pick="muted"]').click();
+    await fol.locator('[data-prop="follow-me"][aria-label="Following: Muted"]').waitFor();
+    assert.deepEqual(posted.at(-1).body, {following: true, notify: 'muted'});
+    await fol.locator('[data-prop-unfollow="human:ben"]').click();
+    await fol.locator('[data-prop-unfollow="human:ben"]').waitFor({state: 'detached'});
+    assert.deepEqual(posted.at(-1).body, {actor: 'human:ben', following: false});
+    assert.equal((await followerWords()).length, 2, 'the owner and you');
+    await page.locator('#task-modal[open] [data-modal-close]').click();
+    await page.evaluate(() => { location.hash = '#/task/' + encodeURIComponent('Write the copy'); });
+    await page.locator('#task-modal[open] [data-prop-row="readers"]', {hasText: 'Public'}).waitFor();
+    assert.equal(await page.locator('#task-modal[open] [data-prop-row="readers"] [data-prop="readers"]').count(), 0);
+    await page.locator('#task-modal[open] [data-modal-close]').click();
+    await page.evaluate(() => { location.hash = '#/tasks'; });
+    await page.locator('#task-new').waitFor();
     await page.evaluate(() => openTaskCreate('bot:cpo'));
     const create = page.locator('#task-create[open]');
     await create.locator('[name=private]').uncheck();
     await create.locator('[name=title]').fill('Review public terms');
     await create.locator('[name=body]').fill('Review the company terms.');
+    assert(!await create.locator('[name=follow]').isChecked(), 'filing does not follow by default');
+    await create.locator('[name=follow]').check();
     await create.locator('[type=submit]').click();
     await page.waitForFunction(() => !document.querySelector('#task-create').open);
     assert.equal(posted.find(p => p.path === '/api/v2/tasks').body.private, false, 'explicit human company choice reaches API');
+    assert.equal(posted.find(p => p.path === '/api/v2/tasks').body.follow, true, 'Follow reaches the API');
     await page.setViewportSize({width: 1200, height: 900});
     await page.evaluate(() => { location.hash = '#/settings'; });
     await page.locator('#bot-editor').waitFor({state: 'attached'});
@@ -223,6 +287,6 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved');
     assert.deepEqual(posted.find(p => p.path === '/api/v2/bots/cpo/definition').body.update_subscriptions, ['templates', 'tico']);
     assert.deepEqual(errors, []);
-    console.log('task privacy UI passed: desktop/phone create/edit, default, manual intent, private parent, explicit company payload');
+    console.log('task privacy UI passed: desktop/phone create/edit, default, manual intent, private parent, explicit company payload, who can see');
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});

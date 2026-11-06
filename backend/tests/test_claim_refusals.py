@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend import check_models, diagnostics, execution, health, health_monitor
+from backend import check_models, diagnostics, execution, health, maintenance_health
 from backend.store import H
 from backend.tests.test_api import api, claim, get, headers, post  # noqa: F401  (api is a fixture)
 from backend.tests.test_task_lanes import new_task, task_bot
@@ -30,7 +30,7 @@ def held(api, machine, asks=True, **busy):
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
         online = {r["id"] for r in health._online_runners(c)}
         rows = [r for r in health._waiting(c, online, store.settings)[2] if r["bot"] == "ops"]
-        found = {f["check_id"] for f in health_monitor.findings(c, store.settings)}
+        found = {f["check_id"] for f in maintenance_health.findings(c, store.settings)}
     return rows, found
 
 
@@ -230,19 +230,41 @@ def test_a_rejected_sign_in(api):
     says(api, machine, "sign_in_rejected")
 
 
+def test_a_sign_in_read_as_ready_for_a_plan_that_no_longer_covers_it(api):
+    # The runner counts a missing sign-in as ready while its assignments say a plan signs the runtime in; with no plan
+    # covering it now, the bot waits for a sign-in instead of starting a turn that fails on the missing login.
+    machine = task_bot(api, lanes=True)
+    new_task(api, "first")
+    readiness(api, machine, {"schema_version": 1, "runtimes": {"codex": {"installed": True, "authenticated": "missing"}},
+                             "bots": {"ops": {"ready": True, "runtime": "codex", "profile": "", "sign_in": "ready"}}})
+    says(api, machine, "sign_in_missing")
+
+
+def test_another_profile_signed_out_does_not_refuse_a_bot_on_its_own_ready_login(api):
+    # An older runner's runtime row is the worst of its profiles: one signed-out profile must not hold a bot whose own
+    # login (the unnamed profile) is signed in.
+    machine = task_bot(api, lanes=True)
+    new_task(api, "first")
+    readiness(api, machine, {"schema_version": 1, "runtimes": {"codex": {
+        "installed": True, "authenticated": "missing",
+        "profiles": {"": {"authenticated": "ready"}, "acme-team": {"authenticated": "missing"}}}},
+        "bots": {"ops": {"ready": True, "runtime": "codex", "profile": "", "sign_in": "ready"}}})
+    assert post(api, "jobs/claim", {}, token=machine["token"])["attempt"] is not None
+
+
 def test_the_report_names_the_bot_and_computer_by_their_bundle_labels(api):
     machine = task_bot(api, lanes=True)
     new_task(api, "first")
     held(api, machine, asks=False)
     store = api.app.state.store
     with store.transaction() as c:
-        item = next(f for f in health_monitor.findings(c, store.settings) if f["check_id"] == "queue_idle")
+        item = next(f for f in maintenance_health.findings(c, store.settings) if f["check_id"] == "queue_idle")
         now = H.now()
         row = {**item, "first_seen_at": now, "last_seen_at": now, "occurrences": 1}
         c.execute("INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen_at,last_seen_at) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", (item["key"], item["signature"], item["check_id"], item["kind"],
                                                 item["title"], item["detail"], item["fix"], now, now))
-        message = health_monitor.report_message(c, row)
+        message = maintenance_health.report_message(c, row)
         bot, computer = diagnostics.bot_label(c, "ops"), diagnostics.runner_label(c, machine["runner_id"])
         bots = [(b["slug"], [b.get("display_name")]) for b in H.bots(c)]
         names = {b["slug"]: b["display_name"] for b in H.bots(c)}
@@ -259,7 +281,7 @@ def ops_rows(api):
     with store.read() as c:
         online = {r["id"] for r in health._online_runners(c)}
         rows = [r for r in health._waiting(c, online, store.settings)[2] if r["bot"] == "ops"]
-        found = {f["check_id"] for f in health_monitor.findings(c, store.settings)}
+        found = {f["check_id"] for f in maintenance_health.findings(c, store.settings)}
     return rows, found
 
 

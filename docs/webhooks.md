@@ -7,7 +7,8 @@ A webhook is one program posting a small message to another over HTTP. Tico does
 - **Outgoing**: Tico posts to an address you choose when something happens in Tico, such as a task finishing or an approval being asked.
 - **Through Tico Gateway**: a second address for an incoming webhook that keeps what is sent while your server is off or asleep.
 
-All three live in Settings → Webhooks, on the tabs **Incoming**, **Outgoing** and **Through Tico Gateway**. Everything on the page
+Incoming webhooks are a built-in row on Automations (**Incoming webhooks**), outgoing ones are on Tools (**Add tool → Outgoing webhook**,
+then a row each), and Through Tico Gateway is the **Webhooks** fold of the Tico Gateway card in Settings → Models. Everything there
 is also in `hub` and in the `hub_*` tools for bots and agents ([the table at the end](#the-commands)).
 
 Step by step:
@@ -147,7 +148,7 @@ call went to it. People who manage the webhook read the whole body.
 
 Before a bot gets a task or turn from a call, Tico's [screening](permissions.md#screening) checks the call's text for a prompt
 injection. A possible one reaches the bot with a warning line on top. At Hold, a likely one is held: the task goes to a
-person titled `Held: ...`, and handing it to the bot releases it. Settings → System → Screening sets this per door
+person titled `Held: ...`, and handing it to the bot releases it. Settings → Security → Screening sets this per door
 (Warn by default); it fails open.
 
 ### Who may do what
@@ -247,7 +248,7 @@ hub trigger relay create github
 
 It looks like `https://hooks.tico.dev/hr_<16 characters>/<secret>`, and like the first address it is shown once.
 `hub trigger relay rotate github` replaces it and `hub trigger relay delete github` removes it. The webhook's own address keeps
-working beside it. It needs the Tico Gateway connected in Settings → Gateway ([Tico AI Gateway](ai-gateway.md)).
+working beside it. It needs the Tico Gateway connected in Settings → Models ([Tico AI Gateway](ai-gateway.md)).
 
 - Your server collects the calls every 15 seconds and treats each as if the sender had posted it here. Signature checks,
   duplicates, routines and rules behave the same. The hourly cap does not apply to them.
@@ -395,7 +396,7 @@ An endpoint whose attempts have all failed for 5 days is turned off. The five da
 errors after a quiet spell does not count. Tico keeps what was queued, shows the endpoint in Health, files one task for its owner
 and records the turn-off in History.
 
-Fix the address, then turn it on (`hub webhook enable <id>`, or Settings → Webhooks). The answer says how many sends gave up since
+Fix the address, then turn it on (`hub webhook enable <id>`, or Tools → Webhooks). The answer says how many sends gave up since
 the failing began. Two commands send again what was held back; both need the endpoint on and handle at most 500 at a time (`more`
 says to run it again):
 
@@ -437,8 +438,8 @@ is refused (`hub webhook example` too); turn the endpoint back on first.
 - A bot cannot make an endpoint itself. Its request files an approval of kind *send*. A person approves, and the bot repeats the
   call. The approver then owns the endpoint.
 - Bots can list endpoints without the full address. They cannot read send logs.
-- A bot sends a custom event only while its **outbound send** switch is on (Settings → Bots → Mail sending, or
-  `hub bot mail <slug> --send`), and only to an endpoint that listens for it. The Strategy Bot sends nothing.
+- A bot sends a custom event only while its sending policy is **On their own** (Settings → Bots → <bot> → Email
+  sending), and only to an endpoint that listens for it. The Strategy Bot sends nothing.
 - An endpoint hears about a task, approval or bot only if its owner could read it. A thread or message event goes only to an
   endpoint whose owner may read that thread. `message.held` goes to owner and admin endpoints, as does a health, inbound or
   webhook event. Thread events carry ids and facts, never a message's words.

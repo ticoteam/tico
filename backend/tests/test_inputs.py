@@ -2,8 +2,9 @@ import json
 
 import pytest
 
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner, setup_attempt, expire
+from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt, expire
 from backend.tests.test_member_bots import botops, turn, finish
+from backend import bot_settings as BS
 
 
 def test_interrupted_steered_question_is_not_silently_completed(api):
@@ -274,7 +275,7 @@ def test_a_persons_follow_up_in_their_botops_chat_joins_the_running_reply(api, b
     active = turn(api, botops, person="ana-test", text="Add a Software Engineer bot")
     post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, botops["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.harness','claude') WHERE bot='botops'")
+        BS.update(c, 'botops', {'harness': 'claude'})
     follow = post(api, "chat/botops", {"text": "Use Claude Opus 5.5, medium effort"}, token="ana-test")
     snapshot = get(api, f"conversations/{follow['conversation_id']}/snapshot", "ana-test")
     assert [m["id"] for m in post(api, f"attempts/{active['id']}/inputs", {}, botops["token"])["messages"]] == [follow["id"]]
@@ -287,7 +288,7 @@ def test_a_message_says_whether_it_steers_the_running_turn_and_stop_and_redirect
     r, origin, active = setup_attempt(api)
     post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, r["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.harness','gemini','$.runtime','gemini') WHERE bot='ops'")
+        BS.update(c, 'ops', {'harness': 'gemini', 'runtime': 'gemini'})
     earlier = post(api, "chat/ops", {"text": "And the March numbers"})
     redirect = post(api, "chat/ops", {"text": "Stop that; do the April numbers instead"})
     page = get(api, f"conversations/{origin['conversation_id']}/snapshot")
@@ -302,13 +303,55 @@ def test_a_message_says_whether_it_steers_the_running_turn_and_stop_and_redirect
     assert {m["id"]: m.get("delivery") for m in page["messages"]}[redirect["id"]]["mode"] == "redirect"
     # A steering host never folds the redirect into the turn it replaces.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.harness','claude','$.runtime','claude') WHERE bot='ops'")
+        BS.update(c, 'ops', {'harness': 'claude', 'runtime': 'claude'})
     assert [m["id"] for m in post(api, f"attempts/{active['id']}/inputs", {}, r["token"])["messages"]] == [earlier["id"]]
     post(api, f"attempts/{active['id']}/complete", {"outcome": "interrupted", "text": "", "last_seq": 0}, r["token"])
     nxt = claim(api, r)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT message_id FROM jobs WHERE id=?", (nxt["job_id"],)).fetchone()[0] == redirect["id"]
         assert H.message(c, redirect["id"])["conversation_id"] == origin["conversation_id"]
+
+
+def test_a_persons_home_message_carried_by_its_notice_is_redirected_by_that_person_only(api):
+    from backend import threads
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    with api.app.state.store.transaction() as c:
+        home = threads.home(c, "bot:ops", create=True)["id"]
+    # The turn runs in Home, so its first message is a carrier too and the redirect shares its conversation.
+    first = api.post(f"/api/v2/threads/{home}/messages", json={"text": "Count the April numbers"},
+                     headers=headers("ana-test"))
+    assert first.status_code == 200, first.text
+    active = claim(api, r)
+    post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, r["token"])
+    response = api.post(f"/api/v2/threads/{home}/messages", json={"text": "Stop that; do the April numbers instead"},
+                        headers=headers("ana-test"))
+    assert response.status_code == 200, response.text
+    sent = response.json()
+    # The bot hears the Home message through its keeper carrier: the queued job is the carrier, not the person's message.
+    with api.app.state.store.read() as c:
+        carrier = c.execute("SELECT j.id,j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.sender_id='keeper' "
+                            "AND json_extract(m.refs,'$.carries')=?", (sent["id"],)).fetchone()
+    assert carrier["state"] == "queued"
+    post(api, "bots/ops/stop", {"run_id": active["id"], "redirect": sent["id"]}, token="ben-test", expected=404)
+    stopped = post(api, "bots/ops/stop", {"run_id": active["id"], "redirect": sent["id"]})
+    assert stopped == {"run_id": active["id"], "stopping": True, "redirect": sent["id"]}
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT redirect FROM jobs WHERE id=?", (carrier["id"],)).fetchone()[0] == 1
+
+
+def test_stop_and_redirect_reads_its_job_by_the_unique_message_id_and_scans_no_jobs(api):
+    from backend.execution import REDIRECT_CARRIER_JOB, REDIRECT_CARRIERS, REDIRECT_OWN_JOB
+    # Each lookup runs with its placeholders bound: the caller's own job, the carrier's job, and the carrier's delivery.
+    queries = {REDIRECT_OWN_JOB: ("m1", "ops", "human:ana", "a1", "a1"),
+               REDIRECT_CARRIER_JOB: ("c1", "ops", "m1", "human:ana", "a1", "a1"),
+               REDIRECT_CARRIERS: ("m1", "bot:ops")}
+    with api.app.state.store.read() as c:
+        for sql, params in queries.items():
+            plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql, params)]
+            assert not [d for d in plan if d.startswith(("SCAN j", "SCAN m"))], plan
+            assert any("INDEX" in d for d in plan), plan
 
 
 def test_a_requester_bot_steers_its_delegated_tasks_running_turn(api):
@@ -356,7 +399,7 @@ def test_a_comment_taken_back_while_the_turn_read_it_does_not_break_the_turns_fi
     assert finished["outcome"] == outcome
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM attempts WHERE id=?", (first["id"],)).fetchone()[0] == outcome
-        assert c.execute("SELECT exit FROM turns WHERE id=?", (first["id"],)).fetchone()[0] == outcome
+        assert c.execute("SELECT exit FROM attempts WHERE id=?", (first["id"],)).fetchone()[0] == outcome
         # The comment still there settles with the run as before; the one taken back is never held or retried.
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (kept["id"],)).fetchone()[0] == \
             ("completed" if outcome == "completed" else "uncertain")

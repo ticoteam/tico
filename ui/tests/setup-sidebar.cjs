@@ -1,6 +1,6 @@
 // Offline regression for the sidebar around the first-run wizard. Fixtures only.
 //  - on the wizard, before setup is done, the sidebar shows Finish setup and the team, not the app's pages or
-//    "What's new · 103 updates", and the phone's bottom bar is hidden; anywhere else, and once setup is
+//    the "Updated to" version row, and the phone's bottom bar is hidden; anywhere else, and once setup is
 //    done, everything is back;
 //  - after Create, a team of "Head of …" bots, each with its harness mark and its Setup pill, shows each whole name
 //    in one color (words shared with another bot's name are not muted), and each row's tooltip has the whole name.
@@ -112,7 +112,7 @@ async function wizard(browser, theme) {
   await page.evaluate(() => { location.hash = '#/tasks'; });
   await page.locator('#side [data-nav="tasks"]').waitFor();
   assert.equal(await page.locator('#changelog-notice').isVisible(), true);
-  assert.ok((await shown(page, '#side .side-scroll > .nav-link')).includes('overview'));
+  assert.ok((await shown(page, '#side .side-scroll > .nav-link, #side .side-scroll > .nav-row > .nav-link')).includes('overview'));
   await page.locator('#usage-notice').waitFor({state: 'visible'});
   assert.deepEqual(notices, ['shown'], 'and counts as seen only then');
   await shot(page, `left-setup-desktop-${theme}`);

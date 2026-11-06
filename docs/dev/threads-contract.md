@@ -5,8 +5,8 @@ track builds against this page. Owner: `threads/core`. A change here is announce
 ("contract:"), and additive changes are preferred over renames.
 
 Terms in UI and docs: **Thread, Home, DM, Sub-thread, Call**. Internally the table stays `conversations` and a
-thread id **is** a conversation id. `turns.thread_id` (like `bot_sessions`) is a provider session: never read or
-reuse it as a thread id.
+thread id **is** a conversation id. `bots.thread_id` and `attempts.thread_id` are provider sessions: never read or
+reuse them as thread ids.
 
 ## 0. Files core owns
 
@@ -206,7 +206,8 @@ Bots are AI employees: an internal bot reads what a person in the same seat read
 
 ### 2.3 Per-message checks (inside the audience)
 - Unchanged rule: `task_privacy.message_readable` (meeting provenance, referenced private tasks, bot limits).
-- **`restricted`** is computed at write time: 1 when the message has `legacy_audience`, an `in_reply_to`, any
+- **`restricted`** is computed at write time: 1 when the message has `legacy_audience`, an `in_reply_to` to anything
+  but a plain message (restricted 0, no `legacy_audience`, not deleted: `threads._plain_parent`), any
   `refs` key outside `threads.SAFE_REF_KEYS`, structure under a safe key other than one level under
   `threads.NESTED_REF_KEYS` (`origin`, `mentions`, `warnings`), any string in refs that names a task (`task:`, a task
   link, or any task's id), sits in a `task` or `meeting` thread, or attaches files. The migration computes the same in
@@ -332,8 +333,9 @@ threads.set_audience(c, principal, thread_id, audience, *, audience_group_id=Non
 threads.update(c, principal, thread_id, *, title=None, archived=None)
 threads.set_retention(c, principal, thread_id, days)           # a root's manager; days=None keeps messages for good
 ```
-- Posting, being mentioned or owning the thread's task sets `following=1` (reason posted|mentioned|task), over a row a
-  read left at `following=0`, keeping its read mark and notify level. A DM delivery or a join only makes the row, so it
+- Posting (in a chat thread) or being mentioned sets `following=1` (reason posted|mentioned), over a row a read left at
+  `following=0`, keeping its read mark and notify level. A task's thread is followed by its owner (reason `owner`) and
+  whoever chose to (reason `manual`); posting there follows nobody (backend/task_followers.py, docs/tasks.md Followers). A DM delivery or a join only makes the row, so it
   never undoes an unfollow.
 - A join reads up to now across the whole tree: the root followed, each sub-thread a read mark. A group joins by each of
   its people and bots not already reading; anyone already reading keeps what they have not read.
@@ -372,7 +374,7 @@ linked to the thread (`slack:<channel>`, written by those tracks through
 - `mode`: `steer` (into the recipient's running turn in the same root), `queue` (start or queue a run; for a person,
   notify live), `defer` (the bot's next run, as `bot_to_bot`/`wake_rules.hold` do today), `digest` (batched), `none`
   (recorded; nothing wakes).
-- `reason`: `dm`, `mention`, `ask`, `assign`, `addressed`, `home`, `sub_thread`, `routing`, `digest`, `member`,
+- `reason`: `dm`, `mention`, `ask`, `assign`, `addressed`, `home`, `sub_thread`, `reply`, `routing`, `digest`, `member`,
   `outside`.
 - `state`: `pending` → `delivered` (claimed / shown) → `read`; `capped` (loop guard, resumes); `held` (an org-rule
   hold on the message, local only); `failed` (an outside destination out of retries, one Needs-you item); `moot`
@@ -385,6 +387,10 @@ Per (message, bot), deduplicated, first match wins:
    wake rule says otherwise;
 2. the bot's Home → `queue`;
 3. a reply in a sub-thread the bot last posted in → `queue`;
+3a. a reply (`in_reply_to`, §4.9) to the bot's message in the same root → `queue`, reason `reply` (`steer` when it is
+   running in that root). A person's reply wakes it as a mention does; a bot's reply to another bot's message is judged
+   like a bot's @mention (`bot_to_bot` may make it wait); a bot's reply to its own message wakes nothing (the author's
+   deliveries are dropped). Reasons 1-3 win when they also match, and a reply is not routed (rule 4);
 4. routing (the Slack gateway's decision model, ≤3 bots) when the message names nobody and the thread has several
    bots → `queue` (`backend/thread_routing.py`);
 5. a following bot with `notify=digest` → `digest`;
@@ -402,7 +408,7 @@ paused or quarantined bot keeps its deliveries; a new batch waits while the last
 reads the threads it names only if the bot is still in their audience at the claim (`thread_bot_digest.grant`).
 
 Never wakes: the author itself, imports and replays (`refs.import`/`refs.replay`), a message whose
-`refs.origin` names that same bot (`threads.never_wakes`), and follow-up nudges and update cards (`refs.follow_up`,
+`refs.origin` names that same bot (`threads.never_wakes`), and legacy follow-up nudges and update cards (`refs.follow_up`,
 `refs.card`: `threads.quiet_notice`; `post` also marks them `quiet`, so not even the addressed bot's run starts). This
 binds the primary recipient too: its delivery is `mode='none'` and its message is `quiet`. A `refs.origin` holds no time,
 so a bot's own message coming back never wakes it, however late. Today's bot-to-bot hold (`rules.bot_to_bot_decision`)
@@ -457,6 +463,60 @@ or reply to them), judged for each person on the post (`threads.solicited`). Oth
 (`UNSOLICITED_PER_DAY`) applies, counted per delivery (`message_deliveries.unsolicited`). Past the cap an addressed post
 is refused as before; a further recipient gets no delivery, the message stays in the thread, and its author gets the
 warning `{"rule": "unsolicited_cap", "actor": ...}`.
+
+### 4.8 Who routing asked
+Every person's message routing looks at writes one `message_routes` row (migration 0068): `bot_ids`, the bots it asked
+(`[]`: it asked nobody, had no model, hit a cap or gave up). Timelines show it as `"routed": {"to": [{"actor",
+"name"}]}`; a message routing never looked at has `"routed": null`. A change is a `threads` event `routed`
+(`message_id`, `routed`) to the message's readers. Deleting the message deletes its row.
+
+### 4.9 Flat replies
+`POST .../messages {"in_reply_to": "<message id>"}` (and the upload's form field) answers one message without making a
+sub-thread: the post goes in the thread in the path, normally the root. The target must be a message (with a `seq`,
+not deleted) of the same root, in the root or an open (not archived, not closed) sub-thread under it, that the poster
+reads; anything else is 422 `{"error": "reply_target_invalid"}`. With `parent_message_id` too it is the same 422.
+Run replies keep writing `in_reply_to` as before (the message the run answers).
+
+Every timeline message (not hidden rows or `collapsed` rows) has `reply_to`: `{"id", "author", "author_name",
+"excerpt"}` (`excerpt`: plain text, markdown out, ≤120 characters with `…`), `{"id", "hidden": true}` when the viewer
+does not read the quoted message, or null. A carrier is read as the message it carries; a sub-thread message with no
+`in_reply_to` quotes its thread's parent message; a run's reply in a DM or Home quotes nothing (it answers the message
+above it). `threads.reply_quotes` batches the lookups for a page. SSE `messages` carry `in_reply_to` only: the quote is
+per viewer, so a client reads it from its loaded rows or the next timeline read.
+
+`GET .../timeline?flat=1`: the thread and its whole readable open subtree, in `seq` order, every message at
+`depth` 0 with no `sub_thread` branches; the same cursor (a seq), `limit`, byte cap, hidden-row folding and
+per-message check as the tree view. A flat page has no `sub_thread` summaries, so it carries `"read_marks": {"<thread
+id>": <the viewer's last_read_seq>}` for the root and each thread a message on the page is in (0 where the viewer has
+read nothing; one query, `threads.read_marks`): a client reads each message against its own thread's mark.
+
+### 4.10 Bot status (`backend/thread_bot_status.py`)
+`GET /api/v2/threads/{id}/bot-status` → `{"bots": [...]}` for the thread's root, and the same list as `bot_status` on
+the first timeline page (no `cursor`). One row per bot the root waits on: a person's message gave it an open wake
+(`queue`/`steer` delivery, `pending`, `delivered` or `capped`, partial index `message_deliveries_open_bots`) and the bot
+has not posted in the root since; a delivery with no live job or running attempt is left out, except an outside
+agent's (it takes work with no job here). Each bot's newest 50 open wakes are read, so one bot's never crowd out
+another's; a running turn's inputs count only for that turn's bot. Someone who reads only a migrated Home's old
+history gets `[]` (REST, timeline and SSE). At most 5, oldest wait
+first:
+```json
+{"actor": "bot:legal", "name": "Legal", "state": "working|up_next|cant_reply", "detail": "...",
+ "since": "<wait start>", "run_id": "<attempt id>|null", "fix": {"label": "Fix", "href": "#/settings/computers"}|null}
+```
+- `working`: its run for this root is running; `detail` is the run's current step (its last tool or progress line,
+  "Writing a reply", "Thinking", "Starting").
+- `up_next`: it is running elsewhere; "Finishing <task title>" or "Finishing # <thread title>" only when the viewer
+  reads that task or thread, else "Busy with other work".
+- `cant_reply`, `fix` set: paused or draining → "Paused" (bot Info); its computer offline or none → "Its computer is
+  offline" (Settings > Devices, `#/settings/computers`, as for a missing sign-in); out of budget or quota → "Out of budget" (`#/finance`); no sign-in for its tool → "Claude sign-in needed on
+  <computer>" (the tool's login name); the loop guard capped it → "Waiting: too many bot turns this hour"; any other
+  claim refusal → its `health.HELD` words. Refusals are the scheduler's `queue-refusal:<bot>` record (one per bot,
+  carrying its computer), written only when the reason changes.
+
+SSE: a `threads` event `bot_status` `{"thread_id": <root>, "bots": [...]}`, rendered per viewer, to the root's readers
+whenever a wake, job, attempt, refusal, bot state or drain changes for it; a run's steps send at most one per root
+every 5 s (`changes_bot_status`), and a step held back is sent by the scheduler's next tick
+(`thread_bot_status.send_trailing`).
 
 ## 5. C4: order and read state
 - `messages.seq` is per install, strictly increasing, from `sequences('messages')`. Tree order:
@@ -546,6 +606,16 @@ live shared-room rule as before.
   must not see it; the Home's menu and its Earlier messages row carry the same control.
 - The reader-set equality fixture asserts, per message, the same readers before and after, and again after a
   roster change.
+- Later, once (`bot_home_merge.run_once`, registry_metadata `bot-chats-to-home`, Nov 3 decision): each person's open
+  personal room with a bot (`room_key` the bot) moves into that bot's Home and is read by the Home's readers. Messages
+  keep ids, seqs and `legacy_audience`; the room closes with `room_key='<key>:home:<home id>'` and a `home_merges`
+  row, and a write that names it lands in the Home (`bot_home_merge.home_for`). The moved history is read for everyone
+  who reads the Home: its messages are history for every reader (`refs.moved_home`, never unread), in the Home and in
+  each moved sub-thread, so old unread state is discarded. A reader's mark moves up to what moved in, never past an
+  original Home message still unread for them. A task's history reads every Home its bot has had (`history_ids`). A person's chat with the bot that opens later is the Home too (`bot_home_merge.home_for_chat`). A file scoped to a moved room takes the
+  Home's scope, unless the Home already has a file of that identity or another moved room's file took it first; that
+  file keeps its room's scope and reads as the Home (`bot_home_merge.scope_home`, for file access and attachments). The
+  Assistant's rooms stay.
 
 ## 8. Sessions (`clients/sessions.py`, `runner-rs/src/execute.rs`)
 The server adds `root_id` and `audience_class` (`public` | `private`) to the turn's `conversation`. `private` =
@@ -589,16 +659,20 @@ narrows `runs`. They do not narrow `threads`: the sidebar stays live while a thr
 `_threads` in `backend/events.py`):
 ```json
 {"seq": 900, "thread_id": "...", "root_id": "...",
- "kind": "created|renamed|archived|unarchived|audience|members|read|sub_thread|counters|activity|reactions|ranked",
+ "kind": "created|renamed|archived|unarchived|audience|members|read|sub_thread|counters|activity|reactions|ranked|pinned|bot_status|routed",
  "thread": {<thread view>},                      // created|renamed|archived|unarchived|audience|members|sub_thread
  "read": {"last_read_seq": 4411},                // kind=read, only to that reader
  "counters": {"last_seq": 4411, "last_unread_seq": 4400},   // kind=counters|activity
- "message_id": "...", "reactions": [{"emoji": ":+1:", "count": 2, "actors": ["human:ana", "bot:legal"]}]}
+ "message_id": "...", "unread": true, "unread_count": 2,   // kind=activity: how many of its messages are unread (§10.1)
+ "message_id": "...", "reactions": [{"emoji": ":+1:", "count": 2, "actors": ["human:ana", "bot:legal"]}],
                                                  // kind=reactions, only when the viewer reads that message
+ "bots": [{<bot status row>}],                   // kind=bot_status, thread_id = the root (§4.10)
+ "message_id": "...", "routed": {"to": [...]}}   // kind=routed, only when the viewer reads that message (§4.8)
 ```
 `changes.kind` values written by core's triggers: `created_at`, `renamed`, `archived`, `unarchived`, `audience`,
 `members`, `sub_thread`, `counters` (on `conversations`), `read` (on `thread_followers`, `ref` = actor),
-`reactions` (on `message_reactions`, `ref` = message id).
+`reactions` (on `message_reactions`, `ref` = message id), `pinned` (on `thread_pins`, `ref` = actor, and on
+`conversations.pinned_for_everyone_at`, no `ref`; §10.1).
 
 `counters` does **not** fire per message. A new message moves its thread's counters, and the `messages` event already
 carries them (`message_seq`, and the thread's `last_seq` is the highest `message_seq` seen): clients derive unread
@@ -620,7 +694,8 @@ Thread view (`threads.view(c, viewer, row)`):
  "last_seq": 4411, "last_unread_seq": 4400,
  "home": {"actor": "bot:legal"},                 // audience=home only
  "me": {"member": true, "following": true, "notify": "live", "last_read_seq": 4400, "unread": 3,
-        "activity": true, "can_post": true, "can_manage": true},
+        "activity": true, "can_post": true, "can_manage": true, "pinned": false},
+ "pinned_for_everyone": false,                   // §10.1
  "dm_with": [{"actor": "human:bea", "name": "Bea"}], "dm_with_count": 1,   // DM roots: the others, at most 4 named
  "new_at": {"thread_id": "t_sub", "message_id": "m_1"}}                    // list rows only; see below
 ```
@@ -635,14 +710,15 @@ with no display name.
 
 | Route | Service function |
 |---|---|
-| `GET /api/v2/threads?cursor=&limit=&sort=` | `threads.sidebar(c, viewer, cursor=None, limit=50, sort=None)` → `{"attention": [...], "threads": [...], "dms": [...], "bot_dms": {...}, "next_cursor"}`, ranked before it is paged: roots with an open Needs attention item for the viewer (`thread_attention.items`: mention, ask, an unread DM with another person in it, held post) or capped wakes the viewer can manage, then unread, then recent, newest first in each. `sort=recent` puts everything after Needs attention newest first; `sort=important` (the app's default) orders it by each root's `importance` (1-10, backend/thread_rank.py: a Decide pass ranks roots with new messages, at most once an hour each; never ranked = 5), highest first, then newest, and leaves out noise: level 1, and a task's thread whose task is finished or that no person owns or asked for. Every row carries `importance` (0 = noise by rule). A task's thread (audience `task`) is a candidate only while it has unread for the viewer (a person's message past their mark, or a delivery to them): parties and posters are no reason, and the filter is part of the same indexed query, so the page and its `next_cursor` agree with the rows. `attention`: the first group's rows on this page, capped ones with `"capped": n, "capped_since"`; the app shows it as Inbox. `bot_dms` (first page only): `{bot actor: unread}` for the viewer's DMs with one bot and no one else (`threads.bot_dm_unread`), which are not Needs attention: the Team list shows each count on its bot, whose page holds the DM. Each root row sums its live subtree for this viewer: `me.unread`, `me.activity`, `last_message_at`, and `activity_seq` (the newest `seq` under it). `cursor` is opaque |
+| `GET /api/v2/threads?cursor=&limit=&sort=` | `threads.sidebar(c, viewer, cursor=None, limit=50, sort=None)` → `{"attention": [...], "threads": [...], "dms": [...], "bot_dms": {...}, "next_cursor"}`, ranked before it is paged: roots with an open Needs attention item for the viewer (`thread_attention.items`: mention, ask, an unread DM with another person in it, held post) or capped wakes the viewer can manage, then unread, then recent, newest first in each. `sort=recent` puts everything after Needs attention newest first; `sort=important` (the app's default) orders it by each root's `importance` (1-10, backend/thread_rank.py: a Decide pass ranks roots with new messages, at most once an hour each; never ranked = 5), highest first, then newest, and leaves out noise: level 1, and a task's thread whose task is finished or that no person owns or asked for. Every row carries `importance` (0 = noise by rule). A task's thread (audience `task`) is a candidate only while it has unread for the viewer (a person's message past their mark, or a delivery to them): parties and posters are no reason, and the filter is part of the same indexed query, so the page and its `next_cursor` agree with the rows. `attention`: the first group's rows on this page, capped ones with `"capped": n, "capped_since"`; the app shows it as Inbox. `bot_dms` (first page only): `{bot actor: unread}` for the viewer's DMs with one bot and no one else (`threads.bot_dm_unread`), which are not Needs attention: the Team list shows each count on its bot, whose page holds the DM. `person_dms` (first page only): the same for DMs with one person (`threads.person_dm_unread`). Each root row sums its live subtree for this viewer: `me.unread`, `me.activity`, `last_message_at`, and `activity_seq` (the newest `seq` under it). `cursor` is opaque |
 | `GET /api/v2/threads/{id}` | `threads.get(c, viewer, thread_id)` → thread view + `"breadcrumb": [{"id","title"}]` |
-| `GET /api/v2/threads/{id}/timeline?cursor=&limit=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=...)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor"}`; `next_cursor` and `limit` count the thread's own messages; each is followed by its sub-thread's rows in tree order (§5). Each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "title", "count", "last_seq", "last_read_seq", "unread", "more"}` (`count` and `unread` only of messages the viewer reads; `more` is how many are collapsed) |
+| `GET /api/v2/threads/{id}/bot-status` | `thread_bot_status.status(c, viewer, root)` → `{"bots": [...]}` (§4.10) |
+| `GET /api/v2/threads/{id}/timeline?cursor=&limit=&flat=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=..., flat=False)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor", "bot_status", "read_marks"}` (`bot_status` on the first page; `flat` and its `read_marks`: §4.9; every message has `reply_to` and `routed`); `next_cursor` and `limit` count the thread's own messages; each is followed by its sub-thread's rows in tree order (§5). Each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "title", "count", "last_seq", "last_read_seq", "unread", "more"}` (`count` and `unread` only of messages the viewer reads; `more` is how many are collapsed) |
 | `POST /api/v2/threads/{id}/read {seq}` | `threads.mark_read` |
 | `POST /api/v2/threads/{id}/read-all` | `threads.mark_all_read` |
 | `GET /api/v2/threads/search?q=` | T2 (FTS5), filtered by `threads.readable` per message |
 | `POST /api/v2/threads {title, audience, audience_group_id, members, parent_message_id, body}` | `threads.create` (+ `threads.post` when `body`) |
-| `POST /api/v2/threads/{id}/messages {text, kind, to, refs, parent_message_id}` | `threads.post` |
+| `POST /api/v2/threads/{id}/messages {text, kind, to, refs, parent_message_id, in_reply_to}` | `threads.post` (`in_reply_to`: §4.9) |
 | `PATCH /api/v2/threads/{id} {title, archived, audience, audience_group_id, retention_days}` | `threads.update` / `threads.set_audience` / `threads.set_retention` |
 | `GET/POST/DELETE /api/v2/threads/{id}/members[/{actor}]` | `threads.members` / `add_member` / `remove_member` |
 | `PUT/DELETE /api/v2/threads/{id}/follow {notify}` | `threads.follow` / `unfollow` |
@@ -653,6 +729,91 @@ Timeline messages: the existing message view plus `thread_id`, `root_id`, `seq`,
 `edited_at`, `deleted` (tombstone: no body), `reactions` (`threads.reactions(c, ids)`, when any), hidden rows as `{"id", "seq", "thread_id", "depth", "hidden": true}` (with `"earlier": true` for closed history, §2.3), and a long branch's older part as
 `{"id": "more:<thread id>", "thread_id", "depth", "collapsed": true, "count", "cursor", "unread"}`.
 `/api/v2/conversations/*` stay as aliases for one release. Every list is paged and byte-capped.
+
+### 10.1 Pins, the rail, Browse and Catch up (`backend/thread_rail.py`)
+
+Schema (migration 0063): `thread_pins(id, thread_id, actor, pinned, created_at, updated_at)`, unique `(thread_id,
+actor)`; `pinned` 1 pins a root for that actor, 0 unpins it for them over a pin for everyone. `conversations.
+pinned_for_everyone_at` (null: not pinned for everyone). Only roots are pinned (422 `pin_root` for a sub-thread). The
+thread view gains `"pinned_for_everyone": bool` and `me.pinned` (the reader's own row wins, else the pin for everyone);
+a sub-thread shows its root's.
+
+| Route | Service function |
+|---|---|
+| `PUT /api/v2/threads/{id}/pin` | `thread_rail.pin(c, principal, thread_id)` → thread view; reading it is enough (404 otherwise) |
+| `DELETE /api/v2/threads/{id}/pin` | `thread_rail.unpin(...)` → thread view: a row with `pinned` 0 when the root is pinned for everyone, else the row goes |
+| `PATCH /api/v2/threads/{id} {"pinned_for_everyone": bool}` | `thread_rail.set_pinned_for_everyone(c, principal, thread_id, value)`: managers only (`can_manage`, 403); 422 `pin_everyone` on a 1:1 DM, a Home, a task's or a meeting's thread. Taking it off drops the rows with `pinned` 0 |
+| `POST /api/v2/threads {..., "pin_for_members": true}` | `threads.create(..., pin_for_members=True)`: a pin row for the starter and every `human:` member |
+| `GET /api/v2/threads/rail?cursor=&limit=100` | `thread_rail.rail(c, viewer, cursor=None, limit=100)` → `{"pinned": [view], "threads": [view], "catch_up": 7, "catch_up_ids": [root id], "dms": {actor: unread}, "next_cursor"}` |
+| `GET /api/v2/threads/browse?q=&cursor=&limit=50` | `thread_rail.browse(c, viewer, q=None, cursor=None, limit=50)` → `{"threads": [view + "member_count"], "next_cursor"}` |
+| `GET /api/v2/threads/catch-up?cursor=&limit=20` | `thread_rail.catch_up(c, viewer, cursor=None, limit=20)` → `{"items": [{"thread": view, "new_count": 4, "mention": true, "messages": [timeline message], "more": 0}], "count": 7, "next_cursor"}` |
+
+Rail. Candidates are open roots the viewer reads (`readable_sql`, then `thread_readable`) with audience company, team
+or members, or a DM with two or more others (`_dm_members`); never a 1:1 DM, a Home, a task's thread or a meeting. The
+viewer is in one as its starter, a member (or in a member group), a follower of it or of any thread under it, a
+participant, or by a pin. `pinned` (at most 200 a page, a quarter of the page's bytes) is every candidate pinned for
+the viewer, a pin for everyone on a thread they never joined included; `threads` (half the page's bytes) the rest they
+are in. Both are ordered by title, case-insensitively, unnamed last, then id, and each goes on through the same
+opaque `next_cursor` until both are done (null then), so a row past either cap is on a later page.
+Rows are list rows: `me.unread` and `me.activity` sum the open subtree, as in the sidebar, plus `activity_seq`.
+`catch_up` (Catch up's `count`), `catch_up_ids` (the roots it counts, at most 99) and `dms` (`threads.one_dm_unread`:
+`{actor: unread}` for each open, followed, unmuted DM with exactly one other person or bot) are on the first page only:
+later pages have `null`, `[]` and `{}`. The sidebar's first page has the same DM counts apart: `bot_dms` and
+`person_dms`.
+
+Live updates. A client reads the rail whole on first load, on `reset`, on `needs` and on a safety poll every few
+minutes, and patches it from the `threads` topic in between. One `activity` event stands for every activity row of
+that thread in its batch: `message_id` is the newest of them the viewer reads, `unread_count` how many of them pass
+`threads.unread_message_sql` for the viewer past their mark (a person's message not their own, or a delivery to them
+that counts under the task rule; one indexed lookup a row) and `unread` whether any does, so the row's `me.unread` goes
+up by `unread_count` and its root joins `catch_up_ids` without a read; the viewer's own `read` clears them; `created`, `members`, `audience`, `archived` and
+`unarchived` carry the thread view; `pinned` moves the row (a thread not on the rail is read alone,
+`GET /api/v2/threads/{id}`).
+
+Browse. Open company and team roots the viewer reads and is not in (as above, pins aside), newest activity first
+(the newest `last_seq` in the open subtree), `q` a case-insensitive LIKE on the title. `member_count` counts the root's
+members and followers once each. Joining is `PUT .../follow`, which puts the thread in the rail.
+
+Catch up. An item is an open root the viewer reads with at least one new message over its subtree that they may read
+(the thread check for each sub-thread and the per-message check for each message; bot activity alone is never unread,
+nor are one's own messages), or with an open mention or ask the viewer may read (`thread_attention._addressed`'s rule, read as ids
+in SQL, the newest 500) or a write held for their review (`org_rule_check.held_for`: only the viewer's own candidates,
+their own holds, their bots' and the ones they review, through `org_rule_holds_author` and `org_rule_holds_reviewer`,
+the oldest 500 native posts and edits). Candidates: company, team, members threads, DMs (1:1 and group) and task threads the viewer
+is in (a task's thread only with unread under the task rules, `H.delivery_counts_sql`), and the viewer's own Home;
+another's Home only through a mention, an ask or a hold. A root the viewer follows with notify `muted` is left out in SQL unless it
+mentions them; a migrated Home they read only for its history counts only by its attention items. Order: items that
+mention the viewer (an open mention or ask, or a new message delivered to them as a mention, ask or assignment) first,
+then newest activity, then id (newest first). Roots are read and checked 100 at a time (batched read checks and
+subtree counts), at most 1,000 over all the pages: the cursor carries how many came before it, so the pages, `count`
+and `catch_up_ids` hold the same items. Counting stops at 99 and reads no message text. `new_count` is how many new
+messages of the subtree the viewer may read (a plain message counts in SQL; a restricted one or a migrated Home's old history is
+read whole for its check, at most 200 a batch of roots), or 1 for an attention item alone. The sidebar's `me.unread`
+still counts before the per-message check (follow-up). `messages` are the new messages (past the viewer's mark in each thread, under the unread rule)
+plus an open mention's or ask's own message, each through the per-message check, in tree order (a message, then the
+sub-thread under it, each with `depth`): candidates are merged in tree order from every unread sub-thread (at most
+1,000), 25 a thread at a time on ids and seqs, and read whole 25 at a time, at most 5 batches, until 20 pass. At most 20 a card, and cards and messages stop at the page's
+byte budget (512 KiB; the first card's first message always goes); a text over 4,000 characters is cut, with
+`"clipped": true`, and a message too big for what is left goes clipped without its refs and reactions, its text cut to
+500. `more` counts every other new message the viewer may read (`new_count`, plus open mentions and asks already read,
+less the ones shown). `count` is every item across
+pages, at most 99 (the sidebar badge). Reading an item is `POST .../read-all`; muting it is `PUT .../follow {"notify": "muted"}`. The older
+`POST /api/v2/threads/{id}/catch-up` (`hub thread catchup`) is a different thing: a written summary of one thread.
+
+Naming. Only a DM with one teammate may be unnamed. `threads.create`, `threads.dm` and a post that starts a thread
+(`_create_plan`) refuse a group DM (two or more others) or a members, team or company thread with an empty title:
+422 `name_required`, "Group chats need a name.", and for a bot the same text plus how to pass a title (`title` in
+`hub_thread_create` and `hub_thread_dm_group`, `--title` on the commands). Opening a group DM that already exists needs
+no title, and existing unnamed group DMs stay readable: clients name them from `dm_with`.
+
+Events. `threads` topic, kind `pinned`, `{"thread_id", "root_id", "kind": "pinned", "actor", "pinned",
+"pinned_for_everyone"}` (`pinned` is the receiver's own state). A reader's own pin (`thread_pins`, `ref` = actor) goes
+only to that reader; a pin for everyone (`conversations.pinned_for_everyone_at`, no `ref`) to everyone who reads it.
+
+CLI and MCP: `hub thread pin|unpin <thread>` (`hub_thread_pin`, `hub_thread_unpin`), `hub thread catch-up`
+(`hub_thread_catch_up`), `hub thread update --pin-for-everyone|--unpin-for-everyone` (`pinned_for_everyone` on
+`hub_thread_update`), `hub thread create --pin-for-members`, `hub thread dm-group --title`. BotOps runs the pin routes
+as the person who asked.
 
 ## 11. Outside tracks' hooks
 - Thread webhooks and rules: `threads._emit_thread_created(c, thread, actor)` (every route: create, dm, home,

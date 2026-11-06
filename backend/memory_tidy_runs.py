@@ -21,8 +21,9 @@ def stamp(at):
 def changed(c, bot, since):
     # Only pushed memory/ counts. A knowledge-only change does not buy a model call.
     excluded = {r[0] for r in c.execute(
-        "SELECT t.id FROM turns t JOIN memory_tidy_passes p "
-        "ON t.task_id=p.parent_task_id OR t.task_id=p.check_task_id WHERE p.bot=?", (bot,))}
+        "SELECT t.id FROM attempts t JOIN memory_tidy_passes p "
+        "ON t.task_id=p.parent_task_id OR t.task_id=p.check_task_id "
+        "WHERE (t.job_id IS NULL OR t.trigger IS NOT NULL) AND p.bot=?", (bot,))}
     for row in c.execute("SELECT subject,files,attempt_id FROM bot_memory_updates "
                          "WHERE bot=? AND shared=1 AND committed_at>?", (bot, since)):
         if row['subject'].startswith('Dreamed ') or row['attempt_id'] in excluded:
@@ -37,12 +38,22 @@ def refresh_costs(c):
     # segments or replace an existing estimate with zero cash billing.
     from .usage_records import RUNS
     for p in c.execute("SELECT id,check_task_id,cost_usd FROM memory_tidy_passes WHERE check_task_id IS NOT NULL").fetchall():
-        rows = c.execute("SELECT est_cost_usd,model,input_tokens,cached_tokens,output_tokens FROM " + RUNS +
+        rows = c.execute("SELECT est_cost_usd,est_cost_low,model,input_tokens,cached_tokens,output_tokens FROM " + RUNS +
                          " u WHERE task_id=?", (p['check_task_id'],)).fetchall()
         total = 0.0
         for r in rows:
-            estimate = providers.estimate_cost(r['model'], r['input_tokens'], r['cached_tokens'], r['output_tokens'])
-            total += max(float(r['est_cost_usd'] or 0), float(estimate or 0))
+            stored = float(r['est_cost_usd'] or 0)
+            if stored > 0 and r['est_cost_low'] == 0:
+                # Priced when the run finished, each request on its own (the host listed them): keep that figure.
+                total += stored
+                continue
+            # No per-request counts are kept here. For a model whose long tier is billed per request, the run's tokens
+            # are priced as one request; any other model pays its standard rate. A row the host did not price per
+            # request may be low, so keep the larger.
+            one = [(r['input_tokens'], r['cached_tokens'], r['output_tokens'])]
+            estimate = providers.estimate_cost(r['model'], r['input_tokens'], r['cached_tokens'], r['output_tokens'],
+                                               one if providers.per_request_long_tier(r['model']) else None)
+            total += max(stored, float(estimate or 0))
         c.execute("UPDATE memory_tidy_passes SET cost_usd=max(cost_usd,?) WHERE id=?", (total, p['id']))
     return c.execute("SELECT coalesce(sum(cost_usd),0) FROM memory_tidy_passes").fetchone()[0]
 
@@ -71,7 +82,7 @@ def close_tasks(c, row, reason):
     # the container first so deadline cancellation never starts an ordinary turn.
     for key in ('parent_task_id', 'check_task_id'):
         if row[key]:
-            H.task_close(c, H.KEEPER, row[key], note=reason, quiet=True)
+            H.task_close(c, H.KEEPER, row[key], note=reason, quiet=True, strict=False)
 
 
 def close_pass(c, row, reason):
@@ -102,12 +113,11 @@ def unsettled(c):
     if c.execute("SELECT 1 FROM memory_tidy_passes WHERE status='filed' LIMIT 1").fetchone():
         return True
     return c.execute(
-        "SELECT 1 FROM memory_tidy_passes p JOIN turns t ON t.task_id=p.check_task_id "
-        "WHERE t.finished_at IS NULL OR (t.usage_reason IS NOT NULL AND "
+        "SELECT 1 FROM memory_tidy_passes p JOIN attempts t ON t.task_id=p.check_task_id "
+        "WHERE (t.job_id IS NULL OR t.trigger IS NOT NULL) AND (t.settled_at IS NULL OR (t.usage_reason IS NOT NULL AND "
         "NOT EXISTS(SELECT 1 FROM usage_facts f WHERE f.run_id=t.id AND f.source='estimate') "
         "AND coalesce(t.input_tokens,0)+coalesce(t.output_tokens,0)=0 "
-        "AND (NOT EXISTS(SELECT 1 FROM attempts a WHERE a.id=t.id) OR "
-        "EXISTS(SELECT 1 FROM attempts a WHERE a.id=t.id AND a.started_at IS NOT NULL))) LIMIT 1").fetchone() is not None
+        "AND (t.job_id IS NULL OR t.started_at IS NOT NULL))) LIMIT 1").fetchone() is not None
 
 
 def packet_runner(c, bot):

@@ -6,7 +6,11 @@
       "bot:ops": "ops",
       "human:ana": "Ana"
     },
+    "by_kind": {
+      "approval": 1
+    },
     "count": 1,
+    "folded_task_ids": [],
     "items": [
       {
         "actions": [
@@ -52,6 +56,7 @@
     ],
     "next": null,
     "older": [],
+    "plate_count": 1,
     "version": "<opaque>",
     "went_away": {
       "assistant": 0,

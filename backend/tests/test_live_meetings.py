@@ -13,6 +13,7 @@ from backend.auth import Identity
 from backend.store import H, digest, encode
 from backend.tests.test_api import api, assign, get, headers, post, restrict, runner  # noqa: F401
 from backend.tests.test_new_bot_flows import create_bot
+from backend import bot_settings as BS
 
 
 @pytest.fixture
@@ -312,14 +313,14 @@ def test_named_chat_bypasses_decision_and_repeat_finalize_keeps_external_id(live
     }
 
 
-def test_joined_human_can_remove_bot_and_revoke_queued_turn_access(live):
+def test_attaching_human_can_remove_bot_and_revoke_queued_turn_access(live):
     live.app.state.live_meeting_decider = lambda state, questions, label: {
         "model": "synthetic-decider", "ms": 1,
         "answers": {key: {"noul": 0.99, "confidence": 0.9} for key in questions}}
     meeting = connect(live, cooldown_seconds=0)
     mid = meeting["id"]
-    attach(live, mid, "ops")
     post(live, f"live-meetings/{mid}/join", {}, token="ben-test")
+    attach(live, mid, "ops", token="ben-test")
     chunk(live, mid, 1, 0, 30_000, "Queue a bot reply")
     turn = get(live, f"live-meetings/{mid}")["router"]["turns"][0]
 
@@ -435,9 +436,9 @@ def test_attachment_requires_write_and_keeper_delivery_keeps_human_contact_polic
     with live.app.state.store.transaction() as c:
         restrict(c, "ops", see={"people": ["cara"]}, read={"people": ["cara"]},
                  write={"people": ["ana"], "bots": ["finance"]})
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config["bot_contact"] = "tasks"
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode(config),))
+        BS.write(c, 'ops', config)
 
     meeting = connect(live, title="Write-authorized contact")
     mid = meeting["id"]
@@ -595,7 +596,7 @@ def test_private_meeting_is_hidden_until_owner_adds_people_or_opens_it_to_the_te
     # The owner can always add a bot; the bot reads only this meeting.
     assert attach(live, mid, "ops")["added"] == ["ops"]
     assert get(live, f"live-meetings/{mid}", token="ops-live")["id"] == mid
-    # Only the owner changes who can see it.
+    # People outside the meeting cannot add themselves.
     denied = live.post(f"/api/v2/live-meetings/{mid}/access", json={"add": ["ben"]}, headers=headers("cara-test"))
     assert denied.status_code == 404
     shared = post(live, f"live-meetings/{mid}/access", {"add": ["ben"]})
@@ -790,7 +791,7 @@ def test_each_meeting_is_its_own_thread_and_a_meetings_turns_continue_it(live):
     """A private meeting's words never reach another meeting or the bot's chats: each meeting and bot has one
     conversation, and its turns run on that conversation's own thread, whatever the bot's session setting."""
     with live.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.session','bot') WHERE bot='ops'")
+        BS.update(c, 'ops', {'session': 'bot'})
     private = post(live, "live-meetings", {"title": "Private A", "visibility": "private", "cooldown_seconds": 0})
     team = post(live, "live-meetings", {"title": "Team B", "cooldown_seconds": 0})
     for meeting in (private, team):
@@ -812,7 +813,7 @@ def test_each_meeting_is_its_own_thread_and_a_meetings_turns_continue_it(live):
     assert thread_of(first) == thread_of(second) == "conversation:" + first["conversation"]["id"]
     assert thread_of(other) == "conversation:" + other["conversation"]["id"] != thread_of(first)
     with live.app.state.store.read() as c:
-        own = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        own = BS.read(c, 'ops')
         kept = {row[0] for row in c.execute("SELECT conversation_id FROM live_meeting_bots WHERE bot='ops'")}
     from clients import sessions
     assert sessions.session_key(own, "ops", None, "any-direct-chat") == sessions.BOT_THREAD != thread_of(first)
@@ -1418,3 +1419,39 @@ def test_idle_screen_wait_does_not_fill_slow_request_diagnostics(live):
         assert route['max'] < 1000, route
     finally:
         live.app.state.timing.recorder = None
+
+
+def test_discard_removes_the_transcript_copies_sent_to_bots(live):
+    meeting = post(live, "live-meetings", {"title": "Kept here", "cooldown_seconds": 0})
+    other = post(live, "live-meetings", {"title": "Another room", "cooldown_seconds": 0})
+    for room in (meeting, other):
+        attach(live, room["id"], "ops")
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    chunk(live, meeting["id"], 1, 0, 1000, "Ops, the synthetic codename is confidential")
+    turn = claimed_turn(live, machine)
+    assert "confidential" in turn["message"]["body"]
+    post(live, f"attempts/{turn['id']}/complete", {"outcome": "completed", "text": "Noted the codename confidential.",
+                                                   "last_seq": 0}, token=machine["token"])
+    chunk(live, other["id"], 1, 0, 1000, "Ops, the synthetic harbour plan")
+    kept = claimed_turn(live, machine)
+    post(live, f"attempts/{kept['id']}/complete", {"outcome": "completed", "text": "Harbour plan noted.",
+                                                   "last_seq": 0}, token=machine["token"])
+    run_log = lambda run: live.get(f"/api/runs/{run}/log", headers=headers())
+    assert "codename" in run_log(turn["id"]).text
+    post(live, f"live-meetings/{meeting['id']}/discard", {})
+    with live.app.state.store.read() as c:
+        conv = turn["conversation"]["id"]
+        bodies = [row[0] for row in c.execute("SELECT body FROM messages WHERE conversation_id=?", (conv,))]
+        closed = c.execute("SELECT closed_at FROM conversations WHERE id=?", (conv,)).fetchone()[0]
+        attempt = c.execute("SELECT final_text,result FROM attempts WHERE id=?", (turn["id"],)).fetchone()
+        events = [row[0] for row in c.execute("SELECT payload FROM attempt_events WHERE attempt_id=?", (turn["id"],))]
+    assert bodies and not any("codename" in (body or "") for body in bodies)
+    assert closed
+    assert attempt is not None and "codename" not in (attempt["final_text"] or "") + (attempt["result"] or "")
+    assert not any("codename" in payload for payload in events)
+    log = run_log(turn["id"])
+    assert log.status_code in (200, 404) and "codename" not in log.text and "confidential" not in log.text
+    # A run from another meeting keeps its words.
+    assert "Harbour plan noted." in run_log(kept["id"]).text

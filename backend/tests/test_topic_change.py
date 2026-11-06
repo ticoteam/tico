@@ -60,9 +60,9 @@ def chat(api):
     def usage(context=150_000, cached=40_000, age=30, summed=None):
         summed = summed or context or 0
         with store.transaction() as c:
-            last = c.execute("SELECT t.id FROM turns t JOIN bot_sessions s ON s.bot=t.bot AND s.thread_id=t.thread_id "
-                             "WHERE t.bot='ops'").fetchone()[0]
-            c.execute("UPDATE turns SET input_tokens=?,cached_tokens=?,prompt_tokens=?,finished_at=? WHERE id=?",
+            last = c.execute("SELECT t.id FROM attempts t JOIN bot_sessions s ON s.bot=t.bot_id AND s.thread_id=t.thread_id "
+                             "WHERE t.bot_id='ops'").fetchone()[0]
+            c.execute("UPDATE attempts SET input_tokens=?,cached_tokens=?,prompt_tokens=?,settled_at=? WHERE id=?",
                       (summed - cached, cached, context, H.shift(H.now(), seconds=-age), last))
     usage()
     return api, machine, conversation, model, usage
@@ -201,7 +201,7 @@ def run_with(api, machine, requests):
                  json={"outcome": "completed", "last_seq": 0, "text": "Done.", "usage": {**part, "segments": [part]}})
     assert r.status_code == 200, r.text
     with api.app.state.store.read() as c:
-        return tuple(c.execute("SELECT input_tokens,cached_tokens,prompt_tokens FROM turns WHERE id=?",
+        return tuple(c.execute("SELECT input_tokens,cached_tokens,prompt_tokens FROM attempts WHERE id=?",
                                (turn["id"],)).fetchone())
 
 
@@ -497,7 +497,8 @@ def test_sends_at_the_same_moment_cannot_pass_the_daily_call_limit_together(chat
         post(api, "chat/ops", {"text": "Plan the offsite agenda"})
     finally:
         model.hold.set()
-        first.join(5)
+        first.join(30)                            # a loaded runner can take past 5 s; a silent timeout lost its row
+    assert not first.is_alive(), "the first send returned"
     assert len(model.calls) == 1, "the second send found no call free and asked nothing"
     errors = [r.get("error") for r in checks(api)]   # each row lands once its send returns, in either order
     assert len(errors) == 2 and errors.count("budget") == 1, "the second asked nothing; the first asked with the call"

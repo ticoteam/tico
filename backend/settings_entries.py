@@ -14,10 +14,10 @@ from .settings_catalog import Setting as S
 SETTINGS_FILES = sorted(
     ["settings.js", "settings-access.js", "settings-bot-editor.js", "settings-bots.js", "settings-strategy-bot.js",
      "settings-company.js", "settings-devices.js", "settings-history.js", "settings-hosted.js", "settings-listening.js",
-     "settings-mail.js", "settings-people.js", "settings-providers.js", "settings-recurring.js", "settings-release.js",
+     "settings-people.js", "settings-providers.js", "settings-recurring.js", "settings-release.js",
      "settings-repositories.js", "settings-storage.js", "settings-webhooks.js", "subscriptions.js",
-     "bot-budget.js", "bot-profile.js", "usage.js", "task-pipelines.js", "tags.js", "roadmaps.js", "inbound.js",
-     "cloud-machines.js"])
+     "bot-budget.js", "bot-profile.js", "usage.js", "task-pipelines.js", "tags.js", "roadmaps.js",
+     "inboxes-texts.js", "inboxes-letters.js", "cloud-machines.js"])
 
 
 def _card(tab, card=""):
@@ -25,9 +25,17 @@ def _card(tab, card=""):
 
 
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "Settings > Computers", "Settings > Bots"
-RULES, HOOKS, TASKS, REPOS = "Settings > System", "Settings > Webhooks", "Settings > Tasks", "Settings > Repositories"
-INBOUND, STRATEGY = "Settings > Email & Phone", "Settings > System > Strategy bot"
-MAIL = "Settings > Mail"
+RULES, TASKS, REPOS = "Automations > System jobs", "Settings > Tasks", "Settings > General > Repositories"
+# Webhooks left Settings: incoming ones are on Automations, outgoing ones on Tools, their Gateway addresses a fold of
+# the Tico Gateway card on Models (ui/app/settings-webhooks.js).
+HOOKS_IN, HOOKS_OUT, HOOKS_GW = "Automations > Incoming webhooks", "Tools > Webhooks", "Settings > Models > Tico Gateway > Webhooks"
+HOOKS_IN_CARD, HOOKS_OUT_CARD = "#/automations/webhooks", "#/tools/webhooks"
+INBOXES, STRATEGY = "Tools", "Strategy bot > Settings"
+# System's other cards moved to the built-in bots' own Settings and to Settings > Security. Releases is on whichever bot
+# is the Release Manager: its address reads the schedule and opens that bot (ui/app/settings.js settingsMovedOut).
+RELEASES, TASK_MANAGER, SECURITY = "Release Manager > Settings > Releases", "Task Manager > Settings", "Settings > Security"
+SYSTEM_JOBS = "#/automations/system-jobs"
+INBOUND, TEXTS, MAIL = (INBOXES + " > Settings > " + s for s in ("Email", "Texts", "Letters in"))
 MODELS = "Settings > Models"
 
 _RULE_NAMES = {
@@ -43,16 +51,16 @@ _RULE_NAMES = {
     "bots_go_ahead": ("Bots go ahead on their recommendation when nobody answers", "confirm", ""),
     "support_access": ("Owners and admins may let Tico support in", "confirm", ""),
     "health_monitor_reports": ("Health monitor reports", "direct", ""),
+    "bot_reports_direct": ("Bots send reports to the Tico team without asking", "confirm", ""),
     "stale_review": ("Review stale tasks", "direct", ""),
     "topic_fresh": ("Keep topics fresh", "direct", ""),
-    "stall_triage": ("Stalled task check", "direct", ""),
     "org_rule_checks": ("Check bot outputs against rules", "direct", ""),
 }
 _RULE_WHERE = {"health_monitor_reports": ("Settings > Health > Health monitor", _card("health")),
-               "stale_review": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
-               "topic_fresh": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
-               "stall_triage": (RULES + " > What Tico runs on its own", _card("system", "set-system-card"))}
-_ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage", "org_rule_checks")
+               "bot_reports_direct": (GENERAL + " > Team", _card("general", "settings-team")),
+               "stale_review": (RULES, SYSTEM_JOBS),
+               "topic_fresh": (RULES, SYSTEM_JOBS)}
+_ADMIN_RULES = ("stale_review", "topic_fresh", "org_rule_checks")
 
 TEAM_RULES = [
     S("team.rules." + key, name, _RULE_WHERE.get(key, (PEOPLE + " > Team rules",))[0],
@@ -84,6 +92,12 @@ ENTRIES = TEAM_RULES + [
       "enabled", card=_card("general", "settings-privacy"), read="system/usage-count#enabled"),
     S("privacy.usage_count.reset", "Reset the usage count", GENERAL + " > Privacy", "owner", "confirm", "POST",
       "system/usage-count/reset", value="json", card=_card("general", "settings-privacy")),
+    S("privacy.share_stats_for_suggestions", "Share stats for suggestions", GENERAL + " > Privacy", "owner", "person",
+      "PUT", "system/suggestions", "share_stats_for_suggestions", card=_card("general", "settings-privacy"),
+      read="system/suggestions#share_stats_for_suggestions", why="Sharing counts requires the owner's consent in Settings"),
+    S("privacy.report_suggestion_outcomes", "Report suggestion outcomes", GENERAL + " > Privacy", "owner", "direct",
+      "PUT", "system/suggestions", "report_suggestion_outcomes", card=_card("general", "settings-privacy"),
+      read="system/suggestions#report_suggestion_outcomes"),
     S("company.server_connection", "Connect to the Tico company server", GENERAL + " > Tico company", "admin",
       "person", "POST", "company/server-connection", value="json", card=_card("general", "settings-company"),
       why="Only a person signed in themselves connects the company server"),
@@ -107,6 +121,9 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("people"), words="invite person"),
     S("people.member_bot_limit", "Member bot limit", PEOPLE + " > Team rules", "admin", "confirm", "PUT",
       "access/limits", "member_bot_limit", "int", _card("people"), "access#limits.member_bot_limit"),
+    S("team.rules.cloud_machine_support", "Tico support can reach our cloud machines", PEOPLE + " > Team rules",
+      "owner", "confirm", "PUT", "cloud-machines/support", "on", card=_card("people"),
+      read="cloud-machines/support#on", words="cloud support helper access"),
     S("people.person.role", "A person's role", PEOPLE, "owner", "confirm", "POST", "access/humans/{person}", "role",
       "choice:member|admin", _card("people"), words="admin member role"),
     S("people.person.sign_in", "A person may sign in", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}",
@@ -150,6 +167,8 @@ ENTRIES = TEAM_RULES + [
       "enabled", card=_card("devices")),
     S("computer.member_bots", "Takes member bots", COMPUTERS, "admin", "confirm", "POST",
       "computers/{computer}/member-bots", "accepts", card=_card("devices")),
+    S("computer.label", "Rename a computer", COMPUTERS, "admin", "direct", "POST", "computers/{computer}/label", "label", "text",
+      card=_card("devices"), words="name computer"),
     S("computer.turns_at_once", "Turns at once", COMPUTERS, "admin", "direct", "POST",
       "computers/{computer}/turns-at-once", value="json", card=_card("devices")),
     S("computer.browser_exit", "Share internet with bots", COMPUTERS, "operator", "person", "POST",
@@ -237,13 +256,16 @@ ENTRIES = TEAM_RULES + [
     S("bot.cloud_machine", "Cloud machine", BOTS + " > Bot editor", "bot", "confirm", "POST",
       "bots/{bot}/cloud-machine", value="json", card=_card("bots"),
       words="cloud machine shared own size always on pause after minutes computer"),
+    S("bot.cloud_machine.replace", "Replace machine", BOTS + " > Bot editor > Computer", "bot", "confirm", "POST",
+      "bots/{bot}/cloud-machine/replace", value="json", card=_card("bots"),
+      words="replace own cloud machine delete disk fresh broken stuck"),
     S("cloud.shared_machine", "Shared cloud machine", BOTS + " > Bot editor", "admin", "confirm", "POST",
       "cloud-machines/shared", value="json", card=_card("bots"),
       words="shared cloud machine size always on pause after minutes"),
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
-      value="json", card=_card("repos", "set-repos"), words="run edit workflows actions ci product",
+      value="json", card=_card("general", "set-repos"), words="run edit workflows actions ci product",
       confirm_when=(("chosen.run_workflows", (True,)), ("chosen.edit_workflows", (True,)),
                     ("all_repos.run_workflows", (True,)), ("all_repos.edit_workflows", (True,)),
                     ("create_product_repositories", (True,))),
@@ -252,71 +274,69 @@ ENTRIES = TEAM_RULES + [
           "workflows starts CI, which uses the repository's secrets"),
     # Strategy bot
     S("strategy.checks", "Strategy bot regular checks", STRATEGY, "owner", "confirm", "POST",
-      "strategy-bot/checks", "on", card=_card("system", "set-strategy-bot-card")),
+      "strategy-bot/checks", "on", card="#/bot/goal-manager/settings"),
     S("strategy.level", "How much the Strategy bot does", STRATEGY, "owner", "confirm", "POST",
-      "strategy-bot/level", "level", "int", _card("system", "set-strategy-bot-card")),
+      "strategy-bot/level", "level", "int", "#/bot/goal-manager/settings"),
     # Repositories
     S("repo.enabled", "Repository on", REPOS, "admin", "direct", "PUT", "repositories/{id}", "enabled",
-      card=_card("repos", "set-repos")),
+      card=_card("general", "set-repos")),
     S("repo.setup_command", "Repository setup command", REPOS, "admin", "direct", "PUT", "repositories/{id}",
-      "setup_command", "text", _card("repos", "set-repos")),
+      "setup_command", "text", _card("general", "set-repos")),
     S("repos.new_bot_default", "New bots get repositories", REPOS, "admin", "direct", "PUT", "repositories/settings",
-      "new_bot_default", "text", _card("repos", "set-repos")),
+      "new_bot_default", "text", _card("general", "set-repos")),
     S("repos.product.create", "New product repository", REPOS, "owner", "confirm", "POST", "github/product-repos",
-      value="json", card=_card("repos", "set-repos")),
+      value="json", card=_card("general", "set-repos")),
     # Rules
-    S("rules.system", "What Tico runs on its own", RULES + " > What Tico runs on its own", "admin", "direct", "PUT",
-      "system-routines/{id}", value="json", card=_card("system", "set-system-card"), words="schedule routine"),
-    S("rules.task_rule", "Task rule", RULES + " > What Tico runs on its own", "anyone", "direct", "PUT", "task-rules/{id}",
-      value="json", card=_card("system", "set-system-card")),
-    S("rules.task_rule.create", "New task rule", RULES + " > What Tico runs on its own", "anyone", "direct", "POST",
-      "task-rules", value="json", card=_card("system", "set-system-card")),
-    S("release.on", "Daily release", RULES + " > Releases", "admin", "direct", "PATCH", "release-schedule", "on",
-      card=_card("system", "set-release-card"), read="release-schedule#on"),
-    S("release.times", "Release times", RULES + " > Releases", "admin", "direct", "PATCH", "release-schedule",
-      "times", "list", _card("system", "set-release-card"), "release-schedule#times", words="release schedule"),
-    S("release.bot", "Release bot", RULES + " > Releases", "admin", "direct", "PATCH", "release-schedule", "bot",
-      "text", _card("system", "set-release-card"), "release-schedule#bot"),
-    S("release.writer", "Release notes writer", RULES + " > Releases", "admin", "direct", "PATCH",
-      "release-schedule", "writer", "text", _card("system", "set-release-card"), "release-schedule#writer"),
-    *[S("screening." + source, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
-        source, "choice:off|warn" + ("" if source == "mail" else "|hold"), _card("system", "set-screening-card"),
+    S("rules.system", "What Tico runs on its own", RULES, "admin", "direct", "PUT",
+      "system-routines/{id}", value="json", card=SYSTEM_JOBS, words="schedule routine"),
+    S("rules.task_rule", "Task rule", RULES, "anyone", "direct", "PUT", "task-rules/{id}",
+      value="json", card=SYSTEM_JOBS),
+    S("rules.task_rule.create", "New task rule", RULES, "anyone", "direct", "POST",
+      "task-rules", value="json", card=SYSTEM_JOBS),
+    S("release.on", "Daily release", RELEASES, "admin", "direct", "PATCH", "release-schedule", "on",
+      card=_card("releases"), read="release-schedule#on"),
+    S("release.times", "Release times", RELEASES, "admin", "direct", "PATCH", "release-schedule",
+      "times", "list", _card("releases"), "release-schedule#times", words="release schedule"),
+    S("release.bot", "Release bot", RELEASES, "admin", "direct", "PATCH", "release-schedule", "bot",
+      "text", _card("releases"), "release-schedule#bot"),
+    S("release.writer", "Release notes writer", RELEASES, "admin", "direct", "PATCH",
+      "release-schedule", "writer", "text", _card("releases"), "release-schedule#writer"),
+    *[S("screening." + source, "Screening: " + name, SECURITY + " > Screening", "admin", "direct", "PUT", "screening",
+        source, "choice:off|warn" + ("" if source == "mail" else "|hold"), _card("security", "set-screening-card"),
         "screening#modes." + source, words="prompt injection screening")
       for source, name in (("webhook", "Webhooks"), ("mail", "Mail"), ("idea", "Ideas"), ("watcher", "Watchers"), ("document", "Documents"))],
-    *[S("screening." + layer, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
-        layer, card=_card("system", "set-screening-card"), read="screening#layers." + layer,
+    *[S("screening." + layer, "Screening: " + name, SECURITY + " > Screening", "admin", "direct", "PUT", "screening",
+        layer, card=_card("security", "set-screening-card"), read="screening#layers." + layer,
         words="prompt injection screening detector")
       for layer, name in (("patterns", "Patterns"), ("model", "Decision model"))],
-    S("task_manager.on", "Task Manager", RULES + " > Task Manager", "owner", "direct", "POST", "task-manager/turn-on",
-      value="json", card=_card("system", "set-task-manager-card")),
-    S("task_manager.off", "Task Manager off", RULES + " > Task Manager", "owner", "direct", "POST",
-      "task-manager/turn-off", value="json", card=_card("system", "set-task-manager-card")),
-    # Webhooks: `incoming`, `outgoing` and `gateway` are the Webhooks tab's own parts, which ui/app/router.js opens from
-    # `#/settings/webhooks/<part>` before the catalogue's generic `#/settings/<tab>/<card>` branch: rename them
-    # together.
-    S("webhooks.incoming.create", "New incoming trigger", HOOKS + " > Incoming", "anyone", "direct", "POST", "triggers",
-      value="json", card=_card("webhooks", "incoming"), words="webhook incoming"),
-    S("webhooks.incoming", "Incoming trigger", HOOKS + " > Incoming", "creator", "direct", "POST", "triggers/{id}",
-      value="json", card=_card("webhooks", "incoming"), words="webhook incoming keep days hourly"),
-    S("webhooks.incoming.signing", "Incoming trigger signing", HOOKS + " > Incoming", "creator", "person", "POST",
-      "triggers/{id}/signing", value="json", card=_card("webhooks", "incoming"),
-      why="A signing secret is typed in Settings, never passed through a bot"),
-    S("webhooks.incoming.rotate", "Rotate an incoming trigger's address", HOOKS + " > Incoming", "creator", "confirm",
+    S("task_manager.on", "Task Manager", TASK_MANAGER, "owner", "direct", "POST", "task-manager/turn-on",
+      value="json", card="#/bot/task-manager/settings"),
+    S("task_manager.off", "Task Manager off", TASK_MANAGER, "owner", "direct", "POST",
+      "task-manager/turn-off", value="json", card="#/bot/task-manager/settings"),
+    # Webhooks
+    S("webhooks.incoming.create", "New incoming trigger", HOOKS_IN, "anyone", "direct", "POST", "triggers",
+      value="json", card=HOOKS_IN_CARD, words="webhook incoming"),
+    S("webhooks.incoming", "Incoming trigger", HOOKS_IN, "creator", "direct", "POST", "triggers/{id}",
+      value="json", card=HOOKS_IN_CARD, words="webhook incoming keep days hourly"),
+    S("webhooks.incoming.signing", "Incoming trigger signing", HOOKS_IN, "creator", "person", "POST",
+      "triggers/{id}/signing", value="json", card=HOOKS_IN_CARD,
+      why="A signing secret is typed by a person, never passed through a bot"),
+    S("webhooks.incoming.rotate", "Rotate an incoming trigger's address", HOOKS_IN, "creator", "confirm",
       "POST",
-      "triggers/{id}/rotate", value="json", card=_card("webhooks", "incoming")),
-    S("webhooks.incoming.delete", "Delete an incoming trigger", HOOKS + " > Incoming", "creator", "confirm", "POST",
-      "triggers/{id}/delete", value="json", card=_card("webhooks", "incoming")),
-    S("webhooks.gateway.wake", "Gateway wake", HOOKS + " > Gateway", "creator", "confirm", "POST",
-      "triggers/{id}/relay/wake", "wake", card=_card("webhooks", "gateway")),
+      "triggers/{id}/rotate", value="json", card=HOOKS_IN_CARD),
+    S("webhooks.incoming.delete", "Delete an incoming trigger", HOOKS_IN, "creator", "confirm", "POST",
+      "triggers/{id}/delete", value="json", card=HOOKS_IN_CARD),
+    S("webhooks.gateway.wake", "Gateway wake", HOOKS_GW, "creator", "confirm", "POST",
+      "triggers/{id}/relay/wake", "wake", card=_card("models", "wh-gateway")),
     # Both answer with a signing secret shown only then, which a Confirm card's tap never shows (it keeps the status).
-    S("hooks.wake_url", "Gateway wake URL", HOOKS + " > Gateway", "owner", "person", "PUT", "hooks/wake-url", "url",
-      "text", _card("webhooks", "gateway"),
-      why="Setting the Gateway wake URL shows its signing secret once, in Settings"),
-    S("webhooks.outgoing.create", "New outgoing webhook", HOOKS + " > Outgoing", "anyone", "person", "POST", "webhooks",
-      value="json", card=_card("webhooks", "outgoing"),
-      why="A new outgoing webhook shows its signing secret once, in Settings"),
-    S("webhooks.outgoing", "Outgoing webhook", HOOKS + " > Outgoing", "creator", "confirm", "POST", "webhooks/{id}/update",
-      value="json", card=_card("webhooks", "outgoing")),
+    S("hooks.wake_url", "Gateway wake URL", HOOKS_GW, "owner", "person", "PUT", "hooks/wake-url", "url",
+      "text", _card("models", "wh-gateway"),
+      why="Setting the Gateway wake URL shows its signing secret once, on screen"),
+    S("webhooks.outgoing.create", "New outgoing webhook", HOOKS_OUT, "anyone", "person", "POST", "webhooks",
+      value="json", card=HOOKS_OUT_CARD,
+      why="A new outgoing webhook shows its signing secret once, on screen"),
+    S("webhooks.outgoing", "Outgoing webhook", HOOKS_OUT, "creator", "confirm", "POST", "webhooks/{id}/update",
+      value="json", card=HOOKS_OUT_CARD),
     # Listening
     S("listening.destination", "Listening destination", "Settings > Listening", "owner", "confirm", "PUT",
       "listening/destinations/{id}", value="json", card=_card("listening")),
@@ -335,41 +355,55 @@ ENTRIES = TEAM_RULES + [
       card=_card("tasks")),
     S("tasks.tag", "Task tag", TASKS + " > Task tags", "anyone", "direct", "POST", "tags/{id}", value="json",
       card=_card("tasks")),
-    # Email & Phone
+    # Inboxes
     S("inbound.company_connection", "Email & phone company connection", INBOUND, "admin", "person", "POST",
-      "inbound/company-connection", value="json", card=_card("inbound", "set-inbound"),
+      "inbound/company-connection", value="json", card=_card("inboxes", "settings/email"),
       why="Only a person signed in themselves connects company email and phone"),
-    S("inbound.inbox.create", "New inbox", INBOUND, "anyone", "direct", "POST", "inbound/inboxes", value="json",
-      card=_card("inbound", "set-inbound")),
-    S("inbound.inbox", "Inbox", INBOUND, "anyone", "direct", "PATCH", "inbound/inboxes/{id}", value="json",
-      card=_card("inbound", "set-inbound")),
-    S("inbound.inbox.audience", "Inbox readers", INBOUND, "admin", "confirm", "PUT", "inbound/inboxes/{id}/audience",
-      value="json", card=_card("inbound", "set-inbound"), words="audience readers group who reads"),
-    S("inbound.inbox.release", "Release an inbox", INBOUND, "admin", "confirm", "POST", "inbound/inboxes/{id}/release",
-      value="json", card=_card("inbound", "set-inbound")),
-    S("inbound.phone_request", "Ask for a phone number", INBOUND, "admin", "confirm", "POST",
-      "inbound/phone-requests", value="json", card=_card("inbound", "set-inbound")),
-    S("inbound.phone_request.accept", "Accept a phone number's price", INBOUND, "admin", "confirm", "POST",
-      "inbound/phone-requests/{id}/accept", value="json", card=_card("inbound", "set-inbound")),
-    S("inbound.phone_request.cancel", "Cancel a phone request", INBOUND, "admin", "direct", "POST",
-      "inbound/phone-requests/{id}/cancel", value="json", card=_card("inbound", "set-inbound")),
-    # Usage
+    S("inbound.inbox.create", "New inbox", INBOXES + " > Add inbox", "anyone", "direct", "POST", "inbound/inboxes",
+      value="json", card=_card("inboxes")),
+    S("inbound.inbox", "Inbox", INBOXES, "anyone", "direct", "PATCH", "inbound/inboxes/{id}", value="json",
+      card=_card("inboxes")),
+    S("inbound.inbox.audience", "Inbox readers", INBOXES + " > Who can use it", "admin", "confirm", "PUT",
+      "inbound/inboxes/{id}/audience", value="json", card=_card("inboxes"), words="audience readers group who reads"),
+    S("inbound.inbox.release", "Release an inbox", INBOXES + " > Stop using in Tico", "admin", "confirm", "POST",
+      "inbound/inboxes/{id}/release", value="json", card=_card("inboxes")),
+    S("inbound.phone_request", "Ask for a phone number", TEXTS, "admin", "confirm", "POST",
+      "inbound/phone-requests", value="json", card=_card("inboxes", "settings/texts")),
+    S("inbound.phone_request.accept", "Accept a phone number's price", TEXTS, "admin", "confirm", "POST",
+      "inbound/phone-requests/{id}/accept", value="json", card=_card("inboxes", "settings/texts")),
+    S("inbound.phone_request.cancel", "Cancel a phone request", TEXTS, "admin", "direct", "POST",
+      "inbound/phone-requests/{id}/cancel", value="json", card=_card("inboxes", "settings/texts")),
     S("mail.address.order", "Get an address", MAIL + " > Addresses", "admin", "confirm", "POST", "postal/orders",
-      value="json", card=_card("mail", "settings-mail-addresses"),
+      value="json", card=_card("inboxes", "settings/letters-in"),
       words="physical mail mailbox postal address registered agent form 1583"),
     S("mail.intake", "Mail-intake inbox", MAIL + " > Bring your own", "admin", "direct", "PUT", "postal/intake",
-      value="json", card=_card("mail", "settings-mail-intake"), read="postal/intake#intake",
+      value="json", card=_card("inboxes", "settings/letters-in"), read="postal/intake#intake",
       words="physical mail scans email in postal provider"),
+    S("mail.access.bot", "Give a bot Read access to physical mail", MAIL + " > Who can use it", "admin", "confirm",
+      "PUT", "postal/addresses/{id}/grants/bot/{bot}", "level", "choice:read",
+      _card("inboxes", "settings/letters-in"), read="postal/addresses/{id}/grants#grants"),
+    S("mail.access.person", "Give a person Read access to physical mail", MAIL + " > Who can use it", "admin", "confirm",
+      "PUT", "postal/addresses/{id}/grants/person/{person}", "level", "choice:read",
+      _card("inboxes", "settings/letters-in"), read="postal/addresses/{id}/grants#grants"),
+    S("mail.access.bot.remove", "Remove a bot's physical mail access", MAIL + " > Who can use it", "admin", "confirm",
+      "DELETE", "postal/addresses/{id}/grants/bot/{bot}", value="json", card=_card("inboxes", "settings/letters-in")),
+    S("mail.access.person.remove", "Remove a person's physical mail access", MAIL + " > Who can use it", "admin", "confirm",
+      "DELETE", "postal/addresses/{id}/grants/person/{person}", value="json", card=_card("inboxes", "settings/letters-in")),
+    S("mail.legal_bot", "Legal mail recipient", MAIL + " > Legal mail", "admin", "confirm", "PUT", "postal/settings",
+      value="json", card=_card("inboxes", "settings/letters-in"), read="postal/settings#settings"),
+    # Usage
     S("team.limit.usd", "Company spend limit", "Usage > Company", "admin", "confirm", "PUT", "usage/limits",
       value="json", card="#/usage", read="usage/limits#default", words="usd dollars spend " + _USD),
     S("pool.limit.usd", "Pool spend limit", "Usage > Pools", "admin", "confirm", "PUT", "usage/pools/{id}",
       value="json", card="#/usage", words="usd dollars spend group " + _USD),
+    S("team.queue.purge", "Clear automatic queue", "Usage > Clear automatic queue", "admin", "confirm", "POST",
+      "usage/queues/purge", value="json", card="#/usage",
+      words="queue purge clear automatic wakes waits backlog"),
 ]
 
 # Confirm entries whose route BotOps can't yet put on a Confirm card (backend/assistant.py valid_operation): a person
-# changes them in Settings until it can, rather than BotOps changing them at once. None now: each has a card, or is a
-# person's because it shows a secret once (the wake URL, a new outgoing webhook).
-NO_CARD_YET = ()
+# changes them in Settings until it can, rather than BotOps changing them at once.
+NO_CARD_YET = ("team.queue.purge",)
 _NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
 ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY) if e.confirm_when else
             replace(e, kind="person", why=e.name + _NO_CARD_WHY)) if e.key in NO_CARD_YET else e for e in ENTRIES]

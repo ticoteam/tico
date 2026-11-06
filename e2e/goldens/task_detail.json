@@ -33,6 +33,11 @@
         "new": "general",
         "note": "",
         "old": null,
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "task_id": "<task>",
         "via": null
       },
@@ -46,6 +51,11 @@
         "new": "general-open",
         "note": "",
         "old": null,
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "task_id": "<task>",
         "via": null
       },
@@ -59,6 +69,11 @@
         "new": "open",
         "note": "",
         "old": null,
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "task_id": "<task>",
         "via": null
       },
@@ -72,18 +87,11 @@
         "new": "bot:ops",
         "note": "",
         "old": "human:ana",
-        "task_id": "<task>",
-        "via": null
-      },
-      {
-        "action_id": null,
-        "actor": "keeper",
-        "created_at": "<time>",
-        "field": "check_back_at",
-        "id": "<id6>",
-        "new": "<time>",
-        "note": "Inspect the next result and continue this task.",
-        "old": null,
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "task_id": "<task>",
         "via": null
       },
@@ -93,10 +101,15 @@
         "actor_name": "Ana",
         "created_at": "<time>",
         "field": "step",
-        "id": "<id7>",
+        "id": "<id6>",
         "new": "general-doing",
         "note": "",
         "old": "general-open",
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "task_id": "<task>",
         "via": null
       },
@@ -106,10 +119,15 @@
         "actor_name": "Ana",
         "created_at": "<time>",
         "field": "status",
-        "id": "<id8>",
+        "id": "<id7>",
         "new": "doing",
         "note": "",
         "old": "open",
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "task_id": "<task>",
         "via": null
       },
@@ -119,10 +137,15 @@
         "actor_name": "Ana",
         "created_at": "<time>",
         "field": "note",
-        "id": "<id9>",
+        "id": "<id8>",
         "new": "Drafted.",
         "note": "Drafted.",
         "old": "",
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "task_id": "<task>",
         "via": null
       },
@@ -132,10 +155,15 @@
         "actor_name": "Ana",
         "created_at": "<time>",
         "field": "step",
-        "id": "<id10>",
+        "id": "<id9>",
         "new": "general-done",
         "note": "Drafted.",
         "old": "general-doing",
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "task_id": "<task>",
         "via": null
       },
@@ -145,10 +173,15 @@
         "actor_name": "Ana",
         "created_at": "<time>",
         "field": "status",
-        "id": "<id11>",
+        "id": "<id10>",
         "new": "done",
         "note": "Drafted.",
         "old": "doing",
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "task_id": "<task>",
         "via": null
       },
@@ -158,10 +191,15 @@
         "actor_name": "Ana",
         "created_at": "<time>",
         "field": "step",
-        "id": "<id12>",
+        "id": "<id11>",
         "new": "general-closed",
         "note": "Accepted.",
         "old": "general-done",
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "task_id": "<task>",
         "via": null
       },
@@ -171,10 +209,15 @@
         "actor_name": "Ana",
         "created_at": "<time>",
         "field": "status",
-        "id": "<id13>",
+        "id": "<id12>",
         "new": "closed",
         "note": "Accepted.",
         "old": "done",
+        "source": {
+          "kind": "person",
+          "link": null,
+          "name": "Ana"
+        },
         "task_id": "<task>",
         "via": null
       }
@@ -183,7 +226,7 @@
       "awake": true,
       "bot_id": "ops",
       "from_person": false,
-      "job_id": "<id14>",
+      "job_id": "<id13>",
       "label": "Saved — queued",
       "machine": {
         "generation": 1,
@@ -191,12 +234,12 @@
         "last_seen_at": "<time>",
         "owner_id": "ana",
         "platform": "test",
-        "runner_id": "<id15>",
+        "runner_id": "<id14>",
         "screen": "off",
         "screen_available": false,
         "version": "<opaque>"
       },
-      "message_id": "<id14>",
+      "message_id": "<id13>",
       "online": true,
       "parts": [],
       "readiness": {
@@ -225,10 +268,10 @@
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
-        "id": "<id16>",
+        "id": "<id15>",
         "in_reply_to": null,
         "kind": "notice",
-        "origin_id": "<id17>@<id18>",
+        "origin_id": "<id16>@<id17>",
         "public": 0,
         "read_at": null,
         "recipient_id": "human:ana",
@@ -253,10 +296,10 @@
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
-        "id": "<id19>",
+        "id": "<id18>",
         "in_reply_to": null,
         "kind": "notice",
-        "origin_id": "<id20>@<id18>",
+        "origin_id": "<id19>@<id17>",
         "public": 0,
         "read_at": null,
         "recipient_id": "bot:ops",
@@ -283,10 +326,10 @@
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
-        "id": "<id21>",
+        "id": "<id20>",
         "in_reply_to": null,
         "kind": "notice",
-        "origin_id": "<id22>@<id18>",
+        "origin_id": "<id21>@<id17>",
         "public": 0,
         "read_at": null,
         "recipient_id": "bot:ops",
@@ -313,10 +356,10 @@
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
-        "id": "<id14>",
+        "id": "<id13>",
         "in_reply_to": null,
         "kind": "notice",
-        "origin_id": "<id23>@<id18>",
+        "origin_id": "<id22>@<id17>",
         "public": 0,
         "read_at": null,
         "recipient_id": "bot:ops",
@@ -372,9 +415,16 @@
       "done_at": "<time>",
       "due_at": null,
       "external_requesters": 0,
+      "followers": [
+        {
+          "actor": "bot:ops",
+          "actor_name": "ops",
+          "notify": "live",
+          "reason": "owner"
+        }
+      ],
       "from_person": "human:ana",
       "goal_id": null,
-      "guest": null,
       "holds": [],
       "id": "<task>",
       "important_requesters": 0,
@@ -382,6 +432,7 @@
       "labels": [],
       "lane": "company",
       "links": [],
+      "live_meeting_id": null,
       "milestone_waits": [],
       "next_run": false,
       "note": "Accepted.",
@@ -401,6 +452,7 @@
       "public_title": "",
       "qa_waivers": [],
       "rank": 1.0,
+      "readers": [],
       "relations": {},
       "request_id": null,
       "requester_count": 0,

@@ -2,6 +2,8 @@
 read state (unread is human or addressed only, a sibling is not cleared, max wins, joining reads up to now), and search
 that follows edits and deletes. Fictional people only: ana (owner), ben and cara (humans)."""
 
+import time
+
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the fixture and its helpers)
 from backend.tests.test_org_rule_check import COLOR, bodies, hold_row, ruled  # noqa: F401  (the Judge fixture)
@@ -292,7 +294,8 @@ def test_a_warn_delivers_a_persons_thread_post_with_the_warning_on_it(ruled):
 
 
 def test_a_group_dm_is_the_open_one_with_exactly_those_people_and_its_first_message_is_posted(api):
-    got = api.post("/api/v2/threads/dm", json={"members": ["human:ben", "human:cara"], "body": "Budget call at 3"},
+    got = api.post("/api/v2/threads/dm", json={"members": ["human:ben", "human:cara"], "body": "Budget call at 3",
+                                                         "title": "Budget"},
                    headers=headers("ana-test"))
     assert got.status_code == 200, got.text
     dm = got.json()
@@ -305,7 +308,8 @@ def test_a_group_dm_is_the_open_one_with_exactly_those_people_and_its_first_mess
 
 def test_a_group_dm_needs_write_on_each_teammate_and_a_hidden_one_is_404(api):
     set_bot_access(api, "ops", {"people": ["cara"]}, {"people": ["cara"]}, {"people": ["ben"]})
-    refused = api.post("/api/v2/threads/dm", json={"members": ["human:ben", "bot:ops"]}, headers=headers("cara-test"))
+    refused = api.post("/api/v2/threads/dm", json={"members": ["human:ben", "bot:ops"], "title": "Ops"},
+                       headers=headers("cara-test"))
     assert refused.status_code == 403 and "Write" in refused.text
     assert api.post("/api/v2/threads/dm", json={"members": ["human:ben"]}, headers=headers("cara-test")).status_code == 200
     assert api.post("/api/v2/threads/dm", json={"members": ["bot:nobody"]}, headers=headers("ana-test")).status_code == 404
@@ -478,6 +482,25 @@ def test_a_root_row_speaks_for_its_sub_threads_for_each_viewer(api):
     quiet = row_of(sidebar(api), root["id"])["me"]
     assert quiet["unread"] == 0 and quiet["activity"] is True                      # a dot on the root, not a count
     assert row_of(sidebar(api, "ben-test", **{"with": "human:cara"}), root["id"])["me"]["activity"] is True
+
+
+def test_read_all_with_ago_ms_leaves_what_came_since_unread(api):
+    # Catch up sends its read once Undo is gone: what was written while Undo showed stays unread.
+    root = new_thread(api, title="Held read", members=("human:ben", "human:cara"), body="Kickoff")
+    first = message_in(api, root["id"])[0]
+    sub = new_thread(api, title="Below", members=("human:ben", "human:cara"), parent_message_id=first["id"])
+    say(api, sub["id"], "Seen on the card", token="cara-test")
+    time.sleep(0.6)
+    say(api, sub["id"], "Came while Undo showed", token="cara-test")
+    response = api.post(f"/api/v2/threads/{root['id']}/read-all", json={"ago_ms": 300}, headers=headers("ben-test"))
+    assert response.status_code == 200, response.text
+    ben = row_of(sidebar(api), root["id"])["me"]
+    assert ben["unread"] == 1, ben                                     # only the late reply
+    assert api.post(f"/api/v2/threads/{root['id']}/read-all", json={"ago_ms": 600_001},
+                    headers=headers("ben-test")).status_code == 422
+    assert api.post(f"/api/v2/threads/{root['id']}/read-all", headers=headers("ben-test")).status_code == 200
+    assert row_of(sidebar(api), root["id"])["me"]["unread"] == 0
+
 
 
 def test_a_reply_below_a_thread_a_person_cannot_read_lists_nothing_for_them(api):

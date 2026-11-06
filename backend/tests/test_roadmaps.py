@@ -8,6 +8,7 @@ from backend import hubdb as H
 from backend import roadmaps as R
 from backend import models as M
 from backend.tests.test_tasks_board import api, get, headers, post, relate
+from backend import bot_settings as BS
 
 
 def test_engineering_children_drive_approved_roadmap_and_reopen(api):
@@ -147,7 +148,7 @@ def _item(api, title, step='Approved'):
 
 def _item_moves(api, item):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='step'", (item['id'],)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step'", (item['id'],)).fetchone()[0]
 
 
 def test_an_item_whose_only_engineering_link_is_blocked_by_moves_when_that_ticket_moves(api):
@@ -411,8 +412,8 @@ def test_a_ticket_with_no_roadmap_item_tells_its_requester_on_the_ticket(api):
 
 
 def test_a_blocked_notice_is_read_only_by_who_may_read_the_blocker_it_names(api):
-    """A private Dev ticket between two bots has a person as its guest. The notice that names its blocker goes to
-    the requester, who reads the blocker; the guest reads the ticket but not that notice, and a blocker made
+    """A private Dev ticket between two bots has a person as a reader. The notice that names its blocker goes to
+    the requester, who reads the blocker; the reader reads the ticket but not that notice, and a blocker made
     private after its notice takes the notice with it."""
     from backend import task_relations as TR
     dev = _dev_tickets(api)
@@ -445,7 +446,7 @@ def test_a_blocked_notice_is_read_only_by_who_may_read_the_blocker_it_names(api)
         assert [m['body'] for m in H.task_comments(c, ticket['id'], actor='bot:cpo')] == [body for _, _, body, _ in sent]
     assert 'Vendor breach' not in api.get('/api/v2/tasks/' + ticket['id'], headers=headers('ben-test')).text
 
-    # The blocker's audience narrows after its notice: the guest no longer reads it; the requester still does.
+    # The blocker's audience narrows after its notice: the reader no longer reads it; the requester still does.
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'bot:cpo', later['id'], private=True)
     assert 'Zip vendor contract' not in comments('ben-test')
@@ -598,6 +599,17 @@ def test_public_projection_moderation_and_no_label_enumeration(api):
     assert api.get(path, headers=ORIGIN).status_code == 404
 
 
+def test_a_public_comment_whose_task_ref_is_a_list_naming_the_task_is_shown(api):
+    task = public_setup(api)
+    public = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Team update', 'public': True})['comment']
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE messages SET refs=? WHERE id=?',
+                  (json.dumps({'task': ['00000000-0000-4000-8000-000000000000', task['id']], 'comment': 1}), public['id']))
+    response = api.get('/public/roadmaps/roadmap/tasks/' + task['id'], headers=ORIGIN)
+    assert response.status_code == 200, response.text
+    assert [c['text'] for c in response.json()['comments']] == ['Team update']
+
+
 def test_cors_and_ip_limit_shared_across_actions_and_tokens_are_task_bound(api):
     task = public_setup(api, limit=4)
     base = '/public/roadmaps/roadmap/tasks/' + task['id']
@@ -623,7 +635,7 @@ def test_cors_and_ip_limit_shared_across_actions_and_tokens_are_task_bound(api):
     assert api.delete(base + '/requesters/' + token, headers=ORIGIN).status_code == 200
     assert api.delete(base + '/requesters/' + token, headers=ORIGIN).status_code == 404
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-manager') WHERE bot='cpo'")
+        BS.update(c, 'cpo', {'template': 'product-manager'})
     suggested = api.post('/public/roadmaps/roadmap/suggest', json={'title': 'New idea', 'summary': 'Details'}, headers=ORIGIN)
     assert suggested.status_code == 200, suggested.text
     with api.app.state.store.read() as c:
@@ -733,7 +745,7 @@ def test_roadmap_types_go_by_role_after_their_managers_change(api):
     public_setup(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE task_types SET manager='ops' WHERE id IN ('product-roadmap','engineering')")
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-manager') WHERE bot='cpo'")
+        BS.update(c, 'cpo', {'template': 'product-manager'})
         F.ensure(c)     # as at a restart: a manager someone chose stays
         managers = "SELECT DISTINCT manager FROM task_types WHERE id IN ('product-roadmap','engineering')"
         assert [r[0] for r in c.execute(managers)] == ['ops']
@@ -869,10 +881,10 @@ def test_first_version_copies_edited_since_or_published_at_creation_are_cleared(
         assert state(draft['id']) == ('private', 'Written draft', '')              # written public text stays
         assert state(shown['id']) == ('public', 'Shown idea', 'Shown notes')       # written at creation, so it stays
         assert state(kept['id']) == ('public', 'Kept public', 'Kept summary')      # only an exact copy goes
-        note = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='visibility'", (copied['id'],)).fetchone()
+        note = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='visibility'", (copied['id'],)).fetchone()
         assert 'copy of the internal title' in note[0]
-        cleared = c.execute("SELECT field,old,new,note FROM task_events WHERE task_id=? AND note LIKE 'Cleared:%' "
-                            "ORDER BY field", (edited['id'],)).fetchall()
+        cleared = c.execute("SELECT kind AS field,old,new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND note LIKE 'Cleared:%' "
+                            "ORDER BY kind", (edited['id'],)).fetchall()
         assert [tuple(r[:3]) for r in cleared] == [('public_summary', 'Old notes', ''), ('public_title', 'Old title', '')]
         c.execute("UPDATE tasks SET public_title='Old title' WHERE id=?", (edited['id'],))
         R.migrate(c)                                                                # once only
@@ -905,9 +917,9 @@ def test_first_version_copies_are_cleared_per_field_when_only_the_public_title_w
         assert state(hidden['id']) == ('private', 'E written', '')
         assert state(retitled['id']) == ('private', '', 'Written summary, public')
         # Each clearing leaves its event, so it can be put back.
-        assert tuple(c.execute("SELECT old,new FROM task_events WHERE task_id=? AND field='public_summary' "
+        assert tuple(c.execute("SELECT old,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='public_summary' "
                                "AND note LIKE 'Cleared:%'", (shown['id'],)).fetchone()) == ('secret internal body', '')
-        assert c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='visibility' AND note LIKE 'Unpublished:%'",
+        assert c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='visibility' AND note LIKE 'Unpublished:%'",
                          (retitled['id'],)).fetchone()
 
 
@@ -963,7 +975,7 @@ def test_a_requester_token_withdraws_after_unlabel_disable_and_delete(api):
 def test_suggestions_have_an_overall_cap_and_spam_checks(api):
     public_setup(api, limit=100)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-manager') WHERE bot='cpo'")
+        BS.update(c, 'cpo', {'template': 'product-manager'})
     post(api, 'roadmaps/settings', {'suggestion_limit': 2})
     assert get(api, 'roadmaps/settings')['suggestion_limit'] == 2
     suggest = lambda body: api.post('/public/roadmaps/roadmap/suggest', json=body, headers=ORIGIN)
@@ -1011,7 +1023,7 @@ def test_suggestions_go_to_the_chosen_then_automatic_bot_and_never_an_archived_o
     suggest = lambda title: api.post('/public/roadmaps/roadmap/suggest', json={'title': title}, headers=ORIGIN)
     def template(bot, name):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config=json_set(config,'$.template',?) WHERE bot=?", (name, bot))
+            BS.update(c, bot, {'template': name})
     def owner(response):
         assert response.status_code == 200, response.text
         return get(api, 'tasks/' + response.json()['id'])['task']['owner_id']
@@ -1073,8 +1085,8 @@ def test_suggestions_go_to_the_chosen_then_automatic_bot_and_never_an_archived_o
 
 def test_suggestions_receiver_order_and_states(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-manager') WHERE bot='cpo'")
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-lead') WHERE bot='cmo'")
+        BS.update(c, 'cpo', {'template': 'product-manager'})
+        BS.update(c, 'cmo', {'template': 'product-lead'})
     def receiver(chosen, **states):
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE bots SET state='active' WHERE slug IN ('cpo','cmo','ops')")

@@ -6,6 +6,7 @@ import pytest
 from backend import hubdb as H
 from backend import task_relations as TR
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post
+from backend import bot_settings as BS
 
 
 @pytest.mark.parametrize('requester,owner', [('human:ben', 'bot:cpo')])
@@ -19,16 +20,31 @@ def test_private_two_party_matrix(api, requester, owner):
                              private=True, type=typ['id'], lint=False)
         c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) '
                   'VALUES(?,?,?,?,?)', (task['id'], 'bot:cmo', requester, None, H.shift(H.now(), hours=24)))
+
+    def check(readers):
+        for actor, token in tokens.items():
+            response = api.get('/api/v2/tasks/' + task['id'], headers=headers(token))
+            assert response.status_code == (200 if actor in readers else 404), (actor, response.text)
+            listed = get(api, 'tasks', token=token)['tasks']
+            assert (task['id'] in {row['id'] for row in listed}) == (actor in readers), actor
+            response = api.post('/api/v2/sql', json={'sql': 'SELECT id,title FROM tasks'}, headers=headers(token))
+            assert response.status_code == 200, response.text
+            assert ('Sensitive packet' in response.text or task['id'] in response.text) == (actor in readers), actor
+
     # Ana is the chart's root above cpo even when she is not a task party.
-    readers = {requester, owner, 'human:ana'}
-    for actor, token in tokens.items():
-        response = api.get('/api/v2/tasks/' + task['id'], headers=headers(token))
-        assert response.status_code == (200 if actor in readers else 404), response.text
-        listed = get(api, 'tasks', token=token)['tasks']
-        assert (task['id'] in {row['id'] for row in listed}) == (actor in readers)
-        response = api.post('/api/v2/sql', json={'sql': 'SELECT id,title FROM tasks'}, headers=headers(token))
-        assert response.status_code == 200, response.text
-        assert ('Sensitive packet' in response.text or task['id'] in response.text) == (actor in readers)
+    parties = {requester, owner, 'human:ana'}
+    check(parties)
+    # A person and a bot on the reader list read it; nobody else does.
+    path = 'tasks/' + task['id'] + '/readers'
+    post(api, path, {'add': ['priya', 'bot:ops']}, token='ben-test')
+    check(parties | {'human:priya', 'bot:ops'})
+    # A group reads it through whoever is in the group when they look.
+    gid = post(api, 'groups', {'name': 'Packet desk', 'add': {'people': ['priya'], 'bots': ['cmo']}})['id']
+    post(api, path, {'add': ['group:' + gid], 'remove': ['priya', 'bot:ops']}, token='ben-test')
+    check(parties | {'human:priya', 'bot:cmo'})
+    r = api.patch('/api/v2/groups/' + gid, json={'remove': {'people': ['priya']}}, headers=headers())
+    assert r.status_code == 200, r.text
+    check(parties | {'bot:cmo'})
 
 
 def test_company_read_does_not_grant_work_but_dev_type_does(api):
@@ -55,9 +71,9 @@ def test_private_defaults_reassignment_and_human_publication(api):
     cpo = bot_token(api, 'cpo')
     with api.app.state.store.transaction() as c:
         for slug in ('ops', 'cpo'):
-            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+            config = BS.read(c, slug)
             config['private_tasks_default'] = True
-            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), slug))
+            BS.write(c, slug, config)
     assigned = post(api, 'tasks', {'owner': 'ops', 'title': 'Review the request', 'body': 'Review it.'})
     created = post(api, 'tasks', {'owner': 'cmo', 'title': 'Draft the response', 'body': 'Draft it.', 'private': False}, token=cpo)
     assert assigned['private'] and created['private']
@@ -112,7 +128,7 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
     with api.app.state.store.transaction() as c:
         counts = {name: c.execute('SELECT count(*) FROM ' + name).fetchone()[0]
                   for name in ('tasks', 'blobs', 'task_assets', 'bot_files')}
-        c.execute("UPDATE bot_config SET config=? WHERE bot='cpo'", (json.dumps({'template': 'general-counsel'}),))
+        BS.write(c, 'cpo', {'template': 'general-counsel'})
         c.execute("UPDATE tasks SET requester_id='human:missing' WHERE id=?", (orphan['id'],))
         c.execute("UPDATE tasks SET requester_id='keeper' WHERE id=?", (routine['id'],))
         # A database from before task privacy had no change log (backend/events.py) or parties counter (backend/row_clock.py).

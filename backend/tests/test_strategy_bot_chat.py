@@ -11,6 +11,7 @@ from backend.auth import Identity
 from backend.store import H, digest
 from backend.tests.test_api import api, as_member, assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_assistant import asked, say, turn_message
+from backend import bot_settings as BS
 
 
 def strategy_bot(api):
@@ -18,8 +19,8 @@ def strategy_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
                   "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('goal-manager',?,NULL,'ana')",
-                  ('{"runtime":"fake","host":"keeper"}',))
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('goal-manager',NULL,'ana')")
+        BS.write(c, 'goal-manager', {"runtime": "fake", "host": "keeper"})
 
 
 def personal(api, pid):
@@ -45,8 +46,8 @@ def helper(api, slug, name):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
                   "VALUES(?,?,?,'','active',?)", (slug, slug, name, H.now()))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,NULL,'ana')",
-                  (slug, '{"runtime":"fake","host":"keeper"}'))
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,NULL,'ana')", (slug,))
+        BS.write(c, slug, {"runtime": "fake", "host": "keeper"})
 
 
 def earlier_chat(api, owner="human:ana", said=("Grow revenue 20% this year", "Here is a plan for that.")):

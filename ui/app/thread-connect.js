@@ -1,7 +1,7 @@
 /* ui/app/thread-connect.js — A thread's Slack link, drawn in its Who can read sheet: an admin links the thread to a Slack
    channel or unlinks it (GET/POST/DELETE /api/v2/slack/links, backend/slack_threads.py). renderThreadConnect(thread, el)
-   draws into `el`, and hides it for anyone who may not link. The rows here are shared with Library › Connections
-   (ui/app/connections.js).
+   draws into `el`, and hides it for anyone who may not link. The rows here are shared with Slack's page under Tools
+   (ui/app/redesign-library.js lcSlackLinks).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 
 'use strict';
@@ -36,7 +36,7 @@ function tcnSlackAct(link, act) {
 // reader may not open has no title to show.
 const TCN_TITLES = new Map();
 async function tcnThreadTitle(id) {
-  const known = [...(THREADS.attention || []), ...(THREADS.threads || []), ...(THREADS.dms || [])].find(t => t?.id === id);
+  const known = [...(THREADS.pinned || []), ...(THREADS.threads || [])].find(t => t?.id === id);
   if (known) return threadTitle(known);
   if (!TCN_TITLES.has(id)) TCN_TITLES.set(id, get('/v2/threads/' + encodeURIComponent(id)).then(threadTitle, () => 'Thread'));
   return TCN_TITLES.get(id);

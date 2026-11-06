@@ -6,13 +6,11 @@
   audit       the same lines as audit.jsonl, queryable
   drafts      one row per idempotency key, so a retried `draft` updates its own Gmail draft
   sends       one row per send, written *before* the API call; also where `sent-log --reconcile`
-              puts the owner's own sends, so the cooldowns count them
-  reviews     every second-model verdict, with the backend and the draft it judged
+              puts the owner's own sends
   messages    every normalized message a sync (or an opportunistic fetch) has stored,
               so the Mac can push a batch later without holding a hub token
   sync_state  per mailbox: Gmail history cursor, last run, last error, live count
-  mail_check_misses  mails sent after their org rule check brought back no verdict, by the check's id, until Tico
-                     counts them (the id, the employee and when: nothing of the mail)
+  queued_drafts      which Tico send a draft was queued as, so `discard` refuses a draft with a live send
 
 Nothing here talks to Google. Tests point it at a temp file.
 """
@@ -86,17 +84,6 @@ CREATE TABLE IF NOT EXISTS sends (
   source     TEXT NOT NULL DEFAULT 'mail',
   status     TEXT NOT NULL DEFAULT 'pending'
 );
-CREATE TABLE IF NOT EXISTS reviews (
-  id        INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts        TEXT NOT NULL,
-  employee  TEXT NOT NULL,
-  mailbox   TEXT NOT NULL DEFAULT '',
-  target    TEXT NOT NULL DEFAULT '',
-  backend   TEXT NOT NULL DEFAULT '',
-  ok        INTEGER NOT NULL DEFAULT 0,
-  available INTEGER NOT NULL DEFAULT 1,
-  verdict   TEXT NOT NULL DEFAULT '{}'
-);
 CREATE TABLE IF NOT EXISTS messages (
   mailbox          TEXT NOT NULL,
   msg_id           TEXT NOT NULL,
@@ -130,11 +117,6 @@ CREATE TABLE IF NOT EXISTS sync_state (
   last_error    TEXT NOT NULL DEFAULT '',
   message_count INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS mail_check_misses (
-  id        TEXT PRIMARY KEY,
-  employee  TEXT NOT NULL,
-  created   TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS judge_cache (
   cache_key   TEXT PRIMARY KEY,
   expires_at  INTEGER NOT NULL,
@@ -146,8 +128,12 @@ CREATE INDEX IF NOT EXISTS sends_day ON sends(employee, mailbox, day);
 CREATE INDEX IF NOT EXISTS sends_recipient ON sends(mailbox, recipient);
 CREATE INDEX IF NOT EXISTS messages_push ON messages(pushed_at, mailbox);
 CREATE INDEX IF NOT EXISTS messages_epoch ON messages(mailbox, epoch);
+CREATE INDEX IF NOT EXISTS messages_from ON messages(mailbox, from_addr);
 CREATE INDEX IF NOT EXISTS judge_cache_expiry ON judge_cache(expires_at);
-CREATE INDEX IF NOT EXISTS mail_check_misses_employee ON mail_check_misses(employee, created);
+DROP TABLE IF EXISTS reviews;
+DROP TABLE IF EXISTS mail_check_misses;
+CREATE TABLE IF NOT EXISTS queued_drafts(mailbox TEXT NOT NULL, draft_id TEXT NOT NULL, send_id TEXT NOT NULL,
+ PRIMARY KEY(mailbox,draft_id));
 """
 
 
@@ -159,6 +145,8 @@ def connect(path=None):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(SCHEMA)
+    if "send_facts_json" not in {row[1] for row in conn.execute("PRAGMA table_info(messages)")}:
+        conn.execute("ALTER TABLE messages ADD COLUMN send_facts_json TEXT NOT NULL DEFAULT '{}'")
     conn.commit()
     return conn
 
@@ -239,34 +227,6 @@ def record_audit(conn, row):
                  (row["ts"], row["employee"], row.get("issue", "") or "", row.get("mailbox", ""),
                   row["action"], row.get("target", ""),
                   json.dumps(row.get("detail") or {}, sort_keys=True)))
-    conn.commit()
-
-
-# ---------------------------------------------------------------- org rule check misses
-
-MAIL_CHECK_MISSES_MAX = 100     # kept per employee, oldest dropped; also what one report to Tico carries
-
-
-def add_mail_check_miss(conn, employee, check_id, commit=True):
-    """A mail sent after its org rule check brought back no verdict: the check's id, for Tico to count once, later.
-    `commit` False: it lands with the caller's next commit (`finish_send`)."""
-    conn.execute("INSERT OR IGNORE INTO mail_check_misses (id, employee, created) VALUES (?,?,?)",
-                 (check_id, employee, stamp()))
-    conn.execute("DELETE FROM mail_check_misses WHERE employee=? AND id NOT IN (SELECT id FROM mail_check_misses "
-                 "WHERE employee=? ORDER BY created DESC, rowid DESC LIMIT ?)",
-                 (employee, employee, MAIL_CHECK_MISSES_MAX))
-    if commit:
-        conn.commit()
-
-
-def mail_check_misses(conn, employee):
-    return [r["id"] for r in conn.execute("SELECT id FROM mail_check_misses WHERE employee=? ORDER BY created, rowid "
-                                          "LIMIT ?", (employee, MAIL_CHECK_MISSES_MAX))]
-
-
-def drop_mail_check_misses(conn, ids):
-    """Tico counted these (its 2xx to the report that carried them)."""
-    conn.executemany("DELETE FROM mail_check_misses WHERE id=?", [(i,) for i in ids])
     conn.commit()
 
 
@@ -356,13 +316,9 @@ def claim_send(conn, key, employee, mailbox, issue, recipients, subject, thread_
     return get_send(conn, key), True
 
 
-def finish_send(conn, key, message_id="", status="sent", miss=None):
-    """`miss` (employee, check id): the send went out after a failed org rule check; its miss becomes reportable in
-    this same commit, only once the send is known to have gone."""
+def finish_send(conn, key, message_id="", status="sent"):
     conn.execute("UPDATE sends SET message_id=?, status=? WHERE key=?",
                  (message_id or "", status, key))
-    if miss:
-        add_mail_check_miss(conn, *miss, commit=False)
     conn.commit()
     return get_send(conn, key)
 
@@ -373,17 +329,38 @@ def drop_send(conn, key):
     conn.commit()
 
 
-def sends_on_day(conn, employee, mailbox, day):
-    r = conn.execute("SELECT count(*) c FROM sends WHERE employee=? AND mailbox=? AND day=? "
-                     "AND status!='failed'", (employee, mailbox, day)).fetchone()
-    return int(r["c"] if r else 0)
+def has_sent_to(conn, mailbox, address):
+    """Whether this mailbox has ever written to `address`, on any of its sends (every recipient, not only the first)
+    or in the synced copy of its own sent mail (To and Cc, in any thread; only messages with the SENT label, from the
+    mailbox, not deleted, so a draft or inbound mail with the owner's From does not count). Gmail is not called. The
+    synced copy holds the 90 days sync backfills, then follows history."""
+    box, who = str(mailbox or "").strip().lower(), str(address or "").strip().lower()
+    if not box or not who:
+        return False
+    if conn.execute("SELECT 1 FROM sends WHERE mailbox=? AND status!='failed' AND (lower(recipient)=? OR "
+                    "instr(',' || lower(recipients) || ',', ?) > 0) LIMIT 1",
+                    (box, who, "," + who + ",")).fetchone():
+        return True
+    needle = json.dumps(who)            # the address as a JSON string, so a substring of another address never matches
+    for row in conn.execute("SELECT to_json, cc_json, labels_json FROM messages WHERE mailbox=? AND lower(from_addr)=? "
+                            "AND deleted_at IS NULL AND instr(labels_json, ?) > 0 "
+                            "AND (instr(lower(to_json), ?) > 0 OR instr(lower(cc_json), ?) > 0)",
+                            (box, box, json.dumps("SENT"), needle, needle)).fetchall():
+        if "SENT" not in _json_strings(row["labels_json"]):     # the prefilter is loose; the label itself is exact
+            continue
+        for column in ("to_json", "cc_json"):
+            if who in {a.strip().lower() for a in _json_strings(row[column])}:
+                return True
+    return False
 
 
-def last_send_to(conn, mailbox, recipient):
-    """When anyone last wrote to this address from this mailbox, the bot or the owner in person."""
-    r = conn.execute("SELECT max(ts) t FROM sends WHERE mailbox=? AND recipient=? "
-                     "AND status!='failed'", (mailbox, str(recipient).lower())).fetchone()
-    return (r["t"] or "") if r else ""
+def _json_strings(text):
+    """The strings of a JSON list column; anything else reads as an empty list."""
+    try:
+        value = json.loads(text or "[]")
+    except ValueError:
+        return []
+    return [a for a in value if isinstance(a, str)] if isinstance(value, list) else []
 
 
 def send_message_ids(conn, mailbox):
@@ -403,31 +380,6 @@ def send_rows(conn, employee=None, mailbox=None, since=None, limit=500):
         sql, args = sql + " AND ts>=?", args + [since]
     sql += " ORDER BY ts DESC LIMIT ?"
     return [dict(r) for r in conn.execute(sql, args + [int(limit)]).fetchall()]
-
-
-# ---------------------------------------------------------------- reviews
-
-def record_review(conn, employee, mailbox, target, verdict, when=None):
-    cur = conn.execute("INSERT INTO reviews (ts, employee, mailbox, target, backend, ok, "
-                       "available, verdict) VALUES (?,?,?,?,?,?,?,?)",
-                       (when or stamp(), employee, mailbox, target,
-                        verdict.get("backend", ""), 1 if verdict.get("ok") else 0,
-                        1 if verdict.get("available") else 0,
-                        json.dumps(verdict, sort_keys=True, default=str)))
-    conn.commit()
-    return cur.lastrowid
-
-
-def get_review(conn, review_id):
-    r = conn.execute("SELECT * FROM reviews WHERE id=?", (review_id,)).fetchone()
-    if not r:
-        return None
-    d = dict(r)
-    try:
-        d["verdict"] = json.loads(d["verdict"])
-    except ValueError:                                  # pragma: no cover
-        d["verdict"] = {}
-    return d
 
 
 def audit_rows(conn, since=None, employee=None, limit=500):
@@ -476,6 +428,7 @@ def _message_values(mailbox, msg):
         "list_id": msg.get("list_id") or "",
         "is_internal": 1 if msg.get("is_internal") else 0,
         "has_unsubscribe": 1 if (msg.get("unsubscribe") or msg.get("has_unsubscribe")) else 0,
+        "send_facts_json": json.dumps(msg.get("send_facts") or {}, sort_keys=True),
     }
 
 
@@ -495,6 +448,7 @@ def _decode_message(row):
     d["body_truncated"] = bool(d.get("body_truncated"))
     d["is_internal"] = bool(d.get("is_internal"))
     d["has_unsubscribe"] = bool(d.get("has_unsubscribe"))
+    d["send_facts"] = json.loads(d.pop("send_facts_json", "{}") or "{}")
     d["id"] = d.get("msg_id")
     return d
 
@@ -520,7 +474,7 @@ def upsert_message(conn, mailbox, msg, when=None):
                             (mailbox, values["msg_id"])).fetchone()
     cols = ("thread_id", "epoch", "date", "from_addr", "from_header", "to_json",
             "cc_json", "subject", "snippet", "labels_json", "body", "body_truncated",
-            "attachments_json", "list_id", "is_internal", "has_unsubscribe")
+            "attachments_json", "list_id", "is_internal", "has_unsubscribe", "send_facts_json")
     args = [values[c] for c in cols]
     if existing:
         if _same_content(existing, values) and not existing["deleted_at"]:
@@ -529,7 +483,7 @@ def upsert_message(conn, mailbox, msg, when=None):
             "UPDATE messages SET thread_id=?, epoch=?, date=?, from_addr=?, from_header=?, "
             "to_json=?, cc_json=?, subject=?, snippet=?, labels_json=?, body=?, "
             "body_truncated=?, attachments_json=?, list_id=?, is_internal=?, "
-            "has_unsubscribe=?, updated_at=?, deleted_at=NULL, pushed_at=NULL "
+            "has_unsubscribe=?, send_facts_json=?, updated_at=?, deleted_at=NULL, pushed_at=NULL "
             "WHERE mailbox=? AND msg_id=?",
             args + [when, mailbox, values["msg_id"]])
         conn.commit()
@@ -537,9 +491,9 @@ def upsert_message(conn, mailbox, msg, when=None):
     conn.execute(
         "INSERT INTO messages (mailbox, msg_id, thread_id, epoch, date, from_addr, "
         "from_header, to_json, cc_json, subject, snippet, labels_json, body, "
-        "body_truncated, attachments_json, list_id, is_internal, has_unsubscribe, "
+        "body_truncated, attachments_json, list_id, is_internal, has_unsubscribe, send_facts_json, "
         "fetched_at, updated_at, deleted_at, pushed_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)",
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)",
         [mailbox, values["msg_id"]] + args + [when, when])
     conn.commit()
     return True
@@ -570,6 +524,48 @@ def unpushed(conn, mailbox=None, mailboxes=None, limit=500):
         args = args + list(mailboxes)
     sql += " ORDER BY mailbox, epoch, msg_id LIMIT ?"
     return [_decode_message(r) for r in conn.execute(sql, args + [int(limit or 500)]).fetchall()]
+
+
+def first_sent_epochs(conn, mailbox):
+    """{address: epoch of the first message the mailbox's owner sent it}, over To and Cc. Only mail the provider marks
+    SENT counts: a draft, or an inbound message that claims the owner's From, does not. Only the copy this database
+    holds (sync backfills 90 days, then follows history); deleted messages do not count."""
+    owner = str(mailbox or "").strip().lower()
+    first = {}
+    rows = conn.execute("SELECT epoch, to_json, cc_json, labels_json FROM messages WHERE mailbox=? AND from_addr=? "
+                        "AND deleted_at IS NULL AND labels_json LIKE '%\"SENT\"%'", (mailbox, owner)).fetchall()
+    for row in rows:
+        try:
+            labels = json.loads(row["labels_json"] or "[]")
+        except ValueError:
+            labels = []
+        if "SENT" not in (labels if isinstance(labels, list) else []):
+            continue
+        epoch = int(row["epoch"] or 0)
+        for column in ("to_json", "cc_json"):
+            try:
+                addresses = json.loads(row[column] or "[]")
+            except ValueError:
+                addresses = []
+            for address in addresses if isinstance(addresses, list) else []:
+                key = str(address or "").strip().lower()
+                if key and (key not in first or epoch < first[key]):
+                    first[key] = epoch
+    return first
+
+
+def annotate_known_senders(conn, rows):
+    """Set `known_sender` on each row: the mailbox's owner had sent mail to the row's sender before the row's own date.
+    The owner's sends are in the copy like any other mail, so one read per mailbox answers every row: no Gmail call
+    and no scan per message. Returns the rows."""
+    firsts = {}
+    for row in rows:
+        box = row["mailbox"]
+        if box not in firsts:
+            firsts[box] = first_sent_epochs(conn, box)
+        first = firsts[box].get(str(row.get("from_addr") or "").strip().lower())
+        row["known_sender"] = first is not None and first < int(row.get("epoch") or 0)
+    return rows
 
 
 def mark_pushed(conn, mailbox, msg_ids, when=None):

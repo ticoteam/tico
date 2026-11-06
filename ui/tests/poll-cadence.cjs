@@ -34,7 +34,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
       if (p === '/api/v2/config') { reads.config++; return json(config); }
       if (p === '/api/v2/health') { reads.health++; return json(health); }
-      if (p === '/api/v2/health-monitor') return json({state: 'active', on: true, findings: []});
+      if (p === '/api/v2/health/findings') return json({findings: [], botops: true, reports_without_asking: false});
       if (p === '/api/v2/system/metrics') return json({});
       if (p === '/api/employees' || p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
@@ -47,8 +47,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     });
     await page.clock.install({time: new Date('2026-10-27T12:00:00Z')});
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('#settings-more > summary').click();
-    await page.locator('[data-settings-tab=health]').click();
+    await page.locator('#settings-health-line [data-hl-details]').click();   // Health has no tab: General's Health line opens it
     await page.locator('#hl-page').waitFor({timeout: t(5000)});
     assert.equal(await page.evaluate(() => liveConnected()), false, 'the live stream should be down in this test');
     await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);

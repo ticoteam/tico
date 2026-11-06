@@ -23,7 +23,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
 from clients import hubtools
-from clients.tico import STREAM_WAIT, MultipartBody, inbound_wait_timeout
+from clients.tico import STREAM_WAIT, MultipartBody, gmail_read_timeout, inbound_wait_timeout
 from .store import Problem
 
 PATH = "/api/v2/mcp"
@@ -99,6 +99,7 @@ class InProcessApi:
             raise ValueError("Send either a JSON body or opaque bytes, not both")
         path = "/api/v2/" + path.replace("#", "%23")
         timeout = inbound_wait_timeout(method, path, body, INTERNAL_TIMEOUT_S, query=query)
+        timeout = gmail_read_timeout(method, path, timeout)
         content, raw_headers = raw_body(raw) if raw is not None else (None, {})
         if raw is not None and hasattr(raw, "read"):
             timeout = max(timeout, STREAM_WAIT)      # a file streamed from disk: stored after its last block
@@ -281,6 +282,7 @@ def task_dry_run(c, auth, who, body):
             parent = auth.resolve_task(c, who, parents[0]) if parents else None
         except Problem:        # an unknown parent is the create's own refusal, not reach's
             parent = None
+        parent_id = parent
         try:
             reach.check(c, who, target, "task", task_id=parent)
         except reach.Refused as exc:
@@ -315,7 +317,7 @@ def task_dry_run(c, auth, who, body):
                 not who.task_actor or H.task_private_readable(c, who.task_actor, H.task(c, dup["id"]))):
             problems.append(f"{dup['id']} already asks {H.actor_name(c, target)} for this")
         # The create's own privacy refusals, word for word (task_privacy.require_create): private work handed to
-        # someone who cannot read it, or a private task's guest refused.
+        # someone who cannot read it, or a private task's reach refused.
         from . import task_privacy as privacy
         try:
             parents = [r.task for r in body.relations if r.kind == "parent"]
@@ -326,6 +328,17 @@ def task_dry_run(c, auth, who, body):
                                    related=related)
         except Problem as exc:
             problems.append(exc.detail)
+        if body.readers:
+            # The create's reader refusals (hubdb.new_readers, task_privacy.require_readers), none of them counted.
+            probe = H.CLOSE_PROBE.set(True)
+            try:
+                parties = {"owner_id": target, "requester_id": who.actor, "readers": None}
+                privacy.require_readers(c, who, None, H.new_readers(c, who.actor, parties, body.readers),
+                                        parent_id)
+            except (Problem, H.Refused) as exc:
+                problems.append(exc.detail)
+            finally:
+                H.CLOSE_PROBE.reset(probe)
     if body.roles:
         from . import task_roles as TRo
         try:

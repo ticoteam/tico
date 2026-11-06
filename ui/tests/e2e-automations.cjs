@@ -29,7 +29,8 @@ journey('e2e-automations', async ({hub, browser, phone}) => {
   await page.reload();
   await page.locator('#main', {hasText: NAME}).first().waitFor({timeout: t(20000)});
   // The run is in the Runs tab: its time and its outcome.
-  await page.locator('#main button, #main a, #main [role=tab]', {hasText: /^Runs$/}).first().click();
+  // The automation's own Runs tab (the list's Automations | Runs tabs are in the page, hidden behind it).
+  await page.locator('#main button:visible, #main a:visible, #main [role=tab]:visible', {hasText: /^Runs$/}).first().click();
   const text = await drawn(page, '#main', text => /\d{1,2}:\d{2} [AP]M/.test(text) && /Done/.test(text),
     `${where}: the run row draws its time and outcome`);
   assert.match(text, /Done/, `${where}: the run row shows its outcome`);

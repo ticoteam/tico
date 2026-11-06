@@ -16,11 +16,6 @@ const launch = () => chromium.launch({headless: true,
 async function open(browser, hub, who, {phone = false, hash = '', time = null, timezone = ''} = {}) {
   const page = await pageAs(browser, hub, who, {phone, timezone});
   if (time) await page.clock.install({time});
-  // The simulated runner reports version "test", which the hub calls out of date: that card is the harness's, not
-  // the journey's, so it stays snoozed and the screenshots show the page.
-  await page.context().addInitScript(() => {
-    try { localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 864e5})); } catch {}
-  });
   await page.reload();
   page.errors = [];
   page.on('pageerror', e => page.errors.push(e.message));
@@ -55,7 +50,7 @@ async function shot(page, name) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
-  await page.evaluate(() => Promise.all(document.getAnimations().map(a => a.finished.catch(() => {}))));
+  await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {}))));
   await page.screenshot({path: path.join(dir, name + '.png')});
 }
 

@@ -124,11 +124,47 @@ def test_a_pinned_computer_shows_outdated_but_its_owner_is_not_nudged(api):
     assert machine["update"]["outdated"] is True and machine["update"]["update_state"] == "pinned"
 
 
+def test_repeated_update_deferrals_show_the_blocked_cause_in_health_and_release_the_hold(api, tmp_path, monkeypatch):
+    from runner_support import release_update as ru
+
+    r = queue_work(api)
+    report(api, r, "0.2.5", update={"state": "updating", "target": "0.3.0", "error": ""})
+    monkeypatch.setenv("TICO_UPDATE_RETRY", "short")
+    reason = "the runner binary is not published yet"
+    for _ in range(ru.MAX_DEFERRALS):
+        outcome = ru.defer_update(tmp_path, "0.3.0", reason)
+        report(api, r, "0.2.5", update=outcome)
+        with api.app.state.store.read() as c:
+            assert not runner_versions.holding_since(c, r["runner_id"])
+    body = get(api, "health")
+    machine = next(m for m in body["computers"] if m["id"] == r["runner_id"])
+    assert machine["update"]["update_state"] == "blocked"
+    assert machine["update"]["error"] == outcome["error"] and reason in outcome["error"]
+    check = next(c for c in body["checks"] if c["id"] == "runners")
+    assert check["status"] == "warn" and outcome["error"] in check["summary"]
+    assert post(api, "jobs/claim", {"bot": None}, token=r["token"])["attempt"]["bot"] == "ops"
+
+
+def test_transient_update_retries_never_report_a_hold_or_blocked_in_health(api, tmp_path, monkeypatch):
+    from runner_support import release_update as ru
+
+    monkeypatch.setenv("TICO_UPDATE_RETRY", "short")
+    r = queue_work(api)
+    for reason in ("active work", "checkout lock busy", "Git gate busy") * 3:
+        outcome = ru.defer_update(tmp_path, "0.3.0", reason, transient=True)
+        report(api, r, "0.2.5", update=outcome)
+        with api.app.state.store.read() as c:
+            assert not runner_versions.holding_since(c, r["runner_id"])
+        machine = next(m for m in get(api, "health")["computers"] if m["id"] == r["runner_id"])
+        assert machine["update"]["update_state"] == "idle"
+    assert post(api, "jobs/claim", {"bot": None}, token=r["token"])["attempt"]["bot"] == "ops"
+
+
 
 def test_queued_work_says_it_waits_for_the_computer_to_update_only_once_the_computer_stops_taking_work(api):
     """A computer due an update keeps claiming for 20 minutes, then takes no new work until its running turns end.
     Chat and task said only "Queued" for that hold; now they say why, and only while it lasts."""
-    from backend import health, health_monitor
+    from backend import health, maintenance_health
     from backend.store import H
     r = runner(api, label="Team box")
     assign(api, r, "ops")
@@ -163,7 +199,7 @@ def test_queued_work_says_it_waits_for_the_computer_to_update_only_once_the_comp
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-30),))
         online = {x["id"] for x in health._online_runners(c)}
         assert {row["reason"] for row in health._waiting(c, online)[2]} == {"updating"}
-        found = {f["check_id"]: f for f in health_monitor.findings(c, store.settings)}
+        found = {f["check_id"]: f for f in maintenance_health.findings(c, store.settings)}
     assert "queue_idle" not in found
     assert "UTC (1 min), waiting to update." in found["runner_outdated"]["detail"]
     update("updating")                                                  # the hold goes on into the update itself

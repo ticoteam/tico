@@ -27,9 +27,9 @@ LIVE_HISTORY = ("transcript", "decision", "tool")
 
 def external_bot_sql(recipient):
     """SQL true when the bot `recipient` (an SQL expression holding `bot:<id>`) is reached only through its inbox."""
-    return ("EXISTS (SELECT 1 FROM bot_config WHERE bot=substr(" + recipient + ",5) AND "
-            "json_extract(config,'$.harness') IN (" + ",".join("'" + h + "'" for h in EXTERNAL_HARNESSES) + ") "
-            "AND NOT EXISTS (SELECT 1 FROM runners r WHERE r.id=json_extract(config,'$.app_delivery.computer') "
+    return ("EXISTS (SELECT 1 FROM bot_settings WHERE bot_id=substr(" + recipient + ",5) AND "
+            "harness IN (" + ",".join("'" + h + "'" for h in EXTERNAL_HARNESSES) + ") "
+            "AND NOT EXISTS (SELECT 1 FROM runners r WHERE r.id=json_extract(app_delivery,'$.computer') "
             "AND r.revoked_at IS NULL))")
 
 

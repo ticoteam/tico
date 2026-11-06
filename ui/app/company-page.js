@@ -1,4 +1,4 @@
-/* ui/app/company-page.js — The Company page for owners and admins (docs/company-page.md). Overview's Company page tab
+/* ui/app/company-page.js — The Company page for owners and admins (docs/company-page.md). Company's Share tab
    shows the page itself, with sharing behind one icon; its Manage goes to the section, one screen with Transparency,
    Editions, Audiences, Disclosure, Stats, Readers and Preview, in that order. Each part loads and fails on its own. The
    server decides every right; this file only hides what the viewer can't use. The reader's page itself is not drawn
@@ -1060,7 +1060,7 @@ function cpPreview() {
     `<a class="ghost small cp-preview" href="${API}/v2/company-page/preview?audience=${cpId(a.id)}" target="_blank" rel="noopener noreferrer" data-cp-preview="${esc(a.id)}">${esc(a.name)}<span class="nav-icon" aria-hidden="true">open_in_new</span></a>`).join('')}</div>`);
 }
 
-// ----------------------------------------------------------------- Overview's Company page tab
+// ----------------------------------------------------------------- Company's Share tab
 // The page itself, in the server's sandboxed preview. The picker's choice holds while the app stays open.
 let CP_TAB_AUDIENCE = '';
 // Which audience opens: the one the page's level puts in front of people, or the first one turned on.
@@ -1083,7 +1083,7 @@ function pageOverviewCompany() {
   const acts = !allowed ? '' : `<span class="cp-tab-acts" hidden><span class="cp-tab-preview" data-cp-preview hidden>Preview</span><span class="cp-tab-pick" data-cp-tab-pick></span>
     <button type="button" class="ghost cp-share-btn" data-cp-share aria-label="Share" aria-haspopup="dialog" title="Share"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M8 7.5l4-4 4 4"/><path d="M8 11H6v9.5h12V11h-2"/></svg></button>
     <a class="cp-manage" href="${CP_ROUTE}" data-cp-manage>Manage</a></span>`;
-  main.innerHTML = `<section class="overview-page cp-tab" aria-label="Share"><div class="overview-tabs"><h1>Overview</h1>${dashTabsHTML('company')}${acts}</div>
+  main.innerHTML = `<section class="overview-page cp-tab" aria-label="Share"><div class="overview-tabs"><h1>Company</h1>${dashTabsHTML('company')}${acts}</div>
     <div class="cp-tab-body" id="cp-tab-body">${allowed ? skelRows(4, {dot: false}) : cpEmpty('Owners and admins only')}</div></section>`;
   if (!allowed) return;
   const state = CP = {...cpNewState(), tab: true};

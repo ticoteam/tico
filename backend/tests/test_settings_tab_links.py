@@ -8,15 +8,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS = "#/settings"
 # Names settingsShow takes besides the tabs: old ones it maps (tags, types, providers; team, assistant, privacy and
-# storage, now sections of General), the Models section of Computers (models), History's Runs view (runs), or ones it
-# sends to the Tools page (credentials, cloud).
+# storage, now sections of General; gateway, now a card on Models), the Models section of Computers (models), History's
+# Runs view (runs), ones it sends to the Tools page (credentials, cloud), or Health, a page with no tab that General's
+# Health line opens.
 ALIASES = {"tags", "types", "providers", "models", "team", "assistant", "privacy", "storage", "runs", "credentials",
-           "cloud"}
+           "cloud", "gateway", "health"}
 
 
 def settings_tabs():
     tabs = set(re.findall(r'data-settings-tab="([a-z]+)"', (ROOT / "ui/app/settings.js").read_text()))
-    assert {"devices", "bots", "health"} <= tabs
+    assert {"devices", "bots"} <= tabs
+    assert 'id="settings-health"' in (ROOT / "ui/app/settings.js").read_text()
     return tabs | ALIASES
 
 
@@ -63,7 +65,7 @@ def server_links():
 def test_ui_links_name_a_settings_tab_that_exists():
     tabs, links = settings_tabs(), list(ui_links())
     # The links people hit most: chat's waiting line, the heartbeat banner, first run.
-    assert {("ui/app/chat.js", "models"), ("ui/app/chat.js", "devices"), ("ui/app/heartbeat.js", "devices"),
+    assert {("ui/app/chat.js", "models"), ("ui/app/chat.js", "devices"), ("ui/app/heartbeat.js", "health"),
             ("ui/first-run.js", "models")} <= set(links)
     assert [(rel, tab) for rel, tab in links if tab not in tabs] == []
 

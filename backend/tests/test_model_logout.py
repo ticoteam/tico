@@ -6,6 +6,7 @@ from backend.tests.test_api import api, get, headers, post, runner  # noqa: F401
 from backend.tests.test_computer_signin import computer_asks, grant, new_computer, store, vault
 from backend.tests.test_getting_started import add_bot
 from backend.tests.test_onboarding import environment, signed_in  # noqa: F401
+from backend import bot_settings as BS
 
 CAPABLE = ["model_sign_out_v1"]
 
@@ -110,8 +111,8 @@ def test_a_canceled_switch_keeps_the_mark_and_the_old_login(api):
 def put_config(api, bot, runtime):
     import json
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot, config, owner_id) VALUES(?, ?, 'ana') ON CONFLICT(bot) DO UPDATE "
-                  "SET config=excluded.config", (bot, json.dumps({"runtime": runtime})))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana') ON CONFLICT(bot) DO NOTHING", (bot,))
+        BS.write(c, bot, {'runtime': runtime})
 
 
 def test_a_signed_out_computer_is_not_given_the_shared_key_until_a_person_says_so(environment):

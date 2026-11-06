@@ -41,7 +41,10 @@ Repo = Annotated[str, Field(max_length=200), AfterValidator(repo_reference)]
 
 
 class Contract(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    # defer_build: a model's validator is built when it is first used (a route's body, a model_validate), not when this
+    # module is imported. The server imports about 300 of them on every start and many are only parts of others; the
+    # schema, the validation and the OpenAPI document are the same either way (subclasses inherit this).
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, defer_build=True)
 
 
 class TurnLevels(Contract):
@@ -148,6 +151,11 @@ class TakeRecommendation(Contract):
     version: Annotated[int, Field(strict=True, ge=1)] | None = None     # the card's task version: a changed task is refused
 
 
+class AsksSeen(Contract):
+    """Questions to the person that their Needs you now shows (POST /api/v2/needs-you/seen)."""
+    asks: Annotated[list[Annotated[StrictStr, Field(min_length=1, max_length=100)]], Field(max_length=200)]
+
+
 class StaleDecision(Contract):
     """A person's answer to one row of their Stale tickets card (backend/stale_review.py): accept or skip. Accept names
     the task version the row showed (409 version_conflict once the task changed), as a change by hand does."""
@@ -191,7 +199,11 @@ class TaskBlocker(Contract):
     endpoint: str = Field(min_length=1, max_length=200)
 
 
+ReaderName = Annotated[str, Field(min_length=1, max_length=200)]
+
+
 class TaskCreate(Contract):
+    live_meeting_id: ID | None = None
     visibility: Literal['public', 'private'] | None = None
     # Publishing at creation needs explicit public text; the internal title and body are never copied.
     public_title: str | None = Field(default=None, max_length=300)
@@ -226,7 +238,11 @@ class TaskCreate(Contract):
     number: TaskNumber | None = None
     # Who else is on the task, by role: {role: [actors]} (backend/task_roles.py).
     roles: dict[str, list[str]] | None = None
-    # A bot's own subtask run on another model, `<runtime>[:<model>]`, as a review or a check (backend/check_models.py).
+    # Who else sees a private task: people, bots and group:<id>s (hubdb.set_task_readers).
+    readers: list[ReaderName] = Field(default_factory=list, max_length=50)
+    # The filer follows it too (backend/task_followers.py); its owner follows anyway.
+    follow: StrictBool = False
+    # With a model, the bot's own check session; review alone is a normal review child.
     check_model: str | None = Field(default=None, max_length=120)
     check_role: Literal["review", "check"] | None = None
     # The model a bot-owned task's runs use, with its effort and harness (backend/task_run_models.py). No model is the
@@ -236,6 +252,15 @@ class TaskCreate(Contract):
     harness: ID | None = None
     # A company-visible task a private task's owning bot files from that work, in its own words (task_privacy.from_private).
     from_private: StrictBool = False
+
+    @model_validator(mode="after")
+    def review_child(self):
+        if self.check_role == "review" and self.check_model is None:
+            if not any(r.kind == "parent" for r in self.relations):
+                raise ValueError("A review is a child task: choose its parent")
+            if not re.match(r"^review\s+[12](?:\s*:|$)", self.title.strip(), re.I):
+                self.title = "Review 1: " + self.title
+        return self
 
 
 class TaskRunModel(Contract):
@@ -557,6 +582,24 @@ class TaskComment(Contract):
 class TaskAskResolve(Contract):
     # The person's words from where they answered; without them the asker withdraws the question.
     quote: Annotated[StrictStr, Field(min_length=1, max_length=4000)] | None = None
+
+
+class TaskReaders(Contract):
+    """Who else sees a private task (hubdb.set_task_readers): add and remove people, bots and group:<id>s."""
+    add: list[ReaderName] = Field(default_factory=list, max_length=50)
+    remove: list[ReaderName] = Field(default_factory=list, max_length=50)
+
+
+class TaskReaderList(Contract):
+    """The whole reader list of a private task, replacing what it had."""
+    readers: list[ReaderName] = Field(default_factory=list, max_length=50)
+
+
+class TaskFollower(Contract):
+    """Follow or unfollow a task (backend/task_followers.py): yourself, or `actor` when you may change the task."""
+    actor: ReaderName | None = None
+    following: StrictBool = True
+    notify: Literal["live", "mentions", "digest", "muted"] | None = None
 
 
 class TaskLink(Contract):
@@ -971,6 +1014,7 @@ class AssistantSettings(Contract):
 class AssistantReadBack(Contract):
     """The approvals the Assistant is about to approve for the person, read back in their chat first."""
     approvals: Annotated[list[Annotated[str, Field(min_length=1, max_length=64)]], Field(min_length=1, max_length=100)]
+    note: Annotated[str, Field(max_length=300)] = ""
 
 
 class ApprovalConsume(Contract):
@@ -997,6 +1041,7 @@ class Enrollment(Contract):
     code: str = Field(min_length=32, max_length=200)
     label: str = Field(min_length=1, max_length=100)
     platform: str = Field(default="", max_length=100)
+    device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class SlashCommand(Contract):
@@ -1053,6 +1098,11 @@ class SubscriptionWeekly(Contract):
     resets_at: str | None = Field(default=None, max_length=50)
     reported_at: str = Field(max_length=50)
     status: Literal["allowed", "allowed_warning", "rejected"] | None = None
+    # Where the reading came from, as the runner tells it (runner-rs drive.rs, subscription_refresh.rs): "subscription" when a
+    # turn ran on a company subscription (`subscription_id` is its id), "login" for the computer's own login (a background
+    # read or a turn on it). Absent from a runner that predates this, which counts for no plan (model_subscriptions._plan_usage).
+    origin: Literal["subscription", "login"] | None = None
+    subscription_id: str | None = Field(default=None, max_length=80)
 
 
 # The computer's own login's usage window on its runtime row: one that fails its checks is left out, like the account.
@@ -1205,18 +1255,17 @@ class ToolUpdate(Contract):
 
 
 class MailRequest(Contract):
-    """What a bot's bot.yaml asks for its mail (runner-rs/src/declared_access.rs `mail_request`): a request only. The
-    server-held setting (backend/mail_settings.py) decides; Health says when the two differ."""
+    """What a bot's bot.yaml says of its mail, as its computer still reports it (runner-rs/src/declared_access.rs
+    `mail_request`). Accepted and ignored: sending is the server's sending policy alone (backend/email_sending.py)."""
     outbound_send: bool = False
     forward_to: list[Annotated[str, Field(max_length=320)]] = Field(default_factory=list, max_length=20)
 
 
 class MailSettingsUpdate(Contract):
-    """A person's change to a bot's mail sending (backend/mail_settings.py). Only what is sent changes.
-    `from_request` takes what the bot's bot.yaml asks, as its computer last reported it."""
+    """A person's change to a bot's mail sending (backend/mail_settings.py): its sending policy mode. `forward_to` is
+    accepted empty only, for older callers: forward targets are retired."""
     outbound_send: bool | None = None
     forward_to: list[Annotated[str, Field(max_length=320)]] | None = Field(default=None, max_length=20)
-    from_request: bool = False
 
 
 class BotReadiness(GoalReadiness):
@@ -1315,6 +1364,7 @@ class StructuredReadiness(Contract):
     worktrees: bool | None = None
     # Prepares a worktree reserved for a waiting task while its bot is idle (backend/worktree_waits.py).
     worktree_waits: bool | None = None
+    worktree_recovery: bool | None = None
     schema_version: Literal[1] = 1
     disk: DiskReadiness | None = None
     # Bots run as their own user here (runner-rs/src/isolation.rs), so a Tico model may run (backend/models_preset.py).
@@ -1424,6 +1474,7 @@ class Heartbeat(Contract):
     repositories: list[RepositoryStatus] | None = None
     version: str = Field(max_length=100)
     platform: str = Field(max_length=100)
+    device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
     capabilities: list[Literal[
@@ -1431,8 +1482,8 @@ class Heartbeat(Contract):
         "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1",
         "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1", "source_continue_v1",
         "turns_at_once_v1", "private_lanes_v1", "model_subscriptions_v1", "browser_exit_v1",
-        "model_subscription_activation_v1", "model_connect_v1", "threads_v1", "memory_tidy_packets_v1"]] = Field(
-        default_factory=list, max_length=20)
+        "model_subscription_activation_v1", "model_connect_v1", "threads_v1", "memory_tidy_packets_v1",
+        "harness_allocation_v1", "make_page"]] = Field(default_factory=list, max_length=32)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -1480,6 +1531,12 @@ Heartbeat.model_rebuild()
 
 class RunnerMemberBots(Contract):
     accepts: bool
+
+
+class RunnerLabel(Contract):
+    # Trimmed first (Contract strips), then 1 to 100 characters on one line.
+    label: StrictStr = Field(min_length=1, max_length=100, pattern=r"^[^\x00-\x1f\x7f]+$",
+                             description="The computer's name, as Settings > Computers shows it.")
 
 
 class RunnerTurnsAtOnce(Contract):
@@ -1617,6 +1674,53 @@ class BotSuggest(Contract):
 class SkillCopy(Contract):
     skill: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,79}$")
     to: list[Slug] = Field(min_length=1, max_length=20)
+
+
+class SkillFile(Contract):
+    """One text file of a skill folder. Its path and size are checked by the rules in clients/skills.py, not here."""
+    path: str
+    content: str
+
+
+class SkillSource(Contract):
+    """Where a proposal came from, as the proposer names it; the server says who proposed it (backend/skills.py)."""
+    repo_path: str | None = Field(default=None, max_length=300)
+    url: str | None = Field(default=None, max_length=500)
+
+
+class SkillPropose(Contract):
+    name: str
+    files: list[SkillFile]
+    source: SkillSource | None = None
+    note: str = Field(default="", max_length=200)
+    base_version: int | None = Field(default=None, ge=1)
+    task_id: str | None = Field(default=None, max_length=200)
+
+
+class SkillApprove(Contract):
+    acknowledged: bool = False
+
+
+class SkillDecline(Contract):
+    reason: str = Field(min_length=1, max_length=300)
+
+
+class SkillInstall(Contract):
+    target_type: Literal["Bot", "Human"]
+    target_id: ID
+    version_policy: Literal["latest", "pinned"] = "latest"
+    pinned_version: int | None = Field(default=None, ge=1)
+
+
+class SkillTarget(Contract):
+    target_type: Literal["Bot", "Human"]
+    target_id: ID
+
+
+class SkillInstallBulk(Contract):
+    targets: list[SkillTarget] = Field(min_length=1, max_length=200)
+    version_policy: Literal["latest", "pinned"] = "latest"
+    pinned_version: int | None = Field(default=None, ge=1)
 
 
 class BotCoOwners(Contract):
@@ -2072,6 +2176,11 @@ class UsageCount(Contract):
     enabled: bool
 
 
+class SuggestionSettings(Contract):
+    share_stats_for_suggestions: StrictBool | None = None
+    report_suggestion_outcomes: StrictBool | None = None
+
+
 class StrategyBotChecks(Contract):
     on: bool
 
@@ -2158,11 +2267,11 @@ class AccessRules(Contract):
     admin_sql: bool | None = None
     member_tokens: bool | None = None
     health_monitor_reports: bool | None = None
+    bot_reports_direct: bool | None = None
     bots_go_ahead: bool | None = None
     support_access: bool | None = None
     stale_review: bool | None = None
     topic_fresh: bool | None = None
-    stall_triage: bool | None = None
     managers_manage_reports: bool | None = None
     org_rule_checks: bool | None = None
     go_ahead_days: Annotated[int, Field(strict=True, ge=1, le=14)] | None = None
@@ -2292,12 +2401,16 @@ class LoadSnapshot(Contract):
 
 
 class StartPlace(Contract):
+    # A real process allocated to this turn stays admitted even if its own memory raises the computer's load.
+    harness_allocated: bool = False
     # The reasons runner-rs reports while a claimed turn gives its computer place back (execute.rs wait_before_start).
-    waiting: Literal["", "shared login", "pre-start requirements", "Docker turn user"] = ""
+    waiting: str = Field(default="", max_length=40,
+                         pattern=r"^(?:|shared login|pre-start requirements|Docker turn user|computer busy: memory (?:100|[1-9]?[0-9])%)$")
 
 
 class Started(Contract):
     thread_id: ID
+    harness_allocated: bool = False
     load_snapshot: LoadSnapshot | None = None
 
 
@@ -2370,7 +2483,7 @@ class RunUsagePart(Contract):
     `requests` is the same three per model request, sent when the runner saw every request, so a model whose
     long prompts cost more (providers.LONG_PROMPT) is priced request by request. A fourth count, when the runner
     sends one, marks the bot's own requests (1) from its subagents' (0): the newest of its own is the session's
-    context size (`turns.prompt_tokens`)."""
+    context size (`attempts.prompt_tokens`)."""
     input_tokens: int = Field(default=0, ge=0, le=10**12)
     cached_tokens: int = Field(default=0, ge=0, le=10**12)
     output_tokens: int = Field(default=0, ge=0, le=10**12)
@@ -2397,6 +2510,11 @@ class UsageLimit(Contract):
 
 class UsageDefault(UsageLimit):
     count_subscription: bool = True
+
+
+class QueuePurge(Contract):
+    """`company`, or `group:<id>` for that group and the groups nested under it."""
+    scope: str = Field(default="company", max_length=200)
 
 
 class SubscriptionUnavailable(Contract):
@@ -2551,6 +2669,33 @@ class SystemRoutineUpdate(Contract):
     at: str | None = Field(default=None, max_length=5)
 
 
+MaintenanceStepKey = Literal["collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream"]
+
+
+class MaintenanceStepChange(Contract):
+    """One step's switch, frequency or bot limit (backend/maintenance.py save_step); only what is sent changes."""
+    key: MaintenanceStepKey
+    enabled: bool | None = None
+    frequency: Literal["run", "day", "week", "custom"] | None = None
+    custom_every: int | None = Field(default=None, ge=1, le=999)
+    custom_unit: Literal["hours", "days"] | None = None
+    max_bots: int | None = Field(default=None, ge=1, le=20)
+
+
+class MaintenanceUpdate(Contract):
+    """The schedule, the pause, the monthly judge spend cap and step changes (backend/maintenance.py save_settings and
+    save_step); only what is sent changes."""
+    schedule: Literal["hourly", "2h", "3h", "6h", "12h", "daily"] | None = None
+    paused: bool | None = None
+    monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
+    steps: list[MaintenanceStepChange] | None = Field(default=None, max_length=8)
+
+
+class MaintenanceRunRequest(Contract):
+    """Run now: every step, or the one named (backend/maintenance.py run_now)."""
+    step: MaintenanceStepKey | None = None
+
+
 class ReleaseScheduleUpdate(Contract):
     """The team's release schedule (backend/release_flow.py); only what is sent changes. `bot` and `writer` name the
     Release Manager and Technical Writer ("" finds them by starter template)."""
@@ -2599,10 +2744,14 @@ class AssistantPage(Contract):
 
 class AssistantMessage(Contract):
     text: Annotated[str, Field(min_length=1, max_length=8000)]
-    # Sent from the Updates chat (backend/updates_chat.py): the turn is handed the updates the person may read.
+    # place "updates" hands the turn the updates the person may read (backend/updates_chat.py).
     place: Literal["updates"] | None = None
     # Sent from the Ask panel (ui/app/ask-panel.js): the page the person is looking at, handed to the turn as a hint.
     page: AssistantPage | None = None
+
+
+class MakePage(Contract):
+    text: Annotated[str, Field(min_length=1, max_length=8000)]
 
 
 class AssistantUpload(Contract):
@@ -2640,6 +2789,12 @@ class AssistantAction(Contract):
     body: dict = Field(default_factory=dict)
     # The Assistant's own background run puts the card in this person's Assistant chat (`for`); otherwise it is the caller's.
     for_person: Annotated[str, Field(min_length=1, max_length=200)] | None = Field(default=None, alias="for")
+
+
+class AssistantMorning(Contract):
+    """The Assistant's one morning message to a person, in their own Assistant chat (backend/assistant.py morning)."""
+    for_person: Annotated[str, Field(min_length=1, max_length=200)] = Field(alias="for")
+    body: Annotated[str, Field(min_length=1, max_length=2000)]
 
 
 class InboxOnly(Contract):
@@ -2822,6 +2977,11 @@ class UpdatePost(Contract):
     slides: UpdateSlides | None = None                                 # a week in review
     day: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")] | None = None   # only a day Tico asked to redo
     replace_draft: bool = False                                        # a person's own words over their Assistant draft
+    # What a bot's turn reports back (a learning or suggestion delivery): how many learnings it kept (at most 15),
+    # the suggestions it acted on, and the delivery this post answers.
+    learnings_saved: Annotated[int, Field(ge=0, le=15)] | None = None
+    suggestions_seen: list[Annotated[str, Field(max_length=300)]] | None = Field(default=None, max_length=10)
+    delivery_batch_id: Annotated[str, Field(max_length=80)] | None = None
 
 
 class UpdateRedo(Contract):
@@ -3089,3 +3249,22 @@ class GrowthSettingsUpdate(Contract):
     unit: str | None = Field(default=None, min_length=1, max_length=40)
     revenue_month: float | None = Field(default=None, ge=0)
     margin_pct: float | None = Field(default=None, ge=0, le=100)
+
+
+# Tools (backend/mailboxes.py): connect a mailbox, and who can use it.
+MailboxLevel = Literal["read", "read_write"]
+
+
+class MailboxCreate(Contract):
+    address: Annotated[str, Field(min_length=3, max_length=254)]
+    shared: StrictBool = False
+
+
+class MailboxAccessCreate(Contract):
+    grantee_type: Literal["person", "bot"]
+    grantee_id: ID
+    level: MailboxLevel
+
+
+class MailboxAccessUpdate(Contract):
+    level: MailboxLevel

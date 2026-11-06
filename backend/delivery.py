@@ -22,11 +22,13 @@ neither loses a deadline nor fires one twice. A later deadline in a session whos
 and a run whose items all went in with another turn is canceled. A bot that is paused or quarantined is passed over until it is active
 again; spend caps, turns at once and claim holds apply to the run's job as to any other. Sleep when idle counts the
 next deadline as a reason to wake (sleep_idle.routine_times).
+A task that ends cancels its pending deferred deliveries, even if it is reopened later.
 
 This module imports nothing from hubdb at load, so hubdb can import it.
 """
 
 import re
+from . import bot_settings as BS
 
 WAYS = ("steer", "queue", "defer")
 DEFER_FOR = r"^(never|[1-9][0-9]{0,5}[mhd])$"
@@ -101,12 +103,6 @@ def defer(conn, bot, kind, item, *, conversation_id="", task_id=None, defer_for=
     due = until(defer_for or (TASK_DEFAULT if kind in ("comment", "task") else CHAT_DEFAULT), created)
     conn.execute("INSERT INTO deferrals(id,bot,kind,item,conversation_id,task_id,due_at,created_at) VALUES(?,?,?,?,?,?,?,?)",
                  (H.new_id(), H.actor_id(bot), kind, item, conversation_id or "", task_id, due, created))
-    if kind == "task" and task_id and due:
-        from . import task_check_backs
-        row = H.task(conn, task_id)
-        explicit = conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_back_explicit' LIMIT 1", (task_id,)).fetchone()
-        if row and task_check_backs.involved(row) and not explicit:
-            task_check_backs.set_time(conn, row, due, "Inspect the deferred assignment at its delivery deadline.", system=True)
     return due
 
 
@@ -173,15 +169,36 @@ def carried(conn, bot, attempt_id, conversation_ids, tasks=(), notes=(), *, job=
 
 def _drop_spent(conn, H, attempt_id, job, note):
     """Cancel each queued deadline run whose items all went in with this turn (another way, or another run)."""
-    from . import claim_holds
     spent = [r[0] for r in conn.execute(
         "SELECT DISTINCT d.fired_job FROM deferrals d JOIN jobs j ON j.id=d.fired_job WHERE d.attempt=? "
         "AND j.state='queued' AND d.fired_job IS NOT ? AND NOT EXISTS(SELECT 1 FROM deferrals x "
         "WHERE x.fired_job=d.fired_job AND x.settled_at IS NULL)", (attempt_id, job)).fetchall()]
-    for spent_job in spent:
-        if conn.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (spent_job,)).rowcount:
+    _drop_jobs(conn, H, spent, note, attempt_id)
+
+
+def _drop_jobs(conn, H, jobs, note, attempt_id=None):
+    """Cancel queued deadline runs with no deferred items left to carry."""
+    from . import claim_holds
+    for spent_job in jobs:
+        if conn.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued' AND NOT EXISTS("
+                        "SELECT 1 FROM deferrals WHERE fired_job=? AND settled_at IS NULL)",
+                        (spent_job, spent_job)).rowcount:
             claim_holds.clear(conn, spent_job, note)
             H.event(conn, H.KEEPER, "delivery.deferred.spent", spent_job, {"attempt": attempt_id})
+
+
+def task_closed(conn, task):
+    """Settle a task's pending deliveries and drop deadline runs that only carried them. A message is the task's by
+    its refs or its dedicated room (hubdb.MESSAGE_TASK_SQL), not by the chat room it was filed from."""
+    H = _H()
+    rows = H._rows(conn.execute(
+        "SELECT d.id,d.fired_job FROM deferrals d LEFT JOIN messages m ON m.id=d.item "
+        "LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE d.settled_at IS NULL AND "
+        f"((d.kind IN ('comment','message') AND {H.MESSAGE_TASK_SQL}=?) OR (d.kind='task' AND d.item=?))",
+        (task["id"], task["id"])))
+    _settle(conn, H, rows, H.now(), "moot")
+    jobs = dict.fromkeys(r["fired_job"] for r in rows if r["fired_job"])
+    _drop_jobs(conn, H, jobs, "Its task ended, canceling its deferred deliveries.")
 
 
 def summary(carried_=None, tasks=0, notes=0):
@@ -217,16 +234,24 @@ def _carrier_ok(conn, bot, item, refs, room, session):
 
 
 def _alive(conn, row):
-    """Whether a deferred item still waits: a task still a deferred task, a note not yet carried or taken back, a
-    message not deleted and not already queued by another way."""
+    """Whether a deferred item still waits and its task, if any, has not ended."""
     H = _H()
     if row["kind"] == "task":
         return H.next_run_waiting(conn, H.task(conn, row["item"]))
     if row["kind"] == "note":
         return H.note_waiting(conn, H.note(conn, row["item"]))
-    found = conn.execute("SELECT m.refs, m.conversation_id FROM messages m WHERE m.id=? AND m.deleted_at IS NULL AND "
+    found = conn.execute("SELECT m.refs, m.conversation_id, cv.task_id FROM messages m "
+                         "LEFT JOIN conversations cv ON cv.id=m.conversation_id "
+                         "WHERE m.id=? AND m.deleted_at IS NULL AND "
                          "NOT EXISTS(SELECT 1 FROM jobs j WHERE j.message_id=m.id)", (row["item"],)).fetchone()
-    return found is not None and _carrier_ok(conn, row["bot"], row["item"], found[0], found[1], row["conversation_id"])
+    if found is None:
+        return False
+    refs = H._json(found[0], {}) or {}
+    task_id = H.message_task_id({"refs": refs}, {"task_id": found[2]})
+    ended = task_id and conn.execute(
+        f"SELECT 1 FROM tasks WHERE id=? AND status IN ({','.join('?' * len(H.TASK_ENDED))}) LIMIT 1",
+        (task_id, *H.TASK_ENDED)).fetchone()
+    return not ended and _carrier_ok(conn, row["bot"], row["item"], refs, found[1], row["conversation_id"])
 
 
 def due(conn, at, failures=None):
@@ -262,16 +287,6 @@ def _fire(conn, H, bot, conversation_id, at, external):
                      (at, *part))
     if not live:
         return None
-    # A task's own due inspection already carries the assignment. Do not bind its deferred item to that job:
-    # a reschedule can obsolete the inspection, while the original delivery deadline still has to be honored.
-    from . import task_check_backs
-    if task_check_backs.enabled(conn) and all(r["kind"] == "task" and conn.execute(
-            "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
-            "AND j.state IN ('queued','leased','running') AND json_extract(m.refs,'$.wake')='check_back' "
-            "AND json_extract(m.refs,'$.task')=? AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=? "
-            "AND t.check_back_at=json_extract(m.refs,'$.check_back_at') AND t.owner_id=m.recipient_id) LIMIT 1",
-            (bot, r["item"], r["item"])).fetchone() for r in live):
-        return None
     # A deadline run already queued in this session takes these too: one run, not one per deadline.
     pending = conn.execute("SELECT d.fired_job FROM deferrals d JOIN jobs j ON j.id=d.fired_job WHERE d.bot=? AND "
                            "d.conversation_id=? AND d.settled_at IS NULL AND j.state='queued' LIMIT 1",
@@ -282,7 +297,7 @@ def _fire(conn, H, bot, conversation_id, at, external):
             conn.execute(f"UPDATE deferrals SET fired_job=? WHERE id IN ({','.join('?' * len(part))})",
                          (pending[0], *part))
         return None
-    config = conn.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = conn.execute(BS.ONE_SQL, (bot,)).fetchone()
     harness = (H._json(config[0], {}) or {}).get("harness") if config else None
     if harness in external:
         # Its app delivers what it reads; Tico starts no run for it. The items wait in its rooms.

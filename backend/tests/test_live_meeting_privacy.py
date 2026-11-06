@@ -41,30 +41,27 @@ def test_removed_bot_cannot_replay_turn_receipt(live):
     post(live, path, {}, token="ops-live", key="claimed-once", expected=404)
 
 
-def test_only_connector_expands_private_audience_and_team_members_keep_bot_attach(live):
+def test_participants_expand_private_audience_and_keep_bots_when_adder_leaves(live):
     mid = private(live)
     post(live, f"live-meetings/{mid}/access", {"add": ["ben"]})
     post(live, f"live-meetings/{mid}/join", {}, token="ben-test")
-    for body in ({"add": ["cara"]}, {"visibility": "team"}):
-        post(live, f"live-meetings/{mid}/access", body, token="ben-test", expected=403)
-    post(live, f"live-meetings/{mid}/bots", {"bots": ["ops"]}, token="ben-test", expected=403)
-    assert attach(live, mid, "ops")["added"] == ["ops"]
+    post(live, f"live-meetings/{mid}/access", {"add": ["cara"]}, token="ben-test")
+    post(live, f"live-meetings/{mid}/access", {"visibility": "team"}, token="ben-test", expected=403)
+    assert attach(live, mid, "ops", token="ben-test")["added"] == ["ops"]
     post(live, f"live-meetings/{mid}/access", {"add": ["cara"]}, token="ops-live", expected=403)
     team = post(live, "live-meetings", {"title": "Synthetic team planning"})["id"]
     post(live, f"live-meetings/{team}/join", {}, token="ben-test")
     assert attach(live, team, "ops", token="ben-test")["added"] == ["ops"]
     chunk(live, team, 1, 0, 1000, "Ops, review this synthetic team plan")
-    # Tightening the audience also revokes grants made by implicit team participants.
+    # Tightening the audience keeps the bot's grant and outstanding turn.
     narrowed = post(live, f"live-meetings/{team}/access", {"visibility": "private"})
-    assert narrowed["router"]["turns"][0]["status"] == "skipped"
-    get(live, f"live-meetings/{team}", token="ops-live", expected=404)
-    # A retained pre-correction attachment made by an added human is removed on revocation.
-    with live.app.state.store.transaction() as c:
-        c.execute("INSERT INTO live_meeting_bots(meeting_id,bot,joined_by,joined_at) VALUES(?,?,?,?)",
-                  (mid, "finance", "human:ben", H.now()))
+    assert narrowed["router"]["turns"][0]["status"] == "pending"
+    get(live, f"live-meetings/{team}", token="ops-live")
+    attach(live, mid, "finance", token="ben-test")
     post(live, f"live-meetings/{mid}/access", {"remove": ["ben"]})
     with live.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot='finance'", (mid,)).fetchone()
+        assert c.execute("SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot='finance'", (mid,)).fetchone()
+    get(live, f"live-meetings/{mid}", token="finance-live")
 
 
 def test_team_to_private_retains_explicit_people_not_joiners_or_open_stream(live, monkeypatch):
@@ -698,8 +695,7 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
                 {"message_id": moved["id"], "to_attempt": "synthetic-later-run", "tasks": [], "live_meetings": []})
         cites = H.say(c, "bot:ops", "human:ana", "Synthetic run reply", conversation_id=root_room["id"],
                       refs={"turn_id": aid})
-        c.execute("INSERT OR REPLACE INTO turns(id,bot,started_at,finished_at,trigger,message_id) VALUES(?,?,?,?,?,?)",
-                  (aid, "ops", H.now(), H.now(), "message", root["id"]))
+        c.execute("UPDATE attempts SET settled_at=?,trigger='message',message_id=? WHERE id=?", (H.now(), root["id"], aid))
         # Finance may read Ops' runs, so only the meeting decides what it reads below.
         c.execute("UPDATE bot_config SET team='engineering' WHERE bot='finance'")
         meeting_key = c.execute("SELECT room_key FROM conversations WHERE id=?",
@@ -712,7 +708,7 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
             conn = S.connect(store.settings.db_path, c, auth, who)
             try:
                 return tuple(bool(conn.execute(f"SELECT 1 FROM {table} WHERE id=?", (key,)).fetchall())
-                             for table, key in (("attempts", aid), ("turns", aid), ("messages", cites["id"])))
+                             for table, key in (("attempts", aid), ("messages", cites["id"])))
             finally:
                 conn.close()
 
@@ -720,21 +716,20 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
         with store.read() as c:
             index = ReadIndex(c, who, rooms=True)
             row = H.message(c, cites["id"])
-            run = bool(index.attempt(aid))
-            return (run, run, bool(index.message(row["id"], row["conversation_id"], row["refs"],
-                                                  row["in_reply_to"])))
+            return (bool(index.attempt(aid)), bool(index.message(row["id"], row["conversation_id"], row["refs"],
+                                                                  row["in_reply_to"])))
 
     with store.read() as c:
         read_deps.sweep(c)
         assert c.execute("SELECT 1 FROM read_index WHERE key=?", ("a:" + aid,)).fetchall()
     for token, who in readers.items():
-        assert reads(who) == gate(who) == (True, True, True), token
+        assert reads(who) == gate(who) == (True, True), token
     with store.transaction() as c:
         c.execute("UPDATE conversations SET room_key=? WHERE id=?", (meeting_key, moved_room["id"]))
     for when in ("before a sweep", "after a sweep"):
         for token, who in readers.items():
             member = token in ("ben-test", "ops-live")
-            assert reads(who) == gate(who) == (member,) * 3, (when, token)
+            assert reads(who) == gate(who) == (member,) * 2, (when, token)
         with store.read() as c:
             read_deps.sweep(c)
 

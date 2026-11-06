@@ -50,7 +50,7 @@ it drafted, for the owner to confirm; nothing is published. The preview lists it
 **Watching** section; each bet `proposed`, its wrong-if a text test due on the file's check date (90 days out when it
 has none); and each goal on the bet it came from. With a market not defined yet it adds the
 [market by spend](librarian.md#market-spend): the definition and its segments, each sized segment's size `proposed`
-on its own evidence (a segment with none stays unsized), the company in its `ours` segment, and each player as a company
+on its own evidence (a segment with none stays unsized), the company in each of its `ours` segments, and each player as a company
 on the market graph with its site a watched page. The posts the page found are filed as new market insights, so the
 Librarian's next curate sees them. A part the app refuses (a name the market graph already has, say) is left out and
 named on the setup record (`company_import.strategy.skipped`). A format 0.2 file imports exactly as before.
@@ -487,6 +487,10 @@ Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a
   `connected`, `on_hire` or `not_set`) and the model it suggests among the providers the team has turned on, with the list
   of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never applicants. Each
   applicant has its own page (`#/seat/<id>/<template>`) with a **Hire** box: name, reports to, computer and model.
+  A seat under another open seat lists that seat in **Reports to**, marked *not hired yet*, and a line inside the box,
+  under **Reports to**, names who the bot reports to until it is hired: *Reports to Ana until Head of Marketing is hired.*
+  When the viewer cannot see that person or bot, the line says *the person or bot above* in place of the name. Choosing
+  any other entry in **Reports to** hides the line.
 - **Hire** (`POST /api/v2/seats/{id}/hire`, `{template, model, name?, runner_id?}`) creates the bot through the same checks
   as any new bot: named as given (the seat's title by default), in the seat's place on the chart and group, owned by the
   person who hired, with the template's instructions plus the job description, and **Onboarding**. A bot reports to a
@@ -512,7 +516,7 @@ session on that site grants no access to your Tico. Older installs can select th
   every run's environment.
 - **An agent you already run elsewhere**: a [Hermes](hermes-agents.md) or [OpenClaw](openclaw-agents.md) profile
   becomes a bot with a pairing code, no template; see [Connect an external agent](connect-an-agent.md#an-agent-that-is-a-bot-not-you).
-- **By hand on the Mac**: `scripts/tico -e <env> bot create <slug> --template <template>`. This
+- **By hand on the Mac**: `scripts/tico-computer -e <env> bot create <slug> --template <template>`. This
   materializes from the same templates with the environment's names but without the wizard
   answers, so `knowledge/company.md` says nobody has answered them. Register the bot in
   **Settings → Bots** afterwards.

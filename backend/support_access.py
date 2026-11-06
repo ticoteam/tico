@@ -53,7 +53,7 @@ CREATE INDEX IF NOT EXISTS support_access_log_session ON support_access_log(sess
 TIERS = ("app", "full")
 TOKEN_PREFIX = "tico_sa_"
 LABEL = "Tico support"
-DEFAULT_HOURS, MAX_HOURS = 24, 720
+DEFAULT_HOURS, MAX_HOURS = 72, 8760
 PULL_WAIT = 30               # seconds HQ may hold a pull open before answering with nothing
 DISPATCH_WAIT = 25           # one request run against this app; HQ gives up on it after 30
 MAX_BODY = 2 * 1024 * 1024   # bytes of one answer carried back

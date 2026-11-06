@@ -340,10 +340,13 @@ def completion_result(c, notice):
     """The result a task-done notice reports: the owner's newest comment on the task that has visuals, written before
     the notice and after the task's previous done or declined notice (a reopened task's earlier visuals are not this
     result), or None. A comment is what the task page shows, so the link lands on it."""
-    task_id, owner = notice["refs"]["task"], notice["refs"]["task_completion"]["owner"]
+    task_id = H._task_ref(notice["refs"].get("task"))  # a list names its first task (hubdb._task_ref)
+    if not task_id:
+        return None
+    owner = notice["refs"]["task_completion"]["owner"]
     since = c.execute("SELECT MAX(created_at) FROM messages WHERE id<>? AND created_at<=? AND deleted_at IS NULL "
-                      "AND json_extract(refs,'$.task')=? AND json_extract(refs,'$.task_completion') IS NOT NULL",
-                      (notice["id"], notice["created_at"], task_id)).fetchone()[0] or ""
+                      f"AND {H.task_ref_sql('refs')} AND json_extract(refs,'$.task_completion') IS NOT NULL",
+                      (notice["id"], notice["created_at"], task_id, task_id)).fetchone()[0] or ""
     found = [m for m in H.task_comments(c, task_id) if m["sender_id"] == owner and since < m["created_at"] <= notice["created_at"]
              and visuals.elsewhere("", m)]
     return found[-1] if found else None
@@ -1542,12 +1545,13 @@ class Gateway:
         else:
             # A task-done notice carries no visuals of its own: the line is the result's, linked to that comment.
             result = completion_result(c, message)
-            line = result and visuals.elsewhere(self.settings.public_url, result, message["refs"]["task"])
+            line = result and visuals.elsewhere(self.settings.public_url, result, H._task_ref(message["refs"].get("task")))
         seen = "\n<" + slack_escape(line["url"]) + "|" + line["label"] + ">" if line else ""
         if not post["bot"]:
-            task_id = message["refs"]["task"]
-            url = self.settings.public_url + "/#/task/" + urllib.parse.quote(task_id, safe="")
-            return {"text": slack_escape(str(post["text"])[:POST_CHARS]) + seen + "\n<" + slack_escape(url) + "|Open task>",
+            task_id = H._task_ref(message["refs"].get("task"))
+            link = ("\n<" + slack_escape(self.settings.public_url + "/#/task/" + urllib.parse.quote(task_id, safe=""))
+                    + "|Open task>") if task_id else ""
+            return {"text": slack_escape(str(post["text"])[:POST_CHARS]) + seen + link,
                     "username": None, "icon_emoji": None, "icon_url": None}
         bot = H.bot(c, post["bot"]) or {}
         name = bot.get("display_name") or bot.get("slug") or post["bot"]
@@ -1561,7 +1565,8 @@ class Gateway:
             label = (f"#{task['number']} " if task.get("number") is not None else "") + str(task.get("title") or "").strip()
             url = self.settings.public_url + "/#/task/" + urllib.parse.quote(task["id"], safe="")
             footer = f"(sent from {name} on <{slack_escape(url)}|{slack_escape(label[:80])}>)"
-            if task.get("check_back_at"):
+            from .task_roundup import follow_up
+            if follow_up(c, task):          # only a time a person or bot set, never a snooze's date (task_roundup)
                 footer += "\nFollow up by " + slack_escape(task["check_back_at"])
         else:
             footer = f"(sent from {name})"

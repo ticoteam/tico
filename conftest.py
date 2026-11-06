@@ -8,6 +8,9 @@ os.environ["TICO_REGISTRY_DIR"] = str(Path(__file__).parent / "backend/tests/fix
 os.environ["TICO_UPDATE_CHECK"] = "off"
 # A runner readiness call would otherwise start real containers on whoever's computer runs the suite.
 os.environ["TICO_RUNNER_CONTAINER_PROBE"] = "off"
+# The start jobs a server runs beside itself once it serves (backend/app.py start_jobs) run before it serves instead, so
+# a test that starts an app sees their result at once. backend/tests/test_start_jobs.py checks the served way.
+os.environ["TICO_START_JOBS"] = "inline"
 # Every test's database is thrown away, so no commit waits for the disk (hubdb.synchronous).
 os.environ["TICO_SQLITE_SYNC"] = "off"
 # Bots start `nearby` (backend/reach.py), and most test companies put their bots on no chart, so tests about
@@ -21,6 +24,10 @@ os.environ.update({"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "tes
                    "AWS_CONFIG_FILE": os.devnull, "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
                    "AWS_EC2_METADATA_DISABLED": "true"})
 
+# A test process builds an app per test: every one after the first reuses the route analysis and field validators the
+# first built (backend/route_memo.py). Tests only: a server builds one app, and production never patches FastAPI.
+from backend import route_memo  # noqa: E402
+route_memo.install()
 
 import re  # noqa: E402
 import pytest  # noqa: E402
