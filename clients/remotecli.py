@@ -594,6 +594,8 @@ def run(args, who=None):
                 payload["relations"] = [{"task": args.parent, "kind": "parent"}]
             if getattr(args, "private", None) is not None:
                 payload["private"] = args.private
+            if getattr(args, "readers", None):
+                payload["readers"] = list(args.readers)
             if getattr(args, "from_private", False):
                 payload["from_private"] = True
             for field in ("type", "step", "number", "qa", "change_paths", "qa_not_checkable_live"):
@@ -635,7 +637,7 @@ def run(args, who=None):
                                                    "next_run": bool(args.next_run), "handled": bool(args.handled)})
         if sub == "waive-qa":
             return post(f"tasks/{args.id}/qa-waiver", {"head": args.head, "reason": args.reason})
-        if sub in ("list", "snooze", "unsnooze"):
+        if sub in ("list", "snooze", "unsnooze", "readers"):
             return via_tool(client, args)
         if sub == "ask":
             return post(f"tasks/{args.id}/ask", {"text": args.text})

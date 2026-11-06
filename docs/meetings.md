@@ -270,7 +270,7 @@ format is a `422` that names the problem.
   The web and saved Recorder views refetch on authorized `meeting_items` events, and close on `gone`.
   `GET /api/v2/presence?place=meeting:<id>` lists current people; each window heartbeats its own `session_id`
   every 15 seconds and leaves with `gone: true`. Sessions expire after 30 seconds; Maintenance deletes expired sessions in bounded batches, and deleting
-  a meeting removes its sessions. Participant grants end only when no remaining source meeting permits access; task parties and guests
+  a meeting removes its sessions. Participant grants end only when no remaining source meeting permits access; task parties and readers
   retain their independent task access. Tasks created in Recorder before Save are uploaded as sent items.
   If Save partly succeeds, Create replays any uncertain item upload with its original request and key, then
   uses the server item and adopts its existing task if another editor already sent it. Local edits stay in

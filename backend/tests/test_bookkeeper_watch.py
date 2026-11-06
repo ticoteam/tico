@@ -52,7 +52,7 @@ def test_the_rules_digest_skips_a_week_with_no_new_rule_and_lists_the_new_ones_a
     assert made["items"] == 1 and made["state"] == "opened"
     (task,) = checks(api)
     assert task["title"] == "Rules digest (1)" and task["private"] == 1 and "rul_1" in task["body"]
-    # Private: the company owner reads the digest (the guest), and a teammate who is not the owner does not.
+    # Private: the company owner reads the digest (a reader), and a teammate who is not the owner does not.
     with store.read() as c:
         row = H.task(c, task["id"])
         assert H.task_private_readable(c, BK._owner(c, api.app.state.auth), row)

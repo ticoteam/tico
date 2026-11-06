@@ -2008,13 +2008,13 @@ class Store:
                                    # row_clock and task_privacy name this with INDEXED BY. hubdb.migrate also makes
                                    # it, but runs before cloud migration 57 adds tasks.private on an upgraded database.
                                    ("tasks_private_status",
-                                    "tasks(id, requester_id, owner_id, guest, private, status, waiting_on) WHERE private IS NOT 0"),
+                                    "tasks(id, requester_id, owner_id, readers, private, status, waiting_on) WHERE private IS NOT 0"),
                                    # The task list's and status rows' covering indexes (hubdb.migrate), for the same reason.
-                                   ("tasks_queue_cover", "tasks(rank, created_at, id, owner_id, requester_id, private, guest)"),
+                                   ("tasks_queue_cover", "tasks(rank, created_at, id, owner_id, requester_id, private, readers)"),
                                    ("tasks_owner_status_cover",
-                                    "tasks(owner_id, status, id, requester_id, private, guest, waiting_on)"),
+                                    "tasks(owner_id, status, id, requester_id, private, readers, waiting_on)"),
                                    ("tasks_requester_status_cover",
-                                    "tasks(requester_id, status, id, owner_id, private, guest, waiting_on)"),
+                                    "tasks(requester_id, status, id, owner_id, private, readers, waiting_on)"),
                                    # A person's view of a bot's settings changes (settings_admin.history): the manager
                                    # bots' changes, found by seek and in id order within a timestamp. It needs the `via`
                                    # column, added above.

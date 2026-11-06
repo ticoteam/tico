@@ -248,9 +248,9 @@ def test_status_task_rows_come_back_as_one_row_with_the_statements_own_rows(api,
     store = api.app.state.store
     finish_private(store, "busy-1")                         # finished private tasks: one it owns, one it asked for
     with store.transaction() as c:
-        guest = H.task_create(c, "human:ben", "Guest copy", "Read along.", "bot:busy-2", private=True)
-        c.execute("UPDATE tasks SET guest='human:cara', status='waiting', waiting_on='human:ben' WHERE id=?",
-                  (guest["id"],))
+        shared = H.task_create(c, "human:ben", "Reader copy", "Read along.", "bot:busy-2", private=True)
+        c.execute("UPDATE tasks SET readers=json_array('human:cara'), status='waiting', waiting_on='human:ben' WHERE id=?",
+                  (shared["id"],))
         H.task_create(c, "bot:busy-3", "Asked only", "For a person.", "human:cara", private=False)   # requester only
         done = H.task_create(c, "bot:busy-0", "Done company work", "Old.", "bot:busy-0", private=False)
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (done["id"],))
@@ -273,9 +273,9 @@ def test_status_task_rows_come_back_as_one_row_with_the_statements_own_rows(api,
             assert typed(privacy.status_tasks(c, "=?", (bot,) * 4)) == typed(
                 dict(row) for row in c.execute(privacy.status_tasks_sql("=?"), (bot,) * 4))
     ids = {row["id"] for row in packed}
-    assert guest["id"] in ids and done["id"] not in ids
+    assert shared["id"] in ids and done["id"] not in ids
     assert any(row["private"] and row["status"] not in H.ACTIVE_STATUSES for row in packed)
-    assert any(row["guest"] == "human:cara" and row["waiting_on"] == "human:ben" for row in packed)
+    assert any(H.task_readers(row) == ["human:cara"] and row["waiting_on"] == "human:ben" for row in packed)
     assert any(row["owner_id"] == "human:cara" and row["requester_id"] == "bot:busy-3" for row in packed)
 
 
