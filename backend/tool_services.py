@@ -63,7 +63,7 @@ SERVICES = {
     "render": _s("Render", "https://api.render.com", "/v1/owners", env="RENDER_API_KEY"),
     "vercel": _s("Vercel", "https://api.vercel.com", "/v2/user", env="VERCEL_TOKEN"),
     "gemini": _s("Gemini", "https://generativelanguage.googleapis.com", "", "query:key", "GEMINI_API_KEY", ("google ai",)),
-    "xai": _s("xAI", "https://api.x.ai", "", env="XAI_API_KEY", aliases=("grok",)),
+    "xai": _s("xAI", "https://api.x.ai", "", env="XAI_API_KEY"),
     "resend": _s("Resend", "https://api.resend.com", "", env="RESEND_API_KEY"),
     "attio": _s("Attio", "https://api.attio.com", "", env="ATTIO_API_KEY"),
     "todoist": _s("Todoist", "https://api.todoist.com", "", env="TODOIST_API_TOKEN"),

@@ -85,7 +85,7 @@ If the ticket has a reply-to email, add an email-ready copy to the task. Send re
 
 ## 4. Post the requested reply
 
-`reply` follows this bot's sending policy in Tico (Settings > Bots > the bot > Email sending). With **On their own**,
+`reply` follows this bot's sending policy in Tico (Tools > the mailbox > Limits). With **On their own**,
 post the requested file from this bot's repository:
 
     software/hq-tickets reply TK-XXXXXXXX reports/hq-TK-XXXXXXXX.md

@@ -419,7 +419,7 @@ const HUB_PATHS: &[&str] = &[
     "thread members list", "thread members remove", "thread open-earlier", "thread pin", "thread post",
     "thread react", "thread read", "thread reply", "thread search", "thread show", "thread slack-resume",
     "thread sub", "thread task", "thread unfollow", "thread unpin", "thread unreact", "thread update",
-    "thread upload", "tool", "tool add", "tool check", "tool index", "tool learn", "tool list",
+    "thread upload", "tool", "tool add", "tool call", "tool check", "tool index", "tool learn", "tool list",
     "tool query-search", "tool remove",
     "tool report", "tool show", "tool update", "tools", "trigger", "trigger create", "trigger delete",
     "trigger deliveries", "trigger delivery", "trigger list", "trigger recover", "trigger relay",

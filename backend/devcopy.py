@@ -80,6 +80,8 @@ EMPTY = (
     # credentials
     "credentials", "credential_keys", "credential_grants", "credential_uses", "credential_requests", "credential_imports",
     "directory_credentials", "company_storage", "tico_storage",
+    # API tools: emptied with their keys, so a copy never calls a vendor or shows a real vendor's call log
+    "tools", "tool_checks", "tool_calls",
     # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
     "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "pending_subscription_fallbacks", "subscription_connects",
     # A frozen outbox, its operation receipts and preview proofs can authorize delivery on the source only.

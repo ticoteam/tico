@@ -245,7 +245,7 @@ class TheConnectorIsHeldToo(Base):
     def test_the_owner_handle_holds_nothing(self):
         rc, out, _ = self.run_cli("inbox", "--as", access.OWNER, "--mailbox", BOX, "--json")
         self.assertEqual(rc, 2, out)
-        self.assertIn("Tools > Settings > Email", out)
+        self.assertIn("Tools > the mailbox > Who can use it", out)
 
     def test_a_connector_run_tico_cannot_be_asked_for_writes_nothing_and_still_reads(self):
         """Without the runner's registration (a terminal) or with Tico down, the connector's writes are refused like a

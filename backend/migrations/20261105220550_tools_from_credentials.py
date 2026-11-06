@@ -27,6 +27,8 @@ def up(conn):
     cols = _columns(conn, "credentials")
     created = "created_at" if "created_at" in cols else "created"
     updated = "updated_at" if "updated_at" in cols else "updated"
+    # Older releases' credentials have no created_by (and the oldest no updated_by): '' then, the tool shows no maker.
+    by = {k: k if k in cols else "''" for k in ("updated_by", "created_by")}
     computer = set()
     if "computer_keys" in have:
         computer |= {r[0] for r in conn.execute("SELECT credential_id FROM computer_keys")}
@@ -34,11 +36,11 @@ def up(conn):
         computer |= {r[0] for r in conn.execute(
             "SELECT credential_id FROM credential_grants WHERE subject='computers' OR subject LIKE 'computer:%'")}
     rows = conn.execute(
-        f"SELECT id, name, kind, env, source, updated_by, created_by, {created}, {updated} FROM credentials"
+        f"SELECT id, name, kind, env, source, {by['updated_by']}, {by['created_by']}, {created}, {updated} FROM credentials"
         " WHERE tool_id IS NULL AND ciphertext IS NOT NULL ORDER BY id").fetchall()
     for cid, name, kind, env, source, updated_by, created_by, created_at, updated_at in rows:
         if not tool_services.is_tool_key(kind, env, name, source, True, cid in computer):
             continue
         tid = tool_services.insert_tool(conn, tool_services.match(env=env, name=name), name, "computer",
-                                        created_by or updated_by, created_at or updated_at, updated_at or created_at)
+                                        created_by or updated_by or "", created_at or updated_at, updated_at or created_at)
         conn.execute("UPDATE credentials SET tool_id=?, access_level='read_write' WHERE id=?", (tid, cid))

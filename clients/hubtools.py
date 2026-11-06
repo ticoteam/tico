@@ -4033,9 +4033,8 @@ def email_cancel(api, args):
     return api.post(f"email/sends/{quote(str(args['id']), safe='')}/cancel", {}, key=_key(args))
 
 
-@tool("hub_bot_mail", "Show, or set, whether a bot sends mail on its own (its sending policy is On their own) or asks "
-      "first. Only a person who manages the bot sets it, as themselves; a bot, BotOps included, is refused. The full "
-      "policy is hub_email_policy.",
+@tool("hub_bot_mail", "Show or set whether a bot sends mail on its own or asks first. Only a person who manages the "
+      "bot sets it; bots are refused. Full policy: hub_email_policy.",
       {"slug": _s("The bot"), "outbound_send": {"type": "boolean", "description": "On their own: on or off"}},
       required=("slug",), writes=True)
 def bot_mail(api, args):
@@ -7057,26 +7056,22 @@ def inbound_wait(api,args):
 
 
 # ----------------------------------------------------------------------------- tool index (backend/api_tools.py)
-@tool('hub_tool_index','Tools: every way you and your bots reach the outside world that you may see: API tools, mailboxes, '
-      'Tico addresses and numbers, mailing mail, Slack, GitHub, meeting importers, Listening, outgoing webhooks and tools '
-      'bots declare. Each row: kind, status, how it is reached (way), who can use it and whether it needs you. Follow '
-      'next with cursor.',
+@tool('hub_tool_index','The Tools you may see (API tools, mailboxes, numbers, Slack, GitHub, webhooks...): kind, '
+      'status, way, who can use it, needs you. Page with cursor.',
       {'cursor':_s('The previous page\'s next'),'limit':{'type':'integer','minimum':1,'maximum':500}})
 def tool_index(api,args):
     page = dict(limit=args.get('limit'), cursor=args.get('cursor'))
     return _as_person(api).get('tool-index', **{k: v for k, v in page.items() if v is not None})
 
 
-@tool('hub_tool_check','Check an API tool now: one authenticated GET per stored key. Working, Key rejected (401/403) or '
-      'Check failed, per key. Its id is the api row\'s id without `api:` in hub_tool_index.',
-      {'id':_s('The API tool id')}, required=('id',))
+@tool('hub_tool_check','Check an API tool\'s keys now: Working, Key rejected or Check failed, per key.',
+      {'id':_s('Its hub_tool_index row id, without api:')}, required=('id',))
 def tool_check(api,args):
     return _as_person(api).post('api-tools/'+quote(str(args['id']).removeprefix('api:'),safe='')+'/check',{})
 
 
-@tool('hub_tool_call','Call a proxied API tool from this turn: METHOD and path on the vendor\'s API, through the Tico '
-      'tool proxy, which adds the real key and logs the call. The tool id is the one in TICO_TOOL_<ID>_URL. Returns '
-      '{status, content_type, body}.',
+@tool('hub_tool_call','Call a proxied API tool: METHOD and vendor API path, through the Tico proxy (it adds the key '
+      'and logs the call). tool: the id in TICO_TOOL_<ID>_URL. Returns {status, content_type, body}.',
       {'tool':_s('The API tool id, e.g. close-crm'),
        'method':{'type':'string','enum':['GET','HEAD','OPTIONS','POST','PUT','PATCH','DELETE']},
        'path':_s('The vendor API path, e.g. /api/v1/me/'),

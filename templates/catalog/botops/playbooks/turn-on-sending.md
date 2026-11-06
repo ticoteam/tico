@@ -49,7 +49,7 @@ turn it off again in one message.
 4. **Check and commit.** `hub bot check <slug>`; fix what it reports; commit with one line. Put the decision in
    `memory/decisions.md` (who asked, which rules, which addresses).
 5. **Ask them to set the sending policy themselves.** Only a person who manages the bot can, and never you, even as
-   them: Settings > Bots > <bot> > Email sending, **On their own** or **Ask first**, or
+   them: Tools > the mailbox > Limits, **On their own** or **Ask first**, or
    `hub email policy --bot <slug> --settings '{"mode":"on_their_own"}'` with their own token.
 6. **Report in one message.** Say what you changed, what the rules are (the recipients and forward address(es) by
    name), what each mode means, that Tico's always-ask rules, caps and blocklist still apply, and how to turn it off

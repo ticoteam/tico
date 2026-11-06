@@ -393,7 +393,7 @@ def sending_allowed(env, approval=False):
     if mode == "ask_first":
         raise Refused("sending is Ask first for this bot: request a publish approval for this exact reply "
                       "(`hq-tickets payload`) and pass it with --approval; keep the reply as a draft until then")
-    raise Refused("sending is Never for this bot (Settings > Bots > the bot > Email sending); keep the reply as a draft")
+    raise Refused("sending is Never for this bot (Tools > the mailbox > Limits); keep the reply as a draft")
 
 
 def main(argv, env=None, out=print, opener=None, run=subprocess.run, emit=None, now=None):

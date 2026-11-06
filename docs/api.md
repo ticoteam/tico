@@ -63,7 +63,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Strategy | The team's strategy: a draft the owner edits, numbered published versions, and the bets goals serve. |
 | Inbound | Shared company inbound email and SMS for people and agents; reads never consume messages. |
 | Triggers | Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again. |
-| Connections | Every connection in one list: who reads what it brings in, its bots and where to configure it. |
+| Tools | Every way the company reaches the outside world in one list, and API tools: their keys per level, who can use each, its checks and calls. |
 | Webhook relay | Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py). |
 | Sleep when idle | A server Tico hosts stops after quiet hours and starts again on a webhook, a routine or a sign-in (backend/sleep_idle.py). |
 | Screening | Prompt-injection screening of outside text at the doors it comes in by (backend/screening.py). |
