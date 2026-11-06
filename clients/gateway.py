@@ -1,7 +1,7 @@
 """The Tico AI Gateway, as the app sees it: one base URL and one gateway key, for Decide and for the Tico models.
 
     <base>/decisions          Tico Decide 1.0 (clients/judge.py, the server's decisions)
-    <base>/chat/completions   Tico Cheap / Mid / Power 1.0, OpenAI chat shape with streaming (bots, through pi)
+    <base>/chat/completions   the Tico levels (X-Low to X-High), OpenAI chat shape with streaming (bots, through pi)
     <base>/key                the key's own state this month: active or revoked, and how much of its cap is used
 
 `enroll` and `rotate` are how an install gets and renews its own key (backend/gateway_connection.py `auto_tick`), by the

@@ -2,7 +2,7 @@
 
 Four choices, kept on the providers record (backend/providers.py) as `preset`:
 - `subscriptions-gateway` (recommended): bots' main work runs on the person's Claude and ChatGPT subscriptions; until
-  a bot's runtime is signed in on its computer, its turns run on its department's Medium tier through the Tico AI Gateway, and a
+  a bot's runtime is signed in on its computer, its turns run on the Medium tier through the Tico AI Gateway, and a
   used-up subscription falls back to the Gateway last.
 - `subscriptions`: subscriptions only; the Gateway is never spent for a bot that does not name a Tico model.
 - `gateway`: the Gateway only; a used-up login falls back to the Gateway last as well.
@@ -22,10 +22,10 @@ from . import bot_settings as BS
 RECOMMENDED = "subscriptions-gateway"
 PRESETS = (RECOMMENDED, "subscriptions", "gateway", "own-keys")
 GATEWAY_PRESETS = frozenset((RECOMMENDED, "gateway"))
-# What a bot's main work runs on before its subscription is signed in, and the Gateway fallback: its department's tier at
-# the current version, pinned (backend/gateway_tiers.py `bot_model`), so a new price is a deliberate pick. A bot's
-# `gateway:` block in bot.yaml (`level`, `fast`) changes the tier; the company-wide row names General Medium.
-WAITING_MODEL = "tico-general-medium-1.0"
+# What a bot's main work runs on before its subscription is signed in, and the Gateway fallback: Medium at the current
+# version, pinned (backend/gateway_tiers.py `bot_model`), so a new price is a deliberate pick. A bot's `gateway:` block in
+# bot.yaml (`level`, `fast`) changes the tier; the company-wide row names Medium.
+WAITING_MODEL = "tico-medium-1.0"
 GATEWAY_RUNTIME = "pi"
 # The runtimes a person signs in to with a subscription (Settings > Computers "Sign in").
 SUBSCRIPTION_RUNTIMES = frozenset(("claude", "codex"))
@@ -86,18 +86,15 @@ def waiting(record, ready, config):
 
 def pick(model=None):
     """The Gateway model a waiting or fallback turn runs on: `model` (an id, or a function that finds it only when it
-    is needed), else the company-wide General Medium."""
+    is needed), else the company-wide Medium."""
     model = model() if callable(model) else model
     return model or gateway_tiers.default_model()
 
 
 def model_for_bot(c, settings, bot, config):
-    """The Gateway model for `bot` when nothing named one: the tier of its org-chart department (Medium unless its
-    bot.yaml `gateway:` says otherwise) at the current version. A bot in no department is General."""
-    from .task_manager import Chart
-
-    department = gateway_tiers.department_of(Chart(c, settings).of("bot:" + bot))
-    return gateway_tiers.bot_model(department, (config or {}).get("gateway"))
+    """The Gateway model for `bot` when nothing named one: Medium unless its bot.yaml `gateway:` names a level or Fast,
+    at the current version. `c`, `settings` and `bot` are kept for the callers; the org chart no longer picks it."""
+    return gateway_tiers.bot_model((config or {}).get("gateway"))
 
 
 def on_gateway(config, model=None):

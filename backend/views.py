@@ -3214,10 +3214,7 @@ def install_views(app, store, auth, mutate, task_view):
             return str(config.get("template") or "") in helpers
 
         from .chat_goals import readable_active
-        from . import gateway_tiers
-        from .task_manager import Chart
 
-        departments = Chart(c, store.settings)  # the Gateway department a bot's model picker starts from
         for bot in bots:
             slug = bot["id"]
             level = access.get(slug, auth.FULL)
@@ -3322,7 +3319,6 @@ def install_views(app, store, auth, mutate, task_view):
                     "turns_at_once": start_places.bot_limit(config),
                     "task_flow": task_flow[slug],
                     "team": P.team_of(slug, configs, people),
-                    "gateway_department": gateway_tiers.department_of(departments.of("bot:" + slug)),
                     "org_parent": P.org_parent("bot", slug, people, chart, archived, bare),
                     **strategy_bot.chart_hidden_row(slug, hide_strategy),
                     "report_position": places.get("bot:" + slug),

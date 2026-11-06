@@ -36,7 +36,7 @@ class FakeDecide:
         if self.fail:
             raise self.fail
         return {
-            "model": "tico-decide-1.0",
+            "model": "tico-decide-low",
             "usage": {"input_tokens": 900, "output_tokens": 0},
             "ms": 140,
             "answers": {"topic": {"type": "choice", "choice": self.choice, "confidence": self.confidence}},

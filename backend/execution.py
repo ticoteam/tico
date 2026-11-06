@@ -4947,7 +4947,7 @@ class Execution:
         # refused sign-in here does not move it to the Gateway (backend/model_subscriptions.py).
         subscribed = model_subscriptions.for_claim(c, runner, config)
         here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
-        # Its department's tier (Medium by default) is looked up only when a turn would use it.
+        # Its tier (Medium unless its bot.yaml `gateway:` says otherwise) is looked up only when a turn would use it.
         tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot_id"], followed)
         config = models_preset.with_gateway_fallback(
             record, here, models_preset.main_config(record, here, config, tier), tier

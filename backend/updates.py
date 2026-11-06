@@ -1004,7 +1004,7 @@ def draft_instructions(kind):
 
 
 def writer_for(c, settings, store=None, vault=None):
-    """The model a person's draft is written with: Tico Mid 1.0 on the Tico AI Gateway under the two Gateway models
+    """The model a person's draft is written with: Tico Medium on the Tico AI Gateway under the two Gateway models
     choices (backend/models_preset.py) while it is connected, else the company's own provider, or None (no drafts).
     The gateway key is read from `store` at the call, never held by the writer."""
     if settings.rehearsal:

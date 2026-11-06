@@ -97,7 +97,7 @@
     "ui/app/session.js": 31,
     "ui/app/settings-access.js": 27,
     "ui/app/settings-bot-editor.js": 121,
-    "ui/app/settings-bots.js": 133,
+    "ui/app/settings-bots.js": 130,
     "ui/app/settings-company.js": 1,
     "ui/app/settings-devices.js": 86,
     "ui/app/settings-gateway.js": 1,

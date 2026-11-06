@@ -113,8 +113,12 @@ def _tier(model):
 
 
 def _on_jev(model):
-    """Whether `model` is Jev: TypeSafe's own name, or a Tico model the Tico AI Gateway answers with on Jev (Low and the
-    classifier). Decide Medium and High are not Jev, whatever the Gateway's list of models says."""
+    """Whether `model` is Jev: TypeSafe's own name, or a Tico model the Tico AI Gateway answers with on Jev (Decide Low;
+    a call recorded under an id from before this lineup counts as the id it is now). Decide Medium and High are not
+    Jev, whatever the Gateway's list of models says."""
+    from .gateway_tiers import new_id
+
+    model = new_id(model)
     return str(model or "").lower().startswith("jev") or (model in J.GATEWAY_MODELS and _tier(model) is None)
 
 
