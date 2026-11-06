@@ -37,6 +37,15 @@ class AlertPreferenceRow(TypedDict):
     updated_at: str
 
 
+class RecorderInstallRow(TypedDict):
+    person_id: str
+    install_id: str
+    version: str
+    last_seen_at: str
+    created_at: str
+    updated_at: str
+
+
 class AlertCompanySettingRow(TypedDict):
     id: int
     monthly_cap: int
@@ -137,7 +146,7 @@ class TaskRow(TypedDict):
     step_rank: float | None
     private: int
     waiting_on: str | None
-    guest: str | None
+    readers: str | None
     lane: str
     rank: float | None
     next_run: int
@@ -233,6 +242,7 @@ class AttemptRow(TypedDict):
     gateway_key_id: str | None
     handed_runtime: str | None
     handed_model: str | None
+    acting_person: str | None
     lane: str
     wake: str | None
     model: str | None
@@ -261,6 +271,23 @@ class AttemptRow(TypedDict):
     est_cost_usd: float | None
     billing: str | None
     usage_reason: str | None
+
+
+class CloudMachineDeletionRow(TypedDict):
+    """Deletion intent stays tied to the live HQ machine id across replacements."""
+    machine_id: str
+    bot: str
+    runner_id: str | None
+    reason: str
+    next_try_at: float | None
+    failures: int
+    created_at: float | None
+
+
+class CloudMachineEnrollmentFailureRow(TypedDict):
+    """Each live HQ machine id spends the enrollment retry budget at most once."""
+    machine_id: str
+    bot: str
 
 
 class RunnerRow(TypedDict):
@@ -695,4 +722,114 @@ class MaintenanceRequestRow(TypedDict):
     actor: str
     request_key: str
     maintenance_run_id: str
+    created_at: str
+
+
+class EmailSendingPolicyRow(TypedDict):
+    scope: str
+    settings: str
+    updated_at: str
+    updated_by: str
+
+
+class EmailSendRow(TypedDict):
+    id: str
+    mailbox: str
+    actor: str
+    bot: str
+    via: str
+    automation_action_id: str | None
+    content_sha256: str
+    idempotency_key: str
+    recipients: str
+    attachments: str
+    subject: str
+    body_sha256: str
+    raw: str
+    draft_id: str
+    thread_id: str
+    reply_to_id: str
+    approval_id: str
+    classification: str
+    decision: str
+    state: str
+    created_at: str
+    send_after: str
+    claimed_at: str | None
+    provider_attempted_at: str | None
+    runner_id: str | None
+    finished_at: str | None
+    provider_message_id: str | None
+    detail: str
+    operation_key: str
+    lease_id: str
+    checked_at: str
+    calendar_action_id: str | None
+
+
+class EmailSuppressedRecipientRow(TypedDict):
+    mailbox: str
+    address: str
+    reason: str
+    created_at: str
+
+
+class EmailLegacyAutomationRow(TypedDict):
+    automation_id: str
+    owner_id: str
+    version: int
+
+
+class EmailSendPreviewRow(TypedDict):
+    send_id: str
+    actor: str
+    content_sha256: str
+    shown_at: str
+
+
+class EmailSendOperationRow(TypedDict):
+    actor: str
+    operation_key: str
+    send_id: str
+
+
+class ToolRow(TypedDict):
+    """An API tool (backend/api_tools.py): a service bots call with a key, through the proxy or on computers."""
+    id: str
+    name: str
+    service: str
+    base_url: str
+    auth_scheme: str
+    check_path: str
+    delivery: str
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class ToolCheckRow(TypedDict):
+    """One key's check of its tool: the status the Tools page shows until the next."""
+    id: str
+    tool_id: str
+    credential_id: str | None
+    ok: int
+    status_code: int | None
+    detail: str
+    checked_at: str
+
+
+class ToolCallRow(TypedDict):
+    """One proxied call (track B's proxy writes it): the tool's activity, never the key or the body."""
+    id: str
+    tool_id: str
+    credential_id: str | None
+    actor: str
+    bot: str
+    access_level: str
+    method: str
+    path: str
+    status_code: int | None
+    result: str
+    detail: str
+    duration_ms: int | None
     created_at: str

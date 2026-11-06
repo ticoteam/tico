@@ -248,9 +248,9 @@ def test_status_task_rows_come_back_as_one_row_with_the_statements_own_rows(api,
     store = api.app.state.store
     finish_private(store, "busy-1")                         # finished private tasks: one it owns, one it asked for
     with store.transaction() as c:
-        guest = H.task_create(c, "human:ben", "Guest copy", "Read along.", "bot:busy-2", private=True)
-        c.execute("UPDATE tasks SET guest='human:cara', status='waiting', waiting_on='human:ben' WHERE id=?",
-                  (guest["id"],))
+        shared = H.task_create(c, "human:ben", "Reader copy", "Read along.", "bot:busy-2", private=True)
+        c.execute("UPDATE tasks SET readers=json_array('human:cara'), status='waiting', waiting_on='human:ben' WHERE id=?",
+                  (shared["id"],))
         H.task_create(c, "bot:busy-3", "Asked only", "For a person.", "human:cara", private=False)   # requester only
         done = H.task_create(c, "bot:busy-0", "Done company work", "Old.", "bot:busy-0", private=False)
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (done["id"],))
@@ -273,9 +273,9 @@ def test_status_task_rows_come_back_as_one_row_with_the_statements_own_rows(api,
             assert typed(privacy.status_tasks(c, "=?", (bot,) * 4)) == typed(
                 dict(row) for row in c.execute(privacy.status_tasks_sql("=?"), (bot,) * 4))
     ids = {row["id"] for row in packed}
-    assert guest["id"] in ids and done["id"] not in ids
+    assert shared["id"] in ids and done["id"] not in ids
     assert any(row["private"] and row["status"] not in H.ACTIVE_STATUSES for row in packed)
-    assert any(row["guest"] == "human:cara" and row["waiting_on"] == "human:ben" for row in packed)
+    assert any(H.task_readers(row) == ["human:cara"] and row["waiting_on"] == "human:ben" for row in packed)
     assert any(row["owner_id"] == "human:cara" and row["requester_id"] == "bot:busy-3" for row in packed)
 
 
@@ -351,3 +351,36 @@ def test_stopped_runs_of_each_uncertain_bot_cost_a_bounded_number_of_statements(
     six = page(api, monkeypatch, "/api/status")
     assert len(six[0]["health_issues"]) >= 6
     assert (six[1] - two) / 4 <= 8
+
+
+def test_status_page_reads_a_fixed_number_of_statements_for_bots_whose_plan_sign_in_lapsed(api, monkeypatch):
+    # Post-release p95 (task 3d54dc12): a bot the computer reads as ready only because a plan signed its runtime in,
+    # with the plan now lapsed, read its declaration and its computer's row again for every such bot on each poll
+    # (views._lapsed_plan). Forty of them cost two statements each more than four did.
+    from backend.tests.test_api import runner
+    from backend.tests.test_threads_list_queries import add_bots
+    r = runner(api)
+    assigned = set()
+
+    def lapse(slugs):
+        for slug in slugs:
+            if slug not in assigned:
+                assign(api, r, slug)
+                assigned.add(slug)
+        with api.app.state.store.read() as c:
+            ids = {slug: (H.resolve_bot(c, slug) or {}).get("id", slug) for slug in slugs}
+        bots = {ids[slug]: {"ready": True, "runtime": "claude", "sign_in": "ready", "problems": [],
+                            "repository_present": True, "configuration_valid": True} for slug in slugs}
+        ready_doc = {"schema_version": 1, "bots": bots, "runtimes": {"claude": {"installed": True, "authenticated": "missing"}}}
+        post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": ready_doc}, token=r["token"])
+        return ids
+
+    add_bots(api, 0, 4)
+    lapse([f"desk-{n}" for n in range(4)])
+    small_body, small = page(api, monkeypatch, "/api/status")
+    add_bots(api, 4, 36)
+    lapse([f"desk-{n}" for n in range(40)])
+    big_body, big = page(api, monkeypatch, "/api/status")
+    assert big <= small + 5, (small, big)
+    assert any(issue.get("bot") == "desk-39" for issue in big_body["health_issues"])
+    assert len(big_body["health_issues"]) > len(small_body["health_issues"])

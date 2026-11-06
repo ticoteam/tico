@@ -17,6 +17,10 @@ software: a web frontend your team builds, a script, another service. This page 
   connection is safe. The same key with a different body is `409 idempotency_conflict`.
   Message receipts saved before an upgrade still accept the same request when the earlier server hashed its
   resolved Home. The retry uses the saved room and recipient, even if routing has since changed.
+- **Bot asks to people:** a task, handoff, wait or question that fails the person’s asking criteria returns
+  `422 ask_refused`, with the reason and fix in `error.detail`. Nothing is created or changed, and it counts toward
+  no quarantine or org-rule hold. A progress note is refused with instructions to post an update. Chores use the
+  main ask budget. Merged repeats and fail-open behavior are unchanged.
 - **Errors:** `{"error": {"code", "detail", "retryable"}}`. See [errors](custom-frontend.md#errors).
 
 ## What the spec covers
@@ -59,7 +63,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Strategy | The team's strategy: a draft the owner edits, numbered published versions, and the bets goals serve. |
 | Inbound | Shared company inbound email and SMS for people and agents; reads never consume messages. |
 | Triggers | Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again. |
-| Connections | Every connection in one list: who reads what it brings in, its bots and where to configure it. |
+| Tools | Every way the company reaches the outside world in one list, and API tools: their keys per level, who can use each, its checks and calls. |
 | Webhook relay | Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py). |
 | Sleep when idle | A server Tico hosts stops after quiet hours and starts again on a webhook, a routine or a sign-in (backend/sleep_idle.py). |
 | Screening | Prompt-injection screening of outside text at the doors it comes in by (backend/screening.py). |
@@ -73,12 +77,22 @@ The operation groups below are generated from the committed spec's tags. After r
 | Feedback | A person's 👍 or 👎 on a message, task or approval a bot made, with an optional reason: a 👎 can tell the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves out feedback on what the caller cannot read. |
 | Company page | The public page for the company's updates: its audiences, the editions each one reads, the stats the page shows, the readers who sign in to it, and the logo ([guide](company-page.md)). |
 | Mailboxes | Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows). |
+| Email | Live Gmail organizing; Gmail holds the mail and Tico records only action details and ids. |
 | Letters out | Physical letters sent through the Gateway; approvals bind the saved proof and price. |
 | Physical mail | Company letters, explicit Read grants and legal mail routing ([guide](physical-mail.md)). |
+| Email sending | One sending policy and durable undo queue for bots, automations and people acting through Tico. |
 | Alerts | Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert. |
 <!-- api-tags:end -->
 
 Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).
+
+`GET /api/v2/needs-you` returns `plate_count` in every response: count-only (`count=1`), unchanged,
+selected ids, full list and pages. It counts unique task, question, waiting, approval, ask, stale and
+memory_tidy items on the signed-in person across all boards, excluding tasks in `folded_task_ids`.
+Thread and update attention are excluded. `count` retains the broader attention total used by the
+desktop poll. Both counts describe the whole list, including unread pages. Live `needs` events also
+carry `plate_count`; a client subtracts any plate items it still holds that were just answered locally.
+Use `ids=` to mend changed rows after a live event, and `limit`/`cursor` to load more rows as needed.
 
 ## Stable and internal
 
@@ -313,11 +327,11 @@ Who may make and send is in [Permissions](permissions.md#outgoing-webhooks).
 
 ## Company inbound email and SMS
 
-**Settings > Inboxes** lists the company's Tico addresses and numbers with every other inbox (`#/settings/inboxes`;
+**Tools** lists the company's Tico addresses and numbers with every other inbox (`#/tools?show=mail`;
 the old `#/settings/inbound`, `#/settings/company-inbox` and `#/settings/email-phone` links open it). Each one's page
-(`#/settings/inboxes/tico/<id>`, `#/settings/inboxes/number/<id>`) shows who reads it, its automations and its recent
+(`#/tools/number/<id>`) shows who reads it, its automations and its recent
 messages; a released address stays listed as Not in use with the messages it received. **Messages**
-(`#/settings/inboxes/messages`) reads every inbox at once, or the ones picked, with channel, sender, search, code and spam
+(`#/tools/messages`) reads every inbox at once, or the ones picked, with channel, sender, search, code and spam
 filters and older pages. All current people, native bot runs and registered external agents can read them. Runner/service credentials
 and support sessions cannot. No read hides a message from another agent. Your connected Google inbox is separate.
 
@@ -333,7 +347,7 @@ Each inbox has an audience. `company`, the default, is everyone above. An owner 
 under it read it, with the owner and admins. Outside its audience an inbox is not there on any read: the inbox list,
 `messages` (search included), `cursor`, `wait`, a message and its code (`404`). Each change leaves an `audit_log` row
 (`inbound_inbox:<id>`) and an `inbound.inbox_audience` event. CLI: `hub inbound audience <id> company|team --group G`;
-MCP: `hub_inbound_audience`. An inbox's page in Settings > Inboxes shows who reads it, and an admin changes it there.
+MCP: `hub_inbound_audience`. An inbox's page in Tools shows who reads it, and an admin changes it there.
 Phone cancellation keeps receiving until the paid period ends; email retirement is permanent.
 
 Phone provisioning requires TICO approval until billing is available. Owners and admins can

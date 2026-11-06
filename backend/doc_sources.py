@@ -568,17 +568,32 @@ class Sources:
         H.event(c, H.KEEPER, 'docs.source_refreshed', job['source_id'], {'unchanged': unchanged})
 
     def tick(self):
+        """One pass of Document sync (Settings > Routines, Automations): one run per pass; an idle pass folds."""
+        from . import system_routines as SR
+        run = SR.Run('doc_sync').did('Nothing to refresh', quiet=True)
+        try:
+            self.pass_once(run)
+        except Exception as exc:
+            run.error = SR.failure_words(exc)
+            raise
+        finally:
+            SR.write(self.store, run)
+
+    def pass_once(self, run):
         job = self.claim()
         if not job:
             self.cleanup()
             return
         try:
             self.refresh(job)
+            run.did('1 linked document refreshed')
         except Canceled:
+            run.did('Refresh stopped: the link changed')
             return
         except Exception as exc:
             failure = exc if isinstance(exc, FetchFailure) else FetchFailure()
             log.info('Doc source refresh: %s', failure.code)
+            run.error = 'Failed: ' + ('access is needed' if failure.hide else 'the document could not be read')
             with self.store.transaction() as c:
                 try:
                     self.guard(c, job)

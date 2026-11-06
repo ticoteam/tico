@@ -135,8 +135,8 @@
       "description": "Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again."
     },
     {
-      "name": "Connections",
-      "description": "Every connection in one list: who reads what it brings in, its bots and where to configure it."
+      "name": "Tools",
+      "description": "Every way the company reaches the outside world in one list, and API tools: their keys per level, who can use each, its checks and calls."
     },
     {
       "name": "Webhook relay",
@@ -191,12 +191,20 @@
       "description": "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
     },
     {
+      "name": "Email",
+      "description": "Live Gmail organizing; Gmail holds the mail and Tico records only action details and ids."
+    },
+    {
       "name": "Letters out",
       "description": "Physical letters sent through the Gateway; approvals bind the saved proof and price."
     },
     {
       "name": "Physical mail",
       "description": "Company letters, explicit Read grants and legal mail routing (docs/physical-mail.md)."
+    },
+    {
+      "name": "Email sending",
+      "description": "One sending policy and durable undo queue for bots, automations and people acting through Tico."
     },
     {
       "name": "Alerts",
@@ -617,6 +625,144 @@
             },
             "description": "1-200 characters. Reusing a key with the same body replays the first answer."
           }
+        ]
+      }
+    },
+    "/api/v2/api-tools/{tool_id}": {
+      "get": {
+        "summary": "One API tool: its keys (never a value), who can use it at which level, its last checks and calls",
+        "operationId": "getApiTool",
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tool Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiTool"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tools"
+        ]
+      }
+    },
+    "/api/v2/api-tools/{tool_id}/activity": {
+      "get": {
+        "summary": "Calls through the proxy and uses of its keys, newest first. Follow next with cursor",
+        "operationId": "listApiToolActivity",
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tool Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "default": "",
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "result",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 20,
+              "default": "",
+              "title": "Result"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiToolActivity"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tools"
         ]
       }
     },
@@ -4871,6 +5017,128 @@
         ]
       }
     },
+    "/api/v2/bots/{bot}/email-sending-policy": {
+      "get": {
+        "summary": "Bot policy, optionally resolved for an inbox",
+        "operationId": "getBotEmailSendingPolicy",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          },
+          {
+            "name": "mailbox",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Mailbox"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendingPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      },
+      "put": {
+        "summary": "Set bot override (a person who manages it)",
+        "operationId": "setBotEmailSendingPolicy",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendingPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
     "/api/v2/bots/{bot}/files": {
       "get": {
         "summary": "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page",
@@ -6171,7 +6439,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ToolUpdate"
+                "$ref": "#/components/schemas/backend__models__ToolUpdate"
               }
             }
           }
@@ -7700,6 +7968,148 @@
         ]
       }
     },
+    "/api/v2/cloud-machines/support": {
+      "get": {
+        "summary": "Read Tico support's cloud-machine switch and helper states from HQ; unavailable off Tico Cloud",
+        "operationId": "getCloudMachineSupport",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudSupportView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Computers"
+        ],
+        "description": "HQ is the source of the switch and helper states; no local copy is kept. GET returns available false, on null and an empty machines list off Tico Cloud or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. PUT accepts a boolean on, needs the owner and refuses support sessions. Core assigns an increasing revision and keeps it for retries of the same Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean on in the error. After an uncertain PUT, read HQ again before showing a saved state."
+      },
+      "put": {
+        "summary": "Let Tico support reach the company's cloud machines, or stop it; owner only",
+        "operationId": "setCloudMachineSupport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudSupportChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudSupportView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Computers"
+        ],
+        "description": "HQ is the source of the switch and helper states; no local copy is kept. GET returns available false, on null and an empty machines list off Tico Cloud or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. PUT accepts a boolean on, needs the owner and refuses support sessions. Core assigns an increasing revision and keeps it for retries of the same Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean on in the error. After an uncertain PUT, read HQ again before showing a saved state."
+      }
+    },
     "/api/v2/company": {
       "get": {
         "summary": "The team's Vision and Description (the Company section at the top of Goals), and whether the caller may edit them. The Vision is the strategy's: the draft's for the owner, the published one for everyone else",
@@ -8891,72 +9301,6 @@
         ]
       }
     },
-    "/api/v2/connections": {
-      "get": {
-        "summary": "Slack, GitHub, mail bots, Tico addresses and numbers, meeting importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the company's they may read. Paged with cursor",
-        "operationId": "listConnections",
-        "parameters": [
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "default": 50,
-              "title": "Limit"
-            }
-          },
-          {
-            "name": "cursor",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 400,
-              "default": "",
-              "title": "Cursor"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ConnectionList"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Connections"
-        ]
-      }
-    },
     "/api/v2/context/document": {
       "get": {
         "summary": "One document",
@@ -9515,7 +9859,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11479,6 +11823,733 @@
         ]
       }
     },
+    "/api/v2/email/inboxes/{mailbox}/sending-policy": {
+      "get": {
+        "summary": "Inbox policy with effective rule and inheritance",
+        "operationId": "getInboxSendingPolicy",
+        "parameters": [
+          {
+            "name": "mailbox",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mailbox"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendingPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      },
+      "put": {
+        "summary": "Set inbox policy (its person or a shared inbox admin)",
+        "operationId": "setInboxSendingPolicy",
+        "parameters": [
+          {
+            "name": "mailbox",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mailbox"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendingPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/inboxes/{mailbox}/suppressed-recipients": {
+      "get": {
+        "summary": "Inbox admin's bounce suppression list",
+        "operationId": "listEmailSuppressions",
+        "parameters": [
+          {
+            "name": "mailbox",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mailbox"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSuppressionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/inboxes/{mailbox}/suppressed-recipients/{address}": {
+      "delete": {
+        "summary": "Restore sending to a bounced address (inbox admin)",
+        "operationId": "removeEmailSuppression",
+        "parameters": [
+          {
+            "name": "mailbox",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mailbox"
+            }
+          },
+          {
+            "name": "address",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Address"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/sending-policy": {
+      "get": {
+        "summary": "Company sending policy",
+        "operationId": "getEmailSendingPolicy",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendingPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      },
+      "put": {
+        "summary": "Set company sending policy (an admin, acting as themselves)",
+        "operationId": "setEmailSendingPolicy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendingPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/sends": {
+      "post": {
+        "summary": "Freeze email content for approval and the undo window; identical content and recipients deduplicate",
+        "operationId": "queueEmail",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Enqueue"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      },
+      "get": {
+        "summary": "Pending sends or the inbox send audit, paged and byte capped",
+        "operationId": "listEmailSends",
+        "parameters": [
+          {
+            "name": "mailbox",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mailbox"
+            }
+          },
+          {
+            "name": "pending",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Pending"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/sends/{sid}": {
+      "get": {
+        "summary": "Frozen preview and audit (inbox readers, the sender or an authorized approver)",
+        "operationId": "getEmailSend",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/sends/{sid}/approve": {
+      "post": {
+        "summary": "Attach an existing content-bound or in-chat approval",
+        "operationId": "attachEmailApproval",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendApproval"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/sends/{sid}/attachments/{part}": {
+      "get": {
+        "summary": "Download the exact frozen attachment (the send's readers or approvers)",
+        "operationId": "getFrozenEmailAttachment",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          },
+          {
+            "name": "part",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Part"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
+    "/api/v2/email/sends/{sid}/cancel": {
+      "post": {
+        "summary": "Cancel before dispatch; delivered mail cannot be recalled",
+        "operationId": "cancelEmailSend",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email sending"
+        ]
+      }
+    },
     "/api/v2/estimates": {
       "get": {
         "summary": "Estimates the caller sees (receivables), newest first, by status, customer and a search over number, memo and customer name, with a cursor",
@@ -11909,7 +12980,7 @@
         ],
         "responses": {
           "200": {
-            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. A `bulk: true` event without `id` means read task lists in full.\n- `meeting_items`: `meeting_id`, `kind`; refetch items. `presence`: `place`; refetch presence. Explicit meeting/task subscriptions receive one `gone: true` on access loss, rechecked within 60 seconds.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as `GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged (keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\n- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
+            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. A `bulk: true` event without `id` means read task lists in full.\n- `meeting_items`: `meeting_id`, `kind`; refetch items. `presence`: `place`; refetch presence. Explicit meeting/task subscriptions receive one `gone: true` on access loss, rechecked within 60 seconds.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as `GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n- `needs`: the viewer's own Needs-you `count`, `plate_count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `plate_count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged (keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\n- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
             "x-task-event-schema": {
               "$ref": "#/components/schemas/TaskEvent"
             },
@@ -23476,6 +24547,78 @@
         ]
       }
     },
+    "/api/v2/mail/messages/organize": {
+      "post": {
+        "summary": "Organize up to 500 messages live in Whole Workspace Gmail; requires organize access; never deletes",
+        "operationId": "organizeMailMessages",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailOrganizeBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailOrganizeResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/mailboxes": {
       "get": {
         "summary": "An admin's every mailbox (person, status, routines); for everyone their own mailbox and the ones shared with them",
@@ -25192,6 +26335,47 @@
         ]
       }
     },
+    "/api/v2/meetings/recorder": {
+      "get": {
+        "summary": "Your most recently used Tico Recorder, the newest release's version and the download",
+        "operationId": "getMyRecorder",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyRecorder"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Meetings"
+        ]
+      }
+    },
     "/api/v2/meetings/review": {
       "post": {
         "summary": "Share or dismiss your Pending meetings",
@@ -25479,7 +26663,7 @@
     },
     "/api/v2/meetings/transcript": {
       "get": {
-        "summary": "A meeting's transcript",
+        "summary": "A meeting's transcript; includes saved notes at offset zero, or notes only with notes=true",
         "operationId": "getMeetingTranscript",
         "parameters": [
           {
@@ -25514,6 +26698,16 @@
               "minimum": 1,
               "default": 20000,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "notes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Notes"
             }
           }
         ],
@@ -26447,7 +27641,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
@@ -27319,6 +28513,66 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/TakeRecommendation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/needs-you/seen": {
+      "post": {
+        "summary": "The caller's Needs you shows these questions to them (asks=<message ids>, at most 200): each open one is delivered",
+        "operationId": "needsYouSeen",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AsksSeen"
               }
             }
           },
@@ -36985,7 +38239,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
@@ -37216,7 +38470,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
@@ -37529,7 +38783,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
@@ -37832,6 +39086,58 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CommentResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      }
+    },
+    "/api/v2/tasks/{tid}/context": {
+      "get": {
+        "summary": "Up to 10 pages and 10 meetings, newest first, filtered by your current read access; metadata only",
+        "operationId": "getTaskContext",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskContext"
                 }
               }
             }
@@ -38318,6 +39624,127 @@
                 ],
                 "title": "TaskFile",
                 "type": "object"
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      }
+    },
+    "/api/v2/tasks/{tid}/make-page": {
+      "post": {
+        "summary": "Ask the caller's Assistant to make and pin a task page with their normal rights; 409 at 60 pins",
+        "operationId": "makeTaskPage",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MakePage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantSent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      },
+      "get": {
+        "summary": "The caller's latest Make page request: making, made, failed or update_required",
+        "operationId": "getTaskMakePage",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskMakePage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
               }
             }
           }
@@ -38977,6 +40404,75 @@
         },
         "tags": [
           "Tasks"
+        ]
+      }
+    },
+    "/api/v2/tasks/{tid}/seen": {
+      "post": {
+        "summary": "The caller opened the task: its open questions to them are read",
+        "operationId": "taskSeen",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
         ]
       }
     },
@@ -41088,6 +42584,72 @@
         },
         "tags": [
           "Threads"
+        ]
+      }
+    },
+    "/api/v2/tool-index": {
+      "get": {
+        "summary": "API tools, mailboxes, Tico addresses and numbers, mailing mail, Slack, GitHub, meeting importers, Listening, outgoing webhooks and declared tools the caller may see, with status and who can use each. Follow next with cursor",
+        "operationId": "listToolIndex",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 500,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 20,
+              "default": "",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolIndex"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tools"
         ]
       }
     },
@@ -45450,6 +47012,262 @@
         ],
         "title": "Answer"
       },
+      "ApiTool": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string"
+              },
+              "base_url": {
+                "type": "string"
+              },
+              "auth_scheme": {
+                "type": "string"
+              },
+              "check_path": {
+                "type": "string"
+              },
+              "delivery": {
+                "enum": [
+                  "proxy",
+                  "computer"
+                ]
+              }
+            },
+            "required": [
+              "auth_scheme",
+              "base_url",
+              "check_path",
+              "delivery",
+              "id",
+              "name",
+              "service"
+            ],
+            "additionalProperties": true
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "preview": {
+                  "type": "string"
+                },
+                "access_level": {
+                  "enum": [
+                    "read",
+                    "read_write"
+                  ]
+                },
+                "expires_on": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "last_used_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "access_level",
+                "id",
+                "name",
+                "preview"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "access": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "subject": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "bot",
+                    "person"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "initials": {
+                  "type": "string"
+                },
+                "level": {
+                  "enum": [
+                    "read",
+                    "read_write"
+                  ]
+                },
+                "last_used_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "initials",
+                "kind",
+                "last_used_at",
+                "level",
+                "name",
+                "subject"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                },
+                "status_code": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "detail": {
+                  "type": "string"
+                },
+                "checked_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "checked_at",
+                "detail",
+                "ok",
+                "status_code"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "recent": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "status": {
+            "type": "object",
+            "properties": {
+              "tone": {
+                "enum": [
+                  "ok",
+                  "wait",
+                  "fail",
+                  "run",
+                  "idle"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "tone"
+            ],
+            "additionalProperties": true
+          },
+          "can_manage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "access",
+          "can_manage",
+          "checks",
+          "keys",
+          "recent",
+          "status",
+          "tool"
+        ],
+        "additionalProperties": true
+      },
+      "ApiToolActivity": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "call",
+                    "use"
+                  ]
+                },
+                "actor": {
+                  "type": "string"
+                },
+                "result": {
+                  "enum": [
+                    "sent",
+                    "refused",
+                    "failed",
+                    "use"
+                  ]
+                },
+                "at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "actor",
+                "at",
+                "id",
+                "kind",
+                "result"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "next",
+          "rows"
+        ],
+        "additionalProperties": true
+      },
       "ApprovalCreate": {
         "properties": {
           "kind": {
@@ -45550,6 +47368,27 @@
           "kind"
         ],
         "additionalProperties": true
+      },
+      "AsksSeen": {
+        "properties": {
+          "asks": {
+            "items": {
+              "type": "string",
+              "maxLength": 100,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Asks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "asks"
+        ],
+        "title": "AsksSeen",
+        "description": "Questions to the person that their Needs you now shows (POST /api/v2/needs-you/seen)."
       },
       "Assistant": {
         "type": "object",
@@ -49826,6 +51665,100 @@
         "type": "object",
         "title": "CloudAgentRequest"
       },
+      "CloudSupportChange": {
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "title": "On"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "on"
+        ],
+        "title": "CloudSupportChange"
+      },
+      "CloudSupportMachine": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "key": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Key"
+          },
+          "helper": {
+            "type": "string",
+            "enum": [
+              "on",
+              "off",
+              "offline",
+              "none"
+            ],
+            "title": "Helper"
+          },
+          "seen": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seen"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "helper",
+          "seen"
+        ],
+        "title": "CloudSupportMachine"
+      },
+      "CloudSupportView": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "on": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On"
+          },
+          "machines": {
+            "items": {
+              "$ref": "#/components/schemas/CloudSupportMachine"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "title": "Machines"
+          }
+        },
+        "type": "object",
+        "required": [
+          "available",
+          "on",
+          "machines"
+        ],
+        "title": "CloudSupportView"
+      },
       "CommentDelivery": {
         "type": "object",
         "properties": {
@@ -50248,113 +52181,6 @@
           "code"
         ],
         "title": "Confirmation"
-      },
-      "Connection": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "enum": [
-              "slack",
-              "github",
-              "mailbox",
-              "inbox",
-              "meetings",
-              "trigger",
-              "webhook",
-              "postal",
-              "listening"
-            ]
-          },
-          "name": {
-            "type": "string"
-          },
-          "detail": {
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "on",
-              "off",
-              "waiting",
-              "error",
-              "paused"
-            ]
-          },
-          "scope": {
-            "enum": [
-              "company",
-              "team",
-              "person"
-            ]
-          },
-          "readers": {
-            "type": "string"
-          },
-          "bots": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "slug": {
-                  "type": "string"
-                },
-                "name": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "name",
-                "slug"
-              ],
-              "additionalProperties": true
-            }
-          },
-          "more_bots": {
-            "type": "integer"
-          },
-          "configure": {
-            "type": "string"
-          },
-          "can_configure": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "bots",
-          "configure",
-          "id",
-          "kind",
-          "name",
-          "readers",
-          "scope",
-          "status"
-        ],
-        "additionalProperties": true
-      },
-      "ConnectionList": {
-        "type": "object",
-        "properties": {
-          "connections": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Connection"
-            }
-          },
-          "next": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "connections",
-          "next"
-        ],
-        "additionalProperties": true
       },
       "Contract": {
         "properties": {},
@@ -51374,11 +53200,292 @@
         ],
         "title": "EditionBody"
       },
+      "EmailSend": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "mailbox": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "bot": {
+            "type": "string"
+          },
+          "via": {
+            "type": "string"
+          },
+          "automation_action_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "calendar_action_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content_sha256": {
+            "type": "string"
+          },
+          "body_sha256": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "approval_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "send_after": {
+            "type": "string"
+          },
+          "claimed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider_message_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "recipients": {
+            "type": "array",
+            "items": "s"
+          },
+          "attachments": {
+            "type": "array",
+            "items": "o"
+          },
+          "decision": {
+            "type": "object"
+          },
+          "classification": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "actor",
+          "approval_id",
+          "attachments",
+          "automation_action_id",
+          "body_sha256",
+          "bot",
+          "calendar_action_id",
+          "claimed_at",
+          "classification",
+          "content_sha256",
+          "created_at",
+          "decision",
+          "detail",
+          "finished_at",
+          "id",
+          "mailbox",
+          "provider_message_id",
+          "recipients",
+          "send_after",
+          "state",
+          "subject",
+          "via"
+        ],
+        "additionalProperties": true
+      },
+      "EmailSendDetail": {
+        "type": "object",
+        "properties": {
+          "send": {
+            "$ref": "#/components/schemas/EmailSend"
+          },
+          "body": {
+            "type": "string"
+          },
+          "bodies": {
+            "type": "array",
+            "items": "o"
+          },
+          "preview_complete": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bodies",
+          "body",
+          "preview_complete",
+          "send"
+        ],
+        "additionalProperties": true
+      },
+      "EmailSendList": {
+        "type": "object",
+        "properties": {
+          "sends": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmailSend"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "next_cursor",
+          "sends"
+        ],
+        "additionalProperties": true
+      },
+      "EmailSendResult": {
+        "type": "object",
+        "properties": {
+          "send": {
+            "$ref": "#/components/schemas/EmailSend"
+          }
+        },
+        "required": [
+          "send"
+        ],
+        "additionalProperties": true
+      },
+      "EmailSendingPolicy": {
+        "type": "object",
+        "properties": {
+          "company": {
+            "type": "object"
+          },
+          "inbox": {
+            "type": "object"
+          },
+          "bot": {
+            "type": "object"
+          },
+          "effective": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "bot",
+          "company",
+          "effective",
+          "inbox"
+        ],
+        "additionalProperties": true
+      },
+      "EmailSuppressionList": {
+        "type": "object",
+        "properties": {
+          "recipients": {
+            "type": "array",
+            "items": "o"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "next_cursor",
+          "recipients"
+        ],
+        "additionalProperties": true
+      },
       "Empty": {
         "properties": {},
         "additionalProperties": false,
         "type": "object",
         "title": "Empty"
+      },
+      "Enqueue": {
+        "properties": {
+          "mailbox": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Mailbox"
+          },
+          "raw": {
+            "type": "string",
+            "maxLength": 33554440,
+            "minLength": 1,
+            "title": "Raw"
+          },
+          "draft_id": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Draft Id",
+            "default": ""
+          },
+          "thread_id": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Thread Id",
+            "default": ""
+          },
+          "reply_to_id": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Reply To Id",
+            "default": ""
+          },
+          "approval_id": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Approval Id",
+            "default": ""
+          },
+          "automation_action_id": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Automation Action Id",
+            "default": ""
+          },
+          "calendar_action_id": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Calendar Action Id",
+            "default": ""
+          },
+          "operation_id": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Operation Id",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mailbox",
+          "raw"
+        ],
+        "title": "Enqueue"
       },
       "Estimate": {
         "allOf": [
@@ -61563,6 +63670,188 @@
         ],
         "additionalProperties": true
       },
+      "MailOrganizeBody": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "mailbox": {
+                "type": "string",
+                "maxLength": 254
+              },
+              "action": {
+                "enum": [
+                  "archive",
+                  "unarchive",
+                  "mark_read",
+                  "mark_unread",
+                  "label",
+                  "unlabel"
+                ]
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "minItems": 1,
+                "maxItems": 500
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 225
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 100
+              }
+            },
+            "required": [
+              "action",
+              "ids",
+              "mailbox"
+            ],
+            "additionalProperties": true,
+            "not": {
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "mailbox": {
+                "type": "string",
+                "maxLength": 254
+              },
+              "action": {
+                "enum": [
+                  "archive",
+                  "unarchive",
+                  "mark_read",
+                  "mark_unread",
+                  "label",
+                  "unlabel"
+                ]
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "minItems": 1,
+                "maxItems": 500
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 225
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 100
+              }
+            },
+            "required": [
+              "action",
+              "mailbox",
+              "query"
+            ],
+            "additionalProperties": true,
+            "not": {
+              "required": [
+                "ids"
+              ]
+            }
+          }
+        ]
+      },
+      "MailOrganizeResult": {
+        "type": "object",
+        "properties": {
+          "mailbox": {
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "archive",
+              "unarchive",
+              "mark_read",
+              "mark_unread",
+              "label",
+              "unlabel"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "ids": {
+            "type": "array",
+            "items": "s"
+          },
+          "undo": {
+            "$ref": "#/components/schemas/MailOrganizeUndo"
+          }
+        },
+        "required": [
+          "action",
+          "count",
+          "ids",
+          "mailbox",
+          "undo"
+        ],
+        "additionalProperties": true
+      },
+      "MailOrganizeUndo": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "enum": [
+              "archive",
+              "unarchive",
+              "mark_read",
+              "mark_unread",
+              "label",
+              "unlabel"
+            ]
+          },
+          "ids": {
+            "type": "array",
+            "items": "s"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "ids"
+        ],
+        "additionalProperties": true
+      },
       "Mailbox": {
         "type": "object",
         "properties": {
@@ -62170,6 +64459,22 @@
         "title": "MaintenanceUpdate",
         "description": "The schedule, the pause, the monthly judge spend cap and step changes (backend/maintenance.py save_settings and\nsave_step); only what is sent changes."
       },
+      "MakePage": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "MakePage"
+      },
       "MarketAnswers": {
         "properties": {
           "sell": {
@@ -62765,6 +65070,9 @@
           "sent_as": {
             "$ref": "#/components/schemas/SentAs",
             "description": "On a send to a bot: the way it went (steer, queue or defer) and a defer's deadline (backend/delivery.py)"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MessageSource"
           }
         },
         "required": [
@@ -62971,6 +65279,38 @@
         },
         "required": [
           "message"
+        ],
+        "additionalProperties": true
+      },
+      "MessageSource": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "person",
+              "bot",
+              "assistant_for",
+              "task_update",
+              "builtin",
+              "automation",
+              "system"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "link",
+          "name"
         ],
         "additionalProperties": true
       },
@@ -63250,6 +65590,44 @@
         ],
         "title": "Moderate"
       },
+      "MyRecorder": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "Your most recently used copy's version; empty when none was seen"
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recent": {
+            "type": "boolean",
+            "description": "A copy was seen in the last 30 days"
+          },
+          "latest": {
+            "type": "string",
+            "description": "The newest release's version; empty when unknown"
+          },
+          "update_available": {
+            "type": "boolean"
+          },
+          "download_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "download_url",
+          "last_seen_at",
+          "latest",
+          "recent",
+          "update_available",
+          "version"
+        ],
+        "additionalProperties": true
+      },
       "NeedsSummary": {
         "type": "object",
         "properties": {
@@ -63316,6 +65694,10 @@
                 "type": "integer",
                 "description": "Items in the whole list, whatever page this is"
               },
+              "plate_count": {
+                "type": "integer",
+                "description": "Unique task, question, waiting, declined, approval, ask, stale and memory_tidy items across all boards, excluding folded or merged tasks; excludes thread and update attention"
+              },
               "by_kind": {
                 "type": "object",
                 "additionalProperties": {
@@ -63363,11 +65745,15 @@
               },
               "count": {
                 "type": "integer"
+              },
+              "plate_count": {
+                "type": "integer"
               }
             },
             "required": [
               "actor",
-              "count"
+              "count",
+              "plate_count"
             ],
             "additionalProperties": true
           }
@@ -64759,6 +67145,262 @@
         "additionalProperties": false,
         "type": "object",
         "title": "PlaceSave"
+      },
+      "PolicyUpdate": {
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "what": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "What"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To"
+          },
+          "daily_cap": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Cap"
+          },
+          "mailbox_daily_cap": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mailbox Daily Cap"
+          },
+          "company_daily_cap": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company Daily Cap"
+          },
+          "max_outside_recipients": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Outside Recipients"
+          },
+          "pacing_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 3600.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pacing Seconds"
+          },
+          "undo_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 600.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Undo Seconds"
+          },
+          "ask_new_address": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask New Address"
+          },
+          "ask_attachments": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Attachments"
+          },
+          "ask_many_recipients": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Many Recipients"
+          },
+          "ask_outside_cc": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Outside Cc"
+          },
+          "ask_legal_money": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Legal Money"
+          },
+          "ask_lint": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Lint"
+          },
+          "second_review": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Second Review"
+          },
+          "blocked_recipients": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Recipients"
+          },
+          "owner_handles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Handles"
+          },
+          "who_can_ok": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Who Can Ok"
+          },
+          "approvers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approvers"
+          },
+          "inherit": {
+            "type": "boolean",
+            "title": "Inherit",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PolicyUpdate"
       },
       "PostalLegalRouting": {
         "properties": {
@@ -68586,6 +71228,22 @@
         "type": "object",
         "title": "SeatUpdate"
       },
+      "SendApproval": {
+        "properties": {
+          "approval_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Approval Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "approval_id"
+        ],
+        "title": "SendApproval"
+      },
       "SentAs": {
         "type": "object",
         "properties": {
@@ -71109,12 +73767,12 @@
             ],
             "description": "The person a waiting task waits on; the task is in their Needs you"
           },
-          "guest": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The one person a private task with no person on it reached: its owning bot's first subtask, question or wait for them made them its guest. They read the task as its requester and owner do, and nothing else of its tree"
+          "readers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Who else can see a private task besides its requester and owner: people, bots and group:<id>s (a group by its members now). Empty on a company task. GET/PUT /api/v2/tasks/{id}/readers reads and changes it"
           },
           "holds": {
             "type": "array",
@@ -71824,6 +74482,74 @@
         ],
         "additionalProperties": true
       },
+      "TaskContext": {
+        "type": "object",
+        "properties": {
+          "pages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskContextPage"
+            },
+            "maxItems": 10
+          },
+          "meetings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskContextMeeting"
+            },
+            "maxItems": 10
+          }
+        },
+        "required": [
+          "meetings",
+          "pages"
+        ],
+        "additionalProperties": true
+      },
+      "TaskContextMeeting": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "id",
+          "title"
+        ],
+        "additionalProperties": true
+      },
+      "TaskContextPage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "updated_at",
+          "version"
+        ],
+        "additionalProperties": true
+      },
       "TaskCreate": {
         "properties": {
           "live_meeting_id": {
@@ -72144,6 +74870,16 @@
             ],
             "title": "Roles"
           },
+          "readers": {
+            "items": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Readers"
+          },
           "check_model": {
             "anyOf": [
               {
@@ -72232,7 +74968,19 @@
             "$ref": "#/components/schemas/Task"
           },
           "events": {
-            "type": "array"
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "$ref": "#/components/schemas/MessageSource"
+                }
+              },
+              "required": [
+                "source"
+              ],
+              "additionalProperties": true
+            }
           },
           "children": {
             "type": "array"
@@ -72832,6 +75580,47 @@
           "cursor",
           "next_offset",
           "tasks"
+        ],
+        "additionalProperties": true
+      },
+      "TaskMakePage": {
+        "type": "object",
+        "properties": {
+          "make_page": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "message_id": {
+                    "type": "string"
+                  },
+                  "conversation_id": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "making",
+                      "made",
+                      "failed",
+                      "update_required"
+                    ]
+                  }
+                },
+                "required": [
+                  "conversation_id",
+                  "message_id",
+                  "state"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "make_page"
         ],
         "additionalProperties": true
       },
@@ -74613,6 +77402,9 @@
               }
             ],
             "description": "Who routing asked to answer this message (`to` empty: nobody); null when routing never looked at it"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MessageSource"
           }
         },
         "required": [
@@ -74974,6 +77766,9 @@
                 },
                 "excerpt": {
                   "type": "string"
+                },
+                "source": {
+                  "$ref": "#/components/schemas/MessageSource"
                 }
               },
               "required": [
@@ -75302,6 +78097,163 @@
         ],
         "additionalProperties": true
       },
+      "ToolIndex": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolIndexRow"
+            }
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "all": {
+                "type": "integer"
+              },
+              "needs_you": {
+                "type": "integer"
+              },
+              "api": {
+                "type": "integer"
+              },
+              "mail": {
+                "type": "integer"
+              },
+              "websites": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "all",
+              "api",
+              "mail",
+              "needs_you",
+              "websites"
+            ],
+            "additionalProperties": true
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "counts",
+          "next",
+          "rows"
+        ],
+        "additionalProperties": true
+      },
+      "ToolIndexRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "api",
+              "mailbox",
+              "number",
+              "address",
+              "slack",
+              "github",
+              "meetings",
+              "listening",
+              "webhook",
+              "declared",
+              "website"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "way": {
+            "type": "string"
+          },
+          "status": {
+            "type": "object",
+            "properties": {
+              "tone": {
+                "enum": [
+                  "ok",
+                  "wait",
+                  "fail",
+                  "run",
+                  "idle"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "tone"
+            ],
+            "additionalProperties": true
+          },
+          "who": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "bot",
+                    "person"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "initials": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "initials",
+                "kind",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "who_total": {
+            "type": "integer"
+          },
+          "needs_you": {
+            "type": "boolean"
+          },
+          "href": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail",
+          "href",
+          "id",
+          "kind",
+          "name",
+          "needs_you",
+          "status",
+          "way",
+          "who",
+          "who_total"
+        ],
+        "additionalProperties": true
+      },
       "ToolRegister": {
         "properties": {
           "service": {
@@ -75375,73 +78327,6 @@
         ],
         "title": "ToolRegister",
         "description": "A tool a person registers for a bot (backend/bot_tools.py). Names and verbs only: `env` is the\nvariable's name, and the server refuses a field that looks like a credential."
-      },
-      "ToolUpdate": {
-        "properties": {
-          "can": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array",
-                "maxItems": 20,
-                "minItems": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Can"
-          },
-          "scope": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object",
-                "maxProperties": 20
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Scope"
-          },
-          "note": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 500
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Note"
-          },
-          "mcp": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mcp"
-          },
-          "title_prefix": {
-            "type": "string",
-            "maxLength": 100,
-            "title": "Title Prefix",
-            "default": ""
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "ToolUpdate",
-        "description": "A change to a tool a bot already declares (backend/bot_tools.py): only what is sent changes. `scope` keys\nare set one by one (an empty value takes a key off); `note` \"\" clears the note."
       },
       "TriggerCreate": {
         "properties": {
@@ -77608,6 +80493,73 @@
         "additionalProperties": false,
         "type": "object",
         "title": "Settings"
+      },
+      "backend__models__ToolUpdate": {
+        "properties": {
+          "can": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 20,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Can"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object",
+                "maxProperties": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "mcp": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp"
+          },
+          "title_prefix": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Title Prefix",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ToolUpdate",
+        "description": "A change to a tool a bot already declares (backend/bot_tools.py): only what is sent changes. `scope` keys\nare set one by one (an empty value takes a key off); `note` \"\" clears the note."
       },
       "backend__presence__Heartbeat": {
         "properties": {

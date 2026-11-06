@@ -1,4 +1,4 @@
-"""Settings > Inboxes, Google mailboxes: which mailboxes Tico uses and who may use each (ui/app/inboxes-email.js).
+"""Tools, Google mailboxes: which mailboxes Tico uses and who may use each (ui/app/inboxes-email.js).
 
 GET /api/v2/mailboxes is the page: for an admin every mailbox with its person, status and routines; for everyone their
 own mailbox and the ones shared with them. Each row also says who uses it (`used_by`: people, bots, the first names)
@@ -247,7 +247,7 @@ def install(app, store):
 
     @app.get(PATH)
     def list_mailboxes(request: Request):
-        """Settings > Inboxes for whoever is signed in: the admin's table, or your own mailbox and what is shared
+        """Tools for whoever is signed in: the admin's table, or your own mailbox and what is shared
         with you."""
         with store.read() as c:
             return listing(c, request.state.identity)

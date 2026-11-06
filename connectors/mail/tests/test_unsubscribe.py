@@ -47,13 +47,13 @@ def news(sender="news@example.org", labels=("INBOX", "UNREAD"), to=BOX):
 
 
 class Ctx:
-    """The parts of the mail CLI's context that perform() uses, over a fake Gmail and a real mail.db. `policy` is the
-    install's mail policy (Ctx.policy in __main__.py), here with only the internal domains it reads."""
+    """The parts of the mail CLI's context that perform() uses, over a fake Gmail and a real mail.db, with the team's
+    own domains as the test names them (Ctx.internal_domains in __main__.py)."""
 
     def __init__(self, gmail, conn, audits, mailbox=BOX, internal=("acme.example",)):
         self.gmail, self.conn, self.audits = gmail, conn, audits
         self.mailbox, self.slug = mailbox, "ana"
-        self.policy = {"internal_domains": list(internal)}
+        self.internal_domains = list(internal)
 
     def normalize(self, raw):
         return gm.normalize(raw, self.gmail.labels())
@@ -163,7 +163,7 @@ class UnsubscribeAction(unittest.TestCase):
                                                        "detail": "not unsubscribing: the mailbox already writes to the sender"})
         self.assertEqual(self.posts, [])
 
-    def test_internal_mail_from_a_domain_the_policy_names_is_kept_without_a_post(self):
+    def test_internal_mail_from_a_team_domain_is_kept_without_a_post(self):
         self.assertEqual(self.perform(news(sender="ops@team.example", to="ana@team.example"),
                                       mailbox="ana@team.example", internal=("team.example",)),
                          {"ok": False, "retry": False, "detail": "not unsubscribing: the mail is internal"})

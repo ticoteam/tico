@@ -172,6 +172,7 @@ def _runner_checks(c, settings):
                                 f"Computer {machine['label']} reports release {update['release'] or 'unknown'}, state "
                                 f"{update['state']}" + (f"; last update error: {update['error']}" if update["error"] else "")
                                 + "." + holds,
+                                update["error"] if update["error"].startswith("the checkout is on branch ") else
                                 "Tico repairs these links on the next update. No local work needs a decision."
                                 if runner_versions.only_flattened_links(update) else
                                 _holding_fix(machine["label"]) if rows and rows[0]["running"]

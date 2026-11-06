@@ -1,4 +1,4 @@
-// A fake of the Google mailboxes routes (backend/mailboxes.py) for the Settings > Inboxes scripts (ui/tests/inboxes.cjs,
+// A fake of the Google mailboxes routes (backend/mailboxes.py) for the inbox pages under Tools (ui/tests/inboxes.cjs,
 // ui/tests/mailbox.cjs).
 // answer(path, method, body) gives the JSON a route answers ({status, body} for a refusal), or undefined for any other
 // path. `fake.state` holds the mailboxes, their accesses and routines; every write is kept in `fake.writes` as
@@ -84,7 +84,7 @@ exports.mailboxesFake = ({admin = true, me = 'ana'} = {}) => {
   return fake;
 };
 
-// Opens `hash` (Settings > Inboxes, one inbox's page or Inboxes > Settings) on a fresh page over `fake` and a google-fake
+// Opens `hash` (Tools, one inbox's page or Tools › Settings) on a fresh page over `fake` and a google-fake
 // hub `google`, signed in as fake.me: an owner when fake.admin, a member otherwise. Waits for `ready`. The other kinds'
 // routes answer empty unless `extra(path, method, body, url)` answers them (undefined passes); `mail` maps a mailbox
 // address to its GET /v2/mail/messages list; `skip` starts with first run skipped; `theme` sets data-theme.
@@ -112,6 +112,7 @@ const EMPTY = {
   '/api/v2/postal/items': () => ({items: [], next: null}),
   '/api/v2/postal/intake': () => ({intake: null}),
   '/api/v2/automations': () => ({automations: []}),
+  '/api/v2/tool-index': () => ({rows: [], counts: {}}),
 };
 // A TICO_SHOTS screenshot once the route's fade has ended, in the theme its name says ('' keeps the page's own).
 exports.shot = async (page, file, theme = '') => {
@@ -121,7 +122,7 @@ exports.shot = async (page, file, theme = '') => {
     .filter(a => a.effect?.getComputedTiming().endTime !== Infinity).map(a => a.finished.catch(() => {}))));
   await page.screenshot({path: `${process.env.TICO_SHOTS}/${file}`, fullPage: true, animations: 'disabled'});
 };
-exports.open = async (browser, fake, google, {hash = '#/settings/inboxes', ready, width = 1440, height = 900, automations = {},
+exports.open = async (browser, fake, google, {hash = '#/tools', ready, width = 1440, height = 900, automations = {},
   extra = () => undefined, mail = {}, skip = false, theme = ''} = {}) => {
   const page = await browser.newPage({viewport: {width, height}, serviceWorkers: 'block'});
   const seen = {errors: []};
@@ -159,6 +160,15 @@ exports.open = async (browser, fake, google, {hash = '#/settings/inboxes', ready
       const answer = google.answer(p, request.url(), method, body);
       if (answer !== undefined) return json(answer);
     }
+    if (p === '/api/v2/org') return json({bots: [{id: 'support-bot', slug: 'support-bot', display_name: 'Support bot'}], humans: []});
+    if (p.endsWith('/sending-policy') || p.endsWith('/email-sending-policy')) {
+      if (method !== 'GET') fake.writes.push({method, path: p, body});
+      return json({company: {}, inbox: {}, bot: {}, legacy_automation_count: 0,
+        effective: {mode: 'ask_first', what: 'replies_only', to: 'anyone', daily_cap: 50, mailbox_daily_cap: 200,
+          company_daily_cap: 1000, pacing_seconds: 10, undo_seconds: 120, ask_new_address: true, ask_attachments: true,
+          ask_many_recipients: true, ask_legal_money: true, who_can_ok: 'bot_managers', approvers: [], sources: {mode: 'company'}}});
+    }
+    if (p === '/api/v2/email/sends') return json({sends: [], next_cursor: null});
     if (p === '/api/v2/mail/messages') return json({messages: structuredClone(mail[url.searchParams.get('mailbox')] || [])});
     if (method === 'GET' && p in EMPTY) return json(EMPTY[p]());
     if (p in SHELL) return json(SHELL[p]);

@@ -132,6 +132,16 @@ def read(c: Any, bot: str) -> dict[str, Any]:
     return join(c.execute("SELECT * FROM bot_settings WHERE bot_id=?", (bot,)).fetchone())
 
 
+ROW_SQL_ONE = "SELECT * FROM bot_settings WHERE bot_id=?"
+
+
+def read_in_snapshot(c: Any, bot: str) -> dict[str, Any]:
+    """`read`, read once per snapshot: a page that checks every bot (the status page's readiness check) asks for
+    the same declaration again per bot, and prime_machines seeds it for all of them in one query."""
+    from . import read_cache
+    return join(read_cache.one(c, ROW_SQL_ONE, (bot,)))
+
+
 def read_many(c, bots=None):
     """{bot: declaration} for `bots`, or for every bot with a settings row."""
     if bots is None:

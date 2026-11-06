@@ -543,6 +543,12 @@ def task_meetings(api, args):
     return _as_person(api).get(f"tasks/{args['id']}/meetings", **{k: args[k] for k in ('limit', 'cursor') if k in args})
 
 
+@tool("hub_task_context", "Task page and meeting references, up to 10 each. Fetch content with hub_file_read or hub_meeting_read.",
+      {"id": TASK_ID}, required=("id",))
+def task_context(api, args):
+    return api.get(f"tasks/{args['id']}/context")
+
+
 @tool("hub_meeting_pending", "List your own Pending meetings, before sharing with the Team.", {})
 def meeting_pending(api, args):
     return _as_person(api).get("meetings", review="pending")
@@ -584,7 +590,7 @@ def granola_sync(api, args):
     return _as_person(api).post("meetings/granola/sync", {})
 
 
-@tool("hub_meeting_search", "Search meeting history and transcripts, with excerpts and available speaker timestamps. Bots see explicitly shared team meetings, never personal notes or private meetings. Empty q lists recent accessible meetings.",
+@tool("hub_meeting_search", "Search meeting history and transcripts, with excerpts and available speaker timestamps. Bots see shared Team meetings and filed meetings they were attached to, never personal notes. Empty q lists recent accessible meetings.",
       {"q": _s("Words to search for; omit for recent history"), "person": _s("Owner, participant, or speaker"),
        "since": _s("Inclusive meeting date, YYYY-MM-DD; creation date when no start is recorded"), "until": _s("Inclusive meeting date, YYYY-MM-DD"),
        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
@@ -593,9 +599,10 @@ def meetings_search(api, args):
     return api.get("meetings/search", **args)
 
 
-@tool("hub_meeting_read", "Read a meeting transcript. Follow next_offset to read the complete text; access matches meetings search.",
+@tool("hub_meeting_read", "Read transcript or notes; follow next_offset for the rest.",
       {"id": _s("Meeting id"), "offset": {"type": "integer", "minimum": 0},
-       "limit": {"type": "integer", "minimum": 1, "maximum": 50000}}, required=("id",))
+       "limit": {"type": "integer", "minimum": 1, "maximum": 50000},
+       "notes": {"type": "boolean", "description": "Notes only"}}, required=("id",))
 def meetings_transcript(api, args):
     return api.get("meetings/transcript", **args)
 
@@ -681,7 +688,8 @@ def tag_update(api, args):
       "no ids, hashes, file paths, s3:// links or tool names (\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool "
       "trial for Thursday? If yes, I'll send the invite.\" Details go below it (a ticket on a custom "
       "type's board is exempt; asks stay on General). `dry_run` reports the "
-      "checks a create would fail and writes nothing.",
+      "checks a create would fail and writes nothing. A person’s asking criteria can refuse the write as "
+      "ask_refused, with the reason and fix; no task is created. Post progress as an update.",
       {"owner": _s("Who does it: a bot slug, a person id, or `me`"),
        "title": _s("Task title: General uses plain words without reference numbers or all-caps; custom types keep board references"),
        "body": _s("The details", default=""),
@@ -692,7 +700,8 @@ def tag_update(api, args):
        "check_back_at": _s("When to inspect progress: ISO timestamp or duration such as 45m; defaults automatically"),
        "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
-       "private": {"type": "boolean", "description": "Only requester and assignee may read; bot defaults also apply"},
+       "private": {"type": "boolean", "description": "Only its requester, owner and readers see it; bot defaults also apply"},
+       "readers": {"type": "array", "items": {"type": "string"}, "description": "Private: who else sees it: human:<id>, bot:<slug> or group:<id>"},
        "from_private": {"type": "boolean", "default": False,
                         "description": "From a run on your own private task with no person on it: a company-visible "
                                        "task for a bot, carrying only its own words (no 12 words copied from the private "
@@ -746,7 +755,7 @@ def task_create(api, args):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model",
                   "check_role", "visibility", "public_title", "public_summary", "from_private", "model", "effort",
-                  "harness", "check_back_at", "check_back_note"):
+                  "harness", "check_back_at", "check_back_note", "readers"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
@@ -932,7 +941,8 @@ def task_ask(api, args):
       "done. One decision per task; write the question so it makes sense on its own. Each option says what happens "
       "if it is picked (`then`); several picks (`multi`) mark the ones you recommend; the question, `why` and each option's "
       "label, description and then line carry no ids, paths, tool names or error output (put those in `body`, shown under Details), or the ask is "
-      "refused with what to fix. One open question per topic: "
+      "refused with what to fix. The person’s asking criteria can also refuse it as ask_refused; nothing is created. "
+      "Post progress as an update. One open question per topic: "
       "asked again while your earlier one on the same topic (same `topic`, else the same parent task) still waits on "
       "them, it updates that one (`folded: true`) instead of adding a second; give a different decision its own topic.",
       {"question": _s("The question, readable with no other context", maxLength=300),
@@ -1381,6 +1391,28 @@ def task_link(api, args):
                                                                **({"kind": "session"} if args.get("kind") == "session" else {}),
                                                                **({"wake_once": args["wake_once"]} if args.get("wake_once") is not None else {})},
                                   key=_key(args))
+
+
+READERS = {"type": "array", "items": {"type": "string"}, "minItems": 1,
+           "description": "human:<id>, bot:<slug> or group:<id>"}
+
+
+@tool("hub_task_readers_list", "Who can see a task: its requester, owner and readers; everyone for a company task.",
+      {"id": TASK_ID}, required=("id",))
+def task_readers_list(api, args):
+    return api.get(f"tasks/{args['id']}/readers")
+
+
+@tool("hub_task_readers_add", "Let people, bots or groups see a private task (a group: whoever is in it now).",
+      {"id": TASK_ID, "readers": READERS}, required=("id", "readers"), writes=True)
+def task_readers_add(api, args):
+    return api.post(f"tasks/{args['id']}/readers", {"add": list(args["readers"])}, key=_key(args))
+
+
+@tool("hub_task_readers_remove", "Take readers off a private task.",
+      {"id": TASK_ID, "readers": READERS}, required=("id", "readers"), writes=True)
+def task_readers_remove(api, args):
+    return api.post(f"tasks/{args['id']}/readers", {"remove": list(args["readers"])}, key=_key(args))
 
 
 @tool("hub_task_relate", "Relate another task to this one, read as `id kind task`: parent (task is its "
@@ -2939,8 +2971,7 @@ def files_search(api, args):
     return api.get("files/search", q=args["q"], limit=args.get("limit"), kind=args.get("kind"))
 
 
-@tool("hub_file_read", "Read one version of a file you may read, in full, as text (Markdown, text, HTML, CSV): the "
-      "current version unless a version is given. The whole text comes back, however long it is.",
+@tool("hub_file_read", "Read a file as text, in full. Defaults to its current version.",
       {"id": _s("File id"), "version": {"type": "integer", "minimum": 1}}, required=("id",))
 def files_read(api, args):
     fid, number = args["id"], args.get("version")
@@ -3055,8 +3086,7 @@ def files_publish_path(client, args):
 # ----------------------------------------------------------------------------- pages
 # A page is an HTML file a bot keeps up to date to show people what it did and found (docs/pages.md). Tico draws its
 # status line (updated, by, version, cadence, data date) outside the page; scripts and outside loads are removed.
-CADENCE = {"enum": ["none", "daily", "weekly", "monthly"], "description": "How often you mean to update it; past 1.5x "
-           "this the page says it is out of date"}
+CADENCE = {"enum": ["none", "daily", "weekly", "monthly"], "description": "Update frequency; stale after 1.5 periods"}
 
 
 def _page_fields(args):
@@ -3066,34 +3096,31 @@ def _page_fields(args):
     return fields
 
 
-@tool("hub_page_publish", "Publish a page: one self-contained .html file (inline CSS, SVG charts, no scripts; "
-      "anything that would load from elsewhere is removed). Put the headline and key numbers first: a card shows the "
-      "top. Publishing the same name again adds a version. With `task` it shows at the top of that task.",
-      {"name": _s("File name ending .html, e.g. weekly-review.html"), "text": _s("The page's HTML"),
-       "title": _s("What people see"), "cadence": CADENCE,
-       "audience": _s("everyone, or ben,group:legal,bot:analyst; narrows inherited visibility; omitted keeps it"),
-       "as_of": _s("The date the data is from (YYYY-MM-DD) when it differs from today"),
-       "task": _s("The task it is for; it shows at the top of that task"),
-       "replaces": _s("The id of an older page of yours this one takes the place of"),
-       "scope": {"enum": ["task", "bot"]}, "path": _s("The file's path in your repository")},
+@tool("hub_page_publish", "Publish .html; scripts/external loads are removed. Lead with key facts for cards. "
+      "Reusing a name versions changes; task pins it.",
+      {"name": {"type": "string"}, "text": {"type": "string"},
+       "title": {"type": "string"}, "cadence": CADENCE,
+       "audience": _s("everyone clears; person,group:legal,bot:analyst narrows. Omit to keep."),
+       "as_of": _s("YYYY-MM-DD"), "task": {"type": "string"},
+       "replaces": {"type": "string"},
+       "scope": {"enum": ["task", "bot"]}, "path": _s("Repo-relative path")},
       required=("name", "text"), writes=True)
 def pages_publish(api, args):
     body = {**_page_fields(args), **{k: args[k] for k in ("name", "text", "path") if args.get(k)}}
     return api.post("pages", body, key=_key(args))
 
 
-@tool("hub_page_list", "Pages you may read, newest first: title, bot, version, when updated, cadence, data date, and "
-      "whether one is out of date or replaced.",
-      {"bot": _s("Only this bot's pages"), "task": _s("Pages filed on or pinned to this task"),
-       "archived": {"type": "boolean", "description": "Archived pages instead"},
-       "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": _s("next_cursor from the previous page")})
+@tool("hub_page_list", "Readable pages, newest first. Follow next_cursor.",
+      {"bot": {"type": "string"}, "task": {"type": "string"},
+       "archived": {"type": "boolean"},
+       "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": {"type": "string"}})
 def pages_list(api, args):
     return api.get("pages", bot=args.get("bot"), task=args.get("task"), archived=args.get("archived") or None,
                    limit=args.get("limit"), cursor=args.get("cursor"))
 
 
-@tool("hub_page_show", "One page's status: title, bot, version, updated and by whom, cadence, data date, out of date "
-      "or replaced. Read its HTML with the file's address.", {"id": _s("Page id (its file id)")}, required=("id",))
+@tool("hub_page_show", "Page status and pins. Read HTML with hub_file_read.",
+      {"id": {"type": "string"}}, required=("id",))
 def pages_show(api, args):
     return api.get("pages/" + args["id"])
 
@@ -4001,19 +4028,40 @@ def group_access(api, args):
     return _teammate_access(api, f"groups/{quote(str(args['group']), safe='')}", args)
 
 
-@tool("hub_bot_mail", "Show, or set, whether a bot sends mail without a per-message approval and its forward targets. "
-      "Only a person who manages the bot sets it, as themselves; a bot, BotOps included, is refused. `outbound_send` and "
-      "`forward_to` in bot.yaml are only a request: this setting decides (docs/mail.md, \"Turning sending on\").",
-      {"slug": _s("The bot"), "outbound_send": {"type": "boolean", "description": "Send without approval: on or off"},
-       "forward_to": _s("Comma list of forward addresses; an empty string clears the list"),
-       "from_request": {"type": "boolean", "description": "Take what the bot's bot.yaml asks, as its computer reported it"}},
+@tool("hub_email_policy", "Read or change the effective email sending policy: company, inbox, or bot. Ask first is "
+      "the default; Never blocks approved sends too. Settings changes require a person acting as themselves.",
+      {"mailbox": _s("Inbox address; omit for company"), "bot": _s("Bot id or slug; omit for inbox/company"),
+       "settings": {"type": "object", "description": "Policy fields to set; omit to read, inherit:true clears the override"}},
+      writes=True)
+def email_policy(api, args):
+    mailbox, bot = args.get("mailbox"), args.get("bot")
+    path = (f"bots/{quote(str(bot), safe='')}/email-sending-policy" if bot else
+            f"email/inboxes/{quote(str(mailbox), safe='')}/sending-policy" if mailbox else "email/sending-policy")
+    if args.get("settings") is not None:
+        return api.call("PUT", path, args["settings"], key=_key(args))
+    return api.get(path, **({"mailbox": mailbox} if bot and mailbox else {}))
+
+
+@tool("hub_email_sends", "Read pending email sends or the send audit for an inbox you may read. Includes the "
+      "policy decision, exact content hash, recipients, attachments, approval and provider receipt.",
+      {"mailbox": _s("Inbox address"), "pending": {"type": "boolean", "description": "Only waiting sends"},
+       "cursor": _s("Next cursor"), "limit": {"type": "integer", "description": "1–100, default 50"}}, required=("mailbox",))
+def email_sends(api, args):
+    return api.get("email/sends", **{key: args[key] for key in ("mailbox", "pending", "cursor", "limit") if key in args})
+
+
+@tool("hub_email_cancel", "Cancel pending email before dispatch: the sender, its manager, or an inbox admin. "
+      "Already delivered mail cannot be recalled.", {"id": _s("Queued send id")}, required=("id",), writes=True)
+def email_cancel(api, args):
+    return api.post(f"email/sends/{quote(str(args['id']), safe='')}/cancel", {}, key=_key(args))
+
+
+@tool("hub_bot_mail", "Show or set whether a bot sends mail on its own or asks first. Only a person who manages the "
+      "bot sets it; bots are refused. Full policy: hub_email_policy.",
+      {"slug": _s("The bot"), "outbound_send": {"type": "boolean", "description": "On their own: on or off"}},
       required=("slug",), writes=True)
 def bot_mail(api, args):
     body = {k: args[k] for k in ("outbound_send",) if args.get(k) is not None}
-    if args.get("forward_to") is not None:
-        body["forward_to"] = [a.strip() for a in str(args["forward_to"]).replace(";", ",").split(",") if a.strip()]
-    if args.get("from_request"):
-        body["from_request"] = True
     if not body:
         return api.get(f"bots/{args['slug']}/mail-settings")
     return api.post(f"bots/{args['slug']}/mail-settings", body, key=_key(args))
@@ -5484,7 +5532,7 @@ def audit(api, args):
       "(that message's id). A decided send approval id works as --approve too.",
       {"kind": {"type": "string", "enum": list(APPROVAL_KINDS)},
        "payload": {"type": "object", "description": "The exact action, as the approvals policy describes. "
-                   "kind=send is to/cc/subject/body_sha256/mailbox. Skip this tool when the owner "
+                   "Email approvals come from mail send or POST /email/sends with frozen MIME; kind=send here is refused. When the owner "
                    "already said send; use mail send --approve <their-message-id>. A "
                    "proposal the hub applies on approval: task_cap {sender, receiver, per_day}, spend_limit "
                    "{bot | pool: company|group:<id>, per_30m_usd, daily_usd, weekly_usd, monthly_usd}."},
@@ -7030,14 +7078,35 @@ def inbound_wait(api,args):
     return api.post('inbound/wait',body)
 
 
-# ----------------------------------------------------------------------------- connections (backend/connections.py)
-@tool('hub_connections_list','Every connection you may see: Slack, GitHub, mail bots, Tico addresses and numbers, meeting '
-      'importers, incoming and outgoing webhooks, physical mail and Listening. Each row: name, status, scope, who reads '
-      'it, its bots and where to configure it. Follow next with cursor.',
-      {'cursor':_s('The previous page\'s next'),'limit':{'type':'integer','minimum':1,'maximum':100}})
-def connections_list(api,args):
+# ----------------------------------------------------------------------------- tool index (backend/api_tools.py)
+@tool('hub_tool_index','The Tools you may see (API tools, mailboxes, numbers, Slack, GitHub, webhooks...): kind, '
+      'status, way, who can use it, needs you. Page with cursor.',
+      {'cursor':_s('The previous page\'s next'),'limit':{'type':'integer','minimum':1,'maximum':500}})
+def tool_index(api,args):
     page = dict(limit=args.get('limit'), cursor=args.get('cursor'))
-    return _as_person(api).get('connections', **{k: v for k, v in page.items() if v is not None})
+    return _as_person(api).get('tool-index', **{k: v for k, v in page.items() if v is not None})
+
+
+@tool('hub_tool_check','Check an API tool\'s keys now: Working, Key rejected or Check failed, per key.',
+      {'id':_s('Its hub_tool_index row id, without api:')}, required=('id',))
+def tool_check(api,args):
+    return _as_person(api).post('api-tools/'+quote(str(args['id']).removeprefix('api:'),safe='')+'/check',{})
+
+
+@tool('hub_tool_call','Call a proxied API tool: METHOD and vendor API path, through the Tico proxy (it adds the key '
+      'and logs the call). tool: the id in TICO_TOOL_<ID>_URL. Returns {status, content_type, body}.',
+      {'tool':_s('The API tool id, e.g. close-crm'),
+       'method':{'type':'string','enum':['GET','HEAD','OPTIONS','POST','PUT','PATCH','DELETE']},
+       'path':_s('The vendor API path, e.g. /api/v1/me/'),
+       'data':{'description':'A JSON body'},
+       'query':{'type':'array','items':{'type':'string'},'description':'Query parameters, each key=value'}},
+      required=('tool','method','path'), local=True)
+def tool_call(api,args):
+    from clients import tool_call as T
+    try:
+        return T.call(args['tool'], args['method'], args['path'], args.get('data'), args.get('query') or ())
+    except T.CallError as exc:
+        return {'error': str(exc)}
 
 
 # ----------------------------------------------------------------------------- letters out (backend/letters.py)
@@ -7128,6 +7197,35 @@ def email_thread(api, args):
       {'mailbox': _s('Mailbox address'), 'id': _s('Gmail message id')}, required=('mailbox', 'id'))
 def email_message(api, args):
     return api.get('mail/messages/' + quote(args['id'], safe=''), mailbox=args['mailbox'])
+
+
+EMAIL_ORGANIZE = ('archive', 'unarchive', 'mark_read', 'mark_unread', 'label', 'unlabel')
+
+
+def _register_email_organize(action):
+    properties = {'mailbox': _s('Whole Workspace mailbox address'),
+                  'ids': {'type': 'array', 'items': {'type': 'string', 'maxLength': 128},
+                          'minItems': 1, 'maxItems': 500},
+                  'query': _s('Gmail query instead of ids; resolved live before changing messages'),
+                  'limit': {'type': 'integer', 'minimum': 1, 'maximum': 500, 'default': 100}}
+    required = ('mailbox',)
+    if action in ('label', 'unlabel'):
+        properties['label'] = _s('Gmail label name; label creates a missing user label, unlabel never does')
+        required += ('label',)
+
+    @tool('hub_email_' + action, 'Organize live Gmail: ' + action.replace('_', ' ') +
+          '. Supply ids or query, up to 500 messages. Needs your organize access and the company switch. '
+          'Never deletes or trashes. Returns count, ids and the inverse action for undo.',
+          properties, required=required, writes=True)
+    def organize_email(api, args):
+        body = {k: args[k] for k in ('mailbox', 'query', 'limit', 'label') if args.get(k) is not None}
+        if args.get('ids'):
+            body['ids'] = args['ids']
+        return api.post('mail/messages/organize', {**body, 'action': action}, key=_key(args))
+
+
+for _email_action in EMAIL_ORGANIZE:
+    _register_email_organize(_email_action)
 
 
 # ----------------------------------------------------------------------------- physical mail (backend/postal_mail.py)
@@ -7828,13 +7926,14 @@ REQUESTER = PEOPLE + BOTOPS
 REQUESTER_READ = REQUESTER + ("assistant",)
 HUMANS_AND_ASSISTANT = PEOPLE + ("assistant",)      # views.human_only: bots are refused
 # A write the Assistant may make on its own (backend/assistant.py write_allowed): anything else it proposes.
-ASSISTANT_WRITES = {"hub_goal_read_back", "hub_goal_save", "hub_goal_create", "hub_goal_update", "hub_kpi_create", "hub_kpi_link", "hub_kpi_target", "hub_kpi_unlink", "hub_proposal_decide", "hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_done", "hub_task_comment", "hub_task_label",
+ASSISTANT_WRITES = {"hub_email_cancel", "hub_goal_read_back", "hub_goal_save", "hub_goal_create", "hub_goal_update", "hub_kpi_create", "hub_kpi_link", "hub_kpi_target", "hub_kpi_unlink", "hub_proposal_decide", "hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_done", "hub_task_comment", "hub_task_label",
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
                     "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",
                     "hub_assistant_withdraw",
                     "hub_assistant_change_restore",
                     "hub_settings_set", "hub_rules_read", "hub_rules_ask"}
+ASSISTANT_WRITES.update('hub_email_' + action for action in EMAIL_ORGANIZE)
 AUDIENCE = {
     **{name: HUMANS_AND_ASSISTANT for name in ("hub_email_mailboxes", "hub_email_inbox", "hub_email_search",
                                               "hub_email_thread", "hub_email_message")},
@@ -7917,8 +8016,8 @@ AUDIENCE = {
     **{name: PEOPLE for name in ("hub_seat_create", "hub_seat_update", "hub_seat_close")},
     "hub_org_models": KINDS,
     # Files are a bot's own: only a bot, or the computer running it, publishes them.
-    **{name: BOTS for name in ("hub_file_publish", "hub_file_link", "hub_file_touch", "hub_file_import",
-                               "hub_page_publish")},
+    **{name: BOTS for name in ("hub_file_publish", "hub_file_link", "hub_file_touch", "hub_file_import")},
+    "hub_page_publish": BOTS + ("assistant",),  # the route authenticates the initiating Make page request
     # A hard delete is the owner's alone; BotOps asks the owner who asked for it to confirm (backend/botops_act.py).
     "hub_file_delete": ("owner", "botops"),
     "hub_page_archive": PEOPLE + BOTS,
@@ -7961,6 +8060,9 @@ ASSISTANT_HIDDEN = frozenset({
     "hub_credential_grant", "hub_credential_revoke", "hub_credential_delete", "hub_credential_set", "hub_credential_import",
     "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_call_token",
     "hub_sql", "hub_support_file", "hub_support_report", "hub_support_send", "hub_trigger_sign", "hub_message_redact",
+    "hub_tool_call",
+    "hub_task_readers_list",  # hub_task_show has the readers; the Assistant's listing is near its size cliff
+    "hub_tool_check",         # hub_tool_index has each tool's status; Check now is on the tool's page. Same cliff.
 })
 
 

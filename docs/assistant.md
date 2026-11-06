@@ -1,11 +1,7 @@
 # The Assistant
 
 Every human has one private DM with the team's assistant (the `coo` bot; you may have renamed it): a personal
-bot that knows how Tico is laid out and does things in it on your behalf. **Ask Tico** opens it from any page except its own page and setup, and still opens while the signed-out banner shows. Where no person has loaded, the row is not shown and ⌘J does nothing; Search's icon becomes a row of its own. On a
-computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) and the Tico team's **?** at its end; it (or ⌘J / Ctrl+J)
-opens a small panel straight above that row, over the sidebar, and nothing floats over the page. On a phone the Liquid Dot in the
-middle of the tab bar opens it as a sheet, even while the signed-out banner shows. On the Assistant page a tap on that tab does not open the sheet at once; it comes up when you leave that page by a link, not by the tab bar. Where no person has loaded, a tap on that tab opens the sheet only once one does. During setup the tab bar is not shown. The panel names the page it sees, and a message sent from it carries that
-page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
+bot that knows how Tico is laid out and does things in it on your behalf. **Tico Assistant** opens it from any page except its own page and setup, and still opens while the signed-out banner shows. Where no person has loaded, the row is not shown and ⌘J does nothing; Search's icon becomes a row of its own. On a computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) and the Tico team's **?** at its end; it (or ⌘J / Ctrl+J) opens a small panel straight above that row, over the sidebar, and nothing floats over the page. On a phone the Liquid Dot in the middle of the tab bar (**Assistant**) opens it as a sheet, even while the signed-out banner shows. On the Assistant page a tap on that tab does not open the sheet at once; it comes up when you leave that page by a link, not by the tab bar. Where no person has loaded, a tap on that tab opens the sheet only once one does. During setup the tab bar is not shown. The panel names the page it sees, and a message sent from it carries that page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
 gave the assistant); its header has the dot, the name and the page it sees. The DM is also a
 page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's Home, with a
 few things to ask while it is empty. The **Assistant** tab, first on your own page (`#/person/<you>`), opens the same
@@ -24,7 +20,7 @@ The Ask panel is only the Assistant. Talking to the people at Tico is a separate
 phone, beside Search in the More drawer), or any link to `#/support`, such as the Assistant's "Message the Tico team"
 reply, opens it ([Support](support.md)). Nothing from the DM goes to the Tico team.
 
-A **peek** is a few words beside the closed dot, just past the sidebar level with the Ask row (above the tab bar on a phone), Tico saying something waits on you:
+A **peek** is a few words beside the closed dot, just past the sidebar level with the Tico Assistant row (above the tab bar on a phone), Tico saying something waits on you:
 "Got a quick question for you", "3 questions are waiting on you", "Need your OK on something". Six words at most,
 never who asked. Tap it and the DM opens at that card; × dismisses it for good, for every item it spoke for. One at a time, none in the first
 few seconds after the page loads or while you are typing, each question at most once a day, and never a sound or a
@@ -43,7 +39,7 @@ What waits on you from elsewhere comes at the end of the DM as cards: a Confirm 
 its own Home, with its Confirm and Cancel, and up to three bots' questions to you from Needs you. A question with two to
 six picks is answered with a tap, any other with a line of words (a question with several picks at once links to its
 task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open question in your words (`hub
-question answer --on-behalf-of turn`, below). A Confirm card always needs your own tap.
+question answer --on-behalf-of turn`, below). A Confirm card needs your own tap. A goal suggestion can also be confirmed by a plain yes in your chat ([below](#goals-agreed-in-words)).
 
 ## Helpers through the Assistant
 
@@ -59,15 +55,39 @@ The Assistant files a helper a task with `--request-id turn`. The same citation 
 wrote in your own Assistant DM in the last 30 minutes, and the owner's rule "Assistant acts without asking" on.
 The task opens with your words quoted.
 For the Strategy Bot and the Librarian the event `assistant.asked_helper` records it (with `helper`, `for` and
-`cited`). Each helper runs its own turn with its own rights, and only BotOps borrows yours (below). So a strategy or goal
-change stays the owner's: the Strategy Bot proposes it on a Confirm card, and only the owner can confirm. A task for any other bot that cites your words is refused
-(`422 request_id`). A person's post to the Strategy Bot's DM (`POST /api/v2/chat/goal-manager`) lands in their
+`cited`). Each helper runs its own turn with its own rights, and only BotOps borrows yours (below). So a strategy change
+stays the owner's: the Strategy Bot proposes it on a Confirm card, and only the owner can confirm. The Strategy Bot's goal
+suggestions are agreed the way your own goal changes are: a plain yes in your chat confirms one ([below](#goals-agreed-in-words)).
+A task for any other bot that cites your words is refused (`422 request_id`). A person's post to the Strategy Bot's DM (`POST /api/v2/chat/goal-manager`) lands in their
 Assistant DM instead.
 
 The owner used to message the Strategy Bot itself (`room_key: ceo`). That DM stays the owner's as read-only history:
 `GET /api/v2/assistant` lists it under `"earlier": {"room_id", "bot", "name"}`, and new messages go to the Assistant.
 On the first start after the update, Confirm cards still waiting there move to the owner's Assistant DM, once
 (event `assistant.strategy_cards_moved`). A card runs only on its owner's own tap, so moving it is safe.
+
+### Goals, agreed in words
+
+For your own goals, measures and targets, and for the Strategy Bot's goal suggestions, the Assistant saves nothing on the first ask. It writes the change back to you
+in your chat as a numbered read-back, with the exact steps. Only your yes saves it:
+
+- A plain yes as your next message, such as **yes**, **ok**, **go ahead** or **save it**, saves every change in it.
+- **Yes to 1 and 3** or **yes except 2** saves only those numbered changes.
+
+Your yes counts only if it is your very next message after the read-back, with nothing from anyone else in between and
+nothing else from you after it, and within 30 minutes of the read-back. Any other reply saves nothing. Ask again, and the
+Assistant reads it back again.
+
+Colour, done or dropped and archive are not agreed in words. They stay your click on the Goals page. If a read-back would
+include one, Tico refuses the whole read-back and saves nothing, and the Assistant says why in one sentence and leaves
+that change for your click. A KPI reading, the company Vision, strategy drafts and bets, and recovery suggestions stay
+clicks too, and are refused the same way.
+
+A suggestion the Strategy Bot made that you confirm with a plain yes leaves **Needs you**, as it does when you confirm
+its card. A message from you that opens with a no, such as "no" or "no, too high", turns down a Strategy Bot suggestion
+about a goal's wording, a KPI added to a goal, a KPI's definition, a KPI target or a flag at once. It needs no read-back
+and no second yes. Your message is kept as the reason, unless it is only a no. A "no" to a Why line stays a click on its
+card. Only the owner's Assistant agrees goal changes in chat, so nobody else's yes or no in chat counts.
 
 ### BotOps
 
@@ -104,7 +124,7 @@ answers. Nothing is answered by keyword or from a fixed reply: "what is waiting 
 did today and how to do something all reach the model, which reads the question and answers it from Tico's own data,
 as you (what you may see, nothing more), with links. A turn takes 30 seconds or more; a greeting is a turn too.
 
-Org rules are checked before a message is written, as for any chat: a held message is not written and nothing is answered.
+Org rules are checked before a message is written, as for any chat: a held message is not written and nothing is answered. In the Ask panel and the Updates chat your text stays in the box and the panel says "An org rule held this message. Nothing was sent."
 
 ## It acts as you, never more
 
@@ -310,7 +330,7 @@ Strategy Bot is on ([Strategy Bot](strategy-bot.md#what-it-has-learned)).
 
 ## On the Updates page
 
-Updates has no Assistant chat beside the feed. To talk to your Assistant, press **Ask Tico** at the bottom of the sidebar
+Updates has no Assistant chat beside the feed. To talk to your Assistant, press **Tico Assistant** at the bottom of the sidebar
 (⌘J; the middle tab on a phone). It opens from any page except the Assistant page and setup, and still opens while the signed-out banner shows. The full page (`#/assistant`) shows the same thread. While
 the Assistant is off, the owner sees one line with **Turn on** there; anyone else sees the same line without the button,
 telling them to ask the owner.

@@ -55,3 +55,14 @@ def test_retired_heartbeat_still_requires_authorized_importer(api, actor):
             c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), machine["runner_id"]))
         token, expected = machine["token"], 401
     assert post(api, "imports/sources/fireflies/status", {"state": "ok"}, token, expected=expected)
+
+
+def test_sources_say_why_an_importer_fails_and_removing_it_drops_it(api):
+    machine = runner(api)
+    assert post(api, "meeting-importers/zoom", {"enabled": True, "runner_id": machine["runner_id"]}) == {"ok": True}
+    post(api, "imports/sources/zoom/status", {"state": "error", "error_code": "auth_failed"}, machine["token"])
+    rows = {r["id"]: r for r in api.get("/api/meetings/sources", headers=headers("ben-test")).json()["sources"]}
+    assert rows["zoom"]["status"] == "error" and rows["zoom"]["error"] == "The tool refused the credential."
+    assert post(api, "meeting-importers/zoom", {"enabled": False, "runner_id": ""}) == {"ok": True}
+    rows = {r["id"] for r in api.get("/api/meetings/sources", headers=headers("ben-test")).json()["sources"]}
+    assert "zoom" not in rows

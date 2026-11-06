@@ -23,6 +23,7 @@ from fastapi.responses import Response
 
 from . import replay
 from . import sql
+from . import sources
 from .store import H, Problem
 
 LIMIT = 100
@@ -245,13 +246,13 @@ def install(app, store, auth):
             elif kind == "credential.revealed":
                 subject = creds.get(r["target"]) or "A credential"
                 result = REVEALS.get(r["action"], r["action"])
-                link = "#/credentials"
+                link = "#/tools/keys?show=credentials"
             elif kind == "permission.changed":
                 action, target = r["action"], r["target"] or ""
                 if action in ("credential.granted", "credential.revoked"):
                     subject = creds.get(target) or "A credential"
                     result = PERMISSIONS[action] + (" to " if action == "credential.granted" else " from ") + name(r["subject_actor"])
-                    link = "#/credentials"
+                    link = "#/tools/keys?show=credentials"
                 elif action.startswith("bot."):
                     subject, result, link = name("bot:" + target), PERMISSIONS[action], "#/bot/" + target
                 elif action == "person.access_edited":
@@ -272,6 +273,9 @@ def install(app, store, auth):
                 item["task"] = task
             out.append(item)
         names = {a: name(a) for item in out for a in (item["actor"], item["about"]) if a}
+        lines = sources.lookup(c, sources.actors_of(out))
+        for item in out:
+            item["source"] = sources.source_of(lines, item)
         return out, names
 
     def params(request):

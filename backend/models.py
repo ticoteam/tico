@@ -151,6 +151,11 @@ class TakeRecommendation(Contract):
     version: Annotated[int, Field(strict=True, ge=1)] | None = None     # the card's task version: a changed task is refused
 
 
+class AsksSeen(Contract):
+    """Questions to the person that their Needs you now shows (POST /api/v2/needs-you/seen)."""
+    asks: Annotated[list[Annotated[StrictStr, Field(min_length=1, max_length=100)]], Field(max_length=200)]
+
+
 class StaleDecision(Contract):
     """A person's answer to one row of their Stale tickets card (backend/stale_review.py): accept or skip. Accept names
     the task version the row showed (409 version_conflict once the task changed), as a change by hand does."""
@@ -194,6 +199,9 @@ class TaskBlocker(Contract):
     endpoint: str = Field(min_length=1, max_length=200)
 
 
+ReaderName = Annotated[str, Field(min_length=1, max_length=200)]
+
+
 class TaskCreate(Contract):
     live_meeting_id: ID | None = None
     visibility: Literal['public', 'private'] | None = None
@@ -230,6 +238,8 @@ class TaskCreate(Contract):
     number: TaskNumber | None = None
     # Who else is on the task, by role: {role: [actors]} (backend/task_roles.py).
     roles: dict[str, list[str]] | None = None
+    # Who else sees a private task: people, bots and group:<id>s (hubdb.set_task_readers).
+    readers: list[ReaderName] = Field(default_factory=list, max_length=50)
     # With a model, the bot's own check session; review alone is a normal review child.
     check_model: str | None = Field(default=None, max_length=120)
     check_role: Literal["review", "check"] | None = None
@@ -570,6 +580,17 @@ class TaskComment(Contract):
 class TaskAskResolve(Contract):
     # The person's words from where they answered; without them the asker withdraws the question.
     quote: Annotated[StrictStr, Field(min_length=1, max_length=4000)] | None = None
+
+
+class TaskReaders(Contract):
+    """Who else sees a private task (hubdb.set_task_readers): add and remove people, bots and group:<id>s."""
+    add: list[ReaderName] = Field(default_factory=list, max_length=50)
+    remove: list[ReaderName] = Field(default_factory=list, max_length=50)
+
+
+class TaskReaderList(Contract):
+    """The whole reader list of a private task, replacing what it had."""
+    readers: list[ReaderName] = Field(default_factory=list, max_length=50)
 
 
 class TaskLink(Contract):
@@ -1225,18 +1246,17 @@ class ToolUpdate(Contract):
 
 
 class MailRequest(Contract):
-    """What a bot's bot.yaml asks for its mail (runner-rs/src/declared_access.rs `mail_request`): a request only. The
-    server-held setting (backend/mail_settings.py) decides; Health says when the two differ."""
+    """What a bot's bot.yaml says of its mail, as its computer still reports it (runner-rs/src/declared_access.rs
+    `mail_request`). Accepted and ignored: sending is the server's sending policy alone (backend/email_sending.py)."""
     outbound_send: bool = False
     forward_to: list[Annotated[str, Field(max_length=320)]] = Field(default_factory=list, max_length=20)
 
 
 class MailSettingsUpdate(Contract):
-    """A person's change to a bot's mail sending (backend/mail_settings.py). Only what is sent changes.
-    `from_request` takes what the bot's bot.yaml asks, as its computer last reported it."""
+    """A person's change to a bot's mail sending (backend/mail_settings.py): its sending policy mode. `forward_to` is
+    accepted empty only, for older callers: forward targets are retired."""
     outbound_send: bool | None = None
     forward_to: list[Annotated[str, Field(max_length=320)]] | None = Field(default=None, max_length=20)
-    from_request: bool = False
 
 
 class BotReadiness(GoalReadiness):
@@ -1454,7 +1474,7 @@ class Heartbeat(Contract):
         "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1", "source_continue_v1",
         "turns_at_once_v1", "private_lanes_v1", "model_subscriptions_v1", "browser_exit_v1",
         "model_subscription_activation_v1", "model_connect_v1", "threads_v1", "memory_tidy_packets_v1",
-        "harness_allocation_v1"]] = Field(default_factory=list, max_length=20)
+        "harness_allocation_v1", "make_page"]] = Field(default_factory=list, max_length=32)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -2674,6 +2694,10 @@ class AssistantMessage(Contract):
     page: AssistantPage | None = None
 
 
+class MakePage(Contract):
+    text: Annotated[str, Field(min_length=1, max_length=8000)]
+
+
 class AssistantUpload(Contract):
     """A message with files in a person's Assistant chat (POST /api/v2/uploads/assistant/messages)."""
     text: Annotated[str, Field(min_length=1, max_length=8000)]
@@ -3165,7 +3189,7 @@ class GrowthSettingsUpdate(Contract):
     margin_pct: float | None = Field(default=None, ge=0, le=100)
 
 
-# Settings > Inboxes (backend/mailboxes.py): connect a mailbox, and who can use it.
+# Tools (backend/mailboxes.py): connect a mailbox, and who can use it.
 MailboxLevel = Literal["read", "read_write"]
 
 

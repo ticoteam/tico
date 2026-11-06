@@ -47,6 +47,7 @@ import sqlite3
 
 from . import bot_access as A
 from . import people as P
+from . import sources
 from .store import H, Problem
 
 LEVELS = ("see", "read", "write", "manage")
@@ -789,6 +790,7 @@ class Known:
         self.me = str(getattr(viewer, "actor", "") or "")
         self._people = self._strangers = None
         self._in = {}
+        self._names, self._looked = {}, set()
 
     @property
     def people(self):
@@ -853,10 +855,32 @@ class Known:
         """`actors` as someone not in their conversation may be told of them."""
         return [a for a in actors if a not in self.strangers]
 
+    def _names_for(self, ids):
+        """Display names for these actors, one lookup per actor for this reader's whole request."""
+        missing = {i for i in ids if i not in self._looked}
+        if missing:
+            self._names.update(sources.lookup(self.c, missing))
+            self._looked |= missing
+        return {i: self._names[i] for i in ids if i in self._names}
+
+    def whole(self, message):
+        """The message with the `source` everyone who may see it all reads: nothing hidden (events._SameForAll)."""
+        return {**message, "source": sources.message_source(self._names_for(sources.actors_of([message])), message)}
+
+    def source(self, message):
+        """A message's `source` (backend/sources.py). A person the reader may not see is not named in it, here or as the
+        Assistant's person, unless the reader is in the message's conversation."""
+        names = self._names_for(sources.actors_of([message]))
+        if self.people and not self.member(message.get("conversation_id")):
+            names = {key: name for key, name in names.items() if key not in self.people}
+        return sources.message_source(names, message)
+
     def message(self, message):
         if isinstance(message, dict):
             from .files import readable_page_refs
             message = readable_page_refs(self.c, self.auth, self.viewer, message)
+            if "sender_id" in message:
+                message = {**message, "source": self.source(message)}
         if not self.people or not isinstance(message, dict):
             return message
         named = [key for key in ("sender_id", "recipient_id") if message.get(key) in self.people]
@@ -878,11 +902,14 @@ class Known:
             return task
         named = [key for key in self.TASK_FIELDS if task.get(key) in self.people]
         origin = task.get("from_person") in self.people
-        if not named and not origin:
+        readers = task.get("readers") if isinstance(task.get("readers"), list) else []
+        hidden = [r for r in readers if r in self.people]
+        if not named and not origin and not hidden:
             return task
         if self.me in (task.get("owner_id"), task.get("requester_id")) or self.member(task.get("conversation_id")):
             return task
-        return {**task, **{key: "" for key in named}, **({"from_person": None} if origin else {})}
+        return {**task, **{key: "" for key in named}, **({"from_person": None} if origin else {}),
+                **({"readers": [r for r in readers if r not in self.people]} if hidden else {})}
 
     def tasks(self, tasks):
         return [self.task(t) for t in tasks] if self.people else tasks

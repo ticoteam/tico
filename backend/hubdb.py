@@ -100,6 +100,7 @@ from backend.webhooks_v4_schema import SCHEMA as WEBHOOKS_V4_SCHEMA
 from backend.webhooks_v5_schema import SCHEMA as WEBHOOKS_V5_SCHEMA
 from backend.webhooks_v6_schema import SCHEMA as WEBHOOKS_V6_SCHEMA
 from . import bot_settings as BS
+from . import sources as SRC
 
 HUB_DIR = Path(__file__).resolve().parent.parent
 ROOT = HUB_DIR.parent                       # employees are siblings of the hub
@@ -771,7 +772,8 @@ RUN_PURPOSE_SCHEMA = """
 ALTER TABLE turns ADD COLUMN purpose TEXT;
 """
 
-# The one person a private task with no person on it may reach (hubdb.task_reach): see "a private task's guest".
+# The one person a private task with no person on it could reach, before its reader list (migration
+# 20261105213649_task_readers turns it into a reader and drops the column).
 TASK_GUEST_SCHEMA = """
 ALTER TABLE tasks ADD COLUMN guest TEXT;
 """
@@ -1546,21 +1548,21 @@ def migrate(conn, adopt_legacy=False):
     add_column(conn, "tasks", "rule_due_id", "TEXT")
     task_columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
     if "private" in task_columns:
-        if "guest" in task_columns:
+        if "readers" in task_columns:
             # The few private tasks: their parties, which every privacy-checked read loads (backend/row_clock.py PARTIES,
             # backend/privacy_index.py), and a bot's private tasks for its status rows (task_privacy.status_tasks_sql)
             # with the two columns those read beyond the parties. The predicate matches both queries word for word and
             # the index holds every column they read, so no body is read.
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_status ON tasks("
-                         "id, requester_id, owner_id, guest, private, status, waiting_on) WHERE private IS NOT 0")
+                         "id, requester_id, owner_id, readers, private, status, waiting_on) WHERE private IS NOT 0")
             # A task list's visibility and queue order, and a bot's status rows (task_privacy.status_tasks_sql), each
             # answered from an index alone: the table's pages hold every body, and these reads need none of them.
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_queue_cover ON tasks("
-                         "rank, created_at, id, owner_id, requester_id, private, guest)")
+                         "rank, created_at, id, owner_id, requester_id, private, readers)")
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_owner_status_cover ON tasks("
-                         "owner_id, status, id, requester_id, private, guest, waiting_on)")
+                         "owner_id, status, id, requester_id, private, readers, waiting_on)")
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_requester_status_cover ON tasks("
-                         "requester_id, status, id, owner_id, private, guest, waiting_on)")
+                         "requester_id, status, id, owner_id, private, readers, waiting_on)")
     # privacy_index.conversation_tasks is `SELECT id, task_id FROM conversations`, on every task list.
     # The conversation row holds participants, and the primary key scan reads those pages.
     conn.execute("CREATE INDEX IF NOT EXISTS conversations_id_task ON conversations(id, task_id)")
@@ -1823,6 +1825,7 @@ def event(conn, actor, action, target="", detail=None):
         detail = {**(detail or {}), "via": VIA.get()}
         if VIA.get() in ("botops", "assistant") and DELEGATION.get():
             detail["delegation"] = DELEGATION.get()
+    detail = SRC.stamp_data(detail, actor)      # what a keeper event was for (backend/sources.py), when a scope names it
     row = {"id": new_id(), "created_at": now(), "actor": str(actor), "action": action,
            "target": str(target or ""), "detail": _dump(detail)}
     conn.execute("INSERT INTO events (id, created_at, actor, action, target, detail) "
@@ -3234,9 +3237,17 @@ def _opener(conn, conversation_id):
 
 
 # ----------------------------------------------------------------------------- messages
+def check_message_refs(refs, *, make_page=False):
+    """Only the task Make page route mints the initiating marker."""
+    if refs and "make_page" in refs and not make_page:
+        from .store import Problem
+        raise Problem("forbidden", "Use the task’s Make page control", 403)
+
+
 def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None,
-        in_reply_to=None, wait_s=None):
+        in_reply_to=None, wait_s=None, *, make_page=False):
     """The one write every message goes through: rules 1, 2, 3, 4, 7 and 8 all live here."""
+    check_message_refs(refs, make_page=make_page)
     on_task = message_task_id({"refs": refs}, conversation(conn, conversation_id) if conversation_id else None)
     with refusal_task(on_task):
         return _say(conn, actor, to_actor, body, conversation_id, kind, refs, in_reply_to, wait_s)
@@ -3617,7 +3628,7 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         if held:
             refs = {**refs, "quiet": True, wake_rules.MARK: held}
     row = {"id": new_id(), "conversation_id": conv["id"], "sender_id": actor, "recipient_id": target,
-           "kind": kind, "body": str(body or ""), "refs": _dump(refs or {}),
+           "kind": kind, "body": str(body or ""), "refs": _dump(SRC.stamp(refs or {}, actor)),
            "in_reply_to": in_reply_to, "created_at": now(), "delivered_at": delivered_at,
            "read_at": read_at, "expires_at": expires_at, "wait_s": wait_s}
     if delivered_at is None:
@@ -3796,6 +3807,23 @@ def mark_delivered(conn, actor, message_id, recipient=None):
     return message(conn, message_id)
 
 
+def asks_seen(conn, actor, ids, read=False):
+    """`actor`, a person, has the questions `ids` asked of them on their Needs you (delivered) or opened them there or on
+    their task (`read`, delivered too). Only open questions to them change, each once: a withdrawn question then says
+    whether they had seen it (backend/task_holds.py). Returns the ids that changed."""
+    at, out = now(), []
+    for mid in list(dict.fromkeys(str(i) for i in ids if i))[:200]:
+        cur = conn.execute(
+            "UPDATE messages SET delivered_at=coalesce(delivered_at,?)" + (", read_at=coalesce(read_at,?)" if read else "")
+            + " WHERE id=? AND recipient_id=? AND kind='ask' AND deleted_at IS NULL AND id IN (SELECT m.id FROM messages m "
+            "WHERE m.id=messages.id AND " + OPEN_ASK_SQL + ") AND (delivered_at IS NULL" + (" OR read_at IS NULL)" if read else ")"),
+            (at, at, mid, actor) if read else (at, mid, actor))
+        if cur.rowcount:
+            out.append(mid)
+            event(conn, actor, "message.read" if read else "message.delivered", mid)
+    return out
+
+
 def mark_read(conn, actor, message_id, recipient=None):
     if _secondary_recipient(conn, message_id, recipient):
         conn.execute("UPDATE message_deliveries SET read_at=COALESCE(read_at,?), state=CASE WHEN state IN "
@@ -3918,7 +3946,8 @@ def task_private(conn, row):
 
 
 def task_private_readable(conn, actor, row):
-    """Private tasks admit their parties, bot parties’ org-chart managers and their one guest (task_reach)."""
+    """Private tasks admit their parties, their readers (`tasks.readers`, a group's by its members), bot parties’
+    org-chart managers, meeting participants and Counsel page copies' readers."""
     if not row:
         return False
     row = dict(row)
@@ -3948,25 +3977,148 @@ def task_private_readable(conn, actor, row):
     from .meeting_audience import participant_tasks
     if row['id'] in participant_tasks(conn, actor):
         return True
-    if "guest" not in row:
-        row = _one(conn, "SELECT guest FROM tasks WHERE id=?", (row["id"],)) or {}
-    return bool(row.get("guest")) and actor == row["guest"]
+    if "readers" not in row:
+        row = _one(conn, "SELECT readers FROM tasks WHERE id=?", (row["id"],)) or {}
+    return task_reader(conn, actor, row)
 
 
-# ----------------------------------------------------------------------------- a private task's guest
+# ----------------------------------------------------------------------------- a private task's readers
+# Who can see a private task: its requester and owner, and its reader list (`tasks.readers`, a JSON list of people,
+# bots and `group:<id>`s). A group reader names everyone in it and in the groups under it, decided at each check, so
+# leaving the group takes the access away. Anyone who may change the task changes the list (set_task_readers), and
+# each add and remove is in the task's history. The inherited readers (bot parties' managers, meeting participants,
+# Counsel page copies) are task_private_readable's and are never listed.
+
+def task_readers(row):
+    """The task's reader list as stored: people, bots and `group:<id>`s, in the order they were added."""
+    value = (row or {}).get("readers")
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [a for a in (_json(value, []) or []) if isinstance(a, str) and a]
+
+
+def reader_names(conn, actor):
+    """The reader-list values that name `actor`: itself and every group it is in (its own and each one above it)."""
+    from . import people as P, views
+    roster = views.roster(conn, shared=True)
+    if is_bot(actor):
+        own = P.team_of(actor_id(actor), views.entries(conn, shared=True), roster) or ""
+    elif is_human(actor):
+        own = (P.person(actor_id(actor), roster) or {}).get("team") or ""
+    else:
+        own = ""
+    return [actor] + ["group:" + g for g in (P.group_chain(own, roster) or ([own] if own else []))]
+
+
+def task_reader(conn, actor, row):
+    """Whether `actor` is on the task's reader list, by name or through a group."""
+    readers = task_readers(row)
+    if not readers or not actor:
+        return False
+    if actor in readers:
+        return True
+    return any(r.startswith("group:") for r in readers) and bool(set(readers) & set(reader_names(conn, actor)))
+
+
+def reader_actors(conn, row):
+    """The people and bots the reader list names, each group's by its members now."""
+    from .teammate_access import group_member_actors
+    out = set()
+    for reader in task_readers(row):
+        out |= group_member_actors(conn, reader[6:]) if reader.startswith("group:") else {reader}
+    return out
+
+
+def _reader_target(conn, actor, value):
+    """A reader list value from what a caller named: a person, a bot or `group:<id>`; refused otherwise."""
+    value = str(value or "").strip()
+    if value.startswith("group:"):
+        from . import views
+        if value[6:] not in ((views.roster(conn, shared=True) or {}).get("org_groups") or {}):
+            refuse(conn, actor, "not-found", f"no group {value[6:]}")
+        return value
+    who = resolve_actor(conn, value)
+    if not who or not (is_human(who) and human(conn, actor_id(who)) or is_bot(who) and bot(conn, actor_id(who))):
+        refuse(conn, actor, "not-found", f"{value} is not a person, bot or group on the team")
+    return who
+
+
+def new_readers(conn, actor, row, names):
+    """The readers `names` would add to task `row`: not on its list yet, and not its requester or owner, who read it
+    already. A bot adds people and bots only: a group may be the whole company, which only a person opens it to."""
+    have = set(task_readers(row)) | {row.get("owner_id"), row.get("requester_id")}
+    added = [r for r in dict.fromkeys(_reader_target(conn, actor, v) for v in names) if r not in have]
+    if is_bot(actor) and any(r.startswith("group:") for r in added):
+        refuse(conn, actor, "identity", "Only a person adds a group to Who can see")
+    return added
+
+
+def may_change_readers(conn, actor, row, mover=None):
+    """Whoever may change the task (task_update's identity rule) changes its readers: its parties, their managers and
+    delegates, a party above it, or a task mover."""
+    if mover is None:
+        mover = is_human(actor) and can_move(conn, actor)
+    return actor == KEEPER or _task_party(conn, actor, row) or bool(task_mover(conn, actor, row, mover))
+
+
+def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, mover=None, check=None):
+    """Add and remove readers of private task `task_id` (or `replace` the whole list); each change is a task event.
+    `check(added)` may refuse the readers being added (task_privacy.require_readers). Returns the list as it is now."""
+    _writer(conn, actor, task_id=task_id)
+    row = task(conn, task_id)
+    if not row:
+        refuse(conn, actor, "not-found", f"no task {task_id}")
+    _task_private_writer(conn, actor, row)
+    if not task_private(conn, row):
+        refuse(conn, actor, "private", "A company task is seen by everyone: make it private to choose who sees it")
+    if not may_change_readers(conn, actor, row, mover):
+        refuse(conn, actor, "identity", "Only the requester, owner, their managers or a task mover change who sees a "
+                                        "private task")
+    before = task_readers(row)
+    if replace is not None:
+        fresh = new_readers(conn, actor, row, replace)
+        wanted = [r for r in dict.fromkeys(_reader_target(conn, actor, v) for v in replace) if r in before or r in fresh]
+    else:
+        gone = {_reader_target(conn, actor, v) if str(v).startswith("group:") else resolve_actor(conn, v) or v
+                for v in remove}
+        kept = [r for r in before if r not in gone]
+        fresh = [r for r in new_readers(conn, actor, row, add) if r not in kept]
+        wanted = kept + fresh
+    if fresh and check:
+        check(fresh)
+    if len(wanted) > MAX_TASK_READERS:
+        refuse(conn, actor, "lint", f"A private task lists at most {MAX_TASK_READERS} readers: add a group instead")
+    if wanted == before:
+        return before
+    conn.execute("UPDATE tasks SET readers=?, updated_at=? WHERE id=?",
+                 (_dump(wanted) if wanted else None, now(), task_id))
+    for reader in before:
+        if reader not in wanted:
+            _task_event(conn, task_id, actor, "reader", reader, None, "")
+    for reader in wanted:
+        if reader not in before:
+            _task_event(conn, task_id, actor, "reader", None, reader, "")
+    return wanted
+
+
+MAX_TASK_READERS = 50
+
+
 # A private task with no person on it (a bot's task for another bot, or for itself) would have no way to reach anyone:
 # every hand-off from its runs is refused because nobody it could go to reads it. Its owning bot may bring in ONE
-# person, its guest, by handing them work: a subtask under it, a question on it, or waiting on them. The guest reads
-# that task as its parties do and nothing else: not its parent, its other subtasks, or anything the run also carries.
-# The first person is kept; a hand-off to anyone else is refused. Changing the owner ends it.
+# person by handing them work: a subtask under it, a question on it, or waiting on them. That person becomes a reader
+# of that task and nothing else: not its parent, its other subtasks, or anything the run also carries. Once a person
+# reads it, a hand-off to anyone else is refused: a person on the task widens it (Who can see), not the bot.
 
 def bot_only(row):
-    """No person on this task: its requester and owner are both bots (the same bot for a bot's task to itself)."""
-    return is_bot(row.get("requester_id") or "") and is_bot(row.get("owner_id") or "") and not row.get("guest")
+    """No person on this task: its requester and owner are both bots (the same bot for a bot's task to itself), and
+    no person is on its reader list."""
+    return (is_bot(row.get("requester_id") or "") and is_bot(row.get("owner_id") or "")
+            and not any(is_human(r) for r in task_readers(row)))
 
 
 def task_reach_refusal(conn, actor, row, person):
-    """Why `actor` may not make `person` the guest of private task `row`, or None when it may (or they already read
+    """Why `actor` may not make `person` a reader of private task `row`, or None when it may (or they already read
     it). The words are the refusal a create, a question or a wait gives, and a dry-run gives the same."""
     if not row or not task_private(conn, row) or task_private_readable(conn, person, row):
         return None
@@ -3974,9 +4126,11 @@ def task_reach_refusal(conn, actor, row, person):
     who = actor_id(person)
     if not is_human(person) or not human(conn, who):
         return f"{person} is not a person on the team"
-    if row.get("guest"):
-        return (f"This private task already reached {actor_name(conn, row['guest'])}, its one guest, and {who} cannot read it: "
-                f"hand this to {actor_name(conn, row['guest'])}, or ask a person on the task to make it company-visible")
+    people = [r for r in task_readers(row) if is_human(r)]
+    if people and is_bot(row.get("requester_id") or "") and is_bot(row.get("owner_id") or ""):
+        names = ", ".join(actor_name(conn, p) for p in people)
+        return (f"This private task already reached {names}, and {who} cannot read it: hand this to {names}, or ask "
+                "a person on the task to add them under Who can see")
     if not bot_only(row):
         return "Private task content stays with its requester and current owner"
     if not task_represents(conn, actor, row["owner_id"]):
@@ -3992,23 +4146,24 @@ def task_reach_refusal(conn, actor, row, person):
 
 def subtask_flows_up(conn, row, parent):
     """Whether private subtask `row`'s words may reach readers of `parent`, its private parent, who cannot read the
-    subtask: every party of the subtask (requester, owner and guest) reads the parent. The person a bot handed a
-    subtask or a question under its task is that task's guest, so their answer comes back to the task it was asked
-    for, and to nobody that task does not already have."""
+    subtask: every party and reader of the subtask reads the parent. The person a bot handed a subtask or a question
+    under its task reads that task, so their answer comes back to the task it was asked for, and to nobody that task
+    does not already have."""
     if not row or not parent or not task_private(conn, parent) or TR.parent_of(conn, row["id"]) != parent["id"]:
         return False
     row = task(conn, row["id"]) or {}
-    parties = [p for p in (row.get("requester_id"), row.get("owner_id"), row.get("guest")) if p]
+    parties = [p for p in (row.get("requester_id"), row.get("owner_id")) if p] + sorted(reader_actors(conn, row))
     return bool(parties) and all(task_private_readable(conn, p, parent) for p in parties)
 
 
 def task_reach(conn, actor, row, person):
-    """Make `person` the guest of private task `row` (task_reach_refusal said yes); a no-op when they already read it.
+    """Make `person` a reader of private task `row` (task_reach_refusal said yes); a no-op when they already read it.
     Recorded in the task's history, so its parties see who it reached."""
     if task_private_readable(conn, person, row):
         return
-    conn.execute("UPDATE tasks SET guest=? WHERE id=?", (person, row["id"]))
-    _task_event(conn, row["id"], actor, "guest", None, person, "")
+    readers = task_readers(task(conn, row["id"]))
+    conn.execute("UPDATE tasks SET readers=? WHERE id=?", (_dump(readers + [person]), row["id"]))
+    _task_event(conn, row["id"], actor, "reader", None, person, "")
 
 
 def _task_private_writer(conn, actor, row):
@@ -4593,7 +4748,8 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
         RT.turn_result(conn, actor, row, RT.result_outcome(row.get("status"), effective), event, effective)
         if effective in ("done", "closed", "declined", "review"):
             TS.clear_finished(conn, actor, row)     # review hands it on: the requester looks now, not at the date
-        if effective in ("done", "closed", "declined"):
+        if effective in TASK_ENDED:
+            delivery.task_closed(conn, row)
             # A finished task's open questions to people are moot, every kind. A question lives and dies with its own
             # task: closing or finishing also closes each open descendant through task_close, so its asks end there.
             # A done task asks its requester to accept what it delivered only after this, so that question stays.
@@ -5072,7 +5228,7 @@ def _answered(conn, actor, task_id, card, told=None):
         return False
     name = person_name(conn, person)
     said = str(card.get("note") or "").strip() or {"done": "Done.", "declined": "Declined."}.get(card["status"], "")
-    closer = "Tico" if actor == KEEPER else person_name(conn, actor)   # the keeper closes an ask that expired
+    closer = "The system" if actor == KEEPER else person_name(conn, actor)   # the keeper closes an ask that expired
     if card["status"] == "closed":
         who = f"{name} closed the ask" if actor == person else f"{closer} closed the ask to {name}"
     else:
@@ -6426,11 +6582,22 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
                                conversation(conn, asked["conversation_id"]), "answer", refs, message_id, None,
                                delivered_at=ts if own else None, read_at=ts if own else None)
     _task_event(conn, task_id, actor, "ask", message_id, "answered" if reply else "withdrawn")
-    if row["status"] == "waiting" and row.get("waiting_on") == person and not any(
+    waited_on = row.get("waiting_on")       # before the clear below: the wait on this person, if it was the one
+    if row["status"] == "waiting" and waited_on == person and not any(
             a["recipient_id"] == person for a in open_task_asks(conn, row)):
         # Nothing else on the task waits on them: the next move is the bot's, and it leaves their Needs you.
         conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task_id,))
         _task_event(conn, task_id, actor, "waiting_on", person, None, "")
+    if quote is None:
+        # A withdrawal ends the question's hold, so the Blocked reason follows the holds (backend/task_holds.py), as an
+        # answer does (`_answered_holds`). The same rule as there: the asker's own question, or one a person or the
+        # wait on this person held, names what cleared; another bot's question on a bot's task changes only its words.
+        from . import task_holds
+        own = row["owner_id"] == asker
+        held = own or waited_on == person or is_human(row["owner_id"])
+        whose = "your" if own else f"{task_holds.name(conn, asker)}'s"
+        task_holds.refresh(conn, task_id, (f"{task_holds.name(conn, actor)} withdrew {whose} question to "
+                                           f"{task_holds.name(conn, person)}") if held else None)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ts, task_id))
     recount(conn, [row["owner_id"], row["requester_id"], asker])
     event(conn, actor, "ask.answered_elsewhere" if reply else "ask.withdrawn", message_id,
@@ -6521,7 +6688,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
             refuse(conn, actor, "identity", "Human requester attribution requires the bot's own verified work")
         requester = requester_actor
     if parent:
-        audience = {"id": "", "private": private, "owner_id": target, "requester_id": requester, "guest": None}
+        audience = {"id": "", "private": private, "owner_id": target, "requester_id": requester, "readers": None}
         body = review_gate.bind_prs(conn, actor, parent, title, body, child=audience)
         if review_gate.is_review(conn, parent, title):
             review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner,
@@ -7068,6 +7235,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         sets.append("private=:private")
         args["private"] = int(private)
         _task_event(conn, task_id, actor, "private", int(task_private(conn, row)), int(private), "")
+        if not private and task_readers(row):
+            # Everyone sees a company task: its reader list goes, so making it private again starts from its parties.
+            sets.append("readers=NULL")
+            for reader in task_readers(row):
+                _task_event(conn, task_id, actor, "reader", reader, None, "")
     # Who it waits on goes with the wait as said: a new status or owner starts with nobody waited on unless this
     # update names the person again. A note alone keeps the person: it is detail beneath the wait, which only
     # clearing it or answering ends (backend/task_holds.py).
@@ -7136,10 +7308,6 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         if new_owner != row["owner_id"]:
             from . import task_run_models
             task_run_models.moved(conn, actor, task_id)
-        if new_owner != row["owner_id"] and row.get("guest"):
-            # The guest was the old owner's to bring in; a new owner starts with the task's two parties.
-            sets.append("guest=NULL")
-            _task_event(conn, task_id, actor, "guest", row["guest"], None, "")
         if new_owner != row["owner_id"] and is_bot(row["owner_id"]) and row.get("conversation_id"):
             # The goal Tico set for the old owner ends with its ownership: only the owner's turns end a task goal,
             # and a person owner has none to end it. A new bot owner's first turn sets its own.
@@ -7594,8 +7762,8 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
 
     It is what makes work that waits on a person show as needing that person: the task is in
     their Needs you and batch, and the bot counts toward `needs_human`. Only a person who can read
-    the task: a private task cannot be put in front of anyone outside its requester and owner, except the one
-    guest its owning bot brings into a private task with no person on it (task_reach)."""
+    the task: a private task cannot be put in front of anyone who does not read it, except the one person its
+    owning bot brings into a private task with no person on it (task_reach), who becomes its reader."""
     value = str(value or "").strip()
     if not value:
         return ""
@@ -7615,8 +7783,8 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
                "another task with hub task wait <task> --on task:<other> (then --on bot:<its owner> names that bot)")
     _botops_only(conn, actor, person)
     if not task_private_readable(conn, person, row if private is None else {**row, "private": int(bool(private))}):
-        # A private task with no person on it can take one, its guest, when its owning bot waits on them.
-        if private is not None or not bot_only(row) and not row.get("guest"):
+        # A private task with no person on it takes one as its reader when its owning bot waits on them.
+        if private is not None or not bot_only(row) and not any(is_human(r) for r in task_readers(row)):
             refuse(conn, actor, "private",
                    f"This task is private and {actor_name(conn, person)} cannot read it: file a task for them instead")
         refusal = task_reach_refusal(conn, actor, row, person)
@@ -8061,6 +8229,7 @@ def history_event(conn, subject_type, subject_id, actor, kind, old=None, new=Non
     for a caller whose id is deterministic (backend/task_check_backs.py)."""
     if subject_type not in HISTORY_SUBJECTS:
         raise ValueError(f"unknown history subject type {subject_type!r}")
+    data = SRC.stamp_data(data, actor)
     event_id = event_id or new_id()
     conn.execute("INSERT INTO history_events (id, subject_type, subject_id, actor_id, kind, old, new, note, action_id, "
                  "via, data, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -9463,7 +9632,7 @@ def conversations_for(conn, actor, limit=100):
 
 
 def chats_with(conn, actor, bot_actor_id):
-    """The open chats (not task threads) that this actor and this bot are both in, newest first.
+    """The actor's open chat with this bot, or its readable Home after the bot's chats move, newest first.
     Found directly, not from the newest conversations: a bot's page opened a month after the last
     message still finds its chat (conversations_for scans a recent window only)."""
     out = []
@@ -9473,6 +9642,15 @@ def chats_with(conn, actor, bot_actor_id):
         row["participants"] = _json(row.get("participants"), []) or []
         if actor in row["participants"] and bot_actor_id in row["participants"]:
             out.append(row)
+    from . import bot_home_merge
+    home_id = bot_home_merge.home_for_chat(conn, actor, bot_actor_id, create=False)
+    if home_id:
+        home = _one(conn, "SELECT * FROM conversations WHERE id=?", (home_id,))
+        if home and all(row["id"] != home_id for row in out):
+            home["participants"] = _json(home.get("participants"), []) or []
+            out.append(home)
+            out.sort(key=lambda row: (row.get("last_message_at") or row.get("created_at") or "", row["id"]),
+                     reverse=True)
     return out
 
 

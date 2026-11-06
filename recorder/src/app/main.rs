@@ -113,7 +113,6 @@ commands! {
     link_selected_tasks(ids: Vec<String>) => |app| app.link_selected_tasks(ids);
     accept_link_item(id: String) => |app| app.accept_link_item(&id);
     unlink_item(id: String) => |app| app.unlink_item(&id);
-    edit_task_detail(id: String, due: String, body: String) => |app| app.edit_task_detail(&id, &due, &body);
     stop_screen() => |app| app.screen.stop("");
     record(event: Option<Value>) => |app| app.record(event);
     open_meeting(id: String) => |app| { let opened = app.open(&id); app.report(opened) };
@@ -159,6 +158,8 @@ commands! {
     dismiss_error() => |app| app.dismiss_error();
     open_url(url: String) => |app| app.open_url(&url);
     dismiss_notice() => |app| app.dismiss_notice();
+    allow_speaker_names() => |app| tico_recorder_native::speaker_names::open_settings(app.store.root());
+    dismiss_speaker_names() => |app| tico_recorder_native::speaker_names::dismiss_permission(app.store.root());
     set_visible(visible: bool) => |app| app.set_visible(visible);
 }
 
@@ -166,26 +167,35 @@ commands! {
 async fn task_picker(
     state: State<'_, Shared>,
     query: String,
+    kind: Option<String>,
     offset: usize,
 ) -> Result<Value, String> {
     let (config, destination) = lock(&state).task_picker_context();
+    let kind = kind.unwrap_or_default();
     picker_search(
         move || tico_recorder_native::network::Tico::saved(&config, &destination),
-        query,
-        offset,
+        move |tico| tico.search_tasks(&query, &kind, offset),
     )
     .await
 }
 
+#[tauri::command]
+async fn task_types(state: State<'_, Shared>) -> Result<Value, String> {
+    let (config, destination) = lock(&state).task_picker_context();
+    picker_search(
+        move || tico_recorder_native::network::Tico::saved(&config, &destination),
+        |tico| tico.task_types(),
+    )
+    .await
+}
+
+/// The picker's reads are blocking HTTP, so they run off the Tauri runtime.
 async fn picker_search(
     connect: impl FnOnce() -> anyhow::Result<tico_recorder_native::network::Tico> + Send + 'static,
-    query: String,
-    offset: usize,
+    read: impl FnOnce(tico_recorder_native::network::Tico) -> anyhow::Result<Value> + Send + 'static,
 ) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        connect()
-            .and_then(|tico| tico.search_tasks(&query, offset))
-            .map_err(|e| e.to_string())
+        connect().and_then(read).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -393,6 +403,7 @@ fn main() {
     let root = settings::root();
     let library_lock = AppLock::acquire(&root).expect("Recorder library is in use");
     let store = Store::open(&root).expect("Open recorder library");
+    tico_recorder_native::diag::init(&root);
     store.recover().expect("Recover saved audio");
     if demo && store.list().unwrap_or_default().is_empty() {
         recorder::seed_demo(&store).expect("Create demo library");
@@ -421,15 +432,22 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Focus decides when a downloaded update may install unattended (see update.rs).
         .on_window_event(move |_window, event| window_focus.window_event(event))
+        // The app menu gets "Check for Updates…" (see update.rs). No menu bar item.
+        .menu(update::app_menu)
+        .on_menu_event(|app, event| {
+            if event.id() == update::MENU_CHECK {
+                update::from_menu(app);
+            }
+        })
         .manage(recorder.clone())
         .manage(updates.clone())
         .invoke_handler(tauri::generate_handler![
             more_task_links,
             task_picker,
+            task_types,
             link_selected_tasks,
             accept_link_item,
             unlink_item,
-            edit_task_detail,
             view,
             meeting_link,
             share_screen,
@@ -480,12 +498,16 @@ fn main() {
             dismiss_error,
             open_url,
             dismiss_notice,
+            allow_speaker_names,
+            dismiss_speaker_names,
             set_visible,
             update::update_check,
             update::update_install,
+            update::move_to_applications,
         ])
         .build(tauri::generate_context!())
         .expect("Start Tico Recorder");
+    updates.locate(app.package_info().version.to_string());
     ticker(app.handle().clone(), &recorder);
     update::start(app.handle().clone(), recorder.clone(), updates);
     app.run(|handle: &tauri::AppHandle, event: RunEvent| match event {

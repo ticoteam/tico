@@ -326,14 +326,15 @@ const HUB_PATHS: &[&str] = &[
     "call leave", "call list", "call retry", "call show", "call start", "call token", "card", "card add",
     "card list", "card remove", "card update", "catalog", "changelog", "changelog list", "changelog mark-read",
     "chat", "chat goal", "chat send", "classify", "company-page", "computer", "computer browser-exit",
-    "computer list", "computer performance", "computer turns-at-once", "computers", "connections",
-    "connections list", "context", "context search", "context show", "conversation", "conversation show",
+    "computer list", "computer performance", "computer turns-at-once", "computers", "context",
+    "context search", "context show", "conversation", "conversation show",
     "credential", "credential delete", "credential grant", "credential import", "credential list",
     "credential request", "credential revoke", "credential set", "db", "decision", "decision ask",
     "decision outcome", "decision readout", "decisions", "doc", "doc archive", "doc ask", "doc ask-status",
     "doc fetch", "doc history", "doc link-list", "doc list", "doc read", "doc search", "doc write", "docs",
-    "docs links", "editions", "editions list", "editions show", "email", "email inbox", "email mailboxes",
-    "email message", "email search", "email thread", "event-types", "external", "external sync",
+    "docs links", "editions", "editions list", "editions show", "email", "email archive", "email cancel", "email inbox",
+    "email label", "email mailboxes", "email mark-read", "email mark-unread", "email message", "email policy",
+    "email search", "email sends", "email thread", "email unarchive", "email unlabel", "event-types", "external", "external sync",
     "feedback", "feedback give", "feedback list", "feedback markers", "feedback reasons", "feedback remove",
     "feedback rule", "feedback rule-draft", "file", "file approved", "file archive", "file delete",
     "file import", "file link", "file list", "file publish", "file read", "file review", "file search",
@@ -397,7 +398,7 @@ const HUB_PATHS: &[&str] = &[
     "task cap set", "task caps", "task check-back", "task child", "task close", "task comment",
     "task comment-delete", "task comment-edit", "task comment-moderate", "task create", "task defer",
     "task delete", "task deleted", "task done", "task label", "task later", "task link", "task list",
-    "task meetings", "task model", "task publication-preview", "task question", "task relate", "task requester-remove",
+    "task context", "task meetings", "task model", "task publication-preview", "task question", "task readers", "task readers add", "task readers list", "task readers remove", "task relate", "task requester-remove",
     "task requester-save", "task requesters", "task restore", "task run", "task show", "task snooze",
     "task stuck", "task tree", "task type", "task type create", "task type delete", "task type update",
     "task types", "task unsnooze", "task update", "task wait", "task waive-qa", "task worktree",
@@ -407,7 +408,7 @@ const HUB_PATHS: &[&str] = &[
     "tasks cap set", "tasks caps", "tasks check-back", "tasks child", "tasks close", "tasks comment",
     "tasks comment-delete", "tasks comment-edit", "tasks comment-moderate", "tasks create", "tasks defer",
     "tasks delete", "tasks deleted", "tasks done", "tasks label", "tasks later", "tasks link", "tasks list",
-    "tasks meetings", "tasks model", "tasks publication-preview", "tasks question", "tasks relate", "tasks requester-remove",
+    "tasks context", "tasks meetings", "tasks model", "tasks publication-preview", "tasks question", "tasks readers", "tasks readers add", "tasks readers list", "tasks readers remove", "tasks relate", "tasks requester-remove",
     "tasks requester-save", "tasks requesters", "tasks restore", "tasks run", "tasks show", "tasks snooze",
     "tasks tree", "tasks type", "tasks type create", "tasks type delete", "tasks type update", "tasks types",
     "tasks unsnooze", "tasks update", "tasks wait", "tasks waive-qa", "tasks worktree", "tasks worktree add",
@@ -418,7 +419,8 @@ const HUB_PATHS: &[&str] = &[
     "thread members list", "thread members remove", "thread open-earlier", "thread pin", "thread post",
     "thread react", "thread read", "thread reply", "thread search", "thread show", "thread slack-resume",
     "thread sub", "thread task", "thread unfollow", "thread unpin", "thread unreact", "thread update",
-    "thread upload", "tool", "tool add", "tool learn", "tool list", "tool query-search", "tool remove",
+    "thread upload", "tool", "tool add", "tool call", "tool check", "tool index", "tool learn", "tool list",
+    "tool query-search", "tool remove",
     "tool report", "tool show", "tool update", "tools", "trigger", "trigger create", "trigger delete",
     "trigger deliveries", "trigger delivery", "trigger list", "trigger recover", "trigger relay",
     "trigger relay create", "trigger relay delete", "trigger relay rotate", "trigger replay", "trigger rotate",
@@ -1284,6 +1286,10 @@ mod tests {
         assert_eq!(command_program("hub task close 7f3a"), "hub task close");
         assert_eq!(command_program("hub needs-you show"), "hub needs-you show");
         assert_eq!(command_program("hub bot status history"), "hub bot status history");
+        for action in ["archive", "unarchive", "mark-read", "mark-unread", "label", "unlabel"] {
+            assert_eq!(command_program(&format!("hub email {action} ana@acme.example private-label private-id")),
+                       format!("hub email {action}"));
+        }
         assert_eq!(command_program("hub nosuch command"), "hub");
     }
 

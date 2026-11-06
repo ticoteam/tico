@@ -32,6 +32,10 @@ pub(crate) fn client() -> Result<Client> {
         .build()?;
     Ok(HTTP.get_or_init(|| client).clone())
 }
+/// This build's version, the release's (build.rs), sent to Tico so it can show who runs an old Recorder.
+pub const VERSION: &str = env!("TICO_RECORDER_VERSION");
+pub const VERSION_HEADER: &str = "X-Tico-Recorder-Version";
+pub const INSTALL_HEADER: &str = "X-Tico-Recorder-Install";
 /// A Tico without an endpoint the recorder uses answers 404 or 405 with no Tico error code.
 pub const OLD_TICO: &str = "This Tico doesn't support this yet. Update Tico to use it.";
 pub(crate) fn response(response: reqwest::blocking::Response) -> Result<Value> {
@@ -193,7 +197,11 @@ pub fn transcribe_next_with(
     })();
     let (text, mut words, error) = match result {
         Ok((text, words)) => (text, words, String::new()),
-        Err(error) => (String::new(), vec![], error.to_string()),
+        Err(error) => (
+            String::new(),
+            vec![],
+            crate::retry::stored(&error, "Transcription is retrying"),
+        ),
     };
     for word in &mut words {
         word.start_ms += chunk.start_ms;
@@ -213,6 +221,15 @@ pub fn transcribe_next_with(
         &error,
         json!({"model":config.transcription_model,"outcome":outcome}),
     )?;
+    #[cfg(feature = "diarize")]
+    if chunk.channel == "them"
+        && error.is_empty()
+        && store.peek(&chunk.recording_id)?.state == "recording"
+    {
+        // Capture and transcription stay usable if the local model is unavailable. Stream labels
+        // remain provisional; the full voiceprint/diarization pass after Stop is still authoritative.
+        let _ = crate::diarize::label_provisional(store, &chunk.recording_id);
+    }
     Ok(true)
 }
 
@@ -239,8 +256,8 @@ impl Transcriber {
             .unwrap_or_else(|error| error.into_inner())
             .clone()
     }
-    /// Workers wake when the library changes (a saved chunk, a retry, `Store::poke` after
-    /// Settings change) instead of polling. Settings are read when there is audio to send.
+    /// Workers wake when the library changes or settings/credentials are saved instead of
+    /// polling. Settings are read when there is audio to send.
     pub fn start(store: Store) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let status = Arc::new(Mutex::new(String::new()));
@@ -386,6 +403,17 @@ impl Tico {
             oauth: false,
         })
     }
+    /// Every call to Tico carries the token, this build's version and this copy's install id. Only calls to Tico:
+    /// speech and chat providers never see the id.
+    fn signed(
+        &self,
+        request: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
+        request
+            .bearer_auth(&self.token)
+            .header(VERSION_HEADER, VERSION)
+            .header(INSTALL_HEADER, settings::install_id())
+    }
     pub fn call(&self, path: &str, body: Option<&Value>, key: &str) -> Result<Value> {
         ensure!(
             path.starts_with('/') && !path.starts_with("//"),
@@ -404,7 +432,7 @@ impl Tico {
                 .json(body),
             None => self.client.get(url),
         };
-        response(request.bearer_auth(&self.token).send()?)
+        response(self.signed(request).send()?)
             .with_context(|| format!("Tico request {path} failed"))
     }
     pub fn unlink_meeting_task(&self, meeting: &str, task: &str, key: &str) -> Result<Value> {
@@ -413,9 +441,7 @@ impl Tico {
             .map_err(|_| anyhow::anyhow!("Invalid Tico address"))?
             .extend(["api", "v2", "meetings", meeting, "tasks", task]);
         let reply = self
-            .client
-            .delete(url)
-            .bearer_auth(&self.token)
+            .signed(self.client.delete(url))
             .header("Idempotency-Key", key)
             .send()?;
         if reply.status() == reqwest::StatusCode::NOT_FOUND {
@@ -445,9 +471,7 @@ impl Tico {
             path
         );
         let reply = self
-            .client
-            .get(url)
-            .bearer_auth(&self.token)
+            .signed(self.client.get(url))
             .header("Accept", "text/event-stream")
             .send()
             .with_context(|| format!("Tico request {path} failed"))?;
@@ -555,6 +579,14 @@ impl Tico {
     }
     /// People and the bots this person may give work to, from the team chart.
     pub fn roster(&self) -> Result<Vec<(String, String)>> {
+        Ok(self
+            .draft_people()?
+            .into_iter()
+            .map(|p| (p.actor, p.name))
+            .collect())
+    }
+    /// The same assignable teammates, retaining jobs for meeting owner suggestions.
+    pub fn draft_people(&self) -> Result<Vec<crate::assist::Person>> {
         let org = self.call("/api/v2/org?can=write", None, "")?;
         let mut result = vec![];
         for row in org["people"].as_array().into_iter().flatten() {
@@ -562,10 +594,11 @@ impl Tico {
                 && let Some(id) = row["id"].as_str()
             {
                 let name = row["name"].as_str().filter(|name| !name.is_empty());
-                result.push((
-                    format!("human:{id}"),
-                    name.or(row["email"].as_str()).unwrap_or(id).into(),
-                ));
+                result.push(crate::assist::Person {
+                    actor: format!("human:{id}"),
+                    name: name.or(row["email"].as_str()).unwrap_or(id).into(),
+                    job: row["title"].as_str().unwrap_or_default().into(),
+                });
             }
         }
         for row in org["bots"].as_array().into_iter().flatten() {
@@ -575,10 +608,11 @@ impl Tico {
                 && let Some(slug) = row["id"].as_str()
             {
                 let name = row["display_name"].as_str().filter(|name| !name.is_empty());
-                result.push((
-                    format!("bot:{slug}"),
-                    name.or(row["name"].as_str()).unwrap_or(slug).into(),
-                ));
+                result.push(crate::assist::Person {
+                    actor: format!("bot:{slug}"),
+                    name: name.or(row["name"].as_str()).unwrap_or(slug).into(),
+                    job: row["description"].as_str().unwrap_or_default().into(),
+                });
             }
         }
         Ok(result)

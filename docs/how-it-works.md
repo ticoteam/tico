@@ -136,7 +136,7 @@ action items), **Docs**,
 and, for the owner and admins, **SQL**. Tasks has List, Board and Done; Routines and wake rules are **Automations**.
 Credentials are in **Tools → Credentials**. See [Navigation](navigation.md). A bot's page has **Chat**,
 **Tasks**, **Docs** and **More**. The assistant (Tico, `coo`), BotOps, the Librarian, the Strategy Bot and the Task Manager are built in and cannot be archived or deleted (`409 system_bot`); the assistant
-and the Librarian work in the background and are not listed for humans. Each human has one private **Assistant** DM, opened by **Ask** from any page except its own and setup, even while the signed-out banner shows
+and the Librarian work in the background and are not listed for humans. Each human has one private **Assistant** DM, opened by **Tico Assistant** (or a page's **Ask**) from any page except its own and setup, even while the signed-out banner shows
 (`#/assistant`, also the first tab on their own page, is the same chat in full): it looks things up at once, does low-risk things as that human, and
 proposes anything with a side effect for their own click ([The Assistant](assistant.md)). The owner's DM is the
 Assistant too: it hands strategy and goal work to the Strategy Bot, research to the Librarian and bot work to BotOps. There is no shared
@@ -148,7 +148,7 @@ one `SELECT` at a time, each caller seeing only what the JSON API would show it,
 
 **Your Mac's runner** — the Rust runner `tico-runner` (`runner-rs/`), with Python helpers in `runner_support/` for the side
 jobs, registered once with **Add computer** in **Settings → Computers** (`scripts/setup-runner.sh`, credential in
-`~/.config/tico/runner.json`). Four launchd jobs, installed and managed with `scripts/tico`. Their plists name
+`~/.config/tico/runner.json`). Four launchd jobs, installed and managed with `scripts/tico-computer`. Their plists name
 `runner`, which forwards to `runner_support/` (runner/__init__.py), so a computer moved back to an older release still
 starts them:
 
@@ -156,8 +156,8 @@ starts them:
 |---|---|---|
 | `team.tico.tico-bot` | `python -m runner run` (execs `tico-runner run`) | Heartbeats every 15 s with readiness, claims work for the bots assigned to this computer, runs each run in the bot's local repository with the local model CLI, streams output back |
 | `team.tico.tico-connectors` | `python -m runner connectors` | Publishes calendar snapshots, executes Tico-queued calendar appointments, and pushes persisted mail from local Google access (Ana's Mac, or a Linux runner that holds the Google key) |
-| `team.tico.tico-close-calls` | `python -m runner close-calls` | Every five minutes, imports available Close call and Notetaker meeting transcripts without fetching audio, using the local Close key (Ana's Mac only; `scripts/tico install close-calls`) |
-| `team.tico.tico-importers` | `python -m runner importers` | Runs the meeting importers the owner turned on for this computer (Zoom, Google Meet, Granola), using credentials kept in `secrets/` here; see [Meetings](meetings.md#meeting-importers) (`scripts/tico install importers`) |
+| `team.tico.tico-close-calls` | `python -m runner close-calls` | Every five minutes, imports available Close call and Notetaker meeting transcripts without fetching audio, using the local Close key (Ana's Mac only; `scripts/tico-computer install close-calls`) |
+| `team.tico.tico-importers` | `python -m runner importers` | Runs the meeting importers the owner turned on for this computer (Zoom, Google Meet, Granola), using credentials kept in `secrets/` here; see [Meetings](meetings.md#meeting-importers) (`scripts/tico-computer install importers`) |
 
 A Linux runner (the Docker image) has no launchd: with `TICO_SIDE_JOBS=1` (set by the image) `tico-runner run` supervises `importers` (while Tico assigns importers to this computer) and
 `close-calls` (while the Close key is in `secrets/`) and `connectors` (while `secrets/google-sa.json` is there, or
@@ -213,7 +213,7 @@ Mac that runs it (`~/tico-work` on Ana's Mac). The contract (`templates/employee
 | File | What |
 |---|---|
 | `AGENT.md` (with `AGENTS.md`/`CLAUDE.md` pointing at it) | its instructions, what it owns, how it starts and ends a run; read every run |
-| `bot.yaml` | `name`, `runtime`, `model`, `reasoning_effort`, `max_run_minutes`, `tools:`, `outbound_send` (`routines:` only in a template, as the seed) |
+| `bot.yaml` | `name`, `runtime`, `model`, `reasoning_effort`, `max_run_minutes`, `tools:` (`routines:` only in a template, as the seed) |
 | `state.md` | current focus, open threads, next step |
 | `memory/learnings.md`, `memory/decisions.md` | how to do the job; dated decisions |
 | `knowledge/` | what is true in its domain, one topic per file, dated sources |
@@ -357,8 +357,8 @@ priority for this reason): a lease lapsing while the server has answered no runn
 than half a lease period gets one more period instead of expiring, and a run that did
 expire is handed back to its runner when the runner reports in within 15 minutes, as long as no
 one has reviewed the job meanwhile (`attempt.lease-restored` in the event log). The runner's log
-(`scripts/tico logs bot`) writes one timestamped line when the cloud becomes unreachable, a
-progress line at most once a minute while it stays so, and one when it is back; `scripts/tico
+(`scripts/tico-computer logs bot`) writes one timestamped line when the cloud becomes unreachable, a
+progress line at most once a minute while it stays so, and one when it is back; `scripts/tico-computer
 status` says when the running bot job predates the checkout's current commit. On a bot's Chat
 page, one line above the composer says when the bot is paused and why (a usage limit, a
 quarantine, or a Mac offline for more than ten minutes) and that messages are saved, or that a
@@ -567,10 +567,12 @@ files a task for you, or sets its own task waiting on you (`hub task update --st
 <you> --note "<what you need to do>"`). A bot's waiting note, or the first paragraph of a task it gives
 you, must say in one or two plain sentences what it needs and what happens after, with no ids, file
 paths or tool names; Tico refuses it otherwise. A task a bot set waiting on you before that rule, with
-no plain ask, sits at the bottom of Needs you as "Waiting for <bot> to explain" while the bot's task roundup lists it to restate it. All of these appear in **Needs you** at the top of **Tasks** with
-**Reply**, **Approve** / **Decline**, **Done** / **Close**. Needs you is your queue: approvals and
-questions first (each blocks a bot), then your own tasks in rank order. Tickets on a numbered type
-stay on their board and come to Needs you only with a question for you ([Tasks](tasks.md)). There
+no plain ask, sits at the bottom of Needs you while the bot's task roundup lists it to restate it.
+**Needs you** at the top of **Tasks** lists everything waiting on you across all boards. Rows answerable
+on a card open that card; other rows open the full task. **Catch up** walks the answerable cards one
+at a time. The tab, list header and Tasks badges share their count, independent of the selected board;
+the badges hide at zero. Tickets on a numbered type stay on their board and come to Needs you only
+with a question for you ([Tasks](tasks.md)). There
 is no priority; a mover (anyone in the leadership, product or engineering group) drags a task up or
 down, into another column, or between lanes; everyone else sees the board and comments.
 
@@ -589,7 +591,7 @@ if you edited elsewhere. Do not edit while the bot is running there.
 **You change a routine.** Routines are automations in Tico (`docs/routines.md`): edit one on the
 Automations page, or a bot changes its own with `hub automation update`. The change is in
 the table at once; a sleeping Mac does not block it. **You change a bot's switches.** Tools
-read `tools:` from the Mac checkout each time a bot sends or posts; whether it may send without approval comes from the mail switch a person sets in Tico (`outbound_send` in bot.yaml only asks). Model, effort, computer, humans, name,
+read `tools:` from the Mac checkout each time a bot sends or posts; whether a send goes is decided by Tico's send queue under the sending policy a person sets in Tico (On their own, Ask first or Never). Model, effort, computer, humans, name,
 status and reporting line are changed in **Settings → Bots**, not in the file.
 
 ### Profiles
@@ -722,7 +724,7 @@ each heartbeat, clones one repository per cycle in the background, and fetches a
 come in a later phase. Fetching uses a temporary GitHub App read token kept out of git config
 and logs. Run tokens still follow each bot's own repository access.
 
-Heartbeats and `scripts/tico doctor` report each base clone's state, last fetch, disk use and
+Heartbeats and `scripts/tico-computer doctor` report each base clone's state, last fetch, disk use and
 any error. A base clone failure does not change a bot's readiness. A clone that has been absent
 from this computer's repository list for 30 days is removed from `repos/`. Older servers without
 the repository endpoint leave this feature idle.

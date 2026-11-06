@@ -63,7 +63,7 @@ HINTS = {
     "unreconciled": "a money account not reconciled for over a month: match rows and reconcile its statement",
     "budget_near_limit": "a budget near its limit: tell its owner once",
     "invoice_email": ("an invoice email waits to send: read its exact text from the invoice search, mail draft it "
-                      "exactly, then mail send --approval-issue with its send approval, and report invoice_delivery"),
+                      "exactly, then mail send with --approval set to its send approval, and report invoice_delivery"),
 }
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bookkeeper_seen(
@@ -366,8 +366,8 @@ def watch(c, auth, at: str) -> dict[str, Any]:
 
 
 def _reach_owner(c, auth, task_id: str) -> None:
-    """A private task's readers are its parties and one guest: the company owner is the guest, so the digest reads for
-    them and the Bookkeeper, never for the rest of the team."""
+    """A private task is read by its parties and its reader list: the company owner is its reader, so the digest
+    reads for them and the Bookkeeper, never for the rest of the team."""
     owner = _owner(c, auth)
     row = H.task(c, task_id)
     if owner and row is not None and H.task_reach_refusal(c, H.KEEPER, row, owner) is None:

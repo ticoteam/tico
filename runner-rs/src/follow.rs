@@ -38,7 +38,7 @@ const PREPARE_LIMIT_S: u64 = 1800; // a cold cargo build (engine.py BUILD_TIMEOU
 const PREPARE_RETRY: Duration = Duration::from_secs(3600);
 /// What a restart picks up: a merge touching nothing here needs none (service.py RUNNER_CODE, plus the Rust source).
 const RUNNER_CODE: &[&str] = &["runner/", "runner_support/", "runner-rs/", "clients/"];
-const NO_SUPERVISOR: &str = "no supervisor would start this runner again after an update: run `scripts/tico install` once on this computer and it updates itself";
+const NO_SUPERVISOR: &str = "no supervisor would start this runner again after an update: run `scripts/tico-computer install` once on this computer and it updates itself";
 
 /// A semantic version's sort key (release_update.py `key`), or None.
 fn key(value: &str) -> Option<(u64, u64, u64, Vec<(u8, u64, String)>)> {
@@ -76,7 +76,7 @@ pub fn kind() -> &'static str {
     }
 }
 
-/// launchd's job label, the systemd unit `scripts/tico install` writes, or TICO_SUPERVISED=1 (service.py supervised).
+/// launchd's job label, the systemd unit `scripts/tico-computer install` writes, or TICO_SUPERVISED=1 (service.py supervised).
 pub fn supervised() -> bool {
     let var = |k: &str| std::env::var(k).unwrap_or_default();
     var("XPC_SERVICE_NAME").starts_with("team.tico") || var("TICO_SYSTEMD_UNIT").starts_with("tico-") || var("TICO_SUPERVISED") == "1"
@@ -169,6 +169,19 @@ fn flattened_note(found: &Value) -> String {
     }
 }
 
+/// Re-read old branch blocks with the updater's own read-only rules, without switching the install from a heartbeat.
+async fn branch_note(root: &Path, want: &str) -> Option<String> {
+    let mut cmd = tokio::process::Command::new(crate::env::python());
+    cmd.args(["-m", "runner_support.release_branch", "--version", want, "--root"]).arg(root)
+        .current_dir(crate::env::root()).stdin(Stdio::null()).stdout(Stdio::piped())
+        .stderr(Stdio::null()).kill_on_drop(true);
+    match tokio::time::timeout(Duration::from_secs(60), cmd.output()).await {
+        Ok(Ok(out)) if out.status.success() => serde_json::from_slice::<Value>(&out.stdout).ok()
+            .and_then(|v| v["error"].as_str().filter(|s| !s.is_empty()).map(str::to_string)),
+        _ => None,
+    }
+}
+
 /// Fast-forward the checkout to origin/main when that is safe (service.py self_update): (restart, note), restart
 /// when HEAD is now newer than what this process runs, the note saying why nothing was done.
 async fn self_update(root: &Path, running: &str) -> (bool, String) {
@@ -225,7 +238,7 @@ async fn self_update(root: &Path, running: &str) -> (bool, String) {
     }
     let changed = out(git_in(root, &["diff", "--name-only", "HEAD", "origin/main"], 30).await);
     if changed.split_whitespace().any(|p| p == "backend/requirements.txt") {
-        return (false, "backend/requirements.txt changed; a person runs pip install and scripts/tico update".into());
+        return (false, "backend/requirements.txt changed; a person runs pip install and scripts/tico-computer update".into());
     }
     if !changed.is_empty() && git_in(root, &["merge", "--ff-only", "--quiet", "origin/main"], 60).await.is_none_or(|(c, _)| c != 0) {
         return (false, "main does not fast-forward".into());
@@ -262,7 +275,7 @@ fn manifest_commit(root: &Path) -> String {
     Some(text_of(&value["commit"])).filter(|c| is_commit(c)).unwrap_or_default()
 }
 
-/// Which commit this process runs, for `scripts/tico status` and the updater's health check (service.py record_revision).
+/// Which commit this process runs, for `scripts/tico-computer status` and the updater's health check (service.py record_revision).
 pub fn record_revision(directory: &Path) {
     let revision = checkout_commit(&crate::env::root());
     let path = directory.join("runner-revision");
@@ -654,6 +667,11 @@ impl Follower {
             }
             s @ ("failed" | "rolled_back" | "blocked") if age < RETRY_AFTER_S => {
                 let mut error = text_of(&status["error"]);
+                if s == "blocked" && error.starts_with("the checkout is on branch ") {
+                    if let Some(note) = branch_note(&self.root, want).await {
+                        error = note;
+                    }
+                }
                 if s == "blocked" && error.starts_with("the checkout has ") {
                     let found = checkout_links(&self.root, false).await;
                     let note = flattened_note(&found);
@@ -1050,7 +1068,7 @@ impl Follower {
             Err(e) => e.to_string(),
         };
         let back = git_in(&self.root, &["reset", "--quiet", "--keep", running], 60).await.is_some_and(|(c, _)| c == 0);
-        log(&format!("Tico runner: could not prepare the runner for main {} ({why}); {}", &head[..7], if back { "kept the checkout on what runs now" } else { "and could not move the checkout back; see scripts/tico status" }));
+        log(&format!("Tico runner: could not prepare the runner for main {} ({why}); {}", &head[..7], if back { "kept the checkout on what runs now" } else { "and could not move the checkout back; see scripts/tico-computer status" }));
         self.inner.lock().unwrap().prepare_after = Some(Instant::now() + PREPARE_RETRY);
         let note: String = format!("the runner for main could not be prepared (it needs cargo to build, or a release to download): {why}").chars().take(300).collect();
         self.inner.lock().unwrap().update_note = note.clone();
@@ -1223,6 +1241,38 @@ scope['main'](sys.argv[1:])
                 }
             }
         }
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn saved_branch_blocks_report_current_recovery_safety_without_moving_head() {
+        let mut f = checkout_follower();
+        f.root = f.directory.join("checkout");
+        std::fs::create_dir(&f.root).unwrap();
+        let sh = |args: &[&str]| {
+            let out = Command::new("git").arg("-C").arg(&f.root)
+                .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@acme.example"]).args(args).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        sh(&["init", "-q", "-b", "tico/b427e9ee-fix-runner"]);
+        std::fs::write(f.root.join("app.py"), "keep").unwrap();
+        sh(&["add", "."]);
+        sh(&["commit", "-qm", "init"]);
+        let before = sh(&["rev-parse", "HEAD"]);
+        let error = "the checkout is on branch tico/b427e9ee-fix-runner; switch it to main to follow releases";
+        write_status(&f.directory, json!({"state": "blocked", "target": "0.3.45", "error": error, "at": epoch_s()}));
+        let (_, note) = f.outcome("0.3.45").await.unwrap();
+        assert!(note.contains("tico/b427e9ee-fix-runner") && note.contains("automatically"), "{note}");
+        std::fs::write(f.root.join("app.py"), "work").unwrap();
+        let (_, note) = f.outcome("0.3.45").await.unwrap();
+        assert!(note.contains("cannot recover") && note.contains("app.py"), "{note}");
+        std::fs::write(f.root.join("app.py"), "keep").unwrap();
+        std::fs::write(f.root.join(".git/MERGE_HEAD"), format!("{before}\n")).unwrap();
+        assert!(f.outcome("0.3.45").await.unwrap().1.contains("merge in progress"));
+        assert_eq!(sh(&["rev-parse", "HEAD"]), before);
+        assert_eq!(sh(&["branch", "--show-current"]), "tico/b427e9ee-fix-runner");
+        assert!(sh(&["for-each-ref", "refs/tico/recovered/"]).is_empty());
         std::fs::remove_dir_all(f.directory).unwrap();
     }
 

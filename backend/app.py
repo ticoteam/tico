@@ -30,8 +30,10 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, recruiting, harness_actions, model_login, oidc, personal_tokens, views
 from . import outcome_stats
+from . import recorder_installs
 from . import assistant_changes, why_here
 from . import teammate_access
+from . import sources as SRC
 from . import start_places
 from . import ask_ingest, ask_routing, delivery, strategy_bot, invites, owner_link
 from . import org_rule_check
@@ -92,6 +94,7 @@ from .performance import listing as performance_listing
 from .credential_cards import install_credential_cards, scrub_attempt
 from .github import PATH as GITHUB_WEBHOOK_PATH
 from .triggers import PATH as TRIGGER_HOOK_PATH
+from .tool_proxy import PREFIX as TOOL_PROXY_PATH
 from .store import H, P, Problem, Store, bot_readiness, encode, message_page, refused, repo_url, task_message_page
 from . import bot_settings as BS
 
@@ -140,6 +143,7 @@ def reset_bot_sessions(c, bot):
 
 def create_app(settings=None):
     settings = settings or Settings.from_env()
+    SRC.set_assistant_name(settings.assistant_name)     # the labels of keeper lines (backend/sources.py)
     telemetry = Observability(settings)
     from . import flight
     recorder = flight.Recorder() if settings.flight_recorder else None
@@ -334,7 +338,7 @@ def create_app(settings=None):
                 except Exception as exc:
                     telemetry.capture("github_wakes", exc)
                 try:
-                    app.state.personal_alerts.tick()
+                    app.state.personal_alerts.tick()           # its pass records on its own thread (personal_alerts)
                     await asyncio.to_thread(scheduler.tick)
                     await asyncio.to_thread(recorded, "release_check", release_check)
                     await asyncio.to_thread(recorded, "repository_waits", repository_waits)
@@ -342,22 +346,35 @@ def create_app(settings=None):
                     telemetry.capture("scheduler", exc)
                     import logging
                     logging.getLogger("tico.scheduler").error("Scheduler tick failed: %s", type(exc).__name__)
+                def call_sweeps():
+                    # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py), and
+                    # calls kept to their threads: people and bots whose access ended, and a LiveKit that restarted.
+                    failed = None
+                    for name, sweep in (("live_meeting_sweep", app.state.live_meeting_routing.sweep),
+                                        ("calls_sweep", app.state.calls.sweep)):
+                        try:
+                            sweep()
+                        except Exception as exc:
+                            telemetry.capture(name, exc)
+                            failed = failed or exc
+                    if failed:
+                        raise failed
                 try:
-                    # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py).
-                    await asyncio.to_thread(app.state.live_meeting_routing.sweep)
-                except Exception as exc:
-                    telemetry.capture("live_meeting_sweep", exc)
+                    await asyncio.to_thread(system_routines.pass_of, store, "call_sweeps", call_sweeps)
+                except Exception:                              # noqa: S110 - captured above, and the run says it failed
+                    pass
                 try:
-                    # Calls keep to their threads: people and bots whose access ended, and a LiveKit that restarted.
-                    await asyncio.to_thread(app.state.calls.sweep)
-                except Exception as exc:
-                    telemetry.capture("calls_sweep", exc)
-                try:
-                    # Settings > Inboxes' pending and failing Workspace key is checked again (backend/google_workspace.py).
+                    # Tools > Settings > Email's pending and failing Workspace key is checked again (backend/google_workspace.py).
                     from . import google_workspace as workspace_checks
-                    await asyncio.to_thread(workspace_checks.tick, store)
+                    await asyncio.to_thread(system_routines.pass_of, store, "workspace_check", workspace_checks.tick, store)
                 except Exception as exc:
                     telemetry.capture("google_workspace", exc)
+                try:
+                    # Workspace inboxes' queued email, sent by the server itself after its undo window and pacing.
+                    from . import email_sending
+                    await asyncio.to_thread(email_sending.drain, store, auth)
+                except Exception as exc:
+                    telemetry.capture("email_drain", exc)
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=10)
                 except TimeoutError:
@@ -711,6 +728,10 @@ def create_app(settings=None):
             # A webhook trigger's address carries its own secret (backend/triggers.py).
             if request.url.path.startswith(TRIGGER_HOOK_PATH) and request.method == "POST":
                 return await call_next(request)
+            # A proxied tool call (backend/tool_proxy.py) carries its own signed token where the vendor's key goes, and
+            # no Tico identity: the route refuses anything not signed for that tool and a live run.
+            if request.url.path.startswith(TOOL_PROXY_PATH):
+                return await call_next(request)
             # An agent signing in to the MCP server over OAuth (backend/mcp_oauth.py): the metadata it reads first, and
             # the registration, token and revocation endpoints, which carry their own codes and secrets.
             if request.url.path.startswith(("/api/v2/oauth/", "/.well-known/oauth-", "/.well-known/openid-configuration/")) \
@@ -721,7 +742,7 @@ def create_app(settings=None):
                 return await call_next(request)
             # A Hermes profile with no credential pairs itself (backend/agents.py): it asks for a code, polls with its own
             # secret, and fetches the source-available connector it runs. The person's approval is the authenticated step.
-            # Settings > Inboxes' setup command (backend/google_workspace.py): the script, and the key upload and its keep
+            # Tools > Settings > Email's setup command (backend/google_workspace.py): the script, and the key upload and its keep
             # check when they carry the command's code. Nothing else passes without a session. The body is read here,
             # bounded, the way the relay's is, and the route reads it again from the buffer.
             from . import google_workspace as workspace_setup
@@ -748,7 +769,7 @@ def create_app(settings=None):
                     from . import support_access
                     raw = request.scope.get("raw_path") or b""
                     support_access.gate(who, raw.decode("latin-1") if raw else request.url.path, request.method)
-                if who.via == "assistant" and not who.confirmed and not who.task_actor:
+                if who.via == "assistant" and not who.confirmed and not who.task_actor and not who.attempt_id:
                     who = replace(who, task_actor="bot:" + settings.assistant_bot)
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
                 request.state.identity = who
@@ -767,6 +788,9 @@ def create_app(settings=None):
                     raise Problem("privacy", reason, 403)
                 if census.person_due(who):
                     await asyncio.get_running_loop().run_in_executor(None, census.note_person, who)
+                # Which Recorder a person runs (backend/recorder_installs.py): a write only when one is due.
+                if (recorder := app.state.recorder_seen.due(who, request.headers)) is not None:
+                    await asyncio.get_running_loop().run_in_executor(None, app.state.recorder_seen.note, *recorder)
                 if who.via:
                     # The Assistant acting for a person (backend/assistant.py): what it writes is
                     # recorded via assistant, and unless the person just confirmed a proposal it may
@@ -1246,6 +1270,7 @@ def create_app(settings=None):
         value = {"id": row["id"], "short_id": row["id"][:8], **row, "acceptance_criteria": json.loads(row.get("acceptance", "[]")),
                  "labels": H.task_labels(row), "lane": row.get("lane") or "company",
                  "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
+        value["readers"] = H.task_readers(row) if value["private"] else []
         if c is not None and row.get("next_run"):
             value["next_run_waiting"] = H.next_run_waiting(c, row)
         if c is not None and (deferred := quiet_work.view(c, row)):
@@ -1488,6 +1513,7 @@ def create_app(settings=None):
 
     def check_refs(c, who, refs):
         # Validate referenced objects rather than trusting an arbitrary ID in a payload.
+        H.check_message_refs(refs)
         for kind, values in refs.items():
             if kind in ("task", "task_id"):
                 # One task id, or a list of them (bots send `task:<id>` as a list); each must be one the caller can read.
@@ -1999,7 +2025,9 @@ def create_app(settings=None):
                     "invites": {pid: sent["at"] for pid, sent in invites.sent(c).items()},
                     "invite_email": invites.can_email(settings),
                     # Whether the issuer also makes accounts with a generated password (Create password).
-                    "account_password": bool(invites.can_make(auth, settings))}
+                    "account_password": bool(invites.can_make(auth, settings)),
+                    # Each person's most recently used Tico Recorder (backend/recorder_installs.py).
+                    "recorders": recorder_installs.everyone(c)}
 
     @app.post("/api/v2/access/people")
     def access_person_add(request: Request, body: M.AccessPersonAdd):
@@ -2873,14 +2901,19 @@ def create_app(settings=None):
         with store.read() as c:
             choice = Providers.load(c, settings)
             cat = gateway_page.catalog(c, settings)
-        return {"models": [row for row in MODEL_CATALOG if not row.get("held")], "harnesses": list(HARNESS_CATALOG),
+            # A held row (Dev 693) is listed only while a bot or the team default already runs it, so the Settings
+            # editor can keep the saved model and its efforts; the picker offers it to that bot alone (ui settings-bots).
+            in_use = {choice["model"]} | {(json.loads(row["config"] or "{}") or {}).get("model")
+                                          for row in c.execute(BS.ROW_SQL).fetchall()}
+        return {"models": [row for row in MODEL_CATALOG if not row.get("held") or row["id"] in in_use],
+                "harnesses": list(HARNESS_CATALOG),
                 "gateway": gateway_tiers.view(cat), "enabled_providers": choice["enabled"],
                 "default": {"runtime": choice["runtime"], "model": choice["model"]}}
 
     @app.get("/api/v2/conversations")
     def conversations(request: Request, bot: str | None = None, chat_with: str | None = None):
-        """`chat_with=<bot>`: my open chats with that bot, however long ago the last message was
-        (the bot page's chat). Otherwise my conversations, or the owner's view of a bot's."""
+        """`chat_with=<bot>`: my open chat with that bot or its Home after the chats move there.
+        Otherwise my conversations, or the owner's view of a bot's."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
@@ -3151,7 +3184,7 @@ def create_app(settings=None):
 
     def message_ingest(who, body):
         """Ask ingest (backend/ask_ingest.py): a bot's question to a person is judged before it is written, whatever
-        task or message it refers to; sent back with the filter on, it is withdrawn as soon as it is asked. Outside
+        task or message it refers to; a refusal creates no message. Outside
         the write, as the rule check is."""
         if body.kind != "ask":
             return None
@@ -3196,9 +3229,9 @@ def create_app(settings=None):
             return org_rule_check.held_answer(c, who, rule, auth=auth)
         sent = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
         # Judged against the plate before the question is on it.
-        gate = ask_ingest.apply(c, ingest) if ingest else None
+        gate = ask_ingest.apply(c, ingest) if ingest and ask_ingest.matches(ingest, H.resolve_actor(c, body.to)) else None
         message = send(c, who, sent)
-        if not ask_ingest.matches(ingest, message.get("recipient_id")) or message.get("kind") != "ask":
+        if not gate or not ask_ingest.matches(ingest, message.get("recipient_id")) or message.get("kind") != "ask":
             if ingest:
                 ask_ingest.skipped(c, ingest, "target")
             return {**message, **org_rule_check.answer(rule)}
@@ -3676,7 +3709,7 @@ def create_app(settings=None):
             items = views.needs_items(c, auth, who, task_view)
             snapshot = views.fleet_snapshot(c, auth, who, task_view)
             scope = body.bot if body.bot == batch.NEXT else (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)
-            return batch.start(c, who.actor, items, snapshot, scope=scope)
+            return batch.start(c, who.actor, items, snapshot, scope=scope, reader=privacy.actor(who))
         return mutate(request, body, work)
 
     @app.get("/api/v2/live/brief")
@@ -3760,7 +3793,7 @@ def create_app(settings=None):
     def batch_next(request: Request, bid: str, body: M.Empty):
         who = request.state.identity
         views.human_only(who)
-        return mutate(request, body, lambda c: batch.next_item(c, who.actor, bid))
+        return mutate(request, body, lambda c: batch.next_item(c, who.actor, bid, reader=privacy.actor(who)))
 
     @app.post("/api/v2/batch/{bid}/respond")
     def batch_respond(request: Request, bid: str, body: M.BatchRespond):
@@ -3904,6 +3937,29 @@ def create_app(settings=None):
             return views.take_recommendation(c, auth, who, asked, body.version)
         return mutate(request, body, work)
 
+    @app.post("/api/v2/needs-you/seen")
+    def needs_seen(request: Request, body: M.AsksSeen):
+        """The person's Needs you shows these questions to them: each is delivered (a question withdrawn later says it
+        was withdrawn after they saw it only once they open it: POST /api/v2/tasks/{id}/seen)."""
+        who = request.state.identity
+        views.human_only(who)
+        def work(c):
+            readable = [m for m in (H.message(c, mid) for mid in body.asks)
+                        if m and m["recipient_id"] == who.actor and privacy.message_readable(c, privacy.actor(who), m)]
+            return {"delivered": H.asks_seen(c, who.actor, [m["id"] for m in readable])}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/seen")
+    def task_seen(request: Request, tid: str, body: M.Empty):
+        """The person opened the task, in Needs you or on its own: its open questions to them are read."""
+        who = request.state.identity
+        views.human_only(who)
+        def work(c):
+            row = auth.task(c, who, auth.resolve_task(c, who, tid))
+            mine = [a["id"] for a in H.open_task_asks(c, row, actor=privacy.actor(who)) if a["recipient_id"] == who.actor]
+            return {"read": H.asks_seen(c, who.actor, mine, read=True)}
+        return mutate(request, body, work)
+
     def task_filters(c, owner=None, requester=None, status=None, lane=None, label=None, type=None, step=None,
                      number=None, updated_since=None, member=None, role=None, snoozed=None, by_id=False, exact=False):
         """The filters `GET /api/v2/tasks` takes, checked and resolved: (owner, requester, H.tasks keywords). A bulk
@@ -4003,7 +4059,7 @@ def create_app(settings=None):
                                       "check_back_note", "check_back",
                                       "requester_count", "external_requesters", "internal_requesters", "important_requesters", "organization", "size"):
                             row.pop(field, None)
-                        for field in ("verdict", "verdict_head", "check_back_at", "done_at", "closed_at", "closed_by_id", "guest"):
+                        for field in ("verdict", "verdict_head", "check_back_at", "done_at", "closed_at", "closed_by_id"):
                             if row.get(field) is None:
                                 row.pop(field, None)
                         if isinstance(row.get("step"), dict):
@@ -4210,7 +4266,9 @@ def create_app(settings=None):
             except Problem:
                 can_comment = False
             history = privacy.content_readable_rows(c, privacy.actor(who), H.task_history(c, tid, provenance=True))
+            lines = SRC.lookup(c, SRC.actors_of(history))
             for event in history:
+                event["source"] = SRC.source_of(lines, event)     # reads `data`, which the answer leaves out
                 event.pop("data", None)
             return {"task": task_view(row, c, visible_sql=auth.task_sql(c, who), who=who),
                     "events": history,
@@ -4381,8 +4439,8 @@ def create_app(settings=None):
             asked_botops = assistant_instruction(c, who, request_id) if assistant_direct() else None
             request_id = None
         # The same checks the dry-run makes (task_privacy.require_create); a subtask for a person under a private
-        # task with no person on it, filed by the bot that owns it, makes them its one guest.
-        guest = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
+        # task with no person on it, filed by the bot that owns it, makes them its reader.
+        reach_to = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
                                        actor=who.actor, title=body.title, body=body.body,
                                        from_private_work=body.from_private, texts=privacy.create_texts(body),
                                        related=[other for other, _ in others])
@@ -4390,7 +4448,7 @@ def create_app(settings=None):
         kept = privacy.from_private(c, source, owner, H.task(c, parent_id) if parent_id else None) \
             if body.from_private else []
         # A private run's subtask for a bot that cannot read its parent: sealed, the history says so (Dev 632).
-        sealed = (not guest and not kept and privacy.private_execution(c, source)
+        sealed = (not reach_to and not kept and privacy.private_execution(c, source)
                   and privacy.sealed_for(c, source, owner, H.task(c, parent_id) if parent_id else None) is not None)
         auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
         # A subtask is the shape that parks the filer as `waiting` and makes it care when the
@@ -4457,8 +4515,8 @@ def create_app(settings=None):
             body = body.model_copy(update=rule_warned_fields(rule_gate, body, approved=approved))
             # Whether the task is public is the store's to say (its type's default included): it adds the line there.
             public_warning = "" if approved else org_rule_check.warn_line(rule_gate)
-        # Ask ingest (backend/ask_ingest.py): a bot's task for a person, judged before the write. Sent back or FYI
-        # with the filter on, it stays the bot's own task; the reply says why.
+        # Ask ingest (backend/ask_ingest.py): a bot's task for a person, judged before the write. SENT_BACK and FYI
+        # refuse the whole write; a merged ask stays on the bot's task.
         gate = None
         if ingest and not joins and owner == ingest["person"]:
             gate = ask_ingest.apply(c, ingest)
@@ -4494,7 +4552,7 @@ def create_app(settings=None):
                 raise Problem("privacy", "The verified requester cannot receive this private execution's other context", 403)
         if private and actual_bot and actual_bot not in (requester_actor or who.actor, owner):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
-        if guest:
+        if reach_to:
             H.task_reach(c, who.actor, parent, owner)
         row = H.task_create(c, who.actor, body.title, body.body, owner, body.due, parent_id,
                             requester_actor=requester_actor, visibility=body.visibility,
@@ -4551,7 +4609,8 @@ def create_app(settings=None):
                     H._write_message(c, H.KEEPER, owner, f"{name} asked {(H.bot(c, H.actor_id(who.actor)) or {}).get('slug') or H.actor_id(who.actor)} for this, in their words:\n\n> "
                                      + "\n> ".join(words[:2000].splitlines() or [""]),
                                      H.conversation(c, row["conversation_id"]), "say",
-                                     {"task": row["id"], "comment": True, "quiet": True, "carried": True}, None, None)
+                                     {"task": row["id"], "comment": True, "quiet": True, "carried": True,
+                                      "source": SRC.ASSISTANT_FOR, "for": carried["person"]}, None, None)
         elif handoff and body.request_id:
             raise Problem("request_id", "Only a task for BotOps carries a person's request", 422)
         if asked_botops:
@@ -4567,7 +4626,8 @@ def create_app(settings=None):
             H._write_message(c, H.KEEPER, owner, f"{name} asked the {settings.assistant_name} for this, in their words:\n\n> "
                              + "\n> ".join(words[:2000].splitlines() or [""]),
                              H.conversation(c, row["conversation_id"]), "say",
-                             {"task": row["id"], "comment": True, "quiet": True, "carried": True}, None, None)
+                             {"task": row["id"], "comment": True, "quiet": True, "carried": True,
+                              "source": SRC.ASSISTANT_FOR, "for": who.actor}, None, None)
         inherited_request = parent.get("request_id") if parent and H.is_human(who.actor) and who.actor == parent["requester_id"] else None
         if request_id in ("turn", "default"):
             # `turn` names the run's own request: store that message, which delegated_identity resolved, so the task's
@@ -4585,9 +4645,13 @@ def create_app(settings=None):
             changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
             readback += TR.readback(c, row["id"], other, kind, changed=changed)
             own_subtask.append(TR.own_subtask_warning(c, row["id"], other, kind))
+        if body.readers:
+            # Who else sees it, before a meeting's audience is checked against everyone who will.
+            H.set_task_readers(c, who.actor, row["id"], add=body.readers, mover=mover(c, who) or None,
+                               check=lambda added: privacy.require_readers(c, who, row["id"], added, shared=parent_id))
         if body.live_meeting_id:
             meeting_audience.check(c, auth, who, owner, live_id=body.live_meeting_id,
-                                   roles=body.roles, guest=H.task(c, row["id"]).get("guest"),
+                                   roles=body.roles, readers=H.task_readers(H.task(c, row["id"])),
                                    requester=H.task(c, row["id"])["requester_id"])
             c.execute("UPDATE tasks SET live_meeting_id=? WHERE id=?", (body.live_meeting_id, row["id"]))
             meeting_audience.grant(c, row["id"], meeting_participants, who.actor)
@@ -4765,8 +4829,8 @@ def create_app(settings=None):
             owner_event_data = None
             for verdict in ingest or ():
                 # Ask ingest (backend/ask_ingest.py), judged against the plate before the change: a bot handing its
-                # own task to a person is filing it for them, and sent back or FYI with the filter on the task stays
-                # the bot's; a wait sent back or FYI is not set. One request may do both, each judged on its own.
+                # own task to a person is filing it for them. A refused ask rolls the whole write back.
+                # One request may do both, each judged on its own.
                 if verdict["kind"] == "task" and row["owner_id"] == who.actor and body.owner and \
                         H.resolve_actor(c, body.owner) == verdict["person"]:
                     gate = ask_ingest.apply(c, verdict)
@@ -4801,7 +4865,7 @@ def create_app(settings=None):
             warnings = after.get("warnings")
             for verdict, gate in waits:
                 # A wait on a person asks in a card of its own (hubdb._ask_in_subtask): that card is what reaches
-                # their Needs you, so the gate's row names it (Hands needed reads it).
+                # their Needs you, so the gate's row names it.
                 card = after.get("asked_in") if not gate["acts"] else None
                 ask_ingest.record(c, verdict, gate, card["id"] if card else task_id)
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
@@ -5020,6 +5084,8 @@ def create_app(settings=None):
                     c.execute("ROLLBACK TO bulk_task")
                     c.execute("RELEASE bulk_task")
                     del c.after_commit[before:]
+                    if isinstance(exc, ask_ingest.AskRefused):
+                        ask_ingest.record_refusal(c, exc)
                     skipped.append((tid, exc.code, exc.detail))
                 else:
                     c.execute("RELEASE bulk_task")
@@ -5032,7 +5098,8 @@ def create_app(settings=None):
             # A handoff judged for a task this change did not land names its call: refused, or unchanged.
             held_tids, refused_tids = {t for t, code, *_ in skipped if code == "held"}, {t for t, *_ in skipped}
             for tid, verdict in ingests.items():
-                if tid not in changed and tid not in held_tids:
+                if tid not in changed and tid not in held_tids and not any(
+                        t == tid and code == "ask_refused" for t, code, *_ in skipped):
                     ask_ingest.skipped(c, verdict, "refused" if tid in refused_tids else "not_applied")
             if body.dry_run:
                 c.execute("ROLLBACK TO bulk_dry_run")
@@ -5183,7 +5250,7 @@ def create_app(settings=None):
     @app.post("/api/v2/tasks/{tid}/ask")
     def task_ask(request: Request, tid: str, body: M.Answer):
         """The owner's one question to the task's requester (hubdb.task_ask). A bot's question to a person passes
-        ask ingest first (backend/ask_ingest.py): sent back, it is withdrawn as soon as it is asked and the task does
+        ask ingest first (backend/ask_ingest.py): a refusal rolls the write back, so the task does
         not wait on them."""
         who = request.state.identity
         def recipients(c):
@@ -5246,7 +5313,7 @@ def create_app(settings=None):
             ask_ingest.record(c, ingest, gate, task_id, msg["id"])
             if gate["acts"]:
                 H.task_ask_resolve(c, who.actor, task_id, msg["id"])
-                # Why, on the task's record, quiet as the merge and let-through notes are.
+                # Why, on the task's record, like the other merge notes.
                 H.task_comment(c, H.KEEPER, task_id, gate["text"], wake=False)
         return {**msg, **ask_ingest.reply(gate), **org_rule_check.answer(rule)}
 
@@ -5326,7 +5393,8 @@ def create_app(settings=None):
         if way == "queue" and to_bot:
             extra["delivery"] = "queue"      # after the bot's running turn, not into it (execution.inputs)
         # Judged against the plate before the question is on it.
-        gate = ask_ingest.apply(c, ingest) if ingest and ask else None
+        gate = ask_ingest.apply(c, ingest) if ingest and ask and ask_ingest.matches(
+            ingest, H.task_ask_recipient(c, who.actor, row, ask)) else None
         msg = H.task_comment(c, who.actor, task_id, text, wake=wake, ask=ask, public=body.public, approval_id=body.approval_id,
                              extra_refs=extra or None)
         due = None
@@ -5386,7 +5454,7 @@ def create_app(settings=None):
         """A comment on a task. `delivery` says how it reaches the task's bot (backend/delivery.py): steer into its
         running turn, queue right after it, defer to its next turn on the task (at the latest `defer_for`, 24h), or
         goal: the task session's goal becomes the text (chat_goals.set_goal). Omitted, H.comment_way decides. A bot's
-        question to a person passes ask ingest first (backend/ask_ingest.py): sent back, it is withdrawn as soon as it
+        question to a person passes ask ingest first (backend/ask_ingest.py): a refused write rolls back before it
         is asked."""
         who = request.state.identity
         counsel.no_attachments(who, body.attachments)    # before the rule check holds anything (visuals.attach too)
@@ -5474,6 +5542,47 @@ def create_app(settings=None):
             task_id = auth.resolve_task(c, request.state.identity, tid)
             auth.task(c, request.state.identity, task_id)
             return {"links": H.task_links(c, task_id)}
+
+    def readers_answer(c, who, task_id):
+        row = H.task(c, task_id)
+        private = H.task_private(c, row)
+        view = teammate_access.Known(c, who, auth).task({**row, "readers": H.task_readers(row) if private else []})
+        return {"private": private, "requester_id": view["requester_id"], "owner_id": view["owner_id"],
+                "readers": view["readers"]}
+
+    @app.get("/api/v2/tasks/{tid}/readers")
+    def get_task_readers(request: Request, tid: str):
+        """Who can see the task: on a private one its requester, owner and reader list (docs/tasks.md)."""
+        with store.read() as c:
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            return readers_answer(c, who, task_id)
+
+    def change_readers(request, tid, body, what, **change):
+        def work(c):
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            if who.via == "botops" and not who.confirmed:
+                # BotOps acting for a person changes who sees a task only on that person's own tap (a Confirm card).
+                return app.state.botops_propose(c, who, request.method, f"/api/v2/tasks/{tid}/readers",
+                                                body.model_dump(exclude_none=True),
+                                                what + " “" + H.task(c, task_id)["title"] + "”")
+            H.set_task_readers(c, who.actor, task_id, mover=mover(c, who) or None,
+                               check=lambda added: privacy.require_readers(c, who, task_id, added, task_id), **change)
+            return readers_answer(c, who, task_id)
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/readers")
+    def task_readers(request: Request, tid: str, body: M.TaskReaders):
+        """Add and remove who else sees a private task; each change is in its history."""
+        return change_readers(request, tid, body, "Change who sees", add=body.add, remove=body.remove)
+
+    @app.put("/api/v2/tasks/{tid}/readers")
+    def put_task_readers(request: Request, tid: str, body: M.TaskReaderList):
+        """Replace the reader list of a private task."""
+        return change_readers(request, tid, body, "Change who sees", replace=body.readers)
 
     @app.delete("/api/v2/tasks/{tid}/links/{link_id}")
     def delete_task_link(request: Request, tid: str, link_id: M.ID):
@@ -5764,6 +5873,8 @@ def create_app(settings=None):
     @app.post("/api/v2/approvals")
     def approval_request(request: Request, body: M.ApprovalCreate):
         who = request.state.identity
+        if body.kind == "send":
+            raise Problem("email_send", "Email approvals come from the frozen send queue; submit the email to /api/v2/email/sends", 422)
         if body.kind == "support":
             from .support import require_on
             require_on(settings)            # nothing to draft where nothing can be sent (docs/support.md)
@@ -5821,6 +5932,10 @@ def create_app(settings=None):
         boards = []
         def work(c):
             row = auth.approval(c, who, aid, decide=True)
+            if body.decision == "approved" and row["kind"] == "send" and (row.get("payload") or {}).get("email_send_id"):
+                from .email_sending import require_preview
+                queued = c.execute("SELECT * FROM email_sends WHERE id=?", (row["payload"]["email_send_id"],)).fetchone()
+                require_preview(c, who.actor, queued)
             if row["kind"] == "support" and body.decision == "approved":
                 # Sending off the install is a person's own tap, or their confirmed yes: not their token, nor an Assistant
                 # that is not confirmed. A decline sends nothing, so anyone who may decide it may decline it.
@@ -7897,7 +8012,6 @@ def create_app(settings=None):
             choice = MODEL_BY_ID.get(body.model)
             if not choice:
                 raise Problem("model", "Choose one of the supported models", 422)
-            settings_admin.refuse_retired(choice)
             row = c.execute(BS.ROW_SQL + " WHERE bc.bot=?", (bot,)).fetchone()
             if not row:
                 raise Problem("not_found", "Bot not found", 404)
@@ -7905,6 +8019,9 @@ def create_app(settings=None):
                 raise Problem("version_conflict", "Bot configuration changed; refresh before changing models", 409)
             config = json.loads(row["config"])
             old_model = config.get("model") or ""
+            # A saved held model (Dev 693) stays editable: a save that keeps it is not a fresh pick (settings_admin._target).
+            if not (choice.get("held") and choice["id"] == old_model):
+                settings_admin.refuse_retired(choice)
             old_runtime = config.get("runtime") or ""
             old_effort = config.get("reasoning_effort") or H.bot(c, bot).get("effort")
             old_harness = resolve_harness(config, old_runtime)
@@ -8195,7 +8312,9 @@ def create_app(settings=None):
             if 0 < len(request.headers.get("idempotency-key", "")) <= 200:
                 with store.read_transaction() as c:
                     validate_identity(c, request.state.identity)
-                    fresh = execution.renew(c, request.state.identity, aid, if_fresh=True)
+                    fresh = (None if store.saved(c, request.state.identity, request.url.path,
+                                                 request.headers.get("idempotency-key")) else
+                             execution.renew(c, request.state.identity, aid, if_fresh=True))
                     if fresh is not None:
                         return fresh
             return mutate(request, body, lambda c: execution.renew(c, request.state.identity, aid, arrived=arrived))
@@ -8224,7 +8343,8 @@ def create_app(settings=None):
             # Warm neutral provenance in a read snapshot. The transaction checks current
             # permissions again, and only reuses this graph while its source clock matches.
             with store.read_transaction() as c:
-                execution.attempt(c, request.state.identity, aid, active=False)
+                if not store.saved(c, request.state.identity, request.url.path, request.headers.get("idempotency-key")):
+                    execution.attempt(c, request.state.identity, aid, active=False)
             return mutate(request, body, lambda c: execution.events(c, request.state.identity, aid, body))
 
     @app.post("/api/v2/attempts/{aid}/capture")
@@ -8450,6 +8570,8 @@ def create_app(settings=None):
     install_docs(app, store, auth, mutate)
     from .context_search import install_context_search
     install_context_search(app, store, auth)
+    from . import task_context
+    task_context.install(app, store, auth)
     from .market import install as install_market
     install_market(app, store, auth, mutate)
     from .market_watch import install as install_market_watch
@@ -8495,10 +8617,15 @@ def create_app(settings=None):
     install_imports(app, store, auth, execution, mutate)
     from .granola_mcp import install_granola
     install_granola(app)
+    recorder_installs.install(app, store)   # before /api/v2/meetings/{id}
     from .meeting_review import install_meeting_review
     install_meeting_review(app, store, auth, mutate)
     from .credentials import install_credentials
     install_credentials(app, store, delegate=delegated_identity, propose=propose_card)
+    from . import api_tools
+    api_tools.install(app, store, auth, settings)      # Tools: API tools, their keys and levels, and the tool index
+    from . import tool_proxy
+    tool_proxy.install(app, store)
     from .finance import actions as finance_vault
     finance_vault.use_vault(app.state.vault)      # never one an earlier app left behind (the scheduler may be off)
     from .google_workspace import install as install_google_workspace
@@ -8591,8 +8718,6 @@ def create_app(settings=None):
     triggers.install(app, settings, store, auth, mutate)
     from . import webhooks
     webhooks.install(app, settings, store, auth, mutate)
-    from . import connections
-    connections.install(app, store, auth, settings)      # Library › Connections: every connection in one list
     # GitHub App per company: manifest setup, installation tokens for runners (docs/github-app.md).
     from .github_app import install_github_app
     install_github_app(app, settings, store)
@@ -8643,6 +8768,8 @@ def create_app(settings=None):
     install_bot_tools(app, store, auth, mutate, settings_admin, as_requester)
     from .mail_settings import install as install_mail_settings
     install_mail_settings(app, store, auth, mutate)
+    from .email_sending import install as install_email_sending
+    install_email_sending(app, store, auth, mutate)
     from . import personal_alerts
     personal_alerts.install(app, store, settings, auth, mutate)
     from .shared_bots import install as install_branches

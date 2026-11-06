@@ -36,6 +36,11 @@ cloud machine" under Computer).
   and members stay, and a member's next work makes a fresh one. The row keeps the old id as `deleted`: HQ keeps the
   machine live until boat confirms, and a create meanwhile answers with it, which is not taken for the new one. A bot's own machine is deleted once the bot runs
   elsewhere (`DELETE /api/v2/bots/{bot}/cloud-machine`).
+  To replace it while the bot stays on its own cloud machine, use **Replace machine** under Computer in the bot editor,
+  or `POST /api/v2/bots/{bot}/cloud-machine/replace` with an `Idempotency-Key`: it uses the same deletion, keeps size, Always on, Pause after and placement, and refuses while a turn is running (409).
+  The next work makes a fresh machine; its first enrollment gets the company plan under the admin placement rule below.
+  Explicit replacement of an own or shared machine resets its retry budget even while old ids still await deletion.
+  Those old ids stay fenced until HQ settles them; they do not block the new machine.
 - Its computer is "Shared cloud machine", owned by the company owner and open to member bots: a bot that joins is
   assigned to it, one that leaves (to its own machine or a computer) is unassigned, and the machine keeps running.
   When the last bot leaves it idles to a stop like any other.
@@ -57,6 +62,27 @@ cloud machine" under Computer).
 - Billing and caps are HQ's: the shared machine is one machine against the company's machine cap, whatever the
   number of bots on it.
 
+## Tico support
+
+Each cloud machine comes with a support helper, on by default. Tico staff and the Support Agent can use it to read
+and change files and run commands, including through the machine user's `sudo`. That can reach bot workspaces and
+credentials on the disk. Each machine keeps an owner log of support actions and who acted.
+
+The owner can turn **Tico support can reach our cloud machines** off or back on in **Settings > People**. HQ holds
+the switch for all of the company's cloud machines; a failed call leaves no saved local choice. Changes appear in
+Tico's audit log under the owner's name. **Settings > Computers** shows each machine's helper state. See
+[Tico support on cloud machines](support.md#tico-support-on-cloud-machines) for how it differs from app support access.
+
+HQ registers the helper on machine creation and start. Its one-time enrollment code travels in
+`TICO_SUPPORT_ENROLL_CODE`, with `TICO_SUPPORT_HQ_URL`, as sandbox environment variables, never in command text.
+On the machine, HQ's install command downloads the helper's signed release, checks its signature and checksum,
+enrolls it through standard input and starts its service. A failed helper install leaves the runner working. Existing
+machines receive it on their next start, even from an old base snapshot. With the company switch off, HQ supplies no
+helper enrollment code.
+
+The helper is never installed on a shared host serving several companies. The shared cloud machine described above
+belongs to one company, so it can have the helper.
+
 ## A stop never lands under a turn
 
 The server decides an idle stop on a read of the hub, and a runner can claim work between that read and HQ's stop.
@@ -70,6 +96,51 @@ answer, one that cannot be read, a 5xx, 402, or 409 `sandbox_stopping`) keeps it
 at the next look: stopping or stopped there holds the claim from then on, running lets it lapse. A server that died
 mid-stop lets it lapse, and a start clears it.
 
+All three manual deletion routes use the same path. A deletion waits for the manager's current look, including any
+start or stop awaiting HQ and its final write, before it reserves the machine. While it asks HQ, the manager cannot
+start or stop that machine. The final write revokes the runner on the row at that moment, including one that enrolled
+during the request, and invalidates all of the machine's enrollment codes. A code cannot enroll another runner after
+the disk is deleted.
+
+Before sending any DELETE, the server stores intent for that exact machine id in `cloud_machine_deletions`.
+Only HQ's own state releases this hold: the machine is deleted, DELETE says 404 or `not_found`, or HQ reports it with `pending` other than
+`delete`. A plain `{ok: true}` DELETE reply never releases it, nor does a first or retry 4xx such as 429 `starts_full`.
+The hold survives restarts, unreadable lists, and lists that omit the machine or its `pending` field. A deleted
+machine's current runner and codes are revoked under the write lock. A report that clears `pending` ends retries
+without revoking a machine kept after an unanswered deletion.
+
+Each manager look checks up to four due intents, including old ids no bot row names anymore, even if the full list
+is unreadable or sizes are no longer offered. The HQ contract here has a full list, with no confirmed per-id read,
+filter or paging. Cleanup retries DELETE for that id; a DELETE 404, `not_found` error or reply with `state: deleted`
+settles it. Settled intent rows are removed. A failed or oversized list only waits
+for the next list attempt; it cannot block these checks or a fresh machine.
+
+Retries use the stored machine id and back off on errors, including 429 and 5xx, up to 15 minutes. Accepted retries
+wait at least a minute; out of credit waits ten minutes. Extra lists, restarts, and repeated requests cannot rush
+that clock. This rule also covers the manager's deletion of a machine that never enrolled.
+Health names deletion fences older than 24 hours by machine id and bot (or shared machine), even after a fresh machine
+runs or sizes are no longer offered. Old disks may still cost money. Existing fences take their age from the deletion
+receipt when one exists; without a dated receipt, their age starts at upgrade.
+
+Changing mode or placement never clears deletion intent. A bot can move to a shared machine or another computer
+while its old own machine is being deleted. If it returns to own, the old computer gets no turn and is not bound
+again. The fence is only on the old id: work can create a fresh machine and run on its new id before the old intent
+settles. A create that returns a fenced id is refused as a replacement and tried again later. New enrollment codes
+belong to the fresh request; unused old codes cannot enroll its runner. Settling the old id leaves the new runner
+and its codes intact. The codes' `replacement_for` marker keeps fresh attempts together across a lost create reply,
+so a machine that enrolls before the reply is recovered keeps its runner and code, even if the old id settles first.
+Each new id gets its own state and enrollment deadline, whether a create reply or HQ's list first returns it.
+The deadline comes from that attempt's saved code expiry; settling the old id cannot clear it. A late list does not
+extend an expired code: that machine is deleted and the next work makes a fresh one with a new code.
+
+When a code expires unused or HQ reports a failed machine, the server counts that exact machine id once in
+`cloud_machine_enrollment_failures`. The count commits before DELETE or adoption of another id. Lost replies,
+old deletion retries, unreadable lists and server restarts cannot skip or repeat it. Cleanup and adoption keep
+the count, and every create checks the three-failure limit. A clear create refusal, such as 429 `starts_full`,
+clears `create_asked_at` and retries with backoff. A timeout or 5xx keeps that marker until a readable HQ list,
+fresh enrollment, or 16 minutes have passed. The wait survives restarts; an unreadable list cannot hold it forever.
+Explicit **Replace machine** (or replacing the shared machine) clears the marker at once and keeps all old-id fences.
+
 ## How a machine becomes the bot's runner
 
 1. The server mints a one-time enrollment code for the machine (15 minutes, single use; only its digest is kept, in
@@ -77,21 +148,30 @@ mid-stop lets it lapse, and a start clears it.
 2. HQ runs the equivalent of `boat new --from <HQ_BOAT_BASE_SNAPSHOT>` (default `tico-runner-base`) with two
    per-sandbox variables: `TICO_ENROLL_TOKEN` (that code) and `TICO_HUB_URL` (the server).
 3. At boot, `tico-cloud-machine.service` (`python -m runner.cloud_machine boot`, forwarded to runner_support/cloud_machine.py) finds the two variables, enrolls the
-   runner once with `tico-runner enroll`, and runs `scripts/tico install`, which starts the runner and its helper jobs
+   runner once with `tico-runner enroll`, and runs `scripts/tico-computer install`, which starts the runner and its helper jobs
    as systemd user units.
 4. The server sees a cloud code. For a bot's own machine it names the computer "&lt;bot&gt; (cloud)", closes it to
    every other bot (`accepts_member_bots=0`, and placement never offers one bot's machine to another) and assigns
    the bot to it. For the shared machine it names it "Shared cloud machine", opens it to member bots and assigns
-   every bot on it.
+   every bot on it. A computer a person renamed keeps that name when its machine is made again (PR 2481,
+   `backend/cloud_machines.py`).
 5. Later boots (a resume after an idle stop) find `~/.config/tico/runner.json` and only start the units.
 
 A retried enroll with the same code returns the same runner, so a boot that lost the server's answer just tries
 again (systemd reruns a failed boot step every 30 seconds). A machine has until its code expires (plus a minute) to
 enroll, and is not idle-stopped meanwhile. One that has not by then never can (a resume brings no new code), so the
 server deletes it and the next work makes a new one with a fresh code; after three such machines in a row it makes no
-more ("Made, but it never connected to this server", in Health) until one enrolls or a person changes the machine's
-settings. Without the marker `/etc/tico/cloud-machine.json` the
+more ("Made, but it never connected to this server", in Health). A successful enrollment clears the count. Otherwise,
+a person must choose **Replace machine** to try again, or delete the shared machine to replace it. That explicit
+request resets the count once, even if its reply is lost; retrying the same request does not reset it again.
+Changing size, Always on, Pause after or placement keeps the count. The replacement button stays available after
+the failed disk is gone. Without the marker `/etc/tico/cloud-machine.json` the
 boot step does nothing, and without a code it does nothing either: that is the base sandbox itself.
+
+If an older server saved an unenrolled machine without a deadline, the next look restores it from its code.
+An expired or missing code takes the same delete-and-replace path, even if the machine already says it is stuck.
+For an enrolled machine stuck on work it never took, **Replace machine** makes a fresh one; a new task can wake the
+same machine too.
 
 The code never reaches a log or a command line. The enroll reads it from a 0600 file that is removed right after;
 printed lines have it masked; the runner's own commands start with a clean environment; and once the runner is
@@ -127,11 +207,11 @@ keep their own harnesses current ([What's on a machine](#whats-on-a-machine)), o
 The base step (below) installs these, so every machine made from the snapshot has them:
 
 - **Google Chrome stable**, headed (x86_64; arm64 gets the distro's Chromium, since Google ships no Linux arm64 Chrome).
-- **Xvfb, x11vnc and matchbox-window-manager**: the same packages as the computer screen (`scripts/tico screen on`),
+- **Xvfb, x11vnc and matchbox-window-manager**: the same packages as the computer screen (`scripts/tico-computer screen on`),
   so Chrome can run headed on a virtual display. The runner picks the display (`:99` and up); nothing to configure.
   The screen is on by default on a cloud machine, so bots get a display, and the computer's operator and admins can
   open it in Settings > Computers. Screen Off there stops people opening it; the display stays up for bots.
-  `scripts/tico screen off` takes the display down.
+  `scripts/tico-computer screen off` takes the display down.
   A bot whose browser should come from a home connection sets **Browse through** to a computer that shares its internet
   ([Share internet with bots](computers.md#share-internet-with-bots)).
 - **Fonts** (`fonts-liberation`, `fonts-noto-color-emoji`).

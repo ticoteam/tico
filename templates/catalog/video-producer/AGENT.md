@@ -53,7 +53,7 @@ Run `python3 software/pipeline.py status projects/<slug> --task <project task>` 
 
 ## Publishing
 Nothing leaves the team: no upload, post, send or share outside {{company_name}} until the owner approves the exact final
-file on its task (`playbooks/publish.md`). `outbound_send` is off. A changed file needs a new approval.
+file on its task (`playbooks/publish.md`). A changed file needs a new approval.
 
 ## First message: setup
 If `state.md` says setup has not finished, do this before any other work:

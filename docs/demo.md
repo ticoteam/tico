@@ -91,7 +91,7 @@ node scripts/screenshots --only updates,settings-health   # some pages
 
 `scripts/screenshots` starts a demo, visits Updates, Tasks, Needs you, the team chart, a bot chat, Meetings, a
 meeting, Settings > Health, Settings > Computers, Finish setup, a tour step, Docs, Market, Strategy, Growth, Finance,
-Rules, Automations, Learnings, Threads, a Recruiting seat and Settings > Inboxes at a desktop and a phone
+Rules, Automations, Learnings, Threads, a Recruiting seat and Tools at a desktop and a phone
 width, light and dark, and writes `<page>-<desktop|phone>-<light|dark>.png`. It waits for the icon font and
 fails, instead of saving a bad picture, on any console error, failed request, error banner, unloaded icon or
 page that never finished loading.

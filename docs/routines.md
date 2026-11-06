@@ -11,7 +11,9 @@ An install that had routines moved them once, on the upgrade to Automations; see
 ## Making one
 
 - **The site.** **Automations** in the sidebar → **New automation**. Pick the trigger, add a Bot turn step, and save.
-  An automation's page shows its **Runs** and **Versions**.
+  An automation's page shows its **Runs** and **Versions**. On **Runs**, click a run to see its steps. A failed step
+  shows its reason after the word failed: the first line of its error, or the detail of its first failed action,
+  cut at 80 characters.
 - **The `hub` CLI, from a person or a bot.** `hub automation guide` prints the flow format and every trigger, step and
   action. Write the flow as JSON and pass it with `--file` (`-` reads stdin):
 
@@ -77,8 +79,12 @@ hub automation stats [--range 24h]
 ```
 
 These are `hub_automation_recent_runs` and `hub_automation_stats` over MCP, and `GET /api/v2/automations/runs` and
-`GET /api/v2/automations/stats` in the API. A system job counts once per recorded run; quiet repeats with the same result
-fold into one row (`count`).
+`GET /api/v2/automations/stats` in the API. A system job counts once per recorded run; quiet repeats with the same result,
+and failures with the same reason, fold into one row (`count`). The System job rows follow what this server runs: a job
+Tico adds gets its row on the next automations tick, a retired job's row goes, a task rule's row takes its name and
+switch, the Health Monitor's row comes back when its bot is restored, and a job that cannot run here (Directory sync with no directory
+connected, say) is left out of the list, runs and counts until its feature is set up. Maintenance runs are listed and counted too, under `automation_id` `maintenance` (trigger
+`system`, owner `tico`, run ids `mnt_<id>`); anyone signed in sees them.
 
   A Bot turn step can also name the model its run's task runs on, with `"model"`, and optionally `"effort"` and
   `"harness"` (`"model": "<model id>", "effort": "high"`). The task the run opens is stamped with that choice

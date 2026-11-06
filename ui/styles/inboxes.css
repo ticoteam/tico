@@ -1,42 +1,7 @@
-/* Settings > Inboxes (ui/app/inboxes.js and one file a kind). One commented block a file; colours are theme tokens only,
+/* The inbox kinds' pages under Tools (ui/app/inboxes.js and one file a kind; ui/styles/tools.css has the shared frame). One commented block a file; colours are theme tokens only,
    so light and dark follow the theme. At phone width the list's rows become cards and nothing scrolls sideways. */
 
-/* The list, first run, Settings and an inbox's page (ui/app/inboxes.js) */
-.ib-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 12px;margin:0 0 12px}
-.ib-head h2{margin:0;font-size:var(--t-lg, 1.15rem)}
-.ib-head h2 .muted{font-weight:500;margin-left:4px}
-.ib-head-act{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}
-.ib-add{position:relative}
-.ib-add>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;min-height:var(--ctl-sm, 32px);padding:0 12px;border-radius:8px;background:var(--accent);color:var(--surface);font-weight:600;font-size:var(--t-sm)}
-.ib-add>summary::-webkit-details-marker{display:none}
-.ib-add-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:5;display:grid;min-width:200px;max-width:calc(100vw - 32px);padding:4px;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:0 8px 24px color-mix(in srgb,var(--ink) 14%,transparent)}
-.ib-add-menu button{all:unset;cursor:pointer;padding:8px 10px;border-radius:6px;font-size:var(--t-sm);color:var(--ink)}
-.ib-add-menu button:hover,.ib-add-menu button:focus-visible{background:var(--surface2)}
-.ib-filters{display:grid;grid-template-columns:minmax(200px,1fr) repeat(3,minmax(0,auto));gap:8px;margin:0 0 12px;min-width:0}
-.ib-filters input,.ib-filters select{min-width:0;width:100%}
-.ib-scroll{overflow-x:auto;max-width:100%}
-.ib-table td{vertical-align:middle}
-.ib-table .ib-name{min-width:0;overflow-wrap:anywhere}
-.ib-table .ib-name a{font-weight:600;color:var(--ink);text-decoration:none}
-.ib-table .ib-name a:hover{text-decoration:underline}
-.ib-table .ib-name .muted{display:block;font-size:var(--t-sm);margin-top:2px}
-.ib-table .ib-kind,.ib-table .ib-latest{white-space:nowrap}
-.ib-table .ib-chev{width:16px;text-align:right}
-.ib-table .ib-chev a{color:var(--muted);text-decoration:none}
-.ib-more{margin:10px 0 0;font-size:var(--t-sm)}
-.ib-first .ib-steps{list-style:none;margin:0;padding:0;display:grid;gap:0}
-.ib-step{padding:14px 0;border-top:1px solid var(--line);min-width:0}
-.ib-step:first-child{border-top:0;padding-top:4px}
-.ib-step-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.ib-step-head h3{margin:0;font-size:var(--t-base);flex:1 1 auto;min-width:0}
-.ib-step-n{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--surface2);color:var(--muted);font-size:var(--t-sm);font-weight:600;flex:none}
-.ib-step.done .ib-step-n{background:var(--ok-bg);color:var(--ok)}
-.ib-dismiss{min-height:0;padding:0 6px;line-height:1.4}
-.ib-step-body{margin:8px 0 0 32px;min-width:0}
-.ib-step-body p{margin:0 0 6px}
-.ib-first-foot{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;border-top:1px solid var(--line);padding-top:12px;margin-top:4px;font-size:var(--t-sm)}
-.ib-crumb{font-size:var(--t-sm);color:var(--muted);margin:0 0 10px;overflow-wrap:anywhere}
-.ib-crumb a{color:var(--muted)}
+/* Settings and an inbox's page (ui/app/inboxes.js) */
 .ib-jump{display:flex;flex-wrap:wrap;gap:4px 16px;margin:0 0 12px;position:sticky;top:0;z-index:2;padding:6px 0;background:var(--bg, var(--surface))}
 .ib-section{scroll-margin-top:48px;margin:0 0 20px;min-width:0}
 .ib-section>h2{font-size:var(--t-base);margin:0 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps);font-size:var(--t-label)}
@@ -44,7 +9,7 @@
 .ib-card>header:last-child{margin-bottom:0}
 .ib-title{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;margin:0 0 12px}
 .ib-title-text{min-width:0;flex:1 1 260px}
-.ib-title h2{margin:0 0 4px;overflow-wrap:anywhere}
+.ib-title h1{margin:0 0 4px;overflow-wrap:anywhere}
 .ib-title-sub{margin:0;display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;font-size:var(--t-sm)}
 .ib-actions{display:flex;flex-wrap:wrap;gap:8px}
 .ib-autos{list-style:none;margin:0;padding:0}
@@ -63,19 +28,7 @@
 .ib-settings [data-ib-setting]+[data-ib-setting]{margin-top:12px}
 .ib-detail .card+.card,.ib-detail [data-ib-panels]>div{margin-top:12px}
 @media (max-width:760px){
-  .ib-filters{grid-template-columns:1fr 1fr}
-  .ib-filters input{grid-column:1/-1}
   .ib-field{grid-template-columns:1fr}
-  .ib-table thead{display:none}
-  .ib-table,.ib-table tbody{display:block}
-  .ib-table tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px;padding:10px 0;border-bottom:1px solid var(--line)}
-  .ib-table td{display:block;padding:0;border:0}
-  .ib-table .ib-name{grid-column:1/2}
-  .ib-table .ib-status{grid-column:2/3;grid-row:1;text-align:right}
-  .ib-table .ib-kind{grid-column:1/2;font-size:var(--t-sm);color:var(--muted)}
-  .ib-table .ib-latest{grid-column:2/3;text-align:right;font-size:var(--t-sm)}
-  .ib-table .ib-chev{display:none}
-  .ib-step-body{margin-left:0}
 }
 
 /* Email: Google mailboxes (ui/app/inboxes-email.js) */
@@ -104,6 +57,25 @@
 .pm-grant-form select,.pm-pick select{width:100%;min-width:0}
 
 /* Sending (ui/app/inboxes-sending.js) */
+.email-send-preview{min-width:0;max-width:100%;overflow-wrap:anywhere}
+.email-send-preview pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:50vh;overflow:auto}
+.email-send-preview code{font-size:var(--t-sm);overflow-wrap:anywhere}
+.ib-send-form fieldset{border:0;padding:0;margin:0;min-width:0}
+.ib-send-form select,.ib-send-form input:not([type=checkbox]){width:100%;max-width:390px;min-width:0;box-sizing:border-box}
+.ib-send-checks{display:flex;flex-direction:column;gap:10px}
+.ib-send-checks label{display:flex;gap:8px;align-items:center}
+.ib-send-effective,.ib-send-rule{font-size:var(--t-sm);color:var(--muted);overflow-wrap:anywhere}
+.ib-send-effective{padding:12px 0}.ib-send-rule{display:block;padding-top:4px}
+.ib-send-bots{width:100%;border-collapse:collapse;table-layout:fixed}
+.ib-send-bots th,.ib-send-bots td{text-align:left;padding:10px 4px;border-bottom:1px solid var(--line);overflow-wrap:anywhere;vertical-align:top}
+.ib-send-bots select{width:100%;max-width:220px;min-width:0}
+.ib-send-pending{list-style:none;padding:0;margin:0}
+.ib-send-pending li{display:flex;justify-content:space-between;align-items:start;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.ib-send-pending li>div{min-width:0}
+.ib-send-pending span{display:block;font-size:var(--t-sm);overflow-wrap:anywhere}
+.ib-send-pending span{color:var(--muted)}
+@media(max-width:760px){.ib-send-bots th:first-child,.ib-send-bots td:first-child{width:35%}.ib-send-pending button{flex-shrink:0}}
+
 
 /* Alerts (ui/app/inboxes-alerts.js) */
 #inboxes-alerts{min-width:0}

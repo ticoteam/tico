@@ -1962,6 +1962,7 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
 
     `reach`: the post is a bot's own write through the API, so whoever it reaches must be in the bot's reach
     (backend/reach.py check_post); a run's reply to what woke it, and a held post a person sends anyway, are not."""
+    H.check_message_refs(refs)
     thread = thread_row(c, thread_id) if thread_id else start
     on_task = H.message_task_id({"refs": refs}, thread)
     with H.refusal_task(on_task):
@@ -2383,9 +2384,14 @@ def search(c, v, query, *, limit=20, before=None):
     found = thread_search.search(c, query, thread_sql=readable_sql(c, v, "cv"), message_sql=message_sql(c, v, "m"),
                                  readable=lambda m: message_readable(c, v, m), limit=limit, before=before)
     known = v.known(c)
-    hits = [{**hit, "sender_id": known.message({"sender_id": hit["sender_id"],
-                                                 "conversation_id": hit["thread_id"]})["sender_id"]}
-            for hit in found["hits"]]
+    refs_of = {r[0]: r[1] for r in c.execute(
+        "SELECT id, refs FROM messages WHERE id IN (%s)" % ",".join("?" * len(found["hits"])),
+        [h["message_id"] for h in found["hits"]])} if found["hits"] else {}
+    hits = []
+    for hit in found["hits"]:     # the sender's `source` needs the message's refs (a keeper line's kind)
+        shown = known.message({"sender_id": hit["sender_id"], "conversation_id": hit["thread_id"],
+                               "refs": H._json(refs_of.get(hit["message_id"]), {}) or {}})
+        hits.append({**hit, "sender_id": shown["sender_id"], "source": shown["source"]})
     return {**found, "hits": hits}
 
 

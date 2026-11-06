@@ -41,8 +41,10 @@ PAGES = {
     "library": page("docs", "docs"),
     "files": page("files", "files"),
     "tools": page("tools", "integrations"),
-    "connections": page("connections", "connections"),
+    # The Tools page's one list (backend/api_tools.py); the old Connections row maps here until the nav drops it.
+    "connections": page("tool-index", "rows"),
     "meetings": page("meetings", "meetings"),
+    "meetings-live": page("live-meetings", "meetings"),
     "threads": page("threads", "threads"),
     # The sidebar's Inbox header opens the Threads page on its Inbox view: the same threads.
     "inbox": page("threads", "threads"),
@@ -64,6 +66,7 @@ PAGES = {
     "settings-inboxes-letters-out": page("letters", "items"),
     # History reuses the runs, task changes and decisions the existing demo sections record.
     "settings-history": page("history", "items"),
+    "settings-email-sending": page("email/sends", "sends", mailbox="ana@acme.example", pending=True),
     "settings-alerts": page("alerts/me"),
     # Not a nav row: its seats show in the Team chart and open from there.
     "recruit": page("seats", "seats"),
@@ -130,6 +133,15 @@ def test_a_demo_task_and_meeting_link_to_each_other(api):
     assert meeting in {row['meeting_id'] for row in response.json()['meetings']}
 
 
+def test_meeting_follow_up_has_an_answerable_needs_you_card(api):
+    meetings = api.get('/api/v2/meetings').json()['meetings']
+    linked = {row['task_id'] for meeting in meetings for row in
+              api.get(f"/api/v2/meetings/{meeting['id']}/tasks").json()['tasks']}
+    needs = api.get('/api/v2/needs-you?limit=200').json()['items']
+    assert any(it['id'] in linked and (it.get('ask') or {}).get('recipient_id') == 'human:ana'
+               and 'answer' in it.get('actions', []) for it in needs)
+
+
 def test_demo_task_has_an_editor_for_the_live_task_page(api):
     meetings = api.get('/api/v2/meetings').json()['meetings']
     task = next(row['task_id'] for meeting in meetings for row in
@@ -144,6 +156,18 @@ def test_task_pages_have_demo_data(api):
     task_place = next(p["place"] for p in shown["pinned"] if p["place"].startswith("task:"))
     pins = api.get("/api/v2/places/" + task_place).json()["pins"]
     assert any(p.get("page", {}).get("file_id") == pages[0]["file_id"] for p in pins)
+
+
+def test_a_demo_task_has_a_page_made_by_its_person(api):
+    pages = api.get("/api/v2/pages?bot=coo").json()["pages"]
+    made = next(p for p in pages if p["updated_by"] == "human:ana")
+    pins = api.get("/api/v2/places/task:" + made["task_id"]).json()["pins"]
+    assert any(p.get("page", {}).get("file_id") == made["file_id"] for p in pins)
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT v.attempt_id,m.refs FROM bot_file_versions v JOIN attempts a ON a.id=v.attempt_id "
+                        "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE v.file_id=?",
+                        (made["file_id"],)).fetchone()
+        assert row and made["task_id"] in row["refs"]
 
 
 def test_mail_settings_have_a_read_grant_and_keep_owner_routing(api):

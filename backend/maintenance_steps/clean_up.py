@@ -20,7 +20,7 @@ def _prune_history(c, now):
 
 def run(c, ctx):
     store, now = ctx["store"], ctx["now"]
-    from .. import automations, events, flight, performance, presence, rules, triggers, webhook_delivery
+    from .. import api_tools, automations, events, flight, performance, presence, rules, triggers, webhook_delivery
     from .. import system_routines as SR
     with store.transaction() as tx:
         # A duplicate is not a failure (batch_work.isolated); rows an older server wrote for one go.
@@ -39,6 +39,7 @@ def run(c, ctx):
     sweep_tokens(store, now)                           # finished runs' token rows keep a week
     sweep_events(store, now)                           # bookkeeping events keep 7 or 30 days
     sweep_credential_uses(store, now)                  # old credential use rows to one per USE_WINDOW a pass
+    api_tools.sweep(store, now)                        # tool calls and checks keep 90 days
     reclaim_free_pages(store)                          # the pages those sweeps freed go back to the disk
     events.sweep(store, now)                           # live events keep a day
     triggers.sweep(store, now)                         # webhook bodies keep their trigger's days, delivery ids 30
