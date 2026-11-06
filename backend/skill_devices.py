@@ -63,33 +63,33 @@ def public(request):
     return request.method == "POST" and request.url.path in (CODES_PATH, TOKEN_PATH)
 
 
-class CodeCreate(Contract):
+class SkillDeviceCodeCreate(Contract):
     label: str = Field("", max_length=120)
 
 
-class CodeDecision(Contract):
+class SkillDeviceDecision(Contract):
     reporting_enabled: bool = False
 
 
-class TokenExchange(Contract):
+class SkillDeviceTokenExchange(Contract):
     device_code: str = Field(..., min_length=1, max_length=200)
 
 
-class DevicePatch(Contract):
+class SkillDevicePatch(Contract):
     reporting_enabled: bool
 
 
-class Staged(Contract):
+class SkillStaged(Contract):
     name: str = Field(..., max_length=200)
     sha256: str = Field(..., max_length=200)
 
 
-class Receipt(Contract):
-    staged: list[Staged] = Field(default_factory=list, max_length=500)
+class SkillReceipt(Contract):
+    staged: list[SkillStaged] = Field(default_factory=list, max_length=500)
     claude_version: str = Field("", max_length=80)
 
 
-class UsageEvent(Contract):
+class SkillUsageEvent(Contract):
     name: str = Field(..., max_length=200)
     trigger: str = Field(..., max_length=20)
     session_key: str = Field(..., min_length=1, max_length=128)
@@ -97,8 +97,8 @@ class UsageEvent(Contract):
     used_at: str = Field("", max_length=40)
 
 
-class Usage(Contract):
-    events: list[UsageEvent] = Field(..., max_length=EVENTS_MAX)
+class SkillUsage(Contract):
+    events: list[SkillUsageEvent] = Field(..., max_length=EVENTS_MAX)
 
 
 def _code(value):
@@ -325,14 +325,14 @@ def install(app, store, auth, mutate, settings):
                           409)
 
     @app.post(CODES_PATH, status_code=201)
-    def skill_device_code(request: Request, body: CodeCreate):
+    def skill_device_code(request: Request, body: SkillDeviceCodeCreate):
         """No sign-in: the helper has nothing yet. Capped per address and in total."""
         refuse_in_rehearsal()
         with store.transaction() as c:
             return create_code(c, body, client_address(request), settings.public_url)
 
     @app.post(TOKEN_PATH)
-    def skill_device_token(request: Request, body: TokenExchange):
+    def skill_device_token(request: Request, body: SkillDeviceTokenExchange):
         """428 while the person has not decided, the token exactly once, 410 after (expired, denied or used)."""
         with store.transaction() as c:
             state, value = exchange(c, body.device_code)
@@ -350,14 +350,14 @@ def install(app, store, auth, mutate, settings):
             return preview(c, request.state.identity, user_code)
 
     @app.post("/api/v2/skills/devices/codes/{user_code}/approve")
-    def skill_device_approve(request: Request, user_code: str, body: CodeDecision):
+    def skill_device_approve(request: Request, user_code: str, body: SkillDeviceDecision):
         who = request.state.identity
         _approver(who)
         refuse_in_rehearsal()
         return mutate(request, body, lambda c: decide(c, who, user_code, True, body.reporting_enabled))
 
     @app.post("/api/v2/skills/devices/codes/{user_code}/deny")
-    def skill_device_deny(request: Request, user_code: str, body: CodeDecision):
+    def skill_device_deny(request: Request, user_code: str, body: SkillDeviceDecision):
         who = request.state.identity
         _approver(who)
         return mutate(request, body, lambda c: decide(c, who, user_code, False))
@@ -368,7 +368,7 @@ def install(app, store, auth, mutate, settings):
             return {"devices": listing(c, request.state.identity)}
 
     @app.patch("/api/v2/skills/devices/{device_id}")
-    def skill_device_patch(request: Request, device_id: str, body: DevicePatch):
+    def skill_device_patch(request: Request, device_id: str, body: SkillDevicePatch):
         who = request.state.identity
         return mutate(request, body, lambda c: set_reporting(c, who, device_id, body.reporting_enabled))
 
@@ -379,12 +379,12 @@ def install(app, store, auth, mutate, settings):
         return store.write(who, lambda c: revoke(c, auth, who, device_id))
 
     @app.post("/api/v2/skills/devices/receipt")
-    def skill_device_receipt(request: Request, body: Receipt):
+    def skill_device_receipt(request: Request, body: SkillReceipt):
         who = request.state.identity
         return store.write(who, lambda c: receipt(c, who, body))
 
     @app.post("/api/v2/skills/usage")
-    def skill_usage(request: Request, body: Usage):
+    def skill_usage(request: Request, body: SkillUsage):
         who = request.state.identity
         return store.write(who, lambda c: usage(c, who, body))
 
