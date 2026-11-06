@@ -697,9 +697,12 @@ is due later or waits on someone else, and the bot hears why. Hourly, `backend/a
 
 ## Wake rules
 
-Whether a message about a task wakes its bot or waits is decided by wake rules, each with an id (`parked`, `own_write`,
-`same_state`, `bot_to_bot`, `batch_*`, `assignment`, `stall`, ...). A person's message, an ask, an approval and a gate
-verdict always wake (a Manager hears of a verdict, and of its subtasks' and blockers' results, as a note). A rule can be set for the whole team, a task type, a department, a bot or one task, and the most
+Who a message in a task's thread reaches comes first: whoever it @mentions or replies to, and the task's
+[followers](#followers), each by the way it was sent (the comments paragraph under
+[Types bots work on](#types-bots-work-on)). A system line (task news, a roundup, a keeper notice) reaches only whom it
+addresses, never the followers. For each bot it reaches, whether it wakes that bot or waits is then decided by wake rules, each with an id (`parked`, `own_write`,
+`same_state`, `bot_to_bot`, `batch_*`, `assignment`, `stall`, ...). A person's message, another bot's @mention, an ask, an
+approval and a gate verdict always wake (a Manager hears of a verdict, and of its subtasks' and blockers' results, as a note). A rule can be set for the whole team, a task type, a department, a bot or one task, and the most
 specific wins (the **What wakes** automations on the Automations page). The message and the run both record the rule, and
 `rule_weekly` in `hub sql` shows how often each woke a bot and how often that run did nothing.
 
@@ -926,15 +929,25 @@ the label, then add it on the task as above.
 Lane and number are a mover's alone ([Permissions](permissions.md#tags)).
 A bot's comment is a message to the people on the task, under the usual rules for reaching them.
 
-A person's comment with no way named is a **Steer** when the bot owns the task (see Conversation below), and is never
-deferred on a task with no bot on it. On a task a bot filed and a person owns, a comment is most often a progress note:
-it is a **Defer** with a 24-hour deadline, reaching the bot that asked on its next turn on the task, or in a day at the
-latest. A comment that @mentions a bot on the task (`@ops`, or its name) is a **Queue**; one from the person the task
-waits on is a Steer. A comment from someone not on the task (not its owner, requester or a mover) is a Defer with no deadline,
-so a reader never spends a bot's turns on a task that is not theirs. A person @mentioned in a
-comment (by id, the part of their email before the @, full name, or first name when no one else
-shares it) gets the comment as a question, which puts the task in their Needs you; when the
-comment also wakes the bot, or names several people, each person gets their own copy of the question.
+A comment is a post in the task's thread and reaches whom any post there reaches: whoever it @mentions, the author of
+the message it replies to, and the task's [followers](#followers), never its author. Nothing is guessed from roles: the
+bot that filed a task is not woken by a comment unless it follows the task or is @mentioned. Each gets the comment by
+the way it was sent (Conversation, below): a live bot follower is steered, queued or deferred, a live person
+follower is notified, and a follower at `mentions` or `muted` gets only a comment that @mentions them or replies to
+them. **Defer never** reaches no follower, but still reaches whom it @mentions, queued.
+Until questions become tasks of their own, three replies keep their old routing: an answer to a person's question
+goes to the task's first bot (owner, requester, origin), a reviewer's verdict goes to the bot that filed the review
+(the result returns once to that bot's task), and the Strategy Bot's relayed answer goes to the bot that asked.
+
+A comment with no way named is a **Steer** (the API, CLI and MCP alike), or a Defer with no deadline from someone not on
+the task (not its owner, requester or a mover), so a reader never spends a bot's turns on a task that is not theirs;
+the people following it are still notified as their level says. Only someone on the task hands the bots it wakes
+party rights on it. An ask or an answer reaches only whom it is for. A
+person or bot @mentioned in a comment (by id or slug, the part of their email before the @, full name, or first name
+when no one else shares it) is reached and follows the task from then on; on a private task they are also added to
+**Who can see**, as a task event anyone on the task can undo. A bot's @mention adds only a teammate in its reach, and
+never a group. A bot's plain comment reaches a following bot on its next turn (the bot-to-bot hold); an @mention or
+`needs_action` wakes it by the comment's way (Steer by default), within the loop guard's bot-caused wakes per hour.
 
 ## Numbers and the order within a step
 
@@ -1300,7 +1313,7 @@ line from the bot's DM shows what happens to it: **Sent**, **Queued** (and why, 
 failed** when the turn errors. It follows the bot your message went to, which on a task you own that a bot asked is that
 bot, and the owner's own runs as before; a bot's message to another bot does not take it. Whoever manages the bot gets
 **Stop** beside it, the same stop as in the bot's DM (`POST /v2/bots/{slug}/stop`). The box at the foot is the thread's
-composer, and what you type there is a comment. Where a bot gets it, the send says how it arrives, in the words a
+composer, and what you type there is a comment. Where bots get it, the send says how it arrives, in the words a
 bot's DM uses ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)): **Steer** goes into the bot's turn running on this task
 now (right after it, if the bot's harness cannot steer); **Queue** goes right after that turn, or now when the bot is
 idle; **Defer** wakes nobody and goes in with the bot's next turn on this task, at the latest after the time picked
@@ -1312,14 +1325,16 @@ owner, requester or a mover) may steer, queue or set the goal; anyone else may d
 (or a right-click or long press on Send) opens the ways. The web always sends the shown way: your kept way
 (`compose.send_way`, [Steer, queue or defer](using-tico.md#steer-queue-or-defer)), or the nearest one you may use
 here (Steer becomes Queue; otherwise Defer). Set as goal is for one comment. A comment that names no way (the API, CLI
-or MCP) goes the way the paragraph on comments above says. Before you send, the box says what the chosen way does, and after, if the server
+or MCP) is a Steer, as the paragraph on comments above says. `GET /api/v2/threads/{thread_id}/reach` (with `text`,
+`delivery`, `defer_for`, `in_reply_to`) answers who it would reach, each with its mode, before it is sent. Before you send, the box says what the chosen way does, and after, if the server
 sent it another way (a defer that rode along). With no bot on the task (everyone on it is a person) the send is a plain arrow, and the box says no bot gets the
 message. `GET /v2/tasks/{id}` carries
 this view: each bot reply in `comments` has its `run`; `execution` is the owning bot's newest run in the task's own
 thread, or a newer one for a person's message there, shaped as in a conversation snapshot with `from_person`; `comment_to`
-(`bot`, `wakes`, `mention`) is who your next comment reaches; and `comment_delivery` (`default`, `default_for`,
+(`bot`, `wakes`, `mention`) is the bot your next plain comment wakes first (the first live bot follower; `mention` is
+always empty, as an @mention reaches whoever it names); and `comment_delivery` (`default`, `default_for`,
 `steer`, `queue`, `steers`, `goal`) is how it can reach them: `default` is what a comment without a delivery does
-(`steer`, `queue` or `defer`) and `default_for` that defer's deadline (`24h`, `never`), `steer` and `queue` say you may wake the
+(`steer`, or `defer` for a reader off the task) and `default_for` that defer's deadline (`never`), `steer` and `queue` say you may wake the
 bot, `steers` says the bot's harness can take a message into a running turn, and `goal` says a goal can be set (null
 and false without a bot). A task still in a thread (one filed into a thread before task
 threads) has no `execution` and no goal of its own: that thread's runs and goal belong to the thread, so `goal` is false.
@@ -1400,7 +1415,8 @@ are the `task_relations` table ([Hub SQL](hub-sql.md)).
 Besides its owner, a task can list any number of people or bots, each under a **role**: a short
 name the team chooses (`developer`, `reviewer`, `qa`, `designer` ...). Tico keeps no list of roles
 and gives them no meaning or rights; a client decides what they mean, such as which board column
-waits on the reviewer. One person may hold several roles, and the owner may hold any of them too.
+waits on the reviewer. A role reaches nobody: a comment reaches the task's followers and whom it @mentions,
+whatever their roles ([Followers](#followers)). One person may hold several roles, and the owner may hold any of them too.
 
 ```json
 "roles": {"developer": ["human:bob"], "reviewer": ["human:charlie"], "qa": ["human:matt", "bot:qa-bot"]}
@@ -1471,7 +1487,7 @@ Uploading any file or version requires comment permission. Anyone who may commen
 can answer, except the asker. Read permission alone does not grant comment or answer permission. Answers validate question ids and option labels; Other
 text is accepted only when the question allows it. A dismissal closes the ask too. Every answer
 is retained, oldest first, as an existing answer message and a readable task comment. Answers
-follow the comment wake rule: a bot, task owner or requester, or human mover wakes the task's bot; other teammates' answers wait for its next turn. The Computer receives the comment
+reach the one who asked: a bot, task owner or requester, or human mover wakes it; other teammates' answers wait for its next turn. The Computer receives the comment
 text and one `answer: {...}` block; older Computers still read the text.
 The bot decides what to do and whether to move the step. Ask once per version and act on the
 answer; attach a new version when the work changes.

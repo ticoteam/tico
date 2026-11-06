@@ -1,5 +1,5 @@
-"""Who a thread message reaches, over real SQLite: following on a post or a mention, the unsolicited cap per delivery,
-routing a message that names nobody, one batched run for a bot's digest, what never wakes a bot, what a join leaves
+"""Who a thread message reaches, over real SQLite: following on a mention (never on a post), the unsolicited cap per
+delivery, a message that names nobody reaching only live followers, one batched run for a bot's digest, what never wakes a bot, what a join leaves
 unread, what an edit or delete changes, retention, and one webhook event per message. Fictional people only: ana (owner),
 ben and cara (humans); the bots come from the api fixture.
 """
@@ -10,7 +10,7 @@ import threading
 import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend import file_library, thread_bot_digest, thread_retention, thread_routing, thread_webhooks, threads
+from backend import file_library, thread_bot_digest, thread_retention, thread_webhooks, threads
 from backend.store import H
 from backend.tests.test_api import api, headers, post  # noqa: F401  (the fixture and its helpers)
 
@@ -75,12 +75,18 @@ def delete(api, message_id, token="ana-test"):
 
 
 # ----------------------------------------------------------------------------- following (18)
-def test_posting_follows_a_thread_only_read_so_far_and_keeps_the_read_mark(api):
+def test_posting_never_follows_but_a_reply_does_and_keeps_the_read_mark(api):
     thread = new_thread(api, audience="company")
-    seq = say(api, thread["id"], "First")["seq"]
+    first = say(api, thread["id"], "First")
+    seq = first["seq"]
     api.post(f"/api/v2/threads/{thread['id']}/read", json={"seq": seq}, headers=headers("ben-test"))
     assert follower(api, thread["id"], "human:ben")["following"] == 0
-    say(api, thread["id"], "Mine", token="ben-test")
+    mine = say(api, thread["id"], "Mine", token="ben-test")
+    assert follower(api, thread["id"], "human:ben")["following"] == 0, "posting follows nobody (D4)"
+    response = api.post(f"/api/v2/threads/{thread['id']}/messages", json={"text": "Noted", "in_reply_to": mine["id"]},
+                        headers=headers("cara-test"))
+    assert response.status_code == 200, response.text
+    assert delivery(api, response.json()["id"], "human:ben")["reason"] == "reply"
     row = follower(api, thread["id"], "human:ben")
     assert row["following"] == 1 and row["last_read_seq"] >= seq
 
@@ -138,84 +144,49 @@ def test_opening_a_home_asks_for_nothing_but_opening_a_dm_does(api):
         assert threads.solicited(c, dm["id"], "bot:ops", "human:ben", addressed=False)
 
 
-# ----------------------------------------------------------------------------- routing (20)
-class Model:
-    """Answers the routing questions with a score per bot; every other bot scores 0."""
-
-    def __init__(self, scores, asks=1.0):
-        self.scores, self.asks, self.calls = scores, asks, []
-
-    def __call__(self, state, questions, label=None):
-        self.calls.append((state, sorted(questions)))
-        answers = {key: {"noul": 0.0} for key in questions}
-        answers["asks"] = {"noul": self.asks}
-        answers.update({"bot:" + slug: {"noul": score} for slug, score in self.scores.items()})
-        return {"answers": answers, "usage": {"input_tokens": 10}}
+# ----------------------------------------------------------------------------- followers, no routing (20, D14)
+def on_live(api, bot, thread_id):
+    with api.app.state.store.transaction() as c:
+        threads.follow(c, threads.actor_viewer(c, bot), thread_id, notify="live")
 
 
-def routed_thread(api, bots=("bot:ops", "bot:cpo", "bot:coo", "bot:finance")):
-    return new_thread(api, members=("human:ben", *bots))
-
-
-def test_a_message_naming_nobody_wakes_at_most_three_bots_through_the_wake_rule(api):
-    store = api.app.state.store
-    thread = routed_thread(api)
-    message = say(api, thread["id"], "Who can look at the budget?")
-    assert rows(api, "SELECT 1 FROM jobs j JOIN message_deliveries d ON d.carrier_id=j.message_id WHERE d.message_id=?",
-                message["id"]) == []       # the post waits on no model
-    model = Model({"ops": 0.9, "cpo": 0.95, "coo": 0.97, "finance": 0.99})
-    woken = thread_routing.drain(store, primary=model)
-    assert sorted(woken) == ["bot:coo", "bot:cpo", "bot:finance"]
-    for bot in ("bot:coo", "bot:cpo", "bot:finance"):
-        row = delivery(api, message["id"], bot)
-        assert row["reason"] == "routing" and row["carrier_id"] and queued_job(api, row["carrier_id"]) == "queued"
+def test_a_message_naming_nobody_reaches_only_the_live_followers(api):
+    thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo", "bot:coo"))
+    # Bots in a chat follow it at mentions: a message naming nobody wakes none of them, and nothing asks a model.
+    quiet = say(api, thread["id"], "Who can look at the budget?")
+    assert all(delivery(api, quiet["id"], b) is None for b in ("bot:ops", "bot:cpo", "bot:coo"))
+    on_live(api, "bot:cpo", thread["id"])
+    message = say(api, thread["id"], "Anyone?")
+    row = delivery(api, message["id"], "bot:cpo")
+    assert row["reason"] == "follower" and row["carrier_id"] and queued_job(api, row["carrier_id"]) == "queued"
     assert delivery(api, message["id"], "bot:ops") is None
-    assert rows(api, "SELECT 1 FROM thread_routings") == []
-    assert len(model.calls) == 1
-    assert len(rows(api, "SELECT 1 FROM events WHERE action='judge.call' AND target=?", thread_routing.JUDGE_LABEL)) == 1
-    assert thread_routing.drain(store, primary=model) == [] and len(model.calls) == 1
-
-
-def test_routing_calls_no_model_with_fewer_than_two_bots_and_for_a_named_bot_or_a_deleted_message(api):
-    store = api.app.state.store
-    model = Model({"ops": 1.0, "cpo": 1.0})
-    one = new_thread(api, members=("human:ben", "bot:ops"))
-    say(api, one["id"], "Anyone?")
-    several = routed_thread(api)
-    named = say(api, several["id"], "@ops please")
-    assert rows(api, "SELECT 1 FROM thread_routings WHERE message_id=?", named["id"]) == []
-    gone = say(api, several["id"], "Never mind this")
-    delete(api, gone["id"])
-    thread_routing.drain(store, primary=model)
-    assert model.calls == [] and rows(api, "SELECT 1 FROM thread_routings") == []
-
-
-def test_routing_wakes_nobody_below_the_bar_or_when_nothing_is_asked_or_without_a_model(api):
-    store = api.app.state.store
-    thread = routed_thread(api)
-    for label, model in (("low", Model({"ops": 0.01})), ("chat", Model({"ops": 1.0}, asks=0.0)), ("none", None)):
-        message = say(api, thread["id"], f"Message {label}")
-        store.settings.__dict__.setdefault("decisions_monthly_usd", 0)
-        assert thread_routing.drain(store, primary=model) == []
-        assert rows(api, "SELECT 1 FROM message_deliveries WHERE message_id=? AND reason='routing'", message["id"]) == []
-        assert rows(api, "SELECT 1 FROM thread_routings") == []
-    assert len(rows(api, "SELECT 1 FROM messages WHERE conversation_id=? AND body LIKE 'Message %'", thread["id"])) == 3
-
-
-def test_a_bots_unaddressed_post_is_not_routed_and_a_failed_call_waits_and_retries(api):
-    from clients import judge as J
-    store = api.app.state.store
-    thread = routed_thread(api)
-    bot_post(api, "bot:ops", thread["id"], "A status line")
-    assert rows(api, "SELECT 1 FROM thread_routings") == []
-    message = say(api, thread["id"], "Who has this?")
-
-    def down(state, questions, label=None):
-        raise J.JudgeError("provider", "down")
-    assert thread_routing.drain(store, primary=down) == []
-    row = rows(api, "SELECT attempts, next_attempt_at FROM thread_routings WHERE message_id=?", message["id"])[0]
-    assert row["attempts"] == 1 and row["next_attempt_at"] > H.now()
     assert rows(api, "SELECT 1 FROM events WHERE action='judge.call'") == []
+
+
+def test_a_bots_plain_post_reaches_a_following_bot_at_its_next_turn_and_a_mention_or_flag_wakes_it(api):
+    thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo"))
+    on_live(api, "bot:cpo", thread["id"])
+    plain = bot_post(api, "bot:ops", thread["id"], "A status line")
+    row = delivery(api, plain["id"], "bot:cpo")
+    assert row["reason"] == "follower" and row["mode"] == "defer" and not row["carrier_id"]
+    # A bot's @mention is addressed: it goes by the way (Steer), not the bot-to-bot hold.
+    named = bot_post(api, "bot:ops", thread["id"], "@cpo can you take this?")
+    row = delivery(api, named["id"], "bot:cpo")
+    assert row["reason"] == "mention" and row["carrier_id"] and queued_job(api, row["carrier_id"]) == "queued"
+    flagged = bot_post(api, "bot:ops", thread["id"], "@cpo this one is urgent", refs={"needs_action": True})
+    row = delivery(api, flagged["id"], "bot:cpo")
+    assert row["reason"] == "mention" and row["carrier_id"] and queued_job(api, row["carrier_id"]) == "queued"
+
+
+def test_muted_and_mentions_followers_get_only_what_addresses_them(api):
+    thread = new_thread(api, audience="company")
+    say(api, thread["id"], "Hello @ben", token="ana-test")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE thread_followers SET notify='muted' WHERE thread_id=? AND actor='human:ben'", (thread["id"],))
+    plain = say(api, thread["id"], "Plain news")
+    assert delivery(api, plain["id"], "human:ben") is None
+    named = say(api, thread["id"], "Over to @ben")
+    assert delivery(api, named["id"], "human:ben")["reason"] == "mention"
 
 
 # ----------------------------------------------------------------------------- bot digests (21)

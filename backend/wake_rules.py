@@ -46,6 +46,7 @@ ALWAYS_WAKE = (
     ("ask", "an ask, answer or steer: a question to the bot, or the answer it waits on"),
     ("approval", "an approval decided, withdrawn or asked about, or a structured question"),
     ("needs_action", "a message its sender flagged needs-action (or a flag that is not plainly true or false)"),
+    ("mention", "another bot's message that @mentions the bot (addressed: it goes by the message's way)"),
     ("reply", "a reply to the bot's own ask, to a message it flagged needs-action, or to one it waits on (wait_s)"),
     ("gate", "a factory gate verdict on the bot's ticket: Review 1, Review 2, QA or Security"),
     ("handoff", "a builder hand-off on its Dev ticket: a verdict to act on, a failed check, a merge conflict or a merge"),
@@ -130,6 +131,10 @@ def always_wakes(conn, actor, target, kind, refs, body, cause=None, in_reply_to=
         return "approval"
     if refs.get(FLAG, False) is not False:
         return "needs_action"
+    if str(actor).startswith("bot:") and str(target).startswith("bot:") and "@" in str(body or ""):
+        from . import threads
+        if threads.names(conn, target, body):
+            return "mention"            # an @mention is addressed: never the bot_to_bot hold (threads contract §4.1)
     if VERDICT.search(str(body or "")):
         return "gate"
     if actor == "keeper" and refs.get("handoff"):

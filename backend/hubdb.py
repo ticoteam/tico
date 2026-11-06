@@ -121,8 +121,11 @@ def task_news_sql(m="m"):
     return f"({m}.sender_id='{KEEPER}' AND COALESCE(json_extract({refs},'$.task'),'')<>'')"
 
 
-# A bot's posts in a task's own thread reach a person only by an @mention (`counts_for_person`).
+# A bot's posts in a task's own thread reach a person only for these reasons: an @mention, a reply to them, or
+# following the task (`counts_for_person`). Rows written for any other reason before followers did not count, and
+# still do not.
 BOT_TASK_KINDS = ("say", "notice", "ask")
+BOT_TASK_REASONS = ("mention", "reply", "follower")
 
 
 def task_post_sql(m="m"):
@@ -135,21 +138,22 @@ def task_post_sql(m="m"):
 def delivery_counts_sql(m, recipient, reason):
     """SQL: a delivery of message `m` to `recipient`, whose reason is the SQL `reason`, is a reason for a person to see
     it. Not when the recipient is a person and the message is task news (`task_news_sql`), nor when it is a bot's post
-    in a task's own thread (`task_post_sql`) that is not a mention (reason 'mention'). One rule for the write side
+    in a task's own thread (`task_post_sql`) for a reason outside `BOT_TASK_REASONS`. One rule for the write side
     (threads' primary delivery trigger, `counts_for_person`) and every read side (unread, the Inbox, the sidebar,
     digests), so deliveries already made stop counting without a migration."""
+    kept = ",".join(f"'{r}'" for r in BOT_TASK_REASONS)
     return (f"NOT ({recipient} LIKE 'human:%' AND ({task_news_sql(m)} "
-            f"OR ({task_post_sql(m)} AND COALESCE({reason},'')<>'mention')))")
+            f"OR ({task_post_sql(m)} AND COALESCE({reason},'') NOT IN ({kept}))))")
 
 
 def counts_for_person(conn, message, reason, conversation_id):
     """The Python side of `delivery_counts_sql`: whether a delivery of `message` to a person, for `reason`, in
-    conversation `conversation_id`, is written. False for task news, and for a bot's post in a task's thread that is not
-    a mention. Used by threads._insert_delivery."""
+    conversation `conversation_id`, is written. False for task news, and for a bot's post in a task's thread for a
+    reason outside `BOT_TASK_REASONS`. Used by threads._insert_delivery."""
     sender = str(message.get("sender_id") or "")
     if task_news(sender, message.get("refs")):
         return False
-    if (sender.startswith("bot:") and message.get("kind") in BOT_TASK_KINDS and reason != "mention"
+    if (sender.startswith("bot:") and message.get("kind") in BOT_TASK_KINDS and reason not in BOT_TASK_REASONS
             and conn.execute("SELECT 1 FROM tasks WHERE conversation_id=? LIMIT 1", (conversation_id,)).fetchone()):
         return False
     return True
@@ -6029,10 +6033,21 @@ def task_ask_recipient(conn, actor, row, ask):
 
 
 @private_task_write
-def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=None, answer_to=None, answer_text=None, public=False, approval_id=None):
-    """A comment on a task: one message in the task's conversation, tagged with the task, from
-    whoever wrote it. It wakes the bot on the other side of the task when `wake` (a mover, the
-    owner or the requester left it); otherwise it is saved for the bot's next turn on the task."""
+def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=None, answer_to=None, answer_text=None,
+                 public=False, approval_id=None, way=None, defer_for=None, delegate=None, reach=None,
+                 people_notified=False, to=None):
+    """A comment on a task: one message in the task's thread, tagged with the task, from whoever wrote it. It goes as
+    any post there does (threads.post): to whom it addresses (its @mentions, the author it replies to) and to the
+    task's followers, each by its way and their level (threads.plan). `way` (steer, queue, or defer until `defer_for`)
+    defaults to Steer when `wake` (D13), else to Defer never: each following bot takes it on its next turn here, and
+    nobody following is notified. A bot's comment flagged needs-action steers whatever `wake` says (bot_to_bot).
+    `people_notified`: a Defer never that binds the bots only (a reader who may not wake them: people are notified as
+    their level says). `delegate`: whether a person's comment delegates the task to the bots it wakes (default: `wake`;
+    only one who may direct the task does). `reach`: the bot's Identity when this is its own write through the API, so
+    whoever the comment reaches is checked against the bot's reach as a thread post is (reach.check_thread). `to`: the
+    bot it is written to besides (a relayed answer, strategy_merge); a reviewer's verdict on a task a bot filed goes to
+    that bot, whose task the result returns to (say, _deliver_subtask_result). Both keep their routing until question
+    tasks (step 6)."""
     _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
@@ -6046,31 +6061,44 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         if ask or extra_refs or answer_to:
             refuse(conn, actor, 'kind', 'A public comment is plain text without attachments or asks')
         check_public_comment(conn, actor, row, text, approval_id)
-    target = comment_target(conn, actor, row)
     refs = {"task": task_id, "comment": True, **(extra_refs or {})}
-    # A bot's comment flagged needs-action wakes the other side even where its comment alone would not (a snoozed
-    # task): the sender said it cannot wait (backend/bot_to_bot.py).
-    if not wake and not (is_bot(actor) and refs.get("needs_action") is True):
-        refs["quiet"] = True
+    if way is None:
+        way = "steer" if wake or (is_bot(actor) and refs.get("needs_action") is True) else "defer"
+        defer_for = defer_for or ("never" if way == "defer" else None)
     conv = conversation(conn, row["conversation_id"])
     if not conv:
         refuse(conn, actor, "not-found", f"task {task_id} has no conversation")
+    if (ask or answer_to) and not wake and not (is_bot(actor) and refs.get("needs_action") is True):
+        refs["quiet"] = True        # asks and answers keep their own routing (step 6): unwoken, they wait quietly
     if ask:
         target, routed = task_ask_route(conn, actor, row, {**refs, **ask})
         refs.update(routed)
-    if answer_to:
+        msg = say(conn, actor, target, text, kind="ask", conversation_id=conv["id"], refs=refs)
+    elif answer_to:
         # The answer goes back to the bot that asked, which may be neither the owner nor the requester.
         asker = (message(conn, answer_to) or {}).get("sender_id")
-        if is_bot(asker) and asker != actor and _actor_exists(conn, asker) and bot_reads_task(conn, asker, row):
-            target = asker
-        msg = answer(conn, actor, answer_to, text, comment_refs=refs, comment_target=target or actor, classify_text=answer_text)
-    elif ask:
-        msg = say(conn, actor, target, text, kind="ask", conversation_id=conv["id"], refs=refs)
-    elif target is None:
-        # the commenter is the only party (they asked themselves): on the record, wakes nobody
-        msg = _write_message(conn, actor, actor, text, conv, "say", refs, None, None)
+        target = (asker if is_bot(asker) and asker != actor and _actor_exists(conn, asker) and bot_reads_task(conn, asker, row)
+                  else answer_target(conn, actor, row))
+        msg = answer(conn, actor, answer_to, text, comment_refs=refs, comment_target=target or actor,
+                     classify_text=answer_text)
     else:
-        msg = say(conn, actor, target, text, conversation_id=conv["id"], refs=refs)
+        refs.update(comment_way_refs(way, defer_for))
+        if people_notified and way == "defer":
+            refs["send_people"] = True
+        from . import task_followers, threads
+        # A system line is addressed to the task's owner bot, and so is a comment on a task with no thread of its own
+        # (filed into a shared chat, which has no task followers): everyone else is reached as in any thread.
+        owner = row["owner_id"]
+        to = to or (owner if ((actor == KEEPER or not task_followers.thread_id(conn, row)) and is_bot(owner)
+                              and owner != actor and task_private_readable(conn, owner, row)) else None)
+        if to is None and is_bot(actor):
+            to = _verdict_to(conn, actor, row, text, refs)
+        if to == actor or (to and not task_private_readable(conn, to, row)):
+            to = None
+        if reach is not None:
+            from . import reach as R
+            R.check_thread(conn, reach, conv["id"], text)
+        msg = threads.post(conn, actor, conv["id"], text, refs=refs, to_actor=to)
     from . import wake_rules
     wake_rules.own_comment(conn, msg, row)        # token saving 2/9: a bot's own comment never wakes it; log the skip
     hook(conn, "task.commented", task_id, lambda: _task_facts(conn, task_id, actor, comment_id=msg["id"]), actor, revision=msg["id"])
@@ -6087,9 +6115,8 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         task_holds.refresh(conn, task_id, f"{task_holds.name(conn, actor)} replied")
     if ask or row.get("waiting_on") == actor:
         _recount(conn, row["owner_id"])
-    if wake and is_bot(target) and is_human(actor):
-        conn.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
-                     (task_id, target, actor, msg["id"], shift(now(), hours=24)))
+    if is_human(actor) and (wake if delegate is None else delegate):
+        delegate_woken(conn, task_id, actor, msg)
     if public:
         conn.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
         msg = message(conn, msg['id'])
@@ -6103,142 +6130,67 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     return msg
 
 
-def jobs_mark(conn):
-    """Where the jobs table stands, to tell later which bot jobs a write queued (comment_delivery)."""
-    return conn.execute("SELECT coalesce(max(rowid),0) FROM jobs").fetchone()[0]
+def _verdict_to(conn, actor, row, text, refs):
+    """The bot a reviewer's verdict comment goes to: the bot that filed the review under its own task, so the result
+    returns there once (say, _deliver_subtask_result). None for any other comment."""
+    from .wake_rules import VERDICT_FIELDS
+    requester = row.get("requester_id")
+    if (actor != row["owner_id"] or not is_bot(requester) or requester == actor or refs.get("quiet")
+            or not VERDICT_FIELDS.search(str(text or ""))):
+        return None
+    parent = _subtask_result_parent(conn, row)
+    return requester if parent and parent["owner_id"] == requester else None
 
 
-def comment_delivery(conn, msg, copies=(), *, since=0):
-    """What a comment write did, for its response: `woke` is true only when the write queued a bot job (the bot will
-    take a turn on it), counting the comment's own job and any the write caused elsewhere, such as the notice a
-    delegated review's verdict forwards to the parent task; `since` is jobs_mark from before the write. `delivered`
-    is true when it reached a person (its recipient or an @mentioned copy), who sees it in their own lists."""
-    ids = [msg["id"], *(m["id"] for m in copies)]
-    queued = conn.execute("SELECT 1 FROM jobs WHERE rowid>? OR message_id IN (%s)" % ",".join("?" * len(ids)),
-                          [since, *ids]).fetchone() is not None
-    return {"woke": queued,
-            "delivered": any(is_human(m.get("recipient_id")) for m in (msg, *copies))}
-
-
-def comment_target(conn, actor, row):
-    """Who `actor`'s plain comment on the task goes to: the first bot among its owner, requester and origin, else the
-    first person among them, else no one."""
+def answer_target(conn, actor, row):
+    """Whom an answer to a person's question goes to (their routing until question tasks, step 6): the first bot among
+    the task's owner, requester and origin, else the first person among them, else no one."""
     others = [a for a in dict.fromkeys([row["owner_id"], row["requester_id"], task_origin(conn, row)])
               if a and a not in (actor, KEEPER) and task_private_readable(conn, a, row)]
     return next((a for a in others if is_bot(a)), None) or (others[0] if others else None)
 
 
-def comment_way(conn, actor, row, text, *, mover=False):
-    """How a comment from `actor` with no delivery named reaches the bot on the task (backend/delivery.py): `steer`,
-    `queue` or `defer`, with the defer's deadline (`24h`, `never`) or None. A comment that wakes the bot steers, as a
-    person's comment always has: it joins the bot's turn running on the task.
-
-    A bot's comment goes as bot messages always have (steer), or waits on a snoozed task. A person's:
-    - someone neither on the task nor a mover: defer, no deadline, so a reader never spends a bot's turns on a task
-      that isn't theirs;
-    - no bot on the task: steer (it reaches a person, who has no turns);
-    - the task waits on them: steer, they are answering it;
-    - a task a bot filed for a person (its requester or origin a bot, its owner not): defer 24h, unless the comment
-      @names a bot on the task: queue. Such a comment is most often a progress note, not a question for the bot;
-    - a task a bot owns: steer, the person is directing its work."""
-    if is_bot(actor):
-        return ("steer", None) if not TS.snoozed(row) else ("defer", "never")
-    if not (mover or task_participant(conn, actor, row)):
-        return "defer", "never"
-    origin = task_origin(conn, row)
-    if not any(is_bot(a) for a in (row["owner_id"], row["requester_id"], origin)):
-        return "steer", None
-    if row.get("waiting_on") == actor:
-        return "steer", None
-    if not is_bot(row["owner_id"]) and (is_bot(row["requester_id"]) or is_bot(origin)):
-        return ("queue", None) if names_a_bot(conn, text, row) else ("defer", "24h")
-    return "steer", None
+def comment_way_refs(way, defer_for=None):
+    """The marks a comment's way leaves on it (threads.WAY_KEYS, as the thread routes write them): Steer leaves
+    none."""
+    if way == "queue":
+        return {"send_way": "queue", "delivery": "queue"}
+    if way == "defer":
+        return {"send_way": "defer", "quiet": True, **({"send_defer_for": defer_for} if defer_for else {})}
+    return {}
 
 
-def comment_wakes(conn, actor, row, text, *, mover=False):
-    """Whether a comment from `actor` with no delivery named wakes the bot on the other side of the task."""
-    return comment_way(conn, actor, row, text, mover=mover)[0] != "defer"
+def delegate_woken(conn, task_id, person, msg):
+    """task_delegations: each bot a person's message on the task woke (its own run, or a steer or queue delivery
+    pending for it) acts on the task with party rights for 24 hours."""
+    woken = []
+    refs = _json(msg.get("refs"), {}) or {}
+    if is_bot(msg.get("recipient_id")) and not refs.get("quiet"):
+        woken.append((msg["recipient_id"], msg["id"]))
+    woken += [(r["recipient"], r["carrier_id"]) for r in _rows(conn.execute(
+        "SELECT recipient, carrier_id FROM message_deliveries WHERE message_id=? AND recipient LIKE 'bot:%' "
+        "AND carrier_id IS NOT NULL AND mode IN ('steer','queue') AND state='pending'", (msg["id"],)))]
+    until = shift(now(), hours=24)
+    for bot_actor, mid in woken:
+        conn.execute("INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) "
+                     "VALUES(?,?,?,?,?)", (task_id, bot_actor, person, mid, until))
 
 
-def task_bots(conn, row):
-    """The bots on the task: its owner, requester and origin."""
-    return [a for a in dict.fromkeys([row["owner_id"], row["requester_id"], task_origin(conn, row)]) if is_bot(a)]
+def jobs_mark(conn):
+    """Where the jobs table stands, to tell later which bot jobs a write queued (comment_delivery)."""
+    return conn.execute("SELECT coalesce(max(rowid),0) FROM jobs").fetchone()[0]
 
 
-def names_a_bot(conn, text, row):
-    """`text` @mentions a bot on the task (its owner, requester or origin)."""
-    return any(_mentions_bot(conn, text, a) for a in task_bots(conn, row))
-
-
-def bot_handles(conn, row):
-    """The @names that reach the bots on the task (names_a_bot): each one's slug and name."""
-    handles = []
-    for a in task_bots(conn, row):
-        found = bot(conn, actor_id(a)) or {}
-        handles += [found.get("slug") or actor_id(a)] + ([found["name"]] if found.get("name") else [])
-    return handles
-
-
-def names_a_filer(conn, text, row):
-    """`text` @mentions the bot that filed the task (its requester or origin)."""
-    filers = [a for a in dict.fromkeys([row["requester_id"], task_origin(conn, row)]) if is_bot(a)]
-    return any(_mentions_bot(conn, text, a) for a in filers)
-
-
-def filer_handles(conn, row):
-    """The @names that reach the bots that filed the task (names_a_filer): each one's slug and name."""
-    handles = []
-    for a in dict.fromkeys([row["requester_id"], task_origin(conn, row)]):
-        if is_bot(a):
-            found = bot(conn, actor_id(a)) or {}
-            handles += [found.get("slug") or actor_id(a)] + ([found["name"]] if found.get("name") else [])
-    return handles
-
-
-def _at(text, name):
-    return re.search(r"(?<![\w@])@" + re.escape(name) + r"(?![\w-])", str(text or ""), re.IGNORECASE) is not None
-
-
-def _mentions_bot(conn, text, actor):
-    """`text` names the bot `actor` with an @, by slug (@product-manager) or by name (@Product Manager)."""
-    slug = actor_id(actor)
-    row = bot(conn, slug) or {}
-    handle = row.get("slug") or slug      # the @name people type is the slug, never the id
-    return any(_at(text, n) for n in [handle] + ([row["name"]] if row.get("name") else []))
-
-
-def mentioned_people(conn, text, row, author):
-    """The people `text` @mentions who may read the task, in the order they appear, never the author.
-    A person is named by id, by the part of their email before the @, by full name or by first name
-    when no one else shares it."""
-    if "@" not in str(text or ""):
-        return []
-    people = humans(conn)
-    firsts = {}
-    for p in people:
-        first = str(p.get("name") or "").split(" ")[0].lower()
-        if first:
-            firsts[first] = firsts.get(first, 0) + 1
-    found = []
-    for p in people:
-        actor = human_actor(p["id"])
-        if actor == author or not task_private_readable(conn, actor, row):
-            continue
-        name = str(p.get("name") or "").strip()
-        names = [p["id"], str(p.get("email") or "").split("@")[0], name]
-        if name and firsts.get(name.split(" ")[0].lower()) == 1:
-            names.append(name.split(" ")[0])
-        spots = [m.start() for n in dict.fromkeys(x for x in names if x)
-                 for m in re.finditer(r"(?<![\w@])@" + re.escape(n) + r"(?![\w-])", text, re.IGNORECASE)]
-        if spots:
-            found.append((min(spots), actor))
-    return [actor for _, actor in sorted(found)]
-
-
-def mention_ask(text, person):
-    """The question a mention puts to `person`: the comment itself, answered in their own words."""
-    return {"questions": [{"id": "mention", "header": "Mention", "question": str(text).strip()[:300],
-                           "options": [], "multi": False, "other": True}], "who": person}
+def comment_delivery(conn, msg, *, since=0):
+    """What a comment write did, for its response: `woke` is true only when the write queued a bot job (the bot will
+    take a turn on it), counting the comment's own job, its carriers' and any the write caused elsewhere, such as the
+    notice a delegated review's verdict forwards to the parent task; `since` is jobs_mark from before the write.
+    `delivered` is true when it reached a person, who sees it in their own lists."""
+    queued = conn.execute("SELECT 1 FROM jobs WHERE rowid>? OR message_id=?", (since, msg["id"])).fetchone() is not None
+    delivered = is_human(msg.get("recipient_id")) or conn.execute(
+        "SELECT 1 FROM message_deliveries WHERE message_id=? AND recipient LIKE 'human:%' LIMIT 1",
+        (msg["id"],)).fetchone() is not None
+    return {"woke": queued, "delivered": delivered}
 
 
 def task_comments(conn, task_id, *, actor=None):
@@ -6403,10 +6355,12 @@ def is_comment(msg):
     """Written by `task_comment`: a say tagged `comment`. Not a question, an answer, a notice, an
     approval, a bot's reply to its run or a chat message that only mentions the task."""
     refs = msg.get("refs") or {}
-    # `moved_home`: the mark a comment in a room that moved into a Home carries (bot_home_merge._mark_moved).
+    # `moved_home`: the mark a comment in a room that moved into a Home carries (bot_home_merge._mark_moved); the
+    # rest are the marks its way and a bot-to-bot hold leave (threads.PRIMARY_MARKS).
     return (msg.get("kind") == "say" and bool(refs.get("comment"))
             and not (set(refs) - {"task", "comment", "quiet", "via", "rule", "wake_immediate",
-                                         "delivery", "moved_home"}))
+                                         "delivery", "moved_home", "send_way", "send_defer_for", "send_people",
+                                         "can_wait", "held_by"}))
 
 
 def _withdraw_queued_comment_copies(conn, message_id):
@@ -6502,9 +6456,14 @@ def task_comment_delete(conn, actor, task_id, message_id):
                  (_dump({"task": task_id, "comment": True}), ts, message_id))
     reopened = [r["id"] for r in _rows(conn.execute("SELECT id FROM messages WHERE answered_by_id=?", (message_id,)))]
     conn.execute("UPDATE messages SET answered_by_id=NULL WHERE answered_by_id=?", (message_id,))
-    conn.execute("UPDATE task_delegations SET expires_at=? WHERE message_id=? AND expires_at>?", (ts, message_id, ts))
+    # The bots it woke beyond the first each woke through a carrier (threads.deliver), keyed by the carrier's id.
+    woke = [message_id] + [r[0] for r in conn.execute(
+        "SELECT carrier_id FROM message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL", (message_id,))]
+    marks = ",".join("?" * len(woke))
+    conn.execute(f"UPDATE task_delegations SET expires_at=? WHERE message_id IN ({marks}) AND expires_at>?",
+                 (ts, *woke, ts))
     canceled = _has_table(conn, "jobs") and conn.execute(
-        "UPDATE jobs SET state='canceled' WHERE message_id=? AND state='queued'", (message_id,)).rowcount > 0
+        f"UPDATE jobs SET state='canceled' WHERE message_id IN ({marks}) AND state='queued'", tuple(woke)).rowcount > 0
     _task_event(conn, task_id, actor, "comment", message_id, None)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ts, task_id))
     row = task(conn, task_id)
