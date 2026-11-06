@@ -844,6 +844,8 @@ def install_credentials(app,store,delegate=None,propose=None):
             validate_identity(c,who)
             require_admin(c,who,vault.admins)
             require_seen(c,who,cid,vault.admins)
+            from . import api_tools
+            api_tools.refuse_finance_key(c,[cid])     # a Finance source still reads it (409 key_in_use)
             row=vault.row(c,cid)
             grants=c.execute('SELECT count(*) FROM credential_grants WHERE credential_id=?',(cid,)).fetchone()[0]
             from .computer_keys import before_delete

@@ -35,7 +35,9 @@ can see the tool, changes it (`set_audience`, event `tool.audience_changed`); a 
 list. The proxy follows grants alone, so it keeps working for whoever can use the tool.
 
 A Finance connection (`fin_connections.credential_ref`, backend/finance) that reads one of a tool's keys shows under
-Who can use it as Finance, read-only: it goes when the source is disconnected. Finance is not on the audience.
+Who can use it as Finance, read-only: it goes when the source is disconnected. Finance is not on the audience. While
+it reads a key, deleting that key or its tool (or the vault's credential) is a 409 `key_in_use`; replacing its value
+is fine.
 
 tool-index rows other than API tools come from backend/connections.py's gatherers with their visibility already
 applied (mailboxes from backend/mailboxes.py, whose rows say who may use each): Tico addresses and numbers, mailing
@@ -795,8 +797,29 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
     return _tool_view(tool_row(c, tool_id))
 
 
+def finance_user(c, key_ids):
+    """The name of a Finance connection (fin_connections, on installs with Finance) that still reads one of these keys:
+    any status but disconnected. None when none does."""
+    from . import connections as CN
+    ids = [str(k) for k in key_ids if k]
+    if not ids or not CN.table(c, "fin_connections"):
+        return None
+    row = c.execute(f"SELECT name, provider FROM fin_connections WHERE credential_ref IN ({','.join('?' * len(ids))}) "
+                    "AND status<>'disconnected' ORDER BY created_at, id LIMIT 1", ids).fetchone()
+    return (row["name"] or row["provider"] or "it") if row else None
+
+
+def refuse_finance_key(c, key_ids):
+    """A 409 `key_in_use` while Finance reads one of these keys: deleting it would break that source. Replacing a key's
+    value stays allowed."""
+    name = finance_user(c, key_ids)
+    if name is not None:
+        raise Problem("key_in_use", f"Finance uses this key. Disconnect {name} in Finance › Sources first.", 409)
+
+
 def _drop_key(c, who, key_id):
     from .computer_keys import before_delete
+    refuse_finance_key(c, [key_id])
     before_delete(c, who, key_id)
     c.execute("DELETE FROM credential_grants WHERE credential_id=?", (key_id,))
     c.execute("DELETE FROM credentials WHERE id=?", (key_id,))
@@ -844,6 +867,7 @@ def delete_tool(c, who, tool_id, admins):
     require_admin(c, who, admins)
     tool = _readable(c, who, tool_id, admins)
     keys = [k["id"] for k in _keys(c, tool_id)]
+    refuse_finance_key(c, keys)                       # before anything goes
     for key_id in keys:
         _drop_key(c, who, key_id)
     c.execute("DELETE FROM tool_calls WHERE tool_id=?", (tool_id,))
