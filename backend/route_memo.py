@@ -14,8 +14,8 @@ rebuilt every time, but three things are pure functions of their inputs and are 
   adapter built for another app's types. An adapter holds no state: it validates and serializes;
 - a path's compiled regex, format and convertors (convertors are module singletons; each route gets its own dict).
 
-A server builds one app, so it sees no difference; tests and restarts that build many apps in one process build each
-adapter once.
+Only tests install it (the root conftest.py, in every pytest process, xdist workers included): a test process builds
+an app per test, a server builds one. Production imports never patch FastAPI (backend/tests/test_route_memo.py).
 """
 import dataclasses
 import enum
@@ -206,7 +206,7 @@ _compile_path = starlette_routing.compile_path
 
 
 def install():
-    """Once per process, at import (backend/app.py)."""
+    """Once per test process, from the root conftest.py."""
     if fastapi_v2.ModelField.__post_init__ is _post_init:
         return
     fastapi_v2.ModelField.__post_init__ = _post_init
