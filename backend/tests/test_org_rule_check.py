@@ -684,7 +684,7 @@ def test_rule_check_eval_cases_build_valid_requests():
 
 # ---- every route, the run's provenance, live text -----------------------------------------------------------------
 
-def test_a_conversation_message_and_both_answer_routes_are_checked(ruled):
+def test_a_conversation_message_is_checked(ruled):
     api, _ = ruled
     color_rule(api)
     origin = post(api, "chat/ops", {"text": "What is new?"})
@@ -693,13 +693,6 @@ def test_a_conversation_message_and_both_answer_routes_are_checked(ruled):
     assert held["held"] and bodies(api, "favorite color is red") == []
     assert post(api, f"conversations/{cid}/messages", {"text": "All clear."}, token="ops-test")["message"]["body"] == \
         "All clear."
-    ask = post(api, "messages", {"to": "ops", "kind": "ask", "text": "Which color?", "conversation_id": cid})
-    got = post(api, f"messages/{ask['id']}/answer", {"text": "Our favorite color is teal."}, token="ops-test")
-    assert got["held"] and bodies(api, "favorite color is teal") == []
-    task = task_for_ops(api)
-    got = post(api, f"tasks/{task['id']}/answers", {"target": {"comment": "none"}, "other": "Favorite color is jade."},
-               token="ops-test")
-    assert got["held"] and bodies(api, "Favorite color is jade") == []
 
 
 def test_the_assistant_writing_as_itself_is_checked(ruled):
@@ -906,24 +899,6 @@ def test_send_anyway_after_the_rule_changed_checks_again_and_keeps_the_nonce(rul
     assert sent["hold"]["state"] == "sent" and len(bodies(api, "favorite color is gold")) == 1
 
 
-def test_send_anyway_of_a_question_runs_ask_ingest_outside_the_write(ruled, monkeypatch):
-    api, _ = ruled
-    color_rule(api, if_broken="escalate", reviewer="ben")
-    from backend import ask_ingest
-    seen = []
-    real = ask_ingest.preflight
-
-    def spy(store, *args, **kw):
-        seen.append(bool(store.writer.queue))
-        return real(store, *args, **kw)
-    monkeypatch.setattr(ask_ingest, "preflight", spy)
-    held = say(api, "Our favorite color is gold, right?", kind="ask")["held"]
-    assert seen == []                           # a held write skips ask ingest
-    view = get(api, f"rule-holds/{held['id']}", token="ben-test")
-    post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]}, token="ben-test")
-    assert seen == [False]
-
-
 def test_a_mail_approval_is_spent_once(ruled):
     api, _ = ruled
     color_rule(api, if_broken="escalate", reviewer="ben")
@@ -1088,16 +1063,6 @@ def send_anyway(api, hold_id, expected=200):
     return r.json()
 
 
-def pick_question(api, task_id, label, qid="q"):
-    """Ana's options-only question to ops on a task (no Other)."""
-    with api.app.state.store.transaction() as c:
-        return H.task_comment(c, "human:ana", task_id, "Which line goes out?", wake=False, ask={
-            "questions": [{"id": qid, "header": "Line", "question": "Which line goes out?", "multi": False,
-                           "other": False, "options": [{"label": label, "description": ""},
-                                                       {"label": "Something else", "description": ""}]}],
-            "who": "bot:ops"})
-
-
 def test_send_anyway_runs_each_routes_privacy_checks_as_the_run(ruled):
     api, _ = ruled
     color_rule(api, if_broken="escalate", reviewer="ben")
@@ -1105,9 +1070,6 @@ def test_send_anyway_runs_each_routes_privacy_checks_as_the_run(ruled):
     aid, run = attempt["id"], attempt["token"]
     task = task_for_ops(api)
     held = [post(api, f"tasks/{task['id']}/comments", {"text": "Our favorite color is red."}, token=run)["held"]]
-    ask = post(api, "messages", {"to": "ops", "kind": "ask", "text": "Which color?",
-                                 "conversation_id": msg["conversation_id"]})
-    held.append(post(api, f"messages/{ask['id']}/answer", {"text": "Our favorite color is teal."}, token=run)["held"])
     assert all(held)
     # The run now carries a private task neither Ana nor the company task's readers may read.
     with api.app.state.store.transaction() as c:
@@ -1118,36 +1080,7 @@ def test_send_anyway_runs_each_routes_privacy_checks_as_the_run(ruled):
         assert hold_row(api, h["id"])["state"] == "held"
     assert bodies(api, "favorite color is red") == [] and bodies(api, "favorite color is teal") == []
     paths = [json.loads(hold_row(api, h["id"])["payload"])["provenance"]["path"] for h in held]
-    assert paths == [f"/api/v2/tasks/{task['id']}/comments", f"/api/v2/messages/{ask['id']}/answer"]
-
-
-def test_a_replayed_answer_keeps_the_run_it_came_from(ruled):
-    api, _ = ruled
-    color_rule(api, if_broken="escalate", reviewer="ben")
-    r, msg, attempt = started_turn(api)
-    ask = post(api, "messages", {"to": "ops", "kind": "ask", "text": "Which color?",
-                                 "conversation_id": msg["conversation_id"]})
-    held = post(api, f"messages/{ask['id']}/answer", {"text": "Our favorite color is teal."}, token=attempt["token"])["held"]
-    send_anyway(api, held["id"])
-    answer = sql(api, "SELECT refs FROM messages WHERE body LIKE '%favorite color is teal%'")[0]
-    assert json.loads(answer["refs"])["turn_id"] == attempt["id"]
-
-
-def test_a_task_answer_replay_is_refused_once_the_run_turned_private(ruled):
-    api, judge = ruled
-    color_rule(api, if_broken="escalate", reviewer="ben")
-    r, msg, attempt = started_turn(api)
-    task = task_for_ops(api)
-    question = pick_question(api, task["id"], "Our favorite color is red")
-    got = post(api, f"tasks/{task['id']}/answers", {"target": {"comment": question["id"]},
-                                                    "answers": {"q": ["Our favorite color is red"]}},
-               token=attempt["token"])
-    assert got["held"]
-    with api.app.state.store.transaction() as c:
-        private = H.task_create(c, "human:ben", "Private plan", "Secret.", "human:ben", lint=False, private=True)
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], private["id"]))
-    send_anyway(api, got["held"]["id"], expected=403)
-    assert hold_row(api, got["held"]["id"])["state"] == "held"
+    assert paths == [f"/api/v2/tasks/{task['id']}/comments"]
 
 
 def test_send_anyway_refuses_once_the_task_changed(ruled):
@@ -1347,22 +1280,6 @@ def test_a_warned_hand_off_puts_its_line_before_the_note_already_there(ruled):
     assert row["note"].startswith("Warning:") and row["note"].endswith("Waiting on the vendor.")
 
 
-def test_a_warned_answer_keeps_its_pick_and_its_reader_gets_the_line(ruled):
-    api, _ = ruled
-    color_rule(api, if_broken="warn")
-    task = task_for_ops(api)
-    label = "My favorite color is blue"
-    first = pick_question(api, task["id"], label)
-    got = post(api, f"messages/{first['id']}/answer", {"text": label}, token="ops-test")
-    assert "decision_open" not in got and got["answer"]["answers"] == {"q": [label]}
-    assert got["comment"]["body"].startswith("Warning:")
-    second = pick_question(api, task["id"], label, qid="q2")
-    got = post(api, f"tasks/{task['id']}/answers", {"target": {"comment": second["id"]}, "answers": {"q2": [label]}},
-               token="ops-test")
-    assert got["rule_warning"] and got["answer"]["answers"] == {"q2": [label]}
-    assert got["comment"]["body"].startswith("Warning:")
-
-
 def test_automation_warnings_land_on_the_posted_text_and_the_hand_off_note(ruled):
     api, _ = ruled
     color_rule(api, if_broken="warn")
@@ -1427,52 +1344,6 @@ def test_a_conversation_post_whose_recipient_moved_needs_a_new_check(ruled, monk
     held = post(api, f"conversations/{cid}/messages", {"text": text}, token="ops-test")["held"]
     assert json.loads(hold_row(api, held["id"])["destinations"]) == ["human:ben"]
     assert bodies(api, text) == []
-
-
-def ask_turn(api, label):
-    """A started turn of ops answering Ana's options-only question on its task (the job's message is the question)."""
-    r, msg, attempt = started_turn(api)
-    task = task_for_ops(api)
-    question = pick_question(api, task["id"], label)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET message_id=? WHERE id=(SELECT job_id FROM attempts WHERE id=?)",
-                  (question["id"], attempt["id"]))
-    return r, attempt, task
-
-
-def answered(api):
-    """The structured answers written: each one's text and its picks."""
-    rows = sql(api, "SELECT body, refs FROM messages WHERE json_extract(refs,'$.answer') IS NOT NULL "
-                    "ORDER BY rowid")
-    return [(r["body"], json.loads(r["refs"])["answer"]["answers"]) for r in rows]
-
-
-def test_a_warned_completion_answers_an_options_question_with_its_pick(ruled):
-    api, _ = ruled
-    color_rule(api, if_broken="warn")
-    label = "My favorite color is blue"
-    r, attempt, task = ask_turn(api, label)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": label, "last_seq": 0},
-         token=r["token"])
-    got = answered(api)
-    assert len(got) == 1 and got[0][0].startswith("Warning:") and got[0][1] == {"q": [label]}
-
-
-def test_send_anyway_of_a_held_answer_resolves_its_pick_before_a_new_warning(ruled):
-    api, judge = ruled
-    color_rule(api, if_broken="escalate", reviewer="ben")
-    label = "Our favorite color is blue and launch is Tuesday"
-    r, attempt, task = ask_turn(api, label)
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": label, "last_seq": 0},
-         token=r["token"])
-    hold = sql(api, "SELECT id FROM org_rule_holds WHERE operation='reply'")[0]["id"]
-    rule(api, {"kind": "internal", "text": LAUNCH, "who": {"bots": ["ops"]}, "if_broken": "warn"})
-    judge.needles[LAUNCH] = "launch is"
-    send_anyway(api, hold)
-    got = answered(api)
-    assert len(got) == 1 and got[0][0].startswith("Warning:") and got[0][1] == {"q": [label]}
 
 
 # ---- chat, updates and task questions; the author of a replay; public task text; the fast path ----------------------
@@ -1990,29 +1861,6 @@ def test_the_market_pointer_keeps_a_warned_daily_line_on_top(ruled, monkeypatch)
     with api.app.state.store.transaction() as c:
         pointed = AA._pointer(c, "ops", "Northwind moved")
     assert pointed.startswith(line + "\n\n- Our favorite color is blue.\n- Market briefing:"), pointed
-
-
-def test_send_anyway_keeps_an_ask_refusal_audit_after_rolling_back_the_send(ruled):
-    api, rules = ruled
-    from backend import ask_ingest
-    from backend.tests.test_ask_ingest import FakeModel, assert_refused, calls, items, write_state
-    asks = FakeModel(kind="own_work")
-
-    def judge(state, questions, label=None):
-        return asks(state, questions, label) if str(label).startswith(ask_ingest.QUESTION_SET) else rules(
-            state, questions, label)
-
-    api.app.state.judge = judge
-    color_rule(api, if_broken="escalate", reviewer="ben")
-    held = say(api, "Our favorite color is gold, right?", to="ben", kind="ask")["held"]
-    assert asks.calls == [], "org-rule holds skip the ask check until Send anyway"
-    view = get(api, f"rule-holds/{held['id']}", token="ben-test")
-    before = write_state(api)
-    r = api.post(f"/api/v2/rule-holds/{held['id']}/send", json={"nonce": view["nonce"]}, headers=headers("ben-test"))
-    assert_refused(api, r, before)
-    [item], [call] = items(api), calls(api)
-    assert item["call_id"] == call["id"] and item["outcome"] == ask_ingest.SENT_BACK
-    assert hold_row(api, held["id"])["state"] == "held"
 
 
 @pytest.mark.parametrize("if_broken", ["block", "warn"])

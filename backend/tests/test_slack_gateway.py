@@ -317,8 +317,12 @@ def test_a_follow_up_answers_the_bots_open_question_task_asked_since_the_person_
                   (old["id"],))
         card = QT.ask_alone(c, "bot:legal", "human:ana", "Which state's law applies?")
         H.say(c, "bot:legal", "human:ana", "Which state's law applies?", conversation_id=thread["conversation_id"])
+        mark = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
         G.say_to_bot(c, "human:ana", "legal", event, "Delaware.", {}, H.now())
     with hub.read() as c:
+        # One wake: the reply is the bot's one new message, with no "done" notice after it.
+        assert [r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:legal' AND rowid>?",
+                                        (mark,))] == ["Delaware."]
         row = H.task(c, card["id"])
         assert row["status"] == "done" and "Delaware." in (row["note"] or "")
         assert QT.is_open(H.task(c, old["id"]))

@@ -137,7 +137,7 @@ def test_any_number_onboard_at_once_and_an_upgrade_maps_set_up_to_onboarding(api
         assert H.parked_bots(c) == {"ops", "finance", "cpo"}
 
 
-def test_an_onboarding_bot_leaves_no_note_answer_or_word_on_a_task_kept_from_before(api):
+def test_an_onboarding_bot_leaves_no_note_or_word_on_a_task_kept_from_before(api):
     # A task it held, and a question it put to a person, from before it went back to onboarding: the fence on new
     # work does not cover them, and asking again on the same task would join that question rather than file one.
     ops, finance, cpo = (as_bot(api, slug) for slug in ("ops", "finance", "cpo"))
@@ -157,17 +157,8 @@ def test_an_onboarding_bot_leaves_no_note_answer_or_word_on_a_task_kept_from_bef
     with api.app.state.store.read() as c:
         assert [r[0] for r in c.execute("SELECT to_actor FROM notes WHERE from_actor='bot:ops'")] == ["bot:coo"]
 
-    # Answering another bot's question is sending to it; an Active bot answers the same question.
-    with api.app.state.store.transaction() as c:
-        to_ops = H.say(c, "bot:finance", "bot:ops", "Which queue is yours?", kind="ask")
-        to_cpo = H.say(c, "bot:finance", "bot:cpo", "Which queue is yours?", kind="ask")
-    answered = api.post(f"/api/v2/messages/{to_ops['id']}/answer", json={"text": "Support"}, headers=headers(ops))
-    assert answered.status_code == 409 and "still onboarding" in answered.text, answered.text
-    assert api.post(f"/api/v2/messages/{to_cpo['id']}/answer", json={"text": "Sales"}, headers=headers(cpo)).status_code == 200
-
-    # Nothing on the kept task either: no question to its requester, no comment, no question put to a person.
-    for path, body in ((f"tasks/{kept['id']}/ask", {"text": "Which queue?"}),
-                       (f"tasks/{kept['id']}/comments", {"text": "Started"}),
+    # Nothing on the kept task either: no comment, no question put to a person.
+    for path, body in ((f"tasks/{kept['id']}/comments", {"text": "Started"}),
                        ("task-questions", question)):
         said = api.post("/api/v2/" + path, json=body, headers=headers(ops))
         assert said.status_code == 409 and "still onboarding" in said.text, (path, said.text)

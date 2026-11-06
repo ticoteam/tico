@@ -1,5 +1,5 @@
 """The Librarian (backend/librarian.py, docs/librarian.md): a person's question goes to a private docs
-conversation with the built-in bot, a bot asks with an ask message, and the Librarian acts as itself."""
+conversation with the built-in bot, a bot asks with a message flagged needs-action, and the Librarian acts as itself."""
 
 import pytest
 
@@ -97,21 +97,23 @@ def test_docs_history_is_private_and_only_docs_rooms_can_be_reopened(desk):
     post(desk, f"librarian/conversations/{mine['conversation_id']}/reopen", {}, token=attempt["token"], expected=403)
 
 
-def test_a_bot_asks_the_librarian_with_an_ask_message_and_the_final_text_is_the_answer(desk):
+def test_a_bot_asks_the_librarian_with_a_needs_action_message_and_the_final_text_is_the_reply(desk):
     ops = runner(desk, label="Ops Mac")
     assign(desk, ops, "ops")
     ready(desk, ops, ["ops"])
     post(desk, "chat/ops", {"text": "Please look at the refund docs"})
     turn = claim(desk, ops)
-    question = post(desk, "messages", {"to": "librarian", "text": "How long do refunds take?", "kind": "ask",
-                                       "wait_s": 60}, token=turn["token"])
+    question = post(desk, "messages", {"to": "librarian", "text": "How long do refunds take?",
+                                       "refs": {"needs_action": True}, "wait_s": 60}, token=turn["token"])
     attempt = claim(desk, desk.runner)
     assert attempt["bot"] == "librarian"
     post(desk, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, token=desk.runner["token"])
     post(desk, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Not in the docs.", "last_seq": 0},
          token=desk.runner["token"])
     with desk.app.state.store.read() as c:
-        assert H.answers_to(c, [question["id"]])[question["id"]]["body"] == "Not in the docs."
+        reply = c.execute("SELECT body FROM messages WHERE sender_id='bot:librarian' AND in_reply_to=?",
+                          (question["id"],)).fetchone()
+        assert reply["body"] == "Not in the docs."
     ask(desk, "A bot uses hub docs ask, not this route", token=turn["token"], expected=403)
 
 

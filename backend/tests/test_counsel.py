@@ -371,7 +371,7 @@ def test_counsel_reaches_no_route_outside_its_own_and_others_keep_theirs(api):
     read = read_document(api, file_id)
     new_version(api, file_id, CONTRACT + "\nClause 12: the Globex merger is secret.")
     run = read_run(api)
-    asked = [("GET", f"answers?ids={read['task_id']}"), ("GET", f"pages/{file_id}"), ("GET", "replay"),
+    asked = [("GET", f"pages/{file_id}"), ("GET", "replay"),
              ("GET", f"file-approvals?file={file_id}&version=2"), ("GET", "bots/tico-counsel/turns"),
              ("GET", f"files/{file_id}/versions"), ("GET", f"files/{file_id}/meta?v=2"),
              ("GET", f"tasks/{read['task_id']}/answers"), ("GET", "rules/stats"),

@@ -1,10 +1,10 @@
 """Needs you cards say what they approve, lead with what is due, carry the group they belong in and the bot's
 recommendation, show one card per blocker, and the list says how many items went away on their own this week."""
 
-import json
 from collections import Counter
 
 from backend import batch, views
+from backend import question_tasks as QT
 from backend import hubdb as H
 from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
 from backend.tests.test_batch import approval_for_ana
@@ -36,11 +36,10 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
                              "human:ana", parent_id=vendor["id"])
         c.executemany("UPDATE tasks SET status='waiting', note=? WHERE id=?",
                       [("Waiting on Ana to pick the vendor.", vendor["id"]), ("Same pick.", fix["id"])])
-        gusto = H.say(c, "bot:finance", "human:ana", "Should payroll move to Gusto or Rippling?", kind="ask",
-              conversation_id=H.task(c, pick["id"])["conversation_id"],
-              refs={"task": pick["id"], "if_no_answer": {"do": "Gusto", "kind": "reversible"},
-                    "questions": [{"id": "q", "question": "Which?", "multi": False, "other": False,
-                                   "options": [{"label": "Gusto", "then": "Go with Gusto"}, {"label": "Rippling", "then": "Go with Rippling"}]}]})
+        QT.store(c, pick["id"], {"if_no_answer": {"do": "Gusto", "kind": "reversible"},
+                                 "questions": [{"id": "q", "header": "", "question": "Which?", "why": "", "multi": False,
+                                                "options": [{"label": "Gusto", "then": "Go with Gusto"},
+                                                            {"label": "Rippling", "then": "Go with Rippling"}]}]})
     page = get(api, "needs-you")
     items = {i["id"]: i for i in page["items"]}
 
@@ -61,7 +60,7 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
 
     card = items[pick["id"]]
     assert card["need"] == "decide" and card["recommend"]["do"] == "Gusto" and card["recommend"]["option"] == "Gusto"
-    assert card["actions"] == ["answer", "update"]
+    assert card["kind"] == "question" and card["actions"] == ["update"]
     assert vendor["id"] not in items and fix["id"] not in items
     assert not card.get("folded") and page["folded_task_ids"] == []
     assert "folded" not in batch._row(card, "human:ana")
@@ -85,8 +84,8 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
     # Taking the recommendation picks the option it names, as a tap on it would, and finishes Ana's card, which only
     # asked it.
     pick_version = get(api, f"tasks/{pick['id']}")["task"]["version"]
-    post(api, "needs-you/recommended", {"ask": gusto["id"], "version": pick_version + 1}, expected=409)
-    assert post(api, "needs-you/recommended", {"ask": gusto["id"], "version": pick_version})["done"] is True
+    post(api, "needs-you/recommended", {"ask": pick["id"], "version": pick_version + 1}, expected=409)
+    assert post(api, "needs-you/recommended", {"ask": pick["id"], "version": pick_version})["woke"] is True
     assert get(api, f"tasks/{pick['id']}")["task"]["status"] == "done"
     assert get(api, f"tasks/{pick['id']}/answers")["answers"][0]["answers"] == {"q": ["Gusto"]}
 
@@ -95,38 +94,33 @@ def test_do_what_you_recommend_answers_and_closes_the_card(api):
     _, _, finance = setup_attempt(api, "finance")
     tool = post(api, "tasks", {"title": "Pick the outbound tool", "body": "x", "owner": "bot:finance"})
     with api.app.state.store.transaction() as c:
-        conv = H.task(c, tool["id"])["conversation_id"]
-        plain = H.say(c, "bot:finance", "human:ana", "Which day suits?", kind="ask", conversation_id=conv,
-                      refs={"task": tool["id"]})
-        asked = H.say(c, "bot:finance", "human:ana", "Shall I go with Apollo?", kind="ask", conversation_id=conv,
-                      refs={"task": tool["id"], "if_no_answer": {"do": "Go with Apollo", "kind": "reversible"}})
+        parent = H.task(c, tool["id"])
+        plain = QT.ask_plain(c, "bot:finance", "human:ana", "Which day suits?", parent=parent)
+        asked = QT.ask_plain(c, "bot:finance", "human:ana", "Shall I go with Apollo?", parent=parent)
+        QT.store(c, asked["id"], {"questions": QT.fields(asked)["questions"],
+                                  "if_no_answer": {"do": "Go with Apollo", "kind": "reversible"}})
         c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (tool["id"],))
-    card = next(i for i in get(api, "needs-you")["items"] if i["id"] == tool["id"])
+    card = next(i for i in get(api, "needs-you")["items"] if i["id"] == asked["id"])
     assert card["recommend"]["do"] == "Go with Apollo" and card["need"] == "decide"
     post(api, "needs-you/recommended", {"ask": plain["id"]}, expected=409)        # no recommendation to take
     post(api, "needs-you/recommended", {"ask": asked["id"]}, token="ben-test", expected=403)   # reads the task, was not asked
     post(api, "needs-you/recommended", {"ask": asked["id"]})
     with api.app.state.store.read() as c:
-        said = c.execute("SELECT body FROM messages WHERE in_reply_to=? AND kind='answer'", (asked["id"],)).fetchone()
-        assert said["body"] == "Yes, do what you recommend: Go with Apollo"
-        assert H.task(c, tool["id"]).get("waiting_on") is None
+        row = H.task(c, asked["id"])
+        assert row["status"] == "done"
+        assert QT.fields(row)["answer"]["text"] == "Yes, do what you recommend: Go with Apollo"
     post(api, "needs-you/recommended", {"ask": asked["id"]}, expected=409)        # once
 
 
 def test_do_what_you_recommend_answers_a_question_on_a_file_version(api):
+    from backend.tests.test_file_reviews import ask as review_ask, publish
     _, _, finance = setup_attempt(api, "finance")
-    plan = post(api, "tasks", {"title": "Review the payroll plan", "body": "x", "owner": "bot:finance"})
-    question = {"questions": [{"id": "verdict", "header": "Review", "question": "Ship it?", "other": False,
-                               "options": [{"label": "Approve", "then": "Go with Approve"}, {"label": "Request changes", "then": "Go with Request changes"}]}], "who": "ana"}
-    made = post(api, f"tasks/{plan['id']}/files", {"name": "plan.md", "text": "# Plan", "ask": question},
-                token=finance["token"])
-    with api.app.state.store.transaction() as c:
-        ask_id = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (made["file_id"],)).fetchone()[0]
-        asked = H.message(c, ask_id)
-        c.execute("UPDATE messages SET refs=?, recipient_id='human:ana' WHERE id=?",
-                  (json.dumps({**asked["refs"], "if_no_answer": {"do": "Approve", "kind": "reversible"}}), ask_id))
-    post(api, "needs-you/recommended", {"ask": ask_id})
-    assert get(api, f"tasks/{plan['id']}/answers")["answers"][0]["answers"] == {"verdict": ["Approve"]}
+    v1 = publish(api, finance["token"], "# Plan", "plan.md")
+    made = review_ask(api, finance["token"], [{"file": v1["id"]}], on="ana", question="Ship it?",
+                      if_no_answer={"do": "Approve", "kind": "reversible"})
+    card_id = made["task"]["id"]
+    post(api, "needs-you/recommended", {"ask": card_id})
+    assert get(api, f"tasks/{card_id}/answers")["answers"][0]["answers"] == {"decision": ["Approve"]}
 
 
 def test_a_side_question_on_a_persons_task_is_answered_not_finished(api):
@@ -134,10 +128,12 @@ def test_a_side_question_on_a_persons_task_is_answered_not_finished(api):
     deck = post(api, "tasks", {"title": "Prepare the board deck", "body": "For Thursday's board meeting",
                                "owner": "human:ana"}, token=finance["token"])
     with api.app.state.store.transaction() as c:
-        asked = H.say(c, "bot:finance", "human:ana", "Shall I pull the Q3 numbers from Stripe for you?", kind="ask",
-                      conversation_id=H.task(c, deck["id"])["conversation_id"],
-                      refs={"task": deck["id"], "if_no_answer": {"do": "Pull them from Stripe", "kind": "reversible"}})
-    assert post(api, "needs-you/recommended", {"ask": asked["id"]})["done"] is False
+        asked = QT.ask_plain(c, "bot:finance", "human:ana", "Shall I pull the Q3 numbers from Stripe for you?",
+                             parent=H.task(c, deck["id"]))
+        QT.store(c, asked["id"], {"questions": QT.fields(asked)["questions"],
+                                  "if_no_answer": {"do": "Pull them from Stripe", "kind": "reversible"}})
+    assert post(api, "needs-you/recommended", {"ask": asked["id"]})["woke"] is True
+    assert get(api, f"tasks/{asked['id']}")["task"]["status"] == "done"
     task = get(api, f"tasks/{deck['id']}")["task"]
     assert task["status"] == "open" and deck["id"] in {i["id"] for i in get(api, "needs-you")["items"]}
 
@@ -152,19 +148,20 @@ def test_what_it_takes_reads_money_and_sign_ins_not_every_mention():
     assert need("Add the new OpenAI API key") == need("Sign in to the venue site") == "connect"
 
 
-def test_a_question_asked_again_did_not_go_away(api):
+def test_a_question_closed_unanswered_went_away_and_an_answered_one_did_not(api):
     _, _, finance = setup_attempt(api, "finance")
     tool = post(api, "tasks", {"title": "Pick the outbound tool", "body": "x", "owner": "bot:finance"})
     with api.app.state.store.transaction() as c:
-        conv = H.task(c, tool["id"])["conversation_id"]
-        H.say(c, "bot:finance", "human:ana", "Apollo or Clay?", kind="ask", conversation_id=conv, refs={"task": tool["id"]})
-        newer = H.say(c, "bot:finance", "human:ana", "Apollo, Clay or Outreach?", kind="ask", conversation_id=conv,
-                      refs={"task": tool["id"]})
-        H.supersede_asks(c, tool["id"], from_actor="bot:finance", to_actor="human:ana", keep=newer["id"])
+        parent = H.task(c, tool["id"])
+        answered = QT.ask_plain(c, "bot:finance", "human:ana", "Apollo or Clay?", parent=parent)
+        dropped = QT.ask_plain(c, "bot:finance", "human:ana", "Apollo, Clay or Outreach?", parent=parent)
     assert get(api, "needs-you")["went_away"]["withdrawn"] == 0
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET superseded_at=? WHERE id=?", (H.now(), newer["id"]))
-    assert get(api, "needs-you")["went_away"]["withdrawn"] == 2
+        H.task_update(c, "human:ana", answered["id"], status="done", note="Clay")
+    assert get(api, "needs-you")["went_away"]["withdrawn"] == 0
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:finance", dropped["id"], status="closed", note="No longer needed")
+    assert get(api, "needs-you")["went_away"]["withdrawn"] == 1
 
 
 def test_a_wait_above_another_open_card_stays_after_a_one_tap_answer(api):
@@ -177,10 +174,10 @@ def test_a_wait_above_another_open_card_stays_after_a_one_tap_answer(api):
                                  parent_id=launch["id"])
         c.execute("UPDATE tasks SET status='waiting', note=? WHERE id=?",
                   ("Waiting on Ana to approve paying the $4,000 Stripe invoice.", launch["id"]))
-        asked = H.say(c, "bot:finance", "human:ana", "Which venue should we book?", kind="ask",
-                      conversation_id=H.task(c, venue["id"])["conversation_id"],
-                      refs={"task": venue["id"], "if_no_answer": {"do": "The Loft", "kind": "reversible"}})
-    assert post(api, "needs-you/recommended", {"ask": asked["id"]})["done"] is True
+        QT.store(c, venue["id"], {"questions": [{"id": "q", "header": "", "question": "Which venue should we book?",
+                                                 "why": "", "options": [], "multi": False}],
+                                  "if_no_answer": {"do": "The Loft", "kind": "reversible"}})
+    assert post(api, "needs-you/recommended", {"ask": venue["id"]})["woke"] is True
     # The other card below stays open, and the bot's task above it still waits.
     assert get(api, f"tasks/{launch['id']}")["task"]["status"] == "waiting"
     assert catering["id"] in {i["id"] for i in get(api, "needs-you")["items"]}

@@ -272,7 +272,9 @@ def answer_from_reply(conn, person, bot, conversation_id, message):
         "AND coalesce(asked_at, created_at)>=?", (person, bot, since))]
     if len(found) != 1:
         return None
-    H.task_update(conn, person, found[0], status="done", note=str(message.get("body") or "").strip())
+    # The reply itself reaches the bot (and wakes it): no second notice that the task is done. A task of the bot's that
+    # waited on it still opens again, with its one wake there.
+    H.task_update(conn, person, found[0], status="done", note=str(message.get("body") or "").strip(), wake_others=False)
     return found[0]
 
 

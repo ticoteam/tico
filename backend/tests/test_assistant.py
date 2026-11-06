@@ -492,8 +492,9 @@ def test_a_group_of_task_actions_is_one_card_and_one_click(api):
 
 
 def needs_you_queue(api):
-    """Ben's Needs you: old publish batches, a merge and a spend for him to decide, and an
-    approval for Ana that his Assistant must never touch."""
+    """Ben's Needs you: old publish batches, a merge and a spend for him to decide, a bot's question to him (a question
+    task), and an approval and a question for Ana that his Assistant must never touch."""
+    from backend import question_tasks as QT
     as_member(api, "ben@acme.example")
     with api.app.state.store.transaction() as c:
         mine = H.task_create(c, "human:ben", "Run the launch", "Ben decides its sends.", "human:ben")["id"]
@@ -503,7 +504,13 @@ def needs_you_queue(api):
         merge = H.approval_request(c, "bot:ops", "merge", {"repo": "acme/site", "pr": 12}, mine)["id"]
         spend = H.approval_request(c, "bot:ops", "spend", {"amount": 500, "account": "card", "what": "Ads"}, mine)["id"]
         hers = H.approval_request(c, "bot:ops", "publish", {"url": "https://acme.example/ana", "content_sha256": "f" * 64})["id"]
-    return {"old": old, "merge": merge, "spend": spend, "hers": hers}
+        ask = QT.ask_alone(c, "bot:ops", "human:ben", "Launch on Oct 1 or Oct 8?")["id"]
+        her_ask = QT.ask_alone(c, "bot:ops", "human:ana", "Which logo?")["id"]
+    return {"old": old, "merge": merge, "spend": spend, "hers": hers, "ask": ask, "her_ask": her_ask}
+
+
+def answer_step(task_id, text):
+    return {"path": f"/api/v2/tasks/{task_id}/answers", "body": {"target": {"task": task_id}, "answers": {}, "other": text}}
 
 
 def decision(api, aid):
@@ -511,7 +518,7 @@ def decision(api, aid):
         return H.approval(c, aid)["decision"]
 
 
-def test_clear_my_queue_declines_in_bulk_and_never_approves(api):
+def test_clear_my_queue_declines_and_answers_in_bulk_and_never_approves(api):
     q = needs_you_queue(api)
     post(api, "assistant/settings", {"decides_approvals": False}, token="ben-test")
     r, attempt = assistant_turn(api, "ben-test", "Clear my queue, close at least 50 of these, the old stuff can go")
@@ -525,23 +532,28 @@ def test_clear_my_queue_declines_in_bulk_and_never_approves(api):
     assert refused["error"]["code"] == "approve_not_asked"
     post(api, "assistant/actions", {"summary": "Odd", "path": assistant.BATCH_PATH, "body": {"actions": [
         {"path": "/api/v2/approvals/" + q["merge"], "body": ["declined"]}]}}, token=token, expected=422)
-    # Ana's approval never goes on his card.
+    # Ana's approval and question never go on his card.
     decline = {"decision": "declined", "note": "Before the reset"}
     steps = [{"path": "/api/v2/approvals/" + aid, "body": decline} for aid in q["old"]]
-    for theirs in ({"path": "/api/v2/approvals/" + q["hers"], "body": decline},):
+    steps.append(answer_step(q["ask"], "Oct 8"))
+    for theirs in ({"path": "/api/v2/approvals/" + q["hers"], "body": decline}, answer_step(q["her_ask"], "The blue one")):
         post(api, "assistant/actions", {"summary": "Clear", "path": assistant.BATCH_PATH,
                                         "body": {"actions": [*steps, theirs]}}, token=token, expected=403)
-    # Declining what he asked for: one card, grouped by kind and age, every item listed.
-    card = post(api, "assistant/actions", {"summary": "3 old publish batches from before the reset: decline",
+    # Declining and answering what he asked for: one card, grouped by kind and age, every item listed.
+    card = post(api, "assistant/actions", {"summary": "3 old publish batches from before the reset: decline; answer Ops",
                                            "path": assistant.BATCH_PATH, "body": {"actions": steps}}, token=token)["action"]
-    assert card["description"] == "3 actions, on one Confirm: 3 approval decisions"
+    assert card["description"] == "4 actions, on one Confirm: 3 approval decisions, 1 answer"
     assert card["diff"][0] == {"field": "Decline 3 publish approvals, over a month old", "new": "reason: Before the reset",
                                "group": True}
-    assert "post-0" in card["diff"][1]["field"] and "40 days old" in card["diff"][1]["field"]
+    assert card["diff"][1]["field"] == "Answer 1 bot question, under a week old"
+    assert "post-0" in card["diff"][2]["field"] and "40 days old" in card["diff"][2]["field"]
+    assert "Oct 8" in card["diff"][-1]["field"] and "Launch on Oct 1 or Oct 8?" in card["diff"][-1]["field"]
     assert all(decision(api, aid) is None for aid in q["old"])                     # nothing ran yet
     done = post(api, f"assistant/actions/{card['id']}/confirm", {}, token="ben-test")["action"]
     assert done["status"] == "done" and not done["result"]["error"], done["result"]
     assert [decision(api, aid) for aid in q["old"]] == ["declined"] * 3
+    with api.app.state.store.read() as c:
+        assert H.task(c, q["ask"])["status"] == "done" and H.task(c, q["her_ask"])["status"] == "open"
     # One he asked for runs directly when the turn cites his message, as him, via the assistant.
     asked(api, "approvals/" + q["spend"], {"decision": "declined", "note": "Not this month"}, token, "turn")
     assert decision(api, q["spend"]) == "declined"

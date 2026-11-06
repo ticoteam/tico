@@ -1,8 +1,10 @@
-"""Task reviews retain the existing ask/answer protocol and legacy attachment path."""
+"""Files on a task (version names, scopes, archive, legacy attachments) and the readable text of a question task's
+answer."""
 
 import pytest
 
 from backend.tests.test_api import api, assign, claim, headers, post, ready, restrict, runner  # noqa: F401
+from backend import question_tasks as QT
 from backend.store import H
 from clients.hubcli import parser
 
@@ -11,9 +13,14 @@ def task(api, title="Review the draft"):
     return post(api, "tasks", {"owner": "ops", "title": title, "body": "Read the report."})["id"]
 
 
-def ask(who=None, other=True):
-    return {"questions": [{"id": "verdict", "header": "Review", "question": "Is this ready?",
-                           "options": [{"label": "Approve", "then": "Go with Approve"}, {"label": "Request changes", "then": "Go with Request changes"}], "other": other}], "who": who}
+def card(api, tid, who="ben", question="Is this ready?", options=("Approve", "Request changes")):
+    """A question task the bot filed for `who` under task `tid`, with one verdict question."""
+    with api.app.state.store.transaction() as c:
+        made = H.task_create(c, "bot:ops", "Which draft?", "Which draft?", "human:" + who, parent_id=tid, lint=False)
+        QT.store(c, made["id"], {"questions": [{"id": "verdict", "header": "Review", "question": question, "why": "",
+                                                "multi": False, "other": True,
+                                                "options": [{"label": o, "then": "Go with " + o} for o in options]}]})
+    return made["id"]
 
 
 def attach(api, tid, name="report.md", **fields):
@@ -39,76 +46,11 @@ def test_version_names_scopes_archive_and_author_edits(api):
     assert all(k in versions[0] for k in ("width", "height", "duration_ms", "media_state", "poster_url", "thumb_url"))
     assert api.get(versions[1]["url"], headers=headers()).content == b"# Report"
     path = f"/api/v2/files/{fid}/versions/2"
-    assert api.patch(path, json={"note": "Changed", "ask": ask()}, headers=headers()).status_code == 200
+    assert api.patch(path, json={"note": "Changed"}, headers=headers()).status_code == 200
     assert api.patch(path, json={"note": "No"}, headers=headers("cara-test")).status_code == 403
     assert api.patch(path, json={"note": "x" * 501}, headers=headers()).status_code == 422
     assert api.patch(f"/api/v2/files/{fid}", json={"archived": True}, headers=headers()).status_code == 200
     assert attach(api, tid)["file_id"] != fid
-
-
-@pytest.mark.parametrize("change", [{"extra": True}])
-def test_ask_validation(api, change):
-    tid = task(api)
-    r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Review", "ask": {**ask(), **change}}, headers=headers())
-    assert r.status_code == 422, r.text
-
-
-def test_comments_answers_rights_validation_multiple_answers_and_needs_you(api):
-    tid = task(api)
-    question = post(api, f"tasks/{tid}/comments", {"text": "Which draft?", "ask": ask("ben")})["comment"]
-    assert question["kind"] == "ask" and question["ask"]["who"] == "ben"
-    assert get(api, f"tasks/{tid}")["task"]["open_asks"] == 1
-    listing = get(api, "tasks")["tasks"]
-    assert next(t for t in listing if t["id"] == tid)["open_asks"] == 1
-    assert tid in [t["id"] for t in get(api, "needs-you", "ben-test")["items"]]
-    body = {"target": {"comment": question["id"]}, "answers": {"verdict": ["Approve"]}}
-    assert api.post(f"/api/v2/tasks/{tid}/answers", json=body, headers=headers()).status_code == 403
-    with api.app.state.store.transaction() as c:
-        restrict(c, "ops", read={"everyone": True}, write={"people": ["ana", "ben"]})
-    assert api.post(f"/api/v2/tasks/{tid}/answers", json=body, headers=headers("cara-test")).status_code == 403
-    with api.app.state.store.transaction() as c:
-        restrict(c, "ops", everyone=True)
-    for invalid in ({"verdict": ["Bogus"]}, {"missing": ["Approve"]}, {"verdict": ["Approve", "Request changes"]}):
-        assert api.post(f"/api/v2/tasks/{tid}/answers", json={**body, "answers": invalid}, headers=headers("ben-test")).status_code == 422
-    answer = post(api, f"tasks/{tid}/answers", body, "ben-test")
-    assert answer["comment"]["kind"] == "answer" and 'answered "Is this ready?": Approve.' in answer["comment"]["body"]
-    assert answer["comment"]["refs"]["answer"] == answer["answer"]
-    post(api, f"tasks/{tid}/answers", {**body, "answers": {"verdict": ["Request changes"]}, "other": "Change the intro."}, "cara-test")
-    comments = get(api, f"tasks/{tid}/comments")["comments"]
-    assert len(next(m for m in comments if m["id"] == question["id"])["answers"]) == 2
-    assert len(get(api, f"tasks/{tid}/answers")["answers"]) == 2
-    assert get(api, f"tasks/{tid}")["task"]["open_asks"] == 0
-
-
-def test_a_file_answer_wakes_the_bot_with_the_structured_answer(api):
-    tid = task(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE humans SET teams='[\"engineering\"]' WHERE id='ben'")
-    made = attach(api, tid, ask=ask(), note="Read this version")
-    fid = made["file_id"]
-    body = {"target": {"file": fid, "version": 1}, "answers": {"verdict": ["Approve"]}}
-    # The author is Ana; another person with comment rights can answer.
-    answer = post(api, f"tasks/{tid}/answers", body, "ben-test")
-    assert 'approved "report.md" v1.' in answer["comment"]["body"]
-    with api.app.state.store.read() as c:
-        msg = H.message(c, answer["comment"]["id"])
-        assert msg["recipient_id"] == "bot:ops"
-        assert c.execute("SELECT 1 FROM jobs WHERE message_id=?", (msg["id"],)).fetchone()
-        question = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (fid,)).fetchone()[0]
-        assert H.answers_to(c, [question])[question]["refs"]["answer"] == answer["answer"]
-    assert get(api, f"tasks/{tid}/files")["files"][0]["versions"][0]["answers"] == [answer["answer"]]
-    assert api.patch(f"/api/v2/files/{fid}/versions/1", json={"ask": ask("ben")}, headers=headers()).status_code == 422
-
-
-def test_plain_ask_and_reply_still_close_through_existing_protocol(api):
-    tid = task(api)
-    with api.app.state.store.transaction() as c:
-        question = H.task_ask(c, "bot:ops", tid, "Which format?")
-    reply = post(api, f"tasks/{tid}/comments", {"text": "Markdown."})["comment"]
-    with api.app.state.store.read() as c:
-        assert H.answers_to(c, [question["id"]])[question["id"]]["id"] == reply["id"]
-        assert H.unanswered_ask(c, H.task(c, tid)) is None
-    assert get(api, f"tasks/{tid}")["task"]["open_asks"] == 0
 
 
 def test_review_migration_keeps_existing_version_bytes(api):
@@ -140,12 +82,11 @@ def test_cli_comment_uploads_use_distinct_retry_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(remotecli, "Client", Client)
     monkeypatch.setenv("HUB_API_URL", "https://example.com")
     monkeypatch.setenv("HUB_OPERATION_ID", "review-operation")
-    args = parser().parse_args(["task", "comment", "t1", "Review", "--attach", str(paths[0]), "--attach", str(paths[1]),
-                                "--choices", "A,B"])
+    args = parser().parse_args(["task", "comment", "t1", "Review", "--attach", str(paths[0]), "--attach", str(paths[1])])
     assert remotecli.run(args) == {"ok": True}
     assert len(set(c[2] for c in calls)) == 3
     assert calls[-1][1]["attachments"] == ["file-a@1", "file-a@2"]
-    assert calls[-1][1]["ask"]["questions"][0]["options"] == [{"label": "A"}, {"label": "B"}]
+    assert "ask" not in calls[-1][1]            # asks are gone: a comment carries no question
 
 
 def test_requester_bot_can_open_person_uploads_and_adopted_legacy_ids(api):
@@ -198,71 +139,6 @@ def test_attach_requires_comment_rights_even_without_question(api, existing):
     assert len(get(api, f"tasks/{tid}/files")["files"]) == int(existing)
 
 
-@pytest.mark.parametrize("role", ["other", "requester"])
-def test_answer_uses_comment_wake_rule(api, role):
-    tid = task(api)
-    question = post(api, f"tasks/{tid}/comments", {"text": "Review", "ask": ask("cara")})["comment"]
-    token = "cara-test"
-    with api.app.state.store.transaction() as c:
-        if role == "mover":
-            c.execute("UPDATE humans SET teams='[\"engineering\"]' WHERE id='cara'")
-        elif role in ("owner", "requester"):
-            c.execute(f"UPDATE tasks SET {role}_id='human:cara' WHERE id=?", (tid,))
-    if role == "bot":
-        machine = runner(api)
-        assign(api, machine, "ops")
-        ready(api, machine, ["ops"])
-        token = claim(api, machine, "ops")["token"]
-    answer = post(api, f"tasks/{tid}/answers", {"target": {"comment": question["id"]},
-                                              "answers": {"verdict": ["Approve"]}}, token)
-    assert answer["woke"] == (role != "other")
-    assert bool(answer["comment"]["refs"].get("quiet")) == (role == "other")
-    with api.app.state.store.read() as c:
-        job = c.execute("SELECT 1 FROM jobs WHERE message_id=?", (answer["comment"]["id"],)).fetchone()
-        assert bool(job) == (role in ("mover", "requester"))
-
-
-@pytest.mark.parametrize("status", ["done", "closed", "declined"])
-def test_needs_you_excludes_inactive_tasks_with_structured_asks(api, status):
-    tid = task(api)
-    post(api, f"tasks/{tid}/comments", {"text": "Review", "ask": ask("ben")})
-    assert tid in [t["id"] for t in get(api, "needs-you", "ben-test")["items"]]
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status=? WHERE id=?", (status, tid))
-    assert tid not in [t["id"] for t in get(api, "needs-you", "ben-test")["items"]]
-
-
-def test_readable_answer_escapes_interpolated_text_and_classifies_only_other(api):
-    from backend.task_review import readable_text
-    assert readable_text("www.example.com ftp://example.com") == "www&#46;example.com ftp&#58;//example.com"
-    tid = task(api)
-    choice = ask("ben")
-    label = "[Open](https://example.com) @ops **yes** secrets/plan"
-    choice["questions"][0]["question"] = "Read [this](https://example.com) @ops **now**?"
-    choice["questions"][0]["options"] = [{"label": label}]
-    question = post(api, f"tasks/{tid}/comments", {"text": "Review", "ask": choice})["comment"]
-    body = {"target": {"comment": question["id"]}, "answers": {"verdict": [label]}}
-    saved = post(api, f"tasks/{tid}/answers", body, "ben-test")
-    assert readable_text(label) in saved["comment"]["body"]
-    assert readable_text(choice["questions"][0]["question"]) in saved["comment"]["body"]
-    assert "&#64;ops" in saved["comment"]["body"] and r"\[Open\]\(https&#58;//example.com\)" in saved["comment"]["body"]
-    assert saved["answer"]["answers"] == {"verdict": [label]}
-
-
-def test_the_person_a_bot_asked_wakes_it_with_their_answer(api):
-    tid = task(api)
-    machine = runner(api)
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
-    token = claim(api, machine, "ops")["token"]
-    question = post(api, f"tasks/{tid}/comments", {"text": "Which draft?", "ask": ask("ben")}, token)["comment"]
-    body = {"target": {"comment": question["id"]}, "answers": {"verdict": ["Approve"]}, "other": "Ship it."}
-    answer = post(api, f"tasks/{tid}/answers", body, "ben-test")
-    assert answer["woke"] and answer["comment"]["recipient_id"] == "bot:ops"
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT 1 FROM jobs WHERE message_id=?", (answer["comment"]["id"],)).fetchone()
-
-
 def test_done_news_skips_a_bot_that_cannot_read_the_task(api):
     parent = post(api, "tasks", {"owner": "ops", "title": "Plan the launch week", "body": "All of it."})["id"]
     child = post(api, "tasks", {"owner": "inbox", "title": "Draft the launch mail", "body": "One page.",
@@ -273,3 +149,27 @@ def test_done_news_skips_a_bot_that_cannot_read_the_task(api):
         told = {r[0] for r in c.execute("SELECT recipient_id FROM messages WHERE body LIKE '% marked this done:%' "
                                         "AND json_extract(refs,'$.task')=?", (child,))}
     assert "bot:inbox" in told and "bot:ops" not in told, told
+
+
+@pytest.mark.parametrize("status", ["done", "closed", "declined"])
+def test_needs_you_excludes_inactive_question_tasks(api, status):
+    tid = task(api)
+    card_id = card(api, tid)
+    assert card_id in [t["id"] for t in get(api, "needs-you", "ben-test")["items"]]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status=? WHERE id=?", (status, card_id))
+    assert card_id not in [t["id"] for t in get(api, "needs-you", "ben-test")["items"]]
+
+
+def test_readable_answer_escapes_interpolated_text_and_classifies_only_other(api):
+    from backend.task_review import readable_text
+    assert readable_text("www.example.com ftp://example.com") == "www&#46;example.com ftp&#58;//example.com"
+    label = "[Open](https://example.com) @ops **yes** secrets/plan"
+    question = "Read [this](https://example.com) @ops **now**?"
+    card_id = card(api, task(api), question=question, options=(label,))
+    body = {"target": {"task": card_id}, "answers": {"verdict": [label]}}
+    saved = post(api, f"tasks/{card_id}/answers", body, "ben-test")
+    text = saved["answer"]["text"]
+    assert readable_text(label) in text and readable_text(question) in text
+    assert "&#64;ops" in text and r"\[Open\]\(https&#58;//example.com\)" in text
+    assert saved["answer"]["answers"] == {"verdict": [label]}

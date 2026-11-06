@@ -3,9 +3,10 @@ a release), a message outside the thread's audience never reaches its person, an
 the people who can manage it."""
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend import threads
+from backend import question_tasks as QT, threads
 from backend.auth import Identity
 from backend import hubdb as H
+from backend.tests.old_asks import old_ask
 from backend.tests.test_api import api, as_member, get, post, setup_attempt  # noqa: F401
 
 
@@ -17,6 +18,12 @@ def members_thread(api, members=("human:ana",), title="Launch"):
 def say(api, thread_id, text, *, actor="human:cara", **kw):
     with api.app.state.store.transaction() as c:
         return threads.post(c, actor, thread_id, text, **kw)
+
+
+def old_question(api, thread_id, text, *, actor="human:cara", to="human:ana"):
+    """An ask row as an older file holds it: nothing writes one now, but the thread still lists it until answered."""
+    with api.app.state.store.transaction() as c:
+        return old_ask(c, actor, to, text, conversation_id=thread_id)
 
 
 def needs(api, kind=None, token="ana-test"):
@@ -32,7 +39,7 @@ def test_attention_variants_share_one_snapshot_but_keep_their_filters_and_own_co
     from backend import thread_attention as TA
     tid = members_thread(api)
     mention = say(api, tid, "@ana please check.")
-    ask = say(api, tid, "Which lease?", kind="ask", to_actor="human:ana")
+    ask = old_question(api, tid, "Which lease?")
     paused = members_thread(api, title="Paused")
     with api.app.state.store.transaction() as c:
         now = H.now()
@@ -84,7 +91,7 @@ def test_a_message_to_the_person_is_listed_until_they_reply(api):
 
 def test_a_question_is_listed_until_the_person_answers_in_the_thread(api):
     tid = members_thread(api)
-    say(api, tid, "Which lease, the Main St one?", kind="ask", to_actor="human:ana")
+    old_question(api, tid, "Which lease, the Main St one?")
     assert [i["conversation_id"] for i in needs(api, "thread_ask")] == [tid]
     say(api, tid, "The Main St one.", actor="human:ana")
     assert needs(api, "thread_ask") == []
@@ -254,9 +261,10 @@ def test_a_dm_with_only_a_bot_is_counted_on_the_bot_not_listed(api):
     say(api, dm, "Numbers are in.", actor="bot:finance")
     assert needs(api, "thread_dm") == []
     assert get(api, "threads", token="ana-test")["bot_dms"] == {"bot:finance": 1}
-    say(api, dm, "Book the Q3 accrual?", actor="bot:finance", kind="ask", to_actor="human:ana")
-    # Its question is Needs you's own card (answered there, which a plain reply is not), so the DM stays out of Inbox.
-    assert [i["conversation_id"] for i in needs(api, "ask")] == [dm]
+    with api.app.state.store.transaction() as c:
+        QT.ask_alone(c, "bot:finance", "human:ana", "Book the Q3 accrual?")
+    # Its question is a question task on Needs you (answered there, which a plain reply is not), so the DM stays out of Inbox.
+    assert len(needs(api, "question")) == 1
     assert get(api, "threads", token="ana-test")["attention"] == []
     with api.app.state.store.transaction() as c:
         threads.mark_all_read(c, ana_viewer(api), dm)

@@ -95,7 +95,7 @@ def test_manager_reads_both_private_parties_in_detail_list_sql_and_loses_access(
     assert owned['id'] not in {t['id'] for t in get(api, 'tasks', token=token)['tasks']}
 
 
-def test_manager_comment_and_question_wake_owner_without_mention(api, bot_manager):
+def test_manager_comment_wakes_owner_without_mention(api, bot_manager):
     token, actor = bot_manager
     task = make(api)
     # The manager is not the direct boss: add a second bot layer for bot and human cases.
@@ -107,15 +107,13 @@ def test_manager_comment_and_question_wake_owner_without_mention(api, bot_manage
         config = BS.read(c, 'ops')
         config['bot_contact'] = 'tasks'
         BS.write(c, 'ops', config)
-    for fields in ({'text': 'Please continue the work.'}, {'text': 'Which approach works?', 'ask': {
-            'questions': [{'id': 'approach', 'header': 'Approach', 'question': 'Which approach works?', 'other': True}]}}):
-        result = post(api, 'tasks/' + task['id'] + '/comments', fields, token=token)
-        assert result['woke'], result
-        assert result['comment']['sender_id'] == actor
-        with api.app.state.store.read() as c:
-            message = H.message(c, result['comment']['id'])
-            assert message['recipient_id'] == 'bot:ops' and not message['refs'].get('quiet')
-            assert c.execute('SELECT 1 FROM jobs WHERE message_id=?', (message['id'],)).fetchone()
+    result = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Please continue the work.'}, token=token)
+    assert result['woke'], result
+    assert result['comment']['sender_id'] == actor
+    with api.app.state.store.read() as c:
+        message = H.message(c, result['comment']['id'])
+        assert message['recipient_id'] == 'bot:ops' and not message['refs'].get('quiet')
+        assert c.execute('SELECT 1 FROM jobs WHERE message_id=?', (message['id'],)).fetchone()
 
 
 def test_requester_manager_comment_wakes_owner_with_requester_permissions(api, bot_manager):
@@ -186,7 +184,7 @@ def test_requester_manager_closes_reopens_owner_manager_cannot_close(api, manage
         post(api, 'tasks/' + requested['id'], {'version': closed['version'], 'status': 'doing'}, token=token, expected=403)
 
 
-def test_manager_snoozes_defers_asks_and_resolves_its_reports_question(api, bot_manager):
+def test_manager_snoozes_and_defers_its_reports_task(api, bot_manager):
     token, actor = bot_manager
     task = make(api)
     snoozed = post(api, 'tasks/' + task['id'] + '/snooze', {'until': '2027-01-01T00:00:00Z'}, token=token)
@@ -195,14 +193,6 @@ def test_manager_snoozes_defers_asks_and_resolves_its_reports_question(api, bot_
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET next_run=1 WHERE id=?', (task['id'],))
     post(api, 'tasks/' + task['id'] + '/defer', {'at': '2027-01-01T00:00:00Z'}, token=token)
-    ask = post(api, 'tasks/' + task['id'] + '/ask', {'text': 'Which packet should I use?'}, token=token)
-    assert ask['sender_id'] == actor
-    with api.app.state.store.transaction() as c:
-        H.task_ask_resolve(c, actor, task['id'], ask['id'])
-        question = H.task_comment(c, 'bot:ops', task['id'], 'Which format?', ask={
-            'who': 'human:ana', 'questions': [{'id': 'format', 'header': 'Format', 'question': 'Which format?', 'other': True}]})
-    result = post(api, 'tasks/' + task['id'] + '/comments/' + question['id'] + '/resolve', {'quote': 'Use Markdown.'}, token=token)
-    assert result['comment']['sender_id'] == actor
 
 
 def test_manager_finishing_report_subtask_returns_result_to_parent_once(api, bot_manager):

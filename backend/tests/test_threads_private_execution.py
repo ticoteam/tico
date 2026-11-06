@@ -152,7 +152,7 @@ def test_the_cleanup_keeps_a_title_a_person_gave_and_a_visible_parent_keeps_its_
 
 def runner_reply(c, thread_id, question, text, refs):
     """A runner's final reply: it carries its turn and answers a message, which makes it restricted by flag alone."""
-    return threads.post(c, "bot:ops", thread_id, text, kind="answer", refs=refs, in_reply_to=question)
+    return threads.post(c, "bot:ops", thread_id, text, refs=refs, in_reply_to=question)
 
 
 def test_a_sub_thread_on_an_ordinary_bot_reply_keeps_its_title(api):
@@ -291,62 +291,6 @@ def test_a_removed_bot_cannot_fetch_a_message_addressed_to_it(api):
     seen = api.get(f"/api/v2/messages/{message_id}", headers=headers(attempt["token"]))
     assert seen.status_code == 404, seen.text
     assert "Note for ops" not in seen.text
-
-
-def test_a_private_run_cannot_answer_a_company_question_with_private_words(api):
-    """Ben asks the bot ops in a company thread; the bot's private run answers through the answer route. The answer is
-    a message the company thread's readers read, so the run's confidential words are refused there."""
-    thread = company_thread_with_bot_and_ben(api)
-    added = api.post(f"/api/v2/threads/{thread['id']}/members", json={"actor": "bot:ops"}, headers=headers("ana-test"))
-    assert added.status_code == 200, added.text
-    asked = api.post("/api/v2/messages", json={"to": "bot:ops", "text": "Which launch date?", "kind": "ask",
-                                               "conversation_id": thread["id"]}, headers=headers("ben-test"))
-    assert asked.status_code == 200, asked.text
-    row, attempt = private_run(api)
-    answer = api.post(f"/api/v2/messages/{asked.json()['id']}/answer", json={"text": "Confidential launch plan"},
-                      headers=headers(attempt["token"]))
-    assert answer.status_code == 403, answer.text
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM messages WHERE body LIKE 'Confidential%'").fetchone()[0] == 0
-
-
-def _dm_question(api, **refs):
-    asked = api.post("/api/v2/messages", json={"to": "bot:ops", "text": "Which launch date?", "kind": "ask", **refs},
-                     headers=headers("ben-test"))
-    assert asked.status_code == 200, asked.text
-    return asked.json()["id"]
-
-
-def _lose_the_task(api, row):
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET requester_id='human:ana' WHERE id=?", (row["id"],))
-
-
-def test_a_private_runs_answer_in_a_dm_keeps_its_task_after_the_asker_loses_it(api):
-    """Everyone in Ben's DM reads the run's private task, so the run may answer his untagged question. The answer stays
-    tied to that task: once Ben loses the task, he no longer reads what the run told him from it."""
-    asked = _dm_question(api)
-    row, attempt = private_run(api)
-    answer = api.post(f"/api/v2/messages/{asked}/answer", json={"text": "Confidential launch plan"},
-                      headers=headers(attempt["token"]))
-    assert answer.status_code == 200, answer.text
-    aid = answer.json()["id"]
-    assert api.get(f"/api/v2/messages/{aid}", headers=headers("ben-test")).status_code == 200
-    _lose_the_task(api, row)
-    assert api.get(f"/api/v2/messages/{aid}", headers=headers("ben-test")).status_code == 404
-
-
-def test_a_private_runs_note_on_an_options_question_keeps_its_task_too(api):
-    with api.app.state.store.transaction() as c:
-        asked = H.say(c, "human:ben", "bot:ops", "Which launch date?", kind="ask",
-                      refs={"questions": [{"id": "q", "text": "Which?", "options": [{"label": "May"}, {"label": "June"}]}]})
-    row, attempt = private_run(api)
-    answer = api.post(f"/api/v2/messages/{asked['id']}/answer", json={"text": "Confidential launch plan"},
-                      headers=headers(attempt["token"]))
-    assert answer.status_code == 200, answer.text
-    aid = answer.json()["id"]
-    _lose_the_task(api, row)
-    assert api.get(f"/api/v2/messages/{aid}", headers=headers("ben-test")).status_code == 404
 
 
 def _route_context(api, attempt):

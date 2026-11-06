@@ -10,6 +10,7 @@ import pytest
 from backend import threads, updates
 from backend.auth import Identity
 from backend.store import H, Problem, digest
+from backend.tests.old_asks import old_answer, old_ask
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
 
 MORNING = datetime(2026, 9, 29, 13, 0, tzinfo=timezone.utc)      # Tuesday 06:00 Pacific
@@ -341,14 +342,14 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
     say(api, "My salary talks are next week")             # her private Assistant chat
     store = api.app.state.store
     with store.transaction() as c:
-        ask = H.say(c, "bot:ops", "human:ana", "Search or social first?", kind="ask",
-                    conversation_id=H.task(c, budget["id"])["conversation_id"], refs={"task": budget["id"]})
-        H.answer(c, "human:ana", ask["id"], "Search ads first")
-        H.answer(c, "human:ana", H.say(c, "bot:ops", "human:ana", "Lunch?", kind="ask")["id"], "Chat answer, no task")
+        ask = old_ask(c, "bot:ops", "human:ana", "Search or social first?",
+                      conversation_id=H.task(c, budget["id"])["conversation_id"], refs={"task": budget["id"]})
+        old_answer(c, "human:ana", ask, "Search ads first")
+        old_answer(c, "human:ana", old_ask(c, "bot:ops", "human:ana", "Lunch?"), "Chat answer, no task")
         # Her answer names the shared budget but replies on the private raise plan: every task it names must be shared.
-        on_raise = H.say(c, "bot:ops", "human:ana", "Can the raise wait?", kind="ask", refs={"task": raise_plan["id"]},
-                         conversation_id=H.task(c, raise_plan["id"])["conversation_id"])
-        H.answer(c, "human:ana", on_raise["id"], "Mixed answer about the raise", comment_refs={"task": budget["id"]})
+        on_raise = old_ask(c, "bot:ops", "human:ana", "Can the raise wait?", refs={"task": raise_plan["id"]},
+                           conversation_id=H.task(c, raise_plan["id"])["conversation_id"])
+        old_answer(c, "human:ana", on_raise, "Mixed answer about the raise", refs={"task": budget["id"]})
     for task in (budget, raise_plan, audit):               # her decisions and comments, on each kind of task
         post(api, f"tasks/{task['id']}/comments", {"text": "Comment on " + task["title"]})
         post(api, f"tasks/{task['id']}", {"version": get(api, f"tasks/{task['id']}")["task"]["version"], "status": "done"})

@@ -5,6 +5,7 @@ import json
 
 from backend import bot_settings as BS
 from backend import hubdb as H
+from backend import question_tasks as QT
 from backend.tests import test_ask_ingest as ingest
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
 from backend.tests.test_ask_ingest import gate, plate   # noqa: F401  (the ask ingest fixture)
@@ -64,17 +65,19 @@ def test_a_dreams_question_skips_ask_ingest_and_reaches_the_person(gate):
     api, model, token = gate
     plate(api, 15)                                  # a plate full enough that ingest would send a question back
     tid = dream(api)["dream"]["task"]
-    r = api.post(f"/api/v2/tasks/{tid}/ask", json={"text": QUESTIONS}, headers=headers(token))
+    r = api.post("/api/v2/task-questions", json={"on": "human:ben", "question": QUESTIONS, "parent": tid},
+                 headers=headers(token))
     assert r.status_code == 200, r.text
     assert "ingest" not in r.json() and model.calls == [] and ingest.items(api) == []
     with api.app.state.store.read() as c:
         row = H.task(c, tid)
-        assert row["status"] == "waiting"
-        assert [a["recipient_id"] for a in H.open_task_asks(c, row)] == ["human:ben"]
+        assert H.unanswered_ask(c, row)["recipient_id"] == "human:ben"
+        assert QT.waiting_on(c, row) == "human:ben"
     # Any other task's question from the same bot is still judged.
     with api.app.state.store.transaction() as c:
         other = H.task_create(c, "human:ben", "Plan the November launch", "Dates.", "bot:ops", lint=False)
-    r = api.post(f"/api/v2/tasks/{other['id']}/ask", json={"text": "Which date?"}, headers=headers(token))
+    r = api.post("/api/v2/task-questions", json={"on": "human:ben", "question": "Which date?", "parent": other["id"]},
+                 headers=headers(token))
     assert r.status_code == 422 and r.json()["error"]["code"] == "ask_refused", r.text
 
 
@@ -86,7 +89,7 @@ def test_asking_answering_and_the_dreams_own_commit(api):
     first = claim(api, machine, "ops")
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=machine["token"])
     assert current(api)["state"] == "dreaming"
-    post(api, f"tasks/{tid}/ask", {"text": QUESTIONS}, token=first["token"])
+    post(api, "task-questions", {"on": "human:ben", "question": QUESTIONS, "parent": tid}, token=first["token"])
     seen = current(api)
     assert seen["state"] == "asking" and seen["questions"]["text"] == QUESTIONS and seen["questions"]["mine"]
     assert current(api, "ana-test")["questions"]["mine"] is False
@@ -94,7 +97,9 @@ def test_asking_answering_and_the_dreams_own_commit(api):
          token=machine["token"])
 
     # The person answers the question itself, as Needs you does: the bot is woken on the dream.
-    post(api, f"messages/{seen['questions']['message_id']}/answer", {"text": "1. the team\n2. yes"}, token="ben-test")
+    card = seen["questions"]["task_id"]
+    post(api, f"tasks/{card}/answers", {"target": {"task": card}, "answers": {}, "other": "1. the team\n2. yes"},
+         token="ben-test")
     assert current(api)["state"] == "dreaming"
     second = claim(api, machine, "ops")
     assert second and second["id"] != first["id"]
@@ -119,7 +124,7 @@ def test_asking_answering_and_the_dreams_own_commit(api):
 def test_someone_who_may_give_work_but_not_read_never_gets_another_persons_open_dream(api):
     tid = dream(api)["dream"]["task"]
     with api.app.state.store.transaction() as c:
-        H.task_ask(c, "bot:ops", tid, QUESTIONS)
+        QT.ask_plain(c, "bot:ops", "human:ben", QUESTIONS, parent=H.task(c, tid))
         restrict(c, "ops", see={"people": ["ana", "ben", "cara"]}, read={"people": ["ana", "ben"]},
                  write={"people": ["ana", "ben", "cara"]})
     r = api.post("/api/v2/bots/ops/dream", json={}, headers=headers("cara-test"))
@@ -137,7 +142,8 @@ def test_a_hand_labelled_task_is_no_dream(gate):
     with api.app.state.store.read() as c:
         assert H.task_labels(H.task(c, tid)) == ["dream"]
     assert current(api) is None, "the label alone does not make it the bot's dream"
-    r = api.post(f"/api/v2/tasks/{tid}/ask", json={"text": QUESTIONS}, headers=headers(token))
+    r = api.post("/api/v2/task-questions", json={"on": "human:ben", "question": QUESTIONS, "parent": tid},
+                 headers=headers(token))
     assert r.status_code == 422 and r.json()["error"]["code"] == "ask_refused", r.text
     # A real dream beside it starts as its own task. (Ben's own open "Dream" for the bot is a duplicate to task_create.)
     real = dream(api, "ana-test")["dream"]["task"]
