@@ -468,7 +468,7 @@ def answer(c, auth, who, task_id, body, warn=""):
     asked = with_pick_sources(as_ask(row))
     questions = {q["id"]: q for q in asked["refs"]["questions"]}
     body, passed = checked_answers(questions, asked["refs"], body)
-    given ={"target": {"task": task_id}, "answers": body.answers, "other": body.other, "dismiss": body.dismiss,
+    given = {"target": {"task": task_id}, "answers": body.answers, "other": body.other, "dismiss": body.dismiss,
              "by": who.actor}
     previous = _load(row.get("answer"))
     if previous:
