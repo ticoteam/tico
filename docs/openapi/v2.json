@@ -20907,6 +20907,124 @@
         ]
       }
     },
+    "/api/v2/heartbeat": {
+      "get": {
+        "summary": "The Heartbeat: seconds between beats, the last beat, beats in the last day and quiet beats, each step in order with its kind, cadence, switch and day counts, and the beats that did something, newest first (pass `next` back as `before`)",
+        "operationId": "getHeartbeat",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeartbeatView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Health"
+        ]
+      },
+      "put": {
+        "summary": "The owner or an admin: set the seconds between beats, 5 to 60",
+        "operationId": "saveHeartbeat",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeartbeatUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeartbeatView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Health"
+        ]
+      }
+    },
     "/api/v2/hooks/wake-url": {
       "get": {
         "summary": "The address Tico Gateway knocks on to start this server when a webhook waits for it, who set it and when (the owner)",
@@ -62380,6 +62498,285 @@
           "audience",
           "checked",
           "checks"
+        ],
+        "additionalProperties": true
+      },
+      "HeartbeatBeat": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "total_ms": {
+            "type": "integer"
+          },
+          "did": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ms": {
+                  "type": "integer"
+                },
+                "error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "key",
+                "ms"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "did",
+          "failed",
+          "id",
+          "started_at",
+          "steps",
+          "total_ms"
+        ],
+        "additionalProperties": true
+      },
+      "HeartbeatStep": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "due",
+              "recovery",
+              "poll"
+            ]
+          },
+          "kind_name": {
+            "type": "string"
+          },
+          "every_s": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "every": {
+            "type": "string"
+          },
+          "switch": {
+            "type": "boolean"
+          },
+          "on": {
+            "type": "boolean"
+          },
+          "can_change": {
+            "type": "boolean"
+          },
+          "last_run_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_result": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_did_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_did": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_error_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runs_24h": {
+            "type": "integer"
+          },
+          "did_24h": {
+            "type": "integer"
+          },
+          "failed_24h": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "can_change",
+          "did_24h",
+          "every",
+          "every_s",
+          "failed_24h",
+          "key",
+          "kind",
+          "kind_name",
+          "last_did",
+          "last_did_at",
+          "last_error",
+          "last_error_at",
+          "last_ms",
+          "last_result",
+          "last_run_at",
+          "name",
+          "on",
+          "runs_24h",
+          "switch"
+        ],
+        "additionalProperties": true
+      },
+      "HeartbeatUpdate": {
+        "properties": {
+          "interval_s": {
+            "type": "integer",
+            "maximum": 60.0,
+            "minimum": 5.0,
+            "title": "Interval S"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "interval_s"
+        ],
+        "title": "HeartbeatUpdate",
+        "description": "The seconds between Heartbeat beats (backend/heartbeat.py), 5 to 60."
+      },
+      "HeartbeatView": {
+        "type": "object",
+        "properties": {
+          "interval_s": {
+            "type": "integer"
+          },
+          "interval_min": {
+            "type": "integer"
+          },
+          "interval_max": {
+            "type": "integer"
+          },
+          "last_beat_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "beats_24h": {
+            "type": "integer"
+          },
+          "quiet_beats": {
+            "type": "integer"
+          },
+          "quiet_since_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatStep"
+            }
+          },
+          "beats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatBeat"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "can_change": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "beats",
+          "beats_24h",
+          "can_change",
+          "interval_max",
+          "interval_min",
+          "interval_s",
+          "kinds",
+          "last_beat_at",
+          "next",
+          "quiet_beats",
+          "quiet_since_at",
+          "steps"
         ],
         "additionalProperties": true
       },

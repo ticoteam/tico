@@ -16,13 +16,8 @@ from backend.store import H
 from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
-TIMED = {
-    "stale_review",
-    "kpi_asks",
-    "ask_deadlines",
-    "task_manager_report",
-    "bookkeeper_check",
-}  # the jobs with a schedule preset
+TIMED = {"stale_review", "kpi_asks", "task_manager_report",
+         "bookkeeper_check"}   # the jobs with a schedule preset; Ask go-ahead's is on its Heartbeat step
 
 
 def rows(api, token="ana-test"):
@@ -263,7 +258,8 @@ def test_run_now_on_stale_review_makes_at_most_30_decide_calls_and_the_row_shows
 def test_run_now_on_a_plain_job_lands_its_result_on_the_row_and_is_refused_while_off(api):
     reply = post(api, "system-routines/ask_deadlines/run", {}, token="ben-test")
     assert reply["running"] is False
-    assert reply["job"]["last"]["result"] == "No asks past their deadline"
+    assert reply["job"]["last_result"] == "No asks past their deadline", "a Heartbeat step: its step row"
+    assert reply["job"]["switch"] is True and reply["job"]["on"] is True
     put(api, "system-routines/kpi_asks", {"on": False}, token="ben-test")
     post(api, "system-routines/kpi_asks/run", {}, token="ben-test", expected=409)
     post(api, "system-routines/topic_fresh/run", {}, token="ben-test", expected=422)
@@ -318,5 +314,5 @@ def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search
     assert jobs["stale_review"]["then"][0] == "check stale tickets"
     assert jobs["topic_fresh"]["when"] == ["a message in a direct chat changes the topic"]
     done = {k for k, j in jobs.items() if "done" in j["search"]}
-    assert {"stale_review", "approval_expiry"} <= done
-    assert "close" in jobs["stale_review"]["search"] and "remind" in jobs["due_reminders"]["search"]
+    assert "stale_review" in done
+    assert "close" in jobs["stale_review"]["search"] and "remind" in jobs["heartbeat"]["search"]

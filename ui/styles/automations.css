@@ -549,6 +549,18 @@ button.au-chip:hover{background:var(--surface2)}
 .mt-stat span{font-size:var(--t-xs)}
 .mt-runs .mt-by{white-space:nowrap}
 .au-tag.mt-bad{color:var(--fail);border-color:color-mix(in srgb,var(--fail) 50%,var(--line))}
+/* The Heartbeat (automations-heartbeat.js): Maintenance's rows, grouped by kind, with each step's numbers on the right */
+.hb-every select{min-width:0;width:auto}
+.hb-group{display:grid;gap:6px}
+.hb-kind{margin:0}
+.hb-main{cursor:default}
+.hb-every-p{display:none;font-size:var(--t-sm)}
+.hb-err{font-size:var(--t-sm);color:var(--fail);overflow-wrap:anywhere}
+.hb-cells{flex:none;display:flex;gap:10px;font-size:var(--t-sm)}
+.hb-cells .au-n{min-width:52px}
+.hb-bad{color:var(--fail)}
+.hb-sw-none{flex:none;width:40px}
+.hb-log .au-sl>span:nth-child(2){overflow-wrap:anywhere}
 @media (max-width:760px){
   .mt{gap:12px}
   .mt-set select{flex:1;min-width:0}
@@ -563,4 +575,9 @@ button.au-chip:hover{background:var(--surface2)}
   .mt-kv input[type="number"]{height:36px}
   .mt-runs .mt-by{display:none}
   .mt-now{min-height:36px}
+  .hb-every-p{display:inline}
+  .mt-step .mt-row:has(.hb-cells){flex-wrap:wrap}
+  .hb-cells{order:3;flex-basis:100%;justify-content:flex-start;padding-left:0}
+  .hb-cells .au-n{min-width:0;text-align:left}
+  .hb-sw-none{display:none}
 }

@@ -109,13 +109,13 @@ def test_the_mirror_sync_makes_retires_renames_and_waits_out_a_broken_write(api,
     assert sync(api) == {"made": [], "retired": [], "renamed": []}
     assert mirrors(api) == before
     # a mirror whose words drifted takes the jobs words
-    (aid,) = live(api, "tico.builtin.job.due_reminders")
+    (aid,) = live(api, "tico.builtin.job.goal_colours")
     with db(api).transaction() as c:
         c.execute("UPDATE automations SET flow=json_set(flow,'$.name','Old name') WHERE id=?", (aid,))
     assert sync(api)["renamed"] == [aid]
     with db(api).read() as c:
         flow = json.loads(c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()["flow"])
-    assert flow["name"] == SR.BY_KEY["due_reminders"].name
+    assert flow["name"] == SR.BY_KEY["goal_colours"].name
     assert sync(api)["renamed"] == []
     # a task rule mirror whose rule is gone is retired
     gone = dead_mirror(api, "Old rule", "task_rule", {"kind": "task_rule", "id": "task-rule-gone"})
@@ -255,14 +255,7 @@ def test_on_a_plain_install_the_feature_jobs_are_hidden_and_the_rest_listed(api,
         "physical_mail",
     ):
         assert hidden not in keys, hidden
-    for shown in (
-        "topic_fresh",
-        "due_reminders",
-        "run_housekeeping",
-        "finance_upkeep",
-        "inbound_mail",
-        "assigned_tasks",
-    ):
+    for shown in ("topic_fresh", "heartbeat", "finance_upkeep", "inbound_mail", "assigned_tasks"):
         assert shown in keys, shown
 
 
@@ -271,30 +264,23 @@ def runs_of(api, key):
         return [dict(r) for r in c.execute("SELECT * FROM system_runs WHERE job=? ORDER BY started_at", (key,))]
 
 
-SCHEDULER_JOBS = (
-    "stall_marks",
-    "run_housekeeping",
-    "ship_deployed",
-    "task_loops",
-    "queue_check",
-    "milestone_waits",
-    "screening",
-    "finance_upkeep",
-    "hourly_deadlines",
-    "thread_loop_guard",
-    "snooze_ends",
-)
+SCHEDULER_JOBS = ("heartbeat", "screening", "finance_upkeep", "hourly_deadlines")
 # Quiet on an install with nothing waiting, so four ticks keep one row each.
-QUIET_JOBS = (
-    "run_housekeeping",
-    "ship_deployed",
-    "task_loops",
-    "milestone_waits",
-    "screening",
-    "thread_loop_guard",
-    "snooze_ends",
-    "hourly_deadlines",
-)
+QUIET_JOBS = ("heartbeat", "screening", "hourly_deadlines")
+# The blocks that became Heartbeat steps (backend/heartbeat.py): each on its step row, none on a run row of its own.
+HEARTBEAT_STEPS = ("stall_marks", "run_housekeeping", "ship_deployed", "task_loops", "queue_check", "milestone_waits",
+                   "thread_loop_guard", "snooze_ends")
+
+
+def step_rows(api):
+    with db(api).read() as c:
+        return {r["key"]: dict(r) for r in c.execute("SELECT * FROM heartbeat_steps")}
+
+
+
+
+
+
 
 
 def applying(monkeypatch, *keys):
@@ -315,8 +301,16 @@ def test_scheduler_jobs_and_background_passes_record_their_runs(api, monkeypatch
         assert found and all(r["ok"] and r["result"] for r in found), (key, found)
     for key in QUIET_JOBS:
         assert len(runs_of(api, key)) == 1, (key, runs_of(api, key))
-    # The Company page is closed on a new install: its job does not apply, and a pass with nothing due writes nothing.
+    steps = step_rows(api)
+    for key in HEARTBEAT_STEPS:
+        assert steps[key]["last_result"] and not steps[key]["last_error"], (key, steps[key])
+        assert runs_of(api, key) == [], key
+    assert steps["run_housekeeping"]["runs_count"] == 4 and steps["stall_marks"]["runs_count"] == 1, "every beat; a minute"
+    # The Company page is closed on a new install: a beat with nothing due is quiet, on its step row only.
+    assert steps["company_page"]["last_result"] == "Nothing due" and steps["company_page"]["last_did_at"] is None
     assert runs_of(api, "company_page") == []
+    with db(api).read() as c:
+        assert c.execute("SELECT count(*) FROM heartbeat_beats").fetchone()[0] == 0, "quiet beats are counted, not kept"
     # a failing block records its failure
     from backend import milestone_waits
 
@@ -324,10 +318,13 @@ def test_scheduler_jobs_and_background_passes_record_their_runs(api, monkeypatch
         raise RuntimeError("private words")
 
     monkeypatch.setattr(milestone_waits, "reconcile", broken)
-    with pytest.raises(RuntimeError):
-        Scheduler(db(api), api.app.state.execution).tick()
-    run = runs_of(api, "milestone_waits")[-1]
-    assert not run["ok"] and run["result"] == "Failed: unexpected error (RuntimeError)"
+    failures = Scheduler(db(api), api.app.state.execution).tick()["failures"]   # a Heartbeat step: the rest still ran
+    assert {"milestone_waits": "RuntimeError"} in failures
+    step = step_rows(api)["milestone_waits"]
+    assert step["last_error"] == "Failed: unexpected error (RuntimeError)" and step["failed_count"] == 1
+    run = runs_of(api, "heartbeat")[-1]
+    assert not run["ok"] and run["result"] == "Failed: Merge and release waits"
+    assert "private" not in json.dumps(step) + json.dumps(run)
     # a background pass records one run and quiet passes fold
     for _ in range(3):
         SR.pass_of(store, "inbound_mail", lambda: None)
@@ -374,25 +371,20 @@ def test_scheduler_jobs_and_background_passes_record_their_runs(api, monkeypatch
     assert len(runs_of(api, "bookkeeper_check")) == seen_before + 1
     # a failure that repeats folds into the first and counts the repeats
     with store.transaction() as c:
-        c.execute("DELETE FROM system_runs WHERE job='snooze_ends'")
+        c.execute("DELETE FROM system_runs WHERE job='screening'")
     long_ago = H.shift(H.now(), seconds=-(SR.QUIET_WRITE_SECONDS + 60))
     with store.transaction() as c:
-        first = SR.save(
-            c, SR.Run("snooze_ends", started=long_ago, error="Failed: the database was busy"), finished=long_ago
-        )
-    for _ in range(3):  # once more after the interval, then twice inside it: no write
-        SR.write(store, SR.Run("snooze_ends", error="Failed: the database was busy"))
-    (row,) = runs_of(api, "snooze_ends")
+        first = SR.save(c, SR.Run("screening", started=long_ago, error="Failed: the database was busy"), finished=long_ago)
+    for _ in range(3):                           # once more after the interval, then twice inside it: no write
+        SR.write(store, SR.Run("screening", error="Failed: the database was busy"))
+    (row,) = runs_of(api, "screening")
     assert row["id"] == first and row["runs"] == 2 and row["first_started_at"] == long_ago and not row["ok"]
-    SR.write(store, SR.Run("snooze_ends", error="Failed: Tico refused it"))
-    SR.write(store, SR.Run("snooze_ends").did("Nothing due", quiet=True))
-    SR.write(store, SR.Run("snooze_ends", error="Failed: Tico refused it"))
-    assert [(r["ok"], r["result"]) for r in runs_of(api, "snooze_ends")] == [
-        (0, "Failed: the database was busy"),
-        (0, "Failed: Tico refused it"),
-        (1, "Nothing due"),
-        (0, "Failed: Tico refused it"),
-    ], "another reason, or a success between, is a new row"
+    SR.write(store, SR.Run("screening", error="Failed: Tico refused it"))
+    SR.write(store, SR.Run("screening").did("Nothing due", quiet=True))
+    SR.write(store, SR.Run("screening", error="Failed: Tico refused it"))
+    assert [(r["ok"], r["result"]) for r in runs_of(api, "screening")] == [
+        (0, "Failed: the database was busy"), (0, "Failed: Tico refused it"), (1, "Nothing due"),
+        (0, "Failed: Tico refused it")], "another reason, or a success between, is a new row"
     # a topic check records a fresh start and folds kept chats
     from backend import topic_change
     from backend.auth import Identity
@@ -433,9 +425,9 @@ def recorded_keys():
 
 def test_every_key_a_block_records_under_is_a_job():
     found = recorded_keys()
-    assert {"stall_marks", "run_housekeeping", "github_sync", "inbound_mail", "doc_sync", "assigned_tasks"} <= set(
-        found
-    )
+    assert {"heartbeat", "release_check", "inbound_mail", "doc_sync", "assigned_tasks"} <= set(found)
+    from backend import heartbeat
+    assert not set(found) & set(heartbeat.BY_KEY), "a Heartbeat step records on its step row"
     assert {key: where for key, where in found.items() if key not in SR.BY_KEY} == {}
 
 

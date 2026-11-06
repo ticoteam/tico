@@ -312,14 +312,11 @@ ACTIONS = {
     "route_letters": ("read and route physical mail", ("mail", "letters", "physical")),
     "send_letters": ("send approved letters and follow them until delivered", ("letters", "mail", "send")),
     "ask_sleep": ("ask HQ to put this server to sleep while nobody uses it", ("sleep", "idle", "hosting")),
-    "manage_machines": (
-        "start bots' cloud machines for work and stop them when idle",
-        ("cloud", "machines", "computers"),
-    ),
-    "triage_quiet": (
-        "not run any more: Decide no longer reads a quiet task (it used to set the wait it names, close it if finished, or let one wake through)",
-        ("decide", "stalled", "tasks", "wait", "close", "wake"),
-    ),
+    "manage_machines": ("start bots' cloud machines for work and stop them when idle", ("cloud", "machines", "computers")),
+    "run_heartbeat": ("run the Heartbeat's steps: due times, recovery and outside polls",
+                      ("heartbeat", "due", "remind", "snooze", "stall", "recovery", "github", "poll", "alerts")),
+    "triage_quiet": ("not run any more: Decide no longer reads a quiet task (it used to set the wait it names, close it if finished, or let one wake through)",
+                     ("decide", "stalled", "tasks", "wait", "close", "wake")),
 }
 
 
@@ -442,9 +439,13 @@ def _letters(c, settings):
 
 
 JOBS = [
-    Job(
-        "assigned_tasks",
-        "Start assigned tasks",
+    # The Heartbeat (backend/heartbeat.py): one row for the steps that ran as their own jobs here before, each with its
+    # stats on the Heartbeat screen (Automations > Heartbeat).
+    Job("heartbeat", "Heartbeat",
+        "Runs, in order, the steps that must happen within seconds: due times, recovery from crashes nothing announces, "
+        "and polls of outside systems that do not push.",
+        HOUSEKEEPING, "Every 10 s", 10, then=("run_heartbeat",)),
+    Job("assigned_tasks", "Start assigned tasks",
         "Starts eligible assigned work on a free computer turn; respects task caps, usage holds and computer capacity. "
         "Each start is one run.",
         HOUSEKEEPING,
@@ -515,123 +516,17 @@ JOBS = [
         "Rules digest",
         "Once a week, lists the posting rules made that week and opens the Bookkeeper's digest task for them. No new "
         "rules is a quiet run.",
-        CHECKS,
-        "Weekly",
-        7 * 86400,
-        then=("check_rules_digest", "wake_rules_digest"),
-        department=FINANCE,
-        applies=_bookkeeper,
-    ),
-    Job(
-        "due_reminders",
-        "Due reminders",
-        "Tells a bot when one of its tasks reaches its due time.",
-        REMINDERS,
-        "Every 10 seconds",
-        10,
-        then=("remind_due",),
-    ),
-    Job(
-        "ask_deadlines",
-        "Ask go-ahead",
-        "A bot's question past its deadline goes ahead on its default answer, or expires.",
-        REMINDERS,
-        "Hourly",
-        3600,
-        control=True,
-        then=("go_ahead",),
-    ),
-    Job(
-        "approval_expiry",
-        "Approval expiry",
-        "Takes approvals and asks nobody will act on out of Needs you.",
-        REMINDERS,
-        "Hourly",
-        3600,
-        then=("expire_approvals",),
-    ),
-    Job(
-        "thread_digest",
-        "Email digest",
-        "Emails a person once an hour the threads they follow on digest that have new messages: each title, its unread "
-        "count and a link, never the messages. Nothing unread is a quiet run.",
-        REMINDERS,
-        "Hourly",
-        3600,
-        then=("email_digest",),
-    ),
-    Job(
-        "thread_bot_digest",
-        "Bot thread digest",
-        "Starts one run an hour for each bot that follows threads on digest and has new messages in them. Plain code: "
-        "no model is called until a batch has something in it, and nothing new is a quiet run.",
-        REMINDERS,
-        "Hourly",
-        3600,
-        then=("wake_digest_bots",),
-    ),
-    Job(
-        "still_needed",
-        "Unanswered questions",
+        CHECKS, "Weekly", 7 * 86400, then=("check_rules_digest", "wake_rules_digest"), department=FINANCE,
+        applies=_bookkeeper),
+    Job("still_needed", "Unanswered questions",
         "On weekday mornings, questions unanswered for two business days go back to their bots as lines on the bots' "
         "task roundup, never as a wake.",
-        REMINDERS,
-        "Hourly",
-        3600,
-        then=("resend_questions",),
-    ),
-    Job(
-        "stall_checks",
-        "Stall checks",
-        "Every minute: allocates waiting tickets, closes timed-out checks, drops queued work its bot can no longer read, and "
-        "alerts once when an Engineering task has been blocked over four hours. It wakes no bot about a quiet task: "
-        "the task roundup lists those.",
-        HOUSEKEEPING,
-        "Every minute",
-        60,
-        then=("drop_unreadable",),
-    ),
-    Job(
-        "turn_fixer",
-        "Turn fixer",
-        "Frees turns proven dead, keeps one Health finding per busy-turns incident and hands what it cannot fix to "
-        "BotOps.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("free_dead_starts", "turns_finding"),
-    ),
-    Job(
-        "waiting_checks",
-        "Waiting checks",
+        REMINDERS, "Hourly", 3600, then=("resend_questions",)),
+    Job("waiting_checks", "Waiting checks",
         "Sends a bot's task waiting on nothing tracked back to open after two hours (one that keeps coming back "
         "goes to its manager bot or BotOps).",
-        HOUSEKEEPING,
-        "Hourly",
-        3600,
-        then=("reopen_stranded",),
-    ),
-    Job(
-        "snooze_ends",
-        "Snooze ends",
-        "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("end_snooze", "start_deferred", "start_task"),
-    ),
-    Job(
-        "thread_loop_guard",
-        "Paused bot replies",
-        "Lets bot replies the loop guard paused in a thread go, as many as its hour has room for, with no one having to post.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("resume_capped_wakes",),
-    ),
-    Job(
-        "thread_retention",
-        "Thread retention",
+        HOUSEKEEPING, "Hourly", 3600, then=("reopen_stranded",)),
+    Job("thread_retention", "Thread retention",
         "Deletes messages past the time their thread keeps them, with what was copied from them, in short batches. Plain "
         "code: nothing past its time is a quiet run.",
         HOUSEKEEPING,
@@ -655,32 +550,10 @@ JOBS = [
         "Production checks",
         "Reads a few production invariants in plain code and shows each failing one on Health. Check health files each "
         "one as a BotOps task, closed when the check passes.",
-        HOUSEKEEPING,
-        "Every 15 minutes",
-        900,
-        then=("check_invariants",),
-    ),
-    Job(
-        "go_live_expiry",
-        "Go-live expiry",
-        "Ends a go-live waiting for a computer that never reports.",
-        HOUSEKEEPING,
-        "Every 10 minutes",
-        600,
-        then=("end_go_live",),
-    ),
-    Job(
-        "goal_colours",
-        "Goal colours",
-        "Works out every goal's colour again as its data ages.",
-        HOUSEKEEPING,
-        "Hourly",
-        3600,
-        then=("goal_colours",),
-    ),
-    Job(
-        "gateway_check",
-        "Gateway key check",
+        HOUSEKEEPING, "Every 15 minutes", 900, then=("check_invariants",)),
+    Job("goal_colours", "Goal colours", "Works out every goal's colour again as its data ages.",
+        HOUSEKEEPING, "Hourly", 3600, then=("goal_colours",)),
+    Job("gateway_check", "Gateway key check",
         "Asks the Tico AI Gateway whether this server's key still works and how much of the month's cap is used.",
         HOUSEKEEPING,
         "Hourly",
@@ -733,80 +606,16 @@ JOBS = [
         "market_watch",
         "Page monitors",
         "Reads each watched competitor page once a day and files an insight for the Librarian when one changed.",
-        CHECKS,
-        "Daily",
-        86400,
-        then=("check_pages",),
-        applies=_pages_watched,
-    ),
-    Job(
-        "updates",
-        "Updates",
-        "Asks people and bots for today's updates, one at a time.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("ask_updates",),
-    ),
-    Job(
-        "github_sync",
-        "GitHub sync",
-        "Catches up on pull requests, merges and releases whose notice from GitHub never arrived.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("sync_github",),
-    ),
-    Job(
-        "repository_waits",
-        "Repository and setup waits",
-        "Finishes a bot waiting for its repository or a worktree, and tells a person about a bot stuck in setup.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("finish_repo_waits", "tell_setup_stuck"),
-    ),
-    Job(
-        "release_check",
-        "Release and feed check",
-        "Checks for a new Tico release and fetches subscribed updates.",
-        HOUSEKEEPING,
-        "Every 10 seconds; a new release is looked for every 6 hours",
-        10,
-        then=("check_release", "fetch_feeds"),
-    ),
-    Job(
-        "directory_sync",
-        "Directory sync",
-        "Brings people in from the company directory.",
-        HOUSEKEEPING,
-        "Hourly",
-        then=("sync_directory",),
-        applies=_directory_connected,
-    ),
-    Job(
-        "meeting_sync",
-        "Meeting notes sync",
-        "Brings in meeting notes from each person's connected Granola.",
-        HOUSEKEEPING,
-        "Every 30 seconds",
-        30,
-        then=("sync_meetings",),
-        applies=_granola_connected,
-    ),
-    Job(
-        "doc_sync",
-        "Document sync",
-        "Refreshes linked documents from their sources.",
-        HOUSEKEEPING,
-        "Every 5 seconds",
-        5,
-        then=("sync_docs",),
-        applies=_documents_linked,
-    ),
-    Job(
-        "topic_fresh",
-        "Start fresh when the topic changes",
+        CHECKS, "Daily", 86400, then=("check_pages",), applies=_pages_watched),
+    Job("release_check", "Release and feed check", "Checks for a new Tico release and fetches subscribed updates.",
+        HOUSEKEEPING, "Every 10 seconds; a new release is looked for every 6 hours", 10, then=("check_release", "fetch_feeds")),
+    Job("directory_sync", "Directory sync", "Brings people in from the company directory.",
+        HOUSEKEEPING, "Hourly", then=("sync_directory",), applies=_directory_connected),
+    Job("meeting_sync", "Meeting notes sync", "Brings in meeting notes from each person's connected Granola.",
+        HOUSEKEEPING, "Every 30 seconds", 30, then=("sync_meetings",), applies=_granola_connected),
+    Job("doc_sync", "Document sync", "Refreshes linked documents from their sources.",
+        HOUSEKEEPING, "Every 5 seconds", 5, then=("sync_docs",), applies=_documents_linked),
+    Job("topic_fresh", "Start fresh when the topic changes",
         "In a direct chat, a message on a new topic starts a fresh session, like Clear.",
         CHAT,
         "When it happens",
@@ -825,92 +634,12 @@ JOBS = [
         then=("rank_threads",),
     ),
     # The scheduler's other timed work (backend/scheduler.py `tick`), each one row.
-    Job(
-        "stall_marks",
-        "Silent run check",
-        "Marks a run that has gone silent and ends a run past this server's time limit, before plain expiry looks at it.",
-        HOUSEKEEPING,
-        "Every minute",
-        60,
-        then=("mark_silent_runs",),
-    ),
-    Job(
-        "run_housekeeping",
-        "Run housekeeping",
-        "Ends runs whose lease ran out, settles interrupted runs, lifts usage limits and cooled holds, gives an active "
-        "bot with no computer one, and settles run notes a result missed.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("end_lapsed_runs", "settle_runs"),
-    ),
-    Job(
-        "ship_deployed",
-        "Shipped merges",
-        "Marks a merged pull request shipped once the running release has it, when its push record came after the deploy.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("mark_shipped",),
-    ),
-    Job(
-        "task_loops",
-        "Task loop alerts",
-        "Tells a task's owner and requester once a day when the task's status keeps changing back and forth.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("tell_task_loop",),
-    ),
-    Job(
-        "queue_check",
-        "Queue check",
-        "Notes why a bot's queued work is not starting, for the bot's row and Health.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("note_queue_refusals",),
-    ),
-    Job(
-        "milestone_waits",
-        "Merge and release waits",
-        "Wakes a task waiting for a merge or a release that already happened, once.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("wake_milestone_waits",),
-    ),
-    Job(
-        "release_hour",
-        "Daily release",
+    Job("release_hour", "Daily release",
         "At the team's release hour, sends the Release Manager one task for what is at Pending Release.",
-        HOUSEKEEPING,
-        "At the release hour",
-        then=("send_release_task",),
-        applies=_release_hour_on,
-    ),
-    Job(
-        "company_page",
-        "Company page editions",
-        "Starts the Company page editions that came due and sends reader notices left waiting.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("start_editions",),
-        applies=_company_page_open,
-    ),
-    Job(
-        "screening",
-        "Outside text check",
-        "Screens outside text a restart left waiting.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("screen_waiting",),
-    ),
-    Job(
-        "skill_screening",
-        "Skill screening",
+        HOUSEKEEPING, "At the release hour", then=("send_release_task",), applies=_release_hour_on),
+    Job("screening", "Outside text check", "Screens outside text a restart left waiting.",
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("screen_waiting",)),
+    Job("skill_screening", "Skill screening",
         "Screens each proposed skill and update with plain-code patterns and Decide High before an admin can approve it. "
         "Mandatory: no switch, and no other model answers in its place.",
         CHECKS,
@@ -961,38 +690,10 @@ JOBS = [
         applies=_gateway_connected,
     ),
     # The server's background loops (backend/app.py `lifespan`), each one row.
-    Job(
-        "personal_alerts",
-        "Personal alerts",
-        "Sends people's opt-in alerts through HQ paging, within their quiet hours and the monthly caps.",
-        REMINDERS,
-        "Every 10 seconds",
-        10,
-        then=("send_alerts",),
-        applies=_alerts_on,
-    ),
-    Job(
-        "workspace_check",
-        "Workspace key check",
+    Job("workspace_check", "Workspace key check",
         "Checks a pending or failing Google Workspace key again until it works or its hour is up.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("check_workspace_key",),
-        applies=_workspace_key,
-    ),
-    Job(
-        "call_sweeps",
-        "Calls and live meetings",
-        "Routes live-meeting windows a restart left behind, and ends call access for people and bots who lost it.",
-        HOUSEKEEPING,
-        "Every 10 seconds",
-        10,
-        then=("sweep_calls",),
-    ),
-    Job(
-        "inbound_mail",
-        "Inbound mail",
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("check_workspace_key",), applies=_workspace_key),
+    Job("inbound_mail", "Inbound mail",
         "Brings in mail and bills from HQ, and deletes inbound mail older than 90 days.",
         HOUSEKEEPING,
         "Every 15 seconds",
@@ -1118,18 +819,8 @@ CONTROLS = {
 
 
 # Last runs read by backend/scheduler.py (QUICK and FIXED).
-QUICK_KEYS = (
-    "kpi_asks",
-    "ask_deadlines",
-    "task_manager_report",
-    "bookkeeper_check",
-    "bookkeeper_watch",
-    "bookkeeper_rules_digest",
-    "thread_digest",
-    "thread_bot_digest",
-    "thread_retention",
-    "skill_usage_rollup",
-)
+QUICK_KEYS = ("kpi_asks", "task_manager_report", "bookkeeper_check", "bookkeeper_watch", "bookkeeper_rules_digest",
+              "thread_retention", "skill_usage_rollup")
 
 
 def zone():
@@ -1167,22 +858,31 @@ def config_of(c, key):
     return config(c)[key]
 
 
+def name_of(key):
+    """A controlled key's name: its job's, or for a Heartbeat step (backend/heartbeat.py) that kept its switch, the
+    step's."""
+    if key in BY_KEY:
+        return BY_KEY[key].name
+    from . import heartbeat
+    step = heartbeat.CONTROLLED.get(key)
+    return step.name if step else key
+
+
 def schedule_words(key, cfg):
     """A controlled job's schedule in words: "Every 4 hours", "Daily at 09:00"."""
     if not cfg or not cfg.get("preset"):
-        return BY_KEY[key].schedule
+        return BY_KEY[key].schedule if key in BY_KEY else ""
     return PRESETS[cfg["preset"]][0].format(at=cfg.get("at") or "")
 
 
 def may_change(auth, who, key):
     """An owner or an admin changes a job's switch, schedule and Run now. Raises a 403."""
     auth.domain(who)
-    job = BY_KEY.get(key)
-    if key not in CONTROLS or not job:
+    if key not in CONTROLS:
         raise Problem("not_found", "No such system routine", 404)
     if CONTROLS[key].owner_only:
         if who.role != "owner":
-            raise Problem("forbidden", f"Only the owner changes {job.name}", 403)
+            raise Problem("forbidden", f"Only the owner changes {name_of(key)}", 403)
     elif not auth.bot_admin(who):
         raise Problem("forbidden", "Only an owner or an admin changes system routines", 403)
 
@@ -1205,11 +905,11 @@ def save_config(c, actor, key, on=None, preset=None, at=None):
     ctl = CONTROLS[key]
     if preset is not None and preset not in ctl.presets:
         offered = ", ".join(PRESETS[p][0].format(at="a time") for p in ctl.presets) or "none"
-        raise Problem("invalid", f"{BY_KEY[key].name} runs on one of: {offered}", 422)
+        raise Problem("invalid", f"{name_of(key)} runs on one of: {offered}", 422)
     if at is not None and not AT_RE.match(str(at)):
         raise Problem("invalid", "Pick a time as HH:MM, from 00:00 to 23:59", 422)
     if (preset is not None or at is not None) and not ctl.presets:
-        raise Problem("invalid", f"{BY_KEY[key].name} has no schedule to change", 422)
+        raise Problem("invalid", f"{name_of(key)} has no schedule to change", 422)
     before = config(c)[key]
     if on is not None and ctl.rule:
         team_rules.save(c, actor, {ctl.rule: bool(on)})
@@ -1308,10 +1008,17 @@ def next_due(cfg, last, now):
 
 
 def last_started(c, keys):
-    """{job: the start of its newest run} for these jobs."""
+    """{job: the start of its newest run} for these jobs. A Heartbeat step's (backend/heartbeat.py) is the newer of its
+    step row's last run and its runs from before the Heartbeat."""
     marks = ",".join("?" for _ in keys)
     rows = c.execute(f"SELECT job, max(started_at) FROM system_runs WHERE job IN ({marks}) GROUP BY job", tuple(keys))
-    return {job: H.parse_ts(started) for job, started in rows.fetchall() if started}
+    found = {job: H.parse_ts(started) for job, started in rows.fetchall() if started}
+    if H._has_table(c, "heartbeat_steps"):
+        for key, started in c.execute(f"SELECT key, last_run_at FROM heartbeat_steps WHERE key IN ({marks})", tuple(keys)):
+            at = H.parse_ts(started) if started else None
+            if at and (found.get(key) is None or at > found[key]):
+                found[key] = at
+    return found
 
 
 # ----------------------------------------------------------------------------- the run record
@@ -1719,6 +1426,11 @@ def listing(c, settings, now=None, who=None, auth=None, everything=False):
 
 
 def row_of(c, settings, key, who=None, auth=None):
+    """One job's listing row; for a Heartbeat step that kept its switch (ask go-ahead), its Heartbeat step row."""
+    if key not in BY_KEY:
+        from . import heartbeat
+        if key in heartbeat.CONTROLLED:
+            return heartbeat.step_row(c, key, auth, who)
     return next(job for job in listing(c, settings, who=who, auth=auth, everything=True)["jobs"] if job["key"] == key)
 
 
@@ -1768,12 +1480,12 @@ def install(app, store, auth, mutate):
             )
             return {"run": run, "started": started}
         may_change(auth, who, key)
-        job = BY_KEY[key]
-        if not job.control:
+        job = BY_KEY.get(key)
+        if job is not None and not job.control:
             raise Problem("invalid", f"{job.name} has nothing to run", 422)
         with store.read() as c:
             if not config_of(c, key)["on"]:
-                raise Problem("conflict", f"{job.name} is off. Switch it on to run it.", 409)
+                raise Problem("conflict", f"{name_of(key)} is off. Switch it on to run it.", 409)
         from .scheduler import run_now
 
         running = run_now(store, auth, key, who.actor)

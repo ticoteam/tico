@@ -9626,6 +9626,31 @@ SCHEMAS.update(
 )
 
 
+# The Heartbeat (backend/heartbeat.py): one short beat of ordered steps, every 10 s by default.
+INT_N = {"type": ["integer", "null"]}
+STABLE.extend([
+    ("/api/v2/heartbeat", "get", "Health", "getHeartbeat",
+     "The Heartbeat: seconds between beats, the last beat, beats in the last day and quiet beats, each step in order "
+     "with its kind, cadence, switch and day counts, and the beats that did something, newest first (pass `next` back "
+     "as `before`)", "HeartbeatView"),
+    ("/api/v2/heartbeat", "put", "Health", "saveHeartbeat",
+     "The owner or an admin: set the seconds between beats, 5 to 60", "HeartbeatView"),
+])
+SCHEMAS.update({
+    "HeartbeatStep": obj({"key": "s", "name": "s", "kind": {"enum": ["due", "recovery", "poll"]}, "kind_name": "s",
+                          "every_s": INT_N, "every": "s", "switch": "b", "on": "b", "can_change": "b",
+                          "last_run_at": "n", "last_ms": INT_N, "last_result": "n", "last_did_at": "n", "last_did": "n",
+                          "last_error": "n", "last_error_at": "n", "runs_24h": "i", "did_24h": "i", "failed_24h": "i"}),
+    "HeartbeatBeat": obj({"id": "s", "started_at": "s", "total_ms": "i", "did": "i", "failed": "i",
+                          "steps": items(obj({"key": "s", "name": "s", "text": "n", "ms": "i", "error": "n"},
+                                             required=["key", "ms"]))}),
+    "HeartbeatView": obj({"interval_s": "i", "interval_min": "i", "interval_max": "i", "last_beat_at": "n",
+                      "beats_24h": "i", "quiet_beats": "i", "quiet_since_at": "n",
+                      "kinds": items(obj({"key": "s", "name": "s"})), "steps": items(ref("HeartbeatStep")),
+                      "beats": items(ref("HeartbeatBeat")), "next": "n", "can_change": "b"}),
+})
+
+
 def spec(app):
     """The v2 document for this app: the stable operations of `app.openapi()`, described."""
     full = copy.deepcopy(app.openapi())
