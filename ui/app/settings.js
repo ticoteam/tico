@@ -428,9 +428,10 @@ function settingsShow(tab) {
         privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
         company && settingsIsAdmin() && renderSettingsCompany(), owner && renderSettingsBotReports(),
         !formBusy($('#settings-notifications')) && settingsNotificationsRender()])
-        // Repositories reads GitHub's list: drawn after the rest of General (even when a card failed), so it never
-        // holds up the first paint.
-        .then(reposDraw, reposDraw).then(() => settingsReveal(SETTINGS_REVEAL));
+        .then(() => SETTINGS_REVEAL !== SETTINGS_REPOS_CARD && settingsReveal(SETTINGS_REVEAL));
+      // Repositories reads GitHub's list: drawn on its own once General has painted, so it never holds that up,
+      // and a link to it scrolls when it is filled in.
+      setTimeout(() => { const drawn = reposDraw(); if (drawn) void drawn.then(() => settingsReveal(SETTINGS_REVEAL)); });
     }
   }
   const peoplePane = $('#settings-people');

@@ -147,7 +147,9 @@ async function open(browser, hash, viewport = {width: 1440, height: 900}, state 
   await page.goto('https://tico-ui.test/' + hash);
   return {page, errors, state};
 }
-const settled = page => page.evaluate(() => Promise.all(document.getAnimations().map(a => a.finished.catch(() => {}))));
+// Every animation that ends has ended (a skeleton's shimmer runs forever).
+const settled = page => page.evaluate(() => Promise.all(document.getAnimations()
+  .filter(a => a.effect?.getComputedTiming().iterations !== Infinity).map(a => a.finished.catch(() => {}))));
 const noSideways = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
 const hash = page => new URL(page.url()).hash;
 const go = (page, to) => page.evaluate(to => { location.hash = to; }, to);
