@@ -340,12 +340,13 @@ def may(c, auth, who, e, target=None):
         )
     # Match the automation route's manager check when rewriting its refusal; the `person` class in `plan` still keeps
     # BotOps and the Assistant from changing this Settings control through a chat card.
-    if e.who == "automation" and e.kind == "person" and e.route.startswith("automations/") and (target or {}).get("id"):
+    target_id = (target or {}).get("id")
+    if e.who == "automation" and e.kind == "person" and e.route.startswith("automations/") and target_id:
         if who.role not in ("owner", "human"):
             return False
         from . import automations
 
-        row = automations._row(c, str(target["id"]))
+        row = automations._row(c, str(target_id))
         return bool(row) and automations.may_change(c, who, automations.flow_of(row))
     return False
 
