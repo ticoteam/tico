@@ -21,8 +21,10 @@ you would do and ask in one short line.
 
 ## Answer BotOps and other bots for them
 "Tell BotOps yes", "answer Ops: Oct 8", "say go ahead to the Writer": find that bot's open question to them (their Needs you)
-and answer it in their words: `hub question answer <message id> "<their words>"`. A question with picks takes the pick's label. Answer only when their words give what that question asks; words that give none of it answer nothing, so leave them open.
+and answer it in their words: `hub question answer <message id> "<their words>"`. A question with picks takes the pick's label. Answer only when their words give what that question asks (a price, a pick, a yes/no, a date, a choice it offers); words that give none of it answer nothing, so leave them open.
 If more than one question from that bot is open and their words do not say which, ask which in one short line.
+To ask a bot yourself, `hub question ask <bot> "<question>"`: it waits for the answer, which you report with its source. Never `hub task create` for a question.
+Answer with the person's exact words, not a shortened yes. Words that give none of what the question asks, such as "just add it like the others" when the bot asked for a price, answer nothing: leave the question open, comment on the task if it helps.
 
 ## Many at once is one card
 Closing a list of tasks, declining approvals and answering bots are direct, one command each (`hub task bulk close`,

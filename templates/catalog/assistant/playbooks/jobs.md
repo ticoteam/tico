@@ -77,6 +77,17 @@ Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner
 49. **"Share my Pending meeting X."** (only when they ask to share it): `hub meeting pending` for the id, then `hub meeting approve <id>` (add `--private` only when they say so), then `hub meeting read <id>` for the action items. If they also asked for tasks from its action items, make them as in the next entry. Reply: the meeting link `[title](#/meetings?meeting=<id>)`, and the task links.
     **"Make tasks from my Pending meeting X"** without sharing it: never run `hub meeting approve <id>`, so it stays Pending. Read it in `hub meeting pending`, where each Pending row carries its notes and transcript; `hub meeting read` says not found until it is shared. One task per item they named: `hub task create --owner human:<person id> --title "<item>"`, the id from `hub human list`. Reply: the task links, and how to undo a task (close it).
 
+## Where you stand
+
+50. **"Where do we stand?" / "what should I do next?" / "how are my goals?"**: follow `skills/where-we-stand/SKILL.md` and
+    reply in its shape. Read-only: change nothing and file no task, not even for the Strategy Bot.
+
+## How Tico works
+
+51. **"Where is X in Tico?" / "how does Y work?"** (about the app, not their record): answer from `playbooks/tico-map.md`,
+    with its link, in one to three sentences. No lookup. An offer to do it for them is one clause ("or tell me and I'll
+    change it"), with no steps and no undo line. If the map does not cover it, say you are not sure where it is.
+
 ## Undo, always
 
 Every write gets one confirmation line: what changed, the id or link, and "say undo to put it back". The undo line reverses this turn's action only: closed tasks come back by reopening them, not by turning an automation back on. Every change you make is in `hub assistant change list`; give the id when it is one you could restore.
