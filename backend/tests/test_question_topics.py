@@ -1,7 +1,7 @@
-"""One open question per topic: a bot asking a person again on a topic it already has an open question about updates
-that question (hubdb.open_question, hubdb.fold_question) instead of filing a second card."""
+"""One open question per topic: a bot asking a person again on a topic it already has an open question task about
+updates that task (question_tasks.open_for, question_tasks.fold) instead of filing a second card."""
 
-from backend import ask_deadlines, hubdb as H, task_relations as TR, team_rules
+from backend import ask_deadlines, hubdb as H, question_tasks as QT, task_relations as TR, team_rules
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
 from backend.tests.test_mcp import call
 
@@ -45,14 +45,14 @@ def test_asked_again_on_the_same_task_it_updates_the_open_question(api):
     assert "Asked before:\n- Run the vendor trial once?" in card["body"]
     assert card["ask"]["refs"]["questions"][0]["question"] == card["title"]
     assert [o["label"] for o in card["ask"]["refs"]["questions"][0]["options"]] == ["This week", "Next month"]
-    assert [e["question"] for e in card["ask"]["refs"]["earlier"]] == ["Run the vendor trial once?"]
     with api.app.state.store.read() as c:
         assert TR.parent_of(c, first["task"]["id"]) == work["id"]
-        assert c.execute("SELECT count(*) FROM tasks WHERE owner_id='bot:ops' AND title LIKE 'Run the vendor trial%'"
+        assert c.execute("SELECT count(*) FROM tasks WHERE owner_id='human:ana' AND title LIKE 'Run the vendor trial%'"
                          ).fetchone()[0] == 1
         folded = c.execute("SELECT detail FROM events WHERE action=? AND target=?",
                            (H.QUESTION_FOLDED, first["task"]["id"])).fetchall()
         assert len(folded) == 1 and H._json(folded[0][0], {})["asks"] == 2
+        assert H._json(folded[0][0], {})["was"] == "Run the vendor trial once?"
     # A third ask keeps every earlier wording, newest first in the body.
     third = _ask(api, attempt["token"], "Run the vendor trial in November?")
     assert third["folded"] and third["task"]["id"] == first["task"]["id"]
@@ -99,7 +99,7 @@ def test_once_answered_or_closed_the_next_question_on_the_topic_opens_a_new_one(
     _, _, attempt = setup_attempt(api)
     first = _ask(api, attempt["token"], "Give Builder a backup model?", topic="backup-model")
     post(api, f"tasks/{first['task']['id']}/answers",
-         {"target": {"comment": first["question"]["id"]}, "answers": {"decision": ["Yes"]}})
+         {"target": {"task": first["task"]["id"]}, "answers": {"decision": ["Yes"]}})
     second = _ask(api, attempt["token"], "Give Analyst a backup model?", topic="backup-model")
     assert not second["folded"] and second["task"]["id"] != first["task"]["id"]
     with api.app.state.store.transaction() as c:
@@ -128,9 +128,9 @@ def test_a_folded_question_gives_the_person_the_teams_days_from_the_latest_wordi
     default = {"do": "Yes", "kind": "reversible"}
     first = _ask(api, attempt["token"], "Archive the September drafts?", topic="drafts", if_no_answer=default)
     quiet = _ask(api, attempt["token"], "Archive the spring drafts?", topic="spring", if_no_answer=default)
+    old = H.shift(H.now(), days=-(ask_deadlines.EXPIRE_DAYS + 1))
     with api.app.state.store.transaction() as c:
-        old = H.shift(H.now(), days=-(ask_deadlines.EXPIRE_DAYS + 1))
-        c.execute("UPDATE messages SET created_at=? WHERE id IN (?,?)", (old, first["question"]["id"], quiet["question"]["id"]))
+        c.execute("UPDATE tasks SET asked_at=? WHERE id IN (?,?)", (old, first["task"]["id"], quiet["task"]["id"]))
     again = _ask(api, attempt["token"], "Archive the September and October drafts?", topic="drafts",
                  if_no_answer=default)
     spring = _ask(api, attempt["token"], "Archive the spring and summer drafts?", topic="spring", if_no_answer=default)
@@ -140,8 +140,8 @@ def test_a_folded_question_gives_the_person_the_teams_days_from_the_latest_wordi
     with api.app.state.store.transaction() as c:
         done = ask_deadlines.sweep(c)
         assert not ids & set(done["went_ahead"] + done["expired"]), "15 days after the first wording, 0 after the latest"
-        asked = H.message(c, first["question"]["id"])
-        assert H.ask_clock(asked) == asked["refs"]["asked_again_at"] > asked["created_at"]
+        asked = QT.as_ask(H.task(c, first["task"]["id"]))
+        assert H.ask_clock(asked) == asked["refs"]["asked_again_at"] > old
         assert not H.ask_older(asked)
         later = H.shift(H.now(), days=team_rules.load(c)["go_ahead_days"], hours=1)
         done = ask_deadlines.sweep(c, at=later)
@@ -155,18 +155,18 @@ def test_an_answer_picked_on_the_earlier_wording_does_not_settle_the_new_one(api
     wording stays open, and her answer on the new wording (a pick, or Other alone) is taken."""
     _, _, attempt = setup_attempt(api)
     first = _ask(api, attempt["token"], "Archive the September drafts?", topic="drafts")
-    seen = first["question"]["ask"]["questions"][0]["id"]
+    seen = first["question"]["refs"]["questions"][0]["id"]
     again = _ask(api, attempt["token"], "Archive the September and October drafts?", topic="drafts")
     assert again["folded"]
     url = f"tasks/{first['task']['id']}/answers"
-    target = {"comment": first["question"]["id"]}
+    target = {"task": first["task"]["id"]}
     for stale in ({"answers": {seen: ["Yes"]}}, {"answers": {}, "other": "Yes, archive them"}):
         r = api.post(f"/api/v2/{url}", json={"target": target, **stale}, headers=headers())
         assert r.status_code == 409 and r.json()["error"]["code"] == "changed", r.text
     with api.app.state.store.read() as c:
-        assert H.message(c, first["question"]["id"])["answers"] == []
+        assert H.task(c, first["task"]["id"])["answer"] is None
     assert [i["id"] for i in _cards(api)] == [first["task"]["id"]]
-    now_id = again["question"]["ask"]["questions"][0]["id"]
+    now_id = again["question"]["refs"]["questions"][0]["id"]
     assert now_id != seen
     post(api, url, {"target": target, "answers": {now_id: []}, "other": "Only September"})
     assert _cards(api) == []

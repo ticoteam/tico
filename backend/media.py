@@ -811,7 +811,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             QT.store(c, tid, ask, topic)
             QT.file(c, who.actor, H.task(c, tid), parent)
         card = H.task(c, tid)
-        return {"task": card, "folded": bool(found), "question": QT.as_ask(card),
+        return {"task": {**card, **QT.fields(card)}, "folded": bool(found), "question": QT.as_ask(card),
                 **({"ingest": made["ingest"]} if made and made.get("ingest") else {}), **org_rule_check.answer(rule)}
 
     @app.post("/api/v2/task-questions")

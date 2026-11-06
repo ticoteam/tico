@@ -96,6 +96,8 @@ def file(conn, bot, card, parent):
     if not parent:
         return
     H.event(conn, bot, H.ASK_CARD, card["id"], {"for": parent["id"], "to": card["owner_id"]})
+    if H.task_private(conn, card) and not H.task_private(conn, parent):
+        return                  # a public task never waits on a private one; the answer still wakes it (_subtask_wake)
     if parent["owner_id"] == bot and card["id"] not in TR.blocker_ids(conn, parent["id"]):
         TR.add_blocker(conn, bot, parent["id"], card["id"], note="asked in a question task")
 
