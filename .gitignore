@@ -9,8 +9,6 @@ app/gen/
 node_modules/
 # The UI's compiled TypeScript (npm run build:ui).
 /build/
-# The API types, written by scripts/check_ui_types.sh from backend/openapi_v2.py; never committed.
-/ui/types/api.d.ts
 .venv/
 .tmp-*
 .pytest_cache/

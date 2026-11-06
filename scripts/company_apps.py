@@ -177,12 +177,6 @@ class SafeRedirect(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def certificate_rejected(exc):
-    # urllib wraps handshake failures in URLError; a bad certificate stays bad until the server is fixed.
-    reason = exc.reason if isinstance(exc, URLError) else exc
-    return isinstance(reason, ssl.SSLCertVerificationError)
-
-
 def download_icon(icon_url):
     # A company server may be restarting for the release while its desktop build starts.
     for attempt in range(1, 9):
@@ -192,8 +186,6 @@ def download_icon(icon_url):
         except (URLError, TimeoutError, ConnectionError, IncompleteRead) as exc:
             if isinstance(exc, HTTPError):
                 exc.close()  # the retry or the raise below does not read the answer
-            if certificate_rejected(exc):
-                raise  # retrying cannot change the server's certificate, so report it at once
             if isinstance(exc, HTTPError) and exc.code not in (408, 429) and not 500 <= exc.code < 600:
                 raise
             if attempt == 8:
@@ -210,54 +202,6 @@ def download_icon(icon_url):
         if len(icon) > 1024 * 1024 or not icon.startswith(b"\x89PNG\r\n\x1a\n"):
             raise Invalid("TICO_COMPANY_APPS.icon_url must serve a PNG up to 1 MB")
         return icon
-
-
-def icon_address(entry):
-    icon_url = entry["icon_url"]
-    if icon_url.startswith("/"):
-        icon_url = entry["url"].rstrip("/") + icon_url
-    return icon_url
-
-
-def write_output(name, value):
-    if os.environ.get("GITHUB_OUTPUT"):
-        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
-            stream.write(f"{name}={value}\n")
-
-
-def write_summary(line):
-    if os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
-            stream.write(line + "\n")
-
-
-def check_icon(entry):
-    # Runs once per company before its builds. A download outage (network, DNS, TLS, timeout or HTTP status
-    # after the retries) skips this company's build and publish with a warning, so the release run stays green.
-    # The company's installed app keeps its current version. A PNG that is invalid or oversized still fails.
-    for value in entry.values():
-        mask(value)
-    try:
-        download_icon(icon_address(entry))
-    except (OSError, IncompleteRead) as exc:
-        reason = failure_reason(exc)
-        print(
-            f"::warning::Company app icon unavailable ({reason}); this company's build and publish are skipped "
-            "and its installed app stays on its current version",
-            file=sys.stderr,
-            flush=True,
-        )
-        write_summary(
-            f"Company app skipped: icon unavailable ({reason}). The installed app stays on its current version."
-        )
-        write_output("available", "false")
-        return 0
-    except Invalid as exc:
-        raise OperationFailed(
-            f"Company app icon download (TICO_COMPANY_APPS.icon_url) failed: {failure_reason(exc)}"
-        ) from None
-    write_output("available", "true")
-    return 0
 
 
 def configure(entry, publishing=False):
@@ -286,8 +230,11 @@ def configure(entry, publishing=False):
     version = required_env("GITHUB_REF_NAME").removeprefix("v")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?", version):
         raise Invalid("GITHUB_REF_NAME must be a version tag for company builds")
+    icon_url = entry["icon_url"]
+    if icon_url.startswith("/"):
+        icon_url = entry["url"].rstrip("/") + icon_url
     with operation("icon download (TICO_COMPANY_APPS.icon_url)"):
-        icon = download_icon(icon_address(entry))
+        icon = download_icon(icon_url)
     with operation("icon file write"):
         Path("app/company-icon.png").write_bytes(icon)
     updater = {"endpoints": [base + "/download/latest.json"]}
@@ -315,7 +262,7 @@ def configure(entry, publishing=False):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("matrix", "icon", "configure", "build", "pack", "unpack", "publish"))
+    parser.add_argument("action", choices=("matrix", "configure", "build", "pack", "unpack", "publish"))
     parser.add_argument("--company")
     parser.add_argument("--target")
     parser.add_argument("--bundles")
@@ -358,8 +305,6 @@ def main(argv=None):
         if args.dry_run:
             print(f"Validated {args.action} for {key(entry)}")
             return 0
-        if args.action == "icon":
-            return check_icon(entry)
         if args.action == "configure":
             configure(entry, args.publishing)
         elif args.action in ("pack", "unpack"):

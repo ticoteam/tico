@@ -45,13 +45,9 @@ on every tracked file; CI runs the same checks. Turn on the pre-push hook once p
 
 ```bash
 git config core.hooksPath .githooks
-git config merge.tico-json.driver 'python3 scripts/json_merge.py %O %A %B'
 ```
 
 After that, each `git push` runs `scripts/check.sh` first. To push without it once, use `git push --no-verify`.
-The second line makes a rebase merge two edits to `docs/openapi/v2.json` by key (`scripts/json_merge.py`), so they stop
-conflicting; without it git merges that file as text. The generated `ui/types/api.d.ts` is not committed:
-`scripts/check_ui_types.sh` writes it.
 shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
 `scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
 
@@ -139,11 +135,9 @@ company already owns, so their commits need no sign-off, and their pull requests
 
 - Trunk-based: everything lands on `main` through short-lived branches named `<who>/<topic>`, one ticket per PR.
 - Draft PRs run no CI. Mark the PR ready for review to start the lint checks; each later push runs only those.
-- Once the PR is reviewed and the tests you touched pass with `scripts/remote.py`, enqueue it with
-  `gh pr merge <N> --merge`. The merge queue tests the PR merged onto current main before the change lands.
-- Enqueue once. Don't rebase or merge main just to be current; rebase only when GitHub reports a conflict.
-- If the queue removes the PR, read why before you push again. Never use `--admin` or the REST merge endpoint:
-  both skip the queue.
+- Once the PR is reviewed and the tests you touched pass with `scripts/remote.py`, the author marks it ready and
+  merges it with `gh pr merge <N> --merge` (`--squash` and `--auto` also enqueue). The merge queue runs the full selected checks on the
+  merged result before the change lands on main.
 - If a release candidate goes red because of your merge, fixing it comes before anything else.
 
 ## Releases

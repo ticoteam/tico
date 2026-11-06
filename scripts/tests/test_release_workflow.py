@@ -117,22 +117,9 @@ def test_cancelled_workflow_never_starts_optional_jobs():
 
 def test_company_publish_survives_skipped_release_and_requires_successful_build():
     jobs = yaml.safe_load((ROOT / ".github/workflows/company-app.yml").read_text())["jobs"]
-    # The icon check sets available=true only when its download works; build and publish both wait for it.
-    passed = {"icon": {"available": "true"}}
     for result in ("success", "failure", "skipped", "cancelled"):
-        expected = result == "success"
-        assert _runs(jobs, "publish", {"icon": "success", "build": result}, passed, inherited=("skipped",)) == expected
-    assert not _runs(jobs, "publish", {"icon": "success", "build": "success"}, passed, cancelled=True)
-    # A failed or skipped icon job never leaves a build or publish to run, even though its build could succeed.
-    for icon in ("failure", "skipped", "cancelled"):
-        assert not _runs(jobs, "build", {"icon": icon}, {})
-        assert not _runs(jobs, "publish", {"icon": icon, "build": "success"}, {})
-    unavailable = {"icon": {"available": "false"}}
-    assert _runs(jobs, "build", {"icon": "success"}, passed)
-    assert not _runs(jobs, "build", {"icon": "success"}, unavailable)
-    assert not _runs(jobs, "publish", {"icon": "success", "build": "success"}, unavailable)
-    assert jobs["build"]["needs"] == "icon"
-    assert set(jobs["publish"]["needs"]) == {"icon", "build"}
+        assert _runs(jobs, "publish", {"build": result}, {}, inherited=("skipped",)) == (result == "success")
+    assert not _runs(jobs, "publish", {"build": "success"}, {}, cancelled=True)
 
 
 @pytest.fixture

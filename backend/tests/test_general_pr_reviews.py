@@ -381,9 +381,10 @@ def test_backfill_takes_older_waits_before_discovering_the_next_page(api, monkey
     assert len(children(api, tasks[2])) == 1
 
 
-def test_conflicting_pr_returns_to_owner_once(api):
+@pytest.mark.parametrize("conflict,stale", [(True, False), (False, True)])
+def test_conflicting_or_behind_pr_returns_to_owner_once(api, conflict, stale):
     setup(api)
-    task = task_pr(api, conflict=True)
+    task = task_pr(api, conflict=conflict, stale=stale)
     dispatch(api)
     dispatch(api)
     assert children(api, task) == []
@@ -391,16 +392,7 @@ def test_conflicting_pr_returns_to_owner_once(api):
     assert "rebase on main" in notice["body"]
 
 
-def test_behind_pr_is_not_sent_back_to_owner(api):
-    # The merge queue merges a branch onto current main, so a branch behind main needs no rebase.
-    setup(api)
-    task = task_pr(api, stale=True)
-    dispatch(api)
-    dispatch(api)
-    assert handoffs(api, task, "merge_conflict") == []
-
-
-@pytest.mark.parametrize("mergeable_state", ["dirty"])
+@pytest.mark.parametrize("mergeable_state", ["dirty", "behind"])
 def test_backfill_reads_github_before_dispatching_a_cached_clean_pr(api, monkeypatch, mergeable_state):
     setup(api)
     task = task_pr(api)
