@@ -702,7 +702,7 @@ def tag_update(api, args):
        "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only its requester, owner and readers see it; bot defaults also apply"},
        "readers": {"type": "array", "items": {"type": "string"}, "description": "Private: who else sees it: human:<id>, bot:<slug> or group:<id>"},
-        "follow": {"type": "boolean", "description": "Follow it yourself (the owner follows anyway)"},
+        "follow": {"type": "boolean"},   # the filer follows it too (docs/tasks.md, Followers)
        "from_private": {"type": "boolean", "default": False,
                         "description": "From a run on your own private task with no person on it: a company-visible "
                                        "task for a bot, carrying only its own words (no 12 words copied from the private "
