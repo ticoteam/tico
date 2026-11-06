@@ -5,13 +5,25 @@ import sys
 from pathlib import Path
 from typing import Literal
 
+import fastapi
+import pydantic
 import pytest
-from fastapi import FastAPI, Query
+import starlette
+from fastapi import FastAPI, Header, Query
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from backend import route_memo as RM
 
+# The versions whose route building route_memo's keys were checked against: what get_dependant, ModelField and
+# compile_path read. An upgrade can make them read more than a key holds.
+REVIEWED = {"fastapi": "0.141.1", "starlette": "1.8.0", "pydantic": "2.14.1"}
+
+
+@pytest.fixture(autouse=True)
+def no_cap_clear(monkeypatch):
+    """A cache reaching its cap clears itself; these tests compare what two builds share, so none clears mid-test."""
+    monkeypatch.setattr(RM, "ADAPTER_LIMIT", 10**9)
 
 
 def build(store):
@@ -40,12 +52,21 @@ def fields(app, path):
     return found.path_params + found.query_params + found.body_params
 
 
+def route(app, path):
+    return next(r for r in app.routes if getattr(r, "path", None) == path)
+
+
 def test_a_second_app_reuses_validators_but_keeps_its_own_state_and_types():
     first, second = build("first"), build("second")
+    # FastAPI really goes through the memo: a renamed or bypassed get_dependant or compile_path fails here.
+    assert route(first, "/items/{item_id}").path_regex is route(second, "/items/{item_id}").path_regex
+    assert RM.DEPENDANTS
     one, two = dependant(first, "/items/{item_id}"), dependant(second, "/items/{item_id}")
     assert one.call is not two.call and one.query_params is not two.query_params
-    for a, b in zip(fields(first, "/items/{item_id}"), fields(second, "/items/{item_id}")):
-        assert a._type_adapter is b._type_adapter, a.name
+    shared = list(zip(fields(first, "/items/{item_id}"), fields(second, "/items/{item_id}")))
+    assert len(shared) == 3
+    for a, b in shared:
+        assert a is b and a._type_adapter is b._type_adapter, a.name
     # A model made inside the function is each app's own, and is never kept by the cache.
     (note_a,), (note_b,) = fields(first, "/notes"), fields(second, "/notes")
     assert note_a is not note_b and note_a._type_adapter is not note_b._type_adapter
@@ -76,6 +97,29 @@ def test_keys_tell_apart_values_that_compare_equal():
     for made_here in (Local, list[Local], lambda: 1, object()):
         with pytest.raises(RM.Uncacheable):
             RM.frozen(made_here)
+
+
+def test_a_signature_differing_only_in_what_get_dependant_reads_is_not_shared():
+    """Header(None) and Header(None, convert_underscores=False) build the same validator but different aliases."""
+    def header_app(convert):
+        app = FastAPI()
+
+        @app.get("/h")
+        def read(x_token: str | None = Header(None, convert_underscores=convert)):
+            return {"token": x_token}
+        return app
+    converted, kept = header_app(True), header_app(False)
+    assert dependant(converted, "/h").header_params[0].alias == "x-token"
+    assert dependant(kept, "/h").header_params[0].alias == "x_token"
+    assert TestClient(kept).get("/h", headers={"x_token": "t"}).json() == {"token": "t"}
+    assert header_app(True) and dependant(header_app(False), "/h").header_params[0].alias == "x_token"
+
+
+def test_route_building_is_still_the_reviewed_version():
+    found = {"fastapi": fastapi.__version__, "starlette": starlette.__version__, "pydantic": pydantic.VERSION}
+    assert found == REVIEWED, (
+        "FastAPI, Starlette or pydantic changed: re-review backend/route_memo.py's keys (what get_dependant, "
+        "ModelField.__post_init__ and compile_path read) against the new version, then update REVIEWED.")
 
 
 def test_paths_compile_once_into_their_own_convertor_dicts():

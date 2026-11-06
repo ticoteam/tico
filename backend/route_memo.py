@@ -27,6 +27,7 @@ import typing
 import annotated_types
 from fastapi import routing as fastapi_routing
 from fastapi._compat import v2 as fastapi_v2
+from fastapi.datastructures import DefaultPlaceholder
 from fastapi.dependencies import utils as fastapi_dependencies
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
@@ -107,14 +108,32 @@ def frozen(value, depth=0):
             raise Uncacheable
         return _Same(value)
     if isinstance(value, FieldInfo):
-        return ("field", kind, _field_parts(value, depth))
+        # A FieldInfo named in a signature (a default, or Annotated metadata) is copied whole: get_dependant reads
+        # more than the validator does (Header's convert_underscores, Body's embed and media_type, in_, ...).
+        return ("field", kind, tuple((name, frozen(getattr(value, name), depth + 1)) for name in _field_names(value)
+                                     if hasattr(value, name)))
     if dataclasses.is_dataclass(value) and _module_level(kind):
         return ("dataclass", kind, tuple(frozen(getattr(value, f.name), depth + 1)
                                          for f in dataclasses.fields(value)))
+    if kind is DefaultPlaceholder:      # FastAPI's "not given" marker (a Param's deprecated `example`): its value
+        return ("placeholder", frozen(value.value, depth + 1))
     if isinstance(value, annotated_types.BaseMetadata) and hasattr(value, "__dict__"):
         # pydantic's general metadata (a pattern, max_digits): one cached class, holding only its __dict__.
         return ("metadata", kind, frozen(vars(value), depth + 1))
     raise Uncacheable
+
+
+def _field_names(field_info):
+    """Every attribute a FieldInfo holds: its classes' slots and its own __dict__, in a fixed order."""
+    names = _slot_names(type(field_info))
+    extra = getattr(field_info, "__dict__", None)
+    return names + tuple(sorted(extra)) if extra else names
+
+
+@functools.cache
+def _slot_names(kind):
+    return tuple(sorted({name for cls in kind.__mro__ for name in getattr(cls, "__slots__", ())
+                         if name not in ("__dict__", "__weakref__")}))
 
 
 def _field_parts(field_info, depth):
@@ -152,7 +171,8 @@ def _post_init(self):
 
 def dependant_key(path, call, name, own_oauth_scopes, parent_oauth_scopes, use_cache, scope):
     """What get_dependant reads: the path, the options and the handler's typed signature (names, kinds, annotations
-    and defaults by value). The handler itself is not in it: each app's Dependant gets its own."""
+    and defaults by value, a FieldInfo with every attribute it holds). The handler itself is not in it: each app's
+    Dependant gets its own."""
     parameters = tuple((p.name, p.kind, frozen(p.annotation), frozen(p.default))
                        for p in fastapi_dependencies.get_typed_signature(call).parameters.values())
     return (path, name, frozen(own_oauth_scopes), frozen(parent_oauth_scopes), use_cache, scope, parameters)
