@@ -138,7 +138,7 @@ const newContext = (browser, phone) => browser.newContext({viewport: phone ? PHO
         assert.ok(!keys.includes('connections'), tag + ': Connections is part of Tools');
         assert.ok(keys.includes('threads') && keys.includes('organisation'), tag + ': Threads and the Team section too');
         if (phone) assert.deepEqual(v.painted.bar, ['org', 'threads', 'mobile-ask', 'tasks', 'updates', 'more'], tag + ': the bottom bar');
-        else assert.ok(v.painted.foot.includes('#ask-row:true'), tag + ': Ask Tico at the foot from the first paint');
+        else assert.ok(v.painted.foot.includes('#ask-row:true'), tag + ': Tico Assistant at the foot from the first paint');
         assert.equal(await v.page.locator('#nav-finance').getAttribute('hidden'), '', tag + ': Finance hidden once the scripts run, too');
         assert.equal((await kept(v.page)).finance, false, tag + ': the answer is kept');
         assert.deepEqual(v.errors, []);

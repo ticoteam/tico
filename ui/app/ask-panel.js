@@ -3,7 +3,7 @@
 'use strict';
 
 // Ask (docs/assistant.md). The one way in to the Assistant ("Tico Assistant" here), to the helpers behind it (BotOps,
-// the Strategy Bot, the Librarian). The Tico team has its own chat (ui/support.js), opened by the ? beside Search. On a computer the "Ask Tico" row at the bottom of the sidebar
+// the Strategy Bot, the Librarian). The Tico team has its own chat (ui/support.js), opened by the ? beside Search. On a computer the "Tico Assistant" row at the bottom of the sidebar
 // (or ⌘J) opens a panel beside the rail, rising from the bottom left; on a phone the Liquid Dot in the middle of the tab bar opens it as a sheet over
 // the page, and closes it again. It is the same conversation as the Assistant page (#/assistant): GET /v2/assistant
 // reads it and POST /v2/assistant/messages sends with the page the person is on (`page`), so the turn knows what "this"
@@ -52,7 +52,7 @@ function askSync() {
   // While the panel is open a close mark holds the row's (and the phone tab's) dot place (ask.css).
   for (const el of [row, tab].filter(Boolean)) {
     el.setAttribute('aria-expanded', String(open));
-    if (open) el.setAttribute('aria-label', 'Close Ask Tico'); else el.removeAttribute('aria-label');
+    if (open) el.setAttribute('aria-label', 'Close Tico Assistant'); else el.removeAttribute('aria-label');
   }
   for (const el of document.querySelectorAll('[data-ask-dot]')) ldotWatch(el);
   askDot();
