@@ -729,7 +729,9 @@ def _ask_task(conn, m, row):
             if live:
                 file(conn, sender, H.task(conn, card["id"]), row)
             return card
-        body = f"{body}\n\nAbout task {row['id']}: {row['title']}"
+        # Its task's title only where the person reads that task: a private one's stays off.
+        readable = not H.task_private(conn, row) or H.task_private_readable(conn, person, row)
+        body = f"{body}\n\nAbout task {row['id']}: {row['title']}" if readable else body
     card = H.task_create(conn, sender, title, body, person, lint=False, deduplicate=False, quiet_notice=True,
                          private=True if not row or H.task_private(conn, row) else None)
     _store_ask(conn, card["id"], m)

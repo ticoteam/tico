@@ -132,7 +132,7 @@ def test_finishing_bot_task_closes_subtasks_and_declining_retires_only_generated
     assert H.task(c, card["id"])["status"] == "closed"
     assert card["id"] not in {t["id"] for t in H.needs_you(c, "human:ana")["tasks"]}
     assert H.task(c, ordinary["id"])["status"] == ("open" if status == "declined" else "closed")
-    assert not H.open_task_asks(c, H.task(c, card["id"]))
+    assert not H.unanswered_ask(c, H.task(c, card["id"]))
 
 
 def test_finishing_parent_closes_shared_person_card_and_releases_other_dependents(c):

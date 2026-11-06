@@ -1,8 +1,8 @@
 """A waiting task's Blocked reason names what really holds it, and follows every change to its holds; a question to a
-person lives and dies with its own task, and its asker hears when it is withdrawn (backend/task_holds.py, Dev 627)."""
+person is a question task that lives and dies with the task it was asked under (backend/task_holds.py, Dev 627)."""
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.store import H
-from backend import approval_expiry, still_needed, task_holds
+from backend import question_tasks as QT, still_needed, task_holds
 from backend.tests.hold_rows import set_holds
 
 
@@ -11,7 +11,8 @@ def bot_task(c, title, owner="bot:ops", parent=None, actor="human:ben"):
 
 
 def ask(c, tid, text, asker="bot:ops", to="human:ana"):
-    return H.say(c, asker, to, text, kind="ask", conversation_id=H.task(c, tid)["conversation_id"], refs={"task": tid})
+    """`asker` asks `to` a question task under the task."""
+    return QT.ask_plain(c, asker, to, text, parent=H.task(c, tid))
 
 
 def wait(c, tid, owner="bot:ops", note=None):
@@ -19,16 +20,12 @@ def wait(c, tid, owner="bot:ops", note=None):
     return H.task(c, tid)
 
 
-def notices(c, to, news="ask_withdrawn"):
+def notices(c, to, news):
     return [m for m in H._rows(c.execute("SELECT body, refs FROM messages WHERE recipient_id=? ORDER BY created_at", (to,)))
             if (H._json(m["refs"], {}) or {}).get("news") == news]
 
 
-def withdrawn_label(c, ask_id):
-    return (H._json(H.message(c, ask_id)["refs"], {}) or {}).get("withdrawn")
-
-
-def test_finishing_parent_closes_its_subtask_and_withdraws_its_question(api):
+def test_finishing_parent_closes_its_subtask_and_its_question(api):
     """A subtask closes with its parent, clearing the question and its hold."""
     with api.app.state.store.transaction() as c:
         parent = bot_task(c, "Spec Settings search")
@@ -36,53 +33,21 @@ def test_finishing_parent_closes_its_subtask_and_withdraws_its_question(api):
         question = ask(c, child, "Search titles only, or bodies too?")
         wait(c, child)
         H.task_update(c, "bot:ops", parent, status="done", note="Spec written")
-        assert H.message(c, question["id"])["superseded_at"]
+        assert not QT.is_open(H.task(c, question["id"]))
         row = H.task(c, child)
         assert row["status"] == "closed" and not row["blocked_reason"]
-        assert approval_expiry.sweep(c)["asks"] == []
-        assert child not in [t["id"] for t in H.tasks_asked_of(c, "human:ana")]
-
-
-def test_ending_the_question_s_own_task_tells_the_asker_whether_the_person_saw_it(api):
-    """Criterion 3: someone other than the asker ends the task; one notice, labelled before/after the person saw it."""
-    with api.app.state.store.transaction() as c:
-        ana = task_holds.name(c, "human:ana")
-        unseen = bot_task(c, "Pick the hosting page date")
-        first = ask(c, unseen, "Ship Staff Hosting on Friday?")
-        wait(c, unseen)
-        H.task_close(c, "human:ben", unseen, "Board cleanup")
-        assert H.message(c, first["id"])["superseded_at"]
-        assert withdrawn_label(c, first["id"]) == f"Withdrawn before {ana} saw it: its task was closed"
-        told = notices(c, "bot:ops")
-        assert len(told) == 1 and "Ship Staff Hosting on Friday?" in told[0]["body"]
-        assert f"Withdrawn before {ana} saw it: its task was closed" in told[0]["body"]
-
-        seen = bot_task(c, "Pick the launch date")
-        second = ask(c, seen, "Launch on Monday?")
-        H.mark_read(c, "human:ana", second["id"])
-        H.task_close(c, "human:ben", seen, "Not needed")
-        assert withdrawn_label(c, second["id"]) == f"Withdrawn after {ana} saw it: its task was closed"
-        assert len(notices(c, "bot:ops")) == 2
-
-        # The asker ending its own task needs no notice of what it did.
-        own = bot_task(c, "Pick a venue")
-        third = ask(c, own, "Indoor or outdoor?")
-        H.task_update(c, "bot:ops", own, status="done", note="Picked indoor")
-        assert H.message(c, third["id"])["superseded_at"]
-        assert len(notices(c, "bot:ops")) == 2
+        assert QT.waiting_on(c, row) is None
 
 
 def test_still_needed_returns_the_question_and_reopens_its_bot_task_without_a_second_notice(api):
     with api.app.state.store.transaction() as c:
-        ana = task_holds.name(c, "human:ana")
         tid = bot_task(c, "Order the mail key")
         question = ask(c, tid, "Which mailbox gets the key?")
         wait(c, tid)
-        still_needed.send_back(c, "bot:ops", [(H.message(c, question["id"]), H.task(c, tid))])
-        assert withdrawn_label(c, question["id"]).startswith(f"Withdrawn before {ana} saw it: no answer in two")
+        still_needed.send_back(c, "bot:ops", [question])
+        assert H.task(c, question["id"])["status"] == "closed"
         row = H.task(c, tid)
         assert row["status"] == "open" and "nothing left to wait on" in row["note"]
-        assert notices(c, "bot:ops") == []      # still needed? sends no notice of its own: the roundup lists it
 
 
 def test_the_last_child_finishing_reopens_a_bot_task_and_one_of_two_keeps_it_waiting_on_the_other(api):
@@ -110,7 +75,7 @@ def test_an_answer_or_a_decided_approval_clears_its_hold(api):
         approval = H.approval_request(c, "bot:ops", "spend", {"amount": 120, "account": "card", "what": "Vendor A"}, task_id=tid)
         row = wait(c, tid)
         assert row["blocked_reason"] == f"Waiting on {ana}: Vendor A or B? (and 1 more)"
-        H.answer(c, "human:ana", question["id"], "A")
+        H.task_update(c, "human:ana", question["id"], status="done", note="A")
         row = H.task(c, tid)
         assert row["status"] == "waiting" and not row["blocked_reason"].startswith(f"Waiting on {ana}: Vendor")
         assert "spend approval" in row["blocked_reason"]
@@ -156,20 +121,6 @@ def test_a_person_s_task_stays_put_and_an_owner_s_own_hold_is_kept(api):
         H.task_update(c, "bot:cpo", sub, status="done", note="Proofread")
         row = H.task(c, manual)
         assert row["status"] == "waiting" and row["blocked_reason"] == "Held until the legal review"
-
-
-def test_the_third_withdrawal_of_the_same_question_in_a_day_says_so(api):
-    """Criterion 13."""
-    with api.app.state.store.transaction() as c:
-        tid = bot_task(c, "Staff Hosting timing")
-        for _ in range(3):
-            question = ask(c, tid, "When does Staff Hosting ship?")
-            wait(c, tid)
-            c.execute("UPDATE messages SET superseded_at=? WHERE id=?", (H.now(), question["id"]))
-            task_holds.withdrawn(c, tid, [question["id"]], "no answer in two business days")
-        told = notices(c, "bot:ops")
-        assert len(told) == 3
-        assert "third question from you" in told[2]["body"] and "third" not in told[1]["body"]
 
 
 def test_a_private_child_is_never_named_in_its_parent_s_reason(api):
@@ -240,17 +191,8 @@ def test_deleting_the_only_child_clears_the_parent_s_hold(api):
 
 def test_a_note_only_edit_keeps_a_recorded_person_wait(api):
     """Criterion 8 on the recorded wait itself, not only the question: a note alone never ends a wait on a person."""
-    from backend import question_tasks as QT
     with api.app.state.store.transaction() as c:
         ana = task_holds.name(c, "human:ana")
-        # An old open question to them holds it (an ask message, until step 6c).
-        asked = bot_task(c, "Pick the venue")
-        ask(c, asked, "Hall A or Hall B?")
-        H.task_update(c, "bot:ops", asked, status="waiting", waiting_on="human:ana", note="Ana, Hall A or Hall B?")
-        H.task_update(c, "bot:ops", asked, note="waiting on Engineering")
-        row = H.task(c, asked)
-        assert row["status"] == "waiting" and row["note"] == "waiting on Engineering"
-        assert row["blocked_reason"] == f"Waiting on {ana}: Hall A or Hall B?"
         # Their open question task holds it (derived): a note edit leaves it, and who it waits on, as they were.
         card = bot_task(c, "Sign the lease")
         H.task_update(c, "bot:ops", card, status="waiting", waiting_on="human:ana",
@@ -275,94 +217,59 @@ def test_a_child_reopened_or_renamed_is_named_again_by_its_waiting_parent(api):
         assert H.task(c, mine)["blocked_reason"] == "Waiting on ops: Write the launch post"
 
 
-def test_a_question_from_a_private_source_is_not_quoted_in_a_company_task_s_reason(api):
-    """The reason is shown to every reader of the task; a question tied to it from a stricter source is only 'a
-    question' there. One asked in the task's own room is still quoted."""
-    with api.app.state.store.transaction() as c:
-        ana = task_holds.name(c, "human:ana")
-        tid = bot_task(c, "Renew the vendor contract")
-        secret = H.task_create(c, "human:ana", "Vendor breach review", "x", "bot:ops", private=True, lint=False)
-        room = H.task(c, tid)["conversation_id"]
-        # Asked in the private room, tied to the company task.
-        H.say(c, "bot:ops", "human:ana", "Was the breach in the March export?", kind="ask",
-              conversation_id=secret["conversation_id"], refs={"task": tid})
-        assert wait(c, tid)["blocked_reason"] == f"Waiting on {ana}: a question"
-        # Asked in the company task's room while it waits, but built on a private message.
-        source = H.say(c, "bot:ops", "human:ana", "Breach notes: the March export leaked.",
-                       conversation_id=secret["conversation_id"], refs={"task": secret["id"]})
-        H.say(c, "bot:ops", "human:ana", "Should the breach go in the renewal terms?", kind="ask",
-              conversation_id=room, refs={"task": tid, "inputs": [source["id"]]})
-        assert "breach" not in H.task(c, tid)["blocked_reason"].lower()
-    text = api.get("/api/v2/tasks/" + tid, headers={"Authorization": "Bearer ben-test"}).text
-    assert "Renew the vendor contract" in text and "breach" not in text.lower()
-    with api.app.state.store.transaction() as c:
-        plain = bot_task(c, "Renew the cleaning contract")
-        ask(c, plain, "Keep the same cleaner?")
-        assert wait(c, plain)["blocked_reason"] == f"Waiting on {ana}: Keep the same cleaner?"
-
-
-def test_structured_answers_end_the_wait_but_an_unmatched_note_keeps_it(api):
-    """A direct exact label or card pick clears the wait; an unmatched task note preserves it."""
+def test_an_answer_ends_the_wait_but_an_unmatched_note_keeps_it(api):
+    """Answering the question task clears the wait; a note on the waiting task preserves it."""
     def asked(c, title):
         tid = bot_task(c, title)
-        q = H.task_comment(c, "bot:ops", tid, "Which month should the report use?", wake=False, ask={
-            "questions": [{"id": "month", "header": "Month", "question": "Which month should the report use?",
-                           "multi": False, "other": True,
-                           "options": [{"label": "July", "description": ""}, {"label": "August", "description": ""}]}],
-            "who": "human:ana"})
-        H.task_update(c, "bot:ops", tid, status="waiting", waiting_on="human:ana", note="Waiting on Ana's pick.")
+        card = ask(c, tid, "Which month should the report use?")
+        wait(c, tid)
         assert H.task(c, tid)["blocked_reason"].startswith(f"Waiting on {task_holds.name(c, 'human:ana')}")
-        return tid, q["id"]
+        return tid, card["id"]
 
     with api.app.state.store.transaction() as c:
         direct, direct_q = asked(c, "Report month (direct)")
-        commented, _ = asked(c, "Report month (comment)")
-        picked, picked_q = asked(c, "Report month (pick)")
-    post(api, f"messages/{direct_q}/answer", {"text": "July"})
+        commented, commented_q = asked(c, "Report month (comment)")
+        picked, picked_q = asked(c, "Report month (route)")
+        H.task_update(c, "human:ana", direct_q, status="done", note="July")
     post(api, f"tasks/{commented}/comments", {"text": "July, please."})
-    post(api, f"tasks/{picked}/answers", {"target": {"comment": picked_q}, "answers": {"month": ["July"]}})
+    post(api, f"tasks/{picked_q}/answers", {"target": {"task": picked_q}, "answers": {}, "other": "July"})
     with api.app.state.store.read() as c:
         ana = task_holds.name(c, "human:ana")
         note_row = H.task(c, commented)
-        assert H.open_task_asks(c, note_row)
+        assert QT.is_open(H.task(c, commented_q))
         assert note_row["status"] == "waiting"
-        for tid in (direct, picked):
+        for tid, card in ((direct, direct_q), (picked, picked_q)):
             row = H.task(c, tid)
-            assert not H.open_task_asks(c, row), tid
+            assert not QT.is_open(H.task(c, card)), tid
             assert row["status"] == "open", (tid, row["status"], row["blocked_reason"])
-            assert row["note"] == f"{ana} answered your question; nothing left to wait on"
+            assert row["note"].startswith(f"{ana} answered"), row["note"]
             assert tid not in [t["id"] for t in H.needs_you(c, "human:ana")["waiting"]]
 
 
-def test_a_person_s_task_distinguishes_a_structured_answer_from_a_note(api):
-    """A structured answer clears the question without moving a person's task; a note leaves it open."""
+def test_a_person_s_task_distinguishes_an_answer_from_a_note(api):
+    """An answer clears the question without moving a person's task; a note leaves it open."""
     def asked(c, title):
         tid = H.task_create(c, "bot:ops", title, "x", "human:ana")["id"]
-        q = H.task_comment(c, "bot:ops", tid, "Which month for the review?", wake=False, ask={
-            "questions": [{"id": "month", "header": "Month", "question": "Which month for the review?",
-                           "multi": False, "other": True,
-                           "options": [{"label": "July", "description": ""}, {"label": "August", "description": ""}]}],
-            "who": "human:ana"})
+        card = ask(c, tid, "Which month for the review?")
         H.task_update(c, "human:ana", tid, status="waiting")
-        return tid, q["id"]
+        return tid, card["id"]
 
     with api.app.state.store.transaction() as c:
         direct, direct_q = asked(c, "Review month (direct)")
-        commented, _ = asked(c, "Review month (comment)")
-        picked, picked_q = asked(c, "Review month (pick)")
+        commented, commented_q = asked(c, "Review month (comment)")
+        picked, picked_q = asked(c, "Review month (route)")
         steps = {tid: H.task(c, tid)["step_id"] for tid in (direct, commented, picked)}
-    post(api, f"messages/{direct_q}/answer", {"text": "July"})
+        H.task_update(c, "human:ana", direct_q, status="done", note="July")
     post(api, f"tasks/{commented}/comments", {"text": "July, please."})
-    post(api, f"tasks/{picked}/answers", {"target": {"comment": picked_q}, "answers": {"month": ["July"]}})
+    post(api, f"tasks/{picked_q}/answers", {"target": {"task": picked_q}, "answers": {}, "other": "July"})
     with api.app.state.store.read() as c:
-        ana, ops = task_holds.name(c, "human:ana"), task_holds.name(c, "bot:ops")
         note_row = H.task(c, commented)
-        assert H.open_task_asks(c, note_row)
+        assert QT.is_open(H.task(c, commented_q))
         assert (note_row["status"], note_row["step_id"]) == ("waiting", steps[commented])
         for tid in (direct, picked):
             row = H.task(c, tid)
             assert (row["status"], row["step_id"]) == ("waiting", steps[tid]), tid
-            assert row["blocked_reason"] == f"Nothing left to wait on: {ana} answered {ops}'s question", tid
+            assert row["blocked_reason"].startswith("Nothing left to wait on"), tid
             assert row["holds_cleared_at"], tid
 
 
@@ -380,92 +287,6 @@ def test_taking_off_a_stale_finished_blocker_releases_nothing(api):
         TR.remove_blocker(c, H.KEEPER, tid, blocker)
         row = H.task(c, tid)
         assert (row["status"], row["blocked_reason"]) == ("waiting", "Nothing tracked to wait on")
-
-
-def test_an_asker_withdrawing_its_own_question_through_the_resolve_route_recomputes_the_reason(api):
-    """The resolve route with no quote: the Blocked reason follows the holds, as an answer's does."""
-    with api.app.state.store.transaction() as c:
-        ben = task_holds.name(c, "human:ben")
-        tid = bot_task(c, "Choose a vendor")
-        question = ask(c, tid, "Vendor A or B?")
-        other = ask(c, tid, "Which invoice month?", to="human:ben")     # a newer question to Ana would replace this one
-        row = wait(c, tid)
-        assert row["blocked_reason"].startswith("Waiting on ") and row["blocked_reason"].endswith(" (and 1 more)")
-        H.task_ask_resolve(c, "bot:ops", tid, question["id"])
-        row = H.task(c, tid)
-        assert row["status"] == "waiting" and row["blocked_reason"] == f"Waiting on {ben}: Which invoice month?"
-        H.task_ask_resolve(c, "bot:ops", tid, other["id"])
-        row = H.task(c, tid)
-        assert row["status"] == "open"
-        assert row["note"] == f"{task_holds.name(c, 'bot:ops')} withdrew your question to {ben}; nothing left to wait on"
-        assert not (row["blocked_reason"] or "").startswith("Waiting on")
-
-
-def test_withdrawing_the_only_question_a_bot_waits_on_reopens_it_through_the_resolve_route(api):
-    """The last question to the person a bot waits on: its clear of the wait must not hide the reason from the recompute."""
-    with api.app.state.store.transaction() as c:
-        ana = task_holds.name(c, "human:ana")
-        tid = bot_task(c, "Choose a vendor")
-        question = ask(c, tid, "Vendor A or B?")
-        H.task_update(c, "bot:ops", tid, status="waiting", waiting_on="human:ana", note="Waiting on Ana's pick.")
-        row = H.task(c, tid)
-        assert row["status"] == "waiting" and row["blocked_reason"].startswith(f"Waiting on {ana}")
-        H.task_ask_resolve(c, "bot:ops", tid, question["id"])
-        row = H.task(c, tid)
-        assert row["status"] == "open"
-        assert row["note"] == f"{task_holds.name(c, 'bot:ops')} withdrew your question to {ana}; nothing left to wait on"
-        assert not (row["blocked_reason"] or "").startswith("Waiting on")
-
-
-def test_an_asker_withdrawing_a_question_to_someone_else_keeps_a_bot_s_wait_on_a_person(api):
-    """The bot waits on Ana through her question task; withdrawing its own question to Ben leaves that wait and its
-    note as they are, and the reason names Ana."""
-    from backend import question_tasks as QT
-    with api.app.state.store.transaction() as c:
-        ana = task_holds.name(c, "human:ana")
-        tid = bot_task(c, "Choose a vendor")
-        question = ask(c, tid, "Which invoice month?", to="human:ben")
-        H.task_update(c, "bot:ops", tid, status="waiting", waiting_on="human:ana",
-                      note="Pick vendor A or B? I'll order from them after.")
-        before = H.task(c, tid)
-        assert before["blocked_reason"].startswith("Waiting on Ben: Which invoice month?")
-        H.task_ask_resolve(c, "bot:ops", tid, question["id"])
-        row = H.task(c, tid)
-        assert row["status"] == "waiting" and QT.waiting_on(c, row) == "human:ana"
-        assert row["blocked_reason"].startswith(f"Waiting on {ana}")
-        assert row["note"] == before["note"]
-        assert not (row["note"] or "").endswith("nothing left to wait on")
-
-
-def test_a_person_s_task_names_what_cleared_when_they_withdraw_their_own_question(api):
-    """Ben's own waiting task: withdrawing his question to Ana leaves it waiting and says what cleared."""
-    with api.app.state.store.transaction() as c:
-        mine = bot_task(c, "Pick the offsite venue", owner="human:ben", actor="human:ben")
-        question = ask(c, mine, "Indoor or outdoor?", asker="human:ben", to="human:ana")
-        wait(c, mine, owner="human:ben")
-        assert H.task(c, mine)["blocked_reason"].startswith("Waiting on ")
-        H.task_ask_resolve(c, "human:ben", mine, question["id"])
-        row = H.task(c, mine)
-        assert row["status"] == "waiting"
-        assert row["blocked_reason"] == "Nothing left to wait on: Ben withdrew your question to Ana"
-
-
-def test_a_teammate_withdrawing_its_question_leaves_the_bot_s_own_hold_and_its_reason_unchanged(api):
-    """The bot waits on its own question to Ben; a teammate's question to Ana is not a hold of this task, so its
-    withdrawal changes status, waiting_on and reason in no way and writes no withdrawal note."""
-    with api.app.state.store.transaction() as c:
-        tid = bot_task(c, "Choose a vendor")
-        ask(c, tid, "Vendor A or B?", to="human:ben")
-        teammate = ask(c, tid, "Is the budget approved?", asker="bot:cpo", to="human:ana")
-        wait(c, tid)
-        before = H.task(c, tid)
-        assert before["blocked_reason"] == "Waiting on Ben: Vendor A or B?"
-        H.task_ask_resolve(c, "bot:cpo", tid, teammate["id"])
-        row = H.task(c, tid)
-        assert row["status"] == before["status"] == "waiting"
-        assert row["blocked_reason"] == before["blocked_reason"]
-        assert row["note"] == before["note"]
-        assert "withdrew" not in (row["note"] or "")
 
 
 def test_a_bot_task_waiting_on_nothing_goes_back_to_open_after_the_grace_with_one_wake_per_bot(api):

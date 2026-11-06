@@ -117,9 +117,9 @@ def test_readable_messages_split_by_hidden_pages_are_found_across_them(api, monk
     assert [m["id"] for m in inbox["messages"]] == [msg["id"]] and inbox["more_messages"] is False
 
 
-def test_the_newest_hundred_readable_arrive_oldest_first_with_their_answers(api):
+def test_the_newest_hundred_readable_arrive_oldest_first(api):
     """What the inbox sends is unchanged: the newest INBOX_LIMIT readable messages, oldest first, `more_messages` when
-    one more readable message waits, and an answered ask says when it was answered."""
+    one more readable message waits, and none says it was answered (nothing asks in a message now)."""
     from backend.app import INBOX_LIMIT
     store = api.app.state.store
     msg = post(api, "chat/ops", {"text": "Hello"})
@@ -127,16 +127,12 @@ def test_the_newest_hundred_readable_arrive_oldest_first_with_their_answers(api)
         first = dict(c.execute("SELECT * FROM messages WHERE id=?", (msg["id"],)).fetchone())
         base = {**first, "sender_id": "bot:ops", "recipient_id": "human:ana", "read_at": None}
         clone(c, "messages", base, INBOX_LIMIT + 50, created_at=lambda i: H.shift(first["created_at"], seconds=-i - 1),
-              kind=lambda i: "ask" if i == 0 else "say", body=lambda i: f"reply {i}")
-        ask = c.execute("SELECT id FROM messages WHERE kind='ask' AND recipient_id='human:ana'").fetchone()["id"]
-        clone(c, "messages", {**first, "sender_id": "human:ana", "recipient_id": "bot:ops", "kind": "answer",
-                              "in_reply_to": ask}, 1, body=lambda i: "yes")
+              kind=lambda i: "say", body=lambda i: f"reply {i}")
         newest = [r["id"] for r in c.execute("SELECT id FROM messages WHERE recipient_id='human:ana' AND read_at IS NULL "
                                              "AND deleted_at IS NULL ORDER BY created_at DESC, rowid DESC")][:INBOX_LIMIT]
     inbox = api.get("/api/v2/messages?unread=1", headers=headers()).json()
     assert [m["id"] for m in inbox["messages"]] == newest[::-1] and inbox["more_messages"] is True
-    answered = {m["id"]: m["answered_at"] for m in inbox["messages"]}
-    assert answered[ask] and all(at is None for mid, at in answered.items() if mid != ask)
+    assert all(m["answered_at"] is None for m in inbox["messages"])
 
 
 def test_a_persons_inbox_leaves_out_threads_they_cannot_read(api):

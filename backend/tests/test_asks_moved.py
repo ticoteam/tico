@@ -60,7 +60,7 @@ def test_each_kind_of_open_ask_moves_once_and_answered_ones_stay_history(api):
         [q] = fields["questions"]
         assert q["question"] == "Launch Tuesday or Thursday?" and [o["label"] for o in q["options"]] == ["Tuesday", "Thursday"]
         assert fields["if_no_answer"]["do"] == "Launch Tuesday"
-        assert QT.waiting_on(c, H.task(c, launch["id"])) == "human:ana"
+        assert sub["id"] in TR.blocker_ids(c, launch["id"])          # its answer opens the task again
         # On a task with Ana's card already: it joins that card, no second one.
         assert TR.child_ids(c, domain["id"]) == [card["id"]]
         assert "new registrar" in " ".join(m["body"] for m in H.task_comments(c, card["id"]))
@@ -102,6 +102,8 @@ def test_a_private_tasks_ask_becomes_a_question_task_only_its_people_read(api):
         UP(c)
     store.initialize(seed_market=False)
     with store.read() as c:
+        why = c.execute("SELECT action, detail FROM events WHERE action LIKE 'ask.%'").fetchall()
+        assert TR.child_ids(c, secret["id"]), [tuple(r) for r in why]
         [card_id] = TR.child_ids(c, secret["id"])
         card = H.task(c, card_id)
         assert card["owner_id"] == "human:ben" and H.task_private(c, card)

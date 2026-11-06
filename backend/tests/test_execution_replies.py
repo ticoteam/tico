@@ -34,7 +34,7 @@ def test_equal_answers_to_distinct_inputs_are_delivered_once(api, kind):
         with api.app.state.store.read() as c:
             second = H.message(c, c.execute("SELECT message_id FROM jobs WHERE state='queued' AND bot_id='ops'").fetchone()[0])
     else:
-        second = post(api, "messages", {"to": "ops", "kind": "ask" if kind == "ask" else "say",
+        second = post(api, "messages", {"to": "ops", "kind": "say",
                       "text": "Check the second folder", "conversation_id": first["conversation_id"]})
     attempt = claim(api, runner)
     start(api, runner, attempt)

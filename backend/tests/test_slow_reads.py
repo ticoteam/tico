@@ -114,10 +114,5 @@ def test_covering_indexes_return_the_same_rows(tmp_path):
         plan = " ".join(row[3] for row in conn.execute(
             "EXPLAIN QUERY PLAN SELECT id,task_id FROM conversations INDEXED BY conversations_id_task"))
         assert "conversations_id_task" in plan
-        asked = " ".join(row[3] for row in conn.execute(
-            "EXPLAIN QUERY PLAN SELECT t.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            "JOIN tasks t ON t.conversation_id=m.conversation_id "
-            "WHERE m.kind='ask' AND m.recipient_id='human:ana' AND m.answered_by_id IS NULL"))
-        assert "messages_open_ask" in asked
     finally:
         conn.close()

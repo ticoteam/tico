@@ -8,37 +8,6 @@ from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend.tests.test_file_reviews import ask as review_ask, answer as review_answer
 from backend.tests.test_page_audience import edit
 from backend.tests.test_page_audience_review4 import public_page
-from backend.tests.test_task_review import ask
-
-
-def test_multi_recommendation_fallback_keeps_its_copied_source(api):
-    tid, _, fid = public_page(api)
-    question = ask("cara")
-    question["questions"][0]["multi"] = True
-    question["questions"][0]["options"][0].update(label="Confidential draft", file=fid + "@1", recommended=True)
-    question["if_no_answer"] = {"do": "Confidential draft", "kind": "reversible"}
-    sibling = post(api, f"tasks/{tid}/files", {"name": "recommendation.txt", "text": "Public notes", "ask": question},
-                   token="ops-test")
-    with api.app.state.store.read() as c:
-        asked = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (sibling["file_id"],)).fetchone()[0]
-    batch = post(api, "batch", {}, token="cara-test")
-    assert batch["item"]["recommend"] == "Confidential draft"
-    post(api, "needs-you/recommended", {"ask": asked}, token="cara-test")
-    with api.app.state.store.read() as c:
-        message = H.message(c, c.execute("SELECT id FROM messages WHERE in_reply_to=?", (asked,)).fetchone()[0])
-        assert "Confidential draft" in message["body"]
-        assert message["refs"]["body_sources"] == [{"file": fid, "version": 1}]
-    edit(api, fid, {"people": ["ben"]})
-    for deleted in (False, True):
-        if deleted:
-            assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
-        for token in ("cara-test", "finance-test"):
-            paths = [f"tasks/{tid}", f"tasks/{tid}/comments", f"tasks/{tid}/answers", "inbox"]
-            if token == "cara-test":
-                paths.append("batch")
-            for path in paths:
-                shown = json.dumps(get(api, path, token=token))
-                assert "Confidential draft" not in shown and fid not in shown, (path, shown)
 
 
 def test_spend_pick_history_events_and_notice_keep_the_label_source(api):
@@ -91,51 +60,3 @@ def test_held_review_pick_text_keeps_its_page_source(api):
             assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
         shown = json.dumps(get(api, "rule-holds/" + held, token="cara-test"))
         assert "Confidential draft" not in shown and fid not in shown, shown
-
-
-def test_a_generated_pick_answer_forwarded_to_a_merged_ask_keeps_its_sources(api):
-    from backend import ask_ingest
-    from backend.tests.test_ask_ingest import FakeModel
-    tid, _, fid = public_page(api)
-    api.app.state.judge = model = FakeModel(recommends=0.95)
-    with api.app.state.store.transaction() as c:
-        ask_ingest.save(c, "human:cara", "human:cara", {"mode": "on", "budget": 10, "chores_budget": 5,
-                                                      "criteria": ask_ingest.DEFAULTS["criteria"]})
-    question = ask("cara")
-    question["questions"][0]["options"][0].update(label="Confidential draft", file=fid + "@1")
-    asked = post(api, f"tasks/{tid}/comments", {"text": "Choose the draft", "ask": question}, token="ops-test")["comment"]
-    model.covered = "Review drafts"
-    made = post(api, "tasks", {"owner": "cara", "title": "Choose another draft", "body": "Which draft should ship?",
-                               "private": False}, token="ops-test")
-    second = made.get("task") or made
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT merged_into FROM ask_ingest_items WHERE ref=?", (second["id"],)).fetchone()[0] == tid
-    post(api, f"tasks/{tid}/answers", {"target": {"comment": asked["id"]},
-                                      "answers": {"verdict": ["Confidential draft"]}}, token="cara-test")
-    with api.app.state.store.read() as c:
-        forwarded = [m for m in H.task_comments(c, second["id"]) if "Confidential draft" in m["body"]]
-        assert len(forwarded) == 1 and forwarded[0]["refs"]["body_sources"] == [{"file": fid, "version": 1}]
-    edit(api, fid, {"people": ["ben"]})
-    for deleted in (False, True):
-        if deleted:
-            assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
-        for token in ("cara-test", "finance-test"):
-            shown = json.dumps(get(api, "tasks/" + second["id"] + "/comments", token=token))
-            assert "Confidential draft" not in shown and fid not in shown, shown
-
-
-def test_quoted_pick_labels_keep_sources_in_the_answer_and_its_body(api):
-    tid, _, fid = public_page(api)
-    question = ask("cara")
-    question["questions"][0]["options"][0].update(label="Confidential draft", file=fid + "@1")
-    asked = post(api, f"tasks/{tid}/comments", {"text": "Choose the draft", "ask": question}, token="ops-test")["comment"]
-    quoted = post(api, f"tasks/{tid}/comments/{asked['id']}/resolve", {"quote": "Confidential draft"}, token="ops-test")
-    assert quoted["comment"]["refs"]["answer"]["body_sources"] == [{"file": fid, "version": 1}]
-    edit(api, fid, {"people": ["ben"]})
-    for deleted in (False, True):
-        if deleted:
-            assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
-        for token in ("cara-test", "finance-test"):
-            for suffix in ("", "/comments", "/answers"):
-                shown = json.dumps(get(api, "tasks/" + tid + suffix, token=token))
-                assert "Confidential draft" not in shown and fid not in shown, shown

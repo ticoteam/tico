@@ -352,26 +352,6 @@ def test_a_reopened_question_task_asks_again(api):
     assert get(api, f"tasks/{card['id']}")["task"]["answer"]["answers"] == {"decision": ["No"]}
 
 
-def test_an_old_ask_on_the_same_topic_gives_way_to_the_question_task(api):
-    _, _, attempt = setup_attempt(api)
-    asked = {"questions": [{"id": "decision", "header": "", "question": "Give Builder a backup model?", "why": "",
-                            "options": [{"label": "Yes"}, {"label": "No"}], "multi": False}],
-             "topic": "backup-model", "task_question": True}
-    with api.app.state.store.transaction() as c:
-        old = H.task_create(c, "human:ana", "Give Builder a backup model?", "Builder has none.", "bot:ops",
-                            lint=False)
-        said = H.task_comment(c, "bot:ops", old["id"], "Give Builder a backup model?", ask=asked)
-        H.task_update(c, "bot:ops", old["id"], status="waiting", waiting_on="human:ana", note="Asked Ana")
-    assert [i for i in get(api, "needs-you")["items"] if i["id"] == old["id"]]
-    card = _ask(api, attempt["token"], "Give Builder and Analyst a backup model?", topic="Backup model")["task"]
-    with api.app.state.store.read() as c:
-        gone = H.task(c, old["id"])
-        assert gone["status"] == "closed" and card["id"] in gone["note"]
-        assert c.execute("SELECT superseded_at FROM messages WHERE id=?", (said["id"],)).fetchone()[0]
-    items = [i for i in get(api, "needs-you")["items"] if i["id"] in (old["id"], card["id"])]
-    assert [i["id"] for i in items] == [card["id"]]
-
-
 def test_the_open_questions_index_reads_the_open_predicate(api):
     from backend import question_tasks
     sql = _read(api, "SELECT sql FROM sqlite_master WHERE name='tasks_open_questions'")[0][0]

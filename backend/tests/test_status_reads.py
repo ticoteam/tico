@@ -1,5 +1,5 @@
 """The status page reads each table once for every bot, and says exactly what each bot's own status line says."""
-from backend import task_privacy as privacy, usage_limits
+from backend import question_tasks as QT, task_privacy as privacy, usage_limits
 from backend.events import prime_status_lines, status_line
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, post, ready  # noqa: F401
@@ -116,7 +116,7 @@ def busy(api, machine, first, count, live=1):
                 task = H.task_create(c, "human:ana", f"Work {slug} {k}", "Do it.", "bot:" + slug, private=k == 3)
                 first_task = first_task or task["id"]
                 if k in (1, 2):
-                    H.task_ask(c, "bot:" + slug, task["id"], "Which one?")
+                    QT.ask_plain(c, "bot:" + slug, "human:ana", "Which one?", parent=task)
             H.task_create(c, "bot:" + slug, f"Need {slug}", "Please look.", "human:ben", private=bool(n % 2))
             H.status_set(c, "bot:" + slug, slug, state="crashed" if n % 3 == 2 else "idle", focus="Working",
                          task_id=first_task)

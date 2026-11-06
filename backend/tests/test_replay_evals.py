@@ -184,8 +184,8 @@ class Server:
 
 
 def test_replay_answers_the_bots_questions_the_way_the_server_asks_them(api):
-    """On the real server: a question on the task leaves it waiting on nobody, and a question card is owned by the
-    bot that asked. The simulated person answers both, and the server counts both as answered."""
+    """On the real server: a question is a question task the person owns. The simulated person answers it, and the
+    server counts it as answered."""
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -195,21 +195,14 @@ def test_replay_answers_the_bots_questions_the_way_the_server_asks_them(api):
     attempt = claim(api, machine, "ops")
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, machine["token"])
 
-    post(api, f"tasks/{tid}/ask", {"text": "Which repository?"}, token=attempt["token"])
-    now = live.outcome(server, "ana-test", tid, "ops")
-    assert now["status"] == "waiting" and not now["waiting_on"] and len(now["open_questions"]) == 1
-    assert live.answer(server, "ana-test", "human:ana", tid, now, "The main one.")
-    assert live.outcome(server, "ana-test", tid, "ops")["open_questions"] == []
-    assert api.get(f"/api/v2/tasks/{tid}", headers=headers()).json()["task"]["open_asks"] == 0
-
     card = api.post("/api/v2/task-questions", headers=headers(attempt["token"]), json={
         "question": "Which week?", "on": "ana", "parent": tid, "options": [{"label": "This week", "then": "Go with This week"}, {"label": "Last week", "then": "Go with Last week"}]})
     assert card.status_code == 200, card.text
     assert card.json()["task"]["owner_id"] == "human:ana"         # a question task: the person owns it
     now = live.outcome(server, "ana-test", tid, "ops")
-    assert [q["task"] for q in now["open_questions"]] == [card.json()["task"]["id"]] and now["person_steps"] == 2
+    assert [q["task"] for q in now["open_questions"]] == [card.json()["task"]["id"]] and now["person_steps"] == 1
     assert live.answer(server, "ana-test", "human:ana", tid, now, "this week")
     after = live.outcome(server, "ana-test", tid, "ops")
-    assert after["open_questions"] == [] and after["person_steps"] == 2
+    assert after["open_questions"] == [] and after["person_steps"] == 1
     answered = api.get(f"/api/v2/tasks/{card.json()['task']['id']}/answers", headers=headers()).json()["answers"]
     assert answered and "This week" in str(answered)

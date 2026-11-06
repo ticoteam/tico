@@ -15,7 +15,6 @@ from backend.tests.test_events import live  # noqa: F401
 from backend.tests.test_org_rules import org
 from backend.tests.test_page_audience import edit, promoted
 from backend.tests.test_pages import HTML, page
-from backend.tests.test_task_review import ask
 
 
 def test_deletion_retains_denials_for_counsel_copies_and_citations(api):
@@ -80,20 +79,17 @@ def test_same_name_outsider_upload_creates_separate_file(api):
         assert dict(c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()) == original
 
 
-def test_asks_raw_task_attachments_and_blob_history_are_scrubbed_after_narrowing(api):
+def test_raw_task_attachments_and_blob_history_are_scrubbed_after_narrowing(api):
     _, attempt = turn(api)
     tid = post(api, "tasks", {"owner": "ops", "title": "Shared review", "body": "Review", "private": False})["id"]
     fid = page(api, attempt, task=tid, title="Audience secret").json()["page"]["file_id"]
-    question_ask = ask("cara")
-    question_ask["questions"][0]["options"][0]["file"] = fid + "@1"
-    question = post(api, f"tasks/{tid}/comments", {"text": "Review", "ask": question_ask, "attachments": [fid + "@1"]})["comment"]
+    question = post(api, f"tasks/{tid}/comments", {"text": "Review", "attachments": [fid + "@1"]})["comment"]
     with api.app.state.store.transaction() as c:
         version = c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()
         blob = dict(c.execute("SELECT * FROM blobs WHERE id=?", (version["blob_id"],)).fetchone())
         c.execute("INSERT OR IGNORE INTO task_assets VALUES(?,?)", (tid, blob["id"]))
         from backend.task_review import file_added
         file_added(c, Identity("bot:ops", "bot"), tid, blob, 1)
-    assert fid in json.dumps(get(api, "tasks/" + tid, token="cara-test")["task"]["ask"])
     edit(api, fid, {"people": ["ben"]})
     for path in ("tasks/" + tid, "tasks", "tasks/" + tid + "/comments", "messages/" + question["id"]):
         result = get(api, path, token="cara-test")
@@ -156,13 +152,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     assert made.status_code == 200, made.text
     fid = made.json()["page"]["file_id"]
     ordinary = page(api, attempt, task=tid, name="ordinary.html", title="Ordinary folio", data=HTML).json()["page"]["file_id"]
-    question = ask("reader")
-    question["questions"][0]["options"][0]["file"] = fid + "@1"
-    comment = post(api, f"tasks/{tid}/comments", {"text": "Review the folio", "attachments": [fid + "@1"], "ask": question}, token="cara-test")["comment"]
-    patched = api.patch(f"/api/v2/files/{fid}/versions/1", json={"note": "Review", "ask": ask("reader")}, headers=headers(attempt["token"]))
-    assert patched.status_code == 200, patched.text
-    answered = post(api, f"tasks/{tid}/answers", {"target": {"file": fid, "version": 1}, "answers": {"verdict": ["Approve"]}}, token="reader-test")
-    # Keep a separate unanswered ask and its file review: task summaries must scrub its raw refs too.
+    comment = post(api, f"tasks/{tid}/comments", {"text": "Review the folio", "attachments": [fid + "@1"]}, token="cara-test")["comment"]
     assistant = post(api, "assistant/messages", {"text": "Review folio", "page": {"path": "#/page/" + fid, "title": title}}, token="cara-test")["message"]
     assistant_room = room(api, "cara-test")["room_id"]
     post(api, "pins", {"place": "dashboard", "item": "page:" + fid})
@@ -188,23 +178,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     with api.app.state.store.read() as c:
         spend_notice = H.message(c, c.execute("SELECT id FROM messages WHERE json_extract(refs,'$.approval')=? "
                                              "AND sender_id=?", (approval_id, H.KEEPER)).fetchone()[0])
-    sibling_ask = ask("reader")
-    sibling_ask["questions"][0]["options"][0].update(label=title, file=fid + "@1")
-    sibling = post(api, f"tasks/{tid}/files", {"name": "public-notes.txt", "text": "Public notes", "ask": sibling_ask})
-    post(api, f"tasks/{tid}/answers", {"target": {"file": sibling["file_id"], "version": 1},
-         "answers": {"verdict": [title]}}, token="reader-test")
-    post(api, f"tasks/{tid}/files", {"name": "other-notes.txt", "text": "Other notes", "ask": sibling_ask})
-    recipient_ask = {**sibling_ask, "who": "cara", "if_no_answer": {"do": title, "kind": "reversible"}}
-    post(api, f"tasks/{tid}/files", {"name": "recipient-notes.txt", "text": "Public notes", "ask": recipient_ask}, token="ops-test")
-    recommendation_ask = {**recipient_ask, "questions": [{**recipient_ask["questions"][0], "multi": True,
-                           "options": [{**o, "recommended": True} for o in recipient_ask["questions"][0]["options"]]}]}
-    recommended = post(api, f"tasks/{tid}/files", {"name": "recommendation-notes.txt", "text": "Public notes",
-                       "ask": recommendation_ask}, token="ops-test")
-    with api.app.state.store.read() as c:
-        recommended_id = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?",
-                                   (recommended["file_id"],)).fetchone()[0]
-    post(api, "needs-you/recommended", {"ask": recommended_id}, token="cara-test")
-    assert title in json.dumps(get(api, f"tasks/{tid}/comments", token="cara-test"))
+    assert fid in json.dumps(get(api, f"tasks/{tid}/comments", token="cara-test"))
     holds = held_answers(api, tid, fid, picked_label)
     # Version uploads and blob archives use the same production writers as the task's Files panel.
     uploaded = post(api, f"tasks/{tid}/files", {"name": name, "text": document.decode() + "<p>Revised</p>"})
@@ -275,13 +249,13 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
               "approvals/" + approval_id, "messages/" + spend_notice["id"],
               "conversations/" + spend_notice["conversation_id"] + "/messages",
               "tasks/" + tid + "/links", "places/dashboard", "places/task:" + tid, "places/person:cara",
-              "messages/" + comment["id"], "messages/" + answered["comment"]["id"], "messages/" + assistant["id"],
+              "messages/" + comment["id"], "messages/" + assistant["id"],
               "conversations", "conversations/" + cid + "/messages", "conversations/" + cid + "/outline",
               "threads", "threads/search?q=Review", "threads/search?q=Canary", "context/search?q=Canary",
               "rule-holds", *("rule-holds/" + hid for hid in holds),
               "threads/" + cid, "threads/" + cid + "/timeline", "threads/" + cid + "/members",
               "rules?status=any", "rules/" + rid, "rules/counts", "bots/ops/rules", "bots/finance/rules", "audit",
-              "needs-you", "needs-you/summary", "updates", "updates/unread", "updates/tree", "inbox", "answers?ids=" + comment["id"], "status", "live/brief",
+              "needs-you", "needs-you/summary", "updates", "updates/unread", "updates/tree", "inbox", "status", "live/brief",
               "bots/ops/history", "bots/finance/history", "bots/ops/turns", "bots/finance/turns",
               "threads/catch-up", "threads/rail", "threads/browse", "threads/home/bot:finance"]
     for ident in (fid, bid):

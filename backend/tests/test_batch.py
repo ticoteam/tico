@@ -4,14 +4,15 @@ the assistant's per-item report opening the next batch. backend/batch.py."""
 import json
 
 from backend import hubdb as H
+from backend import question_tasks as QT
 from backend.tests.test_api import api, get, post, setup_attempt, legacy_send_approval  # noqa: F401
 
 
-def ask_ana(api, bot, text, title="Pick the outbound tool", token=None):
-    """A bot that owns a task Ana filed asks him its one question."""
-    task = post(api, "tasks", {"title": title, "body": "Decide", "owner": bot})
-    token = token or setup_attempt(api, bot)[2]["token"]
-    return post(api, f"tasks/{task['id']}/ask", {"text": text}, token=token)
+def ask_ana(api, bot, text, title="Pick the outbound tool", token=None, parent=None):
+    """A bot that owns a task Ana filed asks her its one question: a question task under it (or alone)."""
+    task = parent or post(api, "tasks", {"title": title, "body": "Decide", "owner": bot})["id"]
+    with api.app.state.store.transaction() as c:
+        return QT.ask_plain(c, H.bot_actor(H.resolve_bot(c, bot)["id"]), "human:ana", text, parent=H.task(c, task))
 
 
 def approval_for_ana(api, bot="finance", kind="spend", payload=None, task=None, token=None):
@@ -29,7 +30,7 @@ def test_responses_are_recorded_not_applied_and_commit_applies_them_with_the_per
     # Both decisive items trace back to Ana, so the approval leads on its kind.
     ads = post(api, "tasks", {"title": "Run the LinkedIn ads", "body": "Q4", "owner": "bot:finance"})
     approval = approval_for_ana(api, token=finance["token"], task=ads["id"])
-    ask = ask_ana(api, "finance", "Close or Apollo?", token=finance["token"])
+    ask = ask_ana(api, "finance", "Close or Apollo?", parent=ads["id"])
     chore = post(api, "tasks", {"title": "Sign the lease", "body": "Ready", "owner": "human:ana"},
                  token=finance["token"])
     junk = post(api, "tasks", {"title": "Drop the old draft to Yair", "body": "Obsolete", "owner": "human:ana"},
@@ -72,10 +73,11 @@ def test_responses_are_recorded_not_applied_and_commit_applies_them_with_the_per
     assert get(api, f"tasks/{chore['id']}")["task"]["status"] == "done"
     assert get(api, f"tasks/{junk['id']}")["task"]["status"] == "closed"
     with api.app.state.store.read() as c:
-        reply = c.execute("SELECT body,sender_id FROM messages WHERE in_reply_to=?", (ask["id"],)).fetchone()
         coo = c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:coo' OR sender_id='bot:coo'").fetchone()[0]
         event = c.execute("SELECT detail FROM events WHERE action='batch.committed'").fetchone()
-    assert reply["body"] == "Close. Keep the trial seats." and reply["sender_id"] == "human:ana"
+    answered = get(api, f"tasks/{ask['id']}")["task"]
+    assert answered["status"] == "done" and answered["answer"]["text"] == "Close. Keep the trial seats."
+    assert answered["answer"]["by"] == "human:ana"
     assert coo == 0, "nothing is written to the assistant's room"
     assert "Rule for finance: Always archive postcard complaints." in json.loads(event["detail"])["applied"]
     assert get(api, "batch")["batch"] is None

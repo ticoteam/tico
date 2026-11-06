@@ -327,13 +327,13 @@ def test_a_quiet_sweep_writes_no_run_record(api):
 
 def test_every_check_reads_through_an_index_not_a_scan_of_a_big_table(api):
     """EXPLAIN QUERY PLAN for each statement the checks run: no full scan of a table that grows with use. A scan of
-    messages_open_ask_to is allowed: it is a partial index holding only the open questions. The refusal log is read
+    tasks_open_questions is allowed: it is a partial index holding only the open question tasks. The refusal log is read
     only through refusals_actor_ts, one bot at a time."""
     store = api.app.state.store
     ctx = I.Ctx(now=stamp(NOW), at=NOW)
     big = {"attempts", "tasks", "messages", "jobs", "approvals", "refusals", "automations", "webhook_sends",
            "conversations", "flight_events", "flight_requests", "flight_process"}
-    bounded = {"messages_open_ask_to"}
+    bounded = {"tasks_open_questions"}
     statements = []
     with store.read() as c:
         c.set_trace_callback(lambda sql: statements.append(sql) if sql.lstrip().upper().startswith("SELECT") else None)

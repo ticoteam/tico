@@ -130,7 +130,6 @@ def test_home_builds_thread_attention_once_for_both_cards_and_rechecks_on_the_ne
     from backend.tests.test_thread_attention import members_thread, say
     tid = members_thread(api)
     mention = say(api, tid, "@ana please check.")
-    ask = say(api, tid, "Which lease?", kind="ask", to_actor="human:ana")
     calls, addressed = [], thread_attention._addressed
 
     def counted(c, me):
@@ -140,8 +139,8 @@ def test_home_builds_thread_attention_once_for_both_cards_and_rechecks_on_the_ne
     monkeypatch.setattr(thread_attention, "_addressed", counted)
     cards = {p["card"]["template"]: p["card"]["data"] for p in place(api, "person:me")["pins"]}
     assert calls == ["human:ana"]
-    # Needs you keeps the loose ask once, while the sidebar's separate projection still sees the thread.
-    assert {it["id"] for it in cards["needs_attention"]["items"]} == {mention["id"], ask["id"]}
+    # Needs you keeps the mention once, while the sidebar's separate projection still sees the thread.
+    assert {it["id"] for it in cards["needs_attention"]["items"]} == {mention["id"]}
     assert [it["id"] for it in cards["unread_threads"]["threads"]] == [tid]
     reply = say(api, tid, "Checked.", actor="human:ana")
     calls.clear()

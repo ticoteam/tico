@@ -291,7 +291,7 @@ def test_full_queue_withholds_only_the_automatic_answer_and_the_run_completes(ap
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
     with api.app.state.store.transaction() as c:
-        asked = H.say(c, 'bot:finance', 'bot:ops', 'Fixture question', kind='ask')
+        asked = H.say(c, 'bot:finance', 'bot:ops', 'Fixture question', refs={'needs_action': True})
     work = claim(api, machine, 'ops')
     post(api, f"attempts/{work['id']}/started", {'thread_id': 'fixture-thread'}, machine['token'])
     hold(api)

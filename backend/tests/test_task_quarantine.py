@@ -111,10 +111,10 @@ def _external_message_mutations_check_the_stored_message_and_native_task(api, ex
     token, task, other = external_work
     messages = []
     for row in (task, other):
-        sender, target = ("human:ana", task["owner_id"]) if mutation in ("ack", "answer") else (task["owner_id"], "human:ana")
+        sender, target = ("human:ana", task["owner_id"]) if mutation == "ack" else (task["owner_id"], "human:ana")
         with api.app.state.store.transaction() as c:
-            messages.append(H.say(c, sender, target, "Which format?" if mutation == "answer" else "Checking the report.",
-                                  conversation_id=row["conversation_id"], kind="ask" if mutation == "answer" else "say",
+            messages.append(H.say(c, sender, target, "Checking the report.",
+                                  conversation_id=row["conversation_id"], kind="say",
                                   refs={"task": other["id"]}))
         if mutation == "unreact":
             assert api.put(f"/api/v2/messages/{messages[-1]['id']}/reactions/check", headers=headers(token)).status_code == 200
@@ -122,9 +122,8 @@ def _external_message_mutations_check_the_stored_message_and_native_task(api, ex
 
     def write(msg):
         path, body, method = f"/api/v2/messages/{msg['id']}", {}, "post"
-        if mutation in ("ack", "answer"):
+        if mutation == "ack":
             path += "/" + mutation
-            body = {"text": "Markdown."} if mutation == "answer" else {}
         elif mutation in ("react", "unreact"):
             path += "/reactions/check"
             method = "put" if mutation == "react" else "delete"
@@ -250,35 +249,6 @@ def test_external_direct_file_reviews_check_both_the_review_task_and_the_files_s
     post(api, "file-reviews", {"task": other["id"], "file": files[1]["id"], "verdict": "approve"}, token)
     post(api, "bots/scout/quarantine/clear", {})
     post(api, "file-reviews", {"task": other["id"], "file": files[0]["id"], "verdict": "approve"}, token)
-
-
-def test_external_structured_review_answers_check_the_files_stored_task(api, external_work):
-    from backend.tests.test_agents import credential, hermes_bot
-    from backend.tests.test_task_review import ask
-
-    token, task, other = external_work
-    hermes_bot(api, slug="publisher")
-    publisher = credential(api, "publisher")["token"]
-    questions = []
-    for row in (task, other):
-        file = post(api, "files/uploads", {"task": row["id"], "name": "report.txt", "text": "Checked."}, publisher)["file"]
-        question = post(api, f"tasks/{other['id']}/comments", {"text": "Review this version.", "ask": ask("scout")})["comment"]
-        with api.app.state.store.transaction() as c:
-            version = c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (file["id"],)).fetchone()
-            refs = {**H.message(c, question["id"])["refs"], "review": {"files": [
-                {"file": file["id"], "version": version["version"], "digest": version["digest"]}]}}
-            c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump(refs), question["id"]))
-        questions.append(question)
-    hold_external(api, task)
-    body = lambda question: {"target": {"comment": question["id"]}, "answers": {"verdict": ["Approve"]}}
-    assert post(api, f"tasks/{other['id']}/answers", body(questions[0]), token,
-                expected=403)["error"]["code"] == "quarantined"
-    with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM bot_file_activity WHERE action='reviewed'").fetchone()
-        assert H.review_answers(c, questions[0]["id"], actor=task["owner_id"]) == []
-    post(api, f"tasks/{other['id']}/answers", body(questions[1]), token)
-    post(api, "bots/scout/quarantine/clear", {})
-    post(api, f"tasks/{other['id']}/answers", body(questions[0]), token)
 
 
 @pytest.mark.parametrize("mutation", ["edit", "replace"])
@@ -416,27 +386,15 @@ def test_external_rule_hold_mutations_check_the_stored_review_task(api, external
     post(api, f"rule-holds/{ids[0]}/{mutation}", body, token)
 
 
-@pytest.mark.parametrize("mutation", ["moderate", "file_ask"])
-def test_external_comment_and_file_question_changes_check_the_stored_native_thread(api, external_work, mutation):
-    from backend.tests.test_task_review import ask
-
+def test_external_comment_changes_check_the_stored_native_thread(api, external_work):
     token, task, other = external_work
     # Older tasks can share a room; the message's refs and the room's native task must both be checked.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (task["conversation_id"], other["id"]))
-    if mutation == "moderate":
-        msg = post(api, f"tasks/{other['id']}/comments", {"text": "Review this report."})["comment"]
-        with api.app.state.store.transaction() as c:
-            c.execute("UPDATE messages SET public=1 WHERE id=?", (msg["id"],))
-        path, body, method = f"tasks/{other['id']}/comments/{msg['id']}/moderate", {"action": "hide"}, "post"
-    else:
-        file = post(api, f"tasks/{other['id']}/files", {"name": "report.txt", "text": "Checked.", "ask": ask("ana")}, token)
-        with api.app.state.store.read() as c:
-            ident = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (file["file_id"],)).fetchone()[0]
-            msg = H.message(c, ident)
-        updated = ask("ana")
-        updated["questions"][0]["question"] = "Is the report ready?"
-        path, body, method = f"files/{file['file_id']}/versions/1", {"ask": updated}, "patch"
+    msg = post(api, f"tasks/{other['id']}/comments", {"text": "Review this report."})["comment"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET public=1 WHERE id=?", (msg["id"],))
+    path, body, method = f"tasks/{other['id']}/comments/{msg['id']}/moderate", {"action": "hide"}, "post"
     hold_external(api, task)
     with api.app.state.store.read() as c:
         before = dict(c.execute("SELECT * FROM messages WHERE id=?", (msg["id"],)).fetchone())
@@ -930,7 +888,6 @@ def test_a_bad_release_preserves_other_cooldowns_and_the_rest_of_the_scheduler_t
 
 def _task_mutation(api, token, mutation, n):
     from backend import task_quarantine as Q
-    from backend.tests.test_task_review import ask
 
     tasks = [new_task(api, f"{title} {n}", owner="scout") for title in ("Check the export", "Check the archive", "Check the summary")]
     other = tasks[2]
@@ -965,14 +922,6 @@ def _task_mutation(api, token, mutation, n):
             comment = post(api, f"tasks/{tid}/comments", {"text": "Checking the report."}, token)["comment"]
             suffix = "comments/" + comment["id"] + ("/delete" if mutation == "delete_comment" else "")
             body = {} if mutation == "delete_comment" else {"text": "Checked the report."}
-        elif mutation == "resolve":
-            comment = post(api, f"tasks/{tid}/ask", {"text": "Which report should I check?"}, token)
-            suffix = "comments/" + comment["id"] + "/resolve"
-        elif mutation == "answers":
-            comment = post(api, f"tasks/{tid}/comments", {"text": "Is the report ready?", "ask": ask("scout")})["comment"]
-            body = {"target": {"comment": comment["id"]}, "answers": {"verdict": ["Approve"]}}
-        elif mutation == "ask":
-            body = {"text": "Which report should I check?"}
         elif mutation == "update":
             suffix = ""
             body = {"version": get(api, "tasks/" + tid)["task"]["version"], "status": "doing"}
@@ -1076,7 +1025,7 @@ def _every(api, external_work, mutations, case):
 
 def test_external_message_mutations_check_the_stored_message_and_native_task(api, external_work):
     """Every message mutations route is fenced for a held task, one fresh task and hold per route."""
-    _every(api, external_work, ["ack", "answer", "edit", "delete", "react", "unreact"], _external_message_mutations_check_the_stored_message_and_native_task)
+    _every(api, external_work, ["ack", "edit", "delete", "react", "unreact"], _external_message_mutations_check_the_stored_message_and_native_task)
 
 
 def test_external_thread_mutations_check_the_stored_thread_task(api, external_work):
@@ -1097,7 +1046,7 @@ def test_external_task_mutations_fence_the_explicit_task_and_allow_an_unheld_tas
     token = credential(api)["token"]
     for n, mutation in enumerate(["snooze", "unsnooze", "check-back", "later", "defer", "relations",
                                   "reverse_relation", "wait_task", "wait_pr", "links", "unlink", "files",
-                                  "edit", "delete_comment", "resolve", "answers", "ask", "update"]):
+                                  "edit", "delete_comment", "update"]):
         _named(mutation, _task_mutation, api, token, mutation, n)
 
 

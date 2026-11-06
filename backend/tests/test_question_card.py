@@ -60,25 +60,6 @@ def test_a_pick_question_without_its_picks_or_what_happens_or_with_ids_is_refuse
     assert q["options"] == [{"description": "", **o} for o in PICKS]
 
 
-def test_a_comment_question_from_a_bot_to_a_person_keeps_the_rules_and_a_person_s_does_not(api):
-    _, _, attempt = setup_attempt(api)
-    task = post(api, "tasks", {"owner": "bot:ops", "title": "Pick the logo", "body": "x"})
-    ask = {"questions": [{"id": "q", "header": "", "question": "Which logo?", "options": [{"label": "Blue"}, {"label": "Red"}]}],
-           "who": "ana"}
-    r = api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "Which logo?", "ask": ask},
-                 headers=headers(attempt["token"], "c1"))
-    assert 'options "Blue", "Red" have no "what happens" line' in _refused(r)
-    ask["questions"][0]["options"] = [{"label": "Blue", "then": "Goes on the site", "description": "see logos/blue.svg"},
-                                      {"label": "Red", "then": "Goes on the site"}]
-    r = api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "Which logo?", "ask": ask},
-                 headers=headers(attempt["token"], "c2"))
-    assert 'the description of "Blue" has a file path: "logos/blue.svg"' in _refused(r)
-    # A person asking a bot is not a card for a person: no rule to keep.
-    ask["who"] = "bot:ops"
-    assert api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "Which logo?", "ask": ask},
-                    headers=headers()).status_code == 200
-
-
 def test_send_ticked_says_not_this_one_for_each_unticked_pick_and_yes_to_all_says_none(api):
     """Acceptance 12 and 13, as the bot reads the answer."""
     _, _, attempt = setup_attempt(api)
@@ -113,8 +94,7 @@ def test_the_card_says_what_it_holds_up_and_decide_puts_a_building_item_first(ap
         # The archive question was asked yesterday; the Building one an hour ago.
         for tid, hours in ((old["task"]["id"], 30), (building["task"]["id"], 1)):
             at = H.shift(H.now(), seconds=-hours * 3600)
-            c.execute("UPDATE messages SET created_at=? WHERE kind='ask' AND json_extract(refs,'$.task')=?", (at, tid))
-            c.execute("UPDATE tasks SET created_at=? WHERE id=?", (at, tid))
+            c.execute("UPDATE tasks SET created_at=?, asked_at=? WHERE id=?", (at, at, tid))
     items = {i["id"]: i for i in get(api, "needs-you")["items"]}
     card, other = items[building["task"]["id"]], items[old["task"]["id"]]
     assert card["holds_up"] == {"id": item["id"], "title": "Website sales chat build", "kind": "roadmap", "step": "Building",
@@ -161,23 +141,9 @@ def test_times_with_different_offsets_are_compared_by_when_they_are():
     assert [views.decide_tier(x, friday) for x in (inside, after, day)] == [0, 2, 0]
 
 
-def test_a_card_on_the_roadmap_item_itself_does_not_say_it_holds_itself_up_but_keeps_its_place(api):
-    """The header never names the card's own task; Decide's order still counts its step and due date."""
-    _, _, attempt = setup_attempt(api)
+def test_a_roadmap_item_under_a_parent_holds_up_the_parent_dated_by_its_own_due(api):
+    """The header never names the task itself; under a parent, the parent is what it holds up."""
     tomorrow = H.shift(H.now(), hours=24)
-    dated = post(api, "tasks", {"owner": "bot:ops", "title": "Website sales chat build", "body": "Spec.", "due": tomorrow,
-                                "type": "Product roadmap", "step": "Building"})
-    undated = post(api, "tasks", {"owner": "bot:ops", "title": "Pricing page refresh", "body": "Spec.",
-                                  "type": "Product roadmap", "step": "Building"})
-    with api.app.state.store.transaction() as c:
-        for row in (dated, undated):
-            H.task_comment(c, "bot:ops", row["id"], "Ship it with the chat on Friday?", ask={"questions": [
-                {"id": "decision", "header": "", "question": "Ship it with the chat on Friday?",
-                 "options": [{"label": "Yes"}, {"label": "No"}], "multi": False, "other": False}], "who": "human:ana"})
-    items = {i["id"]: i for i in get(api, "needs-you")["items"]}
-    assert [(items[r["id"]]["holds_up"], items[r["id"]]["tier"]) for r in (dated, undated)] == [(None, 0), (None, 1)]
-
-    # Under a parent, the parent is what it holds up, dated by the item's own due.
     parent = post(api, "tasks", {"owner": "bot:ops", "title": "Launch the website", "body": "x"})
     sub = post(api, "tasks", {"owner": "bot:ops", "title": "Website chat for launch", "body": "Spec.",
                               "type": "Product roadmap", "step": "Building", "due": tomorrow,

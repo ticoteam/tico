@@ -253,7 +253,7 @@ def publication_responses(api, token):
     team_task = post(api, "tasks", {"owner": "ops", "title": "Review synthetic team plan",
                                    "body": "Check the synthetic plan.", "private": False})
     writes = {
-        "human": ("messages", {"to": "ana", "kind": "ask", "text": "Synthetic meeting summary?"}),
+        "human": ("messages", {"to": "ana", "kind": "say", "text": "Synthetic meeting summary?"}),
         "bot": ("messages", {"to": "finance", "text": "Review this synthetic meeting summary."}),
         "task": ("tasks", {"owner": "finance", "title": "Review synthetic meeting plan",
                            "body": "Review this synthetic summary.", "private": False}),

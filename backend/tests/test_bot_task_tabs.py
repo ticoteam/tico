@@ -420,7 +420,7 @@ def test_bot_filter_uses_readable_blockers_and_preserves_other_waits(api):
     with api.app.state.store.transaction() as c:
         human = H.task_create(c, "human:ana", "Answer the question", "", "human:ana", lint=False, private=False)
         TR.relate(c, "bot:ops", mixed, human["id"], "blocked_by")
-        H.task_ask(c, "bot:ops", asked, "Is this ready for review?")
+        QT.ask_plain(c, "bot:ops", "human:ana", "Is this ready for review?", parent=H.task(c, asked))
         # The relation existed before its prerequisite became private; Cara must not infer it from the count.
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (pre,))
     save(api, "ops", [{"name": "Bot waits", "conditions": [{"field": "waiting_on", "value": "bot"}]},

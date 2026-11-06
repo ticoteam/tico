@@ -304,17 +304,13 @@ def test_only_its_author_edits_or_deletes_a_comment_signed_in_as_themselves(api)
 
 def test_a_deleted_comment_leaves_the_task_and_never_reaches_the_bot(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Draft the newsletter", "body": "x"})
-    with api.app.state.store.transaction() as c:
-        ask = H.task_ask(c, "bot:ops", task["id"], "Which month?")
     said = post(api, f"tasks/{task['id']}/comments", {"text": "September, and call me first."})["comment"]
     before = get(api, "tasks/" + task["id"])
-    assert before["task"]["ask"] is None, "writing back answered the question"
     gone = post(api, f"tasks/{task['id']}/comments/{said['id']}/delete", {})
     assert gone["comment"]["deleted_at"] and gone["woke"] is False
     after = get(api, "tasks/" + task["id"])
     assert said["id"] not in {m["id"] for m in gone["comments"] + after["comments"] + after["messages"]}
     assert after["task"]["updated_at"] > before["task"]["updated_at"]
-    assert after["task"]["ask"]["id"] == ask["id"], "the question it answered is open again"
     get(api, "messages/" + said["id"], expected=404)
     post(api, f"tasks/{task['id']}/comments/{said['id']}", {"text": "October"}, expected=404)
     with api.app.state.store.read() as c:

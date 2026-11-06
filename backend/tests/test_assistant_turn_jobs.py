@@ -9,6 +9,7 @@ import pytest
 
 from backend import bot_settings as BS
 from backend import hubdb as H
+from backend import question_tasks as QT
 from backend.tests.test_api import api, assign, get, headers, post, runner, setup_attempt  # noqa: F401
 from backend.tests.test_assistant import assistant_turn, say
 from backend.tests.test_automation_access import flow
@@ -110,8 +111,10 @@ def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card
     call(api, turn(api, "No, do not spend it"), "POST", f"approvals/{approval}", {"decision": "declined", "note": ""})
 
     # A turn answers a question the bot asked.
-    asked = call(api, finance, "POST", "messages", {"to": "human:ana", "text": "Close or Apollo?", "kind": "ask"})
-    call(api, turn(api, "Apollo"), "POST", f"messages/{asked['id']}/answer", {"text": "Apollo"})
+    with api.app.state.store.transaction() as c:
+        asked = QT.ask_plain(c, "bot:finance", "human:ana", "Close or Apollo?")
+    call(api, turn(api, "Apollo"), "POST", f"tasks/{asked['id']}/answers",
+         {"target": {"task": asked["id"]}, "answers": {}, "other": "Apollo"})
 
     # A turn sets a direct setting and a confirm setting.
     token = turn(api, "Turn off the stale review and the Apollo rule")
@@ -153,7 +156,7 @@ def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card
     # A turn messages a bot and asks it without waiting.
     token = turn(api, "Tell Ops the invoice is sent")
     call(api, token, "POST", "messages", {"to": "ops", "text": "The invoice is sent.", "kind": "say"})
-    call(api, token, "POST", "messages", {"to": "ops", "text": "Is it paid?", "kind": "ask", "wait_s": 0})
+    call(api, token, "POST", "messages", {"to": "ops", "text": "Is it paid?", "kind": "say", "needs_action": True, "wait_s": 0})
 
 
 def test_a_turn_approves_after_a_read_back_and_a_plain_yes_with_the_setting_on(api):
