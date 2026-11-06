@@ -12,7 +12,17 @@ from backend.finance import tab as FT
 from backend.finance.actions import FinanceError
 from backend.finance.store import banking as SK
 from backend.tests.test_api import api, get, headers  # noqa: F401
-from backend.tests.test_finance_fixtures import open_views, AT, OWNER, account, act, books, finance_template, spend, store  # noqa: F401
+from backend.tests.test_finance_fixtures import (
+    open_views,
+    AT,
+    OWNER,
+    account,
+    act,
+    books,
+    finance_template,
+    spend,
+    store,
+)  # noqa: F401
 from backend.tests.test_finance_tab import _bank
 
 OCT = ("2026-10-01", "2026-10-31")

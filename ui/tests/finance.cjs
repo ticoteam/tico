@@ -888,7 +888,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('[data-fin-defaults]').click();
       await page.locator('dialog.fin-dlg[open]').waitFor();
       await shot(page, 'access-defaults-desktop');
-      assert.deepEqual(await page.locator('dialog.fin-dlg select[name="manager"] option').evaluateAll(o => o.map(x => x.value)), ['team_expenses', 'own_expenses'], tag + ': managers see expenses');
+      assert.deepEqual(await page.locator('dialog.fin-dlg select[name="manager"] option').evaluateAll(o => o.map(x => x.value)), ['none', 'team_expenses', 'own_expenses'], tag + ': managers see what everyone else does, or expenses');
       await page.locator('dialog.fin-dlg select[name="manager_payroll"]').selectOption('hidden');
       await page.locator('dialog.fin-dlg [type=submit]').click();
       await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
