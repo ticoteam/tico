@@ -382,7 +382,9 @@ def _move_on(c, ticket, tag):
     from . import step_flow as F
 
     row = H.task(c, ticket["id"])
-    here = F.step(c, row.get("step_id")) if row else None
+    if row is None:
+        return None
+    here = F.step(c, row.get("step_id"))
     if not here or here["name"].strip().lower() != PENDING:
         return None
     after = next((s for s in F.steps(c, here["type_id"]) if s["position"] > here["position"]), None)
