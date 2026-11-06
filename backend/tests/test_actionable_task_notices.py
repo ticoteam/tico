@@ -99,7 +99,8 @@ def test_actionable_notice_preserves_real_gates(api, gate):
         elif gate == 'snooze':
             set_holds(c, task['id'], snoozed_until=H.shift(H.now(), days=1))
         elif gate == 'person':
-            c.execute("UPDATE tasks SET waiting_on='human:ben' WHERE id=?", (task['id'],))
+            H.task_update(c, 'bot:ops', task['id'], status='waiting', waiting_on='human:ben',
+                          note="Send the report figures? I'll check them after.")
         elif gate == 'blocker':
             other = H.task_create(c, 'human:ana', 'Supply a report', '', 'human:ben', lint=False)
             H.TR.add_blocker(c, 'human:ana', task['id'], other['id'], mover=True)
@@ -145,7 +146,9 @@ def test_health_groups_only_jobs_with_the_same_actual_reason(api, ready):
             c.execute('UPDATE tasks SET resume=? WHERE id=?',
                       (json.dumps({'kind': 'time', 'until': H.shift(H.now(), days=1)}), tasks[0]['id']))
         for task in tasks[1:]:
-            c.execute("UPDATE tasks SET next_run=0,waiting_on='human:ben' WHERE id=?", (task['id'],))
+            c.execute("UPDATE tasks SET next_run=0 WHERE id=?", (task['id'],))
+            H.task_update(c, 'bot:ops', task['id'], status='waiting', waiting_on='human:ben',
+                          note="Send the report figures? I'll check them after.")
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), hours=-3),))
         rows = [r for r in health._waiting(c, {machine['runner_id']}, api.app.state.store.settings)[2] if r['bot'] == 'ops']
         assert len(rows) == 1

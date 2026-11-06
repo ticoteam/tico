@@ -66,7 +66,7 @@ def test_clarify_on_a_waiting_task_wakes_the_bot_but_keeps_the_wait(api):
     _, _, finance = setup_attempt(api, "finance")
     vendor = post(api, "tasks", {"title": "Switch the payroll vendor", "body": "x", "owner": "bot:finance"})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana', note=? WHERE id=?",
+        c.execute("UPDATE tasks SET status='waiting', note=? WHERE id=?",
                   ("Waiting on Ana to pick the vendor.", vendor["id"]))
     ask = _stale_ask(api, vendor["id"], "Should payroll move to Gusto or Rippling?")
     before = get(api, f"tasks/{vendor['id']}")["task"]["updated_at"]
@@ -74,7 +74,7 @@ def test_clarify_on_a_waiting_task_wakes_the_bot_but_keeps_the_wait(api):
     done = post(api, "needs-you/clarify", {"ask": ask["id"]})
     with api.app.state.store.transaction() as c:
         row = H.task(c, vendor["id"])
-        assert row["waiting_on"] == "human:ana" and row["updated_at"] > before
+        assert row["status"] == "waiting" and row["updated_at"] > before
         assert c.execute("SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>?",
                          (vendor["id"], "bot:finance", H.now())).fetchone() is not None
     assert done["task"] == vendor["id"]

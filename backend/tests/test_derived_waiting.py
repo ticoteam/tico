@@ -71,7 +71,7 @@ def test_a_private_parents_waiting_names_its_person_only_where_the_answer_flows_
     r = api.get(f"/api/v2/tasks/{parent['id']}", headers={"Authorization": "Bearer cara-test"})
     assert r.status_code in (403, 404), r.text                 # not a reader: no task, no waiting
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET readers=NULL WHERE id=?", (parent["id"],))
+        H.set_task_readers(c, "bot:cpo", parent["id"], remove=["human:ben"])
     # Ben no longer reads the parent: his question task's words stay off it, and so does his name.
     view = get(api, f"tasks/{parent['id']}", attempt["token"])["task"]
     assert view["status"] == "waiting" and view["waiting_on"] is None

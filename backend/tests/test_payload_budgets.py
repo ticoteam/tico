@@ -7,6 +7,7 @@ import uuid
 
 from backend import events as E
 from backend import hubdb as H
+from backend import reconnects
 from backend import threads as CORE
 from backend.store import encode
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
@@ -29,6 +30,16 @@ def clone(c, table, row, n, **changes):
     c.executemany(f"INSERT INTO {table}({','.join(cols)}) VALUES({','.join('?' * len(cols))})", rows)
 
 
+def waits_on_keys(c, task_ids, person="human:ana"):
+    """Each task waits on `person` to save a key its bot asked for (backend/reconnects.py), one key per task: a bot's
+    wait that is still an item of theirs, now that a wait on a person is their question task (step 6b). A task's
+    status says whether its wait stands: an open one is not in their Needs you."""
+    reconnects.ensure(c)
+    c.executemany("INSERT INTO task_reconnects(task_id,key,bot,owner,service,label,person,fix,created_at) "
+                  "VALUES(?,?,'ops','bot:ops','secret',?,?,'{}',?)",
+                  [(tid, f"secret:ops:{tid}", f"KEY_{n}", person, H.now()) for n, tid in enumerate(task_ids)])
+
+
 def size(value):
     return len(encode(value).encode())
 
@@ -44,7 +55,8 @@ def test_folded_needs_changes_stay_under_the_live_event_budget(api):
         waits = [parent["id"]] + [H.task_create(c, "human:ana", f"Prepare offsite part {i}", "x", "bot:ops",
                                               parent_id=parent["id"])["id"] for i in range(249)]
         H.task_create(c, "bot:ops", "Pick the offsite venue", "x", "human:ana", parent_id=parent["id"])
-        c.executemany("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?", [(tid,) for tid in waits])
+        c.executemany("UPDATE tasks SET status='waiting' WHERE id=?", [(tid,) for tid in waits])
+        waits_on_keys(c, waits)
     folded = sorted(waits)
     assert get(api, "needs-you")["folded_task_ids"] == get(api, "needs-you?limit=1")["folded_task_ids"] == folded
     who = auth.authenticate({"authorization": "Bearer ana-test"})
@@ -69,7 +81,7 @@ def test_folded_needs_changes_stay_under_the_live_event_budget(api):
 
     # A single unfolded wait still leaves a replacement too large for a live event.
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET status='open', waiting_on=NULL WHERE id=?", (waits[-1],))
+        c.execute("UPDATE tasks SET status='open' WHERE id=?", (waits[-1],))
     assert change()["folded_task_ids"] is None
     assert get(api, "needs-you?limit=1")["folded_task_ids"] == sorted(waits[:-1])
 
@@ -79,7 +91,7 @@ def test_folded_needs_changes_stay_under_the_live_event_budget(api):
 
     # The set is sent whole, so an empty one is small enough to send, however many ids left it.
     with store.transaction() as c:
-        c.executemany("UPDATE tasks SET status='open', waiting_on=NULL WHERE id=?", [(tid,) for tid in waits])
+        c.executemany("UPDATE tasks SET status='open' WHERE id=?", [(tid,) for tid in waits])
     assert change()["folded_task_ids"] == []
     assert get(api, "needs-you?limit=1")["folded_task_ids"] == []
 
@@ -87,8 +99,8 @@ def test_folded_needs_changes_stay_under_the_live_event_budget(api):
     # the cap with them uses the whole-read path.
     for n in (E.NEEDS_CHANGES_MAX // 2, E.NEEDS_CHANGES_MAX + 1):
         with store.transaction() as c:
-            c.executemany("UPDATE tasks SET status='open', waiting_on=NULL WHERE id=?", [(tid,) for tid in waits])
-            c.executemany("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?",
+            c.executemany("UPDATE tasks SET status='open' WHERE id=?", [(tid,) for tid in waits])
+            c.executemany("UPDATE tasks SET status='waiting' WHERE id=?",
                           [(tid,) for tid in waits[:n]])
         event = change()
         named = len(event["changed"] or []) + len(event["removed"] or [])

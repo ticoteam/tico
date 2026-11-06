@@ -2,6 +2,8 @@
 fails, a retried ask is not sent twice, and a task left waiting on someone who was never asked shows in Health."""
 import uuid
 
+import pytest
+
 from backend.store import H
 from backend.tests.test_api import api, headers, post  # noqa: F401
 from backend.tests.test_tasks_board import bot_token
@@ -52,16 +54,20 @@ def test_a_question_asked_outside_any_task_is_in_the_persons_needs_you_until_ans
     assert all(it["id"] != asked["id"] for it in needs())
 
 
-def test_a_wait_with_no_plain_ask_goes_last_on_needs_you_and_reading_it_asks_nobody(api):
+def test_a_wait_with_no_plain_ask_is_refused_and_reading_needs_you_asks_nobody(api):
+    """A task waits on a person through a question task the waiting note asks in (step 6b): a wait whose only words
+    are the bot's shorthand files nothing, so no card on Needs you lacks its ask."""
     store = api.app.state.store
     plain = "Approve the venue for Friday? If yes, I'll book it."
     explained = post(api, "tasks", {"owner": "ops", "title": "Book the venue", "body": "x"})["id"]
     legacy = post(api, "tasks", {"owner": "ops", "title": "Renew the Acme domain", "body": "x"})["id"]
     with store.transaction() as c:
         explained = H.task_update(c, "bot:ops", explained, status="waiting", waiting_on="ana", note=plain)["asked_in"]["id"]
-        # Set waiting before the plain-ask rule, with the bot's shorthand as its only words.
-        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana', note='Blocked on db14c907' WHERE id=?",
-                  (legacy,))
+    with pytest.raises(H.Refused):
+        with store.transaction() as c:
+            H.task_update(c, "bot:ops", legacy, status="waiting", waiting_on="ana", note="Blocked on db14c907")
+    with store.read() as c:
+        assert H.task(c, legacy)["status"] == "open" and not H._waits_on(c, H.task(c, legacy), "human:ana")
 
     def needs():
         return {it["id"]: it for it in api.get("/api/v2/needs-you", headers=headers()).json()["items"]}
@@ -72,10 +78,10 @@ def test_a_wait_with_no_plain_ask_goes_last_on_needs_you_and_reading_it_asks_nob
                              "AND refs LIKE '%task_roundup%'").fetchone()[0]
 
     items = needs()
-    assert list(items)[-1] == legacy and items[legacy]["ask_missing"] and not items[legacy]["person_ask"]
+    assert legacy not in items and not any(it["ask_missing"] for it in items.values())
     assert (items[explained]["person_ask"], items[explained]["ask_missing"]) == (plain, False)
     assert roundup_lists() == 0, "reading Needs you asks nobody"
-    # The bot restating it plainly clears the mark: the ask becomes Ana's card, the task stays the bot's.
+    # The bot restating it plainly files it: the ask becomes Ana's card, the task stays the bot's.
     with store.transaction() as c:
         card = H.task_update(c, "bot:ops", legacy, status="waiting", waiting_on="ana",
                              note="Renew the Acme domain for a year? If yes, I'll pay the invoice.")["asked_in"]["id"]

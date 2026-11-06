@@ -1383,7 +1383,7 @@ class WaitingWithDependency(HubCase):
         stored = lambda bot: self.conn.execute("SELECT needs_human FROM bot_status WHERE bot=?", (bot,)).fetchone()[0]
         task = H.task_create(self.conn, ANA, 'Fix the build host', '', CMO, private=False)
         wait = lambda **kw: H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana',
-                                          note='Restart it', **kw)
+                                          **{'note': 'Restart it', **kw})
         self.refused('identity', H.task_update, self.conn, ANA, task['id'], status='waiting', waiting_on='ana')
         self.refused('kind', wait, owner='seo')
         self.refused('private', H.task_update, self.conn, CMO, task['id'], status='waiting', waiting_on='ben',

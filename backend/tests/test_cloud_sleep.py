@@ -6,7 +6,7 @@ import time
 import pytest
 
 from backend import (check_models, cloud_machines as CM, execution, health, org_turns, providers, start_places,
-                     thread_bot_status, usage_limits, views)
+                     task_relations as TR, thread_bot_status, usage_limits, views)
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, get, ready, runner  # noqa: F401
 from backend.tests.test_cloud_machines import cloud, enrolled, stopped_when_idle, work  # noqa: F401
@@ -27,7 +27,9 @@ def asleep_bot(cloud):
 def waiting_task(cloud):
     with cloud.store.transaction() as c:
         task = H.task_create(c, 'human:ana', 'Wait for a decision', '', 'bot:ops', private=False)
-        c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (task['id'],))
+        # Waiting on Ana: a question task for her under it holds it (derived).
+        H.task_update(c, 'bot:ops', task['id'], status='waiting', waiting_on='human:ana',
+                      note="Approve the plan? I'll start after.")
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'",
                   (H.shift(H.now(), hours=-4),))
     return task
@@ -47,7 +49,8 @@ def test_health_names_the_task_wait_without_calling_a_sleeping_bot_stuck(cloud):
     assert 'Starting' not in queue['summary'] and not body['stuck']
     assert cloud.tick(10) == []
     with cloud.store.transaction() as c:
-        c.execute('UPDATE tasks SET waiting_on=NULL WHERE id=?', (task['id'],))
+        [card] = TR.child_ids(c, task['id'])
+        H.task_update(c, 'human:ana', card, status='done', note='Yes.')     # answered: the task opens again
     assert cloud.tick(10) == ['start']
     body = get(cloud.api, 'health')
     queue = next(row for row in body['checks'] if row['id'] == 'queue')

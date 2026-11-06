@@ -5,8 +5,8 @@ filter tabs of rows the server checks, counted for each viewer ("me" and "others
 import json
 from datetime import datetime, timedelta, timezone
 
-from backend import hubdb as H, task_relations as TR
-from backend.tests.test_api import api, as_member, get, post, put, setup_attempt  # noqa: F401  (api is a fixture)
+from backend import hubdb as H, question_tasks as QT, task_relations as TR
+from backend.tests.test_api import api, as_member, get, headers, post, put, setup_attempt  # noqa: F401  (api is a fixture)
 from backend.tests.hold_rows import set_holds
 
 ACTIVE = ["open", "doing", "waiting"]
@@ -40,14 +40,28 @@ def shown(api, bot, token="ana-test"):
     return {tab["name"]: (tab["count"], sorted(title[i] for i in tab["ids"])) for tab in out["tabs"]}
 
 
+def wait_card(c, tid, person):
+    """What a task waiting on `person` waits on (question_tasks.waiting_on, derived): an open question task of theirs
+    with no options under it. Theirs alone (they asked it of themselves here), so it is in no bot's tabs."""
+    card = H.task_create(c, person, "Which option?", "Which option?", person, lint=False, private=False)
+    QT.store(c, card["id"], {"questions": [{"id": QT.FIRST_ID, "header": "", "question": "Which option?", "why": "",
+                                            "options": [], "multi": False}]})
+    c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,'parent',?,?)",
+              (card["id"], tid, person, H.now()))
+
+
 def task(api, title, owner, requester, **columns):
+    """A task made with `columns` set on it; `waiting_on=<person>` files them a question task under it instead."""
     stamp = lambda days: (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.000000Z")  # noqa: E731
     with api.app.state.store.transaction() as c:
         tid = H.task_create(c, requester, title, "Details.", owner, lint=False, private=False)["id"]
         for name, value in columns.items():
             if name in ("created_at", "updated_at", "done_at"):
                 value = stamp(value)
-            if name.startswith(("blocked_", "snoozed_")):
+            if name == "waiting_on":
+                if value:
+                    wait_card(c, tid, value)
+            elif name.startswith(("blocked_", "snoozed_")):
                 set_holds(c, tid, **{name: value})
             else:
                 c.execute(f"UPDATE tasks SET {name}=? WHERE id=?", (value, tid))
@@ -375,8 +389,13 @@ def test_bot_filter_finds_an_api_saved_wait_and_drops_it_on_resolution(api):
     _, _, attempt = setup_attempt(api, "ops")
     tid, pre = bot_wait(api, "Ship after the review")
     before = get(api, "tasks/" + tid, attempt["token"])["task"]
+    # A task waits on a person, not a bot (D9): the blocker is the wait, and the note says what for.
+    r = api.post("/api/v2/tasks/" + tid, json={"version": before["version"], "status": "waiting",
+                 "waiting_on": "bot:cpo", "note": "Needs the review first."},
+                 headers=headers(attempt["token"]))
+    assert r.status_code >= 400 and "not a bot" in r.text, r.text
     saved = post(api, "tasks/" + tid, {"version": before["version"], "status": "waiting",
-                "waiting_on": "bot:cpo", "note": "Needs the review first."}, attempt["token"])
+                "note": "Needs the review first."}, attempt["token"])
     saved = saved.get("task", saved)
     assert saved["waiting_on"] is None and saved["note"] == "Needs the review first."
     save(api, "ops", [{"name": "Bot waits", "conditions": [{"field": "waiting_on", "value": "bot"}]}])

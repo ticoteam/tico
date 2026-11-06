@@ -1698,7 +1698,7 @@ class Store:
                     # runner_states.capabilities (migration 0062).
                     c.execute("INSERT INTO cloud_migrations VALUES(58,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=59").fetchone():
-                    H._apply(c, H.WAITING_ON_SCHEMA)
+                    # tasks.waiting_on, which 20261106112609_derived_waiting drops: it ran before this step.
                     c.execute("INSERT INTO cloud_migrations VALUES(59,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=60").fetchone():
                     # Every task-to-task relationship in task_relations; tasks.parent_id and

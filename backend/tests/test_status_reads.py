@@ -250,7 +250,7 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
     # come back as one row of JSON: the same rows, values and types, for many bots and for one.
     with store.transaction() as c:
         shared = H.task_create(c, "human:ben", "Reader copy", "Read along.", "bot:busy-2", private=True)
-        c.execute("UPDATE tasks SET readers=json_array('human:cara'), status='waiting', waiting_on='human:ben' WHERE id=?",
+        c.execute("UPDATE tasks SET readers=json_array('human:cara'), status='waiting' WHERE id=?",
                   (shared["id"],))
         H.task_create(c, "bot:busy-3", "Asked only", "For a person.", "human:cara", private=False)   # requester only
         done = H.task_create(c, "bot:busy-0", "Done company work", "Old.", "bot:busy-0", private=False)
@@ -276,7 +276,7 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
     ids = {row["id"] for row in packed}
     assert shared["id"] in ids and done["id"] not in ids
     assert any(row["private"] and row["status"] not in H.ACTIVE_STATUSES for row in packed)
-    assert any(H.task_readers(row) == ["human:cara"] and row["waiting_on"] == "human:ben" for row in packed)
+    assert any(H.task_readers(row) == ["human:cara"] and row["status"] == "waiting" for row in packed)
     assert any(row["owner_id"] == "human:cara" and row["requester_id"] == "bot:busy-3" for row in packed)
 
     # A status line with no task id hides its focus when any private task of the bot is unreadable to the viewer:

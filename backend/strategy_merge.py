@@ -82,7 +82,7 @@ def hidden(c, person):
     """Ids of the tasks the Strategy Bot merged for this person that stay out of their Needs you: while the merged item
     is open and the original still waits on them as it did when merged, and once its answer was passed on until a bot
     asks them something new there. Anything else on the original is back in their Needs you."""
-    return {link["original"] for link in _hidden_links(c, person)}
+    return {i for link in _hidden_links(c, person) for i in _hidden_ids(c, link)}
 
 
 def hidden_by_item(c, person):
@@ -91,8 +91,19 @@ def hidden_by_item(c, person):
     out = {}
     for link in _hidden_links(c, person):
         if link["state"] == "merged":
-            out.setdefault(link["merged_into"], []).append(link["original"])
+            out.setdefault(link["merged_into"], []).extend(_hidden_ids(c, link))
     return out
+
+
+def _hidden_ids(c, link):
+    """The original, and for a bot's task waiting on the person the question task it waits on: that card is what
+    stood in their Needs you for it, so it goes out with it."""
+    ids = [link["original"]]
+    if link["how"] == "waiting" and link["state"] == "merged":
+        card = _question_of(c, H.task(c, link["original"]), link["person"])
+        if card:
+            ids.append(card["id"])
+    return ids
 
 
 def _hidden_links(c, person):
@@ -172,7 +183,9 @@ def merge(c, actor, person, title, question, task_ids):
                        "Their answer comes back to this task; nothing to do until then.", wake=False)
     H.event(c, actor, "strategy_bot.merged", item["id"], {"person": person, "originals": [r["id"] for r, _ in found]})
     H.recount(c, [how[1] for _, how in found])
-    return {"task": H.task(c, item["id"]), "originals": originals(c, item["id"])}
+    made = H.task(c, item["id"])
+    # The item is a question task: its question fields go out decoded, as a task view carries them.
+    return {"task": {**made, **question_tasks.view_fields(made)}, "originals": originals(c, item["id"])}
 
 
 def _settle(c, merged_into, original, state, note):

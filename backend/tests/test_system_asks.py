@@ -501,7 +501,6 @@ def test_migration_resends_dead_letters_once_and_the_answer_clears_the_hold(api,
     with api.app.state.store.transaction() as c:
         task = system_task(c, manager)
         old = legacy_ask(c, task, direct=direct)
-        c.execute("UPDATE tasks SET waiting_on='keeper' WHERE id=?", (task["id"],))
         task_holds.refresh(c, task["id"])
         assert H.task(c, task["id"])["blocked_reason"].startswith("Waiting on keeper")
         migration = next(m for m in migrations.files() if m.version.endswith("_resend_system_asks"))
@@ -522,7 +521,6 @@ def test_migration_resends_dead_letters_once_and_the_answer_clears_the_hold(api,
         original = H.message(c, old["id"])
         assert original["superseded_at"] and original["refs"]["resent_as"] == msg["id"]
         row = H.task(c, task["id"])
-        assert row["waiting_on"] == recipient
         assert row["blocked_reason"].startswith("Waiting on " + task_holds.name(c, recipient))
         assert not health.unreadable_waits(c)
         module.up(c)
@@ -635,7 +633,7 @@ def test_migrated_direct_task_ask_stays_in_the_managers_decision_queue(api):
     with api.app.state.store.transaction() as c:
         task = system_task(c, "human:cara")
         old = legacy_ask(c, task, direct=True)
-        assert H.task(c, task["id"])["waiting_on"] is None
+        assert H.task(c, task["id"]).get("waiting_on") is None
         run_migration(c)
         msg, = H.open_task_asks(c, H.task(c, task["id"]))
         assert msg["conversation_id"] == task["conversation_id"]

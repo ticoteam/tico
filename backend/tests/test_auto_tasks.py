@@ -87,7 +87,8 @@ def test_usage_hold_and_off_start_none_and_waiting_work_frees_cap(api):
     post(api, f"attempts/{first['id']}/started", {'thread_id': first['lane']}, machine['token'])
     # Work may keep its factory step while waiting for a person or external check.
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE tasks SET waiting_on=? WHERE id=?', ('human:ana', tasks[1]['id']))
+        H.task_update(c, 'bot:ops', tasks[1]['id'], status='waiting', waiting_on='human:ana',
+                      note="Approve the deck? I'll send it after.")
     post(api, f"attempts/{first['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Waiting.'}, machine['token'])
     assert take(api, machine)['task']['id'] == tasks[0]['id']
 

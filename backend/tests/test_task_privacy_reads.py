@@ -505,9 +505,9 @@ def test_needs_you_reads_a_fixed_number_of_statements_and_hides_private_items(ap
     off the list and out of every card that holds it up."""
     store = api.app.state.store
     with store.transaction() as c:
-        # Cara's private task, waiting on Ben, who is no party to it.
+        # Cara's private task, waiting, which Ben's steps hold up; Ben is no party to it.
         hidden = H.task_create(c, "human:cara", "Private plan", "Secret", "human:cara", private=True, lint=False)
-        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ben' WHERE id=?", (hidden["id"],))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (hidden["id"],))
 
     def cards(size):
         with store.transaction() as c:
@@ -521,9 +521,10 @@ def test_needs_you_reads_a_fixed_number_of_statements_and_hides_private_items(ap
                 if n == 0:
                     H.say(c, "bot:ops", "human:ben", "Which region?", kind="ask",
                           conversation_id=step["conversation_id"], refs={"task": step["id"]})
-                wait = H.task_create(c, "human:ana", f"Wait {size}-{n}", "x", "bot:ops", parent_id=parent["id"],
-                                     lint=False)
-                c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ben' WHERE id=?", (wait["id"],))
+                # Its own tree, so each wait files Ben a question task of its own (one card per tree otherwise).
+                wait = H.task_create(c, "human:ana", f"Wait {size}-{n}", "x", "bot:ops", lint=False)
+                H.task_update(c, "bot:ops", wait["id"], status="waiting", waiting_on="human:ben",
+                              note="Pick the region? I'll deploy after.")
         return parent
 
     counts, total = {}, 0

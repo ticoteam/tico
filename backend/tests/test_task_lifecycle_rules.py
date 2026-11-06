@@ -119,8 +119,9 @@ class ClosingNeedsEdit(Case):
         """A bot's question waits on a person; "not now" is theirs to say even when they can't edit the task."""
         t = self.make(CMO, "Approve the launch budget?", CMO)
         self.refused("close", H.task_close, self.conn, CARA, t["id"])
-        # As a bot's question to her leaves it (hub task question): waiting on her, the bot still its owner.
-        self.conn.execute("UPDATE tasks SET status='waiting', waiting_on=? WHERE id=?", (CARA, t["id"]))
+        # As a bot's wait on her leaves it (--on): a question task of hers under it, the bot still its owner.
+        H.task_update(self.conn, CMO, t["id"], status="waiting", waiting_on=CARA,
+                      note="Approve the launch budget? I'll book the ads after.")
         self.assertEqual(H.task_close(self.conn, CARA, t["id"], note="Not now")["status"], "closed")
 
     def test_the_caller_says_when_a_person_moves_tasks(self):
