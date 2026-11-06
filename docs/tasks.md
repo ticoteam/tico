@@ -428,7 +428,11 @@ hub task update <task> --status waiting --note "Needs BotOps's disk snapshot"
 
 A note alone wakes nobody. A bot's task waiting with no blocker, subtask, approval, question or
 person goes back to open at once when its last hold clears (unless its due date says to look later), and the update
-that parks it warns the bot.
+that parks it warns the bot. A bot's task parked with nothing tracked to wait on (`cause` `stranded`) goes back to open
+two hours later, with a note on how to wait, unless its due date or snooze is still ahead; the bot is woken once per
+hourly pass however many of its tasks moved. One sent back three times in 24 hours stays waiting, and its manager bot
+(or BotOps, never a person) is told once a day. A move to a waiting step by hand, Engineering's gate, check and
+worktree holds, and people's tasks are never reopened this way.
 
 The task roundup leaves a task off its bot's list while the bot has a run queued or running on it, or while the task
 waits on something recorded: a blocker, an open subtask, a pending approval, an unanswered question, a due date, a
