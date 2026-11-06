@@ -6613,7 +6613,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
                 change_paths=None, qa=None, qa_not_checkable_live=False, receipt_owner=None,
                 quiet_notice=False, from_private=False, routine=False, same=None, occurrence=None,
-                occurrence_step=None, rule_due_id=None, public_warning="", check_back_at=None, check_back_note=None):
+                occurrence_step=None, rule_due_id=None, public_warning="", check_back_at=None, check_back_note=None,
+                follow=False):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -6638,6 +6639,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     on the task (`tasks.occurrence`) for the sweeps and the app. With `occurrence_step` too, the task is one per
     occurrence per producing step: a retry of a run whose step already opened it gets that task back
     (`_reuse_occurrence`), never a second one.
+    `follow` makes the filer a follower of the task (backend/task_followers.py); the owner follows anyway.
     """
     _writer(conn, actor)
     # Public text is only ever what someone wrote as public text; the internal title and body never stand in.
@@ -6900,6 +6902,11 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         # Its own thread: the maker reads the notice their action wrote; a requester who did not make it sees it as new.
         from . import threads
         threads.task_opened(conn, conv, actor, requester, notice)
+    from . import task_followers
+    made = task(conn, row["id"])
+    task_followers.seed_owner(conn, made)
+    if follow:
+        task_followers.follow_on_create(conn, made, actor)
     _recount(conn, target)
     _recount(conn, actor)
     made = task(conn, row["id"])
@@ -7306,8 +7313,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         args["owner_id"] = new_owner
         _task_event(conn, task_id, actor, "owner", row["owner_id"], new_owner, note or "", data=owner_event_data)
         if new_owner != row["owner_id"]:
-            from . import task_run_models
+            from . import task_followers, task_run_models
             task_run_models.moved(conn, actor, task_id)
+            task_followers.owner_moved(conn, row, row["owner_id"], new_owner)
         if new_owner != row["owner_id"] and is_bot(row["owner_id"]) and row.get("conversation_id"):
             # The goal Tico set for the old owner ends with its ownership: only the owner's turns end a task goal,
             # and a person owner has none to end it. A new bot owner's first turn sets its own.
@@ -8456,6 +8464,8 @@ def _task_room(conn, row, parties):
     conn.execute("INSERT INTO conversations(id,kind,subject,participants,created_at,scope,task_id) "
                  "VALUES(?,?,?,?,?,?,?)", (room, "task", row["title"], _dump(parties), now(), "task", row["id"]))
     conn.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (room, row["id"]))
+    from . import task_followers
+    task_followers.seed_owner(conn, task(conn, row["id"]))     # its owner follows the new room (docs/tasks.md)
     return conversation(conn, room)
 
 

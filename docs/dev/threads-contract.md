@@ -333,8 +333,9 @@ threads.set_audience(c, principal, thread_id, audience, *, audience_group_id=Non
 threads.update(c, principal, thread_id, *, title=None, archived=None)
 threads.set_retention(c, principal, thread_id, days)           # a root's manager; days=None keeps messages for good
 ```
-- Posting, being mentioned or owning the thread's task sets `following=1` (reason posted|mentioned|task), over a row a
-  read left at `following=0`, keeping its read mark and notify level. A DM delivery or a join only makes the row, so it
+- Posting (in a chat thread) or being mentioned sets `following=1` (reason posted|mentioned), over a row a read left at
+  `following=0`, keeping its read mark and notify level. A task's thread is followed by its owner (reason `owner`) and
+  whoever chose to (reason `manual`); posting there follows nobody (backend/task_followers.py, docs/tasks.md Followers). A DM delivery or a join only makes the row, so it
   never undoes an unfollow.
 - A join reads up to now across the whole tree: the root followed, each sub-thread a read mark. A group joins by each of
   its people and bots not already reading; anyone already reading keeps what they have not read.
