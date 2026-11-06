@@ -28,7 +28,10 @@ def test_one_thread_at_a_time_the_sse_rendering_agrees_with_c1_for_every_teammat
             if actor.startswith("bot:"):
                 # Every person is checked. Bots alike in group chain and in the threads they read give the one-by-one
                 # rendering the same input, so the first of each class stands for it.
-                kind = (tuple(v.chain(c)), frozenset(python))
+                names = sorted(v.member_names(c))
+                members = frozenset(r[0] for r in c.execute("SELECT thread_id FROM thread_members WHERE actor IN ({})".format(
+                    ",".join("?" * len(names))), names))
+                kind = (tuple(v.chain(c)), frozenset(python), members, tuple(sorted(v.hidden_read(c) or ())))
                 if kind in checked:
                     continue
                 checked.add(kind)

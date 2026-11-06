@@ -86,8 +86,13 @@ def test_python_sql_and_sse_renderings_agree_for_every_teammate(world):
             if actor.startswith("bot:") or actor.startswith("turn:"):
                 # The renderings read a bot only through its standing (turn or agent, its group chain, the tasks it may
                 # read) and the threads it reads. Two bots with all of that alike give SQL and SSE the same input, so
-                # the first of each such class is checked in full; every person is.
-                kind = (actor.startswith("turn:"), tuple(v.chain(c)), tuple(tasks), frozenset(python))
+                # the first of each such class is checked in full; every person is. The key also holds the threads the bot
+                # is a member of and the Homes it may not read, which readable_sql reads directly.
+                names = sorted(v.member_names(c))
+                members = frozenset(r[0] for r in c.execute("SELECT thread_id FROM thread_members WHERE actor IN ({})".format(
+                    ",".join("?" * len(names))), names))
+                kind = (actor.startswith("turn:"), tuple(v.chain(c)), tuple(tasks), frozenset(python), members,
+                        tuple(sorted(v.hidden_read(c) or ())))
                 if kind in checked:
                     continue
                 checked.add(kind)

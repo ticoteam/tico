@@ -1340,6 +1340,7 @@ def test_a_settings_failure_before_the_verdict_keeps_the_failed_open_record(gate
     [item] = items(api)
     assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, "error")
     assert item["ref"] == out["task"]["id"] and item["call_id"] is None
+    assert "settings unreadable" not in str(item), "a plain error's message stays out of the failed-open record (#1798)"
     assert not calls(api) and not model.calls
 
 
