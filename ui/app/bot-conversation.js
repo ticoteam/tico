@@ -175,7 +175,6 @@ function convRender(state) {
   if (st) st.innerHTML = state.active ? `<span class="pill in-progress">Running${state.active.issue ? ` on #${esc(state.active.issue)}` : ''}</span>`
     : stateOf(slug) === 'paused' ? '<span class="pill">Paused</span>'
     : `Idle${last?.finished_at ? `, last active ${ago(last.finished_at)}` : ''}`;
-  pillNeeds(BOT_PILL?.slug === slug ? BOT_PILL : null, last?.needs_human && last.issue ? last.issue : null);
 }
 
 // The CLI's own resume command comes from its manifest (`resume_command`); a CLI without one gets `<name> --resume`.
