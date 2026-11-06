@@ -156,7 +156,7 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 | **Meeting notes sync** | Brings in meeting notes from each person's connected Granola. | Every 30 seconds |
 | **Document sync** | Refreshes linked documents from their sources. | Every few seconds |
 | **Start fresh when the topic changes** | Starts a fresh session, like Clear, when a direct-chat message changes the topic. | When it happens |
-| **Thread ranking** (AI) | Gives each thread with new messages in the last 14 days a level from 1 to 10 for the **Important** view in Threads. A thread is ranked at most once an hour, and at most 20 threads a pass and 40 an hour. A thread never ranked sits at 5; a failed call keeps its last level. **Important** leaves out level 1 threads, threads of finished tasks, and task threads nobody owns or asked for. | Every 5 minutes |
+| **Thread ranking** (AI) | Gives each thread with new messages in the last 14 days a level from 1 to 10 for the **Important** view in Threads. A thread is ranked at most once an hour, and at most 20 threads a pass and 40 an hour. A thread never ranked sits at 5; a failed call keeps its last level. **Important** leaves out level 1 threads, threads of finished tasks, and task threads no person owns or asked for. It also stops for the day once the server's Decide calls reach 80% of the bots' daily call budget, so the checks that act on tasks keep room. | Every 5 minutes |
 
 **Last run** on **Meeting notes sync** and **Document sync** says "Each connection shows its own", because each connection keeps its own last run. **Start assigned tasks** has no shared run record. **Start fresh when the topic changes** and **Stalled task check** say "Runs when it happens".
 

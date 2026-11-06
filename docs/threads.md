@@ -78,10 +78,10 @@ posted in it, is no reason to list it, and neither is a bot's activity there. Re
 page, the Tasks page and search still find it. A task you make is not unread for you: its first notice is your own action.
 
 Only human messages, and anything addressed to you, count as unread. A bot's post in a thread you follow is activity:
-a dot, not a count. **Needs attention** at the top of the list holds the threads with something open on your Needs you list: a mention or
+a dot, not a count. **Needs attention** at the top of the list (the threads of the sidebar's **Inbox**) holds the threads with something open on your Needs you list: a mention or
 ask you have not answered, an unread DM, a post of yours held for review or held for you to review, and any thread you
 are in where the loop guard paused the bots' wakes; posting there lets them all go, and without a post they go by
-themselves, as many as the thread's hour has room for. Unread threads come next, then the rest, newest first. A thread's
+themselves, as many as the thread's hour has room for. Then the rest: under **Important** (the default) by each thread's level, highest first, then newest, with the noise left out; under **Recent**, newest activity first. A thread's
 row counts its sub-threads too. `hub thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
 sub-thread under it.
 
