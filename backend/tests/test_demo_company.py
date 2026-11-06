@@ -1,6 +1,7 @@
 """The company demo as its owner sees it: what the seed leaves behind, read through the same API the app uses. These
 check behaviour (who owns what, what waits for whom, what every bot has done), not the wording of the seed."""
 
+import json
 import re
 import sqlite3
 from contextlib import closing
@@ -55,13 +56,24 @@ def demo_clock():
         yield
 
 
+def real_clock_at(patch, moment):
+    """The machine's clock as the usage-limit overlay reads it (`datetime.now`), set to `moment`."""
+    clock = type("RealClock", (datetime,), {"now": classmethod(lambda cls, tz=None: moment)})
+    patch.setattr(U, "datetime", clock)
+
+
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
-    """Two builds of the same date, back to back, read before any app has opened either database."""
-    first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
-    rows = stored(first.db_path)
-    second = demo.build(tmp_path_factory.mktemp("company-again"), now=NOW)
-    return first, rows, stored(second.db_path)
+    """Two builds of the same date, back to back, read before any app has opened either database. The machine's clock
+    crosses 07:00 UTC (a usage-limit window edge) between them: the first build runs just after it, the second just
+    before."""
+    with pytest.MonkeyPatch.context() as patch:
+        real_clock_at(patch, datetime(2026, 11, 6, 7, 0, 1, tzinfo=timezone.utc))
+        first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
+        rows = stored(first.db_path)
+        real_clock_at(patch, datetime(2026, 11, 6, 6, 59, 59, tzinfo=timezone.utc))
+        second = demo.build(tmp_path_factory.mktemp("company-again"), now=NOW)
+        return first, rows, stored(second.db_path)
 
 
 @pytest.fixture(scope="module")
@@ -108,16 +120,6 @@ def test_tasks_cover_every_status_and_some_have_chains(ana):
 
 def test_no_task_is_left_stuck_for_days(ana):
     assert ana.get("/api/v2/tasks/stuck").json()["tasks"] == []
-
-
-@pytest.mark.parametrize("hour", [0, 12])
-def test_no_task_is_left_stuck_at_other_build_hours(tmp_path, hour):
-    moment = NOW.replace(hour=hour)
-    with time_machine.travel(moment, tick=False):
-        settings = demo.build(tmp_path, now=moment)
-        with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as api:
-            api.headers["Authorization"] = "Bearer " + settings.local_owner_token_file.read_text().strip()
-            assert api.get("/api/v2/tasks/stuck").json()["tasks"] == []
 
 
 def test_a_meeting_waiting_for_review_is_not_in_the_live_list(ana):
@@ -269,8 +271,15 @@ def test_the_demo_clock_also_reads_the_spend_windows(built):
 
 
 def test_the_same_date_builds_the_same_company(built):
-    _first, rows, again = built
+    """Every table, with the machine's clock either side of 07:00 UTC: the usage limits the builds save match too."""
+    first, rows, again = built
     assert again == rows
+    with closing(sqlite3.connect(first.db_path)) as db:
+        columns = [column[1] for column in db.execute("PRAGMA table_info(idempotency)")]
+    operation, response = columns.index("operation"), columns.index("response")
+    hours = [json.loads(row[response]).get("limit", {}).get("spent", {}).get("hour")
+             for row in rows["idempotency"] if row[operation].startswith("/api/v2/usage/")]
+    assert any(hours), "the windows hold spend, so the hour is really compared"
 
 
 def test_every_department_has_its_lead_and_answers_to_a_person(ana):

@@ -1,12 +1,13 @@
 /* ui/app/finance-admin.js — Finance › Sources and Access (spec §12, §7.5).
    Sources: every source of the books, grouped (banks, cards, payments, payroll, bills and invoices, Tico, accounting,
    manual), collapsed by default; a source opens its account mapping, sync and who sees it, and a finance admin syncs
-   it now, maps its accounts to lines and disconnects it. "+ Source" connects Mercury: the token is stored in the
-   credential vault and the connection made from it (the token never comes back).
+   it now, maps its accounts to lines and disconnects it. "+ Source" connects Mercury, Brex or Stripe with a key from
+   Tools (a pasted one is stored on Tools), QuickBooks or Xero, and sends Google Ads and Meta Ads to their tool pages.
    Access: who sees what in Finance, on the org chart (each teammate's default and grants), private lines, the owner's
    "View as", Edit defaults, and a teammate's "Grant more".
-   Reads: GET /api/v2/finance/sources, /finance/access, /finance/balance-sheet (the lines an account maps to). Writes:
-   POST /api/v2/credentials, /finance/connections, /finance/books/connect, /finance/books/{id}/disconnect; connection_sync, connection_disconnect, connection_map, view_grant,
+   Reads: GET /api/v2/finance/sources, /finance/access, /finance/balance-sheet (the lines an account maps to),
+   /tool-index and /api-tools/{id} (the keys a source can use). Writes: POST /api/v2/api-tools, /api-tools/{id}/keys
+   (PATCH to change one), /credentials (a reader who may not change Tools), /finance/connections, /finance/books/connect, /finance/books/{id}/disconnect; connection_sync, connection_disconnect, connection_map, view_grant,
    view_revoke and view_defaults_set through POST /api/v2/finance/actions.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -180,72 +181,141 @@ async function finSrcMap(sel) {
     void finSrcLoad();
   } catch (e) { toast(e.message, true); sel.disabled = false; sel.value = r.account?.id || ''; }
 }
-// Connect Mercury: the token goes into the credential vault, then the connection is made from the stored credential
-// (POST /api/v2/finance/connections tests it and maps the accounts). The token is never read back. A retry after a
-// failed connect reuses the stored credential (updating its value if the token was changed), so one try stores one.
-function finConnectMercury() {
-  let cred = null, stored = '';
-  finDialog('Connect Mercury', `<label>API token<input name="token" type="password" required autocomplete="off" spellcheck="false"></label>
-    <label>Approver email<input name="approver" type="email" autocomplete="off" spellcheck="false"></label>`, 'Connect', async form => {
-    const token = form.elements.token.value.trim();
-    if (!token) throw new Error('Paste the token');
-    if (!cred) {
-      cred = await post('/v2/credentials', {name: 'Mercury', kind: 'token', secret: token, username: '', env: '', source: 'finance'});
-      if (!cred?.id) { cred = null; throw new Error('The token was not stored'); }
-      stored = token;
-    } else if (token !== stored) {
-      cred = await post('/v2/credentials/' + encodeURIComponent(cred.id), {name: 'Mercury', kind: 'token', secret: token, username: '', env: '',
-        source: 'finance', ...(cred.revision ? {expected_revision: cred.revision} : {})}) || cred;
-      stored = token;
+// The sources that connect with a key: Mercury and Brex (banks and cards) and Stripe (revenue).
+// A pasted key's level starts at what Finance needs from the service: Mercury payments need Read and write; Stripe and
+// Brex are read.
+const FIN_KEY_SOURCES = {mercury: {name: 'Mercury', secret: 'API token', paste: 'Paste the token', level: 'read_write'},
+  brex: {name: 'Brex', secret: 'API token', paste: 'Paste the token', level: 'read'},
+  stripe: {name: 'Stripe', secret: 'Restricted key', paste: 'Paste the key', hint: 'rk_live_…', level: 'read'}};
+// Ad platforms: their spend import is set up on the platform's tool page (Tools), not here.
+const FIN_AD_SOURCES = {'google-ads': 'Google Ads', 'meta-ads': 'Meta Ads'};
+const finService = s => String(s || '').trim().toLowerCase().replace(/_/g, '-');
+// The reader's tools for a service (GET /api/v2/tool-index, its API tools) and each one's keys (GET /api-tools/{id}).
+// A failed read throws: guessing "no tools" would store a second copy of a key already there.
+async function finServiceTools(service, withKeys = true) {
+  const idx = await get('/v2/tool-index', {fresh: true});
+  const rows = (idx?.rows || []).filter(r => r.kind === 'api' && finService(r.service) === service);
+  const tools = rows.map(r => ({id: String(r.id).replace(/^api:/, ''), name: r.name, href: r.href, keys: []}));
+  if (!withKeys) return tools;
+  const found = await Promise.all(tools.map(t => get('/v2/api-tools/' + encodeURIComponent(t.id), {fresh: true})));
+  found.forEach((r, i) => { tools[i].keys = r?.keys || []; });
+  return tools;
+}
+const FIN_LEVELS = [['read', 'Read'], ['read_write', 'Read and write']];
+// "Mercury · Read and write · ••••a1f": the key's tool, level and the end of its preview when the reader may see it.
+const finKeyLabel = (tool, key) => [tool.name, key.access_level === 'read' ? 'Read' : 'Read and write',
+  String(key.preview || '').includes('…') ? '••••' + String(key.preview).split('…').pop() : ''].filter(Boolean).join(' · ');
+
+// Connect a source with a key: one of the service's Tools keys (a Read and write one picked first), or a new one
+// pasted, which is stored on Tools at the level chosen (finStoreKey). Then POST /api/v2/finance/connections tests it
+// and maps the accounts (Mercury also takes the approver who approves payments in Mercury). A pasted key whose
+// connect fails is taken off Tools again, so a retry starts clean. The key never comes back.
+async function finConnectKey(provider) {
+  const src = FIN_KEY_SOURCES[provider];
+  let tools;
+  try { tools = await finServiceTools(provider); } catch (e) { toast(e?.message || 'Tools could not be read', true); return; }
+  const keys = tools.flatMap(t => t.keys.filter(k => k.stored).map(k => ({tool: t, key: k})));
+  const pick = Math.max(0, keys.findIndex(({key}) => key.access_level === 'read_write'));
+  const radios = keys.length ? `<fieldset class="fin-radios"><legend>Use the ${esc(src.name)} key from Tools</legend>${keys.map(({tool, key}, i) =>
+    `<label class="fin-check"><input type="radio" name="key" value="${esc(key.id)}"${i === pick ? ' checked' : ''}>${esc(finKeyLabel(tool, key))}</label>`).join('')}
+    <label class="fin-check"><input type="radio" name="key" value="">Paste a new key</label></fieldset>` : '';
+  const paste = `<div class="fin-paste" data-fin-paste${keys.length ? ' hidden' : ''}><label>${esc(src.secret)}<input name="token" type="password" autocomplete="off" spellcheck="false"${src.hint ? ` placeholder="${esc(src.hint)}"` : ''}></label>
+    <label>Level<select name="level">${FIN_LEVELS.map(([v, l]) => `<option value="${v}"${v === src.level ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>`;
+  const approver = provider === 'mercury' ? '<label>Approver email<input name="approver" type="email" autocomplete="off" spellcheck="false"></label>' : '';
+  // A key kept in the vault (a reader who may not change Tools): a retry reuses it, as before Tools.
+  let kept = null, keptToken = '';
+  const dlg = finDialog('Connect ' + src.name, radios + paste + approver, 'Connect', async form => {
+    const id = form.querySelector('input[name=key]:checked')?.value || '';
+    if (id) { await finConnectWith(provider, id, form); return; }
+    const token = form.elements.token.value.trim(), level = form.elements.level.value;
+    if (!token) throw new Error(src.paste);
+    if (kept) {
+      if (token !== keptToken) { await finRestoreKey(kept, token); keptToken = token; }
+      await finConnectWith(provider, kept.id, form);
+      return;
     }
-    const body = {credential_id: cred.id, name: 'Mercury'};
-    if (form.elements.approver.value.trim()) body.approver_email = form.elements.approver.value.trim();
-    const r = await post('/v2/finance/connections', body);
-    if (r?.status === 'needs_approval') toast(r.approver ? `Sent to ${finWho(r.approver)} for approval` : 'Sent for approval');
-    else if (r?.status !== 'committed') throw new Error(r?.reason || 'Not connected');
-    else toast('Mercury connected');
-    form.elements.token.value = '';
-    if (FIN?.src) void finSrcLoad();
-    if (FIN?.bs) void finBsLoad();
+    // Read again: a failed try, or someone else, may have changed the service's keys since the dialog opened.
+    const made = await finStoreKey(provider, token, level, await finServiceTools(provider));
+    if (made.vault) { kept = made; keptToken = token; }
+    try { await finConnectWith(provider, made.id, form); }
+    catch (e) { if (!made.vault) await finUnstoreKey(made); throw e; }
+  });
+  const form = dlg.querySelector('form'), box = form.querySelector('[data-fin-paste]');
+  form.addEventListener('change', ev => {
+    if (ev.target.name !== 'key') return;
+    box.hidden = !!ev.target.value;
+    if (!box.hidden) form.elements.token.focus();
   });
 }
+async function finConnectWith(provider, credentialId, form) {
+  const name = FIN_KEY_SOURCES[provider].name, body = {provider, credential_id: credentialId, name};
+  const approver = form.elements.approver?.value.trim();
+  if (approver) body.approver_email = approver;
+  const r = await post('/v2/finance/connections', body);
+  if (r?.status === 'needs_approval') toast(r.approver ? `Sent to ${finWho(r.approver)} for approval` : 'Sent for approval');
+  else if (r?.status !== 'committed') throw new Error(r?.reason || 'Not connected');
+  else toast(name + ' connected');
+  if (FIN?.src) void finSrcLoad();
+  if (FIN?.bs) void finBsLoad();
+}
+// A pasted key lands on Tools at its level: on the service's first tool with no key at that level (one key per level),
+// else on a new tool. A reader who may not change Tools stores it in the vault for Finance alone, as before.
+// {id, tool, made} (made: the tool is new) or the credential with vault set.
+async function finStoreKey(provider, token, level, tools) {
+  const name = FIN_KEY_SOURCES[provider].name;
+  let tool = tools.find(t => !t.keys.some(k => k.access_level === level)), made = false;
+  try {
+    if (!tool) {
+      const row = await post('/v2/api-tools', {name, service: provider});
+      if (!row?.id) throw new Error('The key was not stored');
+      tool = {id: row.id}; made = true;
+    }
+    const key = await post(`/v2/api-tools/${encodeURIComponent(tool.id)}/keys`, {name, value: token, access_level: level});
+    if (!key?.id) throw new Error('The key was not stored');
+    return {id: key.id, tool: tool.id, made};
+  } catch (e) {
+    if (made) await finUnstoreKey({tool: tool.id, made});
+    if (e?.status !== 403) throw e;
+  }
+  const cred = await post('/v2/credentials', {name, kind: 'token', secret: token, username: '', env: '', source: 'finance'});
+  if (!cred?.id) throw new Error('The key was not stored');
+  return {...cred, vault: true};
+}
+// Undo finStoreKey after a failed connect: the key, then the tool when it was made for it. Best effort: a removal
+// that fails leaves the key on Tools, where it shows.
+async function finUnstoreKey({id, tool, made}) {
+  try { if (id) await writeRequest('DELETE', `/v2/api-tools/${encodeURIComponent(tool)}/keys/${encodeURIComponent(id)}`); } catch { /* shown on Tools */ }
+  try { if (made) await writeRequest('DELETE', `/v2/api-tools/${encodeURIComponent(tool)}`); } catch { /* shown on Tools */ }
+}
+async function finRestoreKey(cred, token) {
+  const name = cred.name || 'Key';
+  const r = await post('/v2/credentials/' + encodeURIComponent(cred.id), {name, kind: 'token', secret: token, username: '', env: '',
+    source: 'finance', ...(cred.revision ? {expected_revision: cred.revision} : {})});
+  if (r?.revision) cred.revision = r.revision;
+}
+const finConnectMercury = () => void finConnectKey('mercury');
+const finConnectStripe = () => void finConnectKey('stripe');
+// Google Ads, Meta Ads: to the platform's tool page, where its spend import is set up; to Tools when there is none.
+async function finConnectAds(service) {
+  let tools = [];
+  try { tools = await finServiceTools(service, false); } catch { tools = []; }
+  location.hash = tools[0] ? tools[0].href || '#/tools/api/' + encodeURIComponent(tools[0].id) : '#/tools';
+}
 
-// "+ Source": a bank or card account (Mercury), Stripe, or the company's books (QuickBooks, Xero). Finance admins only.
+// "+ Source": a bank or card account (Mercury, Brex), Stripe, the company's books (QuickBooks, Xero), or an ad
+// platform's spend (its tool page). Finance admins only.
 function finSourceMenuHtml(caps) {
   if (!caps.may('finance.admin')) return '';
-  const items = [['mercury', 'Mercury'], ['stripe', 'Stripe'], ['quickbooks', 'QuickBooks'], ['xero', 'Xero']];
+  const items = [['mercury', 'Mercury'], ['brex', 'Brex'], ['stripe', 'Stripe'], ['quickbooks', 'QuickBooks'], ['xero', 'Xero'],
+    ...Object.entries(FIN_AD_SOURCES)];
   return `<span class="fin-pop-at"><button type="button" class="primary" data-fin-connect aria-haspopup="menu" aria-expanded="false" aria-controls="fin-connect">+ Source</button>
     <div class="fin-pop fin-menu" id="fin-connect" role="menu" aria-label="Connect" hidden>${items.map(([v, l]) =>
       `<button type="button" role="menuitem" data-fin-connect-item="${v}">${l}</button>`).join('')}</div></span>`;
 }
 function finConnect(v) {
-  if (v === 'mercury') finConnectMercury();
-  else if (v === 'stripe') finConnectStripe();
+  if (FIN_KEY_SOURCES[v]) void finConnectKey(v);
+  else if (FIN_AD_SOURCES[v]) void finConnectAds(v);
   else if (FIN_BOOKS[v]) finConnectBooks(v);
-}
-// Connect Stripe (revenue): a restricted key into the credential vault, then the connection from it, as with Mercury.
-function finConnectStripe() {
-  let cred = null, stored = '';
-  finDialog('Connect Stripe', `<label>Restricted key<input name="token" type="password" required autocomplete="off" spellcheck="false" placeholder="rk_live_…"></label>`, 'Connect', async form => {
-    const token = form.elements.token.value.trim();
-    if (!token) throw new Error('Paste the key');
-    if (!cred) {
-      cred = await post('/v2/credentials', {name: 'Stripe', kind: 'token', secret: token, username: '', env: '', source: 'finance'});
-      if (!cred?.id) { cred = null; throw new Error('The key was not stored'); }
-      stored = token;
-    } else if (token !== stored) {
-      cred = await post('/v2/credentials/' + encodeURIComponent(cred.id), {name: 'Stripe', kind: 'token', secret: token, username: '', env: '',
-        source: 'finance', ...(cred.revision ? {expected_revision: cred.revision} : {})}) || cred;
-      stored = token;
-    }
-    const r = await post('/v2/finance/connections', {provider: 'stripe', credential_id: cred.id, name: 'Stripe'});
-    if (r?.status === 'needs_approval') toast(r.approver ? `Sent to ${finWho(r.approver)} for approval` : 'Sent for approval');
-    else if (r?.status !== 'committed') throw new Error(r?.reason || 'Not connected');
-    else toast('Stripe connected');
-    form.elements.token.value = '';
-    if (FIN?.src) void finSrcLoad();
-    if (FIN?.bs) void finBsLoad();
-  });
 }
 // QuickBooks or Xero: POST /api/v2/finance/books/connect {provider} -> {url, expires_in}, HQ's consent page. The server
 // takes the browser's return (GET /api/v2/finance/books/return/{flow}) and sends it to #/finance?books=connected or

@@ -75,6 +75,7 @@ EMPTY = (
     # Open windows and their heartbeats belong to the source, not the rehearsal.
     "presences",
     # human sign-in and service keys
+    "skill_devices", "skill_device_codes",   # the skills helper's token hashes and sign-in codes: a copy never keeps a way in
     "human_tokens", "oidc_sessions", "oidc_codes", "oauth_grants", "oauth_clients", "service_keys",
     "service_key_tasks", "owner_links",
     # credentials
@@ -136,10 +137,12 @@ AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhoo
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
 HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_at", "events": "created_at", "deltas": "created_at",
            "bot_status_history": "started_at", "audit_log": "created_at", "browser_exit_usage": "day",
+           "skill_usages": "used_at", "skill_usage_dailies": "used_on",
            # Run steps before their runs: a step row points at its run.
            "maintenance_run_steps": "started_at", "maintenance_runs": "started_at"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
+    "skills", "skill_versions", "skill_proposals", "skill_screenings", "skill_installs", "skill_receipts",   # the company's approved skills
     "email_sending_policies", "email_suppressed_recipients",   # retain the team's send restrictions
     "letter_outboxes", "letter_bot_settings",
     "alert_company_settings",   # the company's spend cap is safe without phones or queued alerts
@@ -193,7 +196,7 @@ KEEP = frozenset((
     # Native threads (backend/threads.py) and teammate permissions (backend/teammate_access.py). A delivery to an
     # outside destination that has not gone is made moot below, so the copy never sends it.
     "message_deliveries", "message_mentions", "message_reactions", "message_revisions", "sequences",
-    "teammate_accesses", "thread_followers", "thread_members", "thread_pins", "thread_routings",
+    "teammate_accesses", "thread_followers", "thread_members", "thread_pins",
     "message_routes",
     "message_search_keys",    # the search index's keys (thread_search.py); its FTS table is copied whole too, and search joins messages
     "home_merges", "home_merge_messages",   # where each person's old chat with a bot went (backend/bot_home_merge.py)

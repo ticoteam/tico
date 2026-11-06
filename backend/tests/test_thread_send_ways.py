@@ -2,7 +2,6 @@
 backend/delivery.py): a post that names no way goes exactly as before, into the bot's running turn; queue waits for that
 turn; defer starts no run until its deadline; a deadline takes the right to message the bot. Fictional people only."""
 
-import pytest
 
 from backend import delivery, task_privacy
 from backend.store import H
@@ -126,18 +125,19 @@ def test_a_member_of_a_dm_with_the_bot_names_any_way_without_write(api):
     assert later["sent_as"]["delivery"] == "defer" and [r["due_at"] is not None for r in rows(api, item=later["id"])] == [True]
 
 
-@pytest.mark.parametrize("body", [
-    {"text": "x", "delivery": "steer", "defer_for": "4h"},
-    {"text": "x", "delivery": "defer", "defer_for": "0m"},
-    {"text": "x", "delivery": "later"},
-    {"text": "x", "refs": {"send_way": "defer"}},
-    {"text": "x", "refs": {"send_defer_for": "1h"}},
-    {"text": "x", "delivery": "queue", "refs": {"delivery": "queue"}},
-])
-def test_a_thread_delivery_that_cannot_apply_is_refused(api, body):
+def test_a_thread_delivery_that_cannot_apply_is_refused(api):
     setup(api)
     tid, _ = dm(api, "Hello.")
-    assert api.post(f"/api/v2/threads/{tid}/messages", json=body, headers=headers()).status_code == 422
+    for body in [
+        {"text": "x", "delivery": "steer", "defer_for": "4h"},
+        {"text": "x", "delivery": "defer", "defer_for": "0m"},
+        {"text": "x", "delivery": "later"},
+        {"text": "x", "refs": {"send_way": "defer"}},
+        {"text": "x", "refs": {"send_defer_for": "1h"}},
+        {"text": "x", "delivery": "queue", "refs": {"delivery": "queue"}},
+    ]:
+        r = api.post(f"/api/v2/threads/{tid}/messages", json=body, headers=headers())
+        assert r.status_code == 422, (body, r.status_code, r.text)
 
 
 def test_a_way_goes_only_where_a_bot_is_across(api):

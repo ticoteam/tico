@@ -452,7 +452,7 @@
         actor: "human:dana"
         messages:
           - {id: 6d2b8e17-6100-4000-8000-000000000001, kind: question, from_actor: "bot:botops", text: "Build the support inbox bot on the shared mailbox, live on Tuesday? Reply yes or no.", created: "2026-11-02T16:00:00Z"}
-          - {id: 3f0e9a52-6100-4000-8000-000000000002, kind: question, from_actor: "bot:botops", text: "Pause the runner queue ping for a day? Yes or no.", created: "2026-11-02T18:05:00Z"}
+          - {id: 3f0e9a52-6100-4000-8000-000000000002, kind: question, from_actor: "bot:health-monitor", text: "Pause the runner queue ping for a day? Yes or no.", created: "2026-11-02T18:05:00Z"}
         more_messages: false
         tasks: []
         notices: []
@@ -470,13 +470,14 @@
     - '^task create .*--owner (bot:)?botops'
   reply: |
     Answers BotOps's question about the support inbox bot with Dana's words (yes, go ahead), and says in one line that it is
-    answered. It does not answer the Check health question, which Dana did not mention, and does not message BotOps separately.
+    answered. It does not answer Health Monitor's question about the runner ping, which Dana did not mention, and does not
+    message BotOps separately. (Only one BotOps question is open; with two, asking which would be right.)
 
 - id: jobs2-ask-bot
   group: jobs2
   prompt: "Ask Analytics how many paid trials we had in October."
   hub:
-    - match: '^question ask analytics'
+    - match: '^question ask (\S+ )?analytics\b'
       out:
         answer: "318 paid trials started in October, from the billing export run on Nov 1."
         source: "billing export, run Nov 1"
@@ -487,7 +488,7 @@
         - {slug: analytics, display_name: Analytics, state: active, focus: "Idle"}
         - {slug: copywriter, display_name: Copywriter, state: active, focus: "Launch email draft 2"}
   must:
-    - '^question ask analytics\b'
+    - '^question ask (\S+ )?analytics\b'
   must_not:
     - '^message send(?! -h\b| --help)'
     - '^task (create|close|update|bulk close)(?! -h\b| --help)'

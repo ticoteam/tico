@@ -8,11 +8,12 @@ reasoning_effort: high
 max_run_minutes: 60
 
 # Routines this bot owns. The server runs the clock and turns each occurrence into a task.
-# The daily sweep runs once a day for the whole Assistant, not per person: it tidies each person's
-# queue and files one card per person. See docs/routines.md for the shape.
+# The morning message runs once a day for the whole Assistant, not per person: for each person it sends at most one
+# message (`hub assistant morning`), or none on a quiet day. The id stays `daily-sweep` for installs that have it.
+# See docs/routines.md for the shape.
 routines:
   - id: daily-sweep
-    title: Daily sweep of each person's queue
+    title: Morning message
     cron: "0 8 * * *"                 # runs in the company's timezone (no timezone: the team default applies)
     template: playbooks/daily-sweep.md
     labels: [priority:p2]

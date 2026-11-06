@@ -5,6 +5,8 @@ Fictional people only: ana (owner), ben (admin), cara (human); the bots come fro
 """
 import json
 
+import pytest
+
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import threads
 from backend.auth import Identity
@@ -44,8 +46,21 @@ def say(api, thread_id, text, token="ana-test", parent=None):
     return answer.json()
 
 
+@pytest.fixture(autouse=True)
+def bot_mentions_wait_as_notes(monkeypatch):
+    """These tests are about where held notes go, so a bot's @mention of another bot waits as a note here, as a
+    plain bot-to-bot message does. (Outside this file it is addressed and wakes by its way: test_comments_route.)"""
+    from backend import wake_rules
+    real = wake_rules.always_wakes
+
+    def floor(*args, **kwargs):
+        found = real(*args, **kwargs)
+        return None if found == "mention" else found
+    monkeypatch.setattr(wake_rules, "always_wakes", floor)
+
+
 def bot_says(api, thread_id, text, bot="bot:ops", **kwargs):
-    """A bot's plain mention of another bot: it waits for that bot's next run (bot_to_bot), so it starts none."""
+    """A bot's mention of another bot, held as a note (bot_mentions_wait_as_notes), so it starts no run."""
     with api.app.state.store.transaction() as c:
         return threads.post(c, bot, thread_id, text, **kwargs)
 

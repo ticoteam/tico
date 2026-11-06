@@ -234,7 +234,7 @@ def test_on_a_plain_install_the_feature_jobs_are_hidden_and_the_rest_listed(api,
                    "letters", "physical_mail"):
         assert hidden not in keys, hidden
     for shown in ("topic_fresh", "due_reminders", "run_housekeeping", "finance_upkeep", "inbound_mail",
-                  "assigned_tasks", "thread_routing"):
+                  "assigned_tasks"):
         assert shown in keys, shown
 
 
@@ -361,13 +361,6 @@ def test_scheduler_jobs_and_background_passes_record_their_runs(api, monkeypatch
     topic_change._audit(db(api), who, {"label": "topic-change@1", "clear": False, "error": "timeout"})
     assert [(r["result"], r["runs"]) for r in runs_of(api, "topic_fresh")] == [
         ("Same topic", 1), ("New topic: started fresh", 1), ("Kept the chat: the check took too long", 1)]
-    # thread routing and the loop guard record
-    from backend import thread_routing
-    thread_routing._running.acquire()
-    thread_routing._worker(db(api))                              # nothing waits: a quiet pass
-    assert runs_of(api, "thread_routing")[-1]["result"] == "Nobody to wake"
-    assert thread_routing._running.acquire(blocking=False), "the worker let its lock go"
-    thread_routing._running.release()
 
 
 # ----------------------------------------------------------------------------- every recorded key is a job

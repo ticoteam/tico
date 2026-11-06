@@ -150,7 +150,7 @@ async function mbActivity(host, id, ctx) {
     box.innerHTML = rows.length ? `<table class="tt-log"><thead><tr><th>Time</th><th>Who</th><th>Action</th><th>Message</th><th>Result</th></tr></thead><tbody>${rows.map(x => {
       const [word, tone] = MB_SEND_RESULT[x.state] || [x.state, ''];
       return `<tr data-mb-send="${esc(x.id)}" data-state="${esc(x.state)}"><td class="tnum" title="${esc(fmt(x.created_at))}">${esc(ago(x.created_at))}</td>
-        <td>${esc(x.bot ? botDisplayName(x.bot) : x.actor || '')}</td><td>Send</td>
+        <td>${esc(x.bot ? botDisplayName(x.bot) : x.actor ? actorLabel(x.actor) : '')}</td><td>Send</td>
         <td class="tt-log-what"><strong>${esc(x.subject || '(No subject)')}</strong><span class="muted">${esc((x.recipients || []).join(', '))}</span></td>
         <td><span class="pill${tone ? ' ' + tone : ''}">${esc(word)}</span>${x.state === 'blocked' && x.decision?.reasons?.length ? `<span class="muted tt-log-why">${esc(x.decision.reasons.join(', '))}</span>` : ''}</td></tr>`;
     }).join('')}</tbody></table>` : '<div class="empty" data-mb-act-none>Nothing yet.</div>';

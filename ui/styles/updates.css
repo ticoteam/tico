@@ -61,6 +61,9 @@
 .upd-corner{display:inline-flex;gap:0;margin:-6px -8px -6px auto;opacity:.55;transition:opacity .15s}
 .upd-card:hover .upd-corner,.upd-corner:focus-within{opacity:1}
 .upd-corner .upd-act{min-width:30px;height:30px;padding:0 6px}
+/* the reports' toggle ("8 >") follows Archive on the name's line, outside the corner so it never fades */
+.upd-meta>.upd-corner:not(:last-child){margin-right:0}
+.upd-meta>.upd-kids{height:30px;margin:-6px -8px -6px 0}
 /* A nested card is narrow on a phone: the top line does not wrap, and the name and time give way (ellipsis) so the corner stays on it.
    The line is the avatar's height, so the avatar's middle is the line's (the thread's elbows turn into it). */
 .upd-card .upd-meta{flex-wrap:nowrap;min-height:var(--upd-av)}
@@ -72,7 +75,7 @@
 .upd-act:disabled{opacity:.4;cursor:default}
 .upd-act .nav-icon{font-size:18px;width:18px;height:18px}
 .upd-n{font-variant-numeric:tabular-nums;font-weight:600}
-.upd-act[data-tip-on]::after{content:attr(title);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);white-space:nowrap;padding:4px 8px;border-radius:8px;background:var(--ink);color:var(--bg);font-size:var(--t-xs);font-weight:500;pointer-events:none;z-index:5}
+:is(.upd-act,.upd-who)[data-tip-on]::after{content:attr(title);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);white-space:nowrap;padding:4px 8px;border-radius:8px;background:var(--ink);color:var(--bg);font-size:var(--t-xs);font-weight:500;pointer-events:none;z-index:5}
 .upd-kids[data-tip-on]::after{left:auto;right:0;transform:none}
 .upd-thread{border-top:1px solid var(--line);margin-top:8px;padding-top:8px;display:flex;flex-direction:column;gap:6px}
 /* a reply thread reads like the chat column: your words in a bubble, the bot's on the card */
@@ -137,6 +140,22 @@
 .upd-none .upd-name,.upd-none>.muted{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .upd-none .upd-write{white-space:nowrap}
 .upd-none .upd-kids{margin-right:-8px}.upd-none .upd-write~.upd-kids{margin-left:0}
+/* Siblings with no update: one line of their avatars, then "No update yet". The first avatar sits where a row's avatar
+   does (the elbow turns into it); they wrap on a narrow screen, the elbow into the first line. One with reports carries
+   their count at its foot and the unread dot at its top; open, it is ringed. */
+.upd-sub>.upd-node>.upd-nones{--tree-y:calc(var(--upd-av) / 2 + 8px)}
+.upd-nones{flex-wrap:wrap;row-gap:6px}
+.upd-nones>.muted{flex:none;line-height:var(--upd-av)}
+.upd-whos{display:flex;flex-wrap:wrap;align-items:center;gap:6px 4px;min-width:0}
+.upd-who{position:relative;display:inline-flex;flex:none;width:var(--upd-av);height:var(--upd-av);padding:0;border:0;background:none;border-radius:50%;cursor:pointer;color:inherit;-webkit-touch-callout:none;user-select:none}
+.upd-who .av{width:var(--upd-av)!important;height:var(--upd-av)!important}
+.upd-who:hover,.upd-who:focus-visible{z-index:1}
+.upd-who:hover .av{filter:brightness(1.12)}
+.upd-who:has(.upd-who-n){margin-right:8px}
+.upd-who[aria-expanded=true]{box-shadow:0 0 0 2px var(--bg),0 0 0 3.5px var(--ink)}
+.upd-who-n{position:absolute;left:calc(100% - 7px);bottom:-4px;min-width:14px;height:14px;padding:0 3px;box-sizing:border-box;border-radius:7px;background:var(--g4);color:var(--ink);box-shadow:0 0 0 1.5px var(--bg);font-size:10px;font-weight:600;line-height:14px;text-align:center;font-variant-numeric:tabular-nums}
+.upd-who .upd-dot{position:absolute;top:-2px;right:-2px;width:7px;height:7px;margin:0;box-shadow:0 0 0 1.5px var(--bg)}
+.upd-who[data-tip-on]::after{bottom:calc(100% + 8px)}
 .upd-draft{background:color-mix(in srgb,var(--muted) 15%,transparent);color:var(--muted)}
 .upd-edit{grid-template-columns:minmax(0,1fr)}
 .upd-edit textarea{width:100%;margin-top:8px;font:inherit}

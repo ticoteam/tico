@@ -35,7 +35,7 @@ def test_the_jobs_list_and_each_run_record(api):
     assert {k for k, j in jobs.items() if j["controllable"]} == {
         "stale_review", "kpi_asks", "ask_deadlines", "task_manager_report",
         "bookkeeper_check", "memory_tidy"} - hidden
-    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "thread_routing", "thread_rank"}
+    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "thread_rank"}
     assert "learnings" not in jobs, "Learn runs in Maintenance"
     # Housekeeping has no switch; Task roundup and Learn run in Maintenance.
     assert all(j["needed"] == (j["group"] == "housekeeping" and not j["controllable"]) for j in jobs.values())

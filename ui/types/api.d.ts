@@ -3724,7 +3724,7 @@ export type Message = {
   id: string;
   in_reply_to: string | null;
   kind: string;
-  recipient_id: string;
+  recipient_id: string | null;
   recipient_name?: string;
   refs: Record<string, unknown>;
   run?: {
@@ -4918,6 +4918,51 @@ export type ServiceKeyCreate = {
   scope?: "tasks" | "update";
 };
 
+export type SkillApprove = {
+  acknowledged?: boolean;
+};
+
+export type SkillDecline = {
+  reason: string;
+};
+
+export type SkillFile = {
+  content: string;
+  path: string;
+};
+
+export type SkillInstall = {
+  pinned_version?: number | null;
+  target_id: string;
+  target_type: "Bot" | "Human";
+  version_policy?: "latest" | "pinned";
+};
+
+export type SkillInstallBulk = {
+  pinned_version?: number | null;
+  targets: Array<SkillTarget>;
+  version_policy?: "latest" | "pinned";
+};
+
+export type SkillPropose = {
+  base_version?: number | null;
+  files: Array<SkillFile>;
+  name: string;
+  note?: string;
+  source?: SkillSource | null;
+  task_id?: string | null;
+};
+
+export type SkillSource = {
+  repo_path?: string | null;
+  url?: string | null;
+};
+
+export type SkillTarget = {
+  target_id: string;
+  target_type: "Bot" | "Human";
+};
+
 export type SlackLink = {
   audience: string;
   channel: {
@@ -6034,6 +6079,19 @@ export type ThreadRail = {
   threads: Array<ThreadView>;
 };
 
+export type ThreadReach = {
+  outside: Array<string>;
+  reaches: Array<{
+  actor: string;
+  adds_reader?: boolean;
+  defer_for?: string | null;
+  mode: "steer" | "queue" | "defer" | "digest";
+  reason: string;
+}>;
+  thread_id: string;
+  way?: "steer" | "queue" | "defer";
+};
+
 export type ThreadReactions = Array<{
   actors: Array<unknown>;
   count: number;
@@ -6860,6 +6918,14 @@ export type ApplyDisclosurePresetParams = {
 export type ApplyDisclosurePresetBody = Preset;
 export type ApplyDisclosurePresetResponse = unknown;
 
+/** POST /api/v2/skills/proposals/{pid}/approve */
+export type ApproveSkillProposalParams = {
+  "Idempotency-Key": string;
+  pid: string;
+};
+export type ApproveSkillProposalBody = SkillApprove;
+export type ApproveSkillProposalResponse = unknown;
+
 /** POST /api/v2/kpis/{kid}/archive */
 export type ArchiveKpiParams = {
   "Idempotency-Key": string;
@@ -7346,6 +7412,14 @@ export type DecideStaleSuggestionParams = {
 };
 export type DecideStaleSuggestionBody = StaleDecision;
 export type DecideStaleSuggestionResponse = unknown;
+
+/** POST /api/v2/skills/proposals/{pid}/decline */
+export type DeclineSkillProposalParams = {
+  "Idempotency-Key": string;
+  pid: string;
+};
+export type DeclineSkillProposalBody = SkillDecline;
+export type DeclineSkillProposalResponse = unknown;
 
 /** DELETE /api/v2/audiences/{audience_id} */
 export type DeleteAudienceParams = {
@@ -8511,6 +8585,28 @@ export type GetSeatAgentParams = {
 export type GetSeatAgentBody = never;
 export type GetSeatAgentResponse = SeatAgent;
 
+/** GET /api/v2/skills/{name} */
+export type GetSkillParams = {
+  name: string;
+};
+export type GetSkillBody = never;
+export type GetSkillResponse = unknown;
+
+/** GET /api/v2/skills/proposals/{pid} */
+export type GetSkillProposalParams = {
+  pid: string;
+};
+export type GetSkillProposalBody = never;
+export type GetSkillProposalResponse = unknown;
+
+/** GET /api/v2/skills/{name}/versions/{number} */
+export type GetSkillVersionParams = {
+  name: string;
+  number: number;
+};
+export type GetSkillVersionBody = never;
+export type GetSkillVersionResponse = unknown;
+
 /** GET /api/v2/sleep */
 export type GetSleepWhenIdleParams = Record<string, never>;
 export type GetSleepWhenIdleBody = never;
@@ -8617,6 +8713,17 @@ export type GetThreadHomeParams = {
 };
 export type GetThreadHomeBody = never;
 export type GetThreadHomeResponse = ThreadView;
+
+/** GET /api/v2/threads/{thread_id}/reach */
+export type GetThreadReachParams = {
+  defer_for?: string | null;
+  delivery?: "steer" | "queue" | "defer" | null;
+  in_reply_to?: string | null;
+  text?: string;
+  thread_id: string;
+};
+export type GetThreadReachBody = never;
+export type GetThreadReachResponse = ThreadReach;
 
 /** GET /api/v2/threads/{thread_id}/timeline */
 export type GetThreadTimelineParams = {
@@ -8793,6 +8900,22 @@ export type ImportReadersParams = {
 };
 export type ImportReadersBody = ReaderImport;
 export type ImportReadersResponse = unknown;
+
+/** POST /api/v2/skills/{name}/installs */
+export type InstallSkillParams = {
+  "Idempotency-Key": string;
+  name: string;
+};
+export type InstallSkillBody = SkillInstall;
+export type InstallSkillResponse = unknown;
+
+/** POST /api/v2/skills/{name}/installs/bulk */
+export type InstallSkillForTargetsParams = {
+  "Idempotency-Key": string;
+  name: string;
+};
+export type InstallSkillForTargetsBody = SkillInstallBulk;
+export type InstallSkillForTargetsResponse = unknown;
 
 /** POST /api/v2/calls/{call_id}/join */
 export type JoinCallParams = {
@@ -9756,6 +9879,26 @@ export type ListServiceKeysParams = Record<string, never>;
 export type ListServiceKeysBody = never;
 export type ListServiceKeysResponse = unknown;
 
+/** GET /api/v2/skills/installs */
+export type ListSkillInstallsParams = {
+  target_id: string;
+  target_type: string;
+};
+export type ListSkillInstallsBody = never;
+export type ListSkillInstallsResponse = unknown;
+
+/** GET /api/v2/skills/proposals */
+export type ListSkillProposalsParams = {
+  status?: string | null;
+};
+export type ListSkillProposalsBody = never;
+export type ListSkillProposalsResponse = unknown;
+
+/** GET /api/v2/skills */
+export type ListSkillsParams = Record<string, never>;
+export type ListSkillsBody = never;
+export type ListSkillsResponse = unknown;
+
 /** GET /api/v2/slack/links */
 export type ListSlackLinksParams = {
   cursor?: string;
@@ -10161,6 +10304,13 @@ export type ProposeAssistantActionParams = {
 };
 export type ProposeAssistantActionBody = AssistantAction;
 export type ProposeAssistantActionResponse = AssistantActionResult;
+
+/** POST /api/v2/skills/proposals */
+export type ProposeSkillParams = {
+  "Idempotency-Key": string;
+};
+export type ProposeSkillBody = SkillPropose;
+export type ProposeSkillResponse = void;
 
 /** POST /api/v2/editions/{edition_id}/publish */
 export type PublishEditionParams = {
@@ -10687,6 +10837,14 @@ export type RequestSlackLinkParams = {
 };
 export type RequestSlackLinkBody = LinkRequest;
 export type RequestSlackLinkResponse = SlackLink;
+
+/** POST /api/v2/skills/proposals/{pid}/rescreen */
+export type RescreenSkillProposalParams = {
+  "Idempotency-Key": string;
+  pid: string;
+};
+export type RescreenSkillProposalBody = Empty;
+export type RescreenSkillProposalResponse = unknown;
 
 /** POST /api/v2/tasks/{tid}/comments/{mid}/resolve */
 export type ResolveTaskQuestionParams = {
@@ -11607,6 +11765,14 @@ export type UnfollowThreadParams = {
 export type UnfollowThreadBody = never;
 export type UnfollowThreadResponse = ThreadFollow;
 
+/** DELETE /api/v2/skills/installs/{iid} */
+export type UninstallSkillParams = {
+  "Idempotency-Key": string;
+  iid: string;
+};
+export type UninstallSkillBody = never;
+export type UninstallSkillResponse = unknown;
+
 /** POST /api/v2/goals/{gid}/kpis/{kid}/unlink */
 export type UnlinkGoalKpiParams = {
   "Idempotency-Key": string;
@@ -11953,3 +12119,11 @@ export type WithdrawRuleHoldParams = {
 };
 export type WithdrawRuleHoldBody = HoldEmpty;
 export type WithdrawRuleHoldResponse = unknown;
+
+/** POST /api/v2/skills/proposals/{pid}/withdraw */
+export type WithdrawSkillProposalParams = {
+  "Idempotency-Key": string;
+  pid: string;
+};
+export type WithdrawSkillProposalBody = Empty;
+export type WithdrawSkillProposalResponse = unknown;
