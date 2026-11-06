@@ -7,6 +7,7 @@ from typing import Callable
 from backend import screening
 
 from . import harness as X
+from . import skills as K
 from .harness import CLAUDE_ID, DANA_ID, LEAD_ID, OMAR, OPENAI_ID, PM
 
 ATTACK = "a01-ignore-direct"        # an attack the patterns also catch
@@ -270,6 +271,32 @@ def s_settings(org, items, judge):
             ("an unknown mode is refused", bad.status == 422, str(bad.status))]
 
 
+# ---------------------------------------------------------------------------------------------- 11 skills
+def s_skills(org, items, judge):
+    cases = K.load_cases()
+    problems = K.case_problems(cases)
+    proposals = K.propose_all(org, cases)
+    rows = K.screen_all(org, cases, proposals)
+    ok, lines = K.grade(cases, rows)
+    missed, floored = K.pattern_checks(cases, rows)
+    clean = [c for c in cases if c["label"] == "clean"]
+    poisoned = [c for c in cases if c["label"] == "poisoned"]
+    refused = {c["id"]: K.approve(org, proposals[c["id"]]).status for c in poisoned}
+    approved = {c["id"]: K.approve(org, proposals[c["id"]]).status for c in clean}
+    acknowledged = K.approve(org, proposals[poisoned[0]["id"]], acknowledged=True).status
+    leaks = K.audit_leaks(org, cases)
+    events = X.one(org, "SELECT count(*) FROM events WHERE action='skill.screened'")
+    return [("the skill cases are well formed, anonymized and enough", not problems, "; ".join(problems)),
+            ("every case is screened and graded as its label", ok, "; ".join(line for line in lines if line.startswith("FAIL"))),
+            ("the plain-code checks find every listed pattern, with no floor kind in a clean skill",
+             not missed and not floored, "; ".join(missed + floored)),
+            ("a clean skill is approved without acknowledgement", set(approved.values()) == {200}, str(approved)),
+            ("an unsafe skill needs the admin's acknowledgement", set(refused.values()) == {422} and acknowledged == 200,
+             f"{refused}, acknowledged {acknowledged}"),
+            ("screen and call audit rows never carry a skill's text", not leaks and events == len(cases),
+             "; ".join(leaks) or f"{events} screen events")]
+
+
 SCENARIOS = [
     Scenario(1, "corpus", "The corpus is well formed, anonymized and big enough.", s_corpus),
     Scenario(2, "hold", "Hold at every door: attacks held (mail warned), lookalikes and benign input passed.", s_hold),
@@ -284,5 +311,7 @@ SCENARIOS = [
              "lets the text through with only the patterns' warning.", s_fail_open),
     Scenario(9, "cache", "A re-read is answered from the kept verdict.", s_cache),
     Scenario(10, "settings", "Defaults, who may change them, and each switch.", s_settings),
+    Scenario(11, "skills", "Clean and poisoned skills: proposed, screened by the job (replayed answers), patterns found, "
+             "approval gated, audit clean.", s_skills),
 ]
 LIVE = ("hold",)   # what --live and the recorder run: the corpus at Hold through every door

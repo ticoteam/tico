@@ -626,6 +626,13 @@ class Scheduler:
                 if mark is None or at - mark >= every:
                     self.marks[key] = at
                     run(self.store, self.execution.auth, at, failures)
+        # Proposed skills and updates waiting for their screen (backend/skill_screening.py): on their own thread, since a
+        # screen's model call can take 90 seconds. The pass records its own run.
+        try:
+            from . import skill_screening
+            skill_screening.kick(self.store)
+        except Exception as exc:
+            failures.append({"skill_screening": type(exc).__name__})
         # Thread messages waiting to be routed: on their own thread, since a tick never waits on the decision model.
         try:
             from . import thread_routing

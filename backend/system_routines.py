@@ -194,6 +194,8 @@ ACTIONS = {
     "start_editions": ("start the Company page editions that came due and send waiting reader notices",
                        ("company", "page", "edition", "readers")),
     "screen_waiting": ("screen outside text a restart left waiting", ("screening", "outside", "text")),
+    "screen_skills": ("screen each proposed skill and update before an admin can approve it",
+                      ("skills", "screening", "proposals", "approve")),
     "finance_upkeep": ("post Finance's waiting events, usage and prepaids, end holds and finished approvals, open the next period",
                        ("finance", "events", "usage", "holds", "period", "approvals")),
     "deadline_sweeps": ("turn off failing webhooks, retire replaced computers, hand on support tickets and screened items",
@@ -287,6 +289,10 @@ def _release_hour_on(c, settings):
 def _company_page_open(c, settings):
     from .company_page import schedule
     return schedule.transparency(c) != "closed"
+
+
+def _skills_proposed(c, settings):
+    return _row_exists(c, "SELECT 1 FROM skill_proposals LIMIT 1")
 
 
 def _cloud_company(c, settings):
@@ -474,6 +480,11 @@ JOBS = [
         HOUSEKEEPING, "Every 10 seconds", 10, then=("start_editions",), applies=_company_page_open),
     Job("screening", "Outside text check", "Screens outside text a restart left waiting.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("screen_waiting",)),
+    Job("skill_screening", "Skill screening",
+        "Screens each proposed skill and update with plain-code patterns and Decide High before an admin can approve it. "
+        "Mandatory: no switch, and no other model answers in its place.",
+        CHECKS, "As skills are proposed", ai=True, labels=("skill-screen",), then=("screen_skills",),
+        applies=_skills_proposed),
     Job("finance_upkeep", "Finance upkeep",
         "Posts Finance's waiting events, Gateway usage and prepaid costs, ends expired holds and finished approvals, "
         "watches documents, and opens next month's period.",

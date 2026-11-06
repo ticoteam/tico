@@ -342,6 +342,10 @@ The check has four layers. Two of them can be switched off in the same card:
 - **Test** runs eight built-in samples, four attacks and four lookalikes (code, a security article, an ordinary
   request), through the model and shows which it got right. Each sample counts against the person's decision budget.
 
+Skills are screened separately, by the skill screening job, before an admin can approve one. That screen is mandatory
+and has no off switch. It never fails open: with no answer from Decide High, the proposal is not screened and cannot be
+approved. See [Skills: Screening](skills.md#screening).
+
 ## Outgoing webhooks
 
 An endpoint is an address Tico posts events to ([API](api.md#outgoing-webhooks)).
