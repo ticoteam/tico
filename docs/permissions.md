@@ -298,7 +298,6 @@ An incoming webhook (a trigger) is an address outside senders post to ([Webhooks
 
 Text from outside Tico can carry instructions meant for the bot that reads it (a prompt injection). Screening checks that
 text at the doors it comes in by, before a bot reads it. Change it in **Settings → Company & policies → What bots may do alone → Screening** (owner or admin).
-
 | Door | What is checked | Default |
 |---|---|---|
 | Webhooks | A call whose automation opens a task for a bot or starts a bot's turn, and a rule's `create_task` on `webhook.received`. In a JSON body, only its strings of three words or more, not ids, numbers or links | Warn |

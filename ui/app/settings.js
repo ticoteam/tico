@@ -112,7 +112,8 @@ const SETTINGS_PLACES = {
   providers: ['models'], chat: ['models'],   // chat: the old Chat tab, then the Models card; Models is AI models' first card
   gateway: ['models', '#settings-gateway-card'], 'turn-levels': ['limits', '#settings-limits'],
   billing: ['limits', '#settings-billing'],
-  system: ['automation'], recurring: ['automation'], rules: ['automation'], routines: ['automation'],
+  system: ['automation', '#set-automations-card'], recurring: ['automation'], rules: ['automation'], routines: ['automation'],
+  screening: ['policies', '#set-screening-card'], security: ['policies', '#set-screening-card'],
   tags: ['tasks', '#settings-tags'], types: ['tasks', '#settings-types'],
   mail: ['connections'], repos: ['connections', '#settings-repos'], repositories: ['connections', '#settings-repos'],
   inbound: ['connections'], 'email-phone': ['connections'],
@@ -122,6 +123,24 @@ const SETTINGS_PLACES = {
   privacy: ['policies', '#settings-privacy'], storage: ['policies', '#settings-storage'],
   history: ['health', '#settings-history'], runs: ['health', '#settings-history'],
 };
+// Cards moved by the current Settings layout keep opening their new home from old links and saved catalogue entries.
+function settingsMovedOut(tab, card = '') {
+  if (tab === 'strategy-bot' || tab === 'ceo' || card === 'set-strategy-bot-card') return `${SETTINGS}/bots/set-strategy-bot-card`;
+  if (tab === 'security' || tab === 'screening' || card === 'set-screening-card') return `${SETTINGS}/policies/set-screening-card`;
+  if (tab === 'releases' || card === 'set-release-card') { void settingsReleasesOpen(); return 'wait'; }
+  if (tab === 'task-manager' || card === 'set-task-manager-card') return '#/bot/task-manager/settings';
+  if (tab === 'system') {
+    if (card === 'set-system-card') return '#/automations/system-jobs';
+    return `${SETTINGS}/automation`;
+  }
+  return '';
+}
+async function settingsReleasesOpen() {
+  let schedule = null;
+  try { schedule = await releaseScheduleLoad(); } catch { /* no schedule to read: Bots */ }
+  const bot = schedule?.bot || schedule?.release_manager;
+  location.replace(bot ? `#/bot/${encodeURIComponent(bot)}/settings` : `${SETTINGS}/bots`);
+}
 // The names an address may carry: a group, or an old tab or section. A known one this person can't see opens You
 // with a line saying so; an unknown name just opens You.
 const SETTINGS_TABS = [...SETTINGS_GROUPS.map(g => g.key), ...Object.keys(SETTINGS_PLACES)];
@@ -289,9 +308,6 @@ function pageSettings() {
     ${pane('automation', `
       <section class="card" id="set-automations-card"><header><h2>Automations</h2></header>
         <p class="settings-card-line"><a href="#/automations">Bot routines, and the rules that wake a bot when something happens.</a></p></section>
-      <section class="card" id="set-system-card"><header><h2>What Tico runs on its own</h2></header><div id="set-system-routines">${skelRows(3, {card: true, dot: false})}</div></section>
-      <section class="card" id="set-release-card" hidden><header><h2>Releases</h2></header><div id="set-release"></div></section>
-      <section class="card" id="set-task-manager-card" hidden><header><h2>Task Manager</h2><span class="pill">Built-in</span></header><div id="set-task-manager"></div></section>
     `)}
     ${pane('tasks', `<div id="settings-tasks">
       <section class="card" id="set-ask-filter-card"><header><h2>What bots may put on you</h2></header><div id="set-ask-filter"></div></section>
@@ -403,8 +419,7 @@ function settingsShow(tab, {group: picked = false} = {}) {
   // A group or card this person can't see (an admin's link, a role just lost) opens You and says why.
   SETTINGS_DENIED = !shown && SETTINGS_TABS.includes(tab) && !['you', 'general'].includes(tab);
   SETTINGS_TAB = shown ? group : 'you';
-  if (!shown) SETTINGS_REVEAL = '';
-  // HQ may have changed while Settings was closed, or a previous read may have failed.
+  if (!shown) SETTINGS_REVEAL = '';  // HQ may have changed while Settings was closed, or a previous read may have failed.
   if (['people', 'computers'].includes(SETTINGS_TAB))
     void cloudSupportRead({fresh: true}).then(() => { if (settingsMachinesVisible()) renderSettingsMachines(); });
   const denied = $('#settings-denied');
@@ -441,9 +456,6 @@ function settingsShow(tab, {group: picked = false} = {}) {
   if (settingsMachinesVisible() && SETTINGS_DATA.loaded) void settingsMachinesRefresh();
   if (on('bots')) load(renderSettingsStrategyBot());
   if (on('limits')) load(SETTINGS_DATA.loaded && renderSettingsSpendLimits(), renderTeamBudgets(), SETTINGS_DATA.loaded && renderSettingsTurnLevels(), $('#settings-billing') && renderSettingsBilling());
-  if (on('automation')) {
-    load(renderSystemRoutines(), renderReleaseCard(), renderTaskManagerCard());
-  }
   if (on('tasks')) load(roadmapSettingsMount(), askFilterSettingsLoad());
   if (on('connections')) load(!formBusy($('#settings-repos')) && renderSettingsRepos(), !formBusy($('#settings-webhooks')) && renderSettingsWebhooks());
   if (on('policies')) {

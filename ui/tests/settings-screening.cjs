@@ -1,8 +1,9 @@
 // Settings > Company & policies > Screening (ui/app/settings-release.js, backend/screening.py): an owner or admin sees a switch per
 // detector (Patterns, Model) and one row per door (Webhooks, Mail, Ideas, Watchers, Documents, Slack) with a mode, mail offering Off and
 // Warn only; a change is one PUT; Run test
-// shows passed/total and each sample; Recent lists holds and warnings with a Task link. A member never sees the card.
-// Fits a phone with no sideways scroll. Fixtures only. TICO_SHOTS=<dir> also saves desktop and phone screenshots.
+// shows passed/total and each sample; Recent lists holds and warnings with a Task link. A member has no Security tab and
+// never sees the card. Fits a phone with no sideways scroll. Fixtures only. TICO_SHOTS (or TICO_UI_SHOTS)=<dir> also
+// saves the tab dark at desktop and phone.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -68,7 +69,7 @@ async function open(browser, role, viewport) {
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
-  const shots = process.env.TICO_SHOTS;
+  const shots = process.env.TICO_SHOTS || process.env.TICO_UI_SHOTS;
   try {
     for (const [role, viewport] of [['owner', {width: 1440, height: 900}], ['admin', {width: 390, height: 844}]]) {
       const {page, errors, writes} = await open(browser, role, viewport);
@@ -115,14 +116,17 @@ async function open(browser, role, viewport) {
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), role + ': no sideways scroll');
       if (shots) {
         fs.mkdirSync(shots, {recursive: true});
-        await card.scrollIntoViewIfNeeded();
-        await card.screenshot({path: path.join(shots, `screening-${viewport.width}.png`)});
+        await page.evaluate(() => window.ticoTheme.set('dark'));
+        await page.evaluate(() => scrollTo(0, 0));
+        await page.screenshot({path: path.join(shots, `settings-security-${viewport.width}-dark.png`)});
       }
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // A member: GET answers 403 and the card is never shown.
+    // A member: no Security tab, and its address says it is for admins with no card.
     const {page, errors} = await open(browser, 'member', {width: 1440, height: 900});
+    assert.equal(await page.locator('[data-settings-tab="security"]').count(), 0);
+    await page.evaluate(() => { location.hash = '#/settings/security'; });
     await page.waitForTimeout(300);
     assert.equal(await page.locator('#set-screening-card:visible').count(), 0);
     assert.deepEqual(errors, []);

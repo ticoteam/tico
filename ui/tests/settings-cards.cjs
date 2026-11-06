@@ -75,7 +75,7 @@ async function open(browser, {role = 'owner', hash = '#/settings', phone = false
         const cards = await page.evaluate(g => {
           const pane = document.querySelector(`[data-settings-group="${g}"]`);
           const shown = el => el.getClientRects().length > 0;
-          return [...pane.querySelectorAll('section.card, #hl-page')].filter(shown).filter(el => !el.closest('dialog')).map(el => {
+          return [...pane.querySelectorAll('section.card, #hl-page')].filter(shown).filter(el => !el.closest('dialog') && el.id !== 'settings-health-line').map(el => {
             const line = el.querySelector(':scope > .settings-card-line');
             return {id: el.id || el.className, decorated: el.hasAttribute('data-settings-card'),
               ask: !!el.querySelector(':scope > header > [data-settings-ask], :scope > .settings-card-line > [data-settings-ask]'),

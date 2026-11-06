@@ -2,10 +2,11 @@
 // their sentences, Suggests actions current (the level every install starts at); picking another shows its sentence
 // again and changes nothing until Confirm, and Cancel leaves it as it was. Turning the regular checks off saves at
 // once. Only the owner has the card: an admin or a member has none, and nobody has a tab or a chat for it. The card and
-// headings use the bot's name. Fixtures only.
+// headings use the bot's name. TICO_UI_SHOTS=<dir> saves its Settings tab dark at 1440 and 390. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const {html, uiFile, harnesses} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
@@ -15,8 +16,9 @@ const LEVELS = [
   {level: 3, name: 'Acts on its own', sentence: 'It also decides on its own: it makes, moves up, reassigns and closes bot tasks, each with an Undo.', ready: true},
 ];
 
-async function open(browser, {role = 'owner', name = 'Strategy Bot'} = {}) {
-  const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
+const SETTINGS = '#/bot/goal-manager/settings';
+async function open(browser, {role = 'owner', name = 'Strategy Bot', hash = SETTINGS, viewport = {width: 1440, height: 900}} = {}) {
+  const page = await browser.newPage({viewport, serviceWorkers: 'block'});
   const errors = [], posted = [];
   page.on('pageerror', e => errors.push(e.message));
   const state = {regular_checks: true, level: 2, level_chosen: false, level_changed_by: '', level_changed_by_name: '', level_changed_at: '', level_history: [], levels: LEVELS,
@@ -32,7 +34,8 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot'} = {}) {
     const config = {version: '0.1.0', app_name: 'Tico'};
     if (p === '/api/me') return json({id: role === 'owner' ? 'ana' : 'cara', role, name: 'Ana', email: 'ana@example.com', cloud: true, registered: true, config});
     if (p === '/api/v2/config') return json(config);
-    if (p === '/api/employees') return json([{name: 'goal-manager', display_name: name, status: 'active'}]);
+    if (p === '/api/employees') return json([{name: 'goal-manager', display_name: name, status: 'active', host: 'keeper', can_chat: true,
+      can_manage: role === 'owner', users: [{id: 'ana', name: 'Ana'}], schedules: [], revision: 1}]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/models') return json({models: [], harnesses});
@@ -70,8 +73,7 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot'} = {}) {
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/settings');
-  await page.locator('#settings-tabs').waitFor();
+  await page.goto('https://tico-ui.test/' + hash);
   return {page, errors, posted};
 }
 
@@ -166,7 +168,22 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot'} = {}) {
       // Even its old address shows no card for them (a member may not see the Bots group at all).
       await page.evaluate(() => { location.hash = '#/settings/strategy-bot'; });
       await page.waitForFunction(() => !location.hash.endsWith('/strategy-bot'));
+      await page.waitForTimeout(200);
       assert.equal(await page.locator('#set-strategy-bot-card, [data-settings-tab="strategy-bot"]').count(), 0, JSON.stringify(opts));
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // Dark, desktop and phone: the card sits in the bot's Settings with nothing wider than the screen.
+    for (const viewport of [{width: 1440, height: 900}, {width: 390, height: 844}]) {
+      const {page, errors} = await open(browser, {viewport});
+      await page.locator('#set-strategy-bot [data-strategy-level]').first().waitFor();
+      await page.evaluate(() => window.ticoTheme.set('dark'));
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), viewport.width + ': no sideways scroll');
+      if (process.env.TICO_UI_SHOTS) {
+        fs.mkdirSync(process.env.TICO_UI_SHOTS, {recursive: true});
+        await page.locator('#set-strategy-bot-card').scrollIntoViewIfNeeded();
+        await page.screenshot({path: path.join(process.env.TICO_UI_SHOTS, `bot-settings-strategy-${viewport.width}-dark.png`)});
+      }
       assert.deepEqual(errors, []);
       await page.close();
     }

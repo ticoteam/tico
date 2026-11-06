@@ -138,13 +138,15 @@ function route(hash = location.hash) {
   else if (S.route === '#/settings/people') { SETTINGS_TAB = 'people'; location.replace(SETTINGS); return; }   // setup's people to invite
   else if (S.route === '#/settings/computers') { SETTINGS_TAB = 'devices'; location.replace(SETTINGS); return; }
   else if (['#/settings/subscriptions', '#/subscriptions'].includes(S.route)) { SETTINGS_TAB = 'models'; location.replace(SETTINGS); return; }   // Subscriptions are on Models
-  // Old links and bookmarks to the Strategy Bot's settings address still open its card (Settings > Bots).
-  else if (S.route === '#/settings/ceo') { location.replace(SETTINGS + '/strategy-bot'); return; }
+  // Old links and bookmarks to the Strategy Bot's Settings address resolve through SETTINGS_PLACES in settings.js.
   // Every other #/settings/<tab>[/<card>] opens that tab, and the card when named (the settings catalogue's links,
   // backend/settings_entries.py). settingsShow maps old names and sections and puts the tab's own address back in
   // the bar, so a tab can be bookmarked and shared: #/settings/people, #/settings/models, …
   else if (/^#\/settings\/[a-z-]+(?:\/[a-z0-9-]+)?\/?(\?.*)?$/.test(S.route)) {
     const [path, query] = S.route.slice(11).split('?'), [tab, card] = path.split('/');
+    // A System card (or the tab) that moved out of Settings opens where it went; Releases reads its bot first.
+    const moved = settingsMovedOut(tab, card);
+    if (moved) { if (moved !== 'wait') location.replace(moved); return; }
     if (tab === 'history') settingsHistoryAddress(query);   // History's view and filters (ui/app/settings-history.js)
     SETTINGS_REVEAL = card ? '#' + card : '';
     // The Models card and Company turn levels moved from Computers to Models.

@@ -147,7 +147,7 @@ call went to it. People who manage the webhook read the whole body.
 
 Before a bot gets a task or turn from a call, Tico's [screening](permissions.md#screening) checks the call's text for a prompt
 injection. A possible one reaches the bot with a warning line on top. At Hold, a likely one is held: the task goes to a
-person titled `Held: ...`, and handing it to the bot releases it. Settings → System → Screening sets this per door
+person titled `Held: ...`, and handing it to the bot releases it. Settings → Security → Screening sets this per door
 (Warn by default); it fails open.
 
 ### Who may do what

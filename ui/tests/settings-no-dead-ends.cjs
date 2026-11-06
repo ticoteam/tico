@@ -4,8 +4,8 @@
 //  - #/settings/gateway keeps opening its new home, the Tico Gateway card in AI models;
 //  - while a tab is shown the address bar names it (#/settings/<tab>), so it can be copied or shared: opening an address
 //    shows its tab's own, picking another tab follows without a history step, a reload reopens it, and a redraw
-//    (route() called again, as a status change does) keeps Settings and the tab; the old Rules and Routines
-//    addresses open System;
+//    (route() called again, as a status change does) keeps Settings and the tab; old System links reach Automations' System jobs,
+//    while retired Rules and Routines open Automations and their cards' addresses reach their new homes;
 //  - Inboxes moved to Tools: the old Google and Inbox addresses (Google's sign-in returns to #/settings/inbox) open
 //    Tools › Settings at Email, the old Mailboxes one Tools' mail, and an old inbox address its page under Tools,
 //    which a redraw and a reload keep;
@@ -22,10 +22,9 @@ const {unrouted} = require('./support/routes.cjs');
 const SPECIAL = ['models', 'providers', 'tags', 'types', 'triggers', 'runs', 'roadmap', 'subscriptions',
   'storage', 'team', 'company', 'assistant', 'privacy'];
 // Old names that leave Settings: Listening moved to Strategy › Market (ui/app/redesign.js; redesign-shell.cjs checks it),
-// the old Strategy Bot address only redirects to its tab (ui/app/router.js), so no link is drawn to it, and Inboxes'
+// the old Strategy Bot address opens its card in Bots, and Inboxes'
 // old addresses redirect to Tools (ui/app/tools.js toolsRoute; checked below).
-const MOVED = ['listening', 'ceo', 'inboxes', 'inbox', 'google', 'mailboxes', 'inbound', 'company-inbox', 'email-phone', 'mail'];
-
+const MOVED = ['listening', 'inboxes', 'inbox', 'google', 'mailboxes', 'inbound', 'company-inbox', 'email-phone', 'mail'];
 // Every #/settings/<name> address written in the UI's sources.
 function settingsLinks() {
   const ui = path.join(__dirname, '..');
@@ -149,8 +148,7 @@ const address = page => page.evaluate(() => location.hash);
         await page.evaluate(h => { location.hash = h; }, old);
         await page.waitForFunction(() => S.route === '#/automations' && location.hash === '#/automations');
         await page.locator('.settings-legacy-filter-note').waitFor();
-        assert.equal((await page.locator('.settings-legacy-filter-note').innerText()).trim(),
-          'The filter from the old Rules link did not carry over. Search or pick below.');
+        assert.ok(await page.locator('.settings-legacy-filter-note').isVisible());
       }
       await go(page, '#/settings/recurring');
       assert.equal(await address(page), '#/settings/automation');

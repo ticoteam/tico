@@ -41,8 +41,10 @@ def _card(tab, card=""):
 
 
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > Company & policies", "Settings > People", "Settings > Computers", "Settings > Bots"
-RULES, HOOKS, TASKS, REPOS = "Settings > Automation", "Settings > Connections > Webhooks", "Settings > Tasks", "Settings > Connections > Repositories"
+RULES, HOOKS, TASKS, REPOS = "Automations > System jobs", "Settings > Connections > Webhooks", "Settings > Tasks", "Settings > Connections > Repositories"
 INBOXES, STRATEGY = "Tools", "Settings > Bots > Strategy Bot"
+RELEASES, TASK_MANAGER = "Release Manager > Settings > Releases", "Task Manager > Settings"
+SYSTEM_JOBS = "#/automations/system-jobs"
 INBOUND, TEXTS, MAIL = (INBOXES + " > Settings > " + s for s in ("Email", "Texts", "Letters in"))
 MODELS = "Settings > AI models"
 
@@ -66,8 +68,8 @@ _RULE_NAMES = {
 }
 _RULE_WHERE = {"health_monitor_reports": ("Settings > Health > Health monitor", _card("health")),
                "bot_reports_direct": (GENERAL + " > Team", _card("general", "settings-team")),
-               "stale_review": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
-               "topic_fresh": (RULES + " > What Tico runs on its own", _card("system", "set-system-card"))}
+               "stale_review": (RULES, SYSTEM_JOBS),
+               "topic_fresh": (RULES, SYSTEM_JOBS)}
 _ADMIN_RULES = ("stale_review", "topic_fresh", "org_rule_checks")
 
 TEAM_RULES = [
@@ -289,8 +291,7 @@ ENTRIES = TEAM_RULES + [
     S("strategy.checks", "Strategy bot regular checks", STRATEGY, "owner", "confirm", "POST",
       "strategy-bot/checks", "on", card=_card("bots", "set-strategy-bot-card")),
     S("strategy.level", "How much the Strategy bot does", STRATEGY, "owner", "confirm", "POST",
-      "strategy-bot/level", "level", "int", _card("bots", "set-strategy-bot-card")),
-    # Repositories
+      "strategy-bot/level", "level", "int", _card("bots", "set-strategy-bot-card")),    # Repositories
     S("repo.enabled", "Repository on", REPOS, "admin", "direct", "PUT", "repositories/{id}", "enabled",
       card=_card("repos", "set-repos")),
     S("repo.setup_command", "Repository setup command", REPOS, "admin", "direct", "PUT", "repositories/{id}",
@@ -299,21 +300,21 @@ ENTRIES = TEAM_RULES + [
       "new_bot_default", "text", _card("repos", "set-repos")),
     S("repos.product.create", "New product repository", REPOS, "owner", "confirm", "POST", "github/product-repos",
       value="json", card=_card("repos", "set-repos")),
-    # Rules
-    S("rules.system", "What Tico runs on its own", RULES + " > What Tico runs on its own", "admin", "direct", "PUT",
-      "system-routines/{id}", value="json", card=_card("system", "set-system-card"), words="schedule routine"),
-    S("rules.task_rule", "Task rule", RULES + " > What Tico runs on its own", "anyone", "direct", "PUT", "task-rules/{id}",
-      value="json", card=_card("system", "set-system-card")),
-    S("rules.task_rule.create", "New task rule", RULES + " > What Tico runs on its own", "anyone", "direct", "POST",
-      "task-rules", value="json", card=_card("system", "set-system-card")),
-    S("release.on", "Daily release", RULES + " > Releases", "admin", "direct", "PATCH", "release-schedule", "on",
-      card=_card("system", "set-release-card"), read="release-schedule#on"),
-    S("release.times", "Release times", RULES + " > Releases", "admin", "direct", "PATCH", "release-schedule",
-      "times", "list", _card("system", "set-release-card"), "release-schedule#times", words="release schedule"),
-    S("release.bot", "Release bot", RULES + " > Releases", "admin", "direct", "PATCH", "release-schedule", "bot",
-      "text", _card("system", "set-release-card"), "release-schedule#bot"),
-    S("release.writer", "Release notes writer", RULES + " > Releases", "admin", "direct", "PATCH",
-      "release-schedule", "writer", "text", _card("system", "set-release-card"), "release-schedule#writer"),
+    # System jobs and rules live on the Automations page; the legacy Rules address opens that page with its notice.
+    S("rules.system", "What Tico runs on its own", RULES, "admin", "direct", "PUT",
+      "system-routines/{id}", value="json", card=SYSTEM_JOBS, words="schedule routine"),
+    S("rules.task_rule", "Task rule", RULES, "anyone", "direct", "PUT", "task-rules/{id}",
+      value="json", card=SYSTEM_JOBS),
+    S("rules.task_rule.create", "New task rule", RULES, "anyone", "direct", "POST",
+      "task-rules", value="json", card=SYSTEM_JOBS),
+    S("release.on", "Daily release", RELEASES, "admin", "direct", "PATCH", "release-schedule", "on",
+      card=_card("releases"), read="release-schedule#on"),
+    S("release.times", "Release times", RELEASES, "admin", "direct", "PATCH", "release-schedule",
+      "times", "list", _card("releases"), "release-schedule#times", words="release schedule"),
+    S("release.bot", "Release bot", RELEASES, "admin", "direct", "PATCH", "release-schedule", "bot",
+      "text", _card("releases"), "release-schedule#bot"),
+    S("release.writer", "Release notes writer", RELEASES, "admin", "direct", "PATCH",
+      "release-schedule", "writer", "text", _card("releases"), "release-schedule#writer"),
     *[S("screening." + source, "Screening: " + name, GENERAL + " > What bots may do alone > Screening", "admin", "direct", "PUT", "screening",
         source, "choice:off|warn" + ("" if source == "mail" else "|hold"), _card("policies", "set-screening-card"),
         "screening#modes." + source, words="prompt injection screening")
@@ -322,10 +323,10 @@ ENTRIES = TEAM_RULES + [
         layer, card=_card("policies", "set-screening-card"), read="screening#layers." + layer,
         words="prompt injection screening detector")
       for layer, name in (("patterns", "Patterns"), ("model", "Decision model"))],
-    S("task_manager.on", "Task Manager", RULES + " > Task Manager", "owner", "direct", "POST", "task-manager/turn-on",
-      value="json", card=_card("system", "set-task-manager-card")),
-    S("task_manager.off", "Task Manager off", RULES + " > Task Manager", "owner", "direct", "POST",
-      "task-manager/turn-off", value="json", card=_card("system", "set-task-manager-card")),
+    S("task_manager.on", "Task Manager", TASK_MANAGER, "owner", "direct", "POST", "task-manager/turn-on",
+      value="json", card="#/bot/task-manager/settings"),
+    S("task_manager.off", "Task Manager off", TASK_MANAGER, "owner", "direct", "POST",
+      "task-manager/turn-off", value="json", card="#/bot/task-manager/settings"),
     # Webhooks: `incoming`, `outgoing` and `gateway` are the Webhooks tab's own parts, which ui/app/router.js opens from
     # `#/settings/webhooks/<part>` before the catalogue's generic `#/settings/<tab>/<card>` branch: rename them
     # together.

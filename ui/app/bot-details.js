@@ -17,6 +17,7 @@ async function botSettingsMount(slug) {
   } else settingsEditBot(slug, true);
   botScreenSettingsPaint(slug);
   settingsSearchRevealBot(slug);
+  void botBuiltinCardsMount(slug);
 }
 function botInstructionsMount(slug) {
   const host = $('#bot-instructions-editor'), bot = botRow(slug);
