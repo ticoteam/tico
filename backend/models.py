@@ -1856,6 +1856,7 @@ class SkillCopy(Contract):
 class SkillFile(Contract):
     """One text file of a skill folder. Its path and size are checked by the rules in clients/skills.py, not here."""
 
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)  # a file's own whitespace is its content
     path: str
     content: str
 
