@@ -1,3 +1,4 @@
+# pyright: strict
 """A bot's merge request for a docs-only pull request is refused: docs merge with no approval (policies/approvals.md).
 
 A pull request whose every changed file is under docs/ or ends in .md or .mdx needs no person's yes, and neither does
@@ -7,6 +8,7 @@ ahead as before, so a person still decides.
 """
 
 import re
+from typing import Any, cast
 from urllib.parse import quote
 
 from .store import Problem
@@ -29,18 +31,18 @@ SITE_MESSAGE = (
 )
 
 
-def is_docs_path(path):
+def is_docs_path(path: object) -> bool:
     text = str(path or "")
     return text.startswith("docs/") or text.lower().endswith(DOCS_SUFFIXES)
 
 
-def changed_files(service, repo, number):
+def changed_files(service: Any, repo: str, number: int) -> list[str] | None:
     """Every file the pull request changes, renames' old names too; None when GitHub will not say."""
     if service is None:
         return None
     try:
         token = service.mint([repo], {"pull_requests": "read", "contents": "read"})[0]
-        names = []
+        names: list[str] = []
         for page in range(1, PAGE_LIMIT + 1):
             response = service._call(
                 "GET",
@@ -50,11 +52,11 @@ def changed_files(service, repo, number):
             )
             if response.status_code != 200:
                 return None
-            files = response.json()
+            files = cast(list[dict[str, Any]], response.json())
             for item in files:
-                names.append(item["filename"])
+                names.append(str(item["filename"]))
                 if item.get("previous_filename"):
-                    names.append(item["previous_filename"])
+                    names.append(str(item["previous_filename"]))
             if len(files) < PAGE_SIZE:
                 return names or None
     except (Problem, RuntimeError, ValueError, KeyError, TypeError):  # unreadable: the request goes ahead
@@ -62,10 +64,11 @@ def changed_files(service, repo, number):
     return None
 
 
-def refusal(service, payload):
+def refusal(service: Any, payload: object) -> str | None:
     """The message that refuses this merge request, or None when it goes ahead."""
     if not isinstance(payload, dict):
         return None
+    payload = cast(dict[str, Any], payload)
     repo = str(payload.get("repo") or "").strip()
     number = str(payload.get("pr") or "").strip().lstrip("#")
     if not REPO.fullmatch(repo) or not number.isdigit():
@@ -78,7 +81,7 @@ def refusal(service, payload):
     return None
 
 
-def refuse(service, payload):
+def refuse(service: Any, payload: object) -> None:
     message = refusal(service, payload)
     if message:
         raise Problem(REFUSAL, message, 422)
