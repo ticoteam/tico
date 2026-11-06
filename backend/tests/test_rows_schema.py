@@ -65,6 +65,9 @@ TABLES = {
     rows.HomeMergeMessageRow: "home_merge_messages",
     rows.HistoryEventRow: "history_events",
     rows.BotSettingsRow: "bot_settings",
+    rows.ToolRow: "tools",
+    rows.ToolCheckRow: "tool_checks",
+    rows.ToolCallRow: "tool_calls",
 }
 
 
@@ -93,7 +96,7 @@ UNTYPED = frozenset({
     "automation_runs", "automation_turn_answers", "automation_versions", "automations", "backup_verified_blobs",
     "batches", "bills_inbound", "blob_locations", "blob_media", "blob_media_retries", "blob_purges", "blobs",
     "bookkeeper_seen", "bookkeeper_watch_listed", "bot_agent_instructions", "bot_browser_exits", "bot_budget",
-    "bot_config", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files", "bot_mail_settings",
+    "bot_config", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
     "bot_memory_documents", "bot_memory_oversized", "bot_memory_seen", "bot_memory_updates", "bot_repo_access",
     "bot_session_epochs", "bot_sessions", "bot_status", "bot_status_history", "bot_task_tabs", "bot_tool_requests",
     "bot_transition_checkpoints", "bot_transitions", "bots", "brand_drafts", "brand_versions", "browser_exit_marks",
@@ -133,7 +136,7 @@ UNTYPED = frozenset({
     "media_control", "meeting_brain", "meeting_comments", "meeting_deliveries", "meeting_importers", "meeting_items",
     "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty", "message_links_seen",
     "messages", "milestones", "model_login_cleared", "model_login_key_off", "model_logins", "model_subscriptions",
-    "notes", "oauth_clients", "oauth_grants", "oidc_codes", "oidc_sessions", "org_rule_holds", "org_rule_misses",
+    "notes", "oauth_clients", "oauth_grants", "oidc_codes", "oidc_sessions", "org_rule_holds",
     "org_rule_verdicts", "org_rules", "org_turn_waits", "owner_links", "pages", "perf_overloads", "perf_points",
     "perf_usage", "pin_places", "pins", "preferences", "provenance_clock", "rate_limits", "read_deps", "read_dirty",
     "read_index", "recording_source_refs", "recording_transcripts", "redesign_migrated", "refusals",

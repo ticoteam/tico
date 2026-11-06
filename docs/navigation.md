@@ -30,8 +30,8 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Store a Credential and grant it | Tools → Credentials → Add credential; then Access → Grant access |
 | Connect or review a Tool | Tools; Slack channels are under Tools → Slack channels |
 | Add or manage people and member rules | Settings → People |
-| Connect your Google account, or the whole Workspace (admins) | Settings → Inboxes → Settings → Email: pick One account at a time or Whole Workspace |
-| See and manage every mailbox, Tico address, number and mailing address | Settings → Inboxes |
+| Connect your Google account, or the whole Workspace (admins) | Tools > Settings > Email: pick One account at a time or Whole Workspace |
+| See and manage every mailbox, Tico address, number and mailing address | Tools |
 | Choose AI providers | Settings → Models |
 | Connect the Tico AI Gateway | Settings → Models → Tico Gateway → Advanced ([Tico AI Gateway](ai-gateway.md)) |
 | Connect your External agent | Connect an external agent beside your email |
@@ -39,7 +39,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Read or write team knowledge | Docs → Internal docs; outside sources are Linked docs |
 | Find a bot, human or page | ⌘K, or the search icon at the end of the sidebar's **Ask Tico** row (phone: the Search tab) |
 | Find a file or page any bot made | Library → Files (`#/library/files`); search finds text inside ([Files](files.md#library--files)) |
-| See every connection, who reads it and its bots | Library → Connections (`#/library/connections`) ([Connect tools](connect-tools.md#connections)) |
+| See every tool and connection, who uses it and its status | Tools (`#/tools`) ([Connect tools](connect-tools.md#tools-list)) |
 | Arrange your own landing page | Overview → Mine (`#/home`) ([Overview](overview.md#my-dashboard)) |
 | See rules or goals on the team chart, by bot | Overview → Graph (`#/overview/graph`, `?view=goals` for goals) ([Overview](overview.md#graph)) |
 | Open a page full size | Tap its card, or `#/page/<id>` ([Pages](pages.md)) |

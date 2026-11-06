@@ -1,6 +1,6 @@
 # Physical mail
 
-> **Unreleased**: the install side and Settings > Inboxes' Letters in are built; Tico Gateway's mailboxes are not on sale yet. The API
+> **Unreleased**: the install side and Tools' Letters in are built; Tico Gateway's mailboxes are not on sale yet. The API
 > below may change.
 
 Tico Mail brings the company's paper mail into Tico. Each scanned letter is saved as a file, read, sorted by kind and
@@ -48,7 +48,7 @@ of its tries.
 Legal goes to the owner whenever the reader or Decide says legal, however unsure: a missed summons costs more than
 a wrong card. A check works the same way: when the mailbox provider flags one in the envelope, or the reader sees
 one, it goes to the owner whatever Decide says, never to junk or the Assistant. Junk is archived only when Decide is sure; anything else short of its threshold goes to the Assistant.
-An owner or admin may choose an active bot for future legal mail in Settings > Inboxes > Settings > Letters in (Legal mail). The owner remains a party to
+An owner or admin may choose an active bot for future legal mail in Tools > Settings > Letters in (Legal mail). The owner remains a party to
 each private task and receives a notice with its deadline. A paused or unavailable bot falls back to the owner.
 Resetting the setting to Owner affects future letters; existing tasks stay where they are. Upgrading enables no
 grants and keeps legal mail going to the owner.
@@ -140,9 +140,9 @@ capped. Status sync polls each active record with backoff and publishes a permis
 with the changed row. Cancellation passes through HQ's honest answer; User Credit jobs cannot be cancelled and
 there is no promised undo window.
 
-## Settings > Inboxes
+## Tools
 
-Each address is a Letters in row in Settings > Inboxes (`#/settings/inboxes`), with open orders as Pending and the
+Each address is a Letters in row in Tools (`#/tools?show=mail`), with open orders as Pending and the
 email-in inbox as Mail by email (still listed, as Not in use, once it is turned off while letters it brought in remain,
 so a failed one can be retried). An address's page shows its Form 1583 progress until it is active, who reads it (an
 owner or admin gives and removes Read on that address there), its automations and its letters (date, sender, kind,
@@ -180,7 +180,7 @@ Bots and people read letters with `hub mail list` and `hub mail read <id>` (MCP 
 
 ## Personal alerts
 
-In **Settings → Inboxes → Alerts**, a person can verify their own US or Canadian phone and opt into texts, with
+In **Settings → General → Notifications**, a person can verify their own US or Canadian phone and opt into texts, with
 separate consent for calls. Only that person, including through their personal API token, can read or change the
 number; bots, BotOps and the Assistant cannot do it for them. Verification is free. Each accepted alert, including
 a test, costs the company **$1**, covering its text or call. A test explicitly accepts that charge.

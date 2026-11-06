@@ -1,8 +1,8 @@
-// Offline browser regression: one Google mailbox's page in Settings > Inboxes (ui/app/inboxes-email.js,
-// #/settings/inboxes/mailbox/<id>) over a fake GET /v2/mailboxes/<id> (ui/tests/support/mailboxes-fake.cjs). Whoever
+// Offline browser regression: one Google mailbox's page under Tools (ui/app/inboxes-email.js,
+// #/tools/mailbox/<id>) over a fake GET /v2/mailboxes/<id> (ui/tests/support/mailboxes-fake.cjs). Whoever
 // manages it (an admin for a shared inbox, the owner for a personal mailbox) adds access, switches Read / Read and write
 // and removes it; the implicit row (Admins, or the owner) has no controls. Automations switch on and off from here.
-// Stop using in Tico confirms in the page and returns to the list. Anyone else reads the page with no controls. A
+// Stop using in Tico confirms in the page and returns to Tools. Anyone else reads the page with no controls. A
 // refused sign-in or a failing sync shows on the page with its reason; Check connection asks Google for a Workspace
 // mailbox and reads the page again; Recent lists its newest mail. A card another file registers with inboxesPanel
 // shows under the mailbox's own.
@@ -13,11 +13,11 @@ const {mailboxesFake, open, shot} = require('./support/mailboxes-fake.cjs');
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
 
 const READY = '#mailbox-access tr[data-mb-access-row]';
-const at = id => ({hash: `#/settings/inboxes/mailbox/${id}`, ready: READY});
+const at = id => ({hash: `#/tools/mailbox/${id}`, ready: READY});
 const accessRows = page => page.$$eval('#mailbox-access tr[data-mb-access-row]', rows => rows.map(row => {
   const cells = [...row.querySelectorAll('td')];
   const picked = row.querySelector('[data-mb-level][aria-checked=true]');
-  return [cells[0].textContent.replace(/\s+/g, ' ').trim(), picked ? `[${picked.textContent}]` : cells[1].textContent.trim(),
+  return [cells[0].lastElementChild.textContent.replace(/\s+/g, ' ').trim(), picked ? `[${picked.textContent}]` : cells[1].textContent.trim(),
     !!row.querySelector('[data-mb-remove]')];
 }));
 const writes = (fake, method, path) => fake.writes.filter(w => w.method === method && w.path === path).map(w => w.body);
@@ -34,15 +34,18 @@ const scenarios = {
   'an admin on a shared inbox adds, changes and removes access; the Admins row has no controls': async browser => {
     const fake = mailboxesFake();
     const {page, seen} = await open(browser, fake, googleFake(), at('mb-support'));
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/mailbox/mb-support');
-    assert.equal(await page.locator('#inbox-head h2').textContent(), 'support@acme.example');
+    assert.equal(await page.evaluate(() => location.hash), '#/tools/mailbox/mb-support');
+    assert.equal(await page.locator('#inbox-head h1').textContent(), 'support@acme.example');
     assert.equal(await page.locator('[data-ib-crumb]').textContent(), 'support@acme.example');
     assert.equal(await pill(page).textContent(), 'Connected');
     assert.equal(await page.locator('[data-mb-status]').textContent(), 'Shared inbox · Not synced yet · Tico may read and organize');
-    assert.equal(await page.locator('[data-ib-list]').count(), 0, 'the list is not drawn under the page');
-    await page.locator('#inbox-send-audit').waitFor();
-    assert.deepEqual(await page.locator('.ib-detail .card > header h2').allTextContents(), ['Who can use it', 'Automations', 'Recent', 'Sending', 'Waiting to send', 'Send audit']);
-    assert.equal(await page.locator('#mailbox-access thead th').nth(2).textContent(), 'Sends');
+    assert.equal(await page.locator('#tools-root').count(), 0, 'the list is not drawn under the page');
+    await page.locator('#inbox-sending [data-send-bot-row]').first().waitFor();
+    // Shown in the page's order: who can use it, its limits and what waits to send, then keys, automations, recent.
+    const cards = await page.locator('.ib-detail .card').evaluateAll(cs => cs.map(c => [c.getBoundingClientRect().top, c.querySelector('header h2').textContent])
+      .sort((a, b) => a[0] - b[0]).map(([, h]) => h));
+    assert.deepEqual(cards, ['Who can use it', 'Limits', 'Waiting to send', 'Keys', 'Automations', 'Recent']);
+    assert.deepEqual(await page.locator('#inbox-sending .tt-limits th').allTextContents(), ['Bot', 'Sends', 'What', 'A day']);
     assert.deepEqual(await accessRows(page), [
       ['Admins', 'Read and write', false],
       ['Cara', '[Read]', true],
@@ -80,7 +83,7 @@ const scenarios = {
     const {page, seen} = await open(browser, fake, googleFake(), at('mb-support'));
     const row = page.locator('[data-mb-routine-row=au-triage]');
     assert.equal(await row.locator('a').getAttribute('href'), '#/automations/au-triage');
-    assert.equal(await row.locator('a').textContent(), 'Support triage');
+    assert.equal(await row.locator('a').evaluate(a => a.lastChild.textContent), 'Support triage', 'its name, after its icon');
     const on = row.locator('[data-mb-routine]');
     assert.equal(await on.isChecked(), true);
     await on.click();   // a click, not uncheck(): a second draw of the page may replace the switch mid-click
@@ -108,7 +111,7 @@ const scenarios = {
     await third.page.close();
   },
 
-  'Stop using in Tico confirms in the page, then shows the list with the mailbox not in use': async browser => {
+  'Stop using in Tico confirms in the page, then opens Tools': async browser => {
     const fake = mailboxesFake();
     const {page, seen} = await open(browser, fake, googleFake(), at('mb-support'));
     page.on('dialog', () => { throw new Error('no browser dialog'); });
@@ -121,29 +124,26 @@ const scenarios = {
     assert.equal(writes(fake, 'DELETE', '/api/v2/mailboxes/mb-support').length, 0, 'Cancel stops nothing');
     await page.locator('[data-mb-stop]').click();
     await page.locator('dialog.settings-confirm [data-confirm-ok]').click();
-    await page.locator('[data-ib-row="mailbox:mb-support"]').waitFor();
+    await page.locator('#tools-root').waitFor();
     assert.equal(writes(fake, 'DELETE', '/api/v2/mailboxes/mb-support').length, 1);
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes');
+    assert.equal(await page.evaluate(() => location.hash), '#/tools');
     assert.equal(await page.locator('[data-ib-detail]').count(), 0);
-    assert.equal(await page.locator('[data-ib-row="mailbox:mb-support"] [data-ib-status]').textContent(), 'Not in use');
     assert.deepEqual(seen.errors, []);
     await page.close();
   },
 
-  'the breadcrumb returns to the list and its address, and the list opens another mailbox': async browser => {
+  'the breadcrumb returns to Tools, and another mailbox\'s address opens it, afresh on a second visit': async browser => {
     const fake = mailboxesFake();
     const {page, seen} = await open(browser, fake, googleFake(), at('mb-ana'));
-    await page.locator('.ib-crumb a[href="#/settings/inboxes"]').click();
-    await page.locator('[data-ib-row]').first().waitFor();
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes');
+    const crumb = () => page.locator('.tt-crumb a[href="#/tools"]').click().then(() => page.locator('#tools-root').waitFor());
+    const ben = () => page.evaluate(() => { location.hash = '#/tools/mailbox/mb-ben'; })
+      .then(() => page.locator('#inbox-head h1', {hasText: 'ben@acme.example'}).waitFor());
+    await crumb();
+    assert.equal(await page.evaluate(() => location.hash), '#/tools');
     assert.equal(await page.locator('[data-ib-detail]').count(), 0);
-    // And the address opens it again: a second visit to a page drawn before is drawn afresh.
-    await page.locator('[data-ib-row="mailbox:mb-ben"] .ib-name a').click();
-    await page.locator('#inbox-head h2', {hasText: 'ben@acme.example'}).waitFor();
-    await page.locator('.ib-crumb a[href="#/settings/inboxes"]').click();
-    await page.locator('[data-ib-row]').first().waitFor();
-    await page.locator('[data-ib-row="mailbox:mb-ben"] .ib-name a').click();
-    await page.locator('#inbox-head h2', {hasText: 'ben@acme.example'}).waitFor();
+    await ben();
+    await crumb();
+    await ben();
     await page.locator(READY).first().waitFor();
     assert.deepEqual(seen.errors, []);
     await page.close();
@@ -191,22 +191,16 @@ const scenarios = {
   },
 
 
-  'a refused sign-in and a failing sync show on the page with the last sync, and the list says the same': async browser => {
+  'a refused sign-in shows on the page with the last sync and where to sign in again': async browser => {
     const fake = mailboxesFake();
     const support = fake.state.mailboxes.find(m => m.id === 'mb-support');
     Object.assign(support, {sync: 'signin', sync_error: 'Google refused the sign-in (invalid_grant)', synced_at: new Date(Date.now() - 3 * 3600e3).toISOString()});
-    Object.assign(fake.state.mailboxes.find(m => m.id === 'mb-ben'), {sync: 'failed', sync_error: 'Gmail answered 500'});
     const {page, seen} = await open(browser, fake, googleFake(), at('mb-support'));
     assert.equal(await pill(page).textContent(), 'Sign-in expired');
     assert.equal(await pill(page).getAttribute('data-ib-status'), 'attention');
     assert.equal(await page.locator('[data-mb-sync-error]').textContent(), 'Google refused the sign-in (invalid_grant)');
     assert.match(await page.locator('[data-mb-status]').textContent(), /^Shared inbox · Last sync 3h ago · Tico may/);
-    assert.equal(await page.locator('[data-mb-signin] a').getAttribute('href'), '#/settings/inboxes/settings/email');
-    await page.locator('.ib-crumb a[href="#/settings/inboxes"]').click();
-    await page.locator('[data-ib-row="mailbox:mb-ben"]').waitFor();
-    const status = id => page.locator(`[data-ib-row="mailbox:${id}"] [data-ib-status]`).textContent();
-    assert.deepEqual([await status('mb-support'), await status('mb-ben'), await status('mb-dan'), await status('mb-old'), await status('mb-ana')],
-      ['Sign-in expired', 'Sync failed', 'Awaiting person', 'Not in use', 'Connected']);
+    assert.equal(await page.locator('[data-mb-signin] a').getAttribute('href'), '#/tools/settings/email');
     assert.deepEqual(seen.errors, []);
     await page.close();
   },
@@ -246,7 +240,7 @@ const scenarios = {
         host.innerHTML = `<section class="card" data-test-panel>${esc(inbox.kind)} ${esc(inbox.address)} ${inbox.can_manage}</section>`;
       }});
       inboxesPanel('test-other', {kinds: ['tico'], order: 2, render: host => { host.innerHTML = '<p data-test-other>no</p>'; }});
-      return renderSettingsInboxes();
+      return inboxesRender();
     });
     await page.locator('[data-test-panel]').waitFor();
     assert.equal(await page.locator('[data-test-panel]').textContent(), 'mailbox support@acme.example true');

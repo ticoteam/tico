@@ -1,6 +1,6 @@
-"""Settings > Inboxes > Connect Google: a person connects their own mailbox through a Google app the server uses.
+"""Tools > Settings > Email > Connect Google: a person connects their own mailbox through a Google app the server uses.
 
-Tico's shared app (the server's environment) asks for read only. The company's own app (Settings > Inboxes) also asks for
+Tico's shared app (the server's environment) asks for read only. The company's own app (Tools) also asks for
 the act scopes the mail CLI gates labels, drafts and calendar writes on. The browser comes back to the server; the
 computer that syncs mail finishes the sign-in and keeps the grant.
 No Workspace admin, no service account, no domain-wide delegation, and nobody connects anyone else's mailbox.
@@ -38,7 +38,7 @@ def app(api):
 
 @pytest.fixture
 def own_app(app, monkeypatch):
-    """The company's own Google app, set in Settings > Inboxes, signs people in: the environment's client is cleared so
+    """The company's own Google app, set in Tools, signs people in: the environment's client is cleared so
     that it is the one a connect uses now (oauth_client prefers the environment)."""
     settings = app.app.state.store.settings
     monkeypatch.setattr(settings, "google_oauth_client_id", None)

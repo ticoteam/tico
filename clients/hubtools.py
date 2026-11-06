@@ -4056,19 +4056,12 @@ def email_cancel(api, args):
     return api.post(f"email/sends/{quote(str(args['id']), safe='')}/cancel", {}, key=_key(args))
 
 
-@tool("hub_bot_mail", "Show, or set, whether a bot sends mail without a per-message approval and its forward targets. "
-      "Only a person who manages the bot sets it, as themselves; a bot, BotOps included, is refused. `outbound_send` and "
-      "`forward_to` in bot.yaml are only a request: this setting decides (docs/mail.md, \"Turning sending on\").",
-      {"slug": _s("The bot"), "outbound_send": {"type": "boolean", "description": "Send without approval: on or off"},
-       "forward_to": _s("Comma list of forward addresses; an empty string clears the list"),
-       "from_request": {"type": "boolean", "description": "Take what the bot's bot.yaml asks, as its computer reported it"}},
+@tool("hub_bot_mail", "Show or set whether a bot sends mail on its own or asks first. Only a person who manages the "
+      "bot sets it; bots are refused. Full policy: hub_email_policy.",
+      {"slug": _s("The bot"), "outbound_send": {"type": "boolean", "description": "On their own: on or off"}},
       required=("slug",), writes=True)
 def bot_mail(api, args):
     body = {k: args[k] for k in ("outbound_send",) if args.get(k) is not None}
-    if args.get("forward_to") is not None:
-        body["forward_to"] = [a.strip() for a in str(args["forward_to"]).replace(";", ",").split(",") if a.strip()]
-    if args.get("from_request"):
-        body["from_request"] = True
     if not body:
         return api.get(f"bots/{args['slug']}/mail-settings")
     return api.post(f"bots/{args['slug']}/mail-settings", body, key=_key(args))
@@ -7085,14 +7078,35 @@ def inbound_wait(api,args):
     return api.post('inbound/wait',body)
 
 
-# ----------------------------------------------------------------------------- connections (backend/connections.py)
-@tool('hub_connections_list','Every connection you may see: Slack, GitHub, mail bots, Tico addresses and numbers, meeting '
-      'importers, incoming and outgoing webhooks, physical mail and Listening. Each row: name, status, scope, who reads '
-      'it, its bots and where to configure it. Follow next with cursor.',
-      {'cursor':_s('The previous page\'s next'),'limit':{'type':'integer','minimum':1,'maximum':100}})
-def connections_list(api,args):
+# ----------------------------------------------------------------------------- tool index (backend/api_tools.py)
+@tool('hub_tool_index','The Tools you may see (API tools, mailboxes, numbers, Slack, GitHub, webhooks...): kind, '
+      'status, way, who can use it, needs you. Page with cursor.',
+      {'cursor':_s('The previous page\'s next'),'limit':{'type':'integer','minimum':1,'maximum':500}})
+def tool_index(api,args):
     page = dict(limit=args.get('limit'), cursor=args.get('cursor'))
-    return _as_person(api).get('connections', **{k: v for k, v in page.items() if v is not None})
+    return _as_person(api).get('tool-index', **{k: v for k, v in page.items() if v is not None})
+
+
+@tool('hub_tool_check','Check an API tool\'s keys now: Working, Key rejected or Check failed, per key.',
+      {'id':_s('Its hub_tool_index row id, without api:')}, required=('id',))
+def tool_check(api,args):
+    return _as_person(api).post('api-tools/'+quote(str(args['id']).removeprefix('api:'),safe='')+'/check',{})
+
+
+@tool('hub_tool_call','Call a proxied API tool: METHOD and vendor API path, through the Tico proxy (it adds the key '
+      'and logs the call). tool: the id in TICO_TOOL_<ID>_URL. Returns {status, content_type, body}.',
+      {'tool':_s('The API tool id, e.g. close-crm'),
+       'method':{'type':'string','enum':['GET','HEAD','OPTIONS','POST','PUT','PATCH','DELETE']},
+       'path':_s('The vendor API path, e.g. /api/v1/me/'),
+       'data':{'description':'A JSON body'},
+       'query':{'type':'array','items':{'type':'string'},'description':'Query parameters, each key=value'}},
+      required=('tool','method','path'), local=True)
+def tool_call(api,args):
+    from clients import tool_call as T
+    try:
+        return T.call(args['tool'], args['method'], args['path'], args.get('data'), args.get('query') or ())
+    except T.CallError as exc:
+        return {'error': str(exc)}
 
 
 # ----------------------------------------------------------------------------- letters out (backend/letters.py)
@@ -8046,7 +8060,9 @@ ASSISTANT_HIDDEN = frozenset({
     "hub_credential_grant", "hub_credential_revoke", "hub_credential_delete", "hub_credential_set", "hub_credential_import",
     "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_call_token",
     "hub_sql", "hub_support_file", "hub_support_report", "hub_support_send", "hub_trigger_sign", "hub_message_redact",
+    "hub_tool_call",
     "hub_task_readers_list",  # hub_task_show has the readers; the Assistant's listing is near its size cliff
+    "hub_tool_check",         # hub_tool_index has each tool's status; Check now is on the tool's page. Same cliff.
 })
 
 

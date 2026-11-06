@@ -133,8 +133,9 @@ const newContext = (browser, phone) => browser.newContext({viewport: phone ? PHO
         const v = await visit(context, {phone, finance: 'no'});
         same(v, tag + ', no Finance');
         const keys = v.painted.rows.filter(r => r.on).map(r => r.key);
-        assert.deepEqual(keys.slice(0, 13), ['overview', 'strategy', 'growth', 'updates', 'tasks', 'automations', 'library', 'Library pages',
-          'docs', 'files', 'meetings', 'tools', 'connections'], tag + ': the order, from the first paint');
+        assert.deepEqual(keys.slice(0, 12), ['overview', 'strategy', 'growth', 'updates', 'tasks', 'automations', 'tools', 'library',
+          'Library pages', 'docs', 'files', 'meetings'], tag + ': the order, from the first paint');
+        assert.ok(!keys.includes('connections'), tag + ': Connections is part of Tools');
         assert.ok(keys.includes('threads') && keys.includes('organisation'), tag + ': Threads and the Team section too');
         if (phone) assert.deepEqual(v.painted.bar, ['org', 'threads', 'mobile-ask', 'tasks', 'updates', 'more'], tag + ': the bottom bar');
         else assert.ok(v.painted.foot.includes('#ask-row:true'), tag + ': Ask Tico at the foot from the first paint');

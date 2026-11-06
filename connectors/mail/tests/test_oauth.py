@@ -336,7 +336,7 @@ class Server:
 
 
 class ServerRefreshed(Base):
-    """A grant from Settings > Inboxes > Connect Google: Tico's server holds the client secret and refreshes it."""
+    """A grant from Tools > Settings > Email > Connect Google: Tico's server holds the client secret and refreshes it."""
 
     def finish(self, server=None, google=None):
         server = server or Server()
@@ -502,7 +502,7 @@ class ActGrant(Base):
                 oauth.server_token(oauth.grant("ana@acme.example"), "gmail", [G + "gmail.modify"], "ana@acme.example")
         self.assertEqual(caught.exception.kind, "scope")
         self.assertEqual(caught.exception.msg, "ana@acme.example's Connect Google grant does not hold that access")
-        self.assertEqual(caught.exception.hint, "Connect Google again in Settings > Inboxes to give Tico this access.")
+        self.assertEqual(caught.exception.hint, "Connect Google again in Tools > Settings > Email to give Tico this access.")
 
 
 class AdminPolicy(Base):

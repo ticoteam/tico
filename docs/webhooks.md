@@ -437,8 +437,8 @@ is refused (`hub webhook example` too); turn the endpoint back on first.
 - A bot cannot make an endpoint itself. Its request files an approval of kind *send*. A person approves, and the bot repeats the
   call. The approver then owns the endpoint.
 - Bots can list endpoints without the full address. They cannot read send logs.
-- A bot sends a custom event only while its **outbound send** switch is on (Settings → Bots → Mail sending, or
-  `hub bot mail <slug> --send`), and only to an endpoint that listens for it. The Strategy Bot sends nothing.
+- A bot sends a custom event only while its sending policy is **On their own** (Settings → Bots → <bot> → Email
+  sending), and only to an endpoint that listens for it. The Strategy Bot sends nothing.
 - An endpoint hears about a task, approval or bot only if its owner could read it. A thread or message event goes only to an
   endpoint whose owner may read that thread. `message.held` goes to owner and admin endpoints, as does a health, inbound or
   webhook event. Thread events carry ids and facts, never a message's words.

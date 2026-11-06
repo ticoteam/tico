@@ -275,7 +275,7 @@ class ConnectorPublisher:
                 "message": str(answer.get("message") or "")[:500], "hint": str(answer.get("hint") or "")[:500]}
 
     def google_connect_tick(self, limit=5):
-        """Finish the Connect Google sign-ins and disconnects people started in Settings > Inboxes."""
+        """Finish the Connect Google sign-ins and disconnects people started in Tools > Settings > Email."""
         done = 0
         for _ in range(limit):
             if self.stop.is_set():

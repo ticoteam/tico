@@ -1,4 +1,5 @@
-// The registry module's policy writes, inheritance, cancellation and responsive layouts over a fake API.
+// Email sending (ui/app/inboxes-sending.js) over a fake API: the company policy's writes, a mailbox's Limits card (each
+// bot's sends, what and a day; the caps in one summary; Edit opens the form), inheritance, cancel and phone layout.
 const {chromium} = require('playwright');
 const fs = require('node:fs');
 const assert = require('node:assert/strict');
@@ -21,7 +22,8 @@ const root = path.resolve(__dirname, '..');
         const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         const inboxesSetting = (key, spec) => specs[key] = spec;
         const inboxesPanel = (key, spec) => panels[key] = spec;
-        const inboxesCard = (id, title, body) => '<section id="'+id+'"><h2>'+esc(title)+'</h2>'+body+'</section>';
+        const inboxesCard = (id, title, body, action = '') => '<section id="'+id+'"><header><h2>'+esc(title)+'</h2>'+action+'</header>'+body+'</section>';
+        const avatar = id => '<span class="av">'+esc(id[0])+'</span>', personDisplay = id => id;
         const toast = () => {};
         const doc = {company: {}, inbox: {}, bot: {}, effective: {mode:'ask_first',what:'replies_only',to:'anyone',daily_cap:50,mailbox_daily_cap:200,company_daily_cap:1000,pacing_seconds:10,undo_seconds:120,ask_new_address:true,ask_attachments:true,ask_many_recipients:true,ask_legal_money:true,who_can_ok:'bot_managers',approvers:[],sources:{mode:'company'}}};
         const send = {id:'pending-one',subject:'<script>unsafe</script>',recipients:['a@vendor.example'],state:'pending',send_after:'2026-11-04T12:00:00Z',can_cancel:true,actor:'bot:ops',decision:{reasons:[]},content_sha256:'a'.repeat(64),provider_message_id:'provider-1'};
@@ -37,6 +39,8 @@ const root = path.resolve(__dirname, '..');
       await form.locator('[name=mode]').selectOption('on_their_own');
       await form.locator('[name=ask_attachments]').uncheck();
       await form.locator('[name=undo_seconds]').selectOption('600');
+      await form.locator('[name=blocked_recipients]').fill('spam.example, Ops@Vendor.example');
+      await form.locator('[name=max_outside_recipients]').fill('3');
       await form.locator('[type=submit]').click();
       await page.waitForFunction(() => refreshes === 1);
       const write = await page.evaluate(() => writes[0]);
@@ -44,7 +48,18 @@ const root = path.resolve(__dirname, '..');
       assert.equal(write.b.mode, 'on_their_own');
       assert.equal(write.b.ask_attachments, false);
       assert.equal(write.b.undo_seconds, 600);
-      await page.evaluate(() => panels['email.sending'].render(document.querySelector('#detail'), {address:'support@acme.example',can_manage:true,accesses:[{grantee_type:'bot',grantee_id:'ops',name:'Ops'}]}, ctx));
+      // The settings carried over from registry/mail-policy.yaml save as lists, numbers and booleans like the rest.
+      assert.deepEqual(write.b.blocked_recipients, ['spam.example', 'Ops@Vendor.example']);
+      assert.deepEqual(write.b.owner_handles, []);
+      assert.equal(write.b.max_outside_recipients, 3);
+      assert.equal(typeof write.b.second_review, 'boolean');
+      await page.evaluate(() => panels['email.sending'].render(document.querySelector('#detail'), {address:'support@acme.example',can_manage:true,accesses:[{grantee_type:'bot',grantee_id:'ops',name:'Ops',level:'read_write'}]}, ctx));
+      await page.locator('#inbox-sending [data-send-bot-row=ops]').waitFor();
+      assert.deepEqual(await page.locator('#inbox-sending .tt-limits th').allTextContents(), ['Bot', 'Sends', 'What', 'A day']);
+      assert.match(await page.locator('#inbox-sending [data-send-bot-row=ops]').innerText(), /Ops[\s\S]*Ask first · Company[\s\S]*Replies only[\s\S]*50/);
+      assert.match(await page.locator('#inbox-sending .ib-send-summary').innerText(), /This mailbox\s+200 a day[\s\S]*Company\s+1,000 a day[\s\S]*Undo\s+2 min/);
+      assert.match(await page.locator('#inbox-sending').innerText(), /People send as themselves, with no limits\./);
+      assert.equal(await page.locator('#detail [data-send-form]').isVisible(), false, 'the form waits behind Edit');
       assert.match(await page.locator('#inbox-waiting-to-send').textContent(), /<script>unsafe<\/script>/);
       assert.equal(await page.locator('#detail script').count(), 0);
       await page.locator('[data-send-preview]').click();
@@ -58,17 +73,15 @@ const root = path.resolve(__dirname, '..');
       assert.equal(await page.locator('#detail [name=who_can_ok]').inputValue(), 'named_people');
       assert.equal(await page.locator('#detail [name=approvers]').inputValue(), 'cara');
       assert.match(await page.locator('#detail').textContent(), /Bot managers · Company \+ Named people · Inbox/);
+      await page.locator('#detail [data-send-edit]').click();
       await page.locator('#detail [data-send-form] [type=submit]').click();
       await page.waitForFunction(() => writes.some(w => w.b.who_can_ok === 'named_people' && w.b.approvers[0] === 'cara'));
       await page.locator('#detail [data-send-inherit]').click();
       await page.waitForFunction(() => writes.some(w => w.b.inherit === true));
-      await page.locator('[data-send-audit]').click();
-      await page.locator('[data-send-activity] code').waitFor();
-      assert.match(await page.locator('[data-send-activity]').textContent(), /provider-1/);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `overflow at ${width}`);
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('Email Sending: settings, inheritance, cancel, audit and phone layout passed');
+    console.log('Email Sending: settings, mailbox Limits, inheritance, cancel and phone layout passed');
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exitCode = 1;});

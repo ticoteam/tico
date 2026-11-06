@@ -240,7 +240,7 @@ def inventory(c, settings, auth, who, aliases=None):
             if bot["id"] not in item["bots"]:
                 item["bots"].append(bot["id"])
             # The problem a computer or the hub found (a missing credential, an MCP server that refused it) and the
-            # variable it is read from: Library › Tools lists them as the tool's issues. Names only, never a value.
+            # variable it is read from: Tools lists them as the tool's issues. Names only, never a value.
             item["connections"].append({"bot": bot["id"], "slug": slug, "status": tool["status"], "identity": tool["identity"], "can": tool["can"],
                                         **({"problem": tool["problem"]} if tool.get("problem") else {}),
                                         **({"env": tool["env"]} if tool.get("env") else {}),
@@ -257,7 +257,7 @@ def custom_page(item):
             "access": "", "credentials": [], "declared_as": "",
             "writes": "allowed" if any(verb not in READ_VERBS
                                        for connection in item["connections"] for verb in connection["can"]) else "never", "owner_id": "owner", "aliases": [], "queries": [], "query_count": 0,
-            "body": "", **item}   # who has it is Library › Tools' Access card
+            "body": "", **item}   # who has it is Tools' Access card
 
 
 def learnings(c, service):

@@ -10,7 +10,6 @@ from unittest import mock
 from types import SimpleNamespace
 
 import pytest
-import yaml
 
 from backend import judge
 from backend.store import Problem
@@ -145,42 +144,6 @@ def test_new_old_format_approval_cannot_authorize_an_added_internal_bcc(inbox):
     assert inbox.post("/api/v2/approvals", json={"kind": "send", "payload": payload}, headers=headers(attempt["token"])).status_code == 422
 
 
-def test_only_approvals_that_predate_queue_cutover_keep_the_old_recipient_scope(inbox):
-    original = S.snapshot(mime(to=["ben@acme.example"]), BOX)
-    with inbox.app.state.store.transaction() as c:
-        approval = H.approval_request(c, "bot:ops", "send", {"mailbox": BOX, "to": ["ben@acme.example"],
-            "cc": [], "subject": original["subject"], "body_sha256": original["body_sha256"]}, to="human:ana")
-        H.approval_decide(c, "human:ana", approval["id"], "approved")
-        cutover = c.execute("SELECT applied_at FROM schema_migrations WHERE version='20261105040656_email_sending_queue'").fetchone()[0]
-        c.execute("UPDATE approvals SET created_at=? WHERE id=?", (H.shift(cutover, seconds=-1), approval["id"]))
-    queued = queue(inbox, actor="bot:ops", raw=mime(to=["ben@acme.example"], Bcc="cara@acme.example"), approval_id=approval["id"])
-    assert queued["decision"]["approved"] and queued["state"] == "pending"
-
-
-@pytest.mark.parametrize("synced,cap,allowed", [(False, 2, False), (True, 2, False), (True, 3, True)])
-def test_retained_daily_cap_counts_the_union_of_history_and_queue(inbox, synced, cap, allowed):
-    autonomous(inbox)
-    registry(inbox, defaults={"max_sends_per_day": cap, "per_recipient_cooldown_days": 0})
-    with inbox.app.state.store.transaction() as c:
-        incoming(c, sender=BOX, mid="pre-cutover")
-        c.execute("UPDATE mail_messages SET labels='[\"SENT\"]',epoch=? WHERE msg_id='pre-cutover'", (H.parse_ts(H.now()).timestamp(),))
-    first = queue(inbox, raw=mime(body="First new send"))
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"])["id"] == first["id"]
-    assert post(inbox, "connectors/email/sends/" + first["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])["send"]
-    post(inbox, "connectors/email/sends/" + first["id"] + "/result", {"status": "sent", "message": "new-provider"}, token=machine["token"])
-    if synced:
-        with inbox.app.state.store.transaction() as c:
-            incoming(c, sender=BOX, mid="new-provider")
-            c.execute("UPDATE mail_messages SET labels='[\"SENT\"]',epoch=? WHERE msg_id='new-provider'", (H.parse_ts(H.now()).timestamp(),))
-    third = queue(inbox, raw=mime(body="Third overall send"))
-    leased = claim(inbox, machine["token"])
-    assert bool(leased) is allowed
-    if leased:
-        assert leased["id"] == third["id"]
-        assert post(inbox, "connectors/email/sends/" + third["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])["send"]
-
-
 @pytest.mark.parametrize("scenario", ["cancel_twice", "conference_twice", "conference_failure_twice", "trusted_duplicates", "legacy_no_snapshot", "legacy_notes", "legacy_link", "changed_hold", "moved_hold", "unrelated", "edit_create_failure", "edit_create_pending", "edit_reuse_failure", "edit_reuse_ready"])
 def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario):
     from contextlib import nullcontext
@@ -244,8 +207,7 @@ def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario
         request.execute = finish
         return request
     with closing(sqlite3.connect(":memory:")) as connection:
-        ctx = SimpleNamespace(conn=connection, mailbox=BOX, dry=False, calendar=calendar, gmail=mock.MagicMock(), audit=mock.MagicMock(),
-                              policy={"defaults": {"max_sends_per_day": 20}})
+        ctx = SimpleNamespace(conn=connection, mailbox=BOX, dry=False, calendar=calendar, gmail=mock.MagicMock(), audit=mock.MagicMock())
         def submit(mailbox, raw, thread_id, reply_id):
             return queue(inbox, actor="bot:ops", raw=raw, thread_id=thread_id, reply_to_id=reply_id)
         def read(path):
@@ -372,7 +334,7 @@ def test_chat_instruction_requires_a_prior_exact_preview_and_unambiguous_yes(inb
         c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), seconds=1), note["id"]))
         c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (note["id"], queued["id"]))
         row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
-        assert S.approved(c, inbox.app.state.auth, row, S.effective(c, BOX, "ops")) is allowed
+        assert S.approved(c, inbox.app.state.auth, row, S.effective(c, BOX, "ops")) == ("message" if allowed else "")
 
 
 def test_company_recipient_message_type_and_approver_cannot_be_loosened(inbox):
@@ -388,72 +350,6 @@ def test_company_recipient_message_type_and_approver_cannot_be_loosened(inbox):
     assert queued["state"] == "blocked" and "internal_only" in queued["decision"]["reasons"]
 
 
-def registry(inbox, **values):
-    base = {"global": {"send_enabled": True}, "internal_domains": ["acme.example"],
-            "defaults": {"max_sends_per_day": 20, "per_recipient_cooldown_days": 0}}
-    (inbox.app.state.store.settings.registry_dir / "mail-policy.yaml").write_text(yaml.safe_dump({**base, **values}))
-
-
-@pytest.mark.parametrize("restriction,reason", [
-    ({"global": {"send_enabled": False}}, "registry_send_disabled"),
-    ({"mailboxes": {BOX: {"paused": True}}}, "registry_mailbox_paused"),
-    ({"blocklist": {"addresses": ["ben@acme.example"]}}, "registry_blocklist"),
-    ({"owner_handles_personally": {"domains": ["acme.example"]}}, "registry_owner_handles_personally"),
-])
-def test_migrated_bot_cannot_skip_registry_checks_at_enqueue_or_dispatch(inbox, restriction, reason):
-    with inbox.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_mail_settings VALUES('ops',1,'[]',?,'human:ana')", (H.now(),))
-        c.execute("INSERT INTO email_sending_policies VALUES('bot:ops',?,?,'migration')",
-                  ('{"mode":"on_their_own","legacy":true}', H.now()))
-    registry(inbox, **restriction)
-    blocked = queue(inbox, actor="bot:ops", raw=mime(to=["ben@acme.example"]))
-    assert blocked["state"] == "blocked" and reason in blocked["decision"]["reasons"]
-    registry(inbox)
-    autonomous(inbox)
-    queued = queue(inbox, actor="bot:ops", raw=mime(to=["ben@acme.example"], body="A second intent"))
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"])["id"] == queued["id"]
-    registry(inbox, **restriction)
-    assert post(inbox, "connectors/email/sends/" + queued["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])["send"] is None
-
-
-def test_registry_daily_cap_cooldown_and_recipient_caps_apply_to_direct_api(inbox):
-    autonomous(inbox)
-    registry(inbox, defaults={"max_sends_per_day": 1, "per_recipient_cooldown_days": 3, "max_external_recipients": 1})
-    assert "registry_recipient_cap" in queue(inbox, raw=mime(to=[CONTACT, "two@vendor.example"]))["decision"]["reasons"]
-    first = queue(inbox)
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"])
-    post(inbox, "connectors/email/sends/" + first["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])
-    post(inbox, "connectors/email/sends/" + first["id"] + "/result", {"status": "sent", "message": "receipt"}, token=machine["token"])
-    second = queue(inbox, raw=mime(body="Different message"))
-    assert claim(inbox, machine["token"]) is None
-    with inbox.app.state.store.read() as c:
-        row = c.execute("SELECT * FROM email_sends WHERE id=?", (second["id"],)).fetchone()
-        reasons = S.decision(c, inbox.app.state.auth, row, dispatch=True)["reasons"]
-    assert "registry_daily_cap" in reasons and "registry_cooldown" in reasons
-
-
-def test_a_retained_allowance_is_revoked_when_the_current_registry_removes_its_recipient(inbox):
-    with inbox.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_mail_settings VALUES('ops',1,'[]',?,'human:ana')", (H.now(),))
-        c.execute("INSERT INTO email_sending_policies VALUES('bot:ops',?,?,'migration')", (json.dumps({
-            "mode": "on_their_own", "legacy": True, "legacy_allowances": {BOX: [CONTACT]}}), H.now()))
-    allowance = {"employee": "ops", "mailbox": BOX, "recipients": {"source": "list", "list": [CONTACT]}}
-    registry(inbox, allowances=[allowance])
-    queued = queue(inbox, actor="bot:ops")
-    assert queued["state"] == "pending"
-    with inbox.app.state.store.transaction() as c:
-        c.execute("UPDATE email_sends SET created_at=?,send_after=? WHERE id=?",
-                  (H.shift(H.now(), minutes=-3), H.shift(H.now(), minutes=-1), queued["id"]))
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"])["id"] == queued["id"]
-    allowance["recipients"]["list"] = []
-    registry(inbox, allowances=[allowance])
-    permit = post(inbox, "connectors/email/sends/" + queued["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])
-    assert permit["send"] is None
-
-
 def test_unnamed_inline_files_require_approval_and_bind_the_actual_bytes(inbox):
     autonomous(inbox, ask_attachments=True)
     msg = EmailMessage()
@@ -467,21 +363,6 @@ def test_unnamed_inline_files_require_approval_and_bind_the_actual_bytes(inbox):
     msg.get_payload()[1].set_payload(base64.b64encode(b"changed").decode())
     changed = queue(inbox, raw=raw(msg), approval_id=first["approval_id"])
     assert changed["state"] == "waiting_approval" and not changed["decision"]["approved"]
-
-
-def test_retained_daily_cap_counts_verified_sent_history_before_the_new_queue(inbox):
-    autonomous(inbox)
-    registry(inbox, defaults={"max_sends_per_day": 1, "per_recipient_cooldown_days": 0})
-    with inbox.app.state.store.transaction() as c:
-        incoming(c, sender=BOX, mid="old-sent")
-        c.execute("UPDATE mail_messages SET labels='[\"SENT\"]',epoch=? WHERE msg_id='old-sent'",
-                  (H.parse_ts(H.now()).timestamp(),))
-    queued = queue(inbox)
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"]) is None
-    with inbox.app.state.store.read() as c:
-        row = c.execute("SELECT decision FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
-        assert "registry_daily_cap" in json.loads(row["decision"])["reasons"]
 
 
 def test_classifier_sees_html_as_well_as_plain_text_and_never_truncates_to_a_no(inbox):

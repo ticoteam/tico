@@ -42,7 +42,7 @@ function meetSourceItems(state) {
     const name = source.id === 'granola' && g ? 'Granola API key' : source.name;
     const row = rows.find(r => r.id === source.id);
     if (source.id === 'close') {
-      const link = word => `<a class="${row && row.status !== 'needs_setup' ? 'ghost' : 'primary'} small" href="${INTEGRATIONS}/close-crm" data-act="close-open">${word}</a>`;
+      const link = word => `<a class="${row && row.status !== 'needs_setup' ? 'ghost' : 'primary'} small" href="#/tools/close-crm" data-act="close-open">${word}</a>`;
       if (row && row.status !== 'needs_setup') on.push({id: 'close', name, row, actions: link('Manage')});
       else off.push({id: 'close', name, actions: link('Connect')});
       continue;

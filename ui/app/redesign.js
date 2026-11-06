@@ -125,8 +125,7 @@ $('#side .rd-rules-toggle').onclick = () => { const open = rdRulesOpen(); RD_RUL
 function redesignNavCurrent(nav) {
   const r = S.route || '';
   if (nav === 'automations') return rdUnder(r, RD_AUTOMATIONS);
-  if (nav === 'tools') return rdUnder(r, RD_TOOLS);
-  if (nav === 'connections') return r.split('?')[0] === RD_CONNECTIONS;
+  if (nav === 'tools') return rdUnder(r, TOOLS_ROUTE);
   if (nav === 'files') return rdUnder(r, RD_FILES);
   if (nav === 'strategy') return rdUnder(r, '#/strategy');
   if (nav === 'growth') return rdUnder(r, GR_ROUTE);
@@ -153,7 +152,7 @@ function redesignRoute(r) {
     else $('#main').innerHTML = '<div id="automations-root" class="rd-automations"></div>';
     return true;
   }
-  if (rdToolsRoute(r)) return true;
+  if (toolsRoute(r)) return true;   // Tools and every old address of what it holds (ui/app/tools.js)
   if (rdUnder(r, BRAND_ROUTE)) { pageBrand(); return true; }   // ui/app/brand-page.js
   if (rdUnder(r, GR_ROUTE)) { pageGrowth(); return true; }   // ui/app/growth-page.js
   if (rdUnder(r, RULES_ROUTE)) { pageRules(); return true; }   // ui/app/org-rules.js
@@ -171,7 +170,7 @@ function redesignRoute(r) {
 // After every route: leave Automations' and Tools' state when off their pages.
 function redesignAfterRoute() {
   if (!rdUnder(S.route || '', RD_AUTOMATIONS)) window.automationsStop?.();
-  if (!rdUnder(S.route || '', RD_TOOLS)) rdToolsStop();
+  if (!rdUnder(S.route || '', TOOLS_ROUTE)) toolsStop();
   if (!rdUnder(S.route || '', RULES_ROUTE)) rulesStop();
   pagesStop(S.route || '');
   rdLibSync();

@@ -213,7 +213,7 @@ Mac that runs it (`~/tico-work` on Ana's Mac). The contract (`templates/employee
 | File | What |
 |---|---|
 | `AGENT.md` (with `AGENTS.md`/`CLAUDE.md` pointing at it) | its instructions, what it owns, how it starts and ends a run; read every run |
-| `bot.yaml` | `name`, `runtime`, `model`, `reasoning_effort`, `max_run_minutes`, `tools:`, `outbound_send` (`routines:` only in a template, as the seed) |
+| `bot.yaml` | `name`, `runtime`, `model`, `reasoning_effort`, `max_run_minutes`, `tools:` (`routines:` only in a template, as the seed) |
 | `state.md` | current focus, open threads, next step |
 | `memory/learnings.md`, `memory/decisions.md` | how to do the job; dated decisions |
 | `knowledge/` | what is true in its domain, one topic per file, dated sources |
@@ -591,7 +591,7 @@ if you edited elsewhere. Do not edit while the bot is running there.
 **You change a routine.** Routines are automations in Tico (`docs/routines.md`): edit one on the
 Automations page, or a bot changes its own with `hub automation update`. The change is in
 the table at once; a sleeping Mac does not block it. **You change a bot's switches.** Tools
-read `tools:` from the Mac checkout each time a bot sends or posts; whether it may send without approval comes from the mail switch a person sets in Tico (`outbound_send` in bot.yaml only asks). Model, effort, computer, humans, name,
+read `tools:` from the Mac checkout each time a bot sends or posts; whether a send goes is decided by Tico's send queue under the sending policy a person sets in Tico (On their own, Ask first or Never). Model, effort, computer, humans, name,
 status and reporting line are changed in **Settings → Bots**, not in the file.
 
 ### Profiles

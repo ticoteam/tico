@@ -1,6 +1,6 @@
 """Every lint rule, twice: a body that trips it and a body that does not.
 
-Pure - no CLI, no Gmail, no policy file. `ids()` collects the rule ids a body produces, so a
+Pure - no CLI, no Gmail, no Tico. `ids()` collects the rule ids a body produces, so a
 rule that stops firing fails a test rather than quietly letting a bad draft through.
 """
 
@@ -17,11 +17,6 @@ TZ = zone("America/Los_Angeles")
 NOW = datetime(2026, 9, 2, 10, 0, tzinfo=TZ)                # Wednesday 2026-09-02, 10:00 PT
 CTA = ("https://acme.example/rentals?utm_source=influencer&utm_medium=email"
        "&utm_campaign=ava-reyes")
-ALLOWANCE = {"urls": {"required_pattern":
-                      r"^https://acme\.example/rentals\?utm_source=influencer"
-                      r"&utm_medium=email&utm_campaign=[a-z0-9][a-z0-9-]*$",
-                      "forbidden": ["calendly.com", "acme.example/demo", "go.acme.example"]}}
-
 CLEAN = """Hi Ava,
 
 I'm Ana, the founder of Acme. We're the AI property manager: pricing, guest messaging and
@@ -48,12 +43,9 @@ def ids(res):
 class Clean(unittest.TestCase):
     def test_the_shipped_outreach_shape_passes(self):
         res = lint(CLEAN + f"\nHere's the product: {CTA}\n\nAna\n",
-                   to=["ava@creator.example"], slug="influencer", allowance=ALLOWANCE)
+                   to=["ava@creator.example"], slug="influencer")
         self.assertTrue(res.ok, ids(res))
         self.assertEqual(res["findings"], [])
-
-class House(unittest.TestCase):
-    """What used to be one company's wording is policy: phrases, hosts and signature names."""
 
 class Content(unittest.TestCase):
     def test_L030_secret_shapes(self):

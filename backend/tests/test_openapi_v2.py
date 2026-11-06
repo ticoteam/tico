@@ -195,6 +195,7 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("setBotUsageLimit", "put", "/api/v2/usage/limits/ops", json={"daily_usd": 20})
     call("getUsage", "get", "/api/v2/usage", params={"bot": "ops", "from": "2026-01-01", "to": "2026-01-03"})
     call("getHealth", "get", "/api/v2/health")
+    call("listToolIndex", "get", "/api/v2/tool-index")
 
 
 

@@ -592,7 +592,6 @@ def settings_for(c, bot, ctx=None):
     """The bot's settings as sentences, read from the modules that hold them. Each is {text, source, edit}; `edit` names
     the page and anchor where the setting is changed, or is null when no one changes it in the product."""
     from . import hubdb as HD
-    from . import mail_settings
     from . import turn_budgets
     from . import usage_limits
     ctx = ctx or _ctx(c)
@@ -609,10 +608,11 @@ def settings_for(c, bot, ctx=None):
         text = f"Only {_join(names)} can message {name}" if names else f"Nobody can message {name}"
     out.append({"text": text, "source": "bot_access", "edit": {"page": "bot", "anchor": "access"}})
 
-    mail = mail_settings.stored(c, bot)
+    from .email_sending import effective
     from .google_workspace import permissions
-    sends = bool(mail and mail["outbound_send"]) and permissions(c)["send_mail"]   # the company's Send mail too
-    out.append({"text": f"{name} {'can send mail' if sends else 'cannot send mail outside Tico'}",
+    mode = effective(c, bot=bot)["mode"] if permissions(c)["send_mail"] else "never"   # the company's Send mail too
+    out.append({"text": f"{name} " + {"on_their_own": "sends mail on its own", "ask_first": "asks before sending mail",
+                                      "never": "cannot send mail"}[mode],
                 "source": "mail_settings", "edit": {"page": "settings", "anchor": "people"}})
 
     default = usage_limits.company(c)

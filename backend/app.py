@@ -94,6 +94,7 @@ from .performance import listing as performance_listing
 from .credential_cards import install_credential_cards, scrub_attempt
 from .github import PATH as GITHUB_WEBHOOK_PATH
 from .triggers import PATH as TRIGGER_HOOK_PATH
+from .tool_proxy import PREFIX as TOOL_PROXY_PATH
 from .store import H, P, Problem, Store, bot_readiness, encode, message_page, refused, repo_url, task_message_page
 from . import bot_settings as BS
 
@@ -363,11 +364,17 @@ def create_app(settings=None):
                 except Exception:                              # noqa: S110 - captured above, and the run says it failed
                     pass
                 try:
-                    # Settings > Inboxes' pending and failing Workspace key is checked again (backend/google_workspace.py).
+                    # Tools > Settings > Email's pending and failing Workspace key is checked again (backend/google_workspace.py).
                     from . import google_workspace as workspace_checks
                     await asyncio.to_thread(system_routines.pass_of, store, "workspace_check", workspace_checks.tick, store)
                 except Exception as exc:
                     telemetry.capture("google_workspace", exc)
+                try:
+                    # Workspace inboxes' queued email, sent by the server itself after its undo window and pacing.
+                    from . import email_sending
+                    await asyncio.to_thread(email_sending.drain, store, auth)
+                except Exception as exc:
+                    telemetry.capture("email_drain", exc)
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=10)
                 except TimeoutError:
@@ -721,6 +728,10 @@ def create_app(settings=None):
             # A webhook trigger's address carries its own secret (backend/triggers.py).
             if request.url.path.startswith(TRIGGER_HOOK_PATH) and request.method == "POST":
                 return await call_next(request)
+            # A proxied tool call (backend/tool_proxy.py) carries its own signed token where the vendor's key goes, and
+            # no Tico identity: the route refuses anything not signed for that tool and a live run.
+            if request.url.path.startswith(TOOL_PROXY_PATH):
+                return await call_next(request)
             # An agent signing in to the MCP server over OAuth (backend/mcp_oauth.py): the metadata it reads first, and
             # the registration, token and revocation endpoints, which carry their own codes and secrets.
             if request.url.path.startswith(("/api/v2/oauth/", "/.well-known/oauth-", "/.well-known/openid-configuration/")) \
@@ -731,7 +742,7 @@ def create_app(settings=None):
                 return await call_next(request)
             # A Hermes profile with no credential pairs itself (backend/agents.py): it asks for a code, polls with its own
             # secret, and fetches the source-available connector it runs. The person's approval is the authenticated step.
-            # Settings > Inboxes' setup command (backend/google_workspace.py): the script, and the key upload and its keep
+            # Tools > Settings > Email's setup command (backend/google_workspace.py): the script, and the key upload and its keep
             # check when they carry the command's code. Nothing else passes without a session. The body is read here,
             # bounded, the way the relay's is, and the route reads it again from the buffer.
             from . import google_workspace as workspace_setup
@@ -8611,6 +8622,10 @@ def create_app(settings=None):
     install_meeting_review(app, store, auth, mutate)
     from .credentials import install_credentials
     install_credentials(app, store, delegate=delegated_identity, propose=propose_card)
+    from . import api_tools
+    api_tools.install(app, store, auth, settings)      # Tools: API tools, their keys and levels, and the tool index
+    from . import tool_proxy
+    tool_proxy.install(app, store)
     from .finance import actions as finance_vault
     finance_vault.use_vault(app.state.vault)      # never one an earlier app left behind (the scheduler may be off)
     from .google_workspace import install as install_google_workspace
@@ -8703,8 +8718,6 @@ def create_app(settings=None):
     triggers.install(app, settings, store, auth, mutate)
     from . import webhooks
     webhooks.install(app, settings, store, auth, mutate)
-    from . import connections
-    connections.install(app, store, auth, settings)      # Library › Connections: every connection in one list
     # GitHub App per company: manifest setup, installation tokens for runners (docs/github-app.md).
     from .github_app import install_github_app
     install_github_app(app, settings, store)

@@ -17,8 +17,8 @@ opens a task before it is optional.
 | Outside obligations (vendor terms, customer contracts, laws, HOA) | `policies/*.md`, bot instructions, prose | No record, no source, no "applies to", no review |
 | Reading a contract for what binds us | Nothing | The core of this plan |
 | Legal dates | Tasks have `due`; the scheduler runs daily jobs (`backend/scheduler.py`) | Nothing says "file X by Y every year, start 2 weeks before" |
-| Who may message a bot, sending outside, limits | `bot_access.py` write audience (Open by default); `outbound_send` toggle in Settings › People (`ui/app/settings-access.js`); `usage_limits.py`, `turn_budgets.py`, `task_caps.py` | All exist and are editable, but spread across Settings; there's no single view per bot |
-| Checks on outbound calls | Optional approvals (`hub approval request --kind send\|spend\|publish\|merge`, payload-bound, consumed once); the mail connector's per-send switch (`connectors/mail/policy.py`) | Nothing ties an outside obligation to the action it governs |
+| Who may message a bot, sending outside, limits | `bot_access.py` write audience (Open by default); the Email sending policy (`backend/email_sending.py`); `usage_limits.py`, `turn_budgets.py`, `task_caps.py` | All exist and are editable, but spread across Settings; there's no single view per bot |
+| Checks on outbound calls | Optional approvals (`hub approval request --kind send\|spend\|publish\|merge`, payload-bound, consumed once); Tico's send queue, which decides every email (`backend/email_sending.py`) | Nothing ties an outside obligation to the action it governs |
 
 ## The model
 
@@ -41,7 +41,7 @@ opens a task before it is optional.
   | Sentence | Source | Who edits |
   |---|---|---|
   | "Only Marketing and Chris can message Marketing Bot" (the write audience; see/read stay in Settings) | `bot_access.py` | the bot's managers |
-  | "Marketing Bot can't send outside Tico" / "…can send mail" | Settings › People `outbound_send`; `mail_settings.py` | a person who manages the bot (never a bot, BotOps or the Assistant, for mail) |
+  | "Marketing Bot can't send outside Tico" / "…can send mail" | the bot's Email sending policy; `email_sending.py` | a person who manages the bot (never a bot, BotOps or the Assistant, for mail) |
   | "Spends up to $X a month" or "Follows the company limit" | `usage_limits.py` (may be a company or group pool) | as today |
   | "Up to N turns a day" or "Team default: N" | `turn_budgets.py` | as today |
   | "Up to N tasks a day to Chris" (one per cap row) | `task_caps.py` | as today |

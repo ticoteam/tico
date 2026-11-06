@@ -41,7 +41,8 @@ PAGES = {
     "library": page("docs", "docs"),
     "files": page("files", "files"),
     "tools": page("tools", "integrations"),
-    "connections": page("connections", "connections"),
+    # The Tools page's one list (backend/api_tools.py); the old Connections row maps here until the nav drops it.
+    "connections": page("tool-index", "rows"),
     "meetings": page("meetings", "meetings"),
     "meetings-live": page("live-meetings", "meetings"),
     "threads": page("threads", "threads"),

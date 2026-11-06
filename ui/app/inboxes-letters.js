@@ -1,10 +1,10 @@
-/* ui/app/inboxes-letters.js — Letters in, in Settings > Inboxes: the company's mailing addresses and mail by email
+/* ui/app/inboxes-letters.js — Letters in, under Tools: the company's mailing addresses and mail by email
    (backend/postal_mail.py, docs/physical-mail.md). Addresses and orders come from Tico Gateway (GET /v2/postal/addresses),
-   letters from this server (GET /v2/postal/items). Kind 'postal': a row an address, an open order and the mail-by-email
-   inbox (kept, as Not in use, while it is off and has letters); one address's page shows its Form 1583 progress and
+   letters from this server (GET /v2/postal/items). Kind 'postal' (#/tools/address/<id>): an address, an open order or
+   the mail-by-email inbox ('intake'); one address's page shows its Form 1583 progress and
    its letters (sender, summary, scan, task). Scan and forward requests are not offered: Tico Gateway does not take
    them. Ordering, the intake inbox, a retry, Read grants and legal-mail routing are an owner's or admin's; everyone
-   else reads. An address's Who can use it gives Read on that address. In Inboxes > Settings > Letters in: Addresses
+   else reads. An address's Who can use it gives Read on that address. On Tools › Settings › Letters in: Addresses
    (Get an address), Bring your own, Who can use it (Read on all addresses) and Legal mail. Registry: ui/app/inboxes.js.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -68,30 +68,7 @@ function pmHome(item, addresses) {
   return hit ? pmId(hit) : open[0] ? pmId(open[0]) : addresses?.[0] ? pmId(addresses[0]) : '';
 }
 
-inboxesKind('postal', {group: 'letters-in', label: 'Letters in', order: 40,
-  rows: async ctx => {
-    const [pm, items, intake] = await Promise.all([pmLoad(ctx), pmItems(ctx).catch(() => []), pmIntakeGet(ctx).catch(() => ({}))]);
-    if (!pm.addresses && !pm.gatewayOff) throw new Error(pm.error);
-    const latest = {};
-    for (const m of items) { const home = pmHome(m, pm.addresses); if (home && m.received_at) latest[home] = Math.max(latest[home] || 0, Date.parse(m.received_at)); }
-    const readers = {people: 1, bots: 0, names: ['Task readers']};
-    const rows = (pm.addresses || []).map(a => {
-      const [status, statusText] = PM_ADDRESS_STATUS[a.status] || ['pending', a.status || 'Pending'];
-      return {id: pmId(a), name: pmName(a), sub: `${pmStateName(a.state)} · ${PM_KINDS[a.kind] || a.kind}`, status, statusText,
-        latest: latest[pmId(a)] || null, usedBy: readers};
-    });
-    for (const o of pm.orders.filter(o => o.status === 'open')) {
-      rows.push({id: 'order-' + (o.order_id || ''), name: `${pmStateName(o.state)} · ${PM_KINDS[o.kind] || o.kind}`, sub: 'Ordered',
-        status: 'pending', statusText: 'Ordered', latest: null, usedBy: {people: 0, bots: 0, names: []}});
-    }
-    // Turned off, mail by email stays listed while it has letters, so a failed one can still be retried.
-    const on = !!(intake.inbox_id || intake.hidden);
-    if (on || items.some(m => m.provider === 'email')) {
-      rows.push({id: 'intake', name: 'Mail by email', sub: !on ? 'Letters emailed earlier' : intake.hidden ? 'An inbox you can’t read' : intake.address || intake.inbox_id,
-        status: on ? 'ok' : 'off', latest: latest.intake || null, usedBy: readers, search: (intake.senders || []).join(' ')});
-    }
-    return rows;
-  },
+inboxesKind('postal', {label: 'Mailing address', order: 40,
   detail: (host, id, ctx) => pmDetail(host, id, ctx),
   add: {label: 'Mailing address', admin: true, open: ctx => pmOrderDialog(ctx)}});
 
@@ -108,7 +85,7 @@ async function pmDetail(host, id, ctx) {
       if (!ctx.live()) return null;
       if (!items.some(m => m.provider === 'email')) throw new Error('Mail by email is off');
       host.innerHTML = `${inboxesHead(host, {name: 'Mail by email', status: 'off', sub: 'Letters emailed earlier. New ones are not brought in.',
-          actions: ctx.admin ? '<a class="ghost" href="#/settings/inboxes/settings/letters-in" data-pm-intake-on>Turn on</a>' : ''})}${recent}`;
+          actions: ctx.admin ? '<a class="ghost" href="#/tools/settings/letters-in" data-pm-intake-on>Turn on</a>' : ''})}${recent}`;
       await pmLetters(host, ctx, 'intake');
       return {kind: 'postal', id, name: 'Mail by email', address: ''};
     }
@@ -366,7 +343,7 @@ async function pmIntake(host, ctx) {
     return;
   }
   if (!list.length) {
-    host.innerHTML = `${line}<p class="muted" data-pm-no-inbox>No Tico address yet. <a href="#/settings/inboxes">Add inbox</a></p>`;
+    host.innerHTML = `${line}<p class="muted" data-pm-no-inbox>No Tico address yet. <a href="#/tools">Add tool</a></p>`;
     return;
   }
   host.innerHTML = `${line}<label class="pm-intake">Inbox<select data-pm-intake-select>
@@ -431,12 +408,3 @@ inboxesSetting('letters-legal', {section: 'letters-in', order: 40,
   }});
 
 // ---------------------------------------------------------------------------------------------------------- First run
-inboxesStep('letters-in', {order: 30, title: 'Receive letters', optional: true,
-  done: async ctx => { const pm = await pmLoad(ctx); return !!(pm.addresses?.length || pm.orders.some(o => o.status === 'open')); },
-  render: async (host, ctx, done) => {
-    const pm = await pmLoad(ctx);
-    host.innerHTML = done ? '<p class="muted">Ordered.</p>'
-      : `<p><button type="button" class="ghost" data-pm-order${pm.gatewayOff ? ' disabled' : ''}>Get an address</button>${
-        pm.gatewayOff ? ` <span class="muted">${esc(pm.error)}</span>` : ''}</p>`;
-    host.querySelector('[data-pm-order]')?.addEventListener('click', () => pmOrderDialog(ctx));
-  }});

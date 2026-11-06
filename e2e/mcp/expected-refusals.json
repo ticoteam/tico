@@ -266,6 +266,7 @@
  "hub_thread_update": "404 not_found",
  "hub_thread_upload": "usage",
  "hub_tool_add": "422 entry",
+ "hub_tool_check": "404 not_found",
  "hub_tool_learn": "404 not_found",
  "hub_tool_query_search": "404 not_found",
  "hub_tool_remove": "404 not_found",

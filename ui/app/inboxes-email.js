@@ -1,9 +1,9 @@
-/* ui/app/inboxes-email.js — Email in Settings > Inboxes: the Google mailboxes Tico uses (backend/mailboxes.py).
-   Kind 'mailbox': its rows in the list (an admin sees every mailbox; everyone else their own and the ones shared with
-   them), one mailbox's page (#/settings/inboxes/mailbox/<id>: who can use it, Read or Read and write, its message
-   automations, its recent mail, Check connection and Stop using in Tico) and Add inbox > Email (Connect mailbox).
-   In Inboxes > Settings > Email: the Connection card (ui/google-connect.js draws it into #set-google) and What Tico may
-   do. First run's required step is Connect company email. Registry: ui/app/inboxes.js.
+/* ui/app/inboxes-email.js — The Google mailboxes Tico uses (backend/mailboxes.py), under Tools.
+   Kind 'mailbox': one mailbox's page (#/tools/mailbox/<address or id>: who can use it, Read or Read and write, its key,
+   its message automations, its recent mail, Check now and Stop using in Tico; the sending Limits card is
+   ui/app/inboxes-sending.js's), its Activity tab (#/tools/mailbox/<…>/activity: what was sent from it, GET
+   /v2/email/sends) and Add tool > Email (Connect mailbox). On Tools › Settings › Email: the Connection card
+   (ui/google-connect.js draws it into #set-google) and What Tico may do. Registry: ui/app/inboxes.js.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -16,7 +16,6 @@ const MB_LEVELS = [['read', 'Read'], ['read_write', 'Read and write']];
 const MB_MAY = [['organize_mail', 'organize', 'Organize', 'label, archive, draft'], ['send_mail', 'send', 'Send', ''],
   ['change_calendar', 'change_calendar', 'Change calendar', '']];
 const mbLevelName = level => (MB_LEVELS.find(([k]) => k === level) || [level, level])[1];
-const mbLink = id => inboxesLink('mailbox', id);
 const mbMailboxes = ctx => ctx.once('mailboxes', () => get('/v2/mailboxes', {fresh: true}));
 const mbGoogle = ctx => ctx.once('google', () => get('/v2/google', {fresh: true}));
 // "read and organize", "read, organize and send": what Tico may do in a mailbox someone has Read and write on.
@@ -37,19 +36,20 @@ function mbStatus(m) {
 const mbWho = m => (m.kind === 'shared' ? 'Shared inbox' : m.person_id ? (m.person_name || m.person_id) : 'Awaiting person');
 const mbSynced = m => (m.synced_at ? `Last sync ${ago(m.synced_at)}` : m.state === 'connected' ? 'Not synced yet' : '');
 
-inboxesKind('mailbox', {group: 'email', label: 'Email', order: 10,
-  rows: async ctx => {
-    const d = await mbMailboxes(ctx);
-    const boxes = d.admin ? d.mailboxes || [] : [d.mine, ...(d.shared || [])].filter(Boolean);
-    return boxes.map(m => {
-      const [status, statusText] = mbStatus(m);
-      return {id: m.id, name: m.address, sub: mbWho(m), status, statusText,
-        latest: m.newest_epoch ? m.newest_epoch * 1000 : null, usedBy: m.used_by,
-        search: (m.routines || []).map(r => r.name).join(' ')};
-    });
-  },
+inboxesKind('mailbox', {label: 'Email', order: 10,
   detail: (host, id, ctx) => renderMailbox(host, id, ctx),
+  activity: (host, id, ctx) => mbActivity(host, id, ctx),
   add: {label: 'Email (Google)', admin: true, open: ctx => mbConnectDialog(ctx)}});
+
+// Tools' rows name a mailbox by its address (#/tools/mailbox/ana@acme.example); its own page reads it by id.
+async function mbId(ctx, ref) {
+  if (!String(ref).includes('@')) return ref;
+  const d = await mbMailboxes(ctx), want = String(ref).toLowerCase();
+  const all = [...(d.mailboxes || []), d.mine, ...(d.shared || [])].filter(Boolean);
+  const hit = all.find(m => String(m.address).toLowerCase() === want);
+  if (!hit) throw new Error('No mailbox here, or you cannot open it.');
+  return hit.id;
+}
 
 // ---------------------------------------------------------------------------------------------------------- One mailbox
 async function renderMailbox(host, id, ctx) {
@@ -63,7 +63,7 @@ async function renderMailbox(host, id, ctx) {
       if (event.target.matches('[data-mb-add-form]')) { event.preventDefault(); void mbAdd(host, event.target); }
     });
   }
-  const d = await get(`/v2/mailboxes/${encodeURIComponent(id)}`, {fresh: true});
+  const d = await get(`/v2/mailboxes/${encodeURIComponent(await mbId(ctx, id))}`, {fresh: true});
   if (run !== MB.run || !ctx.live()) return null;
   mbOneDraw(host, d);
   void mbRecent(host, d.mailbox, run);
@@ -75,41 +75,102 @@ function mbLevelSeg(a) {
     `<button type="button" role="radio" aria-checked="${a.level === k}" data-mb-level="${k}" data-mb-access="${esc(a.id)}">${label}</button>`).join('')}</div>`;
 }
 
+// Who can use it: one row a person or bot, with their level (a segment for whoever manages it) and Remove.
+function mbWhoRow(a, d) {
+  const face = a.grantee_type === 'bot' ? avatar(a.grantee_id || a.name, 22)
+    : personAvatar((S.people || []).find(p => p.id === a.grantee_id) || {id: a.grantee_id, name: a.name}, 22);
+  const edit = d.can_manage && !a.implicit;
+  return `<tr data-mb-access-row="${esc(a.id || a.grantee_type)}">
+      <td class="tt-who-name">${face}<span>${esc(a.name)}${a.grantee_type === 'bot' ? ' <span class="muted">· bot</span>' : ''}</span></td>
+      <td>${edit ? mbLevelSeg(a) : esc(mbLevelName(a.level))}</td>
+      <td class="mb-act">${edit ? `<button type="button" class="ghost tt-x" data-mb-remove="${esc(a.id)}" aria-label="Remove ${esc(a.name)}" title="Remove">×</button>` : ''}</td></tr>`;
+}
+// The key Tico reads it with: the company's Workspace key, or its person's own sign-in.
+function mbKeysHTML(d) {
+  const m = d.mailbox, row = (dt, dd) => dd ? `<dt>${esc(dt)}</dt><dd>${dd}</dd>` : '';
+  const key = m.connection === 'workspace' ? `Google Workspace${d.domain ? ' · ' + esc(d.domain) : ''}` : m.person_id ? `${esc(m.person_name || m.person_id)}'s Google sign-in` : 'Google sign-in';
+  const allows = d.may ? esc(mbMayLine(d.may).replace(/^./, c => c.toUpperCase())) : '';
+  return `<dl class="tt-kv">${row('Key', key)}${row('Allows', allows)}${row('Last sync', m.synced_at ? `<span title="${esc(fmt(m.synced_at))}">${esc(ago(m.synced_at))}</span>` : '')}</dl>`;
+}
+
 function mbOneDraw(host, d) {
   const m = d.mailbox, [status, statusText] = mbStatus(m), admin = settingsIsAdmin();
   // What Tico may do here for the person looking: Read only on a Read access, nothing when they have none.
   const may = m.level === 'read_write' ? mbMayLine(d.may) : m.level === 'read' ? 'read' : '';
   const line = [mbWho(m), mbSynced(m), may ? `Tico may ${may}` : ''].filter(Boolean).map(esc).join(' · ');
   const failing = m.sync && m.sync_error ? `<p class="err" data-mb-sync-error>${esc(m.sync_error)}</p>` : '';
-  const signin = m.sync === 'signin' ? `<p class="muted" data-mb-signin>Sign in to Google again in <a href="#/settings/inboxes/settings/email">Inboxes › Settings</a>.</p>` : '';
-  const actions = [m.status === 'active' ? '<button type="button" class="ghost" data-mb-check>Check connection</button>' : '',
+  const signin = m.sync === 'signin' ? `<p class="muted" data-mb-signin>Sign in to Google again in <a href="#/tools/settings/email">Tools › Settings</a>.</p>` : '';
+  const actions = [m.status === 'active' ? '<button type="button" class="ghost" data-mb-check>Check now</button>' : '',
     admin && m.status === 'active' && m.kind === 'personal' && !m.person_id ? '<button type="button" class="ghost" data-mb-share>Make shared inbox</button>' : '',
     d.can_stop ? '<button type="button" class="ghost danger" data-mb-stop>Stop using in Tico</button>' : ''].join('');
-  const rows = d.accesses.map(a => `<tr data-mb-access-row="${esc(a.id || a.grantee_type)}">
-      <td>${esc(a.name)}${a.grantee_type === 'bot' ? ' <span class="muted">· bot</span>' : ''}</td>
-      <td>${d.can_manage && !a.implicit ? mbLevelSeg(a) : esc(mbLevelName(a.level))}</td>
-      <td class="mb-act">${d.can_manage && !a.implicit ? `<button type="button" class="ghost danger" data-mb-remove="${esc(a.id)}">Remove</button>` : ''}</td></tr>`).join('');
   const pick = d.candidates?.length ? `<form class="mb-form" data-mb-add-form hidden>
       <label class="google-field"><span>Who</span><select name="who">${d.candidates.map(x =>
         `<option value="${esc(x.type)}:${esc(x.id)}">${esc(x.name)}${x.type === 'bot' ? ' (bot)' : ''}</option>`).join('')}</select></label>
       <label class="google-field"><span>Level</span><select name="level">${MB_LEVELS.map(([k, label]) => `<option value="${k}">${label}</option>`).join('')}</select></label>
       <div class="row"><button type="submit" class="primary">Add</button><button type="button" class="ghost" data-mb-add-cancel>Cancel</button></div></form>` : '';
   const routines = d.routines.length ? `<ul class="mb-routines">${d.routines.map(r => `<li data-mb-routine-row="${esc(r.id)}">
-      <a href="#/automations/${encodeURIComponent(r.id)}">${esc(r.name)}</a>
+      <a href="#/automations/${encodeURIComponent(r.id)}"><span class="nav-icon" aria-hidden="true">bolt</span>${esc(r.name)}</a>
       <label class="mb-on"><input type="checkbox" role="switch" class="people-switch" data-mb-routine="${esc(r.id)}" aria-label="${esc(r.name)} on"${
         r.enabled ? ' checked' : ''}${r.can_edit ? '' : ' disabled'}> On</label></li>`).join('')}</ul>` : '<p class="muted">None</p>';
   const recent = host.querySelector('[data-mb-recent]')?.innerHTML;
-  host.innerHTML = `${inboxesHead(host, {name: m.address, status, statusText, actions})}
+  host.innerHTML = `${inboxesHead(host, {name: m.address, status, statusText, sub: 'Mailbox · Google', actions})}
     <p class="muted mb-line" data-mb-status>${line}</p>${failing}${signin}
     <section class="card" id="mailbox-access"><header><h2>Who can use it</h2>
-      ${d.can_manage && d.candidates?.length ? '<button class="primary settings-head-act" type="button" data-mb-add-open>Add access</button>' : ''}</header>
+      ${d.can_manage && d.candidates?.length ? '<button class="ghost small settings-head-act" type="button" data-mb-add-open>Add</button>' : ''}</header>
       ${pick}
-      <table class="settings-table mb-table"><tbody>${rows}</tbody></table></section>
+      <table class="settings-table mb-table tt-who-table"><tbody>${d.accesses.map(a => mbWhoRow(a, d)).join('')}</tbody></table>
+      <p class="muted tt-foot">Assistants act as their person.</p></section>
+    <section class="card" id="mailbox-keys"><header><h2>Keys</h2>${admin ? '<a class="ghost small settings-head-act" href="#/tools/settings/email">Settings</a>' : ''}</header>${mbKeysHTML(d)}</section>
     <section class="card" id="mailbox-routines"><header><h2>Automations</h2>${inboxesAutomationsLink(m.address)}</header>${routines}</section>
     <section class="card" id="mailbox-recent"><header><h2>Recent</h2>${m.level !== 'none'
       ? `<a class="ghost settings-head-act" href="#/mail?mailbox=${encodeURIComponent(m.address)}">Open mail</a>` : ''}</header>
       <div data-mb-recent>${recent || skelRows(2, {card: false, dot: false})}</div></section>`;
   host._mb = d;
+}
+
+// ---------------------------------------------------------------------------------------------------------- Activity
+// What was sent from it (GET /v2/email/sends, newest first, a page at a time): when, who, to whom, and how it ended.
+const MB_SEND_RESULT = {sent: ['Sent', 'ok'], waiting_approval: ['Waiting for OK', 'waiting'], pending: ['Waiting', 'waiting'],
+  dispatching: ['Sending', 'in-progress'], unknown: ['Unknown', 'waiting'], blocked: ['Refused', 'fail'], canceled: ['Canceled', '']};
+const MB_SEND_FILTERS = [['', 'All', () => true], ['sent', 'Sent', s => s.state === 'sent'],
+  ['waiting', 'Waiting', s => ['waiting_approval', 'pending', 'dispatching', 'unknown'].includes(s.state)], ['refused', 'Refused', s => s.state === 'blocked']];
+async function mbActivity(host, id, ctx) {
+  const run = ++MB.run;
+  const d = await get(`/v2/mailboxes/${encodeURIComponent(await mbId(ctx, id))}`, {fresh: true});
+  if (run !== MB.run || !ctx.live()) return null;
+  const m = d.mailbox, [status, statusText] = mbStatus(m);
+  const state = {rows: [], cursor: '', show: ''};
+  host.innerHTML = `${inboxesHead(host, {name: m.address, status, statusText, sub: 'Mailbox · Google'})}
+    <div class="tt-bar"><div class="theme-seg" role="radiogroup" aria-label="Show" data-mb-act-filter>${MB_SEND_FILTERS.map(([k, label]) =>
+      `<button type="button" role="radio" data-mb-act-show="${k}" aria-checked="${k === ''}">${label}</button>`).join('')}</div></div>
+    <div data-mb-act>${skelRows(3)}</div><div class="row" data-mb-act-more hidden><button type="button" class="ghost">More</button></div>`;
+  const box = host.querySelector('[data-mb-act]'), more = host.querySelector('[data-mb-act-more]');
+  const draw = () => {
+    const test = MB_SEND_FILTERS.find(([k]) => k === state.show)[2], rows = state.rows.filter(test);
+    box.innerHTML = rows.length ? `<table class="tt-log"><thead><tr><th>Time</th><th>Who</th><th>Action</th><th>Message</th><th>Result</th></tr></thead><tbody>${rows.map(x => {
+      const [word, tone] = MB_SEND_RESULT[x.state] || [x.state, ''];
+      return `<tr data-mb-send="${esc(x.id)}" data-state="${esc(x.state)}"><td class="tnum" title="${esc(fmt(x.created_at))}">${esc(ago(x.created_at))}</td>
+        <td>${esc(x.bot ? botDisplayName(x.bot) : x.actor || '')}</td><td>Send</td>
+        <td class="tt-log-what"><strong>${esc(x.subject || '(No subject)')}</strong><span class="muted">${esc((x.recipients || []).join(', '))}</span></td>
+        <td><span class="pill${tone ? ' ' + tone : ''}">${esc(word)}</span>${x.state === 'blocked' && x.decision?.reasons?.length ? `<span class="muted tt-log-why">${esc(x.decision.reasons.join(', '))}</span>` : ''}</td></tr>`;
+    }).join('')}</tbody></table>` : '<div class="empty" data-mb-act-none>Nothing yet.</div>';
+    more.hidden = !state.cursor;
+  };
+  const load = async () => {
+    const r = await get(`/v2/email/sends?mailbox=${encodeURIComponent(m.address)}${state.cursor ? '&cursor=' + encodeURIComponent(state.cursor) : ''}`, {fresh: true});
+    if (!ctx.live()) return;
+    state.rows = state.rows.concat(r.sends || []); state.cursor = r.next_cursor || '';
+    draw();
+  };
+  host.querySelector('[data-mb-act-filter]').onclick = ev => {
+    const b = ev.target.closest('[data-mb-act-show]'); if (!b) return;
+    state.show = b.dataset.mbActShow;
+    host.querySelectorAll('[data-mb-act-show]').forEach(x => x.setAttribute('aria-checked', String(x === b)));
+    draw();
+  };
+  more.querySelector('button').onclick = () => void load().catch(e => toast(e.message, true));
+  try { await load(); } catch (e) { if (ctx.live()) box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  return {kind: 'mailbox', id: m.id, name: m.address, address: m.address, ...d};
 }
 
 // The newest mail Tico holds for it, for whoever may read it (GET /v2/mail/messages refuses everyone else).
@@ -195,7 +256,7 @@ async function mbRoutine(input) {
   input.disabled = false;
 }
 
-// Add inbox > Email: an admin connects a mailbox. A person's address is theirs; any other is a shared inbox when
+// Add tool > Email: an admin connects a mailbox. A person's address is theirs; any other is a shared inbox when
 // ticked, else it waits for its person.
 function mbConnectDialog(ctx) {
   const dialog = whDialog('Connect mailbox', `<label>Address<input type="email" name="address" autocomplete="off" spellcheck="false" required></label>
@@ -207,14 +268,13 @@ function mbConnectDialog(ctx) {
     if (!address) throw new Error('Enter an address.');
     const r = await post('/v2/mailboxes', {address, shared: data.get('shared') === 'on'});
     dialog.close(); toast('Connected');
-    return ctx.go('mailbox/' + r.mailbox.id);
+    return ctx.go('mailbox/' + r.mailbox.address);
   });
 }
 
-// ---------------------------------------------------------------------------------------------------------- Settings > Email
+// ---------------------------------------------------------------------------------------------------------- Tools › Settings › Email
 // The Connection card (ui/google-connect.js) draws into one #set-google kept across draws and visits: it holds a paused
-// check, the way picked and typed values, so leaving Inboxes > Settings and coming back resumes them. First run's
-// email step and the Settings card are never shown together, so they share it.
+// check, the way picked and typed values, so leaving Tools › Settings and coming back resumes them.
 let MB_GOOGLE_HOST = null;
 async function mbMountGoogle(slot) {
   if (!slot) return;
@@ -277,22 +337,6 @@ async function mbSaveMay(input) {
   finally {
     MB.known = saved ? body : before; MB.pending = null;
     for (const box of mbMayBoxes()) { box.checked = !!MB.known[box.dataset.googleMay]; box.disabled = false; }
-    if (MB.refreshAfterMay) { MB.refreshAfterMay = false; void renderSettingsInboxes(); }
+    if (MB.refreshAfterMay) { MB.refreshAfterMay = false; void inboxesRender(); }
   }
 }
-
-// ---------------------------------------------------------------------------------------------------------- First run
-// Company email is connected once the Workspace key is in (connected, or failing and so on the list) or Each person
-// signs in is set up, or any mailbox already reads.
-async function mbEmailReady(ctx) {
-  const [g, d] = await Promise.all([mbGoogle(ctx).catch(() => ({})), mbMailboxes(ctx).catch(() => ({}))]);
-  const ws = g.workspace;
-  return !!(ws && ws.status !== 'pending') || !!g.oauth?.configured
-    || (d.mailboxes || []).some(m => m.state === 'connected');
-}
-inboxesStep('email', {order: 10, title: 'Connect company email', optional: false,
-  done: mbEmailReady,
-  render: async host => {
-    host.innerHTML = '<div data-mb-google></div>';
-    await mbMountGoogle(host.querySelector('[data-mb-google]'));
-  }});
