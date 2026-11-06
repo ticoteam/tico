@@ -37,28 +37,6 @@ def test_an_ask_whose_wait_fails_still_returns_its_id_and_a_retry_is_not_sent_tw
     assert [r[0] for r in sent] == [first["ana"]["message_id"]]
 
 
-def test_a_task_waiting_on_a_person_nobody_asked_shows_in_health_until_they_are_asked(api):
-    tid = post(api, "tasks", {"owner": "ops", "title": "Renew the Acme domain", "body": "x"})["id"]
-    with api.app.state.store.transaction() as c:
-        # Set waiting on Ana before asks became subtasks, so the task itself waits on her.
-        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana', note=? WHERE id=?",
-                  ("Renew the Acme domain for a year? If yes, I'll pay the invoice.", tid))
-        H._task_event(c, tid, "bot:ops", "waiting_on", None, "human:ana", "")
-        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=? AND kind='waiting_on'",
-                  (H.shift(H.now(), hours=-2), tid))
-
-    def check():
-        body = api.get("/api/v2/health", headers=headers()).json()
-        return next((row for row in body["checks"] if row["id"] == "silent_waits"), None)
-
-    found = check()
-    assert "Renew the Acme domain waits on" in found["summary"] and "nothing was asked" in found["summary"]
-    assert found["fixes"][0]["href"] == "#/task/" + tid
-    with api.app.state.store.transaction() as c:
-        H.task_ask(c, "bot:ops", tid, "Should the domain renew for one year or three?")
-    assert check() is None
-
-
 def test_a_question_asked_outside_any_task_is_in_the_persons_needs_you_until_answered(api):
     token = bot_token(api, "ops")
     asked = post(api, "messages", {"to": "ana", "text": "Which bank should Acme use for payroll?", "kind": "ask"},

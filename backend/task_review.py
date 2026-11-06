@@ -350,7 +350,7 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
         raise Problem("forbidden", "The asker cannot answer their own question", 403)
     # A bot's question answered by the person it was put to (or its task waits on) is that bot's next move: it wakes.
     wake = wake or H.is_bot(asked["sender_id"]) and (
-        asked["recipient_id"] == who.actor or H.task(c, task_id).get("waiting_on") == who.actor)
+        asked["recipient_id"] == who.actor or H._waits_on(c, H.task(c, task_id), who.actor))
     questions = {q["id"]: q for q in asked["refs"]["questions"]}
     body, passed = checked_answers(questions, asked["refs"], body)
     by = H.human(c, H.actor_id(who.actor)) if H.is_human(who.actor) else H.bot(c, H.actor_id(who.actor))

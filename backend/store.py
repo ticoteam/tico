@@ -1965,8 +1965,7 @@ class Store:
                                    ("jobs_live_created", "jobs(created_at) WHERE state IN ('queued','leased','running','input')"),
                                    ("jobs_attempt", "jobs(attempt_id) WHERE attempt_id IS NOT NULL"),
                                    ("jobs_uncertain", "jobs(created_at) WHERE state='uncertain'"),
-                                   # Open asks to someone, deleted or not (hubdb.tasks_asked_of); conversation_id too,
-                                   # so Health's silent_waits keeps a good plan.
+                                   # Open asks to someone, deleted or not (hubdb.tasks_asked_of), with conversation_id.
                                    ("messages_open_ask_to",
                                     "messages(recipient_id, conversation_id) WHERE kind='ask' AND answered_by_id IS NULL"),
                                    # Replaced asks to someone (views.went_away, on every Needs you read).
@@ -2005,13 +2004,13 @@ class Store:
                                    # row_clock and task_privacy name this with INDEXED BY. hubdb.migrate also makes
                                    # it, but runs before cloud migration 57 adds tasks.private on an upgraded database.
                                    ("tasks_private_status",
-                                    "tasks(id, requester_id, owner_id, readers, private, status, waiting_on) WHERE private IS NOT 0"),
+                                    "tasks(id, requester_id, owner_id, readers, private, status) WHERE private IS NOT 0"),
                                    # The task list's and status rows' covering indexes (hubdb.migrate), for the same reason.
                                    ("tasks_queue_cover", "tasks(rank, created_at, id, owner_id, requester_id, private, readers)"),
                                    ("tasks_owner_status_cover",
-                                    "tasks(owner_id, status, id, requester_id, private, readers, waiting_on)"),
+                                    "tasks(owner_id, status, id, requester_id, private, readers)"),
                                    ("tasks_requester_status_cover",
-                                    "tasks(requester_id, status, id, owner_id, private, readers, waiting_on)"),
+                                    "tasks(requester_id, status, id, owner_id, private, readers)"),
                                    # A person's view of a bot's settings changes (settings_admin.history): the manager
                                    # bots' changes, found by seek and in id order within a timestamp. It needs the `via`
                                    # column, added above.

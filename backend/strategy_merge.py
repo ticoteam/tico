@@ -1,16 +1,17 @@
 """The Strategy Bot's merged asks (docs/goals-and-kpis.md, "Your Strategy Bot"; spec: Head of Product, Strategy Bot,
 test 13).
 
-At level 2 and 3, when several bots ask a person the same thing, the Strategy Bot files one item for all of them: a task
-of its own, waiting on the person, that names every original. The originals stay as they were for the bots that asked,
+At level 2 and 3, when several bots ask a person the same thing, the Strategy Bot files one item for all of them: a
+question task for the person with no options, that names every original. The originals stay as they were for the bots that asked,
 but leave the person's Needs you (`hidden`, read by hubdb.needs_you) while the merged item is open. The Strategy Bot
 decides what counts as the same question; the server checks only that each original is really waiting on that person
 now.
 
-The person answers the merged item once, as they answer any bot's question (a reply on it, or "answer" in Needs you),
-and `on_reply` (from hubdb.task_comment and hubdb.answer) passes the answer to every original: as the answer to a bot's
-open question, or as a comment that wakes the bot whose task waits on them or that filed the task for them. The merged
-item is then done.
+The person answers the merged item once, as they answer any question task ("answer" in Needs you, or Done with a
+note), and `on_close` (from hubdb.task_update) passes the answer to every original: as the answer to a bot's open
+question or question task, or as a comment that wakes the bot that filed the task for them. An item merged before
+step 6b is the Strategy Bot's own task with an open question to the person; `on_reply` (from hubdb.task_comment and
+hubdb.answer) passes its answer on the same way and closes it.
 
 Nothing is dropped: an original whose answer can't be passed on, or every original of a merged item that ends without an
 answer, is back in the person's Needs you as it was. A merged item counts in what the Strategy Bot asked today
@@ -37,14 +38,15 @@ def _open_ask(c, row, person):
 
 def waiting_on(c, person, row):
     """How this task waits on `person` in their Needs you, the bot that asked, and the question when it is one:
-    ("asked", bot, ask id) for a bot's open question on it, ("waiting", bot, None) for a bot's task set waiting on
-    them, ("owned", bot, None) for a task a bot filed for them; None when it does not wait on them."""
+    ("asked", bot, ask id) for a bot's open question on it, ("waiting", bot, None) for a bot's task waiting on an open
+    question task of theirs (derived: question_tasks.waiting_on), ("owned", bot, None) for a task a bot filed for them,
+    a question task among them; None when it does not wait on them."""
     if not row or row["status"] not in H.ACTIVE_STATUSES:
         return None
     ask = _open_ask(c, row, person)
     if ask:
         return "asked", ask["sender_id"], ask["id"]
-    if H.is_bot(row["owner_id"]) and row["status"] == "waiting" and row.get("waiting_on") == person:
+    if H.is_bot(row["owner_id"]) and H._waits_on(c, row, person):
         return "waiting", row["owner_id"], None
     if row["owner_id"] == person and H.is_bot(row["requester_id"]):
         return "owned", row["requester_id"], None
@@ -64,15 +66,15 @@ def _current(c, link, row):
 
 def _asked_again(c, link, row):
     """Whether a bot asked the person something new on the original after their answer was passed on: a message to
-    them on it, or the task set waiting on them again."""
+    them on it, or a new question task for them under it."""
     said = c.execute(
         "SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE m.conversation_id=? AND "
         "m.recipient_id=? AND m.sender_id<>? AND m.sender_id LIKE 'bot:%' AND m.created_at>? "
         f"AND {H.MESSAGE_TASK_SQL}=? LIMIT 1",
         (row["conversation_id"], link["person"], STRATEGY_BOT, link["settled_at"], row["id"])).fetchone()
     return bool(said) or bool(c.execute(
-        "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='waiting_on' AND new=? "
-        "AND created_at>? LIMIT 1",
+        "SELECT 1 FROM task_relations r JOIN tasks q ON q.id=r.from_task WHERE r.to_task=? AND r.kind IN "
+        "('parent','blocks') AND q.owner_id=? AND q.questions IS NOT NULL AND q.created_at>? LIMIT 1",
         (row["id"], link["person"], link["settled_at"])).fetchone())
 
 
@@ -153,12 +155,14 @@ def merge(c, actor, person, title, question, task_ids):
         found.append((row, how))
     who = "\n".join(f'- {_name(c, how[1])}: "{row["title"]}"' for row, how in found)
     body = (f"{question}\n\n{len(found)} bots asked you this; it is one item instead of {len(found)}:\n{who}\n"
-            f"Answer here once and the {strategy_bot.name(c)} passes your answer to each of them.")
-    # Its own task with one open question to the person, as `hub task question` files one: every way they answer a
-    # bot (a reply, "answer" in Needs you) closes that question and reaches `on_reply`.
-    item = H.task_create(c, STRATEGY_BOT, title, body, STRATEGY_BOT, lane="company", lint=False)
-    H.task_comment(c, STRATEGY_BOT, item["id"], question, ask={"who": person})
-    H.task_update(c, STRATEGY_BOT, item["id"], status="waiting", waiting_on=person, note=question[:1000])
+            f"Answer it once and the {strategy_bot.name(c)} passes your answer to each of them.")
+    # A question task for the person with no options, as `hub task question` files one: every way they answer it
+    # ("answer" in Needs you, Done with a note) closes it and reaches `on_close`.
+    from . import question_tasks
+    item = H.task_create(c, STRATEGY_BOT, title, body, person, lane="company", lint=False)
+    question_tasks.store(c, item["id"], {"questions": [{"id": question_tasks.FIRST_ID, "header": "",
+                                                        "question": question, "why": "", "options": [],
+                                                        "multi": False}]})
     at = H.now()
     for row, how in found:
         c.execute("INSERT INTO strategy_merges (merged_into, original, person, asker, how, ask_id, created_at) "
@@ -187,24 +191,65 @@ def _pass_on(c, person, link, item, text, text_sources=()):
     if link["how"] == "asked":
         H.task_ask_resolve(c, STRATEGY_BOT, row["id"], link["ask_id"], quote=text, relay=True, text_sources=text_sources)
         return None
+    from . import question_tasks
+    card = None
+    if link["how"] == "owned" and question_tasks.is_open(row):
+        card = row
+    elif link["how"] == "waiting":
+        card = _question_of(c, row, person)
+    if card is not None:
+        # An open question task: answered as the person, as if they closed it there. Its bot hears it once, on the
+        # task above it (hubdb._subtask_wake, _answered), and nothing else wakes it. A note copied from a page carries
+        # no sources on a task, so that answer is given there instead.
+        if text_sources:
+            return "the answer quotes a page; answer it on the task itself"
+        H.task_update(c, person, card["id"], status="done", note=text[:1000])
+        return None
     H.task_comment(c, STRATEGY_BOT, row["id"], said, extra_refs=refs, to=link["asker"] if H.is_bot(link["asker"]) else None)
-    if link["how"] == "waiting":
-        # The person has answered: the next move is the bot's, as when they reply on its task themselves.
-        c.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (row["id"],))
-        H._task_event(c, row["id"], STRATEGY_BOT, "waiting_on", person, None, "")
     return None
 
 
+def _question_of(c, row, person):
+    """The person's open question task that `row` waits on (question_tasks.waits_sql), oldest first, or None."""
+    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
+    found = c.execute("SELECT q.id FROM task_relations r JOIN tasks q ON q.id=r.from_task WHERE r.to_task=? AND "
+                      "r.kind IN ('parent','blocks') AND q.owner_id=? AND q.questions IS NOT NULL AND q.answer IS NULL "
+                      f"AND q.status IN ({marks}) ORDER BY q.created_at, q.rowid LIMIT 1",
+                      (row["id"], person, *H.ACTIVE_STATUSES)).fetchone()
+    return H.task(c, found[0]) if found else None
+
+
+def on_close(c, actor, row, status, text, *, text_sources=()):
+    """The person closing the merged question task they were asked, done (hubdb.task_update, as every answer to a
+    question task does): their answer is passed to every original. Declined, or closed by anyone else, the originals
+    are back in their Needs you (`hidden`)."""
+    if not row or row.get("requester_id") != STRATEGY_BOT or status != "done" or not H.is_human(actor) \
+            or row["owner_id"] != actor:
+        return
+    note = _pass_all(c, actor, row, text, text_sources)
+    if note:
+        H._task_event(c, row["id"], STRATEGY_BOT, "merged_answer", None, None, note[:1000])
+
+
 def on_reply(c, actor, row, text, *, text_sources=()):
-    """A person's reply on a merged item they were asked (hubdb.task_comment, hubdb.answer): passed to every original,
-    then the item is done; called again for the same reply, it finds nothing left to pass on. An original it can't
-    reach is back in their Needs you, with the reason kept."""
+    """A person's reply on a merged item filed before step 6b, the Strategy Bot's own task with an open question to
+    them (hubdb.task_comment, hubdb.answer): passed to every original, then the item is done; called again for the same
+    reply, it finds nothing left to pass on. An original it can't reach is back in their Needs you, with the reason
+    kept."""
     if not row or row["owner_id"] != STRATEGY_BOT or not H.is_human(actor):
         return
+    note = _pass_all(c, actor, row, text, text_sources)
+    if note:
+        H.task_update(c, STRATEGY_BOT, row["id"], status="done", note=note[:1000], quiet=True, strict=False)
+
+
+def _pass_all(c, actor, row, text, text_sources):
+    """Pass the person's answer to each original still merged into `row`. Returns the item's note, or None when
+    nothing was left to pass on."""
     links = H._rows(c.execute("SELECT * FROM strategy_merges WHERE merged_into=? AND person=? AND state='merged'",
                               (row["id"], actor)))
     if not links:
-        return
+        return None
     passed, back = 0, []
     for link in links:
         c.execute("SAVEPOINT strategy_merge_answer")
@@ -220,6 +265,5 @@ def on_reply(c, actor, row, text, *, text_sources=()):
         else:
             _settle(c, row["id"], link["original"], "answered", "")
             passed += 1
-    note = f"Answered; passed to {passed} bot(s)." + (f" {len(back)} could not be: {'; '.join(back)}." if back else "")
-    H.task_update(c, STRATEGY_BOT, row["id"], status="done", note=note[:1000], quiet=True, strict=False)
     H.recount(c, [link["asker"] for link in links])
+    return f"Answered; passed to {passed} bot(s)." + (f" {len(back)} could not be: {'; '.join(back)}." if back else "")

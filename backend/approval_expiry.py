@@ -55,7 +55,6 @@ def sweep(conn, at=None):
         # One row at a time, like the approvals: a row that fails stays open for the next sweep without undoing the rest.
         with isolated(conn, "approval_expiry", r["id"]):
             conn.execute("UPDATE messages SET superseded_at=? WHERE id=? AND superseded_at IS NULL", (at, r["id"]))
-            H.drop_asked_waits(conn, r["task_id"], [r["id"]], "Its question to them was withdrawn")
             # Its asker is told, and a bot's task left with nothing to wait on goes back to open (task_holds.py).
             from . import task_holds
             task_holds.withdrawn(conn, r["task_id"], [r["id"]], f"its task was {H.TASK_ENDED.get(r['status'], 'ended')}"

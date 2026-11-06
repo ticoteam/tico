@@ -1366,23 +1366,11 @@ def _whole_card(c, task, asked, me):
         said(task.get("title")), said(task.get("body")), said(H.person_ask_of_body(task.get("body"), task.get("title")))}
 
 
-def _another_card_under(c, row, answered, me):
-    """Whether a card of `me`'s other than `answered` (their own task, or one with an ask to them) is still open below
-    `row`: then `row`'s wait may be for that one, and answering `answered` does not end it."""
-    for t in H.descendants(c, row["id"]):
-        if t["id"] == answered or t["status"] not in H.ACTIVE_STATUSES:
-            continue
-        if t["owner_id"] == me or any(a["recipient_id"] == me for a in H.open_task_asks(c, t)):
-            return True
-    return False
-
-
 def take_recommendation(c, auth, who, asked, version=None):
     """"Do what you recommend": `who` answers the bot's ask with what it said it would do (the option it named, picked as
     if by hand, or a plain yes). The card leaves their Needs you when the ask was the whole card: a task of theirs
-    that exists only to ask it is done, a bot's task stops waiting on them, and so do the bot's tasks above it that
-    waited on them for the same thing (they fold into this card). A task of theirs the ask only came up on stays
-    theirs. With `version`, a task that changed since the card was drawn is refused, not answered unseen. The bot
+    that exists only to ask it is done, and a bot's task its open question held stops waiting on them. A task of theirs
+    the ask only came up on stays theirs. With `version`, a task that changed since the card was drawn is refused, not answered unseen. The bot
     wakes on the answer as on any other."""
     from . import models as M
     from .task_review import answer_task
@@ -1412,14 +1400,6 @@ def take_recommendation(c, auth, who, asked, version=None):
     if task and task["status"] in H.ACTIVE_STATUSES:
         if finish:
             H.task_update(c, who.actor, task_id, status="done", note=state_text)
-        waits = [t for t in [task, *(H.task(c, a) for a in TR.ancestors(c, task_id))]
-                 if t and t["status"] == "waiting" and t.get("waiting_on") == who.actor
-                 and (t is task or t["owner_id"] == asked["sender_id"] and not _another_card_under(c, t, task_id, who.actor))]
-        for t in waits:
-            c.execute("UPDATE tasks SET waiting_on=NULL, updated_at=? WHERE id=?", (H.now(), t["id"]))
-            H._task_event(c, t["id"], who.actor, "waiting_on", who.actor, None, state_text)
-        if waits:
-            H._recount(c, who.actor)
     return {"did": rec["do"], "task": task_id, "done": finish,
             **({"source": rec["source"]} if rec.get("source") else {})}
 

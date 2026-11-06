@@ -25,6 +25,7 @@ Nothing asks a person about a quiet task: a bot's quiet task is a line on its ro
 """
 
 from . import hubdb as H
+from . import question_tasks as QT
 from . import team_rules
 from .batch_work import isolated
 
@@ -123,11 +124,6 @@ def settle(conn, asked, task, text, outcome, *, answers=None):
     person = asked["recipient_id"]
     if task:
         conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
-        if task.get("waiting_on") == person:
-            # The wait was for this answer: the next move is the bot's, and the task leaves the person's Needs you.
-            conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task["id"],))
-            note, data = H.sourced_text(text, refs.get("body_sources", []))
-            H._task_event(conn, task["id"], H.KEEPER, "waiting_on", person, None, note, data=data or None)
     H.event(conn, H.KEEPER, "ask." + outcome, asked["id"],
             {"to": person, "bot": asked["sender_id"], **({"task": task["id"]} if task else {})})
     H._recount(conn, person)
@@ -228,7 +224,7 @@ def handed_to_people(conn, expiry, at=None):
     out = []
     for row in rows:
         if (H.TS.snoozed(row, at or H.now()) or (row.get("due_at") and str(row["due_at"])[:10] >= (at or H.now())[:10])
-                or row.get("waiting_on") not in (None, "", row["requester_id"])):
+                or row["status"] == "waiting" and QT.waiting_on(conn, row)):
             continue
         person = row["owner_id"]
         touched = conn.execute(

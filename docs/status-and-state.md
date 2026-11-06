@@ -105,7 +105,7 @@ Values (`TASK_STATUSES`):
 
 - `open`: not started. Owners may set it.
 - `doing`: being worked on.
-- `waiting`: parked on something else (`waiting_on`). The task stays in its working step and shows a Waiting tag.
+- `waiting`: parked on something else: a subtask, a blocker (a person's open question task is one), an approval or an outside wait. The task stays in its working step and shows a Waiting tag.
 - `review`: work is finished and waiting for review or QA. Owners may set it.
 - `ready`: the hub has learned the work is ready, for example its pull request merged. Set by movers and the keeper, never by an owning bot.
 - `done`: finished work. Shown under Done.

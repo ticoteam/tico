@@ -53,7 +53,8 @@ def blocked(c, child):
                                                      if s.strip()), ""))[:300]
         if not why or why == GENERIC:
             why = detail.get("why") or "it is waiting"
-        return {"why": why, "on": detail.get("on") or child.get("waiting_on")}
+        from . import question_tasks
+        return {"why": why, "on": detail.get("on") or question_tasks.waiting_on(c, child)}
     if child["status"] in H.ACTIVE_STATUSES:
         blocker = H.task(c, TR.live_blocker(c, child["id"], H.ACTIVE_STATUSES) or "")
         if blocker:

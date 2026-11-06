@@ -1516,7 +1516,6 @@ def _server_settings(c, settings):
     return checks
 
 
-SILENT_WAIT_HOURS = 1       # a task set waiting on a person this long with nothing said to them is stuck unseen
 
 
 def unreadable_waits(c):
@@ -1529,8 +1528,11 @@ def unreadable_waits(c):
         "JOIN messages m ON m.sender_id=t.owner_id JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE {H.MESSAGE_TASK_SQL}=t.id AND t.status='waiting' "
         f"AND m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL} "
-        f"UNION SELECT {fields},t.waiting_on AS recipient,NULL AS message_id FROM tasks t "
-        "WHERE t.status='waiting' AND t.waiting_on IS NOT NULL) w "
+        # A task waiting on a person's open question task (question_tasks.waits_sql): they are its recipient.
+        f"UNION SELECT {fields},wq.owner_id AS recipient,NULL AS message_id FROM tasks t "
+        "JOIN task_relations wr ON wr.to_task=t.id AND wr.kind IN ('parent','blocks') JOIN tasks wq ON wq.id=wr.from_task "
+        "WHERE t.status='waiting' AND wq.questions IS NOT NULL AND wq.answer IS NULL AND wq.owner_id LIKE 'human:%' "
+        f"AND wq.status IN ({','.join(repr(s) for s in H.ACTIVE_STATUSES)})) w "
         "ORDER BY w.id")
     found, seen = [], set()
     for batch in iter(lambda: rows.fetchmany(500), []):
@@ -1560,24 +1562,6 @@ def unreadable_waits(c):
             if len(found) == 20:
                 return found
     return found
-
-
-def silent_waits(c, at=None):
-    """Tasks waiting on a person who was never asked: no open question to them in the task's thread and no message
-    from the task's owner to them since it started waiting. A bot whose ask failed can still set the task waiting,
-    and then nobody knows. Indexed lookups only: Health is read by every open tab."""
-    cutoff = H.shift(at or H.now(), hours=-SILENT_WAIT_HOURS)
-    return [dict(r) for r in c.execute(
-        "SELECT * FROM (SELECT t.id, t.title, t.owner_id, t.waiting_on, t.conversation_id, t.private, "
-        "coalesce((SELECT max(e.created_at) FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id "
-        "AND e.kind='waiting_on' "
-        "AND e.new=t.waiting_on), t.updated_at) AS since FROM tasks t "
-        "WHERE t.waiting_on IS NOT NULL AND t.status='waiting') w WHERE w.since<? "
-        "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.recipient_id=w.waiting_on AND m.sender_id=w.owner_id "
-        "AND m.created_at>=w.since AND m.deleted_at IS NULL) "
-        "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=w.conversation_id AND m.kind='ask' "
-        f"AND m.recipient_id=w.waiting_on AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL}) "
-        "ORDER BY w.since LIMIT 20", (cutoff,))]
 
 
 def _failed(c):
@@ -2168,13 +2152,6 @@ def view(c, who, settings, auth, github, config):
             f"{row['title']} waits on {row['recipient']}, who cannot read or answer the question"
             if readable else "A private task waits on someone who cannot read or answer the question"
             for row, readable in named) + ("." if len(unreadable) <= 3 else f"; and {len(unreadable) - 3} more."),
-            [_fix("Open " + (row["title"][:40] if readable else "task"), "#/task/" + row["id"]) for row, readable in named]))
-    if full and (silent := silent_waits(c)):
-        named = [(row, H.task_private_readable(c, who.actor, row)) for row in silent[:3]]     # only three are named
-        checks.append(_check("silent_waits", "Waiting on people", "warn", "; ".join(
-            f"{row['title'] if readable else 'A private task'} waits on "
-            f"{(H.human(c, row['waiting_on']) or {}).get('name') or H.actor_id(row['waiting_on'])} but nothing was asked"
-            for row, readable in named) + ("." if len(silent) <= 3 else f"; and {len(silent) - 3} more."),
             [_fix("Open " + (row["title"][:40] if readable else "task"), "#/task/" + row["id"]) for row, readable in named]))
     if full and (missing_tools := _missing_tool_credentials(c, online_ids)):
         checks.append(_check("tool_credentials", "Tool credentials", "warn",
