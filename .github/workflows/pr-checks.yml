@@ -213,7 +213,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          if [ "$EVENT" != pull_request ] || git diff --name-only "$BASE"...HEAD | grep -qE '^(runner-rs|relay-rs|tools/release-command|tools/trust-list-check|contracts/runner)/|^scripts/rust(_checks\.sh|-fmt-pending\.txt)$'; then
+          if [ "$EVENT" != pull_request ] || git diff --name-only "$BASE"...HEAD | grep -qE '^(runner-rs|relay-rs|tools/release-command|tools/trust-list-check|contracts/runner)/|^scripts/rust_checks\.sh$'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.changed.outputs.run == 'true'
