@@ -1,0 +1,1602 @@
+{
+  "backend/agents.py": {
+    "BLE001": 1,
+    "S608": 1
+  },
+  "backend/api_tools.py": {
+    "RUF100": 1,
+    "S608": 4
+  },
+  "backend/app.py": {
+    "B904": 3,
+    "B905": 3,
+    "BLE001": 18,
+    "F401": 5,
+    "S608": 15
+  },
+  "backend/app_delivery.py": {
+    "S608": 5
+  },
+  "backend/approval_expiry.py": {
+    "S608": 2
+  },
+  "backend/ask_deadlines.py": {
+    "RUF100": 1,
+    "S608": 2
+  },
+  "backend/ask_ingest.py": {
+    "B904": 4,
+    "BLE001": 4,
+    "S608": 5
+  },
+  "backend/ask_routing.py": {
+    "S608": 3
+  },
+  "backend/assigned_start.py": {
+    "S608": 9
+  },
+  "backend/assistant.py": {
+    "S608": 5
+  },
+  "backend/assistant_changes.py": {
+    "S608": 5
+  },
+  "backend/auth.py": {
+    "BLE001": 1,
+    "S110": 1,
+    "S608": 7
+  },
+  "backend/auto_tasks.py": {
+    "S608": 15
+  },
+  "backend/automation_overview.py": {
+    "RUF100": 2,
+    "S608": 4
+  },
+  "backend/automations.py": {
+    "B904": 2,
+    "RUF100": 4,
+    "S608": 9
+  },
+  "backend/aws_identity.py": {
+    "BLE001": 1
+  },
+  "backend/backup.py": {
+    "B018": 1,
+    "S608": 3
+  },
+  "backend/batch.py": {
+    "B905": 1,
+    "BLE001": 3,
+    "S608": 1
+  },
+  "backend/beta.py": {
+    "S608": 1
+  },
+  "backend/billing_check.py": {
+    "BLE001": 1,
+    "S110": 1
+  },
+  "backend/bills_address.py": {
+    "S608": 3
+  },
+  "backend/blob_s3.py": {
+    "BLE001": 3
+  },
+  "backend/blobs.py": {
+    "B904": 1,
+    "BLE001": 9,
+    "S110": 1
+  },
+  "backend/blocker_asks.py": {
+    "S608": 3
+  },
+  "backend/blockers.py": {
+    "S608": 1
+  },
+  "backend/bookkeeper.py": {
+    "S608": 3
+  },
+  "backend/bot_home_merge.py": {
+    "RUF100": 1,
+    "S608": 10
+  },
+  "backend/bot_hours.py": {
+    "B905": 1
+  },
+  "backend/bot_rows.py": {
+    "S608": 3
+  },
+  "backend/bot_settings.py": {
+    "S608": 3
+  },
+  "backend/bot_task_tabs.py": {
+    "B023": 1,
+    "RUF100": 1,
+    "S608": 8
+  },
+  "backend/bot_to_bot.py": {
+    "S608": 1
+  },
+  "backend/bot_tools.py": {
+    "B905": 3,
+    "F401": 1,
+    "S608": 4
+  },
+  "backend/botkpis.py": {
+    "F401": 1,
+    "S608": 1
+  },
+  "backend/brand.py": {
+    "S608": 1
+  },
+  "backend/browser_exit.py": {
+    "S608": 2
+  },
+  "backend/cards.py": {
+    "DTZ007": 1,
+    "S608": 7
+  },
+  "backend/census.py": {
+    "BLE001": 1,
+    "S608": 1
+  },
+  "backend/check_models.py": {
+    "S608": 1
+  },
+  "backend/check_pools.py": {
+    "RUF100": 1,
+    "S608": 3
+  },
+  "backend/claim_loads.py": {
+    "S608": 2
+  },
+  "backend/clarify_asks.py": {
+    "S608": 1
+  },
+  "backend/cloud_access.py": {
+    "RUF100": 1
+  },
+  "backend/cloud_agents.py": {
+    "S608": 2
+  },
+  "backend/cloud_machines.py": {
+    "RUF100": 9,
+    "S608": 1
+  },
+  "backend/company_billing.py": {
+    "BLE001": 1
+  },
+  "backend/company_file/actions.py": {
+    "DTZ011": 1
+  },
+  "backend/company_file/draft.py": {
+    "B018": 1
+  },
+  "backend/company_import.py": {
+    "B023": 2,
+    "BLE001": 1,
+    "DTZ011": 1
+  },
+  "backend/company_page/audiences.py": {
+    "S608": 1
+  },
+  "backend/company_page/editions.py": {
+    "S608": 4
+  },
+  "backend/company_page/readers.py": {
+    "S608": 1
+  },
+  "backend/company_page/release.py": {
+    "S608": 2
+  },
+  "backend/company_page/settings.py": {
+    "S608": 1
+  },
+  "backend/company_page/stats.py": {
+    "S608": 1
+  },
+  "backend/company_server.py": {
+    "BLE001": 1,
+    "S110": 1
+  },
+  "backend/company_storage.py": {
+    "BLE001": 5,
+    "S110": 1
+  },
+  "backend/computer_keys.py": {
+    "S608": 5
+  },
+  "backend/computers.py": {
+    "S608": 1
+  },
+  "backend/config.py": {
+    "BLE001": 2
+  },
+  "backend/connections.py": {
+    "S608": 1
+  },
+  "backend/counsel.py": {
+    "S608": 4
+  },
+  "backend/credential_cards.py": {
+    "RUF100": 1
+  },
+  "backend/credentials.py": {
+    "BLE001": 5,
+    "S608": 2
+  },
+  "backend/decide_readout.py": {
+    "RUF100": 1
+  },
+  "backend/delivery.py": {
+    "S608": 12
+  },
+  "backend/demo.py": {
+    "BLE001": 1
+  },
+  "backend/demo_sections/meeting_links.py": {
+    "RUF100": 1
+  },
+  "backend/demo_sections/schedules.py": {
+    "S608": 1
+  },
+  "backend/demo_sections/work_hours.py": {
+    "S608": 1
+  },
+  "backend/demo_seed.py": {
+    "B007": 7,
+    "B023": 21,
+    "RUF100": 1,
+    "S608": 1
+  },
+  "backend/devcopy.py": {
+    "PLW1510": 2,
+    "S608": 8
+  },
+  "backend/diagnostics.py": {
+    "BLE001": 3,
+    "F401": 1,
+    "S110": 1
+  },
+  "backend/directory.py": {
+    "BLE001": 1
+  },
+  "backend/directory_sources.py": {
+    "BLE001": 2
+  },
+  "backend/doc_sources.py": {
+    "BLE001": 1
+  },
+  "backend/docs.py": {
+    "S608": 1
+  },
+  "backend/downloads.py": {
+    "BLE001": 3
+  },
+  "backend/dream.py": {
+    "S608": 5
+  },
+  "backend/dream_auto.py": {
+    "S608": 2
+  },
+  "backend/egress.py": {
+    "B018": 1,
+    "BLE001": 1
+  },
+  "backend/email_sending.py": {
+    "S608": 2
+  },
+  "backend/enqueue.py": {
+    "S608": 1
+  },
+  "backend/events.py": {
+    "ASYNC109": 1,
+    "S608": 30
+  },
+  "backend/execution.py": {
+    "F401": 2,
+    "S608": 41
+  },
+  "backend/external_sync.py": {
+    "S608": 3
+  },
+  "backend/fast_json.py": {
+    "BLE001": 1
+  },
+  "backend/feedback.py": {
+    "S608": 3
+  },
+  "backend/file_library.py": {
+    "BLE001": 4,
+    "F811": 1,
+    "S110": 1,
+    "S608": 3
+  },
+  "backend/file_metadata.py": {
+    "B904": 1,
+    "BLE001": 4,
+    "PLW1510": 1,
+    "S110": 1,
+    "S608": 2
+  },
+  "backend/file_reviews.py": {
+    "S608": 1
+  },
+  "backend/files.py": {
+    "S608": 6
+  },
+  "backend/finance/ad_import.py": {
+    "S608": 1
+  },
+  "backend/finance/delivery.py": {
+    "S608": 1
+  },
+  "backend/finance/qbo.py": {
+    "S608": 5
+  },
+  "backend/finance/store/actions.py": {
+    "S608": 2
+  },
+  "backend/finance/store/ads.py": {
+    "S608": 3
+  },
+  "backend/finance/store/ap.py": {
+    "S608": 31
+  },
+  "backend/finance/store/banking.py": {
+    "S608": 50
+  },
+  "backend/finance/store/budgets.py": {
+    "S608": 7
+  },
+  "backend/finance/store/ledger.py": {
+    "S608": 9
+  },
+  "backend/finance/store/mirror.py": {
+    "S608": 1
+  },
+  "backend/finance/store/purchasing.py": {
+    "S608": 9
+  },
+  "backend/finance/store/raw_totals.py": {
+    "S608": 3
+  },
+  "backend/finance/store/schema.py": {
+    "S608": 1
+  },
+  "backend/finance/store/tax.py": {
+    "S608": 7
+  },
+  "backend/finance/store/tico.py": {
+    "S608": 6
+  },
+  "backend/fleet_check.py": {
+    "BLE001": 2,
+    "S608": 1
+  },
+  "backend/flight.py": {
+    "B007": 2,
+    "B904": 1,
+    "B905": 1,
+    "BLE001": 7,
+    "PLW1510": 1,
+    "S110": 1,
+    "S608": 6
+  },
+  "backend/flight_file.py": {
+    "BLE001": 2
+  },
+  "backend/gateway_connection.py": {
+    "BLE001": 3,
+    "S110": 2
+  },
+  "backend/gateway_page.py": {
+    "S608": 1
+  },
+  "backend/getting_started.py": {
+    "S608": 3
+  },
+  "backend/github.py": {
+    "B023": 4,
+    "B904": 1,
+    "BLE001": 5,
+    "S608": 5
+  },
+  "backend/github_app.py": {
+    "B904": 1,
+    "BLE001": 4,
+    "F401": 1,
+    "S608": 1
+  },
+  "backend/github_reviews.py": {
+    "BLE001": 1
+  },
+  "backend/goal_asks.py": {
+    "S608": 1
+  },
+  "backend/goal_routes.py": {
+    "B904": 1,
+    "BLE001": 1,
+    "S608": 4
+  },
+  "backend/goals.py": {
+    "F401": 2,
+    "S608": 9
+  },
+  "backend/google_connect.py": {
+    "B904": 2
+  },
+  "backend/granola_mcp.py": {
+    "B023": 1,
+    "BLE001": 7,
+    "S110": 2,
+    "S608": 1
+  },
+  "backend/groups.py": {
+    "B007": 1,
+    "S608": 1
+  },
+  "backend/growth.py": {
+    "S608": 12
+  },
+  "backend/growth_numbers.py": {
+    "S608": 3
+  },
+  "backend/health.py": {
+    "BLE001": 3,
+    "S608": 27
+  },
+  "backend/history_log.py": {
+    "RUF100": 1,
+    "S608": 8
+  },
+  "backend/hook_relay.py": {
+    "B018": 1,
+    "BLE001": 2,
+    "S110": 1,
+    "S608": 1
+  },
+  "backend/hosted_updates.py": {
+    "BLE001": 1,
+    "S110": 1
+  },
+  "backend/hubdb.py": {
+    "B034": 4,
+    "B905": 1,
+    "BLE001": 3,
+    "S110": 1,
+    "S608": 98
+  },
+  "backend/idea_triage.py": {
+    "BLE001": 1,
+    "S608": 1
+  },
+  "backend/idempotency_messages.py": {
+    "B023": 2,
+    "BLE001": 1,
+    "S608": 3
+  },
+  "backend/inbound.py": {
+    "B023": 3,
+    "BLE001": 1,
+    "S110": 1,
+    "S608": 3
+  },
+  "backend/invariants.py": {
+    "S608": 4
+  },
+  "backend/judge.py": {
+    "B904": 5,
+    "S608": 1
+  },
+  "backend/kpis.py": {
+    "F401": 1,
+    "S608": 6
+  },
+  "backend/learnings.py": {
+    "B905": 1,
+    "BLE001": 1,
+    "S608": 13
+  },
+  "backend/lenses.py": {
+    "BLE001": 1,
+    "DTZ011": 1,
+    "S608": 2
+  },
+  "backend/letters.py": {
+    "S608": 2
+  },
+  "backend/librarian.py": {
+    "S608": 1
+  },
+  "backend/librarian_setup.py": {
+    "B904": 1,
+    "S608": 1
+  },
+  "backend/lifecycle.py": {
+    "S608": 5
+  },
+  "backend/listening.py": {
+    "S608": 2
+  },
+  "backend/live_blocks.py": {
+    "S608": 3
+  },
+  "backend/live_meetings.py": {
+    "BLE001": 2,
+    "S608": 4
+  },
+  "backend/live_privacy.py": {
+    "S608": 1
+  },
+  "backend/login_holds.py": {
+    "BLE001": 1
+  },
+  "backend/login_waits.py": {
+    "S608": 1
+  },
+  "backend/mail.py": {
+    "S608": 1
+  },
+  "backend/mailbox_access.py": {
+    "S608": 3
+  },
+  "backend/maintenance.py": {
+    "S608": 1
+  },
+  "backend/maintenance_health.py": {
+    "S608": 4
+  },
+  "backend/maintenance_steps/update.py": {
+    "S608": 2
+  },
+  "backend/manage.py": {
+    "F401": 1,
+    "S608": 1
+  },
+  "backend/market.py": {
+    "B008": 1,
+    "BLE001": 3,
+    "S110": 1,
+    "S608": 16
+  },
+  "backend/market_spend.py": {
+    "S608": 6
+  },
+  "backend/market_watch.py": {
+    "BLE001": 3
+  },
+  "backend/mcp.py": {
+    "BLE001": 1,
+    "S110": 1,
+    "S608": 1
+  },
+  "backend/mcp_oauth.py": {
+    "S608": 2
+  },
+  "backend/media.py": {
+    "B905": 2,
+    "BLE001": 1
+  },
+  "backend/meeting_audience.py": {
+    "S608": 10
+  },
+  "backend/meeting_items.py": {
+    "S608": 2
+  },
+  "backend/meeting_task_links.py": {
+    "S608": 1
+  },
+  "backend/meetings.py": {
+    "F401": 1,
+    "S608": 1
+  },
+  "backend/memory_history.py": {
+    "S608": 1
+  },
+  "backend/message_links.py": {
+    "B023": 3,
+    "S608": 8
+  },
+  "backend/messaging.py": {
+    "S608": 8
+  },
+  "backend/migrations/0012_bot_ids.py": {
+    "S608": 1
+  },
+  "backend/migrations/0030_growth_segments.py": {
+    "S608": 1
+  },
+  "backend/migrations/0032_one_spelling_canceled.py": {
+    "S608": 1
+  },
+  "backend/migrations/0033_company_page.py": {
+    "S608": 1
+  },
+  "backend/migrations/0037_finance_combined.py": {
+    "S608": 1
+  },
+  "backend/migrations/0043_drop_bot_legacy_columns.py": {
+    "S608": 1
+  },
+  "backend/migrations/0047_native_threads_schema.py": {
+    "S608": 2
+  },
+  "backend/migrations/0050_idempotency_one_table.py": {
+    "S608": 1
+  },
+  "backend/migrations/0053_usage_facts.py": {
+    "S608": 2
+  },
+  "backend/migrations/0062_runner_states.py": {
+    "S608": 2
+  },
+  "backend/migrations/0064_history_events.py": {
+    "S608": 2
+  },
+  "backend/migrations/0071_explicit_follow_ups.py": {
+    "S608": 1
+  },
+  "backend/migrations/0072_turns_into_attempts.py": {
+    "S608": 3
+  },
+  "backend/migrations/0073_person_draft_keys.py": {
+    "S608": 1
+  },
+  "backend/migrations/0075_task_holds.py": {
+    "S608": 5
+  },
+  "backend/migrations/0076_requeue_list_task_refs.py": {
+    "S608": 2
+  },
+  "backend/migrations/0096_retire_health_monitor.py": {
+    "S608": 2
+  },
+  "backend/migrations/20261105010100_learn_beta.py": {
+    "S608": 1
+  },
+  "backend/migrations/20261105101525_letter_sources.py": {
+    "S608": 1
+  },
+  "backend/migrations/20261105213649_task_readers.py": {
+    "S608": 1
+  },
+  "backend/migrations/20261105214334_retire_replaced_job_mirrors.py": {
+    "S608": 2
+  },
+  "backend/migrations/20261105220550_tools_from_credentials.py": {
+    "S608": 1
+  },
+  "backend/migrations/20261105235413_task_followers.py": {
+    "S608": 2
+  },
+  "backend/migrations/20261106030000_comments_route.py": {
+    "S608": 2
+  },
+  "backend/migrations/20261106084204_retire_memory_tidy.py": {
+    "S608": 1
+  },
+  "backend/milestone_waits.py": {
+    "S608": 4
+  },
+  "backend/model_login.py": {
+    "S608": 12
+  },
+  "backend/model_subscriptions.py": {
+    "S608": 9
+  },
+  "backend/move_retry.py": {
+    "S608": 1
+  },
+  "backend/names.py": {
+    "S608": 2
+  },
+  "backend/observability.py": {
+    "BLE001": 3,
+    "S110": 2
+  },
+  "backend/oidc.py": {
+    "B904": 1
+  },
+  "backend/onboarding.py": {
+    "S608": 4
+  },
+  "backend/openapi_v2.py": {
+    "RUF100": 1
+  },
+  "backend/operations.py": {
+    "BLE001": 2,
+    "PLW1510": 1,
+    "S110": 2
+  },
+  "backend/org_rule_check.py": {
+    "S608": 6
+  },
+  "backend/org_rules.py": {
+    "S608": 1
+  },
+  "backend/outbox.py": {
+    "S608": 5
+  },
+  "backend/pages.py": {
+    "S608": 3
+  },
+  "backend/people_photos.py": {
+    "BLE001": 6,
+    "S110": 2
+  },
+  "backend/people_remove.py": {
+    "S608": 1
+  },
+  "backend/performance.py": {
+    "B023": 12,
+    "S608": 5
+  },
+  "backend/personal_alerts.py": {
+    "S608": 2
+  },
+  "backend/personal_tokens.py": {
+    "S608": 2
+  },
+  "backend/pipeline_exceptions.py": {
+    "S608": 4
+  },
+  "backend/pipeline_stats.py": {
+    "S608": 4
+  },
+  "backend/postal_mail.py": {
+    "S608": 1
+  },
+  "backend/privacy_index.py": {
+    "S608": 3
+  },
+  "backend/profiles.py": {
+    "F401": 2,
+    "S608": 3
+  },
+  "backend/proposals.py": {
+    "B904": 1
+  },
+  "backend/provenance_clock.py": {
+    "S608": 1
+  },
+  "backend/providers.py": {
+    "B905": 4,
+    "S608": 2
+  },
+  "backend/public_roadmaps.py": {
+    "S608": 4
+  },
+  "backend/queue_purge.py": {
+    "S608": 3
+  },
+  "backend/queue_refusals.py": {
+    "BLE001": 1,
+    "S608": 2
+  },
+  "backend/quiet_work.py": {
+    "S608": 14
+  },
+  "backend/reach.py": {
+    "S608": 9
+  },
+  "backend/read_deps.py": {
+    "BLE001": 1,
+    "F401": 3,
+    "S608": 13
+  },
+  "backend/readiness.py": {
+    "S608": 2
+  },
+  "backend/reconnects.py": {
+    "S608": 15
+  },
+  "backend/recorder_installs.py": {
+    "S608": 1
+  },
+  "backend/records/reads.py": {
+    "S608": 4
+  },
+  "backend/records/store.py": {
+    "S608": 2
+  },
+  "backend/redesign_migration.py": {
+    "B904": 1,
+    "BLE001": 6,
+    "RUF100": 1,
+    "S608": 4
+  },
+  "backend/release_flow.py": {
+    "S608": 3
+  },
+  "backend/releases.py": {
+    "BLE001": 2
+  },
+  "backend/replay.py": {
+    "RUF100": 1,
+    "S608": 6
+  },
+  "backend/replication.py": {
+    "BLE001": 14
+  },
+  "backend/repo_waits.py": {
+    "BLE001": 1
+  },
+  "backend/report_managers.py": {
+    "S608": 2
+  },
+  "backend/repositories.py": {
+    "B904": 1,
+    "BLE001": 2,
+    "S608": 3
+  },
+  "backend/review_gate.py": {
+    "B023": 2,
+    "BLE001": 2
+  },
+  "backend/roadmap_flow.py": {
+    "S608": 2
+  },
+  "backend/roadmaps.py": {
+    "S608": 9
+  },
+  "backend/rooms.py": {
+    "S608": 2
+  },
+  "backend/roster_clock.py": {
+    "S608": 1
+  },
+  "backend/routines.py": {
+    "S608": 2
+  },
+  "backend/rule_due.py": {
+    "S608": 4
+  },
+  "backend/rules.py": {
+    "B007": 1,
+    "S110": 1,
+    "S608": 2
+  },
+  "backend/run_backoff.py": {
+    "S608": 2
+  },
+  "backend/run_triggers.py": {
+    "S608": 3
+  },
+  "backend/run_view.py": {
+    "S608": 5
+  },
+  "backend/runner_versions.py": {
+    "RUF100": 1
+  },
+  "backend/runner_wire.py": {
+    "S608": 1
+  },
+  "backend/scheduler.py": {
+    "BLE001": 15,
+    "S608": 1
+  },
+  "backend/screen_binary.py": {
+    "PLW1510": 1
+  },
+  "backend/screen_relay.py": {
+    "BLE001": 1
+  },
+  "backend/settings_admin.py": {
+    "B905": 1,
+    "F401": 2,
+    "S608": 6
+  },
+  "backend/settings_catalog.py": {
+    "S608": 2
+  },
+  "backend/setup_stuck.py": {
+    "S608": 1
+  },
+  "backend/shared_bots.py": {
+    "S608": 5
+  },
+  "backend/skill_devices.py": {
+    "S608": 3
+  },
+  "backend/skill_screening.py": {
+    "S608": 2
+  },
+  "backend/skill_usage.py": {
+    "S608": 9
+  },
+  "backend/slack_app.py": {
+    "BLE001": 1
+  },
+  "backend/slack_gateway.py": {
+    "B023": 14,
+    "BLE001": 15,
+    "F401": 1,
+    "S110": 1,
+    "S608": 2
+  },
+  "backend/sleep_idle.py": {
+    "BLE001": 4,
+    "S110": 3,
+    "S608": 3
+  },
+  "backend/source_outages.py": {
+    "S608": 1
+  },
+  "backend/sources.py": {
+    "S608": 1
+  },
+  "backend/sql.py": {
+    "BLE001": 1,
+    "RUF100": 4,
+    "S608": 47
+  },
+  "backend/stale_review.py": {
+    "BLE001": 3,
+    "S608": 2
+  },
+  "backend/stall_triage.py": {
+    "S110": 1
+  },
+  "backend/start_places.py": {
+    "S608": 7
+  },
+  "backend/status_values.py": {
+    "S608": 6
+  },
+  "backend/step_age.py": {
+    "S608": 2
+  },
+  "backend/step_backlog.py": {
+    "S608": 1
+  },
+  "backend/store.py": {
+    "RUF100": 1,
+    "S608": 15
+  },
+  "backend/strategy.py": {
+    "S608": 6
+  },
+  "backend/strategy_acts.py": {
+    "RUF100": 1,
+    "S608": 3
+  },
+  "backend/strategy_market.py": {
+    "S608": 1
+  },
+  "backend/strategy_merge.py": {
+    "S608": 2
+  },
+  "backend/strategy_setup.py": {
+    "B018": 1,
+    "BLE001": 1,
+    "DTZ011": 1
+  },
+  "backend/strategy_suggest.py": {
+    "B023": 1
+  },
+  "backend/subscriptions.py": {
+    "S608": 1
+  },
+  "backend/support.py": {
+    "BLE001": 2,
+    "S608": 4
+  },
+  "backend/support_access.py": {
+    "BLE001": 2,
+    "S608": 1
+  },
+  "backend/support_asks.py": {
+    "S608": 1
+  },
+  "backend/system_routines.py": {
+    "BLE001": 3,
+    "S608": 2
+  },
+  "backend/task_allocator.py": {
+    "S608": 3
+  },
+  "backend/task_blocked.py": {
+    "S608": 8
+  },
+  "backend/task_caps.py": {
+    "F401": 1
+  },
+  "backend/task_delete.py": {
+    "B007": 2,
+    "S608": 13
+  },
+  "backend/task_followers.py": {
+    "S608": 1
+  },
+  "backend/task_holds.py": {
+    "S608": 9
+  },
+  "backend/task_manager.py": {
+    "S608": 5
+  },
+  "backend/task_privacy.py": {
+    "B905": 3,
+    "S608": 26
+  },
+  "backend/task_quarantine.py": {
+    "S608": 5
+  },
+  "backend/task_reads.py": {
+    "S608": 2
+  },
+  "backend/task_relations.py": {
+    "BLE001": 1,
+    "S608": 9
+  },
+  "backend/task_roles.py": {
+    "S608": 2
+  },
+  "backend/task_roundup.py": {
+    "S608": 14
+  },
+  "backend/task_rules.py": {
+    "BLE001": 2,
+    "S608": 4
+  },
+  "backend/task_snooze.py": {
+    "S608": 1
+  },
+  "backend/task_trigger_rules.py": {
+    "BLE001": 2
+  },
+  "backend/teammate_access.py": {
+    "S608": 1
+  },
+  "backend/tests/test_botops_evals.py": {
+    "F841": 1
+  },
+  "backend/tests/test_claim_refusals.py": {
+    "F841": 2
+  },
+  "backend/tests/test_credentials.py": {
+    "F841": 2
+  },
+  "backend/tests/test_execution_recovery_dependencies.py": {
+    "F841": 2
+  },
+  "backend/tests/test_execution_review.py": {
+    "F841": 1
+  },
+  "backend/tests/test_goal_cards.py": {
+    "F841": 1
+  },
+  "backend/tests/test_held_runs.py": {
+    "F841": 1
+  },
+  "backend/tests/test_member_bots.py": {
+    "F841": 1
+  },
+  "backend/tests/test_org_turns.py": {
+    "F841": 2
+  },
+  "backend/tests/test_profiles.py": {
+    "F841": 1
+  },
+  "backend/tests/test_report_managers.py": {
+    "F841": 1
+  },
+  "backend/tests/test_screen_relay_contract.py": {
+    "F841": 1
+  },
+  "backend/tests/test_source_outages.py": {
+    "F841": 1
+  },
+  "backend/tests/test_task_manager_rights.py": {
+    "F841": 1
+  },
+  "backend/tests/test_triggers_incoming.py": {
+    "F841": 1
+  },
+  "backend/thread_api.py": {
+    "S608": 3
+  },
+  "backend/thread_attention.py": {
+    "S608": 2
+  },
+  "backend/thread_bot_digest.py": {
+    "S608": 1
+  },
+  "backend/thread_bot_status.py": {
+    "S608": 3
+  },
+  "backend/thread_catchup.py": {
+    "S608": 2
+  },
+  "backend/thread_digest.py": {
+    "S608": 2
+  },
+  "backend/thread_rail.py": {
+    "S608": 20
+  },
+  "backend/thread_rank.py": {
+    "S608": 3
+  },
+  "backend/thread_search.py": {
+    "S608": 1
+  },
+  "backend/threads.py": {
+    "S608": 58
+  },
+  "backend/tico_storage.py": {
+    "BLE001": 6,
+    "F401": 1,
+    "S608": 1
+  },
+  "backend/tool_proxy.py": {
+    "RUF100": 1
+  },
+  "backend/topic_change.py": {
+    "BLE001": 3
+  },
+  "backend/triggers.py": {
+    "BLE001": 2,
+    "S608": 5
+  },
+  "backend/turn_budgets.py": {
+    "B007": 1,
+    "S608": 1
+  },
+  "backend/turns.py": {
+    "B023": 4,
+    "B905": 1,
+    "S608": 10
+  },
+  "backend/update_feeds.py": {
+    "S608": 3
+  },
+  "backend/updates.py": {
+    "B007": 1,
+    "B904": 1,
+    "BLE001": 1,
+    "S608": 28
+  },
+  "backend/updates_chat.py": {
+    "S608": 7
+  },
+  "backend/usage.py": {
+    "B904": 1,
+    "S608": 2
+  },
+  "backend/usage_limits.py": {
+    "B023": 1,
+    "S608": 3
+  },
+  "backend/usage_records.py": {
+    "S608": 3
+  },
+  "backend/verdict_moves.py": {
+    "RUF100": 1,
+    "S608": 1
+  },
+  "backend/views.py": {
+    "F401": 2,
+    "RUF100": 3,
+    "S608": 27
+  },
+  "backend/visual_config.py": {
+    "BLE001": 1
+  },
+  "backend/visuals.py": {
+    "B007": 2,
+    "B018": 1,
+    "BLE001": 1
+  },
+  "backend/wake_presets.py": {
+    "S608": 6
+  },
+  "backend/wake_rules.py": {
+    "B007": 1,
+    "S608": 1
+  },
+  "backend/webhook_delivery.py": {
+    "BLE001": 2,
+    "S608": 1
+  },
+  "backend/webhooks.py": {
+    "BLE001": 4,
+    "S608": 2
+  },
+  "backend/why_here.py": {
+    "S608": 3
+  },
+  "backend/worktree_waits.py": {
+    "S608": 6
+  },
+  "backend/worktrees.py": {
+    "S608": 7
+  },
+  "bench/perf-web-home.py": {
+    "S608": 1
+  },
+  "clients/bot_files.py": {
+    "PLW1510": 2
+  },
+  "clients/botcopy.py": {
+    "F401": 1,
+    "PLW1510": 2
+  },
+  "clients/catalog.py": {
+    "DTZ011": 1,
+    "PLW1510": 1
+  },
+  "clients/dbquery.py": {
+    "BLE001": 2,
+    "F401": 1,
+    "S110": 1
+  },
+  "clients/doc_fetch.py": {
+    "B007": 1,
+    "BLE001": 1
+  },
+  "clients/environments.py": {
+    "PLW1510": 1,
+    "RUF100": 1
+  },
+  "clients/gateway.py": {
+    "B018": 1,
+    "BLE001": 2
+  },
+  "clients/harness_manifests.py": {
+    "B904": 1
+  },
+  "clients/hermes_agent.py": {
+    "B904": 8,
+    "BLE001": 1,
+    "PLW1510": 15,
+    "RUF100": 1
+  },
+  "clients/hubcli.py": {
+    "BLE001": 3
+  },
+  "clients/hubmcp.py": {
+    "RUF100": 2
+  },
+  "clients/hubtools.py": {
+    "BLE001": 1,
+    "RUF100": 3
+  },
+  "clients/judge.py": {
+    "B018": 1,
+    "B904": 30,
+    "B905": 1,
+    "BLE001": 1
+  },
+  "clients/preflight.py": {
+    "PLW1510": 6,
+    "RUF100": 5
+  },
+  "clients/registry.py": {
+    "BLE001": 1
+  },
+  "clients/remotecli.py": {
+    "B904": 4,
+    "RUF100": 4
+  },
+  "clients/s3links.py": {
+    "BLE001": 1
+  },
+  "clients/tico.py": {
+    "B904": 2
+  },
+  "connectors/browser.py": {
+    "B904": 1,
+    "DTZ005": 1,
+    "F401": 1,
+    "PLW1510": 1
+  },
+  "connectors/mail/__init__.py": {
+    "B904": 3,
+    "BLE001": 3,
+    "S110": 1
+  },
+  "connectors/mail/__main__.py": {
+    "B904": 4,
+    "BLE001": 5,
+    "F402": 1,
+    "F541": 1
+  },
+  "connectors/mail/access.py": {
+    "BLE001": 3,
+    "RUF100": 2
+  },
+  "connectors/mail/auth.py": {
+    "B904": 13,
+    "BLE001": 1,
+    "RUF100": 9
+  },
+  "connectors/mail/calendar.py": {
+    "B904": 3,
+    "BLE001": 1
+  },
+  "connectors/mail/db.py": {
+    "BLE001": 1
+  },
+  "connectors/mail/gmail.py": {
+    "B904": 2,
+    "BLE001": 2,
+    "RUF100": 1
+  },
+  "connectors/mail/judge.py": {
+    "B905": 4,
+    "RUF100": 1
+  },
+  "connectors/mail/oauth.py": {
+    "B904": 12,
+    "BLE001": 1,
+    "RUF100": 3
+  },
+  "connectors/mail/policy.py": {
+    "BLE001": 8,
+    "RUF100": 3,
+    "S110": 3
+  },
+  "connectors/mail/rules.py": {
+    "B904": 2
+  },
+  "connectors/mail/scheduling.py": {
+    "B904": 1,
+    "BLE001": 3,
+    "F401": 1
+  },
+  "connectors/mail/unsubscribe.py": {
+    "BLE001": 2
+  },
+  "connectors/slack.py": {
+    "B904": 8,
+    "BLE001": 10,
+    "S110": 4
+  },
+  "docker/updater.py": {
+    "B904": 7,
+    "BLE001": 3,
+    "PLW1510": 2
+  },
+  "docs-eval/run.py": {
+    "BLE001": 1,
+    "RUF100": 3
+  },
+  "e2e/preserve.py": {
+    "S608": 3
+  },
+  "evals/botops/run.py": {
+    "RUF100": 1
+  },
+  "evals/botops_automations/checker.py": {
+    "B905": 2,
+    "BLE001": 1,
+    "RUF100": 1
+  },
+  "evals/botops_automations/run.py": {
+    "RUF100": 1
+  },
+  "evals/factory/cases/freezes.py": {
+    "DTZ007": 1,
+    "S608": 1
+  },
+  "evals/factory/cases/github_read_outage.py": {
+    "B007": 1
+  },
+  "evals/factory/cases/qa_waiver_head.py": {
+    "S608": 2
+  },
+  "evals/factory/cases/recovery.py": {
+    "S608": 1
+  },
+  "evals/factory/cases/verdict_past_open_sibling.py": {
+    "B007": 2
+  },
+  "evals/factory/run.py": {
+    "BLE001": 1
+  },
+  "evals/factory/sim.py": {
+    "BLE001": 2,
+    "S608": 3
+  },
+  "evals/factory/world.py": {
+    "B905": 1,
+    "BLE001": 1,
+    "RUF100": 1,
+    "S608": 1
+  },
+  "evals/redesign/cases/caps.py": {
+    "RUF100": 1
+  },
+  "evals/redesign/cases/migration.py": {
+    "S608": 1
+  },
+  "evals/redesign/harness.py": {
+    "BLE001": 2
+  },
+  "evals/redesign/matrix.py": {
+    "B905": 1
+  },
+  "evals/redesign/record.py": {
+    "BLE001": 1
+  },
+  "evals/redesign/workflows.py": {
+    "B007": 1
+  },
+  "evals/replay/capture.py": {
+    "RUF100": 1
+  },
+  "evals/replay/replay.py": {
+    "B023": 2,
+    "RUF100": 2
+  },
+  "evals/replay/run.py": {
+    "RUF100": 1
+  },
+  "evals/screening/harness.py": {
+    "RUF100": 3,
+    "S608": 1
+  },
+  "runner_support/catalog_job.py": {
+    "BLE001": 6
+  },
+  "runner_support/close_calls.py": {
+    "BLE001": 2,
+    "F401": 1,
+    "S110": 1
+  },
+  "runner_support/connectors.py": {
+    "BLE001": 11,
+    "PLW1510": 5,
+    "RUF100": 2,
+    "S110": 1
+  },
+  "runner_support/credential_socket.py": {
+    "BLE001": 2
+  },
+  "runner_support/engine.py": {
+    "PLW1510": 2
+  },
+  "runner_support/git_credentials.py": {
+    "BLE001": 2,
+    "PLW1510": 1
+  },
+  "runner_support/importers/granola.py": {
+    "B905": 1,
+    "F401": 1
+  },
+  "runner_support/importers/service.py": {
+    "BLE001": 3,
+    "F401": 1,
+    "S110": 1
+  },
+  "runner_support/isolation.py": {
+    "PLW1510": 1
+  },
+  "runner_support/mail_key.py": {
+    "PLW1510": 1
+  },
+  "runner_support/op.py": {
+    "DTZ005": 1
+  },
+  "runner_support/redact.py": {
+    "BLE001": 4
+  },
+  "runner_support/release_update.py": {
+    "BLE001": 2
+  },
+  "runner_support/worktrees.py": {
+    "B023": 4,
+    "BLE001": 3,
+    "S110": 1
+  },
+  "scripts/app_release.py": {
+    "BLE001": 1
+  },
+  "scripts/benchmark_screen_relay.py": {
+    "RUF100": 2
+  },
+  "scripts/benchmark_sql_history.py": {
+    "F811": 1,
+    "S608": 3
+  },
+  "scripts/benchmark_test_setup.py": {
+    "PLW1510": 1
+  },
+  "scripts/benchmark_threads.py": {
+    "RUF100": 4
+  },
+  "scripts/cleanup/check_goldens.py": {
+    "RUF100": 1
+  },
+  "scripts/company_app_publisher.py": {
+    "F401": 1
+  },
+  "scripts/company_apps.py": {
+    "BLE001": 2
+  },
+  "scripts/finance_books_rehearsal.py": {
+    "S608": 1
+  },
+  "scripts/finance_tools_rules_rehearsal.py": {
+    "S608": 1
+  },
+  "scripts/finance_xero_rehearsal.py": {
+    "RUF100": 1
+  },
+  "scripts/freeze_guard.py": {
+    "PLW1510": 4
+  },
+  "scripts/granola_live_check.py": {
+    "B007": 1,
+    "BLE001": 2,
+    "RUF100": 1
+  },
+  "scripts/journey-fake-codex.py": {
+    "PLW1510": 1
+  },
+  "scripts/lint_baseline.py": {
+    "PLW1510": 3
+  },
+  "scripts/litestream_restart_check.py": {
+    "RUF100": 1
+  },
+  "scripts/make_upgrade_fixture.py": {
+    "S608": 1
+  },
+  "scripts/market-graph-perf.py": {
+    "RUF100": 3
+  },
+  "scripts/pr_checks.py": {
+    "PLW1510": 4
+  },
+  "scripts/reach_dry_run.py": {
+    "RUF100": 4,
+    "S608": 2
+  },
+  "scripts/release_checklist.py": {
+    "B023": 1,
+    "PLW1510": 1
+  },
+  "scripts/release_checks.py": {
+    "PLW1510": 7
+  },
+  "scripts/remote.py": {
+    "PLW1510": 3
+  },
+  "scripts/threads_migrate_scale.py": {
+    "S608": 3
+  },
+  "setup/aws.py": {
+    "BLE001": 1
+  },
+  "setup/cloud.py": {
+    "F541": 7,
+    "PLW1510": 1
+  },
+  "setup/remote.py": {
+    "PLW1510": 2
+  },
+  "setup/runner_setup.py": {
+    "F541": 1
+  },
+  "setup/ui.py": {
+    "BLE001": 1,
+    "S110": 1
+  },
+  "setup/visual_config.py": {
+    "BLE001": 2,
+    "F401": 1
+  },
+  "setup/visual_contract.py": {
+    "B905": 1
+  },
+  "setup/wizard.py": {
+    "BLE001": 6,
+    "F541": 4
+  },
+  "templates/catalog/release-notes/software/rollout.py": {
+    "B904": 1,
+    "PLW1510": 1
+  }
+}
