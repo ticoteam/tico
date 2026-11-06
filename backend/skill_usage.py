@@ -218,8 +218,7 @@ def _bots_reporting(c, bots):
     if not bots:
         return set()
     declared = BS.read_many(c, bots)
-    runtimes = {row[0]: row[1] for row in c.execute("SELECT id, runtime FROM bots")}
-    return {b for b in bots if reports_skill_uses(declared.get(b, {}), runtimes.get(b))}
+    return {b for b in bots if reports_skill_uses(declared.get(b, {}))}
 
 
 def coverage(c, auth, who, skill, at):
