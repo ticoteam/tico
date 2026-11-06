@@ -69,6 +69,8 @@ from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
 from . import fast_json
+from . import route_memo
+route_memo.install()     # every app after the first in a process reuses its field validators (backend/route_memo.py)
 from . import names as actor_names
 from .openapi_v2 import STABLE as STABLE_ROUTES
 from .route_renames import old_paths as old_route_paths
