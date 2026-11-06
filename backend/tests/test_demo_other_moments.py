@@ -30,13 +30,16 @@ def signed_in(settings):
     return client
 
 
-def nothing_is_dated_after(settings, moment, label):
+def nothing_is_dated_after(settings, moment, label, run_on_the_machines_clock=False):
+    """`run_on_the_machines_clock`: a build whose machine clock is not the build's moment stamps each system run with
+    the machine's own start time, so those two columns are left out (the other build reads them at its own moment)."""
     cut = moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     later = []
     with closing(sqlite3.connect(settings.db_path)) as db:
         for (table,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
             for column in [row[1] for row in db.execute(f'PRAGMA table_info("{table}")')]:
-                if column in FUTURE_BY_DESIGN:
+                if column in FUTURE_BY_DESIGN or (run_on_the_machines_clock and table == "system_runs"
+                                                  and column in ("started_at", "first_started_at")):
                     continue
                 count = db.execute(
                     f'SELECT count(*) FROM "{table}" WHERE typeof("{column}")=\'text\' AND "{column}" > ? '
@@ -102,7 +105,7 @@ def test_a_demo_built_long_after_its_dates_keeps_its_invariants(tmp_path):
     label = "built 200 days before the machine's clock"
     with time_machine.travel(MACHINE, tick=False):
         settings = demo.build(tmp_path, now=LONG_AFTER)
-    nothing_is_dated_after(settings, LONG_AFTER, label)
+    nothing_is_dated_after(settings, LONG_AFTER, label, run_on_the_machines_clock=True)
     every_message_body_is_kept(settings, label)
     with time_machine.travel(LONG_AFTER, tick=False), signed_in(settings) as api:
         no_task_is_stuck(api, label)
