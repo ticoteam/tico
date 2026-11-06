@@ -366,3 +366,19 @@ def tools(world):
                                                                "access_level": "read_write"}, who=DANA), "ledger key")
     _ok(world.api("put", f"/api/v2/api-tools/{ledger}/access/bot:{CLAUDE_ID}", {"level": "read_write"}, who=DANA),
         "builder-claude on Ledger export")
+
+
+@seed("assistant")
+def assistant(world):
+    """The Assistant (bot coo) on the install, as onboarding makes it, and the template routines it has never had: its
+    daily sweep (backend/onboarding.py ensure_builtin_routines, the same call as the startup path). Dana owns it, so her
+    Automations list shows the sweep; the routine is an automation at once (redesign_migration.adopt)."""
+    from backend import bot_settings as BS
+    from .harness import DANA_ID
+    with world.store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('coo', 'coo', 'Coo', 'active')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot, team, owner_id) VALUES('coo', '', ?)", (DANA_ID,))
+        BS.write(c, "coo", {"name": "Coo", "status": "active", "template": "assistant"})
+        made = world.app.state.onboarding.ensure_builtin_routines(c)
+    if made != [("coo", "daily-sweep")]:
+        raise RuntimeError(f"the Assistant's daily sweep was not made: {made}")
