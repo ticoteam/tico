@@ -52,10 +52,10 @@ manages the Dev tickets type run `hub release now`. Routines can run `on: releas
 
 ## Release windows
 
-Tico's own releases (ticoteam/tico) ship from release windows (three on weekdays, two at weekends), run by
+Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays, two at weekends), run by
 `.github/workflows/train.yml` and `scripts/release_train.py`. No one tags by hand.
 
-- **When.** Windows open at 07:30, 14:00 and 20:30 Los Angeles time on weekdays, and at 07:30 and 15:00 on weekends.
+- **When.** Windows open at 07:30, 11:00, 14:00 and 20:30 Los Angeles time on weekdays, and at 07:30 and 15:00 on weekends.
   A window stays open until a `vX.Y.Z` release is published after it opened. Nothing is stored: every run works this
   out from GitHub, so a late schedule or a missed event costs time, never a wrong release.
 - **At the open**, the canary's release is promoted to stable if the bake gate passes (below). Then, if main has moved
