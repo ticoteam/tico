@@ -56,6 +56,13 @@ fn tool_of(item: &Value) -> (String, String) {
     }
 }
 
+/// The app server's extra skill roots for a turn: its staged company skills folder's `<name>/SKILL.md` folder
+/// (crate::company_skills::skills_root), a folder of the runner's own state. Never a folder under CODEX_HOME, which
+/// may be the operator's own.
+pub fn skill_roots(settings: &Settings) -> Vec<String> {
+    settings.company_skills.iter().map(|dir| crate::company_skills::skills_root(std::path::Path::new(dir)).display().to_string()).collect()
+}
+
 /// The `set` table for `shell_environment_policy`: the bot's environment, trimmed.
 pub fn env_for_config(env: &Env) -> Map<String, Value> {
     env.iter()
@@ -125,6 +132,8 @@ struct Shared {
     /// Threads being compacted before a turn (`compact`): None until the app server says how it ended.
     compacting: Mutex<HashMap<String, Option<Result<(), String>>>>,
     compacted: tokio::sync::Notify,
+    /// The extra skill roots this app server was last given (`set_skill_roots`); empty is Codex's own default.
+    skill_roots: Mutex<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -154,6 +163,7 @@ impl CodexHost {
             capture: Mutex::new(None),
             compacting: Mutex::new(HashMap::new()),
             compacted: tokio::sync::Notify::new(),
+            skill_roots: Mutex::new(Vec::new()),
         }))
     }
 
@@ -539,6 +549,13 @@ impl CodexHost {
                                                  "parent_id": sub, "subagent": subagent})));
             return;
         }
+        if kind == "userMessage" {
+            // The input this runner sent, never a subagent's.
+            if sub.is_none() {
+                self.selected_skills(item, t, u);
+            }
+            return;
+        }
         if kind.is_empty() || NOT_TOOLS.contains(&kind) {
             return;
         }
@@ -567,6 +584,28 @@ impl CodexHost {
             fields["reads_only"] = json!(shell_reads_only(command));
         }
         self.emit(event("tool", t, u, fields));
+    }
+
+    /// A `Skill` call, shaped as Claude's (hosts/claude.rs), for each skill the turn's input selects by name: a `skill`
+    /// input item, which the app server echoes in the turn's userMessage item. It is Codex's only explicit selection
+    /// signal: a `$name` in the text is resolved inside Codex with no event, and a SKILL.md the model reads is not a
+    /// selection, so neither is counted. Only the skill's name leaves the computer, for the company's usage counts
+    /// (backend/skill_runtime.py); the call ends as it starts, since the skill is loaded with the input.
+    fn selected_skills(&self, item: &Value, t: Option<&str>, u: Option<&str>) {
+        let id = text_of(&item["id"]);
+        if id.is_empty() {
+            return;
+        }
+        for input in item["content"].as_array().into_iter().flatten() {
+            let Some(name) = input["name"].as_str().filter(|n| input["type"] == "skill" && crate::company_skills::name_ok(n)) else { continue };
+            let call = format!("skill:{id}:{name}");
+            if !self.0.tools_sent.lock().unwrap().insert(format!("{call}:started")) {
+                continue;
+            }
+            self.emit(event("tool", t, u, json!({"tool": "Skill", "status": "started", "item_id": call, "summary": "", "parent_id": null, "skill": name})));
+            self.0.tools_sent.lock().unwrap().insert(format!("{call}:completed"));
+            self.emit(event("tool", t, u, json!({"tool": "Skill", "status": "completed", "item_id": call, "parent_id": null})));
+        }
     }
 
     /// The tokens one report adds: the first in this process counts `last`, later ones what the total grew by.
@@ -628,12 +667,29 @@ impl CodexHost {
         params
     }
 
+    /// Gives the app server the turn's staged company skills as its extra skill roots (`skills/extraRoots/set`, Codex
+    /// 0.136 and later), or takes them away. The call holds for the whole app-server process, which runs this one
+    /// turn, so it is sent only when the roots change. It never fails the turn: an app server without it runs the turn
+    /// without company skills.
+    async fn set_skill_roots(&self, settings: &Settings) {
+        let roots = skill_roots(settings);
+        if *self.0.skill_roots.lock().unwrap() == roots {
+            return;
+        }
+        match self.request("skills/extraRoots/set", json!({"extraRoots": roots}), START_TIMEOUT).await {
+            Ok(_) => *self.0.skill_roots.lock().unwrap() = roots,
+            Err(e) => log(&format!("codex: running without company skills: {e}")),
+        }
+    }
+
     pub async fn start_thread(&self, bot: &str, settings: &Settings) -> Result<String, HostError> {
+        self.set_skill_roots(settings).await;
         let res = self.request("thread/start", self.thread_params(settings), START_TIMEOUT).await?;
         res["thread"]["id"].as_str().filter(|t| !t.is_empty()).map(String::from).ok_or_else(|| failed(format!("thread/start for {bot} returned no thread id")))
     }
 
     pub async fn resume_thread(&self, thread_id: &str, settings: &Settings) -> Result<String, HostError> {
+        self.set_skill_roots(settings).await;
         let mut params = self.thread_params(settings);
         params["threadId"] = json!(thread_id);
         params["excludeTurns"] = json!(true);
@@ -875,6 +931,126 @@ mod tests {
         assert_eq!(host.confirmed("thr_n").as_deref(), Some("thr_n"));
         let confirmed: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).filter(|e| e["kind"] == "thread_confirmed").collect();
         assert_eq!(confirmed, vec![json!({"kind": "thread_confirmed", "thread_id": "thr_n", "turn_id": "turn_1", "session_id": "thr_n"})]);
+    }
+
+    #[test]
+    fn company_skills_are_a_root_of_the_runners_own_never_codex_home() {
+        let base = std::env::temp_dir().join(format!("codex-skills-{}", uuid::Uuid::new_v4().simple()));
+        let (state, home) = (base.join("state"), base.join("codex-home"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("config.toml"), "model = \"gpt-5.5\"\n").unwrap();
+        let files = vec![crate::company_skills::File { path: "SKILL.md".into(), content: "---\nname: acme-brief\ndescription: Write the Acme brief\n---\nWrite it.\n".into() }];
+        let sha = crate::company_skills::bundle_sha(&files);
+        let (staged, _) = crate::company_skills::stage(&state, "a-1", &[("acme-brief".into(), sha, files)]).unwrap();
+        let settings = Settings { company_skills: Some(staged.display().to_string()), ..Settings::default() };
+        let roots = skill_roots(&settings);
+        assert_eq!(roots, vec![staged.join(".claude").join("skills").display().to_string()]);
+        // Codex's layout (one folder per skill, with its SKILL.md), in the runner's state; nothing under CODEX_HOME.
+        assert!(std::path::Path::new(&roots[0]).join("acme-brief").join("SKILL.md").is_file());
+        assert!(roots[0].starts_with(&state.join("skill-sessions").join("a-1").display().to_string()));
+        assert!(!home.join("skills").exists());
+        assert!(skill_roots(&Settings::default()).is_empty());
+        let host = CodexHost::on_home(Env::new(), tokio::sync::mpsc::unbounded_channel().0, Some(home.to_str().unwrap()));
+        assert!(!host.thread_params(&settings).to_string().contains("skill-sessions"), "the root goes only to skills/extraRoots/set");
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// A fake app server that records each request it answers; `FAKE_REFUSE_ROOTS` makes it an app server without
+    /// `skills/extraRoots/set`.
+    const FAKE_APP_SERVER: &str = r#"#!/usr/bin/env python3
+import json, os, sys
+def say(m): print(json.dumps(m), flush=True)
+threads = 0
+for line in sys.stdin:
+    msg = json.loads(line)
+    method, p = msg.get("method"), msg.get("params") or {}
+    if "id" not in msg:
+        continue
+    open(os.environ["FAKE_CALLS"], "a").write(json.dumps({"method": method, "params": p}) + "\n")
+    if method == "skills/extraRoots/set" and os.environ.get("FAKE_REFUSE_ROOTS"):
+        say({"id": msg["id"], "error": {"code": -32601, "message": "method not found"}})
+    elif method == "skills/extraRoots/set":
+        say({"id": msg["id"], "result": {}})
+        say({"method": "skills/changed", "params": {}})
+    elif method == "thread/start":
+        threads += 1
+        say({"id": msg["id"], "result": {"thread": {"id": "th-%d" % threads}}})
+    elif method == "thread/resume":
+        say({"id": msg["id"], "result": {"thread": {"id": p["threadId"]}}})
+    else:
+        say({"id": msg["id"], "result": {}})
+"#;
+
+    #[tokio::test]
+    async fn the_app_server_gets_the_turns_skill_root_once_and_a_refusal_still_runs_the_turn() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("codex-roots-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("codex");
+        std::fs::write(&program, FAKE_APP_SERVER).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default());
+        let calls = |file: &std::path::Path| -> Vec<Value> {
+            std::fs::read_to_string(file).unwrap_or_default().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+        };
+        let staged = Settings { company_skills: Some("/state/skill-sessions/a-1".into()), ..Settings::default() };
+        let root = json!(["/state/skill-sessions/a-1/.claude/skills"]);
+
+        let log = dir.join("calls.jsonl");
+        let env: Env = [("PATH".to_string(), path.clone()), ("FAKE_CALLS".to_string(), log.display().to_string())].into_iter().collect();
+        let host = CodexHost::on_home(env, tokio::sync::mpsc::unbounded_channel().0, None);
+        host.start().await.unwrap();
+        assert_eq!(host.start_thread("ops", &staged).await.unwrap(), "th-1");
+        assert_eq!(host.resume_thread("th-1", &staged).await.unwrap(), "th-1");
+        host.start_thread("ops", &Settings::default()).await.unwrap();
+        host.stop().await;
+        let got = calls(&log);
+        let methods: Vec<&str> = got.iter().map(|c| c["method"].as_str().unwrap()).collect();
+        assert_eq!(methods, ["initialize", "skills/extraRoots/set", "thread/start", "thread/resume", "skills/extraRoots/set", "thread/start"],
+                   "set before the thread starts, again only when the roots change");
+        assert_eq!(got[1]["params"], json!({"extraRoots": root}));
+        assert_eq!(got[4]["params"], json!({"extraRoots": []}), "a turn without company skills takes them away");
+
+        // An app server too old for the call: the thread still starts, without company skills.
+        let log = dir.join("refused.jsonl");
+        let env: Env = [("PATH".to_string(), path), ("FAKE_CALLS".to_string(), log.display().to_string()), ("FAKE_REFUSE_ROOTS".to_string(), "1".to_string())].into_iter().collect();
+        let host = CodexHost::on_home(env, tokio::sync::mpsc::unbounded_channel().0, None);
+        host.start().await.unwrap();
+        assert_eq!(host.start_thread("ops", &staged).await.unwrap(), "th-1");
+        host.stop().await;
+        let methods: Vec<String> = calls(&log).iter().map(|c| text_of(&c["method"])).collect();
+        assert_eq!(methods, ["initialize", "skills/extraRoots/set", "thread/start"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn only_a_skill_input_item_counts_as_a_skill_use() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = CodexHost::on_home(Env::new(), tx, None);
+        let item = |method: &str, thread: &str, item: Value| json!({"method": method, "params": {"threadId": thread, "turnId": "turn_1", "item": item}});
+        let path = "/state/skill-sessions/a-1/.claude/skills/acme-brief/SKILL.md";
+        host.on_message(json!({"method": "turn/started", "params": {"threadId": "thr", "turn": {"id": "turn_1"}}})).await;
+        let selected = json!({"type": "userMessage", "id": "um_1", "content": [
+            {"type": "text", "text": "Use $acme-notes for the Acme brief", "text_elements": []},
+            {"type": "skill", "name": "acme-brief", "path": path},
+            {"type": "skill", "name": "../acme", "path": "/elsewhere/SKILL.md"},
+            {"type": "mention", "name": "acme-app", "path": "app://acme"}]});
+        // Started and completed both carry the input: one use.
+        host.on_message(item("item/started", "thr", selected.clone())).await;
+        host.on_message(item("item/completed", "thr", selected)).await;
+        // No selection: a `$name` typed in the text, the model reading a SKILL.md, a subagent's input.
+        host.on_message(item("item/completed", "thr", json!({"type": "userMessage", "id": "um_2", "content": [{"type": "text", "text": "$acme-brief again", "text_elements": []}]}))).await;
+        host.on_message(item("item/started", "thr", json!({"type": "commandExecution", "id": "c1", "command": format!("cat {path}")}))).await;
+        host.on_message(json!({"method": "thread/started", "params": {"thread": {"id": "thr_sub", "parentThreadId": "thr"}}})).await;
+        host.on_message(item("item/completed", "thr_sub", json!({"type": "userMessage", "id": "um_3", "content": [{"type": "skill", "name": "acme-brief", "path": path}]}))).await;
+        let events: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        let skills: Vec<&Value> = events.iter().filter(|e| e["tool"] == "Skill").collect();
+        assert_eq!(skills, vec![
+            &json!({"kind": "tool", "thread_id": "thr", "turn_id": "turn_1", "tool": "Skill", "status": "started", "item_id": "skill:um_1:acme-brief",
+                    "summary": "", "parent_id": null, "skill": "acme-brief"}),
+            &json!({"kind": "tool", "thread_id": "thr", "turn_id": "turn_1", "tool": "Skill", "status": "completed", "item_id": "skill:um_1:acme-brief", "parent_id": null}),
+        ]);
+        assert!(!serde_json::to_string(&events).unwrap().contains(path), "the skill's name leaves, never its path");
     }
 
     #[tokio::test]

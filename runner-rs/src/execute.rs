@@ -1728,9 +1728,9 @@ impl Runner {
             }
             h.start().await?;
             mark("harness_started", &aid);
-            // The bot's company skills, in a folder of this turn's own that Claude is given with --add-dir. A failure
-            // runs the turn without them.
-            let company_skills = if !packet_only && matches!(h, Host::Claude(_)) {
+            // The bot's company skills, in a folder of this turn's own that Claude is given with --add-dir and Codex as
+            // its extra skill root. A failure runs the turn without them.
+            let company_skills = if !packet_only && matches!(h, Host::Claude(_) | Host::Codex(_)) {
                 crate::company_skills::prepare(&self.client, &self.state.directory, &aid, &bot).await
             } else {
                 None
@@ -1745,6 +1745,7 @@ impl Runner {
                 compact_at: config.get("compact_at").cloned().unwrap_or(Value::Null),
                 gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
                 add_dirs: if packet_only { vec![] } else { crate::company_skills::with_dir(p.add_dirs.clone(), company_skills.as_deref()) },
+                company_skills: company_skills.as_ref().map(|d| d.display().to_string()),
                 shared: packet_only || crate::sessions::is_shared(&config),
                 mcp_servers: if packet_only { vec![] } else { self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config) },
                 background_wait: hosts::background_wait(&config),
@@ -2209,7 +2210,7 @@ impl Runner {
                 }
                 let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
                 h.start().await?;
-                let company_skills = if matches!(h, Host::Claude(_)) {
+                let company_skills = if matches!(h, Host::Claude(_) | Host::Codex(_)) {
                     crate::company_skills::prepare(&self.client, &self.state.directory, &aid, &bot).await
                 } else {
                     None
@@ -2224,6 +2225,7 @@ impl Runner {
                     compact_at: config.get("compact_at").cloned().unwrap_or(Value::Null),
                     gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
                     add_dirs: crate::company_skills::with_dir(place.as_ref().map(|p| p.add_dirs.clone()).unwrap_or_default(), company_skills.as_deref()),
+                    company_skills: company_skills.as_ref().map(|d| d.display().to_string()),
                     shared: crate::sessions::is_shared(&config),
                     mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault.names, &hop.runtime, &hop_config),
                     background_wait: hosts::background_wait(&config),
