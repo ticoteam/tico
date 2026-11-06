@@ -615,6 +615,13 @@ class Scheduler:
                 if mark is None or at - mark >= every:
                     self.marks[key] = at
                     run(self.store, self.execution.auth, at, failures)
+        # Proposed skills and updates waiting for their screen (backend/skill_screening.py): on their own thread, since a
+        # screen's model call can take 90 seconds. The pass records its own run.
+        try:
+            from . import skill_screening
+            skill_screening.kick(self.store)
+        except Exception as exc:
+            failures.append({"skill_screening": type(exc).__name__})
         # Bot wakes the loop guard held: they go by themselves as their root's rolling hour reopens. Plain SQL, no model.
         with SR.recording(self.store, "thread_loop_guard", failures) as run:
             from . import threads

@@ -32,6 +32,37 @@ step against the exact bundle that was screened and the version it was based on.
 refused until it is screened again (`not_screened`, `stale`). A high-risk or unsafe screen needs the admin to acknowledge it.
 Approval makes the next version of the skill. Declining takes a reason of up to 300 characters.
 
+## Screening
+
+The **Skill screening** job (`backend/skill_screening.py`) screens each pending proposal, a few each scheduler pass, oldest
+first. It claims a proposal with a conditional update, so two passes never screen the same one. Each screen writes a
+`skill_screenings` row and sets the proposal's `screen_status`. It is mandatory: there is no switch, and no other model
+answers in place of Decide High.
+
+- **Patterns.** Plain code checks every file and records each hit as `{file, line, pattern}`. It looks for hidden Unicode
+  (zero-width, bidi and tag characters), HTML comments, long base64 or hex blobs, and URLs (each one listed). It also
+  looks for `curl` or `wget` piped to a shell, reads of secrets, env or the keychain, and writes to `.claude/settings*`,
+  hooks, other skills' folders or `AGENT.md`/`CLAUDE.md`. It flags network calls in scripts and the injection phrases
+  that outside-text screening uses. A hit is a hint for the model and the admin, never a verdict on its own.
+- **The model.** Decide High answers the `skill-screen` question set (`questions/skill-screen.json`) with evidence. The
+  state is the skill's name, its description and every file, fenced. For an update it also holds the diff against its
+  base, plus the pattern hits. The model reads the skill as data and judges intent and hiding, not whether it contains
+  commands. It answers a verdict (`safe`, `review` or `unsafe`), a risk (`low`, `medium` or `high`) and five concerns.
+  Its summary and findings (file, line, issue) go on the row.
+- **The risk floor.** A hit for hidden Unicode, a secret read or pipe-to-shell raises a `low` risk to `medium`. So does
+  any concern at 50% or more.
+- **Not screened.** If the state is over 120,000 characters, the row is `not_screened` with the reason `oversize`. With
+  no Gateway, the reason is `unavailable`. At the monthly spend cap it is `cap`, a call that does not answer in time is
+  `timeout`, and any other failure is `error`. A proposal is never marked screened without the model's answer, so it
+  cannot be approved. **Re-run** (`POST skills/proposals/{id}/rescreen`) sends it back to the queue.
+- **Cache.** A bundle already screened with the same sha, base and question set version reuses that answer.
+- **A new question set version** sends every pending proposal screened under an older version back to the queue.
+- **Audit.** Each model call is one `judge.call` row labelled `skill-screen@1`. Each screen is one `skill.screened` event
+  with the name, sha, status, reason, verdict, risk and pattern count, never file contents.
+
+The eval is scenario 11 of `evals/screening` (`python -m evals.screening.run skills`). Its live run is
+`python -m evals.screening.run --skills-live`.
+
 ## Installs
 
 An install is a row: one skill, one bot or one person, and either the latest version or a pinned version. Installing for a
