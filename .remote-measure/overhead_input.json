@@ -1,0 +1,44 @@
+{
+ "tests": [
+  "backend/tests/test_agents.py",
+  "backend/tests/test_api.py",
+  "backend/tests/test_app_release.py",
+  "backend/tests/test_approval_expiry.py",
+  "backend/tests/test_approval_files.py",
+  "backend/tests/test_ask_deadlines.py",
+  "backend/tests/test_attachments.py",
+  "backend/tests/test_auth.py",
+  "backend/tests/test_aws_identity.py",
+  "backend/tests/test_backup.py",
+  "backend/tests/test_backup_bundle.py",
+  "backend/tests/test_batch.py",
+  "backend/tests/test_beta.py",
+  "backend/tests/test_billing_check.py"
+ ],
+ "small": [
+  "backend/finance/ad_warnings.py",
+  "backend/finance/handlers.py",
+  "backend/finance/reads.py",
+  "backend/finance/tab.py",
+  "backend/openapi_v2.py"
+ ],
+ "large": [
+  "backend/decide_readout.py",
+  "backend/demo_sections/services.py",
+  "backend/execution.py",
+  "backend/gateway_page.py",
+  "backend/gateway_tiers.py",
+  "backend/judge.py",
+  "backend/models_preset.py",
+  "backend/postal_mail.py",
+  "backend/providers.py",
+  "backend/recruiting.py",
+  "backend/repositories.py",
+  "backend/settings_admin.py",
+  "backend/task_models.py",
+  "backend/updates.py",
+  "clients/gateway.py",
+  "clients/hubtools.py",
+  "clients/judge.py"
+ ]
+}
