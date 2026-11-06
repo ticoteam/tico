@@ -158,7 +158,7 @@ Transitions:
 - `leased`, `running` or `input` to `queued` or `uncertain`: the attempt's lease expires or the attempt ends without a result. `queued` when nothing was done yet, `uncertain` otherwise (`execution.py` expiry and end-of-attempt paths).
 - On an attempt's end, each job takes the attempt's outcome state, or `canceled` for jobs a stop canceled (`execution.py`).
 - `running` or `input` to `uncertain`, and `leased` to `queued`: hub restart (`backend/backup.py`).
-- `queued` to `completed`: a person answers before any bot runs (`backend/app.py`, `UPDATE jobs SET state='completed' WHERE ... AND state='queued'`).
+- `queued` to `completed`: a person answers before any bot runs (`backend/bot_status_routes.py`, `UPDATE jobs SET state='completed' WHERE ... AND state='queued'`).
 - Any open state to `canceled`: stop, task closed or declined, duplicate wake, quota or wake presets (`app_delivery.py`, `delivery.py`, `demo.py`, `chat_goals.py`, `execution.py`).
 
 Enforcement: trigger on insert and update of `state`. NOT NULL, default `queued`.
