@@ -754,7 +754,6 @@ function runCommand(text, out, slug) {
         await post(`/employees/${encodeURIComponent(slug)}/session/clear`);
         out.hidden = true; out.innerHTML = '';
         toast('Session cleared: the next run starts fresh');
-        if (CONV?.slug === slug) { CONV.cleared = new Date().toISOString(); convRender(CONV); }
       } catch (e) {
         if (/\b403\b|only the owner|not shared|owner only/i.test(e.message)) { out.hidden = true; out.innerHTML = ''; toast('only the owner can do that', true); return; }
         msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; ev.target.disabled = false;
