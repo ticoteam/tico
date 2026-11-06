@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from .. import outbox as O
-from . import banking, cards, payments, stripe_sync, transfers
+from . import banking, brex_sync, cards, payments, stripe_sync, transfers
 from .context import is_set_up, load
 from .core import feeds as F
 from .core.errors import FinanceError
@@ -165,6 +165,7 @@ def stripe_delivery(c: Any, body: Mapping[str, object], at: str | None = None) -
 
 
 stripe_probe = stripe_sync.probe_credential
+brex_probe = brex_sync.probe_credential
 
 
 # ------------------------------------------------------------------------------------------------ one step
@@ -173,7 +174,7 @@ def step(store: Any, vault: Any, *, rehearsal: bool = False, make: Make | None =
     with store.read() as c:
         if not is_set_up(c):
             return
-        rows = [r for r in SK.connections(c) if str(r["provider"]) in ("mercury", "stripe")]
+        rows = [r for r in SK.connections(c) if str(r["provider"]) in ("mercury", "stripe", "brex")]
     for row in rows:
         if str(row["status"]) not in ("active", "error"):
             continue
@@ -205,6 +206,8 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
         return "gone"
     if str(row["provider"]) == "stripe":
         return stripe_sync.connection(store, vault, cid, rehearsal=rehearsal, make=make, at=now)
+    if str(row["provider"]) == "brex":
+        return brex_sync.connection(store, vault, cid, rehearsal=rehearsal, make=make, at=now)
     if rehearsal:
         with store.transaction() as c:
             for o in SK.outbox_due(c, now, OUTBOX_MOST, cid):

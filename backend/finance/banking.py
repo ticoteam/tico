@@ -121,6 +121,9 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if V.opt_text(p, "provider", 20) == "stripe":
         from . import stripe_sync        # lazy: it imports this module
         return stripe_sync.connection_create(ctx, who, p)
+    if V.opt_text(p, "provider", 20) == "brex":
+        from . import brex_sync          # lazy: it imports this module
+        return brex_sync.connection_create(ctx, who, p)
     V.only(p, ("provider", "credential_id", "name", "probe", "approver_email", "token_creator_email", "server_ip"))
     V.choice(p, "provider", ("mercury",))
     cred = V.text(p, "credential_id", 120)
@@ -196,10 +199,10 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     return Plan(K.ALLOW, f"Connect Mercury ({len(accounts)} account(s), {len(credit)} credit)", apply)
 
 
-def _reuse(ctx: Ctx, cid: str, a: Mapping[str, object]) -> Result | None:
-    """A Mercury account already in the books (connected before, perhaps with another token for the same Mercury
-    organization) is the same money account: it moves to this connection, so its history is never taken in twice."""
-    m = SK.money_account_by_provider_id(ctx.c, ctx.book.id, "mercury", str(a.get("id") or ""))
+def _reuse(ctx: Ctx, cid: str, a: Mapping[str, object], provider: str = "mercury") -> Result | None:
+    """A provider account already in the books (connected before, perhaps with another token for the same organization)
+    is the same money account: it moves to this connection, so its history is never taken in twice."""
+    m = SK.money_account_by_provider_id(ctx.c, ctx.book.id, provider, str(a.get("id") or ""))
     if m is None:
         return None
     SK.update(ctx.c, "fin_money_accounts", str(m["id"]), {"connection_id": cid, "status": "active",
@@ -209,12 +212,13 @@ def _reuse(ctx: Ctx, cid: str, a: Mapping[str, object]) -> Result | None:
             "code": gl.code if gl is not None else ""}
 
 
-def _money(ctx: Ctx, cid: str, a: Mapping[str, object], kind: str, subtype: str, gl: L.Account, who: str) -> Result:
+def _money(ctx: Ctx, cid: str, a: Mapping[str, object], kind: str, subtype: str, gl: L.Account, who: str,
+           provider: str = "mercury") -> Result:
     current, available = a.get("current"), a.get("available")
     mid = SK.insert(ctx.c, "fin_money_accounts", {
         "book_id": ctx.book.id, "kind": kind, "subtype": subtype,
         "name": F.bare_name(a.get("name") or "Mercury", str(a.get("last4") or "")[-4:])[:120],
-        "provider": "mercury", "connection_id": cid, "account_id": gl.id, "provider_account_id": str(a.get("id")),
+        "provider": provider, "connection_id": cid, "account_id": gl.id, "provider_account_id": str(a.get("id")),
         "last4": str(a.get("last4") or "")[-4:] or None,
         "holds_cash": 0 if kind == "card_program" and subtype == "credit" else 1,  # a credit program holds no cash
         "balance": current if isinstance(current, int) else None,
@@ -493,7 +497,7 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
         # was taken in) changes nothing, and a posted row never goes back to pending.
         if (t.version and have >= t.version) or (not t.version and have > 0) or (row["entry_id"] and t.pending):
             return str(row["id"])
-    card = SK.card_by_provider(ctx.c, "mercury", t.card_id) if t.card_id else None
+    card = SK.card_by_provider(ctx.c, str(money["provider"] or "mercury"), t.card_id) if t.card_id else None
     fields: dict[str, object] = {
         "txn_date": t.txn_date, "amount": t.amount, "counterparty": t.counterparty, "description": t.description,
         "pending": 1 if t.pending else 0, "provider_status": t.status, "kind": t.kind,

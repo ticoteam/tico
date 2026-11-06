@@ -742,6 +742,7 @@ stripe_delivery = sync.stripe_delivery
 books_delivery = books_sync.delivery
 books_relayed = books_link.relayed_call
 stripe_probe = sync.stripe_probe
+brex_probe = sync.brex_probe
 
 
 def receive(c: sqlite3.Connection, payload: dict[str, object]) -> bool:
