@@ -549,6 +549,9 @@ def run(args, who=None):
         "gateway image",
     ):
         return via_tool(client, args)
+    if fn == "gateway digest":
+        items = json.loads(Path(args.items_file).read_text(encoding="utf-8"))
+        return via_tool(client, args, items=items)
     if args.cmd == "decision":
         return judge(client, args)
     if args.cmd == "meeting":

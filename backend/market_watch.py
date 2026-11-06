@@ -10,6 +10,11 @@ token to read the list.
 
 The fetch runs on a daemon thread outside any database transaction; each result is written in its own short one.
 The first read of a page is its baseline and files nothing. Rows are never deleted: stopping a watch ends it.
+
+With the Tico AI Gateway connected, Tico HQ reads the watches instead (its Signals: pages daily, release feeds every six
+hours, the baselines kept there). Each active watch is registered there once (`signal_watch_id` on the row), a stopped one
+is deleted there, and each check files the changes HQ found since a stored cursor, through the same path as a local read.
+A watch HQ does not hold yet is read here as before. Release feeds are read only through the Gateway.
 """
 
 import difflib
@@ -26,6 +31,7 @@ from fastapi.responses import JSONResponse
 from pydantic import Field
 
 from clients import doc_fetch as F
+from clients import gateway as GW
 from . import hubdb as H
 from . import market as MK
 from . import models as M
@@ -33,7 +39,10 @@ from .store import Problem
 
 log = logging.getLogger("tico.market_watch")
 
-KINDS = ("pricing", "careers", "changelog", "docs", "home", "other")
+KINDS = ("pricing", "careers", "changelog", "docs", "home", "other", "release")
+RELEASE = "release"  # a product's releases: `github:owner/repo` or a feed address, read only through the Gateway
+CHANGES_PER_CALL = 200  # the most changes HQ answers at once (Signals' limit)
+CURSOR_KEY = "market.watch.signals"  # registry_metadata: the Gateway's cursor over the changes filed so far
 MAX_ACTIVE = 200  # active watches
 BATCH = 50  # pages read per check, the longest-unchecked first
 TEXT_MAX = 50_000  # of a page's normalized text kept for the next comparison
@@ -43,11 +52,12 @@ LINES_MAX = 3_000  # lines compared; a longer page is cut before the diff
 STATUSES = ("ok", "error", "blocked")
 DAY_KEY = "market.watch.checked"
 ACTOR = H.KEEPER  # who writes what a check finds
+GITHUB = re.compile(r"github:([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/([A-Za-z0-9._-]{1,100})")
 
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS market_watches (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, url TEXT NOT NULL, "
     "kind TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_by TEXT, created_at TEXT, checked_at TEXT, changed_at TEXT, "
-    "last_hash TEXT, last_text TEXT, last_status TEXT, error TEXT)",
+    "last_hash TEXT, last_text TEXT, last_status TEXT, error TEXT, signal_watch_id TEXT)",
     "CREATE INDEX IF NOT EXISTS market_watches_active ON market_watches(active, checked_at)",
     "CREATE INDEX IF NOT EXISTS market_watches_entity ON market_watches(entity_id)",
 )
@@ -74,7 +84,7 @@ NOISE = re.compile(
     r"^(?:[\d\s.,:;/\\|+*#%$€£–—-]+"
     rf"|(?:{MONTHS}\.?\s+)?\d{{1,2}}(?:st|nd|rd|th)?,?\s+(?:{MONTHS}\.?\s+)?\d{{4}}"
     rf"|{MONTHS}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?"
-    r"|(?:©|\(c\)|copyright)\b.*)$",
+    r"|(?:©|\(c\)|copyright\b).*)$",
     re.I,
 )
 
@@ -167,6 +177,13 @@ def host_of(url):
     return (urlsplit(url).hostname or "").removeprefix("www.")
 
 
+def read_address(url):
+    """The address a watch's evidence cites: the page itself, or a GitHub repository's releases page."""
+    if url.startswith("github:"):
+        return "https://github.com/" + url[len("github:") :] + "/releases"
+    return url
+
+
 def add(c, actor, entity_id, url, kind):
     """A new watch. The caller has checked the writer. The address passes the same guard the doc fetcher applies
     before any DNS lookup (a name that resolves to an internal address is refused by the fetch itself, every time)."""
@@ -174,13 +191,20 @@ def add(c, actor, entity_id, url, kind):
 
     if kind not in KINDS:
         raise Problem("validation", f"a watched page is {'|'.join(KINDS)}, not {kind}", 422)
-    try:
-        url = strategy_setup.normalize_url(url)
-    except ValueError as exc:
-        raise Problem("validation", str(exc), 422, extra={"reason": "url"}) from None
-    if not url:
-        raise Problem("validation", "give the page's address", 422)
-    strategy_setup.refuse_unsafe(url)
+    found = GITHUB.fullmatch(str(url or "").strip()) if kind == RELEASE else None
+    if found:
+        repo = found.group(2)
+        if repo in (".", "..") or repo.lower().endswith(".atom"):
+            raise Problem("validation", "give the repository as github:owner/repo", 422, extra={"reason": "url"})
+        url = f"github:{found.group(1).lower()}/{repo.lower()}"
+    else:
+        try:
+            url = strategy_setup.normalize_url(url)
+        except ValueError as exc:
+            raise Problem("validation", str(exc), 422, extra={"reason": "url"}) from None
+        if not url:
+            raise Problem("validation", "give the page's address", 422)
+        strategy_setup.refuse_unsafe(url)
     entity = MK.entity(c, entity_id)
     if not entity:
         raise Problem("not_found", f"There is no market entity {entity_id}", 404)
@@ -216,14 +240,16 @@ def stop(c, actor, watch_id):
 
 
 # ----------------------------------------------------------------------------- checking
-def due(c, limit=BATCH):
-    """The active watches to read now, the longest unchecked first (never checked first of all)."""
+def due(c, limit=BATCH, skip_mirrored=False):
+    """The active watches to read here now, the longest unchecked first (never checked first of all). A release is read
+    only by the Gateway; with the Gateway, a watch it holds (`skip_mirrored`) is read there."""
+    held = " AND signal_watch_id IS NULL" if skip_mirrored else ""
     return [
         dict(r)
         for r in c.execute(
-            "SELECT id, entity_id, url, kind FROM market_watches WHERE active=1 "
-            "ORDER BY checked_at IS NOT NULL, checked_at, id LIMIT ?",
-            (limit,),
+            "SELECT id, entity_id, url, kind FROM market_watches WHERE active=1 AND kind<>? "
+            f"{held} ORDER BY checked_at IS NOT NULL, checked_at, id LIMIT ?",
+            (RELEASE, limit),
         )
     ]
 
@@ -257,30 +283,37 @@ def record(c, watch, result):
     c.execute(
         "UPDATE market_watches SET changed_at=?, last_hash=?, last_text=? WHERE id=?", (now, fresh, text, row["id"])
     )
-    file_change(c, row, removed, added, fresh)
+    file_change(c, row, removed, added, fresh, now)
     return True
 
 
-def file_change(c, watch, removed, added, fresh):
+def file_change(c, watch, removed, added, fresh, when, address=None):
+    """Files one change of a watch as its evidence, its market insight and an event on the entity. `fresh` is the
+    change's digest, `when` the time it was found, `address` the page it cites (the watch's own by default)."""
     entity = MK.entity(c, watch["entity_id"])
     name = (entity or {}).get("name") or watch["entity_id"]
     quote = excerpt(removed, added)
+    if watch["kind"] == RELEASE:
+        our_read, claim = f"{name} published a new release.", f"Release: {name}"
+    else:
+        our_read, claim = f"The {watch['kind']} page of {name} changed.", f"Page changed: {name} {watch['kind']}"
+    source = address or read_address(watch["url"])
     evidence, _ = MK.create_evidence(
         c,
         ACTOR,
-        source_url=watch["url"],
+        source_url=source,
         source_kind="page-change",
-        captured_at=H.now(),
+        captured_at=when,
         quote=quote,
-        our_read=f"The {watch['kind']} page of {name} changed.",
+        our_read=our_read,
     )
     insight = MK.report(
         c,
         ACTOR,
         kind="property-change",
         about=name,
-        claim=f"Page changed: {name} {watch['kind']}",
-        source_url=watch["url"],
+        claim=claim,
+        source_url=source,
         quote=quote,
         source_ref=f"watch:{watch['id']}:{fresh[:12]}",
     )
@@ -293,7 +326,7 @@ def file_change(c, watch, removed, added, fresh):
         ACTOR,
         f"page.{watch['kind']}",
         None,
-        f"changed: {host_of(watch['url'])}",
+        f"changed: {host_of(watch['url']) or watch['url']}",
         insight["id"],
         evidence["id"],
         trip=False,
@@ -301,12 +334,190 @@ def file_change(c, watch, removed, added, fresh):
     return insight
 
 
-def run_checks(store, limit=BATCH):
-    """Read up to `limit` active watches and write what each shows. The pages are fetched with no transaction open;
-    a failing page is that watch's `error`, never an exception out of here. Returns {read, changed, errors}."""
+def _connected(store, c):
+    from . import gateway_connection
+
+    return gateway_connection.connected(c, store.settings)
+
+
+def connection(store):
+    """(key, base URL) of the Tico AI Gateway when this install has one and may ask it, else None. A rehearsal never asks."""
+    from . import gateway_connection
+    from .credentials import Vault
+
+    if store.settings.rehearsal:
+        return None
     with store.read() as c:
-        watches = due(c, limit)
+        key, base, _ = gateway_connection.target(c, Vault(store), store.settings)
+    return (key, base) if key else None
+
+
+def _cursor(c):
+    found = c.execute("SELECT value FROM registry_metadata WHERE key=?", (CURSOR_KEY,)).fetchone()
+    try:
+        value = json.loads(found[0]) if found else {}
+    except ValueError:
+        value = {}
+    cursor = value.get("cursor") if isinstance(value, dict) else None
+    return cursor if isinstance(cursor, str) and re.fullmatch(r"v1\.[0-9]{1,18}", cursor) else ""
+
+
+def _set_cursor(c, cursor):
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (CURSOR_KEY, json.dumps({"cursor": cursor, "at": H.now()})),
+    )
+
+
+def file_signal(c, change):
+    """One change HQ found on a watch of this install, filed the way a local read's change is. 1 when it was filed."""
+    row = c.execute(
+        "SELECT * FROM market_watches WHERE signal_watch_id=? AND active=1", (str(change.get("watch_id") or ""),)
+    ).fetchone()
+    if not row:
+        return 0  # a watch stopped here since: HQ's change is not news
+    watch = dict(row)
+    found = str(change.get("found_at") or H.now())
+    if watch["kind"] == RELEASE:
+        removed, added = [], [str(change.get("title") or "")] + str(change.get("added") or "").splitlines()
+    else:
+        removed, added = str(change.get("removed") or "").splitlines(), str(change.get("added") or "").splitlines()
+    c.execute("UPDATE market_watches SET changed_at=? WHERE id=?", (found, watch["id"]))
+    file_change(
+        c,
+        watch,
+        removed,
+        added,
+        digest(str(change.get("id") or "")),
+        found,
+        address=str(change.get("url") or "") or None,
+    )
+    return 1
+
+
+def _file_one(c, change):
+    """file_signal inside a savepoint: a change that cannot be filed is logged and skipped, so the cursor still moves."""
+    c.execute("SAVEPOINT signal_change")
+    try:
+        filed = file_signal(c, change)
+        c.execute("RELEASE signal_change")
+        return filed
+    except Exception as exc:
+        c.execute("ROLLBACK TO signal_change")
+        c.execute("RELEASE signal_change")
+        log.warning("Could not file a Gateway page change (%s)", type(exc).__name__)
+        return 0
+
+
+def mirror(store, key, base, pull=True):
+    """Mirror the watches at the Gateway's Signals. Each active watch it does not hold is registered once and its id kept
+    on the row; each stopped watch is ended there (a 404 is ended already); each held watch takes HQ's status. With `pull`,
+    the changes found since the cursor are filed, a page of them in one transaction with the cursor. Returns {read,
+    changed, errors} for the watches HQ holds, or None when HQ's list cannot be had (the caller then reads here)."""
+    status, listed, _ = GW.signals_watches(base, key)
+    if status != 200:
+        return None
+    held = {w["id"]: w for w in listed.get("watches") or [] if isinstance(w, dict) and w.get("id")}
+    with store.read() as c:
+        active = [
+            dict(r) for r in c.execute("SELECT id, kind, url, signal_watch_id FROM market_watches WHERE active=1")
+        ]
+        ended = [
+            dict(r)
+            for r in c.execute(
+                "SELECT id, signal_watch_id FROM market_watches WHERE active=0 AND signal_watch_id IS NOT NULL"
+            )
+        ]
+    pairs = []
+    for row in active:
+        ident = row["signal_watch_id"]
+        if ident not in held:
+            made_status, made, _ = GW.signals_watch(
+                base, key, RELEASE if row["kind"] == RELEASE else "page", row["url"]
+            )
+            ident = made.get("id") if made_status in (200, 201) and isinstance(made.get("id"), str) else None
+            if ident is None:
+                continue  # HQ refused it: this check reads it here
+            held[ident] = made
+            with store.transaction() as c:
+                c.execute("UPDATE market_watches SET signal_watch_id=? WHERE id=? AND active=1", (ident, row["id"]))
+        pairs.append((row["id"], ident))
+    for row in ended:
+        gone, _, _ = GW.signals_end(base, key, row["signal_watch_id"])
+        if gone in (204, 404):
+            with store.transaction() as c:
+                c.execute("UPDATE market_watches SET signal_watch_id=NULL WHERE id=?", (row["id"],))
     out = {"read": 0, "changed": 0, "errors": 0}
+    with store.transaction() as c:
+        for row_id, ident in pairs:
+            theirs = held.get(ident) or {}
+            if theirs.get("status") in (None, "pending"):
+                continue  # HQ has not read it yet
+            ok = theirs["status"] == "ok"
+            c.execute(
+                "UPDATE market_watches SET checked_at=?, last_status=?, error=? WHERE id=?",
+                (
+                    theirs.get("checked_at") or H.now(),
+                    theirs["status"],
+                    None if ok else f"Read by the Gateway: {theirs['status']}",
+                    row_id,
+                ),
+            )
+            out["read"] += 1
+            out["errors"] += not ok
+    if not pull:
+        return out
+    with store.read() as c:
+        cursor = _cursor(c)
+    while True:
+        status, page, _ = GW.signals_changes(base, key, cursor, CHANGES_PER_CALL)
+        if status != 200:
+            break
+        found = [x for x in page.get("changes") or [] if isinstance(x, dict)]
+        nxt = page.get("next") if isinstance(page.get("next"), str) else cursor
+        with store.transaction() as c:
+            out["changed"] += sum(_file_one(c, change) for change in found)
+            _set_cursor(c, nxt)
+        if len(found) < CHANGES_PER_CALL or nxt == cursor:
+            break
+        cursor = nxt
+    return out
+
+
+def sync_soon(store):
+    """Mirror the watches now, on its own thread, when the Gateway is connected: a new watch is registered at HQ and a
+    stopped one ended there without waiting for the daily check. Returns True when a sync was started."""
+    link = connection(store)
+    if link is None:
+        return False
+
+    def work():
+        try:
+            mirror(store, *link, pull=False)
+        except Exception as exc:
+            log.warning("Could not mirror the page watches (%s)", type(exc).__name__)
+
+    spawn(work)
+    return True
+
+
+def run_checks(store, limit=BATCH):
+    """Read up to `limit` active watches and write what each shows. With the Gateway connected, HQ's Signals are mirrored
+    and their changes filed first, and only the watches HQ does not hold are read here. The pages are fetched with no
+    transaction open; a failing page is that watch's `error`, never an exception out of here. Returns {read, changed,
+    errors}."""
+    link = connection(store)
+    out = {"read": 0, "changed": 0, "errors": 0}
+    if link is not None:
+        try:
+            mirrored = mirror(store, *link)
+        except Exception as exc:
+            log.warning("Could not read the Gateway's page changes (%s)", type(exc).__name__)
+            mirrored = None
+        for key in ("read", "changed", "errors"):
+            out[key] += (mirrored or {}).get(key, 0)
+    with store.read() as c:
+        watches = due(c, limit, skip_mirrored=link is not None)
     for watch in watches:
         result = read(watch["url"])
         try:
@@ -405,9 +616,17 @@ def install(app, store, auth, mutate):
 
         def work(c):
             MK.require_writer(who)
+            if body.kind == RELEASE and not _connected(store, c):
+                raise Problem(
+                    "gateway_required",
+                    "A release is watched through the Tico AI Gateway, which is not connected: the owner connects it in Settings > Computers",
+                    409,
+                )
             return {"watch": add(c, who.actor, body.entity_id, body.url, body.kind)}
 
-        return mutate(request, body, work)
+        made = mutate(request, body, work)
+        sync_soon(store)  # HQ registers the page now, not at the next daily check
+        return made
 
     @app.post("/api/v2/market/watches/check")
     def watch_check(request: Request, body: M.Empty):
@@ -425,4 +644,6 @@ def install(app, store, auth, mutate):
             MK.require_writer(who)
             return {"watch": stop(c, who.actor, watch_id)}
 
-        return mutate(request, body, work)
+        stopped = mutate(request, body, work)
+        sync_soon(store)  # HQ ends the watch now, not at the next daily check
+        return stopped
