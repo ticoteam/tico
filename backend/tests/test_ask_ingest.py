@@ -1670,6 +1670,62 @@ def test_a_task_snoozed_past_the_replay_time_is_left_out(ben_off):
         assert A.load_at(c, "human:ben", stamp(10)) == 4
 
 
+def test_a_snooze_released_after_the_replay_time_still_counts_as_open_then(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        TH.put(c, tid, "snoozed", stamp(8), until_at=stamp(12), by_id="human:ben", reason="")
+        TH.release(c, tid, "snoozed", stamp(11))                # ended at eleven, after the replay at ten
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(10)) == 4        # it was snoozed at ten, so it is left out then
+
+
+def test_a_snooze_set_after_the_replay_time_does_not_count_as_open_then(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        TH.put(c, tid, "snoozed", stamp(9), until_at=stamp(12), by_id="human:ben", reason="")
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(8, 30)) == 5    # not yet snoozed at half past eight
+        assert A.load_at(c, "human:ben", stamp(10)) == 4       # snoozed by ten
+
+
+def wait_on_ben(api):
+    """A bot's task waiting on Ben from quarter to nine, set up as the declined-wait test above does."""
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, "human:ana", "Bot asks Ben", "", "bot:ops", lint=False)
+        tid = c.execute("SELECT id FROM tasks WHERE title='Bot asks Ben'").fetchone()[0]
+        c.execute("UPDATE tasks SET created_at=?, status='waiting', waiting_on='human:ben' WHERE id=?", (stamp(8), tid))
+        for field, old, new in (("status", "open", "waiting"), ("waiting_on", None, "human:ben")):
+            c.execute("INSERT INTO history_events(id,subject_type,subject_id,created_at,actor_id,kind,old,new,note) "
+                      "VALUES(?,'task',?,?,?,?,?,?,?)", (H.new_id(), tid, stamp(8, 45), "bot:ops", field, old, new, ""))
+    return tid
+
+
+def test_a_snooze_released_after_the_replay_time_hides_the_wait_then(ben_off):
+    api, token = ben_off
+    tid = wait_on_ben(api)
+    with api.app.state.store.transaction() as c:
+        TH.put(c, tid, "snoozed", stamp(9), until_at=stamp(12), by_id="bot:ops", reason="")
+        TH.release(c, tid, "snoozed", stamp(11))                # ended at eleven, after the replay at ten
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(10)) == 0        # snoozed at ten, so the wait is left out
+
+
+def test_a_snooze_set_after_the_replay_time_does_not_hide_the_wait_then(ben_off):
+    api, token = ben_off
+    tid = wait_on_ben(api)
+    with api.app.state.store.transaction() as c:
+        TH.put(c, tid, "snoozed", stamp(9, 30), until_at=stamp(12), by_id="bot:ops", reason="")
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(9, 15)) == 1    # the wait stood, not yet snoozed at quarter past nine
+        assert A.load_at(c, "human:ben", stamp(10)) == 0       # snoozed by ten
+
+
 def test_a_question_answered_before_the_replay_time_is_not_counted(ben_off):
     api, token = ben_off
     ask_ben(api, token, "Answered at nine?")
