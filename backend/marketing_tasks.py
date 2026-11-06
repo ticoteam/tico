@@ -1,12 +1,15 @@
 """Marketing: the built-in task type a marketing idea is filed as. It lives on the Tasks page with the rest of the work.
 
-A marketing idea is a plain task of this type. Its steps run Idea, Testing, Scaling, with Paused to one side, and it
-finishes by moving to Won, Lost, Inconclusive or Dropped. Channels are `channel:<slug>` labels, and the department is
-the task's team. Nothing is required of it: no prediction, hypothesis, score or bet.
+A marketing idea is a plain task of this type. Its steps run On deck, In development, Live, Working, with Paused to one
+side. A live test is Live; a test that worked and is kept running is Working. It finishes by moving to Succeeded,
+Failed, Inconclusive or Dropped. Channels are `channel:<slug>` labels, and the department is the task's team. Nothing
+is required of it: no prediction, hypothesis, score or bet.
 
 The type keeps the id `idea` it was seeded with, so the tasks filed under it and the step ids other code reads
 (`idea-doing`, `idea-won` and the rest) need no rewrite. Its name is Marketing unless a team's own type already has
-that name; then the names it had before, Idea or Growth idea, are the fallbacks.
+that name; then the names it had before, Idea or Growth idea, are the fallbacks. A file from before the names changed
+gets them from its migration (backend/migrations, marketing step names), which renames only a step still under its old
+default name.
 """
 from . import hubdb as H
 
@@ -14,10 +17,11 @@ TYPE_ID = "idea"
 TYPE_NAMES = ("Marketing", "Idea", "Growth idea")
 # The steps in board order: (key, step name, task status). A step's id is `idea-<key>`; the first two keep the ids an
 # earlier seed gave them.
-STEPS = (("idea", "Idea", "open"), ("testing", "Testing", "doing"), ("scaling", "Scaling", "doing"),
-         ("paused", "Paused", "waiting"), ("review", "Review", "review"), ("ready", "Ready", "ready"),
-         ("done", "Done", "done"), ("closed", "Closed", "closed"), ("won", "Won", "closed"), ("lost", "Lost", "closed"),
-         ("inconclusive", "Inconclusive", "closed"), ("dropped", "Dropped", "closed"))
+STEPS = (("idea", "On deck", "open"), ("building", "In development", "doing"), ("testing", "Live", "doing"),
+         ("scaling", "Working", "doing"), ("paused", "Paused", "waiting"), ("review", "Review", "review"),
+         ("ready", "Ready", "ready"), ("done", "Done", "done"), ("closed", "Closed", "closed"),
+         ("won", "Succeeded", "closed"), ("lost", "Failed", "closed"), ("inconclusive", "Inconclusive", "closed"),
+         ("dropped", "Dropped", "closed"))
 STEP_IDS = {"idea": f"{TYPE_ID}-open", "testing": f"{TYPE_ID}-doing"}
 TERMINAL = ("won", "lost", "inconclusive", "dropped")
 
