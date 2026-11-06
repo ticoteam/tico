@@ -204,7 +204,7 @@ const openCount = slug => S.v2?.status?.[slug]?.open_tasks || 0;
 // number is a fixed attention count matching the default Needs You tab, independent of edits to that tab.
 function botNeeds(slug) {
   return (S.v2?.needs || []).filter(it => (['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it)
-    && companyNeedActor(it, it) === 'bot:' + slug) || (it.kind === 'ask' && it.requester_id === 'bot:' + slug)
+    && companyNeedActor(it, it) === 'bot:' + slug)
     || (it.kind === 'approval' && (it.requested_by_id || it.requester_id) === 'bot:' + slug));
 }
 // While only some pages are held, the counts are the server's over the whole list (its `bots`).
@@ -217,7 +217,7 @@ function needsMeCounts() {
   const counts = new Map();
   for (const it of S.v2?.needs || []) {
     const actor = ['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it) ? companyNeedActor(it, it)
-      : it.kind === 'ask' ? it.requester_id : it.kind === 'approval' ? it.requested_by_id || it.requester_id : null;
+      : it.kind === 'approval' ? it.requested_by_id || it.requester_id : null;
     if (typeof actor === 'string' && actor.startsWith('bot:')) counts.set(actor, (counts.get(actor) || 0) + 1);
   }
   return counts;

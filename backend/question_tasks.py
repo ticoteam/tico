@@ -620,9 +620,10 @@ def take_recommendation(c, auth, who, row, version=None):
         raise Problem("no_recommendation", "This question carries no recommendation to take", 409)
     if rec["option"]:
         question = asked["refs"]["questions"][0]
-        return answer(
+        picked = answer(
             c, auth, who, row["id"], M.TaskAnswer(target={"task": row["id"]}, answers={question["id"]: [rec["option"]]})
         )
+        return {**picked, "did": rec["do"]}
     text, refs = H.answer_text(asked, rec["do"], text="Yes, do what you recommend: " + rec["do"])
     record(
         c,
@@ -641,7 +642,7 @@ def take_recommendation(c, auth, who, row, version=None):
     )
     with sourced(c, refs.get("body_sources")):  # the bot's default may copy a page's words
         H.task_update(c, who.actor, row["id"], status="done", note=text)
-    return {"answer": _load(H.task(c, row["id"]).get("answer")), "woke": True}
+    return {"answer": _load(H.task(c, row["id"]).get("answer")), "woke": True, "did": rec["do"]}
 
 
 # ---- dates: ask_deadlines and still_needed run on question tasks --------------------------------------------------
