@@ -841,8 +841,7 @@ mod tests {
 
     #[test]
     fn the_gateway_hop_runs_the_bots_own_pick_when_the_server_sent_one() {
-        let choices =
-            vec![json!({"runtime": "pi", "harness": "pi", "model": "tico-medium-1.0"})];
+        let choices = vec![json!({"runtime": "pi", "harness": "pi", "model": "tico-medium-1.0"})];
         let mut env = crate::env::Env::new();
         env.insert(crate::gateway_relay::KEY_ENV.into(), "relay-fixture".into());
         let mut config = json!({"runtime": "claude", "harness": "claude-code", "model": "claude-sonnet-5-5",

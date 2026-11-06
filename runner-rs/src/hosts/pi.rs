@@ -2453,7 +2453,10 @@ mod tests {
             inputs_of(&models(both[0]), "tico-high-1.0"),
             json!(["text", "image"])
         );
-        assert_eq!(inputs_of(&models(both[0]), "tico-xlow-1.0"), json!(["text"]));
+        assert_eq!(
+            inputs_of(&models(both[0]), "tico-xlow-1.0"),
+            json!(["text"])
+        );
         // No value (an older server), or one that lists no image: text only, for every model.
         for none in [
             Value::Null,
