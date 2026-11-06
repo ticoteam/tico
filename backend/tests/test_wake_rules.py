@@ -37,9 +37,9 @@ def skips(c):
         "SELECT * FROM events WHERE action=? ORDER BY created_at, rowid", (W.SKIPPED,))]
 
 
-def parked_task(c, title="Build 2/9"):
+def parked_task(c, title="Build 2/9", blocker_title="Build 1/9"):
     """cpo's task, filed by ops, blocked by an open task of ops's."""
-    blocker = H.task_create(c, "bot:ops", "Build 1/9", "First", "bot:ops")
+    blocker = H.task_create(c, "bot:ops", blocker_title, "First", "bot:ops")
     task = H.task_create(c, "bot:ops", title, "Second", "bot:cpo")
     c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
               (blocker["id"], task["id"], H.now()))
@@ -289,24 +289,26 @@ def test_t4_a_persons_message_comment_and_approval_always_wake_a_parked_bot(api)
         assert skips(c) == []
 
 
-@pytest.mark.parametrize("kind,refs,body,key", [
-    ("say", {}, "Hi", "person"),
-    ("ask", {}, "Which release?", "ask"),
-    ("answer", {}, "v0.3.62", "ask"),
-    ("steer", {}, "Stop and fix the tests", "ask"),
-    ("notice", {"approval": "a1"}, "Approved", "approval"),
-    ("notice", {"questions": [{"id": "q"}]}, "Pick one", "approval"),
-    ("notice", {"needs_action": True}, "Blocked on you", "needs_action"),
-    ("notice", {}, "Review done.\nVERDICT: changes PR #12 head " + "a" * 40, "gate"),
-])
-def test_each_always_wake_case_is_never_filtered_even_on_a_parked_task_by_its_own_bot(api, kind, refs, body, key):
+def test_each_always_wake_case_is_never_filtered_even_on_a_parked_task_by_its_own_bot(api):
+    # One story for every always-wake case, each on its own fresh parked task (one setup, not one per case).
+    cases = [
+        ("say", {}, "Hi", "person"),
+        ("ask", {}, "Which release?", "ask"),
+        ("answer", {}, "v0.3.62", "ask"),
+        ("steer", {}, "Stop and fix the tests", "ask"),
+        ("notice", {"approval": "a1"}, "Approved", "approval"),
+        ("notice", {"questions": [{"id": "q"}]}, "Pick one", "approval"),
+        ("notice", {"needs_action": True}, "Blocked on you", "needs_action"),
+        ("notice", {}, "Review done.\nVERDICT: changes PR #12 head " + "a" * 40, "gate"),
+    ]
     setup(api)
     with api.app.state.store.transaction() as c:
-        task, _ = parked_task(c)
-        actor = "human:ana" if key == "person" else H.KEEPER
-        cause = "human:ana" if key == "person" else "bot:cpo"
-        assert W.always_wakes(c, actor, "bot:cpo", kind, refs, body, cause) == key
-        assert W.rule_for(c, actor, "bot:cpo", kind, {**refs, "task": task["id"]}, body, task, cause) is None
+        for n, (kind, refs, body, key) in enumerate(cases):
+            task, _ = parked_task(c, title=f"Build case {n}", blocker_title=f"Build 1/9 case {n}")
+            actor = "human:ana" if key == "person" else H.KEEPER
+            cause = "human:ana" if key == "person" else "bot:cpo"
+            assert W.always_wakes(c, actor, "bot:cpo", kind, refs, body, cause) == key, body
+            assert W.rule_for(c, actor, "bot:cpo", kind, {**refs, "task": task["id"]}, body, task, cause) is None, body
 
 
 @pytest.mark.parametrize("parked_on", ["blocked_by", "wake_once"])
