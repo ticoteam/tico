@@ -441,7 +441,7 @@ def test_the_snapshot_is_the_contracts_lineup():
         for row in cat["models"]
     }
     assert shown == {
-        "tico-xlow": ("xlow", False, "DeepSeek V4 Flash", (0.14, 0.014, 0.27)),
+        "tico-xlow": ("xlow", False, "DeepSeek V4 Flash", (0.14, 0.027, 0.27)),
         "tico-xlow-fast": ("xlow", True, "Inception Mercury 3", (0.30, 0.03, 1.05)),
         "tico-low": ("low", False, "Claude Haiku 5.5", (0.15, 0.015, 0.75)),
         "tico-low-fast": ("low", True, "DeepSeek V4.1 Flash", (0.45, 0.045, 1.80)),
@@ -471,7 +471,7 @@ def test_the_snapshot_is_the_contracts_lineup():
         "tico-decide-high": ("1.0", [("tico-decide-high-1.0", "Claude Opus 5.5")]),
     }
     services = [row["id"] for row in cat["services"]]
-    assert services[:12] == [
+    assert services[:14] == [
         "decide",
         "inbox.email",
         "inbox.numbers",
@@ -481,13 +481,15 @@ def test_the_snapshot_is_the_contracts_lineup():
         "images",
         "svg",
         "video",
+        "signals",
+        "digest",
         "transcribe",
         "mail.physical",
         "letters",
     ]
     assert "classify" not in services
     by_id = {row["id"]: row for row in cat["services"]}
-    assert all(by_id[i]["status"] == "next" and by_id[i]["details"] == [] for i in ("svg", "video"))
+    assert all(by_id[i]["status"] == "live" and by_id[i]["details"] for i in ("svg", "video", "signals", "digest"))
     assert by_id["mail.physical"]["name"] == "Mail"
     assert {"Address", "Own box"} <= {d["label"] for d in by_id["mail.physical"]["details"]}
     assert [d["label"] for d in by_id["transcribe"]["details"]] == ["Recordings", "Live"]

@@ -256,7 +256,8 @@ the tools that use it. The owner's key and Gateway URL are under **Advanced**. T
 (`#/settings/gateway`) opens this card.
 
 Services today: **Decide** (live), **Inbox** email addresses (live) and numbers (on request), **Search**, **Fetch**,
-**Images**, **Transcribe** and **Mail** (live), with SVG, video, sending letters and email, enrichment and voice coming soon.
+**Images**, **SVG**, **Video**, **Signals**, **Digest**, **Transcribe** and **Mail** (live), with sending letters and email,
+enrichment and voice coming soon.
 A choice question (which of your labels fits) is a Decide question. Bots and agents read
 the same list with the `hub_gateway_catalog` tool and search the web with `hub_gateway_search` (`hub gateway catalog [query]`,
 `hub gateway search QUERY`, `hub gateway fetch URL`); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `hub_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The

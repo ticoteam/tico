@@ -41,7 +41,7 @@
      "price": {
       "input": 0.14,
       "output": 0.27,
-      "cached_input": 0.014
+      "cached_input": 0.027
      },
      "long_prompt": null,
      "context": 1048576,
@@ -570,20 +570,90 @@
   {
    "id": "svg",
    "name": "SVG",
-   "for": "Make a vector image (SVG) from a prompt",
-   "price": null,
-   "status": "next",
+   "for": "Make a vector image (SVG) from a prompt, scalable without loss",
+   "price": "Per image, at cost + 25%",
+   "status": "live",
    "tools": [],
-   "details": []
+   "details": [
+    {
+     "label": "Standard",
+     "value": "Recraft v4.1 Vector"
+    },
+    {
+     "label": "Pro",
+     "value": "Recraft v4.1 Pro Vector"
+    },
+    {
+     "label": "Price",
+     "value": "At cost + 25%"
+    }
+   ]
   },
   {
    "id": "video",
    "name": "Video",
-   "for": "Make a short video from a prompt",
-   "price": null,
-   "status": "next",
+   "for": "Make a short video from a prompt, with optional first and last frames",
+   "price": "Per second, at cost + 25%",
+   "status": "live",
    "tools": [],
-   "details": []
+   "details": [
+    {
+     "label": "Model",
+     "value": "Gemini Omni 1.2 Flash"
+    },
+    {
+     "label": "Length",
+     "value": "3 to 15 seconds"
+    },
+    {
+     "label": "Resolution",
+     "value": "360p to 4K, with audio"
+    },
+    {
+     "label": "Price",
+     "value": "At cost + 25%"
+    }
+   ]
+  },
+  {
+   "id": "signals",
+   "name": "Signals",
+   "for": "Watch pages and releases for changes",
+   "price": "10 watches included, then $2 per watch a month",
+   "status": "live",
+   "tools": [],
+   "details": [
+    {
+     "label": "Kinds",
+     "value": "Pages, releases"
+    },
+    {
+     "label": "Checks",
+     "value": "Pages daily, releases every 6 hours"
+    },
+    {
+     "label": "Price",
+     "value": "10 watches included, then $2 per watch a month"
+    }
+   ]
+  },
+  {
+   "id": "digest",
+   "name": "Digest",
+   "for": "Group many items into one summary",
+   "price": "Tokens at Low prices",
+   "status": "live",
+   "tools": [],
+   "details": [
+    {
+     "label": "Model",
+     "value": "Low"
+    },
+    {
+     "label": "Price",
+     "value": "Tokens at Low prices"
+    }
+   ]
   },
   {
    "id": "transcribe",
