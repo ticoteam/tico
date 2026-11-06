@@ -25,9 +25,9 @@ def runs(api, count, room=False, failed=False, machine=None):
         if room:
             with api.app.state.store.transaction() as c:
                 shared = H.open_conversation(c, "human:ana", ["human:ana", "human:ben", "bot:ops"], subject=f"Room {k}")
-            msg = post(api, "messages", {"to": "ops", "text": f"Question {k}", "conversation_id": shared["id"]})
+            post(api, "messages", {"to": "ops", "text": f"Question {k}", "conversation_id": shared["id"]})
         else:
-            msg = post(api, "chat/ops", {"text": f"Question {k}"})
+            post(api, "chat/ops", {"text": f"Question {k}"})
         aid = claim(api, machine)["id"]
         post(api, f"attempts/{aid}/started", {"thread_id": f"run {k}"}, machine["token"])
         rows = [{"seq": 1, "kind": "status", "payload": {"state": "active", "tool_events": True}}]
