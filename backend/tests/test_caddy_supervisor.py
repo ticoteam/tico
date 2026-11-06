@@ -1,4 +1,5 @@
 """Actual pinned Caddy lifecycle, isolated HTTP listeners and no live install/ACME/DB."""
+
 import hashlib
 import http.client
 import json
@@ -43,11 +44,18 @@ class Runtime:
         self.public_port, self.ready_port = port(), port()
         while self.ready_port == self.public_port:
             self.ready_port = port()
-        self.env = {**os.environ, "TICO_CADDY_CONFIG": str(self.config), "TICO_CADDY_STATE_DIR": str(self.state),
-                    "TICO_CADDY_BIN": binary, "TICO_CADDY_READY_PORT": str(self.ready_port),
-                    "TICO_CADDY_READY_TICKS": "2", "TICO_CADDY_STOP_TICKS": "2",
-                    "TICO_CADDY_VALIDATE_TICKS": "3", "XDG_DATA_HOME": str(root / "data"),
-                    "XDG_CONFIG_HOME": str(root / "config")}
+        self.env = {
+            **os.environ,
+            "TICO_CADDY_CONFIG": str(self.config),
+            "TICO_CADDY_STATE_DIR": str(self.state),
+            "TICO_CADDY_BIN": binary,
+            "TICO_CADDY_READY_PORT": str(self.ready_port),
+            "TICO_CADDY_READY_TICKS": "2",
+            "TICO_CADDY_STOP_TICKS": "2",
+            "TICO_CADDY_VALIDATE_TICKS": "3",
+            "XDG_DATA_HOME": str(root / "data"),
+            "XDG_CONFIG_HOME": str(root / "config"),
+        }
         if not shutil.which("wget"):
             # Darwin has no BusyBox/wget here. This adapter makes a real HTTP request, never a fake ACK.
             curl = shutil.which("curl")
@@ -57,9 +65,11 @@ class Runtime:
             tools.mkdir()
             adapter = tools / "wget"
             # The product invocation has six arguments; keep the adapter shape strict.
-            adapter.write_text('#!/bin/sh\n[ "$#" -eq 6 ] || exit 64\n'
-                               '[ "$1 $2 $3 $4 $5" = "-q -T 1 -O -" ] || exit 64\n'
-                               'exec ' + curl + ' --noproxy "*" -fsS --max-time 1 --max-redirs 0 "$6"\n')
+            adapter.write_text(
+                '#!/bin/sh\n[ "$#" -eq 6 ] || exit 64\n'
+                '[ "$1 $2 $3 $4 $5" = "-q -T 1 -O -" ] || exit 64\n'
+                'exec ' + curl + ' --noproxy "*" -fsS --max-time 1 --max-redirs 0 "$6"\n'
+            )
             adapter.chmod(0o700)
             self.env["PATH"] = str(tools) + os.pathsep + self.env["PATH"]
         self.process = None
@@ -68,16 +78,36 @@ class Runtime:
     def configuration(self, asset=ASSET, *, label="one", ready_path="/__tico_caddy_ready"):
         routes = [{"match": [{"host": [APP]}], "handle": [{"handler": "static_response", "body": label}]}]
         if asset:
-            routes.append({"match": [{"host": [asset]}], "handle": [{"handler": "static_response", "body": "asset " + label}]})
+            routes.append(
+                {"match": [{"host": [asset]}], "handle": [{"handler": "static_response", "body": "asset " + label}]}
+            )
         routes.append({"handle": [{"handler": "static_response", "status_code": 404}]})
-        value = {"admin": {"disabled": True}, "apps": {"http": {"servers": {"fixture": {
-            "listen": ["127.0.0.1:" + str(self.public_port)], "automatic_https": {"disable": True}, "routes": routes}}}}}
+        value = {
+            "admin": {"disabled": True},
+            "apps": {
+                "http": {
+                    "servers": {
+                        "fixture": {
+                            "listen": ["127.0.0.1:" + str(self.public_port)],
+                            "automatic_https": {"disable": True},
+                            "routes": routes,
+                        }
+                    }
+                }
+            },
+        }
         generation = hashlib.sha256(encoded(value)).hexdigest()
         value["apps"]["http"]["servers"]["tico_ready"] = {
-            "listen": ["127.0.0.1:" + str(self.ready_port)], "automatic_https": {"disable": True}, "routes": [
-                {"match": [{"path": [ready_path], "method": ["GET"]}],
-                 "handle": [{"handler": "static_response", "body": "tico-caddy-generation:" + generation}]},
-                {"handle": [{"handler": "static_response", "status_code": 404}]}]}
+            "listen": ["127.0.0.1:" + str(self.ready_port)],
+            "automatic_https": {"disable": True},
+            "routes": [
+                {
+                    "match": [{"path": [ready_path], "method": ["GET"]}],
+                    "handle": [{"handler": "static_response", "body": "tico-caddy-generation:" + generation}],
+                },
+                {"handle": [{"handler": "static_response", "status_code": 404}]},
+            ],
+        }
         return value, generation
 
     def replace(self, value):
@@ -88,8 +118,9 @@ class Runtime:
         return hashlib.sha256(raw).hexdigest()
 
     def start(self):
-        self.process = subprocess.Popen(["/bin/sh", str(SCRIPT)], env=self.env, stdout=self.log, stderr=self.log,
-                                        start_new_session=True)
+        self.process = subprocess.Popen(
+            ["/bin/sh", str(SCRIPT)], env=self.env, stdout=self.log, stderr=self.log, start_new_session=True
+        )
 
     def proof(self):
         try:
@@ -101,6 +132,7 @@ class Runtime:
         def observed():
             proof = self.proof()
             return proof if proof and proof["file_sha256"] == digest and proof["generation"] == generation else None
+
         proof = until(observed)
         assert proof["supervisor_pid"] == self.process.pid
         assert self.health() == 0
@@ -113,11 +145,13 @@ class Runtime:
                 return row if row["phase"] == phase and not self.proof() else None
             except (FileNotFoundError, json.JSONDecodeError):
                 return None
+
         return until(observed)
 
     def health(self):
-        return subprocess.run(["/bin/sh", str(SCRIPT), "health"], env=self.env,
-                              capture_output=True, timeout=3).returncode
+        return subprocess.run(
+            ["/bin/sh", str(SCRIPT), "health"], env=self.env, capture_output=True, timeout=3
+        ).returncode
 
     def request(self, host):
         connection = http.client.HTTPConnection("127.0.0.1", self.public_port, timeout=0.3)

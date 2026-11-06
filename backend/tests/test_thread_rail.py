@@ -7,7 +7,6 @@ Fictional people only: ana (owner), ben (bot admin) and cara."""
 import importlib
 import json
 import sqlite3
-from pathlib import Path
 
 import pytest
 
@@ -17,8 +16,6 @@ from backend.tests.test_thread_events import cursor, read_as, who
 from backend import thread_rail, threads
 from backend.config import Settings
 from backend.store import H, Problem, Store
-
-FIXTURE = Path(__file__).parent / "fixtures" / "schema_old_main.sql"
 
 
 def new_thread(api, title="Budget", members=("human:ben",), audience="members", token="ana-test", **extra):
@@ -113,10 +110,12 @@ def test_only_a_manager_pins_for_everyone_and_never_a_one_to_one_dm_a_home_a_tas
 def test_a_pin_for_everyone_reaches_every_reader_and_one_reader_unpins_it_for_themselves(api):
     hall = new_thread(api, title="All hands", audience="company")
     assert everyone(api, hall["id"], True).status_code == 200
-    for token in ("ben-test", "cara-test"):          # neither ever joined it
+    for token in ("ben-test", "cara-test"):  # neither ever joined it
         assert hall["id"] in ids(listed(api, "rail", token)["pinned"])
     assert pin(api, hall["id"], "cara-test", "delete").json()["me"]["pinned"] is False
-    assert hall["id"] not in ids(listed(api, "rail", "cara-test")["pinned"] + listed(api, "rail", "cara-test")["threads"])
+    assert hall["id"] not in ids(
+        listed(api, "rail", "cara-test")["pinned"] + listed(api, "rail", "cara-test")["threads"]
+    )
     assert hall["id"] in ids(listed(api, "rail", "ben-test")["pinned"])
     # Taking the pin off drops the unpin; pinning it again reaches cara too.
     assert everyone(api, hall["id"], False).json()["pinned_for_everyone"] is False
@@ -137,7 +136,7 @@ def test_the_rail_is_the_threads_one_is_in_by_title_and_never_a_one_to_one_dm_or
     assert rail["pinned"] == [] and rail["next_cursor"] is None
     listed_ids = ids(rail["pinned"] + rail["threads"])
     assert dm["id"] not in listed_ids and home["id"] not in listed_ids and zeta["id"] not in listed_ids
-    assert dm["id"] in rail["catch_up_ids"]                     # the DM's unread is Catch up's, not a rail row
+    assert dm["id"] in rail["catch_up_ids"]  # the DM's unread is Catch up's, not a rail row
     assert rail["dms"] == {"human:ana": 1} and rail["catch_up"] == len(rail["catch_up_ids"])
     followed = api.put(f"/api/v2/threads/{zeta['id']}/follow", json={}, headers=headers("ben-test"))
     assert followed.status_code == 200, followed.text
@@ -165,7 +164,7 @@ def test_a_hidden_thread_leaves_no_trace_in_the_rail_browse_or_catch_up(api):
     assert ids(browse) == [hall["id"]] and browse[0]["member_count"] >= 1
     assert ids(listed(api, "browse", "cara-test", q="OPEN")["threads"]) == [hall["id"]]
     assert listed(api, "browse", "cara-test", q="100%")["threads"] == []
-    assert listed(api, "browse", "ana-test")["threads"] == []                    # ana is in it, so it is not Browse's
+    assert listed(api, "browse", "ana-test")["threads"] == []  # ana is in it, so it is not Browse's
     api.put(f"/api/v2/threads/{hall['id']}/follow", json={}, headers=headers("cara-test"))
     assert listed(api, "browse", "cara-test")["threads"] == []
     assert hall["id"] in ids(listed(api, "rail", "cara-test")["threads"])
@@ -221,7 +220,7 @@ def test_catch_up_shows_twenty_messages_counts_the_rest_and_caps_its_count(api, 
 
 def test_every_list_keeps_to_its_byte_budget_and_its_cursor_still_reaches_every_row(api, monkeypatch):
     made = [new_thread(api, title=f"Thread {n}", audience="company") for n in range(4)]
-    for thread in made:                              # ben joins first: joining reads up to now
+    for thread in made:  # ben joins first: joining reads up to now
         api.put(f"/api/v2/threads/{thread['id']}/follow", json={}, headers=headers("ben-test"))
         say(api, thread["id"], "x" * 400)
     monkeypatch.setattr(threads, "MAX_PAGE_BYTES", 2400)
@@ -245,21 +244,29 @@ def test_every_list_keeps_to_its_byte_budget_and_its_cursor_still_reaches_every_
 
 
 def test_a_group_chat_needs_a_name_and_a_bot_is_told_how_to_give_one(api):
-    for path, payload in (("/api/v2/threads", {"audience": "members", "members": ["human:ben"]}),
-                          ("/api/v2/threads", {"audience": "company", "title": "  "}),
-                          ("/api/v2/threads/dm", {"members": ["human:ben", "human:cara"]})):
+    for path, payload in (
+        ("/api/v2/threads", {"audience": "members", "members": ["human:ben"]}),
+        ("/api/v2/threads", {"audience": "company", "title": "  "}),
+        ("/api/v2/threads/dm", {"members": ["human:ben", "human:cara"]}),
+    ):
         refused = api.post(path, json=payload, headers=headers("ana-test"))
         assert refused.status_code == 422, refused.text
         assert refused.json()["error"]["code"] == "name_required"
         assert refused.json()["error"]["detail"] == threads.NAME_REQUIRED
-    assert api.post("/api/v2/threads/dm", json={"members": ["human:ben"]}, headers=headers("ana-test")).status_code == 200
+    assert (
+        api.post("/api/v2/threads/dm", json={"members": ["human:ben"]}, headers=headers("ana-test")).status_code == 200
+    )
     with api.app.state.store.transaction() as c:
         with pytest.raises(Problem) as caught:
             threads.dm(c, "bot:ops", ["human:ben", "human:cara"])
     assert caught.value.code == "name_required" and "hub_thread_dm_group" in caught.value.detail
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM conversations WHERE audience='personal' AND owner_id='bot:ops'"
-                         ).fetchone()[0] == 0
+        assert (
+            c.execute("SELECT COUNT(*) FROM conversations WHERE audience='personal' AND owner_id='bot:ops'").fetchone()[
+                0
+            ]
+            == 0
+        )
 
 
 def test_pin_for_members_pins_the_new_thread_for_each_person_in_it(api):
@@ -267,7 +274,9 @@ def test_pin_for_members_pins_the_new_thread_for_each_person_in_it(api):
     assert thread["me"]["pinned"] is True
     assert api.get(f"/api/v2/threads/{thread['id']}", headers=headers("ben-test")).json()["me"]["pinned"] is True
     with api.app.state.store.read() as c:
-        actors = {r[0] for r in c.execute("SELECT actor FROM thread_pins WHERE thread_id=? AND pinned=1", (thread["id"],))}
+        actors = {
+            r[0] for r in c.execute("SELECT actor FROM thread_pins WHERE thread_id=? AND pinned=1", (thread["id"],))
+        }
     assert actors == {"human:ana", "human:ben"}
 
 
@@ -307,18 +316,23 @@ def test_subtree_unread_counts_a_delivery_in_any_state_once_and_leaves_out_bot_h
     root = new_thread(api, members=("human:ben", "bot:ops"))
     human = post_as(api, root["id"], "human:ana", "@ben please check.", to_actor="human:ben")
     bot = post_as(api, root["id"], "bot:ops", "Numbers are ready", to_actor="human:ben")
-    post_as(api, root["id"], "bot:ops", "Indexing finished")
+    post_as(api, root["id"], "bot:ops", "Indexing finished")  # his @mention made him a live follower: it counts
     post_as(api, root["id"], "human:ana", "Imported note", refs={"import": "history"})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE message_deliveries SET state='moot' WHERE message_id=? AND recipient='human:ben'",
-                  (bot["id"],))
+        c.execute(
+            "UPDATE message_deliveries SET state='moot' WHERE message_id=? AND recipient='human:ben'", (bot["id"],)
+        )
     with api.app.state.store.read_transaction() as c:
         v = threads.viewer(api.app.state.auth, who(api, "ben-test"))
         summary = threads.subtree_summaries(c, v, [root["id"]])[root["id"]]
-        assert summary["unread"] == 2 and summary["new_at"] is None
-        assert thread_rail._readable_new(c, v, [root["id"]]) == {root["id"]: 2}
-        assert c.execute("SELECT COUNT(*) FROM message_deliveries WHERE message_id=? AND recipient='human:ben'",
-                         (human["id"],)).fetchone()[0] == 1  # the human half must not count its delivery again
+        assert summary["unread"] == 3 and summary["new_at"] is None
+        assert thread_rail._readable_new(c, v, [root["id"]]) == {root["id"]: 3}
+        assert (
+            c.execute(
+                "SELECT COUNT(*) FROM message_deliveries WHERE message_id=? AND recipient='human:ben'", (human["id"],)
+            ).fetchone()[0]
+            == 1
+        )  # the human half must not count its delivery again
 
 
 def test_a_pin_event_goes_to_its_reader_and_a_pin_for_everyone_to_everyone_who_reads_it(api):
@@ -332,32 +346,48 @@ def test_a_pin_event_goes_to_its_reader_and_a_pin_for_everyone_to_everyone_who_r
         return [d for _, topic, d in read_as(api, who(api, token), after, ("threads",)) if d.get("kind") == "pinned"]
 
     assert [(d["thread_id"], d["actor"], d["pinned"]) for d in pins("ben-test")] == [(thread["id"], "human:ben", True)]
-    assert pins("cara-test") == []                    # ben's pin is his alone; the hidden thread is not hers to read
+    assert pins("cara-test") == []  # ben's pin is his alone; the hidden thread is not hers to read
     after = cursor(api)
     everyone(api, thread["id"], True)
     sent = pins("cara-test")
     assert [(d["thread_id"], d["pinned"], d["pinned_for_everyone"]) for d in sent] == [(thread["id"], True, True)]
 
 
-def test_the_migration_adds_pins_to_an_existing_database_once(tmp_path):
-    path = tmp_path / "old.sqlite"
-    conn = sqlite3.connect(path)
-    conn.executescript(FIXTURE.read_text())
-    conn.close()
+def test_the_pins_migration_run_once_more_changes_nothing(tmp_path):
+    """The upgrade itself (an old database gains thread_pins and the column) is pinned by test_schema_every_table's
+    upgraded-database test; this one checks that 0063 is repeatable on a database that already has it."""
+    path = tmp_path / "hub.sqlite"
     Store(Settings(db_path=path)).initialize()
     conn = sqlite3.connect(path)
     try:
-        assert {r[1] for r in conn.execute("PRAGMA table_info(thread_pins)")} >= {"thread_id", "actor", "pinned"}
-        assert "pinned_for_everyone_at" in {r[1] for r in conn.execute("PRAGMA table_info(conversations)")}
-        importlib.import_module("backend.migrations.0063_thread_pins").up(conn)       # once more changes nothing
+
+        def shape():
+            return (
+                {r[1] for r in conn.execute("PRAGMA table_info(thread_pins)")},
+                {r[1] for r in conn.execute("PRAGMA table_info(conversations)")},
+            )
+
+        before = shape()
+        assert {"thread_id", "actor", "pinned"} <= before[0] and "pinned_for_everyone_at" in before[1]
+        importlib.import_module("backend.migrations.0063_thread_pins").up(conn)
+        assert shape() == before
     finally:
         conn.close()
 
 
 def test_catch_up_leaves_out_bot_chatter_own_messages_and_muted_threads_and_a_task_needs_a_mention(api):
     with api.app.state.store.transaction() as c:
-        task = H.task_create(c, "human:ben", "Budget review", "Details.", "human:ben", requester_actor="human:ana",
-                             lint=False)["conversation_id"]
+        made = H.task_create(
+            c, "human:ben", "Budget review", "Details.", "human:ben", requester_actor="human:ana", lint=False
+        )
+    task = made["conversation_id"]
+    # Ben owns the task and follows it; at `mentions` a bot's post there reaches him only when it names him.
+    r = api.put(
+        f"/api/v2/tasks/{made['id']}/followers",
+        json={"following": True, "notify": "mentions"},
+        headers=headers("ben-test"),
+    )
+    assert r.status_code == 200, r.text
     post_as(api, task, "bot:ops", "The draft is in the doc.", to_actor="human:ben")
     chatter = new_thread(api, title="Chatter")
     post_as(api, chatter["id"], "bot:ops", "Indexing finished")
@@ -379,12 +409,15 @@ def test_catch_up_leaves_out_bot_chatter_own_messages_and_muted_threads_and_a_ta
 def test_an_old_unnamed_group_dm_still_opens_shows_in_the_rail_and_takes_posts(api):
     made = group_dm(api, ["human:ben", "human:cara"], "Temp")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE conversations SET subject='' WHERE id=?", (made["id"],))     # the way old data looks
+        c.execute("UPDATE conversations SET subject='' WHERE id=?", (made["id"],))  # the way old data looks
         assert threads.dm(c, "human:ana", ["human:ben", "human:cara"])["id"] == made["id"]
     assert made["id"] in ids(listed(api, "rail", "ben-test")["threads"])
     say(api, made["id"], "Still here")
-    again = api.post("/api/v2/threads/dm", json={"members": ["human:cara", "human:ben"], "body": "And again"},
-                     headers=headers("ana-test"))
+    again = api.post(
+        "/api/v2/threads/dm",
+        json={"members": ["human:cara", "human:ben"], "body": "And again"},
+        headers=headers("ana-test"),
+    )
     assert again.status_code == 200 and again.json()["id"] == made["id"]
 
 
@@ -394,14 +427,17 @@ def test_an_activity_event_says_whether_its_message_is_unread_for_each_viewer(ap
     say(api, thread["id"], "A person's update")
 
     def activity(token):
-        return [d for _, topic, d in read_as(api, who(api, token), after, ("threads",))
-                if d.get("kind") == "activity" and d["thread_id"] == thread["id"]]
+        return [
+            d
+            for _, topic, d in read_as(api, who(api, token), after, ("threads",))
+            if d.get("kind") == "activity" and d["thread_id"] == thread["id"]
+        ]
 
     assert [d["unread"] for d in activity("ben-test")] == [True]
-    assert [d["unread"] for d in activity("ana-test")] == [False]          # one's own message
+    assert [d["unread"] for d in activity("ana-test")] == [False]  # one's own message
     after = cursor(api)
     post_as(api, thread["id"], "bot:ops", "Indexing finished")
-    assert [d["unread"] for d in activity("ben-test")] == [False]          # bot activity alone
+    assert [d["unread"] for d in activity("ben-test")] == [False]  # bot activity alone
     after = cursor(api)
     post_as(api, thread["id"], "bot:ops", "@ben please check", to_actor="human:ben")
     assert [d["unread"] for d in activity("ben-test")] == [True]
@@ -410,12 +446,17 @@ def test_an_activity_event_says_whether_its_message_is_unread_for_each_viewer(ap
 
 def test_a_hundred_long_pins_page_through_the_cursor_and_none_is_lost(api, monkeypatch):
     with api.app.state.store.transaction() as c:
-        made = [threads.create(c, "human:ana", title=f"Pinned {n:03d} " + "x" * 1500, audience="company")["id"]
-                for n in range(100)]
-        c.executemany("INSERT INTO thread_pins(id,thread_id,actor,pinned,created_at,updated_at) "
-                      "VALUES(?,?,'human:ben',1,'2026-11-03','2026-11-03')", [("pin-" + t, t) for t in made])
+        made = [
+            threads.create(c, "human:ana", title=f"Pinned {n:03d} " + "x" * 1500, audience="company")["id"]
+            for n in range(100)
+        ]
+        c.executemany(
+            "INSERT INTO thread_pins(id,thread_id,actor,pinned,created_at,updated_at) "
+            "VALUES(?,?,'human:ben',1,'2026-11-03','2026-11-03')",
+            [("pin-" + t, t) for t in made],
+        )
     joined = new_thread(api, title="Joined")
-    monkeypatch.setattr(threads, "MAX_PAGE_BYTES", 60000)     # a quarter of it holds about ten of these rows
+    monkeypatch.setattr(threads, "MAX_PAGE_BYTES", 60000)  # a quarter of it holds about ten of these rows
     pinned, rest, page, pages = [], [], listed(api, "rail", "ben-test"), 1
     while True:
         pinned += ids(page["pinned"])
@@ -462,6 +503,7 @@ def test_catch_up_cuts_a_long_text_and_keeps_each_card_to_the_page_budget(api, m
 def private_ref(api):
     """A private task of cara's that ben may not read: a person's post that names it is hidden from ben."""
     from backend.tests.test_api import unrelated_task_managers
+
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
         return H.task_create(c, "human:cara", "Private plan", "Details.", "human:cara", private=True, lint=False)["id"]
@@ -504,23 +546,27 @@ def test_an_activity_event_counts_every_unread_message_it_stands_for(api):
     after = cursor(api)
     say(api, thread["id"], "One")
     say(api, thread["id"], "Two")
-    post_as(api, thread["id"], "bot:ops", "Indexing finished")       # the newest is not unread for anyone
+    post_as(api, thread["id"], "bot:ops", "Indexing finished")  # a bot's post: unread only for its followers
 
     def activity(token):
-        return [(d["unread"], d["unread_count"]) for _, topic, d in read_as(api, who(api, token), after, ("threads",))
-                if d.get("kind") == "activity" and d["thread_id"] == thread["id"]]
+        return [
+            (d["unread"], d["unread_count"])
+            for _, topic, d in read_as(api, who(api, token), after, ("threads",))
+            if d.get("kind") == "activity" and d["thread_id"] == thread["id"]
+        ]
 
     assert activity("ben-test") == [(True, 2)]
-    assert activity("ana-test") == [(False, 0)]
+    assert activity("ana-test") == [(True, 1)], "Ana started the thread, so she follows it"
 
 
 def test_held_writes_are_read_from_the_readers_own_candidates_through_an_index(api):
     from backend import org_rule_check
     from backend.tests.test_thread_attention import hold
+
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='finance'")
     for _ in range(30):
-        hold(api, reviewer="human:ana", author="human:cara", operation="threads")      # not ben's
+        hold(api, reviewer="human:ana", author="human:cara", operation="threads")  # not ben's
     mine = hold(api, reviewer="human:ben", author="human:cara", operation="threads")
     for_him = hold(api, reviewer="human:ana", author="bot:finance", operation="threads")
     seen = []

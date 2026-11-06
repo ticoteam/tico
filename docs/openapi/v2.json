@@ -135,8 +135,8 @@
       "description": "Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again."
     },
     {
-      "name": "Connections",
-      "description": "Every connection in one list: who reads what it brings in, its bots and where to configure it."
+      "name": "Tools",
+      "description": "Every way the company reaches the outside world in one list, and API tools: their keys per level, who can use each, its checks and calls."
     },
     {
       "name": "Webhook relay",
@@ -169,10 +169,6 @@
     {
       "name": "Slack links",
       "description": "A thread's link to a Slack channel, both ways (docs/slack.md): asked for by an admin, checked by the gateway, then active, suspended or refused. Admins only."
-    },
-    {
-      "name": "Memory tidy",
-      "description": "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
     },
     {
       "name": "Threads",
@@ -209,6 +205,10 @@
     {
       "name": "Alerts",
       "description": "Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert."
+    },
+    {
+      "name": "Skills",
+      "description": "The company's approved skills: proposals and approval, screening state, and installs for bots and people (docs/skills.md)."
     }
   ],
   "paths": {
@@ -625,6 +625,213 @@
             },
             "description": "1-200 characters. Reusing a key with the same body replays the first answer."
           }
+        ]
+      }
+    },
+    "/api/v2/api-tools/{tool_id}": {
+      "get": {
+        "summary": "One API tool: its keys (never a value), who can use it at which level, its last checks and calls; to whoever may change it, who can see it and why. A tool the caller may not see is a 404",
+        "operationId": "getApiTool",
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tool Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiTool"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tools"
+        ]
+      },
+      "patch": {
+        "summary": "Change a tool's settings (credential administrators) or who can see it: audience null for Everyone, or an audience for Only listed (the owner, or a credential administrator who can see it, who then stays on the list)",
+        "operationId": "updateApiTool",
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tool Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/backend__api_tools__ToolUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiToolSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tools"
+        ]
+      }
+    },
+    "/api/v2/api-tools/{tool_id}/activity": {
+      "get": {
+        "summary": "Calls through the proxy and uses of its keys, newest first. Follow next with cursor",
+        "operationId": "listApiToolActivity",
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tool Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "default": "",
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "result",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 20,
+              "default": "",
+              "title": "Result"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiToolActivity"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tools"
         ]
       }
     },
@@ -1554,7 +1761,7 @@
     },
     "/api/v2/assistant/messages": {
       "post": {
-        "summary": "Say something to the Assistant. It is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. `place: updates` (the Updates chat) is handed the recent updates the caller may read",
+        "summary": "Say something to the Assistant. It is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. `place: updates` is handed the recent updates the caller may read",
         "operationId": "sendAssistantMessage",
         "requestBody": {
           "content": {
@@ -1574,6 +1781,66 @@
                 "schema": {
                   "$ref": "#/components/schemas/AssistantSent"
                 }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Assistant"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/assistant/morning": {
+      "post": {
+        "summary": "The Assistant's background run only: one morning message for a person, in their own Assistant chat, as the Assistant (no card). Once a company day per person: a second is 409 already_sent_today",
+        "operationId": "sendAssistantMorning",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantMorning"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -6301,7 +6568,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ToolUpdate"
+                "$ref": "#/components/schemas/backend__models__ToolUpdate"
               }
             }
           }
@@ -9160,72 +9427,6 @@
         },
         "tags": [
           "Team"
-        ]
-      }
-    },
-    "/api/v2/connections": {
-      "get": {
-        "summary": "Slack, GitHub, mail bots, Tico addresses and numbers, meeting importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the company's they may read. Paged with cursor",
-        "operationId": "listConnections",
-        "parameters": [
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "default": 50,
-              "title": "Limit"
-            }
-          },
-          {
-            "name": "cursor",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 400,
-              "default": "",
-              "title": "Cursor"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ConnectionList"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Connections"
         ]
       }
     },
@@ -14467,6 +14668,257 @@
         },
         "tags": [
           "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/ad-accounts": {
+      "get": {
+        "summary": "A Google Ads or Meta Ads tool's ad spend (finance admins): whether Finance imports it every 4 hours and from which day, the books line it books as, which stored keys hold each value (names only), the last import's result, and each ad account with the bot it counts for and its spend this month in cents",
+        "operationId": "listFinanceAdAccounts",
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "title": "Tool Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceAdAccounts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/ad-accounts/{ad_account_id}": {
+      "patch": {
+        "summary": "Pick the bot an ad account's spend counts for, or null for none (finance admins)",
+        "operationId": "updateFinanceAdAccount",
+        "parameters": [
+          {
+            "name": "ad_account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "title": "Ad Account Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinanceAdAccountPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceAdAccount"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/ad-imports": {
+      "post": {
+        "summary": "Save a tool's ad spend import (finance admins): on or off, history_from, the books line and {slot: credential id}. One enabled import per platform (409 otherwise); switching on asks for a run at once",
+        "operationId": "saveFinanceAdImport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinanceAdImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceAdAccounts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/finance/ad-imports/run": {
+      "post": {
+        "summary": "Import an enabled tool's ad spend now instead of at the next 4-hourly run (finance admins)",
+        "operationId": "runFinanceAdImport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinanceAdRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceAdAccounts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
         ]
       }
     },
@@ -20455,6 +20907,124 @@
         ]
       }
     },
+    "/api/v2/heartbeat": {
+      "get": {
+        "summary": "The Heartbeat: seconds between beats, the last beat, beats in the last day and quiet beats, each step in order with its kind, cadence, switch and day counts, and the beats that did something, newest first (pass `next` back as `before`)",
+        "operationId": "getHeartbeat",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeartbeatView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Health"
+        ]
+      },
+      "put": {
+        "summary": "The owner or an admin: set the seconds between beats, 5 to 60",
+        "operationId": "saveHeartbeat",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeartbeatUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeartbeatView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Health"
+        ]
+      }
+    },
     "/api/v2/hooks/wake-url": {
       "get": {
         "summary": "The address Tico Gateway knocks on to start this server when a webhook waits for it, who set it and when (the owner)",
@@ -26263,6 +26833,47 @@
         ]
       }
     },
+    "/api/v2/meetings/recorder": {
+      "get": {
+        "summary": "Your most recently used Tico Recorder, the newest release's version and the download",
+        "operationId": "getMyRecorder",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyRecorder"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Meetings"
+        ]
+      }
+    },
     "/api/v2/meetings/review": {
       "post": {
         "summary": "Share or dismiss your Pending meetings",
@@ -26550,7 +27161,7 @@
     },
     "/api/v2/meetings/transcript": {
       "get": {
-        "summary": "A meeting's transcript",
+        "summary": "A meeting's transcript; includes saved notes at offset zero, or notes only with notes=true",
         "operationId": "getMeetingTranscript",
         "parameters": [
           {
@@ -26585,6 +27196,16 @@
               "minimum": 1,
               "default": 20000,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "notes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Notes"
             }
           }
         ],
@@ -27318,170 +27939,6 @@
         ]
       }
     },
-    "/api/v2/memory-tidy/cards": {
-      "get": {
-        "summary": "The named reviewer\u2019s open cards; diffs are fetched on opening a card. Human and bot reviewers.",
-        "operationId": "listMemoryTidyCards",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryTidyCards"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Memory tidy"
-        ]
-      }
-    },
-    "/api/v2/memory-tidy/cards/{ident}": {
-      "get": {
-        "summary": "A named reviewer\u2019s card with its checked diff, including after both pass tasks close.",
-        "operationId": "getMemoryTidyCard",
-        "parameters": [
-          {
-            "name": "ident",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Ident"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryTidyCardResult"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Memory tidy"
-        ]
-      }
-    },
-    "/api/v2/memory-tidy/cards/{ident}/decide": {
-      "post": {
-        "summary": "Discard an open card without repository changes, or queue deterministic Keep on its capable assigned computer. Failed re-checks leave the card open.",
-        "operationId": "decideMemoryTidyCard",
-        "parameters": [
-          {
-            "name": "ident",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Ident"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MemoryTidyDecision"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryTidyCardResult"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Memory tidy"
-        ]
-      }
-    },
     "/api/v2/messages": {
       "post": {
         "summary": "Send a message to a person or bot",
@@ -27852,75 +28309,6 @@
         },
         "tags": [
           "Conversations"
-        ]
-      }
-    },
-    "/api/v2/messages/{mid}/answer": {
-      "post": {
-        "summary": "Answer a question a bot asked",
-        "operationId": "answerMessage",
-        "parameters": [
-          {
-            "name": "mid",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Mid"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Answer"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Needs you"
         ]
       }
     },
@@ -28318,66 +28706,6 @@
         },
         "tags": [
           "Needs you"
-        ]
-      }
-    },
-    "/api/v2/needs-you/clarify": {
-      "post": {
-        "summary": "Ask the bot behind a stale question whether it still matters, in clearer words",
-        "operationId": "clarifyAsk",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ClarifyAsk"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Needs you"
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
         ]
       }
     },
@@ -34737,6 +35065,1090 @@
         ]
       }
     },
+    "/api/v2/skills": {
+      "get": {
+        "summary": "The directory: each skill with its latest approved version and install count",
+        "operationId": "listSkills",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/bundles/{sha256}": {
+      "get": {
+        "summary": "An approved version's files by its bundle sha, checked against the sha before it is served",
+        "operationId": "getSkillBundle",
+        "parameters": [
+          {
+            "name": "sha256",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sha256"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/install-targets": {
+      "get": {
+        "summary": "Who the caller may install a skill for: writable bots, people, and teams as current members",
+        "operationId": "listSkillInstallTargets",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/installed": {
+      "get": {
+        "summary": "Your installs and those of the bots you may write, desired and staged, with updates available",
+        "operationId": "listMySkillInstalls",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/installs": {
+      "get": {
+        "summary": "The installs of one bot or person, with what is wanted and what is staged there",
+        "operationId": "listSkillInstalls",
+        "parameters": [
+          {
+            "name": "target_type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Target Type"
+            }
+          },
+          {
+            "name": "target_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Target Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/installs/{iid}": {
+      "delete": {
+        "summary": "Take a skill off a bot or person, with the rights to install it",
+        "operationId": "uninstallSkill",
+        "parameters": [
+          {
+            "name": "iid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Iid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/proposals": {
+      "post": {
+        "summary": "Propose a skill or an update as its whole folder of text files; an admin approves it after screening",
+        "operationId": "proposeSkill",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillPropose"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      },
+      "get": {
+        "summary": "Proposals: admins see all, anyone else their own",
+        "operationId": "listSkillProposals",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/proposals/{pid}": {
+      "get": {
+        "summary": "A proposal with its files, its diff, whether the skill moved on, and its latest screening",
+        "operationId": "getSkillProposal",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/proposals/{pid}/approve": {
+      "post": {
+        "summary": "Admins approve a screened proposal as the skill's next version",
+        "operationId": "approveSkillProposal",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillApprove"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/proposals/{pid}/decline": {
+      "post": {
+        "summary": "Admins decline a pending proposal with a reason",
+        "operationId": "declineSkillProposal",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillDecline"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/proposals/{pid}/rescreen": {
+      "post": {
+        "summary": "Admins or the proposer send a pending proposal back to screening",
+        "operationId": "rescreenSkillProposal",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/proposals/{pid}/withdraw": {
+      "post": {
+        "summary": "The proposer withdraws a pending proposal",
+        "operationId": "withdrawSkillProposal",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/usage": {
+      "get": {
+        "summary": "Each skill's use over 7 or 30 days: by trigger, people and bots, last used, top users (admins; others see themselves)",
+        "operationId": "listSkillUsage",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 30,
+              "title": "Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/{name}": {
+      "get": {
+        "summary": "One skill: its versions and the installs the caller may see",
+        "operationId": "getSkill",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/{name}/installs": {
+      "post": {
+        "summary": "Install a skill for one bot or person, at the latest version or pinned to one",
+        "operationId": "installSkill",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillInstall"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/{name}/installs/bulk": {
+      "post": {
+        "summary": "Install a skill for several bots or people at once, all or nothing",
+        "operationId": "installSkillForTargets",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillInstallBulk"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/{name}/usage": {
+      "get": {
+        "summary": "One skill's use: totals, per actor, the last 20 uses with readable links, and install coverage",
+        "operationId": "getSkillUsage",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 30,
+              "title": "Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
+    "/api/v2/skills/{name}/versions/{number}": {
+      "get": {
+        "summary": "One approved version of a skill, with its files",
+        "operationId": "getSkillVersion",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
     "/api/v2/slack/links": {
       "get": {
         "summary": "The Slack links (of one thread with `thread`), newest first, up to `limit` (at most 100) a page; `next_cursor` reads the next page; unlinked ones are left out",
@@ -36564,7 +37976,7 @@
     },
     "/api/v2/system-routines/{key}": {
       "put": {
-        "summary": "The owner or an admin: switch a system routine on or off, pick its schedule preset (15m, hourly, 4h, daily, business) or its daily time",
+        "summary": "The owner or an admin: switch a system routine on or off, pick its schedule preset (15m, hourly, 4h, daily, business) or its daily time; answers {job}: the routine's listing row, or for ask_deadlines (a Heartbeat step with its own switch) its HeartbeatStep row",
         "operationId": "saveSystemRoutine",
         "parameters": [
           {
@@ -36593,7 +38005,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SystemRoutineUpdate"
+                  "$ref": "#/components/schemas/SystemRoutineSaved"
                 }
               }
             }
@@ -38414,7 +39826,7 @@
         ]
       },
       "post": {
-        "summary": "Answer or dismiss a comment or file version question",
+        "summary": "Answer or dismiss a comment or file version question, or a question task ({task}: the answer closes it done, a dismiss declined)",
         "operationId": "answerTaskQuestion",
         "parameters": [
           {
@@ -38913,10 +40325,10 @@
         ]
       }
     },
-    "/api/v2/tasks/{tid}/comments/{mid}/resolve": {
-      "post": {
-        "summary": "Settle an open question answered elsewhere ({quote}: its asker or the task's owner bot), or withdraw it ({}: its asker); it leaves every Needs you list and wakes nobody",
-        "operationId": "resolveTaskQuestion",
+    "/api/v2/tasks/{tid}/context": {
+      "get": {
+        "summary": "Up to 10 pages and 10 meetings, newest first, filtered by your current read access; metadata only",
+        "operationId": "getTaskContext",
         "parameters": [
           {
             "name": "tid",
@@ -38926,43 +40338,15 @@
               "type": "string",
               "title": "Tid"
             }
-          },
-          {
-            "name": "mid",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Mid"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TaskAskResolve"
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
             "description": "OK",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CommentResult"
+                  "$ref": "#/components/schemas/TaskContext"
                 }
               }
             }
@@ -39219,184 +40603,6 @@
                       }
                     ],
                     "title": "Note"
-                  },
-                  "ask": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "questions": {
-                            "items": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "id": {
-                                  "maxLength": 40,
-                                  "minLength": 1,
-                                  "title": "Id",
-                                  "type": "string"
-                                },
-                                "header": {
-                                  "maxLength": 30,
-                                  "title": "Header",
-                                  "type": "string"
-                                },
-                                "question": {
-                                  "maxLength": 300,
-                                  "minLength": 1,
-                                  "title": "Question",
-                                  "type": "string"
-                                },
-                                "why": {
-                                  "default": "",
-                                  "maxLength": 200,
-                                  "title": "Why",
-                                  "type": "string"
-                                },
-                                "options": {
-                                  "items": {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                      "label": {
-                                        "maxLength": 60,
-                                        "minLength": 1,
-                                        "title": "Label",
-                                        "type": "string"
-                                      },
-                                      "description": {
-                                        "default": "",
-                                        "maxLength": 200,
-                                        "title": "Description",
-                                        "type": "string"
-                                      },
-                                      "file": {
-                                        "anyOf": [
-                                          {
-                                            "pattern": "^[^@]+@[1-9][0-9]*$",
-                                            "type": "string"
-                                          },
-                                          {
-                                            "type": "null"
-                                          }
-                                        ],
-                                        "title": "File"
-                                      },
-                                      "then": {
-                                        "default": "",
-                                        "maxLength": 120,
-                                        "title": "Then",
-                                        "type": "string"
-                                      },
-                                      "recommended": {
-                                        "default": false,
-                                        "title": "Recommended",
-                                        "type": "boolean"
-                                      }
-                                    },
-                                    "required": [
-                                      "label"
-                                    ],
-                                    "title": "QuestionOption",
-                                    "type": "object"
-                                  },
-                                  "maxItems": 6,
-                                  "title": "Options",
-                                  "type": "array"
-                                },
-                                "multi": {
-                                  "default": false,
-                                  "title": "Multi",
-                                  "type": "boolean"
-                                },
-                                "other": {
-                                  "default": true,
-                                  "title": "Other",
-                                  "type": "boolean"
-                                }
-                              },
-                              "required": [
-                                "id",
-                                "header",
-                                "question"
-                              ],
-                              "title": "ReviewQuestion",
-                              "type": "object"
-                            },
-                            "maxItems": 4,
-                            "minItems": 1,
-                            "title": "Questions",
-                            "type": "array"
-                          },
-                          "who": {
-                            "anyOf": [
-                              {
-                                "maxLength": 200,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ],
-                            "title": "Who"
-                          },
-                          "if_no_answer": {
-                            "anyOf": [
-                              {
-                                "additionalProperties": false,
-                                "description": "What the bot does if the person does not answer by `by` (backend/ask_deadlines.py). `kind` says what that step is:\nonly a `reversible` internal step goes ahead on its own; a send, a payment or a delete waits for an answer.",
-                                "properties": {
-                                  "do": {
-                                    "maxLength": 300,
-                                    "minLength": 1,
-                                    "title": "Do",
-                                    "type": "string"
-                                  },
-                                  "kind": {
-                                    "enum": [
-                                      "reversible",
-                                      "send",
-                                      "spend",
-                                      "delete"
-                                    ],
-                                    "title": "Kind",
-                                    "type": "string"
-                                  },
-                                  "by": {
-                                    "anyOf": [
-                                      {
-                                        "maxLength": 40,
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ],
-                                    "title": "By"
-                                  }
-                                },
-                                "required": [
-                                  "do",
-                                  "kind"
-                                ],
-                                "title": "IfNoAnswer",
-                                "type": "object"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "required": [
-                          "questions"
-                        ],
-                        "title": "ReviewAsk",
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
                   }
                 },
                 "required": [
@@ -39438,10 +40644,6 @@
                     "type": "string",
                     "format": "binary",
                     "description": "Optional PNG or JPEG poster."
-                  },
-                  "ask": {
-                    "type": "string",
-                    "description": "JSON-encoded structured ask, with questions and optional who."
                   }
                 },
                 "required": [
@@ -39449,6 +40651,127 @@
                 ],
                 "title": "TaskFile",
                 "type": "object"
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      }
+    },
+    "/api/v2/tasks/{tid}/make-page": {
+      "post": {
+        "summary": "Ask the caller's Assistant to make and pin a task page with their normal rights; 409 at 60 pins",
+        "operationId": "makeTaskPage",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MakePage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantSent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      },
+      "get": {
+        "summary": "The caller's latest Make page request: making, made, failed or update_required",
+        "operationId": "getTaskMakePage",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskMakePage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
               }
             }
           }
@@ -42032,6 +43355,121 @@
         ]
       }
     },
+    "/api/v2/threads/{thread_id}/reach": {
+      "get": {
+        "summary": "Who a message would reach, each with its mode, given `text` (its @mentions), `delivery` (steer when none), `defer_for` and `in_reply_to`; `outside` lists @mentions it would not reach, `adds_reader` a private task's new reader. Writes nothing",
+        "operationId": "getThreadReach",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "text",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Text"
+            }
+          },
+          {
+            "name": "delivery",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "steer",
+                    "queue",
+                    "defer"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Delivery"
+            }
+          },
+          {
+            "name": "defer_for",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Defer For"
+            }
+          },
+          {
+            "name": "in_reply_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "In Reply To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadReach"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Threads"
+        ]
+      }
+    },
     "/api/v2/threads/{thread_id}/read": {
       "post": {
         "summary": "Read up to `seq` in the thread; the highest mark wins, so a device that is ahead keeps its place",
@@ -42288,6 +43726,72 @@
         },
         "tags": [
           "Threads"
+        ]
+      }
+    },
+    "/api/v2/tool-index": {
+      "get": {
+        "summary": "API tools, mailboxes, Tico addresses and numbers, mailing mail, Slack, GitHub, meeting importers, Listening, outgoing webhooks and declared tools the caller may see, with status and who can use each. Follow next with cursor",
+        "operationId": "listToolIndex",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 500,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 20,
+              "default": "",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolIndex"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tools"
         ]
       }
     },
@@ -46629,26 +48133,333 @@
         ],
         "additionalProperties": true
       },
-      "Answer": {
+      "ApiTool": {
+        "type": "object",
         "properties": {
-          "text": {
-            "type": "string",
-            "maxLength": 200000,
-            "minLength": 1,
-            "title": "Text"
+          "tool": {
+            "$ref": "#/components/schemas/ApiToolSettings"
           },
-          "unknown": {
-            "type": "boolean",
-            "title": "Unknown",
-            "default": false
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "preview": {
+                  "type": "string"
+                },
+                "access_level": {
+                  "enum": [
+                    "read",
+                    "read_write"
+                  ]
+                },
+                "expires_on": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "last_used_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "access_level",
+                "id",
+                "name",
+                "preview"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "access": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "subject": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "bot",
+                    "person",
+                    "finance"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "initials": {
+                  "type": "string"
+                },
+                "level": {
+                  "enum": [
+                    "read",
+                    "read_write"
+                  ]
+                },
+                "last_used_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "fixed": {
+                  "type": "boolean",
+                  "description": "Finance reads this key; it goes when the source is disconnected, not here"
+                }
+              },
+              "required": [
+                "initials",
+                "kind",
+                "last_used_at",
+                "level",
+                "name",
+                "subject"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                },
+                "status_code": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "detail": {
+                  "type": "string"
+                },
+                "checked_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "checked_at",
+                "detail",
+                "ok",
+                "status_code"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "recent": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "status": {
+            "type": "object",
+            "properties": {
+              "tone": {
+                "enum": [
+                  "ok",
+                  "wait",
+                  "fail",
+                  "run",
+                  "idle"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "tone"
+            ],
+            "additionalProperties": true
+          },
+          "can_manage": {
+            "type": "boolean"
+          },
+          "private": {
+            "type": "boolean"
+          },
+          "can_set_audience": {
+            "type": "boolean"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessAudience"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only to whoever may change it; null is Everyone"
+          },
+          "seen_by": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "subject": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "person",
+                    "group",
+                    "bot",
+                    "finance"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "why": {
+                  "enum": [
+                    "Owner",
+                    "Listed",
+                    "Can use it"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "name",
+                "subject",
+                "why"
+              ],
+              "additionalProperties": true
+            },
+            "description": "Only to whoever may change it: who can see an Only listed tool, and why"
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
-          "text"
+          "access",
+          "can_manage",
+          "can_set_audience",
+          "checks",
+          "keys",
+          "private",
+          "recent",
+          "status",
+          "tool"
         ],
-        "title": "Answer"
+        "additionalProperties": true
+      },
+      "ApiToolActivity": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "call",
+                    "use"
+                  ]
+                },
+                "actor": {
+                  "type": "string"
+                },
+                "result": {
+                  "enum": [
+                    "sent",
+                    "refused",
+                    "failed",
+                    "use"
+                  ]
+                },
+                "at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "actor",
+                "at",
+                "id",
+                "kind",
+                "result"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "next",
+          "rows"
+        ],
+        "additionalProperties": true
+      },
+      "ApiToolSettings": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "auth_scheme": {
+            "type": "string"
+          },
+          "check_path": {
+            "type": "string"
+          },
+          "delivery": {
+            "enum": [
+              "proxy",
+              "computer"
+            ]
+          },
+          "private": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "auth_scheme",
+          "base_url",
+          "check_path",
+          "delivery",
+          "id",
+          "name",
+          "private",
+          "service"
+        ],
+        "additionalProperties": true
       },
       "ApprovalCreate": {
         "properties": {
@@ -47038,6 +48849,30 @@
           "text"
         ],
         "title": "AssistantMessage"
+      },
+      "AssistantMorning": {
+        "properties": {
+          "for": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "For"
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Body"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "for",
+          "body"
+        ],
+        "title": "AssistantMorning",
+        "description": "The Assistant's one morning message to a person, in their own Assistant chat (backend/assistant.py morning)."
       },
       "AssistantPage": {
         "properties": {
@@ -48977,7 +50812,7 @@
                           },
                           "mine": {
                             "type": "boolean",
-                            "description": "The question is put to the caller, who answers it at POST /api/v2/messages/{mid}/answer"
+                            "description": "The question is put to the caller, who answers it at POST /api/v2/tasks/{tid}/answers with target {task}"
                           }
                         },
                         "required": [
@@ -50623,6 +52458,9 @@
           "shipped_at": {
             "type": "string"
           },
+          "published_at": {
+            "type": "string"
+          },
           "unread": {
             "type": "boolean"
           },
@@ -50896,22 +52734,6 @@
           "message"
         ],
         "additionalProperties": true
-      },
-      "ClarifyAsk": {
-        "properties": {
-          "ask": {
-            "type": "string",
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Ask"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "ask"
-        ],
-        "title": "ClarifyAsk"
       },
       "CloudAgent": {
         "type": "object",
@@ -51564,113 +53386,6 @@
         ],
         "title": "Confirmation"
       },
-      "Connection": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "enum": [
-              "slack",
-              "github",
-              "mailbox",
-              "inbox",
-              "meetings",
-              "trigger",
-              "webhook",
-              "postal",
-              "listening"
-            ]
-          },
-          "name": {
-            "type": "string"
-          },
-          "detail": {
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "on",
-              "off",
-              "waiting",
-              "error",
-              "paused"
-            ]
-          },
-          "scope": {
-            "enum": [
-              "company",
-              "team",
-              "person"
-            ]
-          },
-          "readers": {
-            "type": "string"
-          },
-          "bots": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "slug": {
-                  "type": "string"
-                },
-                "name": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "name",
-                "slug"
-              ],
-              "additionalProperties": true
-            }
-          },
-          "more_bots": {
-            "type": "integer"
-          },
-          "configure": {
-            "type": "string"
-          },
-          "can_configure": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "bots",
-          "configure",
-          "id",
-          "kind",
-          "name",
-          "readers",
-          "scope",
-          "status"
-        ],
-        "additionalProperties": true
-      },
-      "ConnectionList": {
-        "type": "object",
-        "properties": {
-          "connections": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Connection"
-            }
-          },
-          "next": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "connections",
-          "next"
-        ],
-        "additionalProperties": true
-      },
       "Contract": {
         "properties": {},
         "additionalProperties": false,
@@ -51736,7 +53451,6 @@
             "type": "string",
             "enum": [
               "chat",
-              "ask",
               "notice"
             ],
             "title": "Kind",
@@ -53831,16 +55545,6 @@
               }
             ],
             "title": "Note"
-          },
-          "ask": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ReviewAsk"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "additionalProperties": false,
@@ -54263,6 +55967,376 @@
         ],
         "title": "FinanceActionRequest",
         "description": "One Finance action: its kind (`budget.create`, `entry.post`, ...), its payload, and whether only to say what would\nhappen."
+      },
+      "FinanceAdAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tool_id": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "bot_slug": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "active",
+          "bot_slug",
+          "currency",
+          "external_id",
+          "id",
+          "name",
+          "tool_id"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceAdAccountPatch": {
+        "properties": {
+          "bot_slug": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bot Slug"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bot_slug"
+        ],
+        "title": "FinanceAdAccountPatch",
+        "description": "The bot an ad account's spend counts for; null when no bot."
+      },
+      "FinanceAdAccounts": {
+        "type": "object",
+        "properties": {
+          "tool_id": {
+            "type": "string"
+          },
+          "tool_name": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "google_ads",
+              "meta_ads"
+            ]
+          },
+          "platform_label": {
+            "type": "string"
+          },
+          "import": {
+            "type": "object",
+            "properties": {
+              "saved": {
+                "type": "boolean"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "history_from": {
+                "type": "string"
+              },
+              "account_id": {
+                "type": "string"
+              },
+              "account_name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "never",
+                  "ok",
+                  "reconnect",
+                  "failed"
+                ]
+              },
+              "last_import_at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "last_error": {
+                "type": "string"
+              },
+              "run_requested": {
+                "type": "boolean"
+              },
+              "every_hours": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "account_id",
+              "account_name",
+              "enabled",
+              "every_hours",
+              "history_from",
+              "last_error",
+              "last_import_at",
+              "run_requested",
+              "saved",
+              "status"
+            ],
+            "additionalProperties": true
+          },
+          "slots": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "slot": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "credential_id": {
+                  "type": "string"
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name"
+                    ],
+                    "additionalProperties": true
+                  }
+                }
+              },
+              "required": [
+                "credential_id",
+                "label",
+                "options",
+                "required",
+                "slot"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "books_lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "elsewhere": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "tool_id": {
+                "type": "string"
+              },
+              "tool_name": {
+                "type": "string"
+              }
+            }
+          },
+          "month": {
+            "type": "string"
+          },
+          "month_label": {
+            "type": "string"
+          },
+          "accounts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "external_id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "currency": {
+                  "type": "string"
+                },
+                "bot_slug": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "active": {
+                  "type": "boolean"
+                },
+                "month_to_date": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "active",
+                "bot_slug",
+                "currency",
+                "external_id",
+                "id",
+                "month_to_date",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "accounts",
+          "books_lines",
+          "elsewhere",
+          "import",
+          "month",
+          "month_label",
+          "platform",
+          "platform_label",
+          "slots",
+          "tool_id",
+          "tool_name"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceAdImportRequest": {
+        "properties": {
+          "tool_id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Tool Id"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "history_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History From"
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "credentials": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credentials"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tool_id",
+          "enabled"
+        ],
+        "title": "FinanceAdImportRequest",
+        "description": "A tool's ad spend import: on or off, the first day it reads, the books line spend books as, and which stored\nkey holds each value the platform needs ({slot: credential id}, null to clear one). Left out: kept as saved."
+      },
+      "FinanceAdRunRequest": {
+        "properties": {
+          "tool_id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Tool Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tool_id"
+        ],
+        "title": "FinanceAdRunRequest",
+        "description": "Import a tool's ad spend now instead of at the next 4-hourly run."
       },
       "FinanceBalanceSheet": {
         "type": "object",
@@ -55004,7 +57078,8 @@
             "type": "string",
             "enum": [
               "mercury",
-              "stripe"
+              "stripe",
+              "brex"
             ],
             "title": "Provider",
             "default": "mercury"
@@ -55062,6 +57137,18 @@
               }
             ],
             "title": "Server Ip"
+          },
+          "history_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History From"
           }
         },
         "additionalProperties": false,
@@ -55070,7 +57157,7 @@
           "credential_id"
         ],
         "title": "FinanceConnectionRequest",
-        "description": "Connect a bank or Stripe with a stored credential. Mercury's token: the approver is a Mercury user other than the\ntoken's creator, who approves payments in Mercury; without one, payments stay off. Stripe's restricted key needs no\napprover."
+        "description": "Connect a bank, Stripe or Brex with a stored credential. Mercury's token: the approver is a Mercury user other than\nthe token's creator, who approves payments in Mercury; without one, payments stay off. Stripe's restricted key and\nBrex's token need no approver. history_from is Brex's first day of history (Jan 1 of this year when left out); it is\nread for Brex only."
       },
       "FinanceConnectionResult": {
         "type": "object",
@@ -58848,14 +60935,13 @@
                   "type": "array",
                   "items": {
                     "enum": [
-                      "answer",
                       "update",
                       "decide",
                       "add_reading",
                       "open"
                     ]
                   },
-                  "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; a tidy card, POST /api/v2/memory-tidy/cards/{id}/decide; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
+                  "description": "The writes that settle it: `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; a question task is answered by its close (a pick: POST /api/v2/tasks/{task id}/answers with target {task}); `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
                 },
                 "goal_id": {
                   "type": "string"
@@ -59978,6 +62064,300 @@
         ],
         "additionalProperties": true
       },
+      "HeartbeatBeat": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "total_ms": {
+            "type": "integer"
+          },
+          "did": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "repeats": {
+            "type": "integer"
+          },
+          "last_repeated_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ms": {
+                  "type": "integer"
+                },
+                "error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "key",
+                "ms"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "did",
+          "failed",
+          "id",
+          "last_repeated_at",
+          "repeats",
+          "started_at",
+          "steps",
+          "total_ms"
+        ],
+        "additionalProperties": true
+      },
+      "HeartbeatStep": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "due",
+              "recovery",
+              "poll"
+            ]
+          },
+          "kind_name": {
+            "type": "string"
+          },
+          "every_s": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "every": {
+            "type": "string"
+          },
+          "switch": {
+            "type": "boolean"
+          },
+          "on": {
+            "type": "boolean"
+          },
+          "can_change": {
+            "type": "boolean"
+          },
+          "last_run_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_result": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_did_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_did": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_error_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failing": {
+            "type": "boolean"
+          },
+          "runs_24h": {
+            "type": "integer"
+          },
+          "did_24h": {
+            "type": "integer"
+          },
+          "failed_24h": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "can_change",
+          "did_24h",
+          "every",
+          "every_s",
+          "failed_24h",
+          "failing",
+          "key",
+          "kind",
+          "kind_name",
+          "last_did",
+          "last_did_at",
+          "last_error",
+          "last_error_at",
+          "last_ms",
+          "last_result",
+          "last_run_at",
+          "name",
+          "on",
+          "runs_24h",
+          "switch"
+        ],
+        "additionalProperties": true
+      },
+      "HeartbeatUpdate": {
+        "properties": {
+          "interval_s": {
+            "type": "integer",
+            "maximum": 60.0,
+            "minimum": 5.0,
+            "title": "Interval S"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "interval_s"
+        ],
+        "title": "HeartbeatUpdate",
+        "description": "The seconds between Heartbeat beats (backend/heartbeat.py), 5 to 60."
+      },
+      "HeartbeatView": {
+        "type": "object",
+        "properties": {
+          "interval_s": {
+            "type": "integer"
+          },
+          "interval_min": {
+            "type": "integer"
+          },
+          "interval_max": {
+            "type": "integer"
+          },
+          "last_beat_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "beats_24h": {
+            "type": "integer"
+          },
+          "quiet_beats": {
+            "type": "integer"
+          },
+          "quiet_since_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatStep"
+            }
+          },
+          "beats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatBeat"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "can_change": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "beats",
+          "beats_24h",
+          "can_change",
+          "interval_max",
+          "interval_min",
+          "interval_s",
+          "kinds",
+          "last_beat_at",
+          "next",
+          "quiet_beats",
+          "quiet_since_at",
+          "steps"
+        ],
+        "additionalProperties": true
+      },
       "HeldAction": {
         "properties": {
           "action": {
@@ -60027,46 +62407,6 @@
           "nonce"
         ],
         "title": "HoldSend"
-      },
-      "IfNoAnswer": {
-        "properties": {
-          "do": {
-            "type": "string",
-            "maxLength": 300,
-            "minLength": 1,
-            "title": "Do"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "reversible",
-              "send",
-              "spend",
-              "delete"
-            ],
-            "title": "Kind"
-          },
-          "by": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 40
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "By"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "do",
-          "kind"
-        ],
-        "title": "IfNoAnswer",
-        "description": "What the bot does if the person does not answer by `by` (backend/ask_deadlines.py). `kind` says what that step is:\nonly a `reversible` internal step goes ahead on its own; a send, a payment or a delete waits for an answer."
       },
       "InboundCompanyConnection": {
         "oneOf": [
@@ -63948,6 +66288,22 @@
         "title": "MaintenanceUpdate",
         "description": "The schedule, the pause, the monthly judge spend cap and step changes (backend/maintenance.py save_settings and\nsave_step); only what is sent changes."
       },
+      "MakePage": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "MakePage"
+      },
       "MarketAnswers": {
         "properties": {
           "sell": {
@@ -64274,163 +66630,6 @@
         ],
         "title": "MemberAdd"
       },
-      "MemoryTidyCard": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "enum": [
-              "memory_tidy"
-            ]
-          },
-          "bot": {
-            "type": "string"
-          },
-          "reviewer": {
-            "type": "string"
-          },
-          "requester_id": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "memory_commit": {
-            "type": "string"
-          },
-          "model": {
-            "type": "string"
-          },
-          "cost_usd": {
-            "type": "number",
-            "description": "Filing-ledger list-price estimate, including subscription usage."
-          },
-          "diary": {
-            "type": "string"
-          },
-          "diff": {
-            "type": "string",
-            "description": "Checked unified diff; present on detail reads and decisions, omitted from lists."
-          },
-          "created_at": {
-            "type": "string"
-          },
-          "expires_at": {
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "open",
-              "withdrawn",
-              "discarded",
-              "kept"
-            ]
-          },
-          "reason": {
-            "type": "string"
-          },
-          "keep_available": {
-            "type": "boolean"
-          },
-          "keep_pending": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "bot",
-          "cost_usd",
-          "created_at",
-          "diary",
-          "expires_at",
-          "id",
-          "keep_available",
-          "kind",
-          "memory_commit",
-          "model",
-          "reason",
-          "requester_id",
-          "reviewer",
-          "status",
-          "title"
-        ],
-        "additionalProperties": true
-      },
-      "MemoryTidyCardResult": {
-        "type": "object",
-        "properties": {
-          "card": {
-            "$ref": "#/components/schemas/MemoryTidyCard"
-          }
-        },
-        "required": [
-          "card"
-        ],
-        "additionalProperties": true
-      },
-      "MemoryTidyCards": {
-        "type": "object",
-        "properties": {
-          "cards": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MemoryTidyCard"
-            }
-          }
-        },
-        "required": [
-          "cards"
-        ],
-        "additionalProperties": true
-      },
-      "MemoryTidyDecision": {
-        "properties": {
-          "decision": {
-            "type": "string",
-            "enum": [
-              "keep",
-              "discard"
-            ],
-            "title": "Decision"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "decision"
-        ],
-        "title": "MemoryTidyDecision"
-      },
-      "MemoryTidyPilot": {
-        "properties": {
-          "bot": {
-            "type": "string",
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Bot"
-          },
-          "model": {
-            "type": "string",
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Model"
-          },
-          "effort": {
-            "type": "string",
-            "const": "low",
-            "title": "Effort",
-            "default": "low"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "bot",
-          "model"
-        ],
-        "title": "MemoryTidyPilot"
-      },
       "Message": {
         "type": "object",
         "properties": {
@@ -64444,7 +66643,10 @@
             "type": "string"
           },
           "recipient_id": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "kind": {
             "type": "string"
@@ -64543,6 +66745,9 @@
           "sent_as": {
             "$ref": "#/components/schemas/SentAs",
             "description": "On a send to a bot: the way it went (steer, queue or defer) and a defer's deadline (backend/delivery.py)"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MessageSource"
           }
         },
         "required": [
@@ -64594,7 +66799,6 @@
             "type": "string",
             "enum": [
               "say",
-              "ask",
               "notice",
               "steer"
             ],
@@ -64749,6 +66953,38 @@
         },
         "required": [
           "message"
+        ],
+        "additionalProperties": true
+      },
+      "MessageSource": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "person",
+              "bot",
+              "assistant_for",
+              "task_update",
+              "builtin",
+              "automation",
+              "system"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "link",
+          "name"
         ],
         "additionalProperties": true
       },
@@ -65028,6 +67264,44 @@
         ],
         "title": "Moderate"
       },
+      "MyRecorder": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "Your most recently used copy's version; empty when none was seen"
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recent": {
+            "type": "boolean",
+            "description": "A copy was seen in the last 30 days"
+          },
+          "latest": {
+            "type": "string",
+            "description": "The newest release's version; empty when unknown"
+          },
+          "update_available": {
+            "type": "boolean"
+          },
+          "download_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "download_url",
+          "last_seen_at",
+          "latest",
+          "recent",
+          "update_available",
+          "version"
+        ],
+        "additionalProperties": true
+      },
       "NeedsSummary": {
         "type": "object",
         "properties": {
@@ -65096,7 +67370,7 @@
               },
               "plate_count": {
                 "type": "integer",
-                "description": "Unique task, question, waiting, declined, approval, ask, stale and memory_tidy items across all boards, excluding folded or merged tasks; excludes thread and update attention"
+                "description": "Unique task, question, waiting, declined, approval, ask and stale items across all boards, excluding folded or merged tasks; excludes thread and update attention"
               },
               "by_kind": {
                 "type": "object",
@@ -65167,7 +67441,7 @@
           },
           "kind": {
             "type": "string",
-            "description": "Needs you: task, question, waiting, declined, ask, approval, stale, memory_tidy, setup. Goals: vision, kpi_red, kpi_stale, recovery, proposal, why. Each kind adds the fields its card reads"
+            "description": "Needs you: task, question, waiting, declined, ask, approval, stale, setup. Goals: vision, kpi_red, kpi_stale, recovery, proposal, why. Each kind adds the fields its card reads"
           },
           "title": {
             "type": "string"
@@ -65219,14 +67493,13 @@
             "type": "array",
             "items": {
               "enum": [
-                "answer",
                 "update",
                 "decide",
                 "add_reading",
                 "open"
               ]
             },
-            "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; a tidy card, POST /api/v2/memory-tidy/cards/{id}/decide; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
+            "description": "The writes that settle it: `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; a question task is answered by its close (a pick: POST /api/v2/tasks/{task id}/answers with target {task}); `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
           }
         },
         "required": [
@@ -66620,6 +68893,19 @@
             ],
             "title": "Company Daily Cap"
           },
+          "max_outside_recipients": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Outside Recipients"
+          },
           "pacing_seconds": {
             "anyOf": [
               {
@@ -66679,6 +68965,17 @@
             ],
             "title": "Ask Many Recipients"
           },
+          "ask_outside_cc": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Outside Cc"
+          },
           "ask_legal_money": {
             "anyOf": [
               {
@@ -66689,6 +68986,58 @@
               }
             ],
             "title": "Ask Legal Money"
+          },
+          "ask_lint": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Lint"
+          },
+          "second_review": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Second Review"
+          },
+          "blocked_recipients": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Recipients"
+          },
+          "owner_handles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Handles"
           },
           "who_can_ok": {
             "anyOf": [
@@ -67733,51 +70082,6 @@
         ],
         "additionalProperties": true
       },
-      "QuestionOption": {
-        "properties": {
-          "label": {
-            "type": "string",
-            "maxLength": 60,
-            "minLength": 1,
-            "title": "Label"
-          },
-          "description": {
-            "type": "string",
-            "maxLength": 200,
-            "title": "Description",
-            "default": ""
-          },
-          "file": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^[^@]+@[1-9][0-9]*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "File"
-          },
-          "then": {
-            "type": "string",
-            "maxLength": 120,
-            "title": "Then",
-            "default": ""
-          },
-          "recommended": {
-            "type": "boolean",
-            "title": "Recommended",
-            "default": false
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "label"
-        ],
-        "title": "QuestionOption"
-      },
       "QuestionSets": {
         "type": "object",
         "properties": {
@@ -68741,48 +71045,6 @@
           }
         ]
       },
-      "ReviewAsk": {
-        "properties": {
-          "questions": {
-            "items": {
-              "$ref": "#/components/schemas/ReviewQuestion"
-            },
-            "type": "array",
-            "maxItems": 4,
-            "minItems": 1,
-            "title": "Questions"
-          },
-          "who": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Who"
-          },
-          "if_no_answer": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IfNoAnswer"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "questions"
-        ],
-        "title": "ReviewAsk"
-      },
       "ReviewMany": {
         "properties": {
           "action": {
@@ -68814,59 +71076,6 @@
           "action"
         ],
         "title": "ReviewMany"
-      },
-      "ReviewQuestion": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "maxLength": 40,
-            "minLength": 1,
-            "title": "Id"
-          },
-          "header": {
-            "type": "string",
-            "maxLength": 30,
-            "title": "Header"
-          },
-          "question": {
-            "type": "string",
-            "maxLength": 300,
-            "minLength": 1,
-            "title": "Question"
-          },
-          "why": {
-            "type": "string",
-            "maxLength": 200,
-            "title": "Why",
-            "default": ""
-          },
-          "options": {
-            "items": {
-              "$ref": "#/components/schemas/QuestionOption"
-            },
-            "type": "array",
-            "maxItems": 6,
-            "title": "Options"
-          },
-          "multi": {
-            "type": "boolean",
-            "title": "Multi",
-            "default": false
-          },
-          "other": {
-            "type": "boolean",
-            "title": "Other",
-            "default": true
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "id",
-          "header",
-          "question"
-        ],
-        "title": "ReviewQuestion"
       },
       "ReviewSettings": {
         "properties": {
@@ -68940,6 +71149,19 @@
               }
             ],
             "title": "Version"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task"
           }
         },
         "additionalProperties": false,
@@ -70617,6 +72839,259 @@
         ],
         "title": "ServiceKeyCreate",
         "description": "A service key (backend/service_keys.py): the label names the system that holds it, on every\ntask it files. `tasks` files tasks; `update` checks for, starts and follows an update of this install."
+      },
+      "SkillApprove": {
+        "properties": {
+          "acknowledged": {
+            "type": "boolean",
+            "title": "Acknowledged",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SkillApprove"
+      },
+      "SkillDecline": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "SkillDecline"
+      },
+      "SkillFile": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "path",
+          "content"
+        ],
+        "title": "SkillFile",
+        "description": "One text file of a skill folder. Its path and size are checked by the rules in clients/skills.py, not here."
+      },
+      "SkillInstall": {
+        "properties": {
+          "target_type": {
+            "type": "string",
+            "enum": [
+              "Bot",
+              "Human"
+            ],
+            "title": "Target Type"
+          },
+          "target_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Target Id"
+          },
+          "version_policy": {
+            "type": "string",
+            "enum": [
+              "latest",
+              "pinned"
+            ],
+            "title": "Version Policy",
+            "default": "latest"
+          },
+          "pinned_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pinned Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target_type",
+          "target_id"
+        ],
+        "title": "SkillInstall"
+      },
+      "SkillInstallBulk": {
+        "properties": {
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/SkillTarget"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Targets"
+          },
+          "version_policy": {
+            "type": "string",
+            "enum": [
+              "latest",
+              "pinned"
+            ],
+            "title": "Version Policy",
+            "default": "latest"
+          },
+          "pinned_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pinned Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "targets"
+        ],
+        "title": "SkillInstallBulk"
+      },
+      "SkillPropose": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/SkillFile"
+            },
+            "type": "array",
+            "title": "Files"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SkillSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Note",
+            "default": ""
+          },
+          "base_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Version"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "files"
+        ],
+        "title": "SkillPropose"
+      },
+      "SkillSource": {
+        "properties": {
+          "repo_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Path"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SkillSource",
+        "description": "Where a proposal came from, as the proposer names it; the server says who proposed it (backend/skills.py)."
+      },
+      "SkillTarget": {
+        "properties": {
+          "target_type": {
+            "type": "string",
+            "enum": [
+              "Bot",
+              "Human"
+            ],
+            "title": "Target Type"
+          },
+          "target_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Target Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target_type",
+          "target_id"
+        ],
+        "title": "SkillTarget"
       },
       "SlackLink": {
         "type": "object",
@@ -72488,23 +74963,41 @@
         ],
         "title": "Suggestion"
       },
-      "SystemRoutineUpdate": {
+      "SystemRoutineSaved": {
+        "type": "object",
         "properties": {
-          "pilots": {
+          "job": {
             "anyOf": [
               {
-                "items": {
-                  "$ref": "#/components/schemas/MemoryTidyPilot"
-                },
-                "type": "array",
-                "maxItems": 3
+                "$ref": "#/components/schemas/HeartbeatStep"
               },
               {
-                "type": "null"
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "key",
+                  "name"
+                ],
+                "additionalProperties": true
               }
             ],
-            "title": "Pilots"
-          },
+            "description": "The saved routine's row: a HeartbeatStep for ask_deadlines, else its GET /system-routines row"
+          }
+        },
+        "required": [
+          "job"
+        ],
+        "additionalProperties": true
+      },
+      "SystemRoutineUpdate": {
+        "properties": {
           "on": {
             "anyOf": [
               {
@@ -72986,6 +75479,44 @@
             "type": "integer",
             "description": "Questions on this task with no answer or dismissal"
           },
+          "questions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object"
+            },
+            "description": "A question task's question (a bot's decision for the person who owns it): each {id, question, why, options [{label, then, description, recommended, file}], multi}; null on any other task. Answered with POST /tasks/{id}/answers and target {task}"
+          },
+          "if_no_answer": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A question task's default: {do, kind, by}"
+          },
+          "review": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A question task's files under review: {files, pick, attachments}"
+          },
+          "spend": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A question task's spend, approved by picking its label"
+          },
+          "answer": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A question task's answer once closed: {answers, other, dismiss, by, at, text}; null while open"
+          },
           "type_id": {
             "type": [
               "string",
@@ -73089,14 +75620,14 @@
               "string",
               "null"
             ],
-            "description": "The person a waiting task waits on; the task is in their Needs you"
+            "description": "Read only, derived: the person a waiting task waits on, the owner of its oldest open question task (a subtask or a blocker). Null when a private question task's words do not reach this task's readers"
           },
-          "guest": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The one person a private task with no person on it reached: its owning bot's first subtask, question or wait for them made them its guest. They read the task as its requester and owner do, and nothing else of its tree"
+          "readers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Who else can see a private task besides its requester and owner: people, bots and group:<id>s (a group by its members now). Empty on a company task. GET/PUT /api/v2/tasks/{id}/readers reads and changes it"
           },
           "holds": {
             "type": "array",
@@ -73254,26 +75785,6 @@
           "answers"
         ],
         "additionalProperties": true
-      },
-      "TaskAskResolve": {
-        "properties": {
-          "quote": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 4000,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Quote"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "TaskAskResolve"
       },
       "TaskBlocker": {
         "properties": {
@@ -73728,16 +76239,6 @@
             "minLength": 1,
             "title": "Text"
           },
-          "ask": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ReviewAsk"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "attachments": {
             "items": {
               "anyOf": [
@@ -73803,6 +76304,74 @@
         },
         "required": [
           "comments"
+        ],
+        "additionalProperties": true
+      },
+      "TaskContext": {
+        "type": "object",
+        "properties": {
+          "pages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskContextPage"
+            },
+            "maxItems": 10
+          },
+          "meetings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskContextMeeting"
+            },
+            "maxItems": 10
+          }
+        },
+        "required": [
+          "meetings",
+          "pages"
+        ],
+        "additionalProperties": true
+      },
+      "TaskContextMeeting": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "id",
+          "title"
+        ],
+        "additionalProperties": true
+      },
+      "TaskContextPage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "updated_at",
+          "version"
         ],
         "additionalProperties": true
       },
@@ -74126,6 +76695,21 @@
             ],
             "title": "Roles"
           },
+          "readers": {
+            "items": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Readers"
+          },
+          "follow": {
+            "type": "boolean",
+            "title": "Follow",
+            "default": false
+          },
           "check_model": {
             "anyOf": [
               {
@@ -74214,7 +76798,19 @@
             "$ref": "#/components/schemas/Task"
           },
           "events": {
-            "type": "array"
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "$ref": "#/components/schemas/MessageSource"
+                }
+              },
+              "required": [
+                "source"
+              ],
+              "additionalProperties": true
+            }
           },
           "children": {
             "type": "array"
@@ -74814,6 +77410,47 @@
           "cursor",
           "next_offset",
           "tasks"
+        ],
+        "additionalProperties": true
+      },
+      "TaskMakePage": {
+        "type": "object",
+        "properties": {
+          "make_page": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "message_id": {
+                    "type": "string"
+                  },
+                  "conversation_id": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "making",
+                      "made",
+                      "failed",
+                      "update_required"
+                    ]
+                  }
+                },
+                "required": [
+                  "conversation_id",
+                  "message_id",
+                  "state"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "make_page"
         ],
         "additionalProperties": true
       },
@@ -76595,6 +79232,9 @@
               }
             ],
             "description": "Who routing asked to answer this message (`to` empty: nobody); null when routing never looked at it"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MessageSource"
           }
         },
         "required": [
@@ -76827,6 +79467,73 @@
         ],
         "additionalProperties": true
       },
+      "ThreadReach": {
+        "type": "object",
+        "properties": {
+          "thread_id": {
+            "type": "string"
+          },
+          "way": {
+            "type": "string",
+            "enum": [
+              "steer",
+              "queue",
+              "defer"
+            ]
+          },
+          "reaches": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "mention, ask, dm, home, sub_thread, reply, follower or digest"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "steer",
+                    "queue",
+                    "defer",
+                    "digest"
+                  ]
+                },
+                "defer_for": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "adds_reader": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "actor",
+                "mode",
+                "reason"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "outside": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "outside",
+          "reaches",
+          "thread_id"
+        ],
+        "additionalProperties": true
+      },
       "ThreadReactions": {
         "type": "array",
         "items": {
@@ -76956,6 +79663,9 @@
                 },
                 "excerpt": {
                   "type": "string"
+                },
+                "source": {
+                  "$ref": "#/components/schemas/MessageSource"
                 }
               },
               "required": [
@@ -77284,6 +79994,167 @@
         ],
         "additionalProperties": true
       },
+      "ToolIndex": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolIndexRow"
+            }
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "all": {
+                "type": "integer"
+              },
+              "needs_you": {
+                "type": "integer"
+              },
+              "api": {
+                "type": "integer"
+              },
+              "mail": {
+                "type": "integer"
+              },
+              "websites": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "all",
+              "api",
+              "mail",
+              "needs_you",
+              "websites"
+            ],
+            "additionalProperties": true
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "counts",
+          "next",
+          "rows"
+        ],
+        "additionalProperties": true
+      },
+      "ToolIndexRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "api",
+              "mailbox",
+              "number",
+              "address",
+              "slack",
+              "github",
+              "meetings",
+              "listening",
+              "webhook",
+              "declared",
+              "website"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "way": {
+            "type": "string"
+          },
+          "status": {
+            "type": "object",
+            "properties": {
+              "tone": {
+                "enum": [
+                  "ok",
+                  "wait",
+                  "fail",
+                  "run",
+                  "idle"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "tone"
+            ],
+            "additionalProperties": true
+          },
+          "who": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "bot",
+                    "person"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "initials": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "initials",
+                "kind",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "who_total": {
+            "type": "integer"
+          },
+          "needs_you": {
+            "type": "boolean"
+          },
+          "href": {
+            "type": "string"
+          },
+          "private": {
+            "type": "boolean",
+            "description": "An API tool whose Who can see it is Only listed"
+          }
+        },
+        "required": [
+          "detail",
+          "href",
+          "id",
+          "kind",
+          "name",
+          "needs_you",
+          "status",
+          "way",
+          "who",
+          "who_total"
+        ],
+        "additionalProperties": true
+      },
       "ToolRegister": {
         "properties": {
           "service": {
@@ -77357,73 +80228,6 @@
         ],
         "title": "ToolRegister",
         "description": "A tool a person registers for a bot (backend/bot_tools.py). Names and verbs only: `env` is the\nvariable's name, and the server refuses a field that looks like a credential."
-      },
-      "ToolUpdate": {
-        "properties": {
-          "can": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array",
-                "maxItems": 20,
-                "minItems": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Can"
-          },
-          "scope": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object",
-                "maxProperties": 20
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Scope"
-          },
-          "note": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 500
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Note"
-          },
-          "mcp": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mcp"
-          },
-          "title_prefix": {
-            "type": "string",
-            "maxLength": 100,
-            "title": "Title Prefix",
-            "default": ""
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "ToolUpdate",
-        "description": "A change to a tool a bot already declares (backend/bot_tools.py): only what is sent changes. `scope` keys\nare set one by one (an empty value takes a key off); `note` \"\" clears the note."
       },
       "TriggerCreate": {
         "properties": {
@@ -79438,6 +82242,96 @@
         ],
         "additionalProperties": true
       },
+      "backend__api_tools__ToolUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "auth_scheme": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Scheme"
+          },
+          "check_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Path"
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(proxy|computer)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessAudience"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ToolUpdate"
+      },
       "backend__company_page__api_editions__Correction": {
         "properties": {
           "title": {
@@ -79590,6 +82484,73 @@
         "additionalProperties": false,
         "type": "object",
         "title": "Settings"
+      },
+      "backend__models__ToolUpdate": {
+        "properties": {
+          "can": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 20,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Can"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object",
+                "maxProperties": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "mcp": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp"
+          },
+          "title_prefix": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Title Prefix",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ToolUpdate",
+        "description": "A change to a tool a bot already declares (backend/bot_tools.py): only what is sent changes. `scope` keys\nare set one by one (an empty value takes a key off); `note` \"\" clears the note."
       },
       "backend__presence__Heartbeat": {
         "properties": {

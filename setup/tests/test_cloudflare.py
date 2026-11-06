@@ -19,13 +19,21 @@ class Api:
 
 
 def test_ensure_tunnel_creates_and_configures_ingress_to_the_server():
-    api = Api({("GET", "/accounts/a1/cfd_tunnel?"): [], ("POST", "/accounts/a1/cfd_tunnel"): {"id": "t2", "token": "T2"},
-               ("PUT", "/accounts/a1/cfd_tunnel/t2/configurations"): {}})
+    api = Api(
+        {
+            ("GET", "/accounts/a1/cfd_tunnel?"): [],
+            ("POST", "/accounts/a1/cfd_tunnel"): {"id": "t2", "token": "T2"},
+            ("PUT", "/accounts/a1/cfd_tunnel/t2/configurations"): {},
+        }
+    )
     cf = Cloudflare("tok", api)
     assert cf.ensure_tunnel("a1", "n") == ("t2", "T2")
     cf.configure_tunnel("a1", "t2", "t.example.com")
     ing = api.calls[-1][2]["config"]["ingress"]
-    assert ing[0] == {"hostname": "t.example.com", "service": "http://hold:8080"} and ing[-1]["service"] == "http_status:404"
+    assert (
+        ing[0] == {"hostname": "t.example.com", "service": "http://hold:8080"}
+        and ing[-1]["service"] == "http_status:404"
+    )
 
 
 def test_errors_never_include_the_token():
@@ -37,10 +45,16 @@ def test_errors_never_include_the_token():
 
 def test_a_runner_hostname_gets_the_api_and_downloads_only_before_the_404():
     from setup.cloudflare import ingress_config
-    assert ingress_config("t.example.com") == {"ingress": [{"hostname": "t.example.com", "service": "http://hold:8080"},
-                                                          {"service": "http_status:404"}]}
+
+    assert ingress_config("t.example.com") == {
+        "ingress": [{"hostname": "t.example.com", "service": "http://hold:8080"}, {"service": "http_status:404"}]
+    }
     ing = ingress_config("t.example.com", "t-runner.example.com")["ingress"]
-    assert ing[1] == {"hostname": "t-runner.example.com", "path": "^/(?:api/v2|download)(?:/.*)?$", "service": "http://hold:8080"}
+    assert ing[1] == {
+        "hostname": "t-runner.example.com",
+        "path": "^/(?:api/v2|download)(?:/.*)?$",
+        "service": "http://hold:8080",
+    }
     assert [r.get("hostname") for r in ing] == ["t.example.com", "t-runner.example.com", None]
     api = Api({("PUT", "/accounts/a1/cfd_tunnel/t2/configurations"): {}})
     Cloudflare("tok", api).configure_tunnel("a1", "t2", "t.example.com", "t-runner.example.com")
@@ -57,26 +71,47 @@ def test_upsert_cname_repoints_a_record_elsewhere_only_when_allowed():
     assert cf.upsert_cname("z1", "r.example.com", "t9.cfargotunnel.com") == "repointed from app.other.net"
     assert api.calls[-1][:2] == ("PUT", "/zones/z1/dns_records/r1")
     mine = [{**elsewhere[0], "content": "t9.cfargotunnel.com"}]
-    assert Cloudflare("tok", Api({("GET", "/zones/z1/dns_records?"): mine})).upsert_cname(
-        "z1", "r.example.com", "t9.cfargotunnel.com", repoint=False) == "unchanged"
+    assert (
+        Cloudflare("tok", Api({("GET", "/zones/z1/dns_records?"): mine})).upsert_cname(
+            "z1", "r.example.com", "t9.cfargotunnel.com", repoint=False
+        )
+        == "unchanged"
+    )
 
 
 def test_full_ingress_is_validated_before_put_and_removal_restores_only_restricted_routes():
     from setup.cloudflare import ingress_config
     from setup.ui import MissingInput
+
     api = Api({('PUT', '/accounts/a1/cfd_tunnel/t2/configurations'): {}})
     cf = Cloudflare('fictional-token', api)
-    cf.configure_tunnel('a1', 't2', 'app.acme.example', 'runner.acme.example',
-                        aliases=('Old.Acme.Example', 'old.acme.example', 'app.acme.example'), visual_origin='https://files.acme.example')
+    cf.configure_tunnel(
+        'a1',
+        't2',
+        'app.acme.example',
+        'runner.acme.example',
+        aliases=('Old.Acme.Example', 'old.acme.example', 'app.acme.example'),
+        visual_origin='https://files.acme.example',
+    )
     rules = api.calls[-1][2]['config']['ingress']
-    assert [r.get('hostname') for r in rules] == ['app.acme.example', 'old.acme.example', 'runner.acme.example', 'files.acme.example', None]
+    assert [r.get('hostname') for r in rules] == [
+        'app.acme.example',
+        'old.acme.example',
+        'runner.acme.example',
+        'files.acme.example',
+        None,
+    ]
     assert rules[2]['path'] == '^/(?:api/v2|download)(?:/.*)?$' and rules[3]['path'] == '^/visuals/'
     calls = list(api.calls)
-    for aliases, origin in [(('runner.acme.example',), 'https://files.acme.example'),
-                            (('files.acme.example',), 'https://files.acme.example'),
-                            (('old.acme.example',), 'https://private@files.acme.example/invalid')]:
+    for aliases, origin in [
+        (('runner.acme.example',), 'https://files.acme.example'),
+        (('files.acme.example',), 'https://files.acme.example'),
+        (('old.acme.example',), 'https://private@files.acme.example/invalid'),
+    ]:
         with pytest.raises(MissingInput):
-            cf.configure_tunnel('a1', 't2', 'app.acme.example', 'runner.acme.example', aliases=aliases, visual_origin=origin)
+            cf.configure_tunnel(
+                'a1', 't2', 'app.acme.example', 'runner.acme.example', aliases=aliases, visual_origin=origin
+            )
         assert api.calls == calls
     cf.configure_tunnel('a1', 't2', 'app.acme.example', 'app.acme.example')
     assert api.calls[-1][2]['config'] == ingress_config('app.acme.example')

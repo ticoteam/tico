@@ -44,6 +44,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS task_relations_one_parent ON task_relations(fr
 
 def _H():
     from . import hubdb
+
     return hubdb
 
 
@@ -66,23 +67,29 @@ def migrate(conn):
         if statement.strip():
             conn.execute(statement)
     if _columns(conn, "task_relations_v110"):
-        conn.execute("INSERT OR IGNORE INTO task_relations(from_task,to_task,kind,created_by,created_at) "
-                     "SELECT min(task_id,related_id),max(task_id,related_id),'related',added_by,created_at "
-                     "FROM task_relations_v110 WHERE task_id<>related_id")
+        conn.execute(
+            "INSERT OR IGNORE INTO task_relations(from_task,to_task,kind,created_by,created_at) "
+            "SELECT min(task_id,related_id),max(task_id,related_id),'related',added_by,created_at "
+            "FROM task_relations_v110 WHERE task_id<>related_id"
+        )
         conn.execute("DROP TABLE task_relations_v110")
     columns = _columns(conn, "tasks")
     if "parent_id" in columns:
-        conn.execute("INSERT OR IGNORE INTO task_relations(from_task,to_task,kind,created_by,created_at) "
-                     "SELECT t.id,t.parent_id,'parent',NULL,coalesce(t.updated_at,t.created_at,'') FROM tasks t "
-                     "WHERE t.parent_id IS NOT NULL AND t.parent_id<>t.id "
-                     "AND t.parent_id IN (SELECT id FROM tasks)")
+        conn.execute(
+            "INSERT OR IGNORE INTO task_relations(from_task,to_task,kind,created_by,created_at) "
+            "SELECT t.id,t.parent_id,'parent',NULL,coalesce(t.updated_at,t.created_at,'') FROM tasks t "
+            "WHERE t.parent_id IS NOT NULL AND t.parent_id<>t.id "
+            "AND t.parent_id IN (SELECT id FROM tasks)"
+        )
         conn.execute("DROP INDEX IF EXISTS tasks_parent")
         conn.execute("ALTER TABLE tasks DROP COLUMN parent_id")
     if "blocked_by" in columns:
-        conn.execute("INSERT OR IGNORE INTO task_relations(from_task,to_task,kind,created_by,created_at) "
-                     "SELECT t.blocked_by,t.id,'blocks',NULL,coalesce(t.updated_at,t.created_at,'') FROM tasks t "
-                     "WHERE t.blocked_by IS NOT NULL AND t.blocked_by<>t.id "
-                     "AND t.blocked_by IN (SELECT id FROM tasks)")
+        conn.execute(
+            "INSERT OR IGNORE INTO task_relations(from_task,to_task,kind,created_by,created_at) "
+            "SELECT t.blocked_by,t.id,'blocks',NULL,coalesce(t.updated_at,t.created_at,'') FROM tasks t "
+            "WHERE t.blocked_by IS NOT NULL AND t.blocked_by<>t.id "
+            "AND t.blocked_by IN (SELECT id FROM tasks)"
+        )
         conn.execute("DROP INDEX IF EXISTS tasks_blocked_by")
         conn.execute("ALTER TABLE tasks DROP COLUMN blocked_by")
 
@@ -90,8 +97,7 @@ def migrate(conn):
 # ----------------------------------------------------------------------------- reads
 def parent_sql(alias="tasks"):
     """SQL for a task's parent id, given the alias its `tasks` row has in the query."""
-    return (f"(SELECT r.to_task FROM task_relations r WHERE r.from_task={alias}.id "
-            "AND r.kind='parent')")
+    return f"(SELECT r.to_task FROM task_relations r WHERE r.from_task={alias}.id AND r.kind='parent')"
 
 
 CHILD_IDS = "SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?"
@@ -105,6 +111,7 @@ def parent_of(conn, task_id):
     # Through the snapshot's read cache, so a page that read its tasks' ancestry together (prime_ancestry) reads no
     # parent twice.
     from .read_cache import one
+
     row = one(conn, PARENT_SQL, (task_id,))
     return row[0] if row else None
 
@@ -115,13 +122,19 @@ def child_ids(conn, task_id):
 
 def blocker_ids(conn, task_id):
     """The tasks blocking this one, oldest first."""
-    return [r[0] for r in conn.execute("SELECT from_task FROM task_relations WHERE to_task=? AND kind='blocks' "
-                                       "ORDER BY created_at, rowid", (task_id,))]
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT from_task FROM task_relations WHERE to_task=? AND kind='blocks' ORDER BY created_at, rowid",
+            (task_id,),
+        )
+    ]
 
 
 def blocked_ids(conn, task_id):
     """The tasks this one blocks."""
     from .read_cache import rows
+
     return [r[0] for r in rows(conn, BLOCKED_SQL, (task_id,))]
 
 
@@ -131,6 +144,7 @@ def prime_ancestry(conn, task_ids):
     its task's chain). Returns every task id it met. Without a read snapshot it reads nothing: those lookups then
     read for themselves."""
     from .read_cache import cache, prime, prime_rows
+
     met, walked, frontier = set(), set(), {tid for tid in task_ids if tid}
     if cache(conn) is None:
         return met
@@ -139,9 +153,11 @@ def prime_ancestry(conn, task_ids):
         walked |= frontier
         parents, blocked = {}, {}
         for part in _parts(sorted(frontier)):
-            for row in conn.execute("SELECT from_task,to_task,kind FROM task_relations WHERE from_task IN (%s) "
-                                    "AND kind IN ('parent','blocks') ORDER BY created_at, rowid"
-                                    % ",".join("?" * len(part)), part):
+            for row in conn.execute(
+                "SELECT from_task,to_task,kind FROM task_relations WHERE from_task IN (%s) "
+                "AND kind IN ('parent','blocks') ORDER BY created_at, rowid" % ",".join("?" * len(part)),
+                part,
+            ):
                 if row[2] == "parent":
                     parents[row[0]] = (row[1],)
                 else:
@@ -156,25 +172,34 @@ def prime_ancestry(conn, task_ids):
 def live_blocker(conn, task_id, statuses):
     """The first blocker still in one of `statuses`, or None."""
     from .read_cache import one
+
     row = one(conn, live_blocker_sql(len(statuses)), (task_id, *statuses))
     return row[0] if row else None
 
 
 def live_blocker_sql(count):
     """live_blocker's read for `count` statuses (auto_tasks.prime_waits seeds it for many tasks)."""
-    return ("SELECT t.id FROM task_relations r JOIN tasks t ON t.id=r.from_task "
-            f"WHERE r.to_task=? AND r.kind='blocks' AND t.status IN ({','.join('?' * count)}) "
-            "ORDER BY r.created_at, r.rowid LIMIT 1")
+    return (
+        "SELECT t.id FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+        f"WHERE r.to_task=? AND r.kind='blocks' AND t.status IN ({','.join('?' * count)}) "
+        "ORDER BY r.created_at, r.rowid LIMIT 1"
+    )
 
 
 def live_blockers(conn, task_id, statuses):
     """Every blocker still in one of `statuses`, as task rows, oldest relation first."""
     from . import hubdb as H
+
     marks = ",".join("?" * len(statuses))
-    return [dict(r) for r in conn.execute(
-        f"SELECT t.* FROM task_relations r JOIN {H.TASKS} t ON t.id=r.from_task "
-        f"WHERE r.to_task=? AND r.kind='blocks' AND t.status IN ({marks}) "
-        "ORDER BY r.created_at, r.rowid", (task_id, *statuses))]
+    return [
+        dict(r)
+        for r in conn.execute(
+            f"SELECT t.* FROM task_relations r JOIN {H.TASKS} t ON t.id=r.from_task "
+            f"WHERE r.to_task=? AND r.kind='blocks' AND t.status IN ({marks}) "
+            "ORDER BY r.created_at, r.rowid",
+            (task_id, *statuses),
+        )
+    ]
 
 
 def live_blockers_many(conn, task_ids, statuses):
@@ -183,9 +208,11 @@ def live_blockers_many(conn, task_ids, statuses):
     marks = ",".join("?" * len(statuses))
     for part in _parts(sorted(found)):
         for row in conn.execute(
-                "SELECT r.to_task AS blocked_task, t.* FROM task_relations r JOIN tasks t ON t.id=r.from_task "
-                f"WHERE r.to_task IN ({','.join('?' * len(part))}) AND r.kind='blocks' AND t.status IN ({marks}) "
-                "ORDER BY r.created_at, r.rowid", (*part, *statuses)):
+            "SELECT r.to_task AS blocked_task, t.* FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+            f"WHERE r.to_task IN ({','.join('?' * len(part))}) AND r.kind='blocks' AND t.status IN ({marks}) "
+            "ORDER BY r.created_at, r.rowid",
+            (*part, *statuses),
+        ):
             block = dict(row)
             found[block.pop("blocked_task")].append(block)
     return found
@@ -208,15 +235,20 @@ def ancestors(conn, task_id):
 
 
 def descendant_ids(conn, task_id):
-    return [r[0] for r in conn.execute(
-        "WITH RECURSIVE tree(id) AS (" + CHILD_IDS + " UNION SELECT r.from_task FROM task_relations r "
-        "JOIN tree ON r.to_task=tree.id AND r.kind='parent') SELECT id FROM tree", (task_id,))]
+    return [
+        r[0]
+        for r in conn.execute(
+            "WITH RECURSIVE tree(id) AS (" + CHILD_IDS + " UNION SELECT r.from_task FROM task_relations r "
+            "JOIN tree ON r.to_task=tree.id AND r.kind='parent') SELECT id FROM tree",
+            (task_id,),
+        )
+    ]
 
 
 def _parts(values):
     values = list(values)
     for i in range(0, len(values), 400):
-        yield values[i:i + 400]
+        yield values[i : i + 400]
 
 
 PRIVATE_PARENT = "a private task"
@@ -245,23 +277,39 @@ def grouped(conn, task_ids, visible_sql="1"):
             f"WHERE r.to_task IN ({marks}) AND r.kind<>'parent') x "
             # The other end's visibility by primary key, not a list of every visible task.
             f"WHERE EXISTS (SELECT 1 FROM tasks WHERE tasks.id=x.id AND ({visible_sql})) ORDER BY at, rid",
-            (*part, *part))
+            (*part, *part),
+        )
         for row in rows:
-            entry = {"id": row["id"], "title": row["title"], "status": row["status"], "owner_id": row["owner_id"],
-                     "direction": row["direction"]}
+            entry = {
+                "id": row["id"],
+                "title": row["title"],
+                "status": row["status"],
+                "owner_id": row["owner_id"],
+                "direction": row["direction"],
+            }
             out[row["here"]].setdefault(row["kind"], []).append(entry)
         if visible_sql == "1":
             continue
         # A company-visible task filed from private work (task_privacy.from_private) under a private parent the reader
         # cannot open: the parent is there, as "a private task", with nothing of it but that.
         for row in conn.execute(
-                "SELECT r.from_task FROM task_relations r INDEXED BY task_relations_from "
-                "JOIN tasks c ON c.id=r.from_task JOIN tasks p ON p.id=r.to_task "
-                f"WHERE r.from_task IN ({marks}) AND r.kind='parent' AND c.private=0 "
-                "AND (p.private IS NULL OR p.private<>0) "
-                f"AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id=r.to_task AND ({visible_sql}))", part):
-            out[row["from_task"]]["parent"] = [{"id": None, "title": PRIVATE_PARENT, "status": None, "owner_id": None,
-                                               "direction": "out", "private": True}]
+            "SELECT r.from_task FROM task_relations r INDEXED BY task_relations_from "
+            "JOIN tasks c ON c.id=r.from_task JOIN tasks p ON p.id=r.to_task "
+            f"WHERE r.from_task IN ({marks}) AND r.kind='parent' AND c.private=0 "
+            "AND (p.private IS NULL OR p.private<>0) "
+            f"AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id=r.to_task AND ({visible_sql}))",
+            part,
+        ):
+            out[row["from_task"]]["parent"] = [
+                {
+                    "id": None,
+                    "title": PRIVATE_PARENT,
+                    "status": None,
+                    "owner_id": None,
+                    "direction": "out",
+                    "private": True,
+                }
+            ]
     return out
 
 
@@ -273,14 +321,23 @@ def for_prompt(conn, task_id, readable):
     for kind, entries in grouped(conn, [task_id]).get(task_id, {}).items():
         for entry in entries:
             if readable(H.task(conn, entry["id"])):
-                lines.append({"kind": kind, "direction": entry["direction"], "id": entry["id"],
-                              "title": entry["title"], "status": entry["status"]})
-    children = conn.execute("SELECT t.id,t.title,t.status FROM tasks t WHERE t.id IN (" + CHILD_IDS + ") "
-                            "ORDER BY t.created_at", (task_id,)).fetchall()
+                lines.append(
+                    {
+                        "kind": kind,
+                        "direction": entry["direction"],
+                        "id": entry["id"],
+                        "title": entry["title"],
+                        "status": entry["status"],
+                    }
+                )
+    children = conn.execute(
+        "SELECT t.id,t.title,t.status FROM tasks t WHERE t.id IN (" + CHILD_IDS + ") ORDER BY t.created_at", (task_id,)
+    ).fetchall()
     for row in children:
         if readable(H.task(conn, row["id"])):
-            lines.append({"kind": "parent", "direction": "in", "id": row["id"], "title": row["title"],
-                          "status": row["status"]})
+            lines.append(
+                {"kind": "parent", "direction": "in", "id": row["id"], "title": row["title"], "status": row["status"]}
+            )
     return lines
 
 
@@ -289,7 +346,8 @@ OWN_SUBTASK_BLOCKER = (
     "{blocker} is a subtask of {task}, and now blocks it. If the subtask stays open until {task} finishes "
     "(a hold, an acknowledgement, a window), neither can ever move. Say what {task} waits for with a comment or "
     "`waiting` and a reason instead, or finish the subtask once it has answered. If both go quiet, Tico wakes "
-    "the task's owner about it, and BotOps sees it as stuck.")
+    "the task's owner about it, and BotOps sees it as stuck."
+)
 
 
 def own_subtask_warning(conn, task_id, other_id, kind):
@@ -319,22 +377,28 @@ def normalize(task_id, other_id, kind):
 def _insert(conn, actor, from_id, to_id, kind, at):
     if kind == "related":
         from_id, to_id = sorted((from_id, to_id))
-    conn.execute("INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,?,?,?)",
-                 (from_id, to_id, kind, actor, at))
+    conn.execute(
+        "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,?,?,?)",
+        (from_id, to_id, kind, actor, at),
+    )
 
 
 def _exists(conn, from_id, to_id, kind):
     if kind == "related":
         from_id, to_id = sorted((from_id, to_id))
-    return bool(conn.execute("SELECT 1 FROM task_relations WHERE from_task=? AND to_task=? AND kind=?",
-                             (from_id, to_id, kind)).fetchone())
+    return bool(
+        conn.execute(
+            "SELECT 1 FROM task_relations WHERE from_task=? AND to_task=? AND kind=?", (from_id, to_id, kind)
+        ).fetchone()
+    )
 
 
 def _delete(conn, from_id, to_id, kind):
     if kind == "related":
         from_id, to_id = sorted((from_id, to_id))
-    return conn.execute("DELETE FROM task_relations WHERE from_task=? AND to_task=? AND kind=?",
-                        (from_id, to_id, kind)).rowcount
+    return conn.execute(
+        "DELETE FROM task_relations WHERE from_task=? AND to_task=? AND kind=?", (from_id, to_id, kind)
+    ).rowcount
 
 
 def _history(conn, actor, from_id, to_id, kind, added, note="", at=None):
@@ -349,6 +413,7 @@ def _history(conn, actor, from_id, to_id, kind, added, note="", at=None):
         # A blocker added changes what the task waits on (backend/task_holds.py). One taken off is recomputed by
         # remove_blocker after reconcile; a child moved in or out by set_parent and task_create.
         from . import task_holds
+
         task_holds.refresh(conn, to_id)
 
 
@@ -356,13 +421,23 @@ def _mine(conn, actor, row, mover):
     """task_update's gate: a party, a delegate, an ancestor's party, a type's working bot, or a mover."""
     H = _H()
     mover = H.task_mover(conn, actor, row, mover)
-    mine = H.task_participant(conn, actor, row) or bool(H._one(
-        conn, "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>? LIMIT 1",
-        (row["id"], actor, H.now())))
-    mine = (mine or H.task_ancestor_party(conn, actor, row) or H.type_bot_works(conn, actor, row)
-            or H.task_manager_acts(conn, actor, row))
+    mine = H.task_participant(conn, actor, row) or bool(
+        H._one(
+            conn,
+            "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>? LIMIT 1",
+            (row["id"], actor, H.now()),
+        )
+    )
+    mine = (
+        mine
+        or H.task_ancestor_party(conn, actor, row)
+        or H.type_bot_works(conn, actor, row)
+        or H.task_manager_acts(conn, actor, row)
+    )
     if not mine and not mover and actor != H.KEEPER:
-        H.refuse(conn, actor, "identity", f"{row['id']} is changed by its parties, their managers, delegates or task movers")
+        H.refuse(
+            conn, actor, "identity", f"{row['id']} is changed by its parties, their managers, delegates or task movers"
+        )
 
 
 def _mover(conn, actor, mover):
@@ -374,8 +449,13 @@ def _mover(conn, actor, mover):
 
 def _need_mover(conn, actor, what):
     H = _H()
-    H.refuse(conn, actor, "identity", f"{what} on a task is changed by a person on the "
-                                      f"{', '.join(H.MOVER_TEAMS)} teams, not by {H.actor_name(conn, actor)}")
+    H.refuse(
+        conn,
+        actor,
+        "identity",
+        f"{what} on a task is changed by a person on the "
+        f"{', '.join(H.MOVER_TEAMS)} teams, not by {H.actor_name(conn, actor)}",
+    )
 
 
 def _task(conn, actor, task_id):
@@ -453,13 +533,17 @@ def readback(conn, task_id, other_id, kind="related", remove=False, changed=True
         return []
     if kind == "blocks":
         # Lead with the waiting task: "#237 waits for #233", then "#233 blocks #237".
-        lines = [f"{_name(conn, to_id)} {SAYS[kind][1]} {_name(conn, from_id)}",
-                 f"{_name(conn, from_id)} {SAYS[kind][0]} {_name(conn, to_id)}"]
+        lines = [
+            f"{_name(conn, to_id)} {SAYS[kind][1]} {_name(conn, from_id)}",
+            f"{_name(conn, from_id)} {SAYS[kind][0]} {_name(conn, to_id)}",
+        ]
     elif kind == "related":
         lines = [f"{_name(conn, from_id)} {SAYS[kind][0]} {_name(conn, to_id)}"]
     else:
-        lines = [f"{_name(conn, from_id)} {SAYS[kind][0]} {_name(conn, to_id)}",
-                 f"{_name(conn, to_id)} {SAYS[kind][1]} {_name(conn, from_id)}"]
+        lines = [
+            f"{_name(conn, from_id)} {SAYS[kind][0]} {_name(conn, to_id)}",
+            f"{_name(conn, to_id)} {SAYS[kind][1]} {_name(conn, from_id)}",
+        ]
     prefix = "Removed: " if remove else "Already: " if not changed else ""
     return [prefix + line for line in lines]
 
@@ -491,7 +575,12 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
     if old and not mover:
         old_parent = H.task(conn, old)
         if old_parent and not H.task_participant(conn, actor, old_parent):
-            H.refuse(conn, actor, "identity", "Only the parent's owner, requester, their managers or a mover can move a subtask away")
+            H.refuse(
+                conn,
+                actor,
+                "identity",
+                "Only the parent's owner, requester, their managers or a mover can move a subtask away",
+            )
     target = None
     if new:
         target = H._task_parent(conn, actor, child_id, new)
@@ -511,11 +600,10 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
         H._task_event(conn, new, actor, "subtask", None, child_id, note)
     H._task_event(conn, child_id, actor, "parent_id", old, new, note)
     made_private = bool(target and H.task_private(conn, target) and not H.task_private(conn, row))
-    conn.execute("UPDATE tasks SET updated_at=? WHERE id IN (?,?,?)",
-                 (at, child_id, old or child_id, new or child_id))
+    conn.execute("UPDATE tasks SET updated_at=? WHERE id IN (?,?,?)", (at, child_id, old or child_id, new or child_id))
     if made_private:
         H._made_private(conn, actor, child_id)
-        for below in H.descendants(conn, child_id):     # and the tasks under it, as making a parent private does
+        for below in H.descendants(conn, child_id):  # and the tasks under it, as making a parent private does
             if not H.task_private(conn, below):
                 H._made_private(conn, actor, below["id"])
     H.event(conn, actor, "task.relate", child_id, {"task": new or old, "kind": "parent", "removed": not new})
@@ -525,12 +613,14 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
     # What each parent waits on changed: the old one lost a child (a hold cleared, when it was open), the new one
     # gained one (backend/task_holds.py).
     from . import task_holds
+
     if old:
         live = row["status"] not in ("done", "closed", "declined")
         task_holds.refresh(conn, old, f"{task_holds.title(conn, row)} moved away" if live else None)
     if new:
         task_holds.refresh(conn, new)
     from .roadmap_flow import changed, sync
+
     changed(conn, child_id)
     if old:
         sync(conn, old)
@@ -547,16 +637,23 @@ def _check_blocker(conn, actor, row, blocker_id):
     H._task_private_writer(conn, actor, block)
     if is_descendant(conn, blocker_id, row["id"]):
         H.refuse(conn, actor, "kind", "A child task cannot be blocked by its own parent or ancestor")
-    if H.task_private(conn, block) and (not H.task_private(conn, row) or not all(
-            H.task_private_readable(conn, party, block) for party in (row["owner_id"], row["requester_id"]))
-    ) and not H.subtask_flows_up(conn, block, row):
-        # Its own subtask for its guest may block it: the guest's answer comes back to it (hubdb.subtask_flows_up).
+    if (
+        H.task_private(conn, block)
+        and (
+            not H.task_private(conn, row)
+            or not all(H.task_private_readable(conn, party, block) for party in (row["owner_id"], row["requester_id"]))
+        )
+        and not H.subtask_flows_up(conn, block, row)
+    ):
+        # Its own subtask for its reader may block it: the reader's answer comes back to it (hubdb.subtask_flows_up).
         H.refuse(conn, actor, "private", "A private dependency requires the same private audience")
     # No loop: the blocker must not already wait, directly or through others, on this task.
-    loop = conn.execute("WITH RECURSIVE ahead(id) AS (SELECT to_task FROM task_relations WHERE from_task=? "
-                        "AND kind='blocks' UNION SELECT r.to_task FROM task_relations r JOIN ahead "
-                        "ON r.from_task=ahead.id AND r.kind='blocks') SELECT 1 FROM ahead WHERE id=?",
-                        (row["id"], blocker_id)).fetchone()
+    loop = conn.execute(
+        "WITH RECURSIVE ahead(id) AS (SELECT to_task FROM task_relations WHERE from_task=? "
+        "AND kind='blocks' UNION SELECT r.to_task FROM task_relations r JOIN ahead "
+        "ON r.from_task=ahead.id AND r.kind='blocks') SELECT 1 FROM ahead WHERE id=?",
+        (row["id"], blocker_id),
+    ).fetchone()
     if loop:
         H.refuse(conn, actor, "kind", f"{blocker_id} already waits on this task")
     return block
@@ -580,22 +677,40 @@ def requester_hears_block(conn, row, blocker, actor):
     H = _H()
     req, owner, waits_on = row.get("requester_id"), row.get("owner_id"), (blocker or {}).get("owner_id")
     split_off = H.is_bot(waits_on) and blocker.get("requester_id") == owner
-    return bool(req and H.is_bot(req) and waits_on and req not in (owner, actor, waits_on)
-                and waits_on != owner and not split_off)
+    return bool(
+        req
+        and H.is_bot(req)
+        and waits_on
+        and req not in (owner, actor, waits_on)
+        and waits_on != owner
+        and not split_off
+    )
 
 
 def _tell_requester(conn, actor, row, blocker):
     """The requester's wake for a block (requester_hears_block); a Dev ticket's own notice carries it instead."""
     from .ticket_notices import _engineering
     from .check_blocked import kind as check_kind
+
     H = _H()
     if not blocker or _engineering(conn, row) or not requester_hears_block(conn, row, blocker, actor):
         return
     parent = H.task(conn, parent_of(conn, row["id"]) or "")
-    if parent and check_kind(conn, row, parent) and _engineering(conn, parent) and parent["owner_id"] == row["requester_id"]:
-        return                        # its builder hears once, on the ticket (check_blocked.notify)
-    H._wake(conn, row, row["requester_id"], f"Blocked: {row['title']}: waits on {blocker['title']}",
-            {"news": "task_blocked", "blocker": blocker["id"]}, quiet_bots=True)
+    if (
+        parent
+        and check_kind(conn, row, parent)
+        and _engineering(conn, parent)
+        and parent["owner_id"] == row["requester_id"]
+    ):
+        return  # its builder hears once, on the ticket (check_blocked.notify)
+    H._wake(
+        conn,
+        row,
+        row["requester_id"],
+        f"Blocked: {row['title']}: waits on {blocker['title']}",
+        {"news": "task_blocked", "blocker": blocker["id"]},
+        quiet_bots=True,
+    )
 
 
 def add_blocker(conn, actor, task_id, blocker_id, mover=None, note=""):
@@ -612,18 +727,31 @@ def add_blocker(conn, actor, task_id, blocker_id, mover=None, note=""):
     _check_blocker(conn, actor, row, blocker_id)
     _insert(conn, actor, blocker_id, task_id, "blocks", H.now())
     _history(conn, actor, blocker_id, task_id, "blocks", True, note)
-    H.event(conn, actor, "task.relate", task_id, {"task": blocker_id, "kind": "blocked_by",
-                                                  **({"own_subtask": True} if is_descendant(conn, task_id, blocker_id) else {})})
+    H.event(
+        conn,
+        actor,
+        "task.relate",
+        task_id,
+        {
+            "task": blocker_id,
+            "kind": "blocked_by",
+            **({"own_subtask": True} if is_descendant(conn, task_id, blocker_id) else {}),
+        },
+    )
     from .auto_tasks import back_off
+
     back_off(conn, H.task(conn, task_id))
     from .roadmap_flow import sync
     from .ticket_notices import blocked
-    sync(conn, task_id)               # a roadmap item now waits on this Dev ticket too
+
+    sync(conn, task_id)  # a roadmap item now waits on this Dev ticket too
     from .task_blocked import hold
+
     if H.task(conn, blocker_id)["status"] in H.ACTIVE_STATUSES:
         hold(conn, task_id, "Waiting on a dependency")
     from .check_blocked import changed
-    changed(conn, task_id)            # a blocked Review or QA check shows on its ticket (Dev 553)
+
+    changed(conn, task_id)  # a blocked Review or QA check shows on its ticket (Dev 553)
     blocked(conn, actor, row, blocker_id)
     _tell_requester(conn, actor, H.task(conn, task_id), H.task(conn, blocker_id))
     return True
@@ -643,16 +771,21 @@ def remove_blocker(conn, actor, task_id, blocker_id, mover=None, note="", keeper
     _history(conn, actor, blocker_id, task_id, "blocks", False, note if keeper_note is None else keeper_note)
     H.event(conn, actor, "task.unrelate", task_id, {"task": blocker_id, "kind": "blocked_by"})
     from .task_blocked import reconcile
+
     reconcile(conn, task_id)
     from . import task_holds
+
     # A completed blocker no longer holds the task. A stale relation from before cleanup is not a hold being cleared.
     live = blocker and blocker["status"] in H.ACTIVE_STATUSES
     task_holds.refresh(conn, task_id, f"{task_holds.title(conn, blocker)} no longer blocks it" if live else None)
     from .check_blocked import changed
+
     changed(conn, task_id)
     from .blocker_asks import unjoined
+
     unjoined(conn, actor, task_id, blocker_id)
     from .roadmap_flow import sync
+
     sync(conn, task_id)
     return True
 
@@ -660,8 +793,12 @@ def remove_blocker(conn, actor, task_id, blocker_id, mover=None, note="", keeper
 # ----------------------------------------------------------------------------- trash
 def snapshot_rows(conn, task_id):
     """Every relation row touching the task, for the trash."""
-    return [dict(r) for r in conn.execute("SELECT rowid AS _rowid, * FROM task_relations "
-                                          "WHERE from_task=? OR to_task=?", (task_id, task_id))]
+    return [
+        dict(r)
+        for r in conn.execute(
+            "SELECT rowid AS _rowid, * FROM task_relations WHERE from_task=? OR to_task=?", (task_id, task_id)
+        )
+    ]
 
 
 def restore_row(conn, row):
@@ -671,8 +808,10 @@ def restore_row(conn, row):
         return None
     try:
         conn.execute("SAVEPOINT relation_row")
-        conn.execute("INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,?,?,?)",
-                     (row["from_task"], row["to_task"], row["kind"], row.get("created_by"), row["created_at"]))
+        conn.execute(
+            "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,?,?,?)",
+            (row["from_task"], row["to_task"], row["kind"], row.get("created_by"), row["created_at"]),
+        )
         conn.execute("RELEASE relation_row")
         return True
     except Exception:

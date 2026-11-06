@@ -1,5 +1,6 @@
 """The Hosting preview's installer flags (tico-services Dev 268): HQ creates a 7-day preview server with --name pv-<id>
 under DevOps's permissions boundary, and on day 7 runs destroy --dns. Fake AWS and Route 53 only."""
+
 import json
 import stat
 
@@ -14,11 +15,40 @@ NAME = "pv-abcdefgh"
 DOMAIN = f"{NAME}.{ZONE}"
 BOUNDARY = "arn:aws:iam::123456789012:policy/tico-preview-boundary"
 OURS = [{"Key": "ManagedBy", "Value": "tico-setup"}, {"Key": "tico-setup-name", "Value": NAME}]
-CREATE = ["--cloud", "aws", "--aws-region", "us-east-2", "--aws-instance-type", "t4g.medium", "--name", NAME,
-          "--aws-permissions-boundary", BOUNDARY, "--hosted", "invited", "--hosted-zone", ZONE, "--domain", DOMAIN,
-          "--preset", "recommended", "--backup", "local", "--auth", "oidc", "--issuer", "https://accounts.example",
-          "--client-id", "preview-client", "--signin-label", "Tico account", "--owner-email", "ana@acme.example",
-          "--non-interactive", "--yes"]
+CREATE = [
+    "--cloud",
+    "aws",
+    "--aws-region",
+    "us-east-2",
+    "--aws-instance-type",
+    "t4g.medium",
+    "--name",
+    NAME,
+    "--aws-permissions-boundary",
+    BOUNDARY,
+    "--hosted",
+    "invited",
+    "--hosted-zone",
+    ZONE,
+    "--domain",
+    DOMAIN,
+    "--preset",
+    "recommended",
+    "--backup",
+    "local",
+    "--auth",
+    "oidc",
+    "--issuer",
+    "https://accounts.example",
+    "--client-id",
+    "preview-client",
+    "--signin-label",
+    "Tico account",
+    "--owner-email",
+    "ana@acme.example",
+    "--non-interactive",
+    "--yes",
+]
 DESTROY = ["destroy", "--name", NAME, "--domain", DOMAIN, "--aws-region", "us-east-2", "--dns", "--yes"]
 
 
@@ -55,7 +85,10 @@ def test_the_preview_create_command_names_everything_after_its_name_under_the_bo
     assert iam.called("attach_role_policy") == [{"RoleName": f"tico-{NAME}", "PolicyArn": aws.SSM_CORE}]
     (inline,) = iam.called("put_role_policy")
     assert inline["RoleName"] == f"tico-{NAME}"
-    assert json.loads(inline["PolicyDocument"])["Statement"][0]["Resource"] == f"arn:aws:ssm:us-east-2:123456789012:parameter/tico/{NAME}/env"
+    assert (
+        json.loads(inline["PolicyDocument"])["Statement"][0]["Resource"]
+        == f"arn:aws:ssm:us-east-2:123456789012:parameter/tico/{NAME}/env"
+    )
     (param,) = ssm.called("put_parameter")
     assert param["Name"] == f"/tico/{NAME}/env" and "TICO_BACKUP_URL" not in param["Value"]
     assert "TICO_INSTALL_PRESET=recommended" in param["Value"]
@@ -114,9 +147,14 @@ def test_without_a_boundary_or_name_the_role_is_as_before():
     assert role["RoleName"] == "tico-tico-example-com" and "PermissionsBoundary" not in role
 
 
-@pytest.mark.parametrize("flag,value,wanted", [
-    ("--name", "PV_bad!", "--name is 1 to 40"), ("--name", "x" * 41, "--name is 1 to 40"),
-    ("--aws-permissions-boundary", "tico-preview-boundary", "is an IAM policy ARN")])
+@pytest.mark.parametrize(
+    "flag,value,wanted",
+    [
+        ("--name", "PV_bad!", "--name is 1 to 40"),
+        ("--name", "x" * 41, "--name is 1 to 40"),
+        ("--aws-permissions-boundary", "tico-preview-boundary", "is an IAM policy ARN"),
+    ],
+)
 def test_a_bad_name_or_boundary_stops_before_anything_is_made(flag, value, wanted):
     d, ec2, iam, ssm, r53 = world()
     argv = list(CREATE)
@@ -127,19 +165,47 @@ def test_a_bad_name_or_boundary_stops_before_anything_is_made(flag, value, wante
 
 
 def test_name_and_boundary_are_only_for_aws():
-    code, out = go(["--target", "ssh", "--ssh", "root@h", "--name", NAME, "--non-interactive", "--domain", "tico.example.com",
-                    "--auth", "google", "--client-id", "c", "--owner-email", "me@example.com"], fakes.deps())
+    code, out = go(
+        [
+            "--target",
+            "ssh",
+            "--ssh",
+            "root@h",
+            "--name",
+            NAME,
+            "--non-interactive",
+            "--domain",
+            "tico.example.com",
+            "--auth",
+            "google",
+            "--client-id",
+            "c",
+            "--owner-email",
+            "me@example.com",
+        ],
+        fakes.deps(),
+    )
     assert code == 2 and "are for a server on AWS" in out
 
 
 def server(ip="203.0.113.9", ipv6="2600:1f16::9"):
-    return FakeEC2(extra_instances=[{"InstanceId": "i-pv", "Tags": OURS, "PublicIpAddress": ip,
-                                     "NetworkInterfaces": [{"Ipv6Addresses": [{"Ipv6Address": ipv6}]}]}])
+    return FakeEC2(
+        extra_instances=[
+            {
+                "InstanceId": "i-pv",
+                "Tags": OURS,
+                "PublicIpAddress": ip,
+                "NetworkInterfaces": [{"Ipv6Addresses": [{"Ipv6Address": ipv6}]}],
+            }
+        ]
+    )
 
 
 def record(kind, *values, alias=False):
     rs = {"Name": DOMAIN + ".", "Type": kind, "TTL": 300}
-    return {**rs, "AliasTarget": {"DNSName": "x."}} if alias else {**rs, "ResourceRecords": [{"Value": v} for v in values]}
+    return (
+        {**rs, "AliasTarget": {"DNSName": "x."}} if alias else {**rs, "ResourceRecords": [{"Value": v} for v in values]}
+    )
 
 
 def test_destroy_dns_deletes_the_records_that_still_point_at_this_server_and_does_it_first():
@@ -157,12 +223,13 @@ def test_destroy_dns_deletes_the_records_that_still_point_at_this_server_and_doe
     assert order == ["dns", "terminate"]
     (change,) = r53.called("change_resource_record_sets")
     assert [c["Action"] for c in change["ChangeBatch"]["Changes"]] == ["DELETE", "DELETE"]
-    assert r53.records == [other_name]            # another preview's record, same zone, untouched
+    assert r53.records == [other_name]  # another preview's record, same zone, untouched
     assert "DNS records were not touched" not in out
 
 
-@pytest.mark.parametrize("moved", [record("A", "198.51.100.1"), record("A", "203.0.113.9", "198.51.100.1"),
-                                   record("A", alias=True)])
+@pytest.mark.parametrize(
+    "moved", [record("A", "198.51.100.1"), record("A", "203.0.113.9", "198.51.100.1"), record("A", alias=True)]
+)
 def test_destroy_dns_leaves_a_record_that_points_elsewhere(moved):
     r53 = FakeRoute53(ZONE, [moved])
     d, ec2, iam, ssm, _ = world(ec2=server(), r53=r53)
@@ -189,7 +256,12 @@ def test_destroy_dns_dry_run_lists_the_record_and_deletes_nothing():
 
 
 def test_pointing_at_reads_only_this_name():
-    r53 = FakeRoute53(ZONE, [record("A", "203.0.113.9"), {"Name": f"{DOMAIN}.", "Type": "TXT", "TTL": 300,
-                                                           "ResourceRecords": [{"Value": '"x"'}]}])
+    r53 = FakeRoute53(
+        ZONE,
+        [
+            record("A", "203.0.113.9"),
+            {"Name": f"{DOMAIN}.", "Type": "TXT", "TTL": 300, "ResourceRecords": [{"Value": '"x"'}]},
+        ],
+    )
     ours, other = route53.pointing_at(r53, "Z1", DOMAIN, {"203.0.113.9"})
     assert [r["Type"] for r in ours] == ["A"] and other == []

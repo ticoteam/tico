@@ -28,17 +28,23 @@ SEEN_HOURS = 1
 def _timed_steps(c):
     """{step id: flow} for the steps whose flow sets status_hours or late_hours."""
     from . import step_flow
+
     if not step_flow._ready(c):
         return {}
-    return {s["id"]: step_flow.of(s) for s in H._rows(c.execute(
-        "SELECT id, flow FROM task_steps WHERE flow LIKE '%status_hours%' OR flow LIKE '%late_hours%'"))}
+    return {
+        s["id"]: step_flow.of(s)
+        for s in H._rows(
+            c.execute("SELECT id, flow FROM task_steps WHERE flow LIKE '%status_hours%' OR flow LIKE '%late_hours%'")
+        )
+    }
 
 
 def late_limit(c, row, timed=None):
     """The hours at its step after which a ticket is late, or None when that check is off there."""
     flow = (_timed_steps(c) if timed is None else timed).get(row.get("step_id")) or {}
-    engineering = row.get("status") == WORKING and bool(c.execute(
-        "SELECT 1 FROM task_types WHERE id=? AND role=?", (row.get("type_id") or "", ENGINEERING)).fetchone())
+    engineering = row.get("status") == WORKING and bool(
+        c.execute("SELECT 1 FROM task_types WHERE id=? AND role=?", (row.get("type_id") or "", ENGINEERING)).fetchone()
+    )
     return flow.get("late_hours", LATE_HOURS if engineering else None)
 
 
@@ -47,33 +53,44 @@ def since_map(c, rows):
     for the page. A ticket created straight into the step has no event: its creation time."""
     types = {r[0] for r in c.execute("SELECT id FROM task_types WHERE role=?", (ENGINEERING,))}
     timed = _timed_steps(c)
-    rows = [r for r in rows if r.get("step_id") in timed
-            or (r.get("status") == WORKING and r.get("type_id") in types)]
+    rows = [r for r in rows if r.get("step_id") in timed or (r.get("status") == WORKING and r.get("type_id") in types)]
     if not rows:
         return {}
     ids = [r["id"] for r in rows]
-    found = dict(c.execute(
-        f"SELECT subject_id, max(created_at) FROM history_events WHERE subject_type='task' "
-        f"AND subject_id IN ({','.join('?' * len(ids))}) AND kind IN ('step','status') GROUP BY subject_id", ids).fetchall())
+    found = dict(
+        c.execute(
+            f"SELECT subject_id, max(created_at) FROM history_events WHERE subject_type='task' "
+            f"AND subject_id IN ({','.join('?' * len(ids))}) AND kind IN ('step','status') GROUP BY subject_id",
+            ids,
+        ).fetchall()
+    )
     return {r["id"]: found.get(r["id"]) or r.get("created_at") for r in rows}
 
 
 def _working(c):
     timed = list(_timed_steps(c))
-    return H._rows(c.execute(
-        f"SELECT t.* FROM {H.TASKS} t JOIN task_types y ON y.id=t.type_id WHERE (y.role=? AND t.status=?) "
-        f"OR (t.step_id IN ({','.join('?' * len(timed))}) AND t.status NOT IN ('done','closed','declined')) "
-        "ORDER BY t.updated_at", (ENGINEERING, WORKING, *timed)))
+    return H._rows(
+        c.execute(
+            f"SELECT t.* FROM {H.TASKS} t JOIN task_types y ON y.id=t.type_id WHERE (y.role=? AND t.status=?) "
+            f"OR (t.step_id IN ({','.join('?' * len(timed))}) AND t.status NOT IN ('done','closed','declined')) "
+            "ORDER BY t.updated_at",
+            (ENGINEERING, WORKING, *timed),
+        )
+    )
 
 
 def _seen_by(c, row, who, at):
     """Whether `who` wrote in the ticket's room or changed it in the last SEEN_HOURS: they know how it stands."""
     since = H.shift(at, seconds=-SEEN_HOURS * 3600)
-    return bool(c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? "
-                          "AND deleted_at IS NULL UNION ALL SELECT 1 FROM history_events WHERE subject_type='task' "
-                          "AND subject_id=? AND actor_id=? "
-                          "AND created_at>? LIMIT 1", (row.get("conversation_id") or "", who, since, row["id"], who,
-                                               since)).fetchone())
+    return bool(
+        c.execute(
+            "SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? "
+            "AND deleted_at IS NULL UNION ALL SELECT 1 FROM history_events WHERE subject_type='task' "
+            "AND subject_id=? AND actor_id=? "
+            "AND created_at>? LIMIT 1",
+            (row.get("conversation_id") or "", who, since, row["id"], who, since),
+        ).fetchone()
+    )
 
 
 def _hours(at, since):
@@ -91,6 +108,7 @@ def _step(c, row):
 def _manager(c, row):
     """Who hears that a ticket runs late: the bot that manages its type, else the owner's manager. Never the owner."""
     from .lifecycle import _manager_actor
+
     owner = row.get("owner_id") or ""
     typed = H.type_manager(c, row)
     for who in ((H.bot_actor(typed) if typed else ""), _manager_actor(c, H.actor_id(owner)) if H.is_bot(owner) else ""):
@@ -115,7 +133,7 @@ def late_items(c, at=None):
         try:
             hours = _hours(at, start)
         except ValueError:
-            continue            # an unreadable step time: no line for this ticket
+            continue  # an unreadable step time: no line for this ticket
         late_hours = late_limit(c, row, timed)
         if not late_hours or hours < late_hours:
             continue

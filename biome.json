@@ -1,0 +1,22 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.2/schema.json",
+  "files": {
+    "includes": ["ui/**/*.js", "ui/**/*.ts", "!ui/vendor", "!ui/assets", "!ui/types", "!**/node_modules"]
+  },
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "none",
+      "correctness": {
+        "preset": "recommended",
+        "noUnusedVariables": "off"
+      },
+      "suspicious": {
+        "preset": "recommended",
+        "noRedundantUseStrict": "off"
+      }
+    }
+  }
+}

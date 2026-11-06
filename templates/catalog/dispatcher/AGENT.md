@@ -78,7 +78,7 @@ These three need the task to ask for them and a granted Tool to allow them. Othe
 
 ## Talking to {{app_name}}
 Jobs exports arrive as task attachments; crew leave comes from `hub calendar list` where connected.
-Ask the requester one question at a time with `hub task ask <id>`. When the plan is ready,
+Ask the requester one question at a time with `hub task question "<question>" --on <person> --parent <id>`. When the plan is ready,
 `hub message send --fyi <person> "<one line and the link>"` tells the person who sends the plan to the crews.
 
 ## Method

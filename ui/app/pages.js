@@ -45,7 +45,13 @@ const pageSrc = p => p.src ? visualPageSrc(p.src) : null;
 // The frame's address says where the page is drawn: the server's height reporter (backend/visuals.py) reads
 // `#tico-view=card|full&tico-size=<size>` into <html data-tico-view data-tico-size>, so a page's own CSS can draw a
 // compact widget in a card. A fragment changes no signature, cache key or audience check, and follows a redirect.
-const pageViewSrc = (src, size) => `${src.split('#')[0]}#tico-view=${size === 'full' ? 'full' : 'card'}&tico-size=${size}`;
+// A desktop app that checks frame addresses (visualOrigin) refuses a fragment unless it says visualView
+// (app/src/visual_origin.rs view_marker): older ones get the bare address, so the page draws, without its card layout.
+const pageViewSrc = (src, size) => {
+  const bare = src.split('#')[0], features = window.ticoNativeFeatures || [];
+  if (features.includes('visualOrigin') && !features.includes('visualView')) return bare;
+  return `${bare}#tico-view=${size === 'full' ? 'full' : 'card'}&tico-size=${size}`;
+};
 function pageFrame(p, src, height, size) {
   const f = document.createElement('iframe');
   f.className = 'page-frame';
@@ -62,8 +68,8 @@ function pageFrame(p, src, height, size) {
   return f;
 }
 // pageCard(page, {size}): one card holding the page's status line and the framed page (or an Open card, the status
-// under its title, when there is no address). A card is a widget: the page's top at a fixed height, faded at the
-// bottom when the page runs on, and the whole card one tap that opens the page full size, as its expand icon does.
+// under its title, when there is no address). A card is a widget: the page at its own height up to the card's size,
+// faded at the bottom when the page runs on, and the whole card one tap that opens the page full size, as its expand icon does.
 // `full` is that full size, where the status line sits under the view's own title. `page` is GET
 // /api/v2/pages/{id}'s page.
 window.pageCard = function pageCard(page, {size = 'medium'} = {}) {
@@ -86,7 +92,9 @@ window.pageCard = function pageCard(page, {size = 'medium'} = {}) {
   el.innerHTML = pageStatusHTML(page);
   const box = document.createElement('div');
   box.className = 'pg-box';
-  const frame = pageFrame(page, src, full ? PAGE_FULL_MIN : cap, named);
+  // A page measures at least its frame, so a card's frame starts at 1px and the page says its own height; the box
+  // keeps the card's size until it does (pg-sized).
+  const frame = pageFrame(page, src, full ? PAGE_FULL_MIN : 1, named);
   frame.pageCap = full ? 0 : cap;
   box.append(frame);
   el.append(box);
@@ -103,15 +111,22 @@ window.pageCard = function pageCard(page, {size = 'medium'} = {}) {
   }
   return el;
 };
-// The height a page reports (backend/visuals.py REPORTER), from a page frame's own window only. A card keeps its fixed
-// height and fades its bottom when the page is taller; the full view takes the height whole.
+// The height a page reports (backend/visuals.py REPORTER), from a page frame's own window only. A card takes the page's
+// height up to its size and fades its bottom when the page is taller; the full view takes the height whole.
 window.addEventListener('message', ev => {
   const n = ev.data && typeof ev.data === 'object' ? ev.data.ticoVisualHeight : undefined;
   if (typeof n !== 'number' || !Number.isFinite(n) || !ev.source) return;
   const frame = [...document.querySelectorAll('iframe.page-frame')].find(x => x.contentWindow === ev.source);
   if (!frame) return;
   const h = frame.pageHeight = Math.max(24, Math.min(Math.ceil(n), VISUAL_PAGE_MAX));
-  if (frame.pageCap) frame.parentElement?.classList.toggle('pg-cut', h > frame.pageCap);
+  if (frame.pageCap) {
+    const box = frame.parentElement;
+    // A page sized by the screen (100vh) says next to nothing from its 1px frame: it fills the card.
+    const fills = !box.classList.contains('pg-sized') && Math.ceil(n) < 24;
+    frame.style.height = (fills ? frame.pageCap : Math.min(h, frame.pageCap)) + 'px';
+    box.classList.add('pg-sized');
+    box.classList.toggle('pg-cut', !fills && h > frame.pageCap);
+  }
   else frame.style.height = Math.max(h, PAGE_FULL_MIN) + 'px';
 });
 
@@ -255,7 +270,24 @@ function taskPagesAdopt(d, task) {
   d.tpEl = slot; slot.dataset.task = id;
   slot.innerHTML = `<header class="tp-head"><span class="lbl">Pages</span><div class="tp-actions"><button type="button" class="ghost" data-tp-link hidden>Link page</button></div></header>
     <div class="tp-picker" hidden><div class="tp-search"><input type="search" placeholder="Search pages" aria-label="Search pages" autocomplete="off">
-      <button type="button" class="ghost" data-tp-close aria-label="Close page picker">Close</button></div><div class="tp-results" aria-live="polite"></div></div><div class="tp-pages"></div>`;
+      <button type="button" class="ghost" data-tp-close aria-label="Close page picker">Close</button></div><div class="tp-results" aria-live="polite"></div></div>
+    <form class="tp-make" hidden>${ldotHTML({state: 'still', size: 20})}<input type="text" aria-label="Describe the page" placeholder="Describe the page" maxlength="8000" required><button type="submit" class="primary">Make page</button></form>
+    <p class="tp-error err" role="alert" hidden></p><div class="tp-making" role="status" hidden></div><div class="tp-pages"></div>`;
+  const make = $('.tp-make', slot), prompt = $('input', make), error = $('.tp-error', slot);
+  make.onsubmit = async ev => {
+    ev.preventDefault();
+    if (slot.tpSending || ['making', 'update_required'].includes(slot.tpMaking?.state) || !prompt.value.trim()) return;
+    slot.tpSending = true; $('button', make).disabled = true; error.hidden = true;
+    try {
+      const r = await post('/v2/tasks/' + encodeURIComponent(id) + '/make-page', {text: prompt.value.trim()});
+      if (d.tpEl !== slot) return;
+      if (r.held) throw new Error('Not sent');
+      make.reset();
+      taskPageMakeDraw(d, {state: 'making', conversation_id: r.message.conversation_id});
+      await taskPageMakeLoad(d);
+    } catch (e) { if (d.tpEl === slot) { error.textContent = e.message; error.hidden = false; } }
+    finally { slot.tpSending = false; $('button', make).disabled = ['making', 'update_required'].includes(slot.tpMaking?.state); }
+  };
   const picker = $('.tp-picker', slot), input = $('input', picker), results = $('.tp-results', picker);
   $('[data-tp-link]', slot).onclick = () => { picker.hidden = false; input.focus(); };
   $('[data-tp-close]', slot).onclick = () => { picker.hidden = true; $('[data-tp-link]', slot).focus(); };
@@ -287,11 +319,47 @@ function taskPagesAdopt(d, task) {
     } catch (e) { toast(e.message, true); }
     finally { slot.tpBusy = false; button.disabled = false; }
   };
-  d.tpOff = liveOn('tasks', e => {
+  const refresh = () => { if (d.open && d.tpEl === slot) void taskPagesLoad(d); };
+  const offs = [liveOn('tasks', e => {
     if (d.open && d.tpEl === slot && (e.kinds || [e.kind]).includes('files') && String(e.id) === id)
-      liveSoon('task-pages:' + d.id + ':' + id, () => { if (d.open && d.tpEl === slot) void taskPagesLoad(d); }, 200);
-  });
+      liveSoon('task-pages:' + d.id + ':' + id, refresh, 200);
+  }), liveOn('runs', e => {
+    if (['making', 'update_required'].includes(slot.tpMaking?.state) && e.conversation_id === slot.tpMaking.conversation_id)
+      liveSoon('task-pages:' + d.id + ':' + id, refresh, 200);
+  }), liveOn('reset', refresh)];
+  const poll = liveFallback(() => { if (['making', 'update_required'].includes(slot.tpMaking?.state)) refresh(); }, 5000);
+  d.tpOff = () => { offs.forEach(off => off()); slot.tpFollow?.(); clearInterval(poll); };
   void taskPagesLoad(d);
+}
+function taskPageMakeDraw(d, status) {
+  const slot = d.tpEl;
+  if (!slot) return;
+  const pending = ['making', 'update_required'].includes(status?.state);
+  const cid = pending ? status.conversation_id : null;
+  if (slot.tpFollowCid !== cid) {
+    slot.tpFollow?.(); slot.tpFollow = cid ? liveFollow(cid) : null; slot.tpFollowCid = cid;
+  }
+  slot.tpMaking = status;
+  const card = $('.tp-making', slot);
+  card.hidden = !status || status.state === 'made';
+  card.innerHTML = status?.state === 'making' ? 'Making page…' : status?.state === 'update_required'
+    ? 'Update this computer to make pages · <button type="button" class="ghost" data-tp-retry>Retry</button>'
+    : 'Not made · <a href="#/assistant">Open chat</a>';
+  const retry = $('[data-tp-retry]', card);
+  if (retry) retry.onclick = async () => {
+    retry.disabled = true;
+    try { await taskPageMakeLoad(d); }
+    catch (e) { toast(e.message, true); }
+    finally { retry.disabled = false; }
+  };
+  $('button', $('.tp-make', slot)).disabled = slot.tpSending || pending;
+}
+async function taskPageMakeLoad(d) {
+  const slot = d.tpEl;
+  if (!slot) return;
+  const seq = slot.tpMakeSeq = (slot.tpMakeSeq || 0) + 1;
+  const r = await get('/v2/tasks/' + encodeURIComponent(slot.dataset.task) + '/make-page', {fresh: true});
+  if (d.tpEl === slot && seq === slot.tpMakeSeq) taskPageMakeDraw(d, r.make_page);
 }
 async function taskPagesLoad(d) {
   const slot = d.tpEl;
@@ -303,6 +371,7 @@ async function taskPagesLoad(d) {
     const pins = (r.pins || []).filter(x => x.page && !x.page.replaced_by_id && !x.page.archived);
     slot.hidden = !r.can_link && !pins.length;
     $('[data-tp-link]', slot).hidden = !r.can_link;
+    $('.tp-make', slot).hidden = !r.can_link;
     const kept = slot.tpCards || new Map(), cards = new Map();
     for (const pin of pins) {
       const key = JSON.stringify([pin.page, pin.size, pin.can_unpin]);
@@ -321,6 +390,7 @@ async function taskPagesLoad(d) {
     }
     slot.tpCards = cards;
     $('.tp-pages', slot).replaceChildren(...[...cards.values()].map(x => x.el));
+    if (r.can_link) await taskPageMakeLoad(d);
   } catch (e) { if (d.tpEl === slot) toast(e.message, true); }
 }
 

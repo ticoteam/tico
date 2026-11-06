@@ -79,8 +79,8 @@ latency, how many excerpts and how long the question was; never its text) and co
 caps (`TICO_DECISIONS_DAILY_CALLS_*`, counted apart from decisions); over the cap the ask is a 429.
 
 **Bots and the Assistant.** `hub doc ask "question" [--wait 120]`, or the MCP tool `hub_doc_ask`, returns
-`{answer, citations: [{type, title, url_or_id}], covered}`. A bot's question is an `ask` message to the Librarian, the ordinary
-ask and answer path: the Librarian's final message is the answer. `covered` is false when the answer starts "Not in the docs".
+`{answer, citations: [{type, title, url_or_id}], covered}`. A bot's question is a direct message to the Librarian flagged
+`--needs-action`, the ordinary message path: the Librarian's final message is the answer. `covered` is false when the answer starts "Not in the docs".
 Citations have `type: internal|linked|manual`. Manual citations link to the release's page, such as
 `https://github.com/ticoteam/tico/blob/v0.3.3/docs/people.md`.
 The server MCP returns after at most 20 seconds: if pending, it returns
@@ -237,7 +237,7 @@ market reads it, and the tables are readable in hub SQL like the other market ta
   trust it (primary, secondary, estimate, signal). A team adds its own with `hub market sources --add-file`; one with a shipped
   id replaces it.
 
-The owner asks for the work with **Size the market** (`POST /api/v2/market/spend/research {description}`), which files one
+The owner asks for the work with **Size the market** on the Market page (`POST /api/v2/market/spend/research {description}`), which files one
 Librarian task following `playbooks/size-the-market.md`; asking again while it is open returns the same task. A first market
 setup ends by pointing at the same playbook.
 

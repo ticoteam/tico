@@ -23,20 +23,42 @@ reads the YAML and hands the document here; `backend/tests/test_people.py` cover
 
 A missing or empty file still gives a working roster: the environment owner, and nothing else.
 """
-DEFAULT_PERSON = {"id": "", "name": "", "email": "", "title": "",
-                  "team": "", "primary_for": [], "bot": None, "reports_to": "",
-                  "inbox_bot": None, "hidden": False, "photo": "",
-                  "slack": "", "slack_id": "", "github": "", "notify_slack_task_done": True,
-                  "notify_slack_bot_messages": True, "slack_muted_bots": [], "phone": "", "about": "", "goals": "", "notes": "",
-                  "update_draft": True,
-                  # Browser notifications for Needs you (off by default; the page asks the browser's permission).
-                  "notify_browser": False,
-                  # Email digests of the threads they follow on digest (backend/thread_digest.py): on unless turned off.
-                  "email_digest": True,
-                  "directory": "", "external_id": "", "directory_left": False,
-                  # What a member may do (docs/permissions.md): create bots (on by default), and add people
-                  # (None = the default: coworkers in the company's email domain may, others may not).
-                  "create_bots": True, "add_people": None}
+
+DEFAULT_PERSON = {
+    "id": "",
+    "name": "",
+    "email": "",
+    "title": "",
+    "team": "",
+    "primary_for": [],
+    "bot": None,
+    "reports_to": "",
+    "inbox_bot": None,
+    "hidden": False,
+    "photo": "",
+    "slack": "",
+    "slack_id": "",
+    "github": "",
+    "notify_slack_task_done": True,
+    "notify_slack_bot_messages": True,
+    "slack_muted_bots": [],
+    "phone": "",
+    "about": "",
+    "goals": "",
+    "notes": "",
+    "update_draft": True,
+    # Browser notifications for Needs you (off by default; the page asks the browser's permission).
+    "notify_browser": False,
+    # Email digests of the threads they follow on digest (backend/thread_digest.py): on unless turned off.
+    "email_digest": True,
+    "directory": "",
+    "external_id": "",
+    "directory_left": False,
+    # What a member may do (docs/permissions.md): create bots (on by default), and add people
+    # (None = the default: coworkers in the company's email domain may, others may not).
+    "create_bots": True,
+    "add_people": None,
+}
 
 
 def _clean(value):
@@ -58,40 +80,42 @@ def _person(row):
     photo = _clean(row.get("photo"))
     if photo and not photo.startswith(("https://", "http://", "/")):
         photo = ""
-    return {"id": pid,
-            "name": _clean(row.get("name")) or pid.title(),
-            "email": _clean(row.get("email")).lower(),
-            "title": _clean(row.get("title")),
-            "team": _clean(row.get("team")),
-            "primary_for": _list(row.get("primary_for")),
-            "bot": _clean(row.get("bot")) or None,
-            "reports_to": reports_to,
-            "inbox_bot": _clean(row.get("inbox_bot")) or None,
-            "hidden": bool(row.get("hidden")),
-            "photo": photo,
-            "slack": _clean(row.get("slack")).lstrip("@"),
-            "slack_id": _clean(row.get("slack_id")),
-            # Their GitHub login, which a review request on a linked pull request names (backend/github.py).
-            "github": _clean(row.get("github")).lstrip("@").lower(),
-            "notify_slack_task_done": row.get("notify_slack_task_done") is not False,
-            "notify_slack_bot_messages": row.get("notify_slack_bot_messages") is not False,
-            # The Assistant drafts their daily update unless they turn it off.
-            "update_draft": row.get("update_draft") is not False,
-            "notify_browser": row.get("notify_browser") is True,
-            "email_digest": row.get("email_digest") is not False,
-            "slack_muted_bots": _list(row.get("slack_muted_bots")),
-            "phone": _clean(row.get("phone")),
-            "about": _clean(row.get("about")),
-            "goals": _clean(row.get("goals")),
-            "notes": _clean(row.get("notes")),
-            # Which directory feed owns this person ("" = added by hand, never touched by sync).
-            "directory": _clean(row.get("directory")),
-            "external_id": _clean(row.get("external_id")),
-            "directory_left": bool(row.get("directory_left")),
-            "create_bots": row.get("create_bots") is not False,
-            # Off: still on the roster and the chart, but refused at sign-in and on every token (backend/auth.py).
-            "sign_in": row.get("sign_in") is not False,
-            "add_people": row.get("add_people") if isinstance(row.get("add_people"), bool) else None}
+    return {
+        "id": pid,
+        "name": _clean(row.get("name")) or pid.title(),
+        "email": _clean(row.get("email")).lower(),
+        "title": _clean(row.get("title")),
+        "team": _clean(row.get("team")),
+        "primary_for": _list(row.get("primary_for")),
+        "bot": _clean(row.get("bot")) or None,
+        "reports_to": reports_to,
+        "inbox_bot": _clean(row.get("inbox_bot")) or None,
+        "hidden": bool(row.get("hidden")),
+        "photo": photo,
+        "slack": _clean(row.get("slack")).lstrip("@"),
+        "slack_id": _clean(row.get("slack_id")),
+        # Their GitHub login, which a review request on a linked pull request names (backend/github.py).
+        "github": _clean(row.get("github")).lstrip("@").lower(),
+        "notify_slack_task_done": row.get("notify_slack_task_done") is not False,
+        "notify_slack_bot_messages": row.get("notify_slack_bot_messages") is not False,
+        # The Assistant drafts their daily update unless they turn it off.
+        "update_draft": row.get("update_draft") is not False,
+        "notify_browser": row.get("notify_browser") is True,
+        "email_digest": row.get("email_digest") is not False,
+        "slack_muted_bots": _list(row.get("slack_muted_bots")),
+        "phone": _clean(row.get("phone")),
+        "about": _clean(row.get("about")),
+        "goals": _clean(row.get("goals")),
+        "notes": _clean(row.get("notes")),
+        # Which directory feed owns this person ("" = added by hand, never touched by sync).
+        "directory": _clean(row.get("directory")),
+        "external_id": _clean(row.get("external_id")),
+        "directory_left": bool(row.get("directory_left")),
+        "create_bots": row.get("create_bots") is not False,
+        # Off: still on the roster and the chart, but refused at sign-in and on every token (backend/auth.py).
+        "sign_in": row.get("sign_in") is not False,
+        "add_people": row.get("add_people") if isinstance(row.get("add_people"), bool) else None,
+    }
 
 
 def people_rows(doc, owner=None):
@@ -107,9 +131,17 @@ def people_rows(doc, owner=None):
     owner_id = _clean(owner.get("id")) or _clean(owner.get("email")).split("@")[0]
     default = _clean(doc.get("default_user")) or owner_id or (people[0]["id"] if people else "")
     if default and not any(p["id"] == default for p in people):
-        people.insert(0, {**DEFAULT_PERSON, "id": default, "name": default.title(),
-                          "email": _clean(owner.get("email")).lower() if default == owner_id else "",
-                          "reports_to": "", "inbox_bot": None})
+        people.insert(
+            0,
+            {
+                **DEFAULT_PERSON,
+                "id": default,
+                "name": default.title(),
+                "email": _clean(owner.get("email")).lower() if default == owner_id else "",
+                "reports_to": "",
+                "inbox_bot": None,
+            },
+        )
     return people
 
 
@@ -147,29 +179,39 @@ def load(doc, owner=None):
         if not gid or gid in gseen or not isinstance(body, dict):
             continue
         gseen.add(gid)
-        groups[gid] = {"id": gid, "name": _clean(body.get("name")) or gid.replace("-", " ").title(),
-                       "reports_to": _clean(body.get("reports_to")), "parent": _clean(body.get("parent")),
-                       "root": _clean(body.get("root"))}
+        groups[gid] = {
+            "id": gid,
+            "name": _clean(body.get("name")) or gid.replace("-", " ").title(),
+            "reports_to": _clean(body.get("reports_to")),
+            "parent": _clean(body.get("parent")),
+            "root": _clean(body.get("root")),
+        }
         if isinstance(body.get("order"), int):
             groups[gid]["order"] = body["order"]
         if isinstance(body.get("bet_id"), str) and body["bet_id"].strip():
-            groups[gid]["bet_id"] = body["bet_id"].strip()       # the strategy bet it serves (backend/strategy.py)
+            groups[gid]["bet_id"] = body["bet_id"].strip()  # the strategy bet it serves (backend/strategy.py)
         if _clean(body.get("lead")):
-            groups[gid]["lead"] = _clean(body["lead"])            # bot:<slug> or person:<id> (CONTRACT §3, backend/groups.py)
-    for gid, root in roots.items():             # a roster written before groups: each team is a group
-        group = groups.setdefault(gid, {"id": gid, "name": gid.replace("-", " ").title(), "reports_to": "",
-                                        "parent": "", "root": ""})
+            groups[gid]["lead"] = _clean(body["lead"])  # bot:<slug> or person:<id> (CONTRACT §3, backend/groups.py)
+    for gid, root in roots.items():  # a roster written before groups: each team is a group
+        group = groups.setdefault(
+            gid, {"id": gid, "name": gid.replace("-", " ").title(), "reports_to": "", "parent": "", "root": ""}
+        )
         group["root"] = group["root"] or root
-    for gid, group in groups.items():           # a parent that is not a group, or that leads back here, is no parent
+    for gid, group in groups.items():  # a parent that is not a group, or that leads back here, is no parent
         at, seen = group["parent"], {gid}
         while at in groups and at not in seen:
             seen.add(at)
             at = groups[at]["parent"]
         if at in seen or group["parent"] not in groups:
             group["parent"] = ""
-    return {"default_user": default, "people": people, "developers": _list(doc.get("developers")),
-            "org_groups": groups, "teams": {gid: {"root": g["root"]} for gid, g in groups.items() if g["root"]},
-            "groups_migrated": bool(doc.get("groups_migrated"))}
+    return {
+        "default_user": default,
+        "people": people,
+        "developers": _list(doc.get("developers")),
+        "org_groups": groups,
+        "teams": {gid: {"root": g["root"]} for gid, g in groups.items() if g["root"]},
+        "groups_migrated": bool(doc.get("groups_migrated")),
+    }
 
 
 def group_chain(gid, roster):
@@ -210,8 +252,7 @@ def person(pid, roster):
 def person_by_email(email, roster):
     """A roster person by verified email. Unknown allowed-domain users deliberately miss."""
     wanted = _clean(email).lower()
-    return next((p for p in (roster or {}).get("people") or []
-                 if str(p.get("email") or "").lower() == wanted), None)
+    return next((p for p in (roster or {}).get("people") or [] if str(p.get("email") or "").lower() == wanted), None)
 
 
 def default_person(roster):
@@ -230,11 +271,11 @@ def team_of(slug, employees, roster):
     at, seen = _clean(slug), set()
     while at:
         if at in seen or at.startswith("human:"):
-            return None                    # no group of its own and none up this chain
+            return None  # no group of its own and none up this chain
         entry = (employees or {}).get(at) or {}
         named = entry.get("team")
         if named is not None and (_clean(named) in groups or not _clean(named)):
-            return _clean(named) or None   # "" says: in no group, whatever its manager is in
+            return _clean(named) or None  # "" says: in no group, whatever its manager is in
         if at in roots:
             return roots[at]
         seen.add(at)
@@ -261,7 +302,7 @@ def manager_team(reports_to, employees, roster):
         entry = (employees or {}).get(at) or {}
         named = _clean(entry.get("team"))
         if entry.get("team") is not None and (named in groups or not named):
-            return named or None           # "" says: in no group, whatever its manager is in
+            return named or None  # "" says: in no group, whatever its manager is in
         if at in roots:
             return roots[at]
         at = _clean(entry.get("reports_to"))
@@ -327,8 +368,11 @@ def manages(pid, kind, ident, roster, employees, archived=(), bare_people=False)
 
 def bots_of(pid, roster, employees):
     """The bots this person is the primary user of, in registry order."""
-    return [slug for slug in (employees or {})
-            if any(p["id"] == _clean(pid) for p in primary_users(slug, roster, employees))]
+    return [
+        slug
+        for slug in (employees or {})
+        if any(p["id"] == _clean(pid) for p in primary_users(slug, roster, employees))
+    ]
 
 
 def may_chat(email, slug, roster, employees):
@@ -360,6 +404,7 @@ def brief(person_row):
     if person_row.get("photo"):
         out["photo"] = person_row["photo"]
     from . import people_photos
+
     if person_row.get("id") and people_photos.may_have(None, person_row.get("email"), person_row.get("photo")):
         out["photo_url"] = "/api/humans/" + person_row["id"] + "/photo"
     return out
@@ -423,9 +468,14 @@ def org_parent(kind, ident, roster, employees, archived=(), bare_people=False):
             return ""
         skipped.add(reports)
         reports = _clean(((employees or {}).get(reports) or {}).get("reports_to"))
-    if bare_people and reports and not reports.startswith("human:") and reports not in (employees or {}) \
-            and person(reports, roster):
-        reports = "human:" + reports      # a bare person id, the form some writers store, is that person
+    if (
+        bare_people
+        and reports
+        and not reports.startswith("human:")
+        and reports not in (employees or {})
+        and person(reports, roster)
+    ):
+        reports = "human:" + reports  # a bare person id, the form some writers store, is that person
     if reports and not reports.startswith("human:") and reports not in archived and reports not in (employees or {}):
         # A boss that is not a bot here at all (an assistant the company chose not to have):
         # the bot hangs under the owner instead of vanishing from the chart.
@@ -454,28 +504,30 @@ def profile(person_row):
     handles = [x for x in (p.get("primary_for") or []) if x != "*"]
     if "*" in (p.get("primary_for") or []):
         handles = ["*"] + handles
-    return {"id": p.get("id") or "",
-            "name": p.get("name") or "",
-            "email": p.get("email") or "",
-            "title": p.get("title") or "",
-            "team": p.get("team") or "",
-            "primary_for": list(p.get("primary_for") or []),
-            "handles": handles,
-            "bot": p.get("bot"),
-            "reports_to": p.get("reports_to") or "",
-            "slack": p.get("slack") or "",
-            "slack_id": p.get("slack_id") or "",
-            "github": p.get("github") or "",
-            "notify_slack_task_done": p.get("notify_slack_task_done") is not False,
-            "notify_slack_bot_messages": p.get("notify_slack_bot_messages") is not False,
-            "update_draft": p.get("update_draft") is not False,
-            "notify_browser": p.get("notify_browser") is True,
-            "email_digest": p.get("email_digest") is not False,
-            "slack_muted_bots": list(p.get("slack_muted_bots") or []),
-            "phone": p.get("phone") or "",
-            "about": p.get("about") or "",
-            "goals": p.get("goals") or "",
-            "notes": p.get("notes") or ""}
+    return {
+        "id": p.get("id") or "",
+        "name": p.get("name") or "",
+        "email": p.get("email") or "",
+        "title": p.get("title") or "",
+        "team": p.get("team") or "",
+        "primary_for": list(p.get("primary_for") or []),
+        "handles": handles,
+        "bot": p.get("bot"),
+        "reports_to": p.get("reports_to") or "",
+        "slack": p.get("slack") or "",
+        "slack_id": p.get("slack_id") or "",
+        "github": p.get("github") or "",
+        "notify_slack_task_done": p.get("notify_slack_task_done") is not False,
+        "notify_slack_bot_messages": p.get("notify_slack_bot_messages") is not False,
+        "update_draft": p.get("update_draft") is not False,
+        "notify_browser": p.get("notify_browser") is True,
+        "email_digest": p.get("email_digest") is not False,
+        "slack_muted_bots": list(p.get("slack_muted_bots") or []),
+        "phone": p.get("phone") or "",
+        "about": p.get("about") or "",
+        "goals": p.get("goals") or "",
+        "notes": p.get("notes") or "",
+    }
 
 
 def org_view(roster, employees, archived=(), person_id="", team="", bare_people=False):
@@ -489,8 +541,12 @@ def org_view(roster, employees, archived=(), person_id="", team="", bare_people=
     inside = group_and_below(team, roster) if team else set()
     people_rows = []
     for p in visible_people(roster):
-        if team and p.get("team") not in inside and not (inside & set(p.get("primary_for") or [])) \
-                and "*" not in (p.get("primary_for") or []):
+        if (
+            team
+            and p.get("team") not in inside
+            and not (inside & set(p.get("primary_for") or []))
+            and "*" not in (p.get("primary_for") or [])
+        ):
             continue
         row = profile(p)
         row["org_parent"] = org_parent("person", p["id"], roster, employees, archived, bare_people)
@@ -502,24 +558,36 @@ def org_view(roster, employees, archived=(), person_id="", team="", bare_people=
         bot_team = team_of(slug, employees, roster)
         if team and bot_team not in inside:
             continue
-        bot_rows.append({
-            "id": slug,
-            "name": slug,
-            "display_name": _clean((entry or {}).get("display_name")) or slug,
-            "description": _clean((entry or {}).get("description")),
-            "team": bot_team or "",
-            "reports_to": _clean((entry or {}).get("reports_to")),
-            "org_parent": org_parent("bot", slug, roster, employees, archived, bare_people),
-            "owners": [u["id"] for u in primary_users(slug, roster, employees)],
-        })
+        bot_rows.append(
+            {
+                "id": slug,
+                "name": slug,
+                "display_name": _clean((entry or {}).get("display_name")) or slug,
+                "description": _clean((entry or {}).get("description")),
+                "team": bot_team or "",
+                "reports_to": _clean((entry or {}).get("reports_to")),
+                "org_parent": org_parent("bot", slug, roster, employees, archived, bare_people),
+                "owners": [u["id"] for u in primary_users(slug, roster, employees)],
+            }
+        )
     group_rows = []
     for i, (gid, g) in enumerate(((roster or {}).get("org_groups") or {}).items()):
         if team and gid not in inside:
             continue
         boss = person(g.get("reports_to"), roster)
-        parent = ("g:" + g["parent"]) if g.get("parent") else ("p:" + boss["id"]) if boss and not boss.get("hidden") else ""
-        group_rows.append({"id": gid, "name": g.get("name") or gid, "reports_to": g.get("reports_to") or "",
-                           "parent": g.get("parent") or "", "org_parent": parent, "order": g.get("order", i)})
+        parent = (
+            ("g:" + g["parent"]) if g.get("parent") else ("p:" + boss["id"]) if boss and not boss.get("hidden") else ""
+        )
+        group_rows.append(
+            {
+                "id": gid,
+                "name": g.get("name") or gid,
+                "reports_to": g.get("reports_to") or "",
+                "parent": g.get("parent") or "",
+                "org_parent": parent,
+                "order": g.get("order", i),
+            }
+        )
     if wanted:
         keep = {"p:" + wanted}
         changed = True
@@ -544,10 +612,15 @@ def org_view(roster, employees, archived=(), person_id="", team="", bare_people=
         bot_rows = [r for r in bot_rows if "b:" + r["id"] in keep]
         # The groups the people and bots kept are in, and the groups those are in, stay so the chart still reads.
         shown = {gid for r in people_rows + bot_rows for gid in group_chain(r["team"], roster)} | {
-            r["id"] for r in group_rows if "g:" + r["id"] in keep}
+            r["id"] for r in group_rows if "g:" + r["id"] in keep
+        }
         group_rows = [r for r in group_rows if r["id"] in shown]
-    return {"people": people_rows, "bots": bot_rows, "org_groups": group_rows,
-            "teams": dict((roster or {}).get("teams") or {})}
+    return {
+        "people": people_rows,
+        "bots": bot_rows,
+        "org_groups": group_rows,
+        "teams": dict((roster or {}).get("teams") or {}),
+    }
 
 
 def bot_departments(employees, roster, archived=()):

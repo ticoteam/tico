@@ -4,18 +4,26 @@ import contextlib, io, json, os, sys, tempfile, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import fake                    # noqa: E402,F401
+import fake  # noqa: E402,F401
 
-from connectors.mail import Failure, db, gmail as gm                 # noqa: E402
-from connectors.mail import access, audit as audit_log              # noqa: E402
-from connectors.mail import __main__ as cli                          # noqa: E402
+from connectors.mail import Failure, db, gmail as gm  # noqa: E402
+from connectors.mail import access, audit as audit_log  # noqa: E402
+from connectors.mail import __main__ as cli  # noqa: E402
 
 
-HEADERS = {"From": "Acme Growth <hello@acme.io>", "To": "ana@acme.example",
-           "Subject": "Grow your rentals", "Date": "Tue, 02 Sep 2026 09:00:00 -0700",
-           "List-Unsubscribe": "<https://acme.io/u/1>"}
-PLAIN = {"From": "Real Person <person@customer.example>", "To": "ana@acme.example",
-         "Subject": "Pricing question", "Date": "Tue, 02 Sep 2026 09:30:00 -0700"}
+HEADERS = {
+    "From": "Acme Growth <hello@acme.io>",
+    "To": "ana@acme.example",
+    "Subject": "Grow your rentals",
+    "Date": "Tue, 02 Sep 2026 09:00:00 -0700",
+    "List-Unsubscribe": "<https://acme.io/u/1>",
+}
+PLAIN = {
+    "From": "Real Person <person@customer.example>",
+    "To": "ana@acme.example",
+    "Subject": "Pricing question",
+    "Date": "Tue, 02 Sep 2026 09:30:00 -0700",
+}
 
 OLD, MID, NEW = 1788278400000, 1788364800000, 1788368400000
 
@@ -28,12 +36,25 @@ def corpus():
 
 
 def norm(mid="m-plain", **extra):
-    base = {"id": mid, "thread_id": "t-" + mid, "epoch": 100, "date": "2026-09-02T09:30:00-07:00",
-            "from": "person@customer.example", "from_header": "Real Person <person@customer.example>",
-            "to": ["ana@acme.example"], "cc": [], "subject": "Pricing question",
-            "snippet": "How does", "labels": ["INBOX", "UNREAD"], "body": "How does pricing work?",
-            "body_truncated": False, "attachments": [], "list_id": "", "is_internal": False,
-            "unsubscribe": False}
+    base = {
+        "id": mid,
+        "thread_id": "t-" + mid,
+        "epoch": 100,
+        "date": "2026-09-02T09:30:00-07:00",
+        "from": "person@customer.example",
+        "from_header": "Real Person <person@customer.example>",
+        "to": ["ana@acme.example"],
+        "cc": [],
+        "subject": "Pricing question",
+        "snippet": "How does",
+        "labels": ["INBOX", "UNREAD"],
+        "body": "How does pricing work?",
+        "body_truncated": False,
+        "attachments": [],
+        "list_id": "",
+        "is_internal": False,
+        "unsubscribe": False,
+    }
     base.update(extra)
     return base
 
@@ -71,8 +92,7 @@ class KnownSenders(unittest.TestCase):
         self.tmp.cleanup()
 
     def put(self, mid, sender, to, epoch, cc=None, labels=None):
-        msg = norm(mid, epoch=epoch, labels=labels or ["INBOX", "UNREAD"],
-                   **{"from": sender, "to": to, "cc": cc or []})
+        msg = norm(mid, epoch=epoch, labels=labels or ["INBOX", "UNREAD"], **{"from": sender, "to": to, "cc": cc or []})
         db.upsert_message(self.conn, self.OWNER, msg)
 
     def sent(self, mid, to, epoch, cc=None):
@@ -84,22 +104,22 @@ class KnownSenders(unittest.TestCase):
         return {r["id"]: r["known_sender"] for r in db.annotate_known_senders(self.conn, rows)}
 
     def test_a_sender_the_owner_wrote_to_earlier_is_known(self):
-        self.sent("sent",["pat@customer.example"], 100)
+        self.sent("sent", ["pat@customer.example"], 100)
         self.put("later", "pat@customer.example", [self.OWNER], 200)
         self.assertEqual(self.known("later"), {"later": True})
 
     def test_a_message_older_than_the_first_send_is_not_known(self):
-        self.sent("sent",["pat@customer.example"], 100)
+        self.sent("sent", ["pat@customer.example"], 100)
         self.put("early", "pat@customer.example", [self.OWNER], 50)
         self.assertEqual(self.known("early"), {"early": False})
 
     def test_a_copy_to_the_owner_counts_and_so_does_a_cc(self):
-        self.sent("sent",[], 100, cc=["pat@customer.example"])
+        self.sent("sent", [], 100, cc=["pat@customer.example"])
         self.put("later", "pat@customer.example", [self.OWNER], 200)
         self.assertEqual(self.known("later"), {"later": True})
 
     def test_a_new_sender_is_not_known_and_deleted_sends_do_not_count(self):
-        self.sent("sent",["pat@customer.example"], 100)
+        self.sent("sent", ["pat@customer.example"], 100)
         db.mark_deleted(self.conn, self.OWNER, "sent")
         self.put("later", "pat@customer.example", [self.OWNER], 200)
         self.put("new", "kim@other.example", [self.OWNER], 300)
@@ -116,7 +136,7 @@ class KnownSenders(unittest.TestCase):
         self.assertEqual(self.known("later"), {"later": False})
 
     def test_an_inbound_message_claiming_the_owners_from_does_not_make_the_recipient_known(self):
-        self.put("spoof", self.OWNER, ["pat@customer.example"], 100)     # INBOX, never SENT
+        self.put("spoof", self.OWNER, ["pat@customer.example"], 100)  # INBOX, never SENT
         self.put("later", "pat@customer.example", [self.OWNER], 200)
         self.assertEqual(self.known("later"), {"later": False})
 

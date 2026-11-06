@@ -1,4 +1,4 @@
-// Ask (ui/app/ask-panel.js): the person's chat bot on every page. On a computer the "Ask Tico" row at the bottom of
+// Ask (ui/app/ask-panel.js): the person's chat bot on every page. On a computer the "Tico Assistant" row at the bottom of
 // the sidebar, with Search's icon at its end (or ⌘J), opens "Tico Assistant", a panel straight above the row that names the
 // page it sees and sends it with the message, and a close mark takes the row's dot place; on a phone the dot in the middle of the tab bar opens a sheet and closes it again. Its dot flies up to
 // its place beside the panel's name and lands there exactly, and flies back down on close; Tico's turns carry no dot.
@@ -40,7 +40,6 @@ async function open(browser, viewport, state) {
     if (p === '/api/v2/assistant/actions/act9' && method === 'GET') return json({action: state.card});
     if (p === '/api/v2/assistant/actions/act9/confirm') { state.decided.push('act9'); state.card.status = 'done'; return json({action: state.card}); }
     if (p === '/api/v2/needs-you') return json({actor: 'human:ben', count: state.needs.length, version: 'v' + state.needs.length, items: state.needs});
-    if (p === '/api/v2/messages/m9/answer') { state.answers.push(JSON.parse(route.request().postData()).text); state.needs = []; return json({ok: true}); }
     if (p === '/api/v2/tasks/t7/answers') { state.picked.push(JSON.parse(route.request().postData()).answers['tone-2']); state.needs = []; return json({ok: true}); }
     if (p === '/api/v2/assistant/messages') {
       const body = JSON.parse(route.request().postData());
@@ -110,7 +109,8 @@ const words = text => text.trim().split(/\s+/).length;
                  messages: [{body: 'Try a hard reload.', from: 'staff', created_at: ago(20)}]}],
       card: {id: 'act9', summary: 'Add Cara as an admin', method: 'POST', path: '/api/v2/people', status: 'pending', result: null,
              description: 'Add Cara as an admin', diff: [], body: {}, proposed_via: 'botops', created_at: ago(13)},
-      needs: [{kind: 'ask', id: 'm9', created_at: ago(12), ask: {id: 'm9', sender_id: 'bot:botops', recipient_id: 'human:ben', body: 'Which inbox should the bot answer?', created_at: ago(12), refs: {}}},
+      needs: [{kind: 'question', id: 'm9', created_at: ago(12), ask: {id: 'm9', sender_id: 'bot:botops', recipient_id: 'human:ben', body: 'Which inbox should the bot answer?', created_at: ago(12),
+               refs: {questions: [{id: 'inbox', question: 'Which inbox should the bot answer?', options: []}]}}},
               {kind: 'question', id: 't4', created_at: now, ask: {id: 'q4', sender_id: 'bot:coo', recipient_id: 'human:ben', body: 'Two launch questions', created_at: now,
                refs: {questions: [{question: 'Launch day?', options: [{label: 'Mon'}, {label: 'Tue'}]}, {question: 'Price?', options: [{label: '$9'}, {label: '$19'}]}]}}}]};
     let {page, errors} = await open(browser, {width: 1280, height: 900}, state);
@@ -158,7 +158,7 @@ const words = text => text.trim().split(/\s+/).length;
     // The flight is quick: under 350 ms however far it goes.
     const {took} = await flight(page, '#ask-panel .ask-head [data-ask-dot]', async () => { await fab.click(); await panel.waitFor(); });
     assert.ok(took <= 350, `a quick flight: ${took}ms`);
-    assert.deepEqual([await fab.getAttribute('aria-expanded'), await fab.getAttribute('aria-label')], ['true', 'Close Ask Tico']);
+    assert.deepEqual([await fab.getAttribute('aria-expanded'), await fab.getAttribute('aria-label')], ['true', 'Close Tico Assistant']);
     assert.equal(await fab.isVisible(), true, 'the row stays');
     assert.equal(await fab.evaluate(el => getComputedStyle(el.querySelector('.ask-x')).opacity), '1', 'a close mark holds its place');
     const above = await page.evaluate(() => { const b = s => document.querySelector(s).getBoundingClientRect(), p = b('#ask-panel'), r = b('#ask-row');
@@ -200,11 +200,10 @@ const words = text => text.trim().split(/\s+/).length;
     const several = thread.locator('.ask-card[data-ask-q="t4"]');
     assert.equal(await several.locator('a[href="#/task/t4"]').count(), 1);
     assert.equal(await several.locator('form').count(), 0);
+    // A question with no options is answered on its task: the card links there, with no words to send here.
     const question = thread.locator('.ask-card', {hasText: 'Which inbox should the bot answer?'});
-    await question.getByRole('textbox', {name: 'Answer BotOps'}).fill('support@acme.test');
-    await question.getByRole('button', {name: 'Send'}).click();
-    await question.waitFor({state: 'detached'});
-    assert.deepEqual(state.answers, ['support@acme.test']);
+    assert.equal(await question.locator('a[href="#/task/m9"]').count(), 1);
+    assert.equal(await question.getByRole('textbox').count(), 0);
     // Three picks or more are a list and Send, and the one chosen survives the thread being drawn again.
     const need = (id, extra) => ({kind: 'question', id, created_at: now, ask: {id: 'q' + id, sender_id: 'bot:botops', recipient_id: 'human:ben', created_at: now, ...extra}});
     state.picked = [];
@@ -212,7 +211,7 @@ const words = text => text.trim().split(/\s+/).length;
     await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
     const tone = thread.locator('.ask-card[data-ask-q="t7"]');
     await tone.locator('select').selectOption('2');
-    state.needs = [...state.needs, {...need('m10', {body: 'Anything else?', refs: {}}), kind: 'ask'}];
+    state.needs = [...state.needs, need('m10', {body: 'Anything else?', refs: {questions: [{id: 'more', question: 'Anything else?', options: [{label: 'Yes'}, {label: 'No'}]}]}})];
     await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
     await thread.locator('.ask-card[data-ask-q="m10"]').waitFor();
     assert.equal(await tone.locator('select').inputValue(), '2', 'the pick stays across a redraw');
@@ -273,7 +272,8 @@ const words = text => text.trim().split(/\s+/).length;
     await page.close();
 
     // A phone: the dot in the middle of the tab bar opens a full page above the tab bar, and closes it.
-    const ask = (id, who, body) => ({kind: 'ask', id, created_at: now, ask: {id, sender_id: who, recipient_id: 'human:ben', body, created_at: now, refs: {}}});
+    const ask = (id, who, body) => ({kind: 'question', id, created_at: now, ask: {id, sender_id: who, recipient_id: 'human:ben', body, created_at: now,
+      refs: {questions: [{id: 'q' + id, question: body, options: []}]}}});
     state = {messages: [msg('p1', 'human:ben', 'Our key is sk-live1234567890abcdef, board blank', ago(5)), msg('p2', 'bot:coo', 'Try a reload.', ago(4))],
       sent: [], read: [], decided: [], answers: [], tickets: [], card: null,
       needs: [ask('m8', 'bot:botops', 'Which inbox should the bot answer?'), ask('m7', 'bot:coo', 'Ship the launch post today?')]};
@@ -307,7 +307,7 @@ const words = text => text.trim().split(/\s+/).length;
     const sheet = await page.locator('#ask-panel').boundingBox(), bar = await page.locator('#mobile-nav').boundingBox();
     assert.ok(sheet.x === 0 && sheet.y === 0 && sheet.width === 390 && Math.abs(sheet.y + sheet.height - bar.y) < 2, `a full page above the tab bar (${JSON.stringify([sheet, bar])})`);
     assert.equal(await page.locator('#ask-panel').evaluate(el => getComputedStyle(el).borderTopLeftRadius), '0px', 'square, like a page');
-    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Close Ask Tico', 'close']);
+    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Close Tico Assistant', 'close']);
     assert.equal(await page.locator('#ask-panel').evaluate(el => [...el.querySelectorAll('*')].every(x => x.getBoundingClientRect().right <= innerWidth + 1)), true, 'no horizontal scroll');
     assert.equal(await page.locator('#ask-panel [data-ask-loop], #ask-panel [data-ask-requests]').count(), 0, 'no support links on a phone either');
     // Its box is one line, as the bot chat's was: Attach, the words, Send in one row, not the words over the buttons.

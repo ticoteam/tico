@@ -112,7 +112,7 @@ async function wizard(browser, theme) {
   await page.evaluate(() => { location.hash = '#/tasks'; });
   await page.locator('#side [data-nav="tasks"]').waitFor();
   assert.equal(await page.locator('#changelog-notice').isVisible(), true);
-  assert.ok((await shown(page, '#side .side-scroll > .nav-link')).includes('overview'));
+  assert.ok((await shown(page, '#side .side-scroll > .nav-link, #side .side-scroll > .nav-row > .nav-link')).includes('overview'));
   await page.locator('#usage-notice').waitFor({state: 'visible'});
   assert.deepEqual(notices, ['shown'], 'and counts as seen only then');
   await shot(page, `left-setup-desktop-${theme}`);

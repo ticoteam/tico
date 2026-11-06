@@ -216,18 +216,18 @@
           - {id: e41d8a66-7000-4000-8000-000000000003, short_id: e41d8a66, title: "Photos for the 2025 offsite", status: waiting, owner: "human:dana", requester: "human:dana", note: "Waiting on Dana to pick photos.", created: "2026-04-11T14:00:00Z", updated: "2026-06-30T14:00:00Z"}
           - {id: b92f5e13-7000-4000-8000-000000000004, short_id: b92f5e13, title: "Reply to the Harbor Co renewal", status: waiting, owner: "human:dana", requester: "human:dana", note: "Harbor Co asked for confirmation of the renewal terms.", created: "2026-10-29T15:00:00Z", updated: "2026-10-30T13:10:00Z"}
         next_offset: null
+    - match: '^task close 9b14e7d0\S*'
+      out: {ok: true, closed: 1, answered: "Oct 8", note: "answered as the person, via Assistant"}
     - match: '^task (bulk close|close)'
       out: {ok: true, closed: 3, note: "closed as the person, via Assistant"}
     - match: '^approval decline (2d4b6f81|2e7a0c93)\S*'
       out: {ok: true, status: declined, decided_by: "human:dana (via Assistant)"}
-    - match: '^question answer 9b14e7d0\S*'
-      out: {ok: true, answered: "Oct 8"}
     - match: '^assistant propose'
       out: {ok: true, proposal: {id: prop_0931, status: waiting_for_confirm}}
   must:
     - '^task (bulk close|close)\b'
     - '^approval decline (2d4b6f81|2e7a0c93)\S*'
-    - '^question answer 9b14e7d0\S*'
+    - '^task close 9b14e7d0\S*'
   must_not:
     - '^assistant propose'
     - '^approval approve'

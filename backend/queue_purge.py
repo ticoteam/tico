@@ -34,10 +34,13 @@ def apply(c, bots):
     marks = ",".join("?" * len(bots))
     still_running = c.execute(
         f"SELECT count(*) FROM jobs WHERE bot_id IN ({marks}) AND state IN ({','.join('?' * len(RUNNING))})",
-        (*bots, *RUNNING)).fetchone()[0]
+        (*bots, *RUNNING),
+    ).fetchone()[0]
     rows = c.execute(
         f"""SELECT j.id, m.sender_id, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id
-            WHERE j.state='queued' AND j.bot_id IN ({marks})""", bots).fetchall()
+            WHERE j.state='queued' AND j.bot_id IN ({marks})""",
+        bots,
+    ).fetchall()
     cancel, kept_people = [], 0
     for row in rows:
         if _from_a_person(row):
@@ -48,5 +51,6 @@ def apply(c, bots):
     if cancel:
         cancelled = c.execute(
             f"UPDATE jobs SET state='canceled', held=0 WHERE state='queued' AND id IN ({','.join('?' * len(cancel))})",
-            cancel).rowcount
+            cancel,
+        ).rowcount
     return {"cancelled": cancelled, "kept_people": kept_people, "still_running": still_running}

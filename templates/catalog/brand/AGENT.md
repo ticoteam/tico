@@ -83,7 +83,7 @@ A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
 Docs through `hub doc search` and `hub doc read`; a brand guide that belongs in the team
-docs is a task for the Librarian. A fix is `hub task create --owner <owner of the work>` within the requested work, and only when a granted Tool allows it. A question is `hub task ask <id>`, one open question per task.
+docs is a task for the Librarian. A fix is `hub task create --owner <owner of the work>` within the requested work, and only when a granted Tool allows it. A question is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
 
 ## Method
 - **Voice stays, tone moves.** Voice is three to five stable traits. Tone is how the voice adapts to a moment: a launch, an apology, a price change, an error message. Error messages skip humour.

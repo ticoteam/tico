@@ -30,8 +30,7 @@ def release(value):
 
 
 def browser_config(settings, actor):
-    if (settings.observability_environment not in ENVIRONMENTS
-            or len(settings.observability_id_secret) < 32):
+    if settings.observability_environment not in ENVIRONMENTS or len(settings.observability_id_secret) < 32:
         return {}
     host = settings.posthog_host.rstrip("/")
     key = settings.posthog_key
@@ -40,18 +39,25 @@ def browser_config(settings, actor):
     dsn = public_dsn(settings.sentry_dsn)
     if not key and not dsn:
         return {}
-    distinct_id = "tico:" + hmac.new(settings.observability_id_secret.encode(), actor.encode(),
-                                     hashlib.sha256).hexdigest()
-    return {"app": "tico", "environment": settings.observability_environment,
-            "distinct_id": distinct_id, "posthog_key": key, "posthog_host": host,
-            "sentry_dsn": dsn, "release": release(settings.release_id)}
+    distinct_id = (
+        "tico:" + hmac.new(settings.observability_id_secret.encode(), actor.encode(), hashlib.sha256).hexdigest()
+    )
+    return {
+        "app": "tico",
+        "environment": settings.observability_environment,
+        "distinct_id": distinct_id,
+        "posthog_key": key,
+        "posthog_host": host,
+        "sentry_dsn": dsn,
+        "release": release(settings.release_id),
+    }
 
 
 def staff_display_name(c, who):
     """Only admitted staff metadata; normalized ID-title names lack provenance."""
     if who.role not in ("human", "owner") or not who.actor.startswith("human:"):
         return ""
-    pid = who.actor[len("human:"):]
+    pid = who.actor[len("human:") :]
     human = c.execute("SELECT email FROM humans WHERE id=?", (pid,)).fetchone()
     if not human:
         return ""
@@ -82,8 +88,12 @@ def staff_display_name(c, who):
             if name and name.casefold() != pid.title().casefold():
                 return name
     email = bounded(who.email)
-    if (email and email == who.email and email.lower() == str(human["email"] or "").lower()
-            and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)):
+    if (
+        email
+        and email == who.email
+        and email.lower() == str(human["email"] or "").lower()
+        and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)
+    ):
         return email
     return ""
 
@@ -94,7 +104,7 @@ SOURCE = re.compile(r"[a-z][a-z_]{0,31}")
 ROUTE = re.compile(r"(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /[A-Za-z0-9_{}/.:-]{0,200}")
 # A Rust runner panic's location: a file of the runner's own crate.
 RUNNER_FILE = re.compile(r"runner-rs/src/[a-z0-9_]+(?:/[a-z0-9_]+)*\.rs")
-RUNNER_PANICS = 5        # reports kept from one runner post
+RUNNER_PANICS = 5  # reports kept from one runner post
 # The hub's own limits on what a runner token can send, whatever the runner does: one report per file and line an
 # hour, at most RUNNER_HOURLY reports per runner an hour.
 RUNNER_REPEAT = 3600
@@ -138,8 +148,11 @@ def sanitize_event(event, hint=None):
             kind = value["type"]
         for frame in value.get("stacktrace", {}).get("frames", []):
             name = frame.get("filename")
-            if ((name in SOURCE_FILES or (isinstance(name, str) and RUNNER_FILE.fullmatch(name)))
-                    and type(frame.get("lineno")) is int and 0 < frame["lineno"] < 1_000_000):
+            if (
+                (name in SOURCE_FILES or (isinstance(name, str) and RUNNER_FILE.fullmatch(name)))
+                and type(frame.get("lineno")) is int
+                and 0 < frame["lineno"] < 1_000_000
+            ):
                 kept = {"filename": name, "lineno": frame["lineno"], "in_app": True}
                 if isinstance(frame.get("function"), str) and NAME.fullmatch(frame["function"]):
                     kept["function"] = frame["function"]
@@ -162,7 +175,7 @@ class Observability:
         self.client = None
         self.release = ""
         self.instance = ""
-        self.runner_sent = {}     # (runner, file, line) -> when, then (runner,) -> [when, ...]
+        self.runner_sent = {}  # (runner, file, line) -> when, then (runner,) -> [when, ...]
         self.runner_lock = threading.Lock()
 
     def start(self):
@@ -170,21 +183,34 @@ class Observability:
         if not dsn or self.settings.observability_environment not in ENVIRONMENTS:
             return
         from .releases import version
+
         self.release = release(self.settings.release_id) or release(version())
         # Unnamed, the team's name; an install that never set one has the stock name, so its opaque id instead.
         named = self.settings.company_name if self.settings.company_name != DEFAULT_COMPANY_NAME else ""
-        self.instance = (instance(self.settings.instance_name) or instance(named)
-                         or instance(self.settings.environment_id))
+        self.instance = (
+            instance(self.settings.instance_name) or instance(named) or instance(self.settings.environment_id)
+        )
         try:
             from sentry_sdk import Client
+
             self.client = Client(
-                dsn=dsn, environment=self.settings.observability_environment,
+                dsn=dsn,
+                environment=self.settings.observability_environment,
                 release=self.release or None,
-                default_integrations=False, auto_enabling_integrations=False,
-                send_default_pii=False, include_local_variables=False, include_source_context=False,
-                max_breadcrumbs=0, traces_sample_rate=0, profiles_sample_rate=0,
-                auto_session_tracking=False, send_client_reports=False,
-                enable_logs=False, enable_metrics=False, server_name="", before_send=sanitize_event,
+                default_integrations=False,
+                auto_enabling_integrations=False,
+                send_default_pii=False,
+                include_local_variables=False,
+                include_source_context=False,
+                max_breadcrumbs=0,
+                traces_sample_rate=0,
+                profiles_sample_rate=0,
+                auto_session_tracking=False,
+                send_client_reports=False,
+                enable_logs=False,
+                enable_metrics=False,
+                server_name="",
+                before_send=sanitize_event,
                 before_breadcrumb=no_breadcrumb,
             )
         except Exception:
@@ -204,15 +230,26 @@ class Observability:
                 except ValueError:
                     filename = ""
                 if filename in SOURCE_FILES:
-                    frames.append({"filename": filename, "lineno": tb.tb_lineno,
-                                   "function": tb.tb_frame.f_code.co_name})
+                    frames.append(
+                        {"filename": filename, "lineno": tb.tb_lineno, "function": tb.tb_frame.f_code.co_name}
+                    )
                 tb = tb.tb_next
-            event = {"tags": {"source": source, "status": str(status), "instance": self.instance,
-                              "route": route, "runner": runner},
-                     "environment": self.settings.observability_environment,
-                     "release": self.release,
-                     "exception": {"values": [{"type": type(exc).__name__ if exc is not None else "",
-                                               "stacktrace": {"frames": frames}}]}}
+            event = {
+                "tags": {
+                    "source": source,
+                    "status": str(status),
+                    "instance": self.instance,
+                    "route": route,
+                    "runner": runner,
+                },
+                "environment": self.settings.observability_environment,
+                "release": self.release,
+                "exception": {
+                    "values": [
+                        {"type": type(exc).__name__ if exc is not None else "", "stacktrace": {"frames": frames}}
+                    ]
+                },
+            }
             # Sanitize before handing anything to the SDK, and again at its final hook.
             clean = sanitize_event(event)
             if clean:
@@ -235,7 +272,7 @@ class Observability:
     def runner_allows(self, runner, file, line, now):
         with self.runner_lock:
             sent = self.runner_sent
-            if len(sent) > 10_000:   # bounded memory: forget what is past both windows
+            if len(sent) > 10_000:  # bounded memory: forget what is past both windows
                 for key in [k for k, v in sent.items() if not isinstance(v, list) and now - v >= RUNNER_REPEAT]:
                     del sent[key]
             if now - sent.get((runner, file, line), -RUNNER_REPEAT) < RUNNER_REPEAT:
@@ -269,6 +306,7 @@ def reporting_settings(env=None):
     from contextlib import closing
     from .config import Settings
     from .replication import rehearsal_on
+
     env = os.environ if env is None else env
     db = Path(env.get("TICO_DB") or Path(env.get("TICO_DATA_DIR") or "/data") / "hub.sqlite")
     environment_id = env.get("TICO_ENVIRONMENT_ID", "").strip()
@@ -280,16 +318,21 @@ def reporting_settings(env=None):
         except (sqlite3.Error, ValueError, TypeError):
             environment_id = ""
     company = env.get("TICO_TEAM_NAME", "").strip() or env.get("TICO_COMPANY_NAME", "").strip()
-    return Settings(db_path=db, environment_id=environment_id if isinstance(environment_id, str) else "",
-                    company_name=company or DEFAULT_COMPANY_NAME,
-                    release_id=env.get("TICO_RELEASE", ""), instance_name=env.get("TICO_INSTANCE_NAME", "").strip(),
-                    observability_environment=env.get("TICO_OBSERVABILITY_ENVIRONMENT", ""),
-                    sentry_server_dsn="" if rehearsal_on(env) else env.get("TICO_SENTRY_SERVER_DSN", ""))
+    return Settings(
+        db_path=db,
+        environment_id=environment_id if isinstance(environment_id, str) else "",
+        company_name=company or DEFAULT_COMPANY_NAME,
+        release_id=env.get("TICO_RELEASE", ""),
+        instance_name=env.get("TICO_INSTANCE_NAME", "").strip(),
+        observability_environment=env.get("TICO_OBSERVABILITY_ENVIRONMENT", ""),
+        sentry_server_dsn="" if rehearsal_on(env) else env.get("TICO_SENTRY_SERVER_DSN", ""),
+    )
 
 
 def main(argv=None):
     """`python -m backend.observability test`: send one harmless error, to see that reports arrive and how they look."""
     import argparse
+
     parser = argparse.ArgumentParser(prog="python -m backend.observability")
     parser.add_argument("command", choices=["test"])
     parser.parse_args(argv)
@@ -306,7 +349,9 @@ def main(argv=None):
     if not event_id:
         print("The test error was not sent.")
         return 1
-    print(f"Sent test error {event_id} (release {telemetry.release or 'none'}, instance {telemetry.instance or 'none'}).")
+    print(
+        f"Sent test error {event_id} (release {telemetry.release or 'none'}, instance {telemetry.instance or 'none'})."
+    )
     return 0
 
 

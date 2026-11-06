@@ -27,13 +27,38 @@ npx playwright install chromium
 npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cjs)
 ```
 
-Run both locally before you open a pull request. GitHub Actions runs them again on the pull request (the PR checks
-workflow), so a failure shows there too. The default run leaves out
+Run both locally before you open a pull request. GitHub Actions lints the pull request again (the PR checks workflow), and the merge queue runs the selected
+tests on the merged result before a change lands, so a failure shows there too. The default run leaves out
 tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and the browser scripts outside the core
 list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run them, and the release check does. Run
 them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
 for one file, `node scripts/ui-tests.cjs <name>` for one browser script. If you touch `app/`, also run `cargo check`
 there.
+
+## Before you push
+
+`scripts/check.sh` is the fast local gate. It runs each static check that applies to what you changed (the Python
+lint baseline, shellcheck, actionlint, cargo fmt, the migration order, the UI API types and the pyright boundary
+modules), one line per check with its time, and exits non-zero if one fails. It compares against the merge-base
+with origin/main, so committed, uncommitted and new files are all checked. `scripts/check.sh --all` runs every check
+on every tracked file; CI runs the same checks. Turn on the pre-push hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+After that, each `git push` runs `scripts/check.sh` first. To push without it once, use `git push --no-verify`.
+shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
+`scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
+
+The UI's JavaScript has a type check and a Biome lint, both seconds long: `bash scripts/check_ui_types.sh` and
+`bash scripts/check_ui_lint.sh`. Each counts findings per file against `ui/types-baseline.json` or
+`ui/lint-baseline.json`. The counts only shrink: after you fix findings, lower the baseline with
+`python3 scripts/ui_baseline.py tsc --write` (or `biome`).
+The UI's API calls are checked against the backend's routes by `bash scripts/check_ui_routes.sh`: it imports the app and
+walks its routes (no server), and counts the calls that match no route per file in `ui/routes-baseline.json`, which
+only shrinks the same way. Fix a call by pointing it at the route it should reach; the baseline is written with
+`python3 scripts/check_ui_routes.py --write`.
 
 ## Profiling API test setup
 
@@ -96,6 +121,9 @@ company already owns, so their commits need no sign-off, and their pull requests
   wording or docs prose, trivial getters or exhaustive parametrizations of one path. Mark a test
   `@pytest.mark.slow` if it needs real git, Docker or a server.
 - Added or changed an icon in `ui/`? Run `python3 scripts/build-icon-font.py` to rebuild the icon font subset (a test fails until you do).
+- New UI files are TypeScript (`ui/app/name.ts`, strict types, no `any`). After `npm ci`, `npm run build:ui` compiles
+  them to `build/ui/` (`npm run watch:ui` while editing); the server will not serve a stale build.
+  `bash scripts/check_ui_types.sh` type-checks them.
 - Keep the tests green, and do not add a dependency, a network call in the UI or a build step
   without saying why.
 - Comments explain why, in the present tense. They do not name who asked or when.
@@ -103,12 +131,22 @@ company already owns, so their commits need no sign-off, and their pull requests
   the fictional team Acme (`acme.example`).
 - Describe the behavior change and how you checked it in the pull request.
 
+## How we work
+
+- Trunk-based: everything lands on `main` through short-lived branches named `<who>/<topic>`, one ticket per PR.
+- Draft PRs run no CI. Mark the PR ready for review to start the lint checks; each later push runs only those.
+- Once the PR is reviewed and the tests you touched pass with `scripts/remote.py`, the author marks it ready and
+  merges it with `gh pr merge <N> --merge` (`--squash` and `--auto` also enqueue). The merge queue runs the full selected checks on the
+  merged result before the change lands on main.
+- If a release candidate goes red because of your merge, fixing it comes before anything else.
+
 ## Releases
 
 Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's notes after it is published.
 
-A release is a version tag. Once the release checks are green on the frozen commit, the Release
-Manager pushes `vX.Y.Z` on `main`. The tag builds the Docker images and publishes the GitHub release,
-and running installs then offer the update; the version's section in [CHANGELOG.md](CHANGELOG.md)
-follows. Contributors do not tag.
-The steps are in [docs/releasing.md](docs/releasing.md).
+A release is a version tag, and contributors do not tag. Tico releases from release windows (weekdays 07:30, 11:00,
+14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00):
+GitHub Actions validates main's head, ships the first green candidate to Tico Team's install, and promotes it to
+stable after it has baked. A hotfix is for major production issues only. The Release Manager bot no longer tags or
+rolls out Tico releases; it only monitors them. The details are in
+[docs/releasing.md](docs/releasing.md#release-windows).

@@ -69,7 +69,7 @@ function countWatch(root, sel, keyOf, {when = () => true, page = false} = {}) {
 }
 countWatch($('#tree'), '.cnt', b => b.closest('[data-org]')?.dataset.org || '');
 const motionTasksPage = () => /^#\/(tasks|task\/)/.test(location.hash);
-countWatch($('#main'), '.tl-tabs .cnt, .bcol > header .cnt', b => {
+countWatch($('#main'), '.tl-scope .cnt, .bcol > header .cnt', b => {
   const tab = b.closest('[data-view]'), col = b.closest('.bcol');
   return tab ? 'view:' + tab.dataset.view : col ? 'col:' + col.dataset.col : '';
 }, {when: motionTasksPage, page: true});
@@ -86,7 +86,7 @@ countWatch($('#main'), '.tl-tabs .cnt, .bcol > header .cnt', b => {
   bar.setAttribute('aria-hidden', 'true');
   bar.hidden = true;
   scroller.prepend(bar);
-  const ROWS = ':scope > .nav-link.cur, #tree a.node.cur, #tree a.dept-label.cur, .inbox-list a.cur';
+  const ROWS = ':scope > .nav-link.cur, :scope > .nav-row > .nav-link.cur, :scope > .rd-lib > .nav-link.cur, #tree a.node.cur, #tree a.dept-label.cur, .inbox-list a.cur';
   let at = '', queued = 0;
   const place = () => {
     queued = 0;

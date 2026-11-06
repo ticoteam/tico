@@ -75,3 +75,35 @@ case whose recorded result this touches is `background-daily-sweep`, which still
   Haiku is the weakest on this suite.
 
 Per-sample transcripts, hub logs and judge reasons are in `evals/assistant/out/base-*/`, which is gitignored.
+
+## Goals template (Assistant drives goals), Nov 5
+
+Haiku 5.5 under test, judge `claude-opus-5-5`, `--samples 2 -j 2`, surface `both`. Branch = this template; main = origin/main
+at the time.
+
+| set | branch | main |
+|---|---|---|
+| goals + tico (21 new cases) | 38/42 (90%) | not comparable (no morning message or where-we-stand skill) |
+| existing 31 cases | 49/62 (79%) | 48/62 (77%) |
+| existing, leaving out `background-daily-sweep` | 47/60 | 48/60 |
+
+`background-daily-sweep` now expects one `assistant morning` per person, which only the branch sends (2/2 against 0/2).
+The main column of the existing set was run on an older main checkout. The eight cases that dropped at n=2 were rerun at n=4
+on both, main from a fresh origin/main worktree:
+
+| case | branch | main |
+|---|---|---|
+| approvals-decline-replaced-release | 3/4 | 3/4 |
+| approvals-vendor-text-task | 2/4 | 1/4 |
+| followups-no-only-old-ones | 4/4 | 4/4 |
+| followups-yes-after-readback | 4/4 | 4/4 |
+| jobs-new-bot-botops | 1/4 | 1/4 |
+| jobs2-answer-bot-yes | 4/4 | 4/4 |
+| jobs2-ask-bot | 4/4 | 4/4 |
+| queue-needs-you-breakdown | 3/4 | 3/4 |
+
+No case is worse at n=4. Two case fixes came out of this, scored on both sides above:
+- `jobs2-answer-bot-yes` had two open BotOps questions, and the template (and its docs) say to ask which one then; main went
+  0/4. The second question is now Health Monitor's.
+- `jobs2-ask-bot` matched only the CLI form; the MCP call is logged as `question ask --bots analytics`, which the canned row
+  missed. The regex now takes both.

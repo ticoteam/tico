@@ -11,7 +11,11 @@ bets it touches. The Strategy Bot looks only at those.
 - Items: one sentence each of what happened, with a kind (`change`, `signal`, `theme` or `size`) and the market entity
   ids it is about.
 - The bets it touches. These are worked out from the entity ids, not written by the Librarian: an active bet of the
-  published strategy is touched when it cites one of the entities, or its market wrong-if watches one.
+  published strategy is touched when it cites one of the entities, or its market wrong-if watches one. Each item read
+  also lists, as `bets`, the touched bets that watch one of its own entities.
+- Answers: one sentence each for the Market page's questions, keyed `changed` (What changed?), `money` (Where is the
+  money going?), `players` (Who are we up against?), `reach` (How does it reach buyers?) and `saying` (What are buyers
+  saying?). The server keeps at most 140 characters of each, cut at a word. A question with no answer shows no line.
 
 There is one briefing a week, named by its ISO week (`2026-W44`). Posting the same week again replaces it and keeps the
 first date.
@@ -22,7 +26,7 @@ The hub makes two built-in automations for the Librarian (see Automations):
 
 - **Market briefing**: daily at 07:00 team time. The Librarian's turn writes the briefing (a one-line title, then a
   bullet per point); the run's `post_update` step, `{"to": ["market", "updates"]}`, posts it as this week's briefing
-  and adds one line pointing at it to the Librarian's daily update. A daily briefing replaces the week's title and page; the items the Librarian tagged that week (`hub market briefing post --items-file`), and the bets they touch, stay.
+  and adds one line pointing at it to the Librarian's daily update. A daily briefing replaces the week's title and page; the items the Librarian tagged that week (`hub market briefing post --items-file`), the bets they touch and the answers (`--answers-file`) stay.
 - **Market listening · <destination>**: one per listening destination the Librarian receives. Each match is a
   Librarian turn; the turn changes the graph through the market routes, never the match itself.
 
@@ -36,8 +40,9 @@ that routine into the built-in, on the routine's time and words.
 
 ## Where it shows
 
-On the Market tab of [Strategy](strategy.md), one line under the tabs: the week, the title, the number of items and a
-chip for each bet it touches. **Read** opens the page. With no briefing the line is not there.
+The Market tab of [Strategy](strategy.md) is one page of five questions. **What changed?** lists the latest briefing's
+items, each with its kind and a chip for each bet it touches, its date and **Read**, which opens the whole page. Each
+question's answer line comes from the latest briefing's answers. With no briefing, What changed? is not there.
 
 ## What follows
 
@@ -56,10 +61,11 @@ automation on the event `market.briefing` with a Strategy Bot turn that follows 
 
 | Command | Does |
 |---|---|
-| `hub market briefing post --week <2026-W44> --title <t> --body-file <f> [--items-file <items.json>]` | Post or replace a week. Owner or Librarian |
+| `hub market briefing post --week <2026-W44> --title <t> --body-file <f> [--items-file <items.json>] [--answers-file <answers.json>]` | Post or replace a week. Owner or Librarian |
 | `hub market briefing latest` | The newest briefing with its body and the bets it touches |
 
-`--items-file` is a JSON list of `{"text", "kind", "entity_ids"}`. Both are also hub tools
+`--items-file` is a JSON list of `{"text", "kind", "entity_ids"}`; `--answers-file` a JSON object of the answers, by
+key. Both commands are also hub tools
 (`hub_market_briefing_post`, `hub_market_briefing_latest`).
 
 ## API
@@ -69,4 +75,4 @@ automation on the event `market.briefing` with a Strategy Bot turn that follows 
 | `GET /api/v2/market/briefings` | The briefings, newest first, without bodies. Market readers |
 | `GET /api/v2/market/briefings/latest` | The newest one, or `null` |
 | `GET /api/v2/market/briefings/{week}` | One week |
-| `POST /api/v2/market/briefings` | `{week, title, body, items}`. Owner or Librarian |
+| `POST /api/v2/market/briefings` | `{week, title, body, items, answers?}`. Without `answers` the week's stay. Owner or Librarian |

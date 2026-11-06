@@ -36,7 +36,7 @@ function thvDraftSave(view) {
 
 // `opts`: {id} a thread, {home: actor} that teammate's Home, or {dm: actor} the viewer's DM with them (made on the
 // first message). {card: true} keeps the list to a box inside a page; {header: false} leaves out the title line, and
-// {header: 'compact'} keeps only its actions (call, Members, the thread menu), drawn into `actsHost` when given (a bar
+// {header: 'compact'} keeps only its actions (call, Members, the thread menu; {menu: false} leaves the menu out), drawn into `actsHost` when given (a bar
 // the page owns). {compactEmpty: true} draws a Home with no messages as its composer alone, never a blank timeline, and
 // hides the card (`hideGone`) from a viewer who can't post either. {focus: message id} shows that message. {goals: slug}
 // (a bot's Home or DM) brings back the old chat's bar (pill.js): the ways to send (Set as goal among them) and the
@@ -61,7 +61,7 @@ function threadMount(host, opts = {}) {
 }
 // Everything that belongs to one conversation: a view that moves to another (a fresh DM) starts from this again.
 const thvConvFresh = () => ({id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading', execution: null,
-  readAt: 0, openSeq: 0, readSent: new Map(), marks: new Map(), pending: [], replyTo: null, botStatus: null, openUpdates: new Set(),
+  readAt: 0, openSeq: 0, readSent: new Map(), marks: new Map(), pending: [], replyTo: null, botStatus: null, openUpdates: new Set(), openLines: new Set(),
   flash: '', focus: '', error: '', memberList: null, memberMore: false, run: {openSteps: new Set(), steps: {}, openFolds: new Set()}});
 function threadUnmount(view) {
   if (!view || view.gone) return;
@@ -230,9 +230,11 @@ async function thvFocus(view, mid, {flash = false, toSeq = 0} = {}) {
   if (!view.messages.some(m => m.id === mid)) return false;
   thvUpdateReveal(view, mid);
   if (flash) thvFlash(view, mid); else { view.focus = mid; thvDraw(view); }
-  view.el.querySelector(`.th-msg[data-mid="${CSS.escape(mid)}"]`)?.scrollIntoView({block: 'center'});
+  view.el.querySelector(thvRowSel(mid))?.scrollIntoView({block: 'center'});
   return true;
 }
+// A message's row, whether a message or a gray line (sourceLineHTML).
+const thvRowSel = mid => `.th-msg[data-mid="${CSS.escape(mid)}"], .th-line[data-mid="${CSS.escape(mid)}"]`;
 // A quoted message, brought into view and lit for a moment.
 function thvFlash(view, mid) {
   view.flash = mid; thvDraw(view);
@@ -240,7 +242,7 @@ function thvFlash(view, mid) {
   view.flashTimer = setTimeout(() => { if (view.flash === mid) { view.flash = ''; thvDraw(view); } }, 1600);
 }
 async function thvGoTo(view, mid) {
-  const at = () => view.el.querySelector(`.th-msg[data-mid="${CSS.escape(mid)}"]`);
+  const at = () => view.el.querySelector(thvRowSel(mid));
   // Found after the flash's redraw, which may put a new node in the old one's place.
   if (at()) { thvFlash(view, mid); at()?.scrollIntoView({block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'}); return; }
   if (await thvFocus(view, mid, {flash: true}) || view.gone) return;
@@ -273,7 +275,7 @@ function thvActsHTML(view) {
     : members ? '<button type="button" class="ghost small" data-thv-members>Members</button>' : '';
   return `${callHeadHTML(view)}
       ${people}
-      <button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="dialog" aria-label="Thread settings" title="Thread settings"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`;
+      ${view.opts.menu === false ? '' : `<button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="dialog" aria-label="Thread settings" title="Thread settings"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`}`;
 }
 // The viewer's own pin, on a thread the rail lists (a server with pins says `me.pinned`).
 const thvPinnable = t => !!t?.me && 'pinned' in t.me && threadOnRail(t);
@@ -346,6 +348,9 @@ function thvIsNew(view, m) {
   return m.seq > mark && m.seq <= view.openSeq;
 }
 const thvBot = a => String(a || '').startsWith('bot:');
+// Who a message is from, as its header and a quote of it name it: the Assistant relaying for a person reads as
+// "Ana's Assistant"; a row the server wrote has no sender (rowSource).
+const thvWhoName = m => { const src = rowSource(m); return src.kind === 'assistant_for' || isSourceLine(m) ? src.name : actorName(m.sender_id); };
 function thvWhoHTML(a) {
   const slug = actorSlug(a), pid = actorPerson(a);
   if (slug && S.emps.some(e => e.id === slug)) return `<a class="th-who" href="#/bot/${esc(slug)}">${esc(actorName(a))}</a>`;
@@ -380,7 +385,7 @@ function thvReactionsHTML(m) {
 // ---- replies: one line quoting the message answered
 // Plain words of a message's start, as a quote shows it.
 const thvExcerpt = text => chatLine(String(text || '').replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>~|]/g, ''), 120);
-const thvQuoteFrom = t => t.hidden ? {id: t.id, hidden: true} : {id: t.id, author: t.sender_id, author_name: actorName(t.sender_id), excerpt: thvExcerpt(t.deleted ? 'Deleted' : t.body)};
+const thvQuoteFrom = t => t.hidden ? {id: t.id, hidden: true} : {id: t.id, author: t.sender_id, author_name: thvWhoName(t), excerpt: thvExcerpt(t.deleted ? 'Deleted' : t.body)};
 // What a message quotes: the server's `reply_to` (null: nothing), else, from a server without it or the stream, the
 // message it names (`in_reply_to`) or, for one in a sub-thread, the message that sub-thread opened under.
 function thvQuoteOf(view, m) {
@@ -423,13 +428,14 @@ function thvMsgActsHTML(view, m) {
     m.body ? `<button type="button" class="th-act" data-th-copy aria-label="Copy" title="Copy">${THV_SVG.copy}</button>` : ''}</div>`;
 }
 function thvMsgHTML(view, m, cont = false) {
+  const relay = rowSource(m).kind === 'assistant_for';
   const bot = thvBot(m.sender_id);
   // A bot's own words take a row of Copy, 👍 and 👎 under them, apart from the emoji reactions (ui/app/feedback.js).
   const fb = !m.deleted && m.id && bot ? fbKey('message', m.id) : '';
   const fresh = thvIsNew(view, m), quiet = fresh && !thvAddressed(m);
   const cls = ['th-msg', cont && 'th-cont', view.focus === m.id && 'th-focus', view.flash === m.id && 'th-flash', m.refs?.follow_up && 'th-followup',
     thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted'].filter(Boolean).join(' ');
-  const head = cont ? '' : `<div class="th-head">${thvWhoHTML(m.sender_id)}${bot ? THV_BOT_TAG : ''}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
+  const head = cont ? '' : `<div class="th-head">${relay ? `<span class="th-who">${esc(rowSource(m).name)}</span>` : thvWhoHTML(m.sender_id)}${bot || relay ? THV_BOT_TAG : ''}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
     m.edited_at && !m.deleted ? '<span class="th-edited muted">edited</span>' : ''}</div>`;
   let body;
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
@@ -442,7 +448,7 @@ function thvMsgHTML(view, m, cont = false) {
   // The Assistant's read-back of what it will approve is shown exactly as written, never formatted.
   else if (m.refs?.read_back) body = `<div class="th-body read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`;
   else body = `<div class="th-body md">${safeMd(m.body || '', {shortLinks: true})}</div>${
-    // The notice a bot's manager gets about its Home's closed history (backend/thread_followups.py).
+    // The notice a bot's manager got about its Home's closed history (no longer sent; old ones keep their button).
     m.refs?.earlier_messages?.thread_id ? `<button type="button" class="ghost small th-earlier-open" data-th-earlier="${esc(m.refs.earlier_messages.thread_id)}">Open earlier messages to Read</button>` : ''}`;
   // A bot's reply reads as Claude's does: one folded line of what its run did first (ui/app/chat.js), then the words,
   // the runner's warnings and the message's cards.
@@ -450,7 +456,8 @@ function thvMsgHTML(view, m, cont = false) {
   if (!m.deleted && bot)
     body += (m.refs?.warnings || []).map(w => `<div class="chat-warn">${esc(String(w).charAt(0).toUpperCase() + String(w).slice(1))}</div>`).join('') + v2MessageCards(m);
   const quote = m.deleted ? '' : thvQuoteHTML(thvQuoteOf(view, m));
-  const av = cont ? `<time class="th-cont-time" title="${esc(fmt(m.created_at))}">${esc(thvClock(m.created_at))}</time>` : actorAvatar(m.sender_id, 32);
+  const av = cont ? `<time class="th-cont-time" title="${esc(fmt(m.created_at))}">${esc(thvClock(m.created_at))}</time>`
+    : relay ? avatar(assistantBot(), 32) : actorAvatar(m.sender_id, 32);
   return `<div class="${cls}" data-mid="${esc(m.id)}" data-message="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}">
     <div class="th-av">${av}</div>
     <div class="th-main">${head}${quote}${run}${body}${m.deleted ? '' : thvFilesHTML(m) + thvReactionsHTML(m) + fbRowHTML(fb, m.body)}${thvRoutedHTML(m)}</div>
@@ -550,7 +557,29 @@ function thvUpdateGroups(view) {
 function thvUpdateReveal(view, id) {
   const req = thvUpdateGroups(view).get(id);
   if (req) view.openUpdates.add(req);
+  const group = thvLineGroups(view).get(id);
+  if (group) view.openLines.add(group);
 }
+// ---- gray lines: rows no person or bot wrote (rowSource, ui/app/hub-v2.js). A task update, a built-in's or an automation's
+// line, or a system line has no avatar or sender row; two or more task updates in a row are one "N task updates" row,
+// shut until opened. A normal message after them starts its own group.
+const thvTaskUpdate = row => !!row?.m && !row.m.deleted && isSourceLine(row.m) && rowSource(row.m).kind === 'task_update';
+// Each task update in a run of two or more, by id, mapped to its run's key (the first one's id).
+function thvLineGroups(view) {
+  const of = new Map(), rows = thvRows(view).filter(r => !(view.opts.home && r.m && thvIsUpdateCard(r.m)));
+  for (let i = 0; i < rows.length;) {
+    if (!thvTaskUpdate(rows[i])) { i++; continue; }
+    let end = i;
+    while (end < rows.length && thvTaskUpdate(rows[end])) end++;
+    if (end - i > 1) for (const r of rows.slice(i, end)) of.set(r.m.id, rows[i].m.id);
+    i = end;
+  }
+  return of;
+}
+// The old notice about a Home's closed history keeps its Open button on the line.
+const thvLineHTML = (view, m) => sourceLineHTML(m, {cls: 'th-line' + (view.flash === m.id ? ' th-flash' : ''),
+  attrs: ` data-mid="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}"`,
+  tail: m.refs?.earlier_messages?.thread_id ? `<button type="button" class="linkish th-earlier-open" data-th-earlier="${esc(m.refs.earlier_messages.thread_id)}">Open earlier messages to Read</button>` : ''});
 // The line stands for its group: a button that opens or shuts it. Its panel is always in the markup (empty while shut),
 // so aria-controls names an element either way.
 const thvUpdateLineHTML = (req, panel, open) => `<div class="th-upd"><button type="button" class="th-upd-btn" data-th-update="${esc(req)}" aria-expanded="${open}" aria-controls="${panel}">› Update generated</button></div>`;
@@ -559,12 +588,13 @@ function thvListHTML(view) {
   if (view.state === 'loading') return '<div class="th-empty muted">Loading…</div>';
   if (view.state === 'gone') return '<div class="th-empty muted">Not found</div>';
   if (view.state === 'error') return `<div class="th-empty err">${esc(view.error || 'Could not load')}</div>`;
-  const rows = thvRows(view), out = [], groups = thvUpdateGroups(view);
+  const rows = thvRows(view), out = [], groups = thvUpdateGroups(view), lineGroups = thvLineGroups(view);
   let divided = false, prev = null;
   // One row drawn where it sits. The "New" line goes above the first message the viewer had not read when the thread opened,
   // and only a row that is drawn can take it: a shut group's rows are not drawn, so they are not news on the screen.
   const draw = row => {
     if (!divided && row.m && thvIsNew(view, row.m)) { out.push('<div class="th-newline" role="separator" aria-label="New"><span>New</span></div>'); divided = true; prev = null; }
+    if (row.m && !row.m.deleted && isSourceLine(row.m)) { out.push(thvLineHTML(view, row.m)); prev = null; return; }
     if (row.m) { out.push(thvMsgHTML(view, row.m, thvJoins(view, prev, row.m))); prev = row.m; return; }
     out.push(row.fold ? thvFoldHTML(view, row) : thvMoreHTML(row.more));
     prev = null;
@@ -574,6 +604,22 @@ function thvListHTML(view) {
     // Updates have their own page (Updates); a Home does not repeat them as cards.
     if (view.opts.home && row.m && thvIsUpdateCard(row.m)) continue;
     const req = row.m && groups.get(row.m.id);
+    const run = !req && row.m && lineGroups.get(row.m.id);
+    if (run) {
+      // A run of task updates: one row, its lines under it while it is open.
+      const ms = [];
+      let end = i;
+      for (; end < rows.length; end++) {
+        const r = rows[end];
+        if (view.opts.home && r.m && thvIsUpdateCard(r.m)) continue;
+        if (!r.m || lineGroups.get(r.m.id) !== run) break;
+        ms.push(r.m);
+      }
+      out.push(sourceRunsHTML(ms, {line: m => thvLineHTML(view, m), draw: () => '', open: run => run.some(m => view.openLines.has(m.id))}));
+      prev = null;
+      i = end - 1;
+      continue;
+    }
     if (!req) { draw(row); continue; }
     // A request and its turn: the line, then their rows under it while it is open.
     let end = i;
@@ -765,11 +811,15 @@ function thvComposerDraw(view) {
       <span class="p-sendbox"><button class="p-way p-icon" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Ways to send" title="Ways to send"><span class="nav-icon" aria-hidden="true">expand_more</span></button>` : ''}
       <button class="p-send p-send-icon" type="button" aria-label="Send" title="Send">${ICON_SEND}</button>${bot ? `
       <div class="p-menu p-ways" role="menu" aria-label="Ways to send" hidden></div></span>` : ''}</div>
+    ${composeFootHTML()}
     <div class="p-chips"></div>
     ${bot ? '<div class="p-cmd" hidden></div>' : ''}
     <div class="p-menu thv-mentions" role="listbox" aria-label="Mention" hidden></div>
     <div class="thv-lib" hidden></div></div>`;
   C.el = host.querySelector('.thv-ask');
+  // Follow and "Reaches N" under the box (pill.js composeReach): the way Send shows, the words' @mentions, the reply.
+  C.reach = composeReach(C.el.querySelector('.p-foot'), {thread: () => thvDm(view) ? '' : view.id,
+    mode: () => C.ways ? thvWayMode(view) : '', text: () => C.el.querySelector('.p-text').value, reply: () => view.replyTo});
   host.querySelector('.thv-replying').onclick = ev => { if (ev.target.closest('[data-reply-cancel]')) thvReplyStart(view, null); };
   const box = C.el.querySelector('.p-text'), file = C.el.querySelector('.p-file'), menu = C.el.querySelector('.thv-attach-menu');
   const grow = () => { box.style.height = 'auto'; box.style.height = Math.min(box.scrollHeight, 160) + 'px'; };
@@ -848,6 +898,7 @@ function thvReplyingDraw(view) {
 function thvReplyStart(view, m) {
   view.replyTo = m?.id || null;
   thvReplyingDraw(view);
+  thvFootSync(view);
   if (m) view.composer?.el.querySelector('.p-text')?.focus();
 }
 function thvComposerButtons(view) {
@@ -855,6 +906,7 @@ function thvComposerButtons(view) {
   if (!btn) return;
   const empty = !box.value.trim() && !C.files.length && !C.lib.length;
   btn.classList.toggle('p-off', empty);
+  thvFootSync(view);
   // While the bot runs, Stop takes Send's place (and the caret's) until something is typed: a message typed meanwhile
   // still goes to it.
   const stop = C.el.querySelector('.p-stop');
@@ -865,6 +917,27 @@ function thvComposerButtons(view) {
   if (caret) { caret.hidden = show; if (show) thvWaysMenu(view, false); }
   const says = C.stopping ? 'Stopping…' : 'Stop';
   stop.title = says; stop.setAttribute('aria-label', says);
+}
+// ----------------------------------------------------------------- Follow and who it reaches
+// A DM always reaches its members, so its composer offers neither. Elsewhere Follow shows until the viewer follows
+// (`me.follows`: a member who only joined a chat does not), kept per kind: a task's thread or a chat.
+const thvDm = view => !!view.opts.dm || threadIsDm(view.thread);
+function thvFootSync(view) {
+  const C = view.composer, foot = C?.el.querySelector('.p-foot'), me = view.thread?.me;
+  if (!foot) return;
+  const offer = !!view.id && !thvDm(view) && !!me && !(me.follows ?? me.following) && me.can_post !== false;
+  composeFollowPaint(foot, view.thread?.audience === 'task' ? 'task' : 'chat', offer);
+  C.reach?.update();
+}
+// Follow ticked: once the message is in, follow the thread (posting alone never does).
+async function thvFollowAfterSend(view) {
+  try {
+    const r = await put(thvPath(view.id) + '/follow', {notify: 'live'});
+    if (view.gone || !view.thread) return;
+    view.thread = {...view.thread, me: {...view.thread.me, following: true, follows: true, notify: r?.notify || 'live'}};
+    threadsPut(view.thread);
+    thvFootSync(view);
+  } catch (e) { toast(`Not followed: ${e.message}`, true); }
 }
 // ----------------------------------------------------------------- the ways to send (a bot's Home or DM)
 // Steer now, Queue, Defer with its durations, then Set as goal (deliveryMenuHTML, pill.js). Steer, Queue and Defer are
@@ -1106,16 +1179,17 @@ async function thvComposerSend(view) {
   // In a bot's Home or DM every message names the kept way (thread posts take delivery, backend/thread_api.py); in
   // goal mode with a file attached it goes as a message, that way too.
   const way = C.ways ? deliveryBody(thvSendMode(view)) : null;
+  const follow = composeFollowWanted(C.el.querySelector('.p-foot'));
   const files = C.files.splice(0), lib = C.lib.splice(0);
   const replyTo = view.messages.find(x => x.id === view.replyTo) || null;
   box.value = ''; box.style.height = ''; thvChips(view);
   THV_DRAFTS.delete(thvDraftKey(view));
   thvReplyStart(view, null);
-  await thvSend(view, {text, files, lib, way, replyTo});
+  await thvSend(view, {text, files, lib, way, replyTo, follow});
 }
 // One message out: a "Checking…" row while the rules check runs, then the message, or a held row the author can
 // edit, discard or (when the server allows) send anyway. A reply goes to this thread too, naming what it answers.
-async function thvSend(view, {text, files = [], lib = [], way = null, replyTo = null}) {
+async function thvSend(view, {text, files = [], lib = [], way = null, replyTo = null, follow = false}) {
   const p = {key: 'p' + (++THV_N), text, files, lib, replyTo: replyTo?.id || '', quote: replyTo ? thvQuoteFrom(replyTo) : null, state: 'checking'};
   view.pending.push(p);
   thvDraw(view, {stick: true});
@@ -1144,6 +1218,7 @@ async function thvSend(view, {text, files = [], lib = [], way = null, replyTo = 
       if (m) thvApplyMessage(view, {id: m.id, thread_id: m.thread_id, root_id: m.root_id, message: {...(replyTo && !m.in_reply_to ? {in_reply_to: replyTo.id} : {}), ...m}});
       else void thvRefresh(view);
       for (const w of r?.warnings || []) if (w.rule === 'mention_outside') toast(`${actorName(w.actor)} is not in this thread`, true);
+      if (follow && view.id) void thvFollowAfterSend(view);
       // Without the live stream, the bots' status is read once now; with it, `bot_status` events keep it.
       if (Array.isArray(view.botStatus) && !liveConnected()) void thvStatusRead(view);
     }
@@ -1200,6 +1275,7 @@ function thvWire(view) {
     if (ev.target.matches?.('details.run-steps')) void v2StepsOpen(view.run, ev.target, el);
     const fold = ev.target.dataset?.fold;
     if (fold) view.run.openFolds[ev.target.open ? 'add' : 'delete'](fold);
+    sourceGroupToggle(view.openLines, ev.target);
   }, true);
 }
 const thvMsgOf = (view, row) => view.messages.find(m => m.id === row?.dataset.mid);

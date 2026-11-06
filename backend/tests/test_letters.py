@@ -1,4 +1,5 @@
 """Letters through a fake HQ: the approval is the authority for one proof, and retries never print twice."""
+
 import hashlib
 import json
 
@@ -39,16 +40,24 @@ class HQ:
             qid = "lq_" + str(len(self.quotes) + 1)
             digest = hashlib.sha256(self.proof).hexdigest()
             approval_hash = hashlib.sha256((L.dump(body) + digest + str(self.total)).encode()).hexdigest()
-            self.quotes[qid] = {"quote_id": qid, "proof_sha256": digest, "approval_hash": approval_hash,
-                "page_count": 1, "total_micros": self.total, "currency": "USD", "expires_at": L.later(900)}
+            self.quotes[qid] = {
+                "quote_id": qid,
+                "proof_sha256": digest,
+                "approval_hash": approval_hash,
+                "page_count": 1,
+                "total_micros": self.total,
+                "currency": "USD",
+                "expires_at": L.later(900),
+            }
             return self.quotes[qid]
         if path.endswith("/proof"):
             return self.proof
         if path.startswith("/keys/") and path.endswith("/resolve"):
             from urllib.parse import unquote
+
             if not self.resolve_supported:
                 raise G.LettersError(404, "not_found")
-            send_key = unquote(path[len("/keys/"):-len("/resolve")])
+            send_key = unquote(path[len("/keys/") : -len("/resolve")])
             if send_key in self.jobs:
                 return {"letter": dict(self.jobs[send_key]), "abandoned": False}
             self.abandoned.add(send_key)
@@ -63,9 +72,16 @@ class HQ:
                 raise G.LettersError(502, "gateway_unavailable")
             if idempotency_key not in self.jobs:
                 self.provider_submits += 1
-                self.jobs[idempotency_key] = {"letter_id": "lt_" + str(len(self.jobs) + 1), "status": "submitted",
-                    "tracking": [], "cancel_possible": False, "error": None, "accepted_at": H.now(),
-                    "billing": "billed", "charged_micros": self.total}
+                self.jobs[idempotency_key] = {
+                    "letter_id": "lt_" + str(len(self.jobs) + 1),
+                    "status": "submitted",
+                    "tracking": [],
+                    "cancel_possible": False,
+                    "error": None,
+                    "accepted_at": H.now(),
+                    "billing": "billed",
+                    "charged_micros": self.total,
+                }
             else:
                 assert self.jobs[idempotency_key]["quote_id"] == body["quote_id"]
             self.jobs[idempotency_key]["quote_id"] = body["quote_id"]
@@ -76,8 +92,13 @@ class HQ:
         if path.endswith("/cancel") and self.no_cancel:
             raise G.LettersError(409, "cannot_cancel")
         job = next((row for row in self.jobs.values() if row["letter_id"] == path.split("/")[1]), {})
-        result = {**job, "letter_id": path.split("/")[1], "status": "cancelled" if path.endswith("/cancel") else "mailed",
-                  "tracking": [{"barcode": "1234", "status": "mailed"}], "cancel_possible": False}
+        result = {
+            **job,
+            "letter_id": path.split("/")[1],
+            "status": "cancelled" if path.endswith("/cancel") else "mailed",
+            "tracking": [{"barcode": "1234", "status": "mailed"}],
+            "cancel_possible": False,
+        }
         if path.endswith("/cancel"):
             result.update(billing="void", charged_micros=0)
         return result
@@ -88,8 +109,9 @@ def hq(api, monkeypatch):
     fake = HQ()
     monkeypatch.setenv("TICO_GATEWAY_KEY", "tgw_letters_test")
     monkeypatch.setattr(G, "letters", fake)
-    api.app.state.letters.engine = lambda *args: {"answers": {
-        "recipient_kind": {"type": "choice", "choice": "other", "confidence": 1.0}}}
+    api.app.state.letters.engine = lambda *args: {
+        "answers": {"recipient_kind": {"type": "choice", "choice": "other", "confidence": 1.0}}
+    }
     put(api, "letters/settings", {"return_address": ADDRESS})
     return fake
 
@@ -205,7 +227,10 @@ def test_revoke_or_never_before_approval_prevents_submission(api, hq):
     assert fetch(api, row)["error"] == "forbidden" and not hq.jobs
     grant(api, ident)
     put(api, "letters/settings", {"mode": "never"})
-    assert post(api, "letters/" + row["id"] + "/send", {}, token=token, expected=403)["error"]["code"] == "letters_disabled"
+    assert (
+        post(api, "letters/" + row["id"] + "/send", {}, token=token, expected=403)["error"]["code"]
+        == "letters_disabled"
+    )
 
 
 def test_an_admin_can_approve_but_an_unrelated_person_cannot(api, hq):
@@ -260,8 +285,9 @@ def test_courts_and_unknown_triage_always_ask(api, hq):
     put(api, "letters/settings", {"mode": "on_their_own"})
     first = send(api, quote(api))
     approve(api, first)
-    api.app.state.letters.engine = lambda *args: {"answers": {
-        "recipient_kind": {"type": "choice", "choice": "court_agency", "confidence": 0.9}}}
+    api.app.state.letters.engine = lambda *args: {
+        "answers": {"recipient_kind": {"type": "choice", "choice": "court_agency", "confidence": 0.9}}
+    }
     assert send(api, quote(api))["status"] == "waiting_for_ok"
     api.app.state.letters.engine = lambda *args: {"answers": {}}
     assert send(api, quote(api))["status"] == "waiting_for_ok"
@@ -305,10 +331,19 @@ def test_unstable_proof_stops_instead_of_repeatedly_requesting_approval(api, hq)
 
 def test_bot_quotes_an_uploaded_pdf_through_the_existing_library_path(api, hq):
     import base64
+
     ident, token = bot(api)
     grant(api, ident)
-    failed, uploaded = call(api, "hub_file_publish", {"name": "letter.pdf", "content_base64":
-        base64.b64encode(L.render("A letter uploaded by a bot")).decode(), "scope": "bot"}, token=token)
+    failed, uploaded = call(
+        api,
+        "hub_file_publish",
+        {
+            "name": "letter.pdf",
+            "content_base64": base64.b64encode(L.render("A letter uploaded by a bot")).decode(),
+            "scope": "bot",
+        },
+        token=token,
+    )
     assert not failed, uploaded
     row = post(api, "letters/quotes", {"file_id": uploaded["file"]["id"], "recipient": RECIPIENT}, token=token)
     assert row["page_count"] == 1 and row["proof"]
@@ -331,11 +366,13 @@ def test_gateway_billing_and_cap_refusals_wait_for_an_explicit_retry(api, hq, mo
         monkeypatch.setattr(G, "letters", real)
         row = send(api, quote(api))
         attempts = []
+
         def refused(key, base, path="", **kwargs):
             attempts.append(path)
             if path == "/quotes":
                 raise G.LettersError(403, code)
             return real(key, base, path, **kwargs)
+
         monkeypatch.setattr(G, "letters", refused)
         approve(api, row)
         after = fetch(api, row)
@@ -351,8 +388,10 @@ def test_gateway_client_preserves_billing_required(monkeypatch):
     from types import SimpleNamespace
 
     def refused(*args, **kwargs):
-        raise urllib.error.HTTPError("https://gateway.acme.example", 403, "Forbidden", {},
-                                     io.BytesIO(b'{"error":"billing_required"}'))
+        raise urllib.error.HTTPError(
+            "https://gateway.acme.example", 403, "Forbidden", {}, io.BytesIO(b'{"error":"billing_required"}')
+        )
+
     monkeypatch.setattr(G, "branded_opener", lambda *args: SimpleNamespace(open=refused))
     with pytest.raises(G.LettersError) as error:
         G.letters("tgw_test", "https://gateway.acme.example/v1/gateway", "/quotes", body={})
@@ -523,6 +562,7 @@ def test_only_authoritative_void_or_reversal_releases_a_terminal_charge(api, hq)
 
 def test_claim_and_approval_are_durable_before_approved_and_autonomous_post(api, hq, monkeypatch):
     from contextlib import contextmanager
+
     store = api.app.state.store
     transaction, real_hq = store.transaction, hq.__call__
     committed, sent = [], []
@@ -531,7 +571,9 @@ def test_claim_and_approval_are_durable_before_approved_and_autonomous_post(api,
     def traced(durable=False):
         with transaction(durable=durable) as c:
             yield c
-            claims = c.execute("SELECT id,submission_quote_id,approval_id,approved_hash FROM letters WHERE status='submitting'").fetchall()
+            claims = c.execute(
+                "SELECT id,submission_quote_id,approval_id,approved_hash FROM letters WHERE status='submitting'"
+            ).fetchall()
             found = (bool(durable), c.execute("PRAGMA synchronous").fetchone()[0]) if claims else None
         if found:
             committed.append(found)
@@ -540,7 +582,9 @@ def test_claim_and_approval_are_durable_before_approved_and_autonomous_post(api,
         if path == "" and kwargs.get("body"):
             assert committed[-1] == (True, 2)
             with store.read() as c:
-                row = c.execute("SELECT * FROM letters WHERE submission_quote_id=?", (kwargs["body"]["quote_id"],)).fetchone()
+                row = c.execute(
+                    "SELECT * FROM letters WHERE submission_quote_id=?", (kwargs["body"]["quote_id"],)
+                ).fetchone()
                 assert kwargs["idempotency_key"] == "tico-letter:" + row["id"]
                 if row["approved_hash"]:
                     assert H.approval(c, row["approval_id"])["consumed_at"]
@@ -573,6 +617,7 @@ def test_truncated_four_page_pdf_always_asks_even_for_a_known_address(api, hq):
     import base64
     import io
     from reportlab.pdfgen import canvas
+
     ident, token = bot(api)
     grant(api, ident)
     put(api, "letters/settings", {"mode": "on_their_own"})
@@ -591,8 +636,12 @@ def test_truncated_four_page_pdf_always_asks_even_for_a_known_address(api, hq):
     data = output.getvalue()
     sampled, complete = L.pdf_text(data)
     assert not complete and "Court filing" not in sampled
-    failed, uploaded = call(api, "hub_file_publish", {"name": "letter.pdf", "content_base64": base64.b64encode(data).decode(),
-                                                       "scope": "bot"}, token=token)
+    failed, uploaded = call(
+        api,
+        "hub_file_publish",
+        {"name": "letter.pdf", "content_base64": base64.b64encode(data).decode(), "scope": "bot"},
+        token=token,
+    )
     assert not failed, uploaded
     row = post(api, "letters/quotes", {"file_id": uploaded["file"]["id"], "recipient": RECIPIENT}, token=token)
     requested = send(api, row, token=token)
@@ -604,11 +653,16 @@ def test_truncated_four_page_pdf_always_asks_even_for_a_known_address(api, hq):
 def test_sparse_or_failed_pdf_extraction_is_incomplete(monkeypatch):
     from types import SimpleNamespace
     import pypdf
+
     def broken():
         raise ValueError("unreadable text stream")
+
     for extract in (lambda: "", lambda: "Short", broken):
-        monkeypatch.setattr(pypdf, "PdfReader", lambda data: SimpleNamespace(is_encrypted=False,
-            pages=[SimpleNamespace(extract_text=extract)]))
+        monkeypatch.setattr(
+            pypdf,
+            "PdfReader",
+            lambda data: SimpleNamespace(is_encrypted=False, pages=[SimpleNamespace(extract_text=extract)]),
+        )
         assert L.pdf_text(b"%PDF-1.7\nfixture")[1] is False
 
 
@@ -633,6 +687,7 @@ def test_delegated_reader_needs_its_own_letter_permission_on_every_surface(api, 
         source = c.execute("SELECT source_blob_id FROM letters WHERE id=?", (row["id"],)).fetchone()[0]
         who = api.app.state.auth.identity_for_actor(c, "human:ana")
         from dataclasses import replace
+
         who = replace(who, task_actor="bot:coo")
         assert not task_privacy.blob_readable(c, task_privacy.actor(who), source)
     with api.app.state.store.read() as c:
@@ -647,9 +702,12 @@ def test_private_source_keeps_only_admin_metadata_and_fences_both_copies(api, hq
     data = L.render("A complete source letter with enough searchable text for the recipient review.")
     digest = api.app.state.blobs.put(data, "application/pdf")
     with api.app.state.store.transaction() as c:
-        task = H.task_create(c, "human:cara", "Review the source letter", "Read the packet.", "human:cara",
-                             private=False, lint=False)
-        original = blobs.register(c, SimpleNamespace(actor="human:ana"), digest, len(data), "packet.pdf", "application/pdf")
+        task = H.task_create(
+            c, "human:cara", "Review the source letter", "Read the packet.", "human:cara", private=False, lint=False
+        )
+        original = blobs.register(
+            c, SimpleNamespace(actor="human:ana"), digest, len(data), "packet.pdf", "application/pdf"
+        )
         c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (task["id"], original["id"]))
     row = post(api, "letters/quotes", {"file_id": original["id"], "recipient": RECIPIENT})
     row = send(api, row)
@@ -675,8 +733,10 @@ def test_private_source_keeps_only_admin_metadata_and_fences_both_copies(api, hq
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM task_assets WHERE blob_id=?", (original["id"],))
     get(api, "files/" + source, expected=403)
-    api.app.state.letters.update(row["id"], {"letter_id": receipt["hq_letter_id"],
-                                           "status": "mailed", "billing": "billed", "charged_micros": 1500000})
+    api.app.state.letters.update(
+        row["id"],
+        {"letter_id": receipt["hq_letter_id"], "status": "mailed", "billing": "billed", "charged_micros": 1500000},
+    )
     with api.app.state.store.read() as c:
         who = api.app.state.auth.identity_for_actor(c, "human:ana")
         changed = events.read(c, api.app.state.auth, who, before, topics=("letters",))[0]
@@ -693,18 +753,32 @@ def external_thread_letter(api, audience, *, explicit=False):
     ident, token = bot(api)
     grant(api, ident)
     group = post(api, "groups", {"name": "Marketing", "add": {"bots": [ident]}}) if audience == "team" else None
-    thread = create_thread(api, title="Letter source", audience=audience,
-                           group=group["id"] if group else None, members=["bot:" + ident])
-    failed, uploaded = call(api, "hub_file_publish", {"name": "letter.pdf", "scope": "bot", "content_base64":
-        base64.b64encode(L.render("A complete source letter with searchable text for the recipient review.")).decode()}, token=token)
+    thread = create_thread(
+        api, title="Letter source", audience=audience, group=group["id"] if group else None, members=["bot:" + ident]
+    )
+    failed, uploaded = call(
+        api,
+        "hub_file_publish",
+        {
+            "name": "letter.pdf",
+            "scope": "bot",
+            "content_base64": base64.b64encode(
+                L.render("A complete source letter with searchable text for the recipient review.")
+            ).decode(),
+        },
+        token=token,
+    )
     assert not failed, uploaded
     message = post(api, "threads/" + thread["id"] + "/messages", {"text": "The letter PDF."}, token=token)
     with api.app.state.store.transaction() as c:
-        original = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=1",
-                             (uploaded["file"]["id"],)).fetchone()[0]
+        original = c.execute(
+            "SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=1", (uploaded["file"]["id"],)
+        ).fetchone()[0]
         c.execute("INSERT INTO message_assets(message_id,blob_id) VALUES(?,?)", (message["id"], original))
     fields = {"thread_id": thread["id"]} if explicit else {}
-    row = post(api, "letters/quotes", {"file_id": uploaded["file"]["id"], "recipient": RECIPIENT, **fields}, token=token)
+    row = post(
+        api, "letters/quotes", {"file_id": uploaded["file"]["id"], "recipient": RECIPIENT, **fields}, token=token
+    )
     return ident, token, thread, row
 
 
@@ -720,6 +794,7 @@ def test_external_sender_losing_an_inferred_source_thread_gets_only_metadata(api
     if audience == "company":
         from backend import bot_settings
         from starlette.datastructures import Headers
+
         with api.app.state.store.transaction() as c:
             bot_settings.update(c, ident, {"harness": "codex", "runtime": "codex"})
         # A profile edit does not turn the still-active standing credential into a runner lease.
@@ -766,6 +841,7 @@ def test_revoked_external_identity_stops_deferred_send_instead_of_becoming_inter
         assert c.execute("SELECT next_sync_at FROM letters WHERE id=?", (row["id"],)).fetchone()[0] is None
         from backend.auth import bot_identity
         from backend.store import Problem
+
         with pytest.raises(Problem):
             bot_identity(c, "bot:no-longer-registered")
 
@@ -773,18 +849,35 @@ def test_revoked_external_identity_stops_deferred_send_instead_of_becoming_inter
 def test_real_source_task_privacy_and_party_changes_patch_finished_letter_rows(api, hq):
     from backend import events
 
-    task = post(api, "tasks", {"owner": "human:cara", "title": "Review source", "body": "Source packet.",
-                               "private": False}, token="cara-test")
-    variants = [({"task_id": task["id"]}, {}), ({}, {"tasks": [task["id"]]}),
-                ({"thread_id": task["conversation_id"]}, {}), ({}, {"threads": [task["conversation_id"]]})]
+    task = post(
+        api,
+        "tasks",
+        {"owner": "human:cara", "title": "Review source", "body": "Source packet.", "private": False},
+        token="cara-test",
+    )
+    variants = [
+        ({"task_id": task["id"]}, {}),
+        ({}, {"tasks": [task["id"]]}),
+        ({"thread_id": task["conversation_id"]}, {}),
+        ({}, {"threads": [task["conversation_id"]]}),
+    ]
     rows = [quote(api) for _ in variants]
     unrelated = quote(api)
     for index, (row, (columns, frozen)) in enumerate(zip(rows, variants)):
-        api.app.state.letters.update(row["id"], {"letter_id": "lt_finished_" + str(index), "status": "delivered",
-                                               "billing": "billed", "charged_micros": 1500000})
+        api.app.state.letters.update(
+            row["id"],
+            {
+                "letter_id": "lt_finished_" + str(index),
+                "status": "delivered",
+                "billing": "billed",
+                "charged_micros": 1500000,
+            },
+        )
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE letters SET task_id=?,thread_id=?,source_provenance=? WHERE id=?",
-                      (columns.get("task_id"), columns.get("thread_id"), json.dumps(frozen), row["id"]))
+            c.execute(
+                "UPDATE letters SET task_id=?,thread_id=?,source_provenance=? WHERE id=?",
+                (columns.get("task_id"), columns.get("thread_id"), json.dumps(frozen), row["id"]),
+            )
             L.freeze_sources(c, row["id"])
     assert all(not fetch(api, row)["redacted"] for row in rows)
     with api.app.state.store.read() as c:
@@ -795,10 +888,15 @@ def test_real_source_task_privacy_and_party_changes_patch_finished_letter_rows(a
     with api.app.state.store.read() as c:
         changes = events.read(c, api.app.state.auth, owner, before, topics=("letters",))[0]
         assert all(r["updated_at"] == originals[r["id"]] for r in c.execute("SELECT id,updated_at FROM letters"))
-        assert c.execute("SELECT count(*) FROM letters WHERE status='delivered' AND next_sync_at IS NULL").fetchone()[0] == 4
+        assert (
+            c.execute("SELECT count(*) FROM letters WHERE status='delivered' AND next_sync_at IS NULL").fetchone()[0]
+            == 4
+        )
     patched = {event[2]["id"]: event[2]["letter"] for event in changes}
     assert set(patched) == {row["id"] for row in rows} and unrelated["id"] not in patched
-    assert all(row["redacted"] and not {"recipient", "return_address", "proof"}.intersection(row) for row in patched.values())
+    assert all(
+        row["redacted"] and not {"recipient", "return_address", "proof"}.intersection(row) for row in patched.values()
+    )
     # Changing a private task's parties can also restore access, without touching the letter or polling a list.
     task = get(api, "tasks/" + task["id"], "cara-test")["task"]
     with api.app.state.store.read() as c:
@@ -813,6 +911,7 @@ def test_real_source_task_privacy_and_party_changes_patch_finished_letter_rows(a
 
 def test_status_sync_patches_one_letter_and_emits_authorized_live_change(api, hq):
     from backend import events
+
     row = send(api, quote(api))
     approve(api, row)
     with api.app.state.store.transaction() as c:
@@ -866,6 +965,7 @@ def test_sql_provenance_sources_do_not_expose_letter_or_agent_tables(api, hq):
 
 def test_renderer_is_deterministic_us_letter_and_does_not_execute_markup():
     from pypdf import PdfReader
+
     data = L.render("# Heading\n\nHello <script>world</script>.\n\n" + "word " * 2000)
     assert data == L.render("# Heading\n\nHello <script>world</script>.\n\n" + "word " * 2000)
     reader = PdfReader(__import__("io").BytesIO(data))

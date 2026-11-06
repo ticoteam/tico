@@ -41,21 +41,27 @@ log = logging.getLogger("tico.demo")
 DEFAULT_PORT = 8765
 OWNER_EMAIL = "ana@acme.example"
 BANNER = "Demo — sample data"
-EXPLAIN = ("This is a demo with sample data: bots do not run here and nothing is sent. "
-           "On a real install, this starts the bot on a connected computer.")
-BOT_REPLY = ("This is a demo, so I do not run here. On a real install this message would reach me on a "
-             "connected computer and I would answer it there.")
+EXPLAIN = (
+    "This is a demo with sample data: bots do not run here and nothing is sent. "
+    "On a real install, this starts the bot on a connected computer."
+)
+BOT_REPLY = (
+    "This is a demo, so I do not run here. On a real install this message would reach me on a "
+    "connected computer and I would answer it there."
+)
 
 # What would start a bot or call a model. Refused with EXPLAIN rather than queued for nobody.
-RUNS = re.compile(r"^/api(?:/v2)?/(?:tasks/[^/]+/run-now|routines/[^/]+/run|jobs/[^/]+/(?:retry|reconcile)"
-                  r"|bots/[^/]+/control|page-chat|docs/ask|judge|decisions|market/curator/sweep"
-                  r"|(?:runners|computers)/[^/]+/(?:logins|harness-actions|restart)|system/update)$")
+RUNS = re.compile(
+    r"^/api(?:/v2)?/(?:tasks/[^/]+/run-now|routines/[^/]+/run|jobs/[^/]+/(?:retry|reconcile)"
+    r"|bots/[^/]+/control|page-chat|docs/ask|judge|decisions|market/curator/sweep"
+    r"|(?:runners|computers)/[^/]+/(?:logins|harness-actions|restart)|system/update)$"
+)
 # Writes a public (read-only) demo still takes, so the page can remember what a visitor has read.
 PUBLIC_WRITES = re.compile(r"^/api/v2/(?:updates/read|preferences/[^/]+|(?:setup/)?getting-started/state)$")
 
 AVATAR = re.compile(r"^/api/(?:people|humans)/([a-z0-9-]+)/photo$")
 
-ATTEMPTS = []   # every outbound connection refused in this process, for tests and for the curious
+ATTEMPTS = []  # every outbound connection refused in this process, for tests and for the curious
 
 
 # ----------------------------------------------------------------------------- what may listen
@@ -77,12 +83,13 @@ def check_bind(host, public_demo=False, in_container=False):
         f"tico demo: refusing to listen on {host or 'all interfaces'}. The demo signs everyone in as its "
         "owner, so it stays on this computer (127.0.0.1). To put it on a network on purpose, add "
         "--public-demo; it is then read-only. In Docker, publish the port on loopback: "
-        "-p 127.0.0.1:8765:8765")
+        "-p 127.0.0.1:8765:8765"
+    )
 
 
 # ----------------------------------------------------------------------------- no outbound calls
 def _remote(address):
-    if isinstance(address, (str, bytes)):          # a unix socket path
+    if isinstance(address, (str, bytes)):  # a unix socket path
         return False
     host = str(address[0]) if address else ""
     return bool(host) and not loopback_address(host) and host != "0.0.0.0"
@@ -139,6 +146,7 @@ async def keep_alive(store, stop, vault=None):
     if vault is not None:
         from .finance import actions as finance
         from .finance import mercury
+
         if mercury.base_url() != mercury.BASE:
             finance.banking_start(store, vault)
             finance_jobs = True
@@ -158,23 +166,37 @@ async def keep_alive(store, stop, vault=None):
 def tick(store):
     with store.transaction() as c:
         now = H.now()
-        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id IN (SELECT id FROM runners WHERE revoked_at IS NULL)",
-                  (now,))
-        c.execute("INSERT INTO service_health VALUES('scheduler',?,NULL,'{}') ON CONFLICT(service) DO UPDATE SET "
-                  "last_succeeded_at=excluded.last_succeeded_at,last_error=NULL", (now,))
-        for job in c.execute("SELECT j.id,j.bot_id,m.sender_id,m.conversation_id,m.id AS message FROM jobs j "
-                             "JOIN messages m ON m.id=j.message_id WHERE j.state='queued'").fetchall():
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id IN (SELECT id FROM runners WHERE revoked_at IS NULL)",
+            (now,),
+        )
+        c.execute(
+            "INSERT INTO service_health VALUES('scheduler',?,NULL,'{}') ON CONFLICT(service) DO UPDATE SET "
+            "last_succeeded_at=excluded.last_succeeded_at,last_error=NULL",
+            (now,),
+        )
+        for job in c.execute(
+            "SELECT j.id,j.bot_id,m.sender_id,m.conversation_id,m.id AS message FROM jobs j "
+            "JOIN messages m ON m.id=j.message_id WHERE j.state='queued'"
+        ).fetchall():
             c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job["id"],))
             if H.is_human(job["sender_id"]):
                 try:
-                    H.say(c, H.bot_actor(job["bot_id"]), job["sender_id"], BOT_REPLY,
-                          conversation_id=job["conversation_id"], in_reply_to=job["message"])
+                    H.say(
+                        c,
+                        H.bot_actor(job["bot_id"]),
+                        job["sender_id"],
+                        BOT_REPLY,
+                        conversation_id=job["conversation_id"],
+                        in_reply_to=job["message"],
+                    )
                 except H.Refused:
                     pass
 
 
 def finance_tick(store):
     from .finance import actions as finance, reads as finance_reads
+
     with store.read() as c:
         if not finance_reads.is_set_up(c):
             return
@@ -186,12 +208,15 @@ def finance_tick(store):
 def avatar(pid):
     """A drawn portrait for a sample person, so the page never asks for a photo that does not exist."""
     from . import demo_content
+
     name = next((p["name"] for p in demo_content.PEOPLE if p["id"] == pid), pid)
     initials = "".join(part[0] for part in name.split()[:2]).upper()
     hue = sum(map(ord, name)) * 37 % 360
-    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" '
-           f'fill="hsl({hue},45%,42%)"/><text x="32" y="41" font-family="system-ui,sans-serif" font-size="26" '
-           f'font-weight="600" text-anchor="middle" fill="#fff">{initials}</text></svg>')
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" '
+        f'fill="hsl({hue},45%,42%)"/><text x="32" y="41" font-family="system-ui,sans-serif" font-size="26" '
+        f'font-weight="600" text-anchor="middle" fill="#fff">{initials}</text></svg>'
+    )
     return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "private, max-age=3600"})
 
 
@@ -235,6 +260,7 @@ def install(app, auth, settings):
     # takes the same answer, as the route passes `now` too).
     async def granola_recent(who, interval=0, now=False):
         return {"state": "recent", "last_synced_at": app.state.granola.status(who)["last_synced_at"]}
+
     app.state.granola.trigger = granola_recent
 
     def problem(status, code, detail):
@@ -245,8 +271,13 @@ def install(app, auth, settings):
         host = request.headers.get("host", "")
         name = host.rsplit(":", 1)[0] if not host.startswith("[") else host.split("]")[0] + "]"
         if not settings.demo_public and not loopback_address(name):
-            return problem(421, "demo_host", "The demo answers only on localhost. Open http://localhost:"
-                           + str(DEFAULT_PORT) + " (or use --public-demo).")
+            return problem(
+                421,
+                "demo_host",
+                "The demo answers only on localhost. Open http://localhost:"
+                + str(DEFAULT_PORT)
+                + " (or use --public-demo).",
+            )
         path = request.url.path
         photo = AVATAR.match(path)
         if photo and request.method == "GET":
@@ -275,12 +306,25 @@ def prepare(directory, url="", public=False):
         with os.fdopen(fd, "w") as out:
             out.write(os.urandom(32).hex())
     settings = Settings(
-        db_path=directory / "hub.sqlite", registry_dir=directory / "registry", environment_id="demo",
-        company_name="Acme", app_name="Tico", assistant_name="Assistant", owner_email=OWNER_EMAIL,
-        github_owner="acme", local_owner_token_file=token_file, public_url=(url.rstrip("/") if url and not public else f"http://127.0.0.1:{DEFAULT_PORT}"),
-        scheduler_enabled=False, blob_dir=directory / "blobs", enabled_providers=("anthropic",),
-        default_runtime="claude", default_model="claude-opus-5-5", release_id="demo", demo=True,
-        demo_public=public)
+        db_path=directory / "hub.sqlite",
+        registry_dir=directory / "registry",
+        environment_id="demo",
+        company_name="Acme",
+        app_name="Tico",
+        assistant_name="Assistant",
+        owner_email=OWNER_EMAIL,
+        github_owner="acme",
+        local_owner_token_file=token_file,
+        public_url=(url.rstrip("/") if url and not public else f"http://127.0.0.1:{DEFAULT_PORT}"),
+        scheduler_enabled=False,
+        blob_dir=directory / "blobs",
+        enabled_providers=("anthropic",),
+        default_runtime="claude",
+        default_model="claude-opus-5-5",
+        release_id="demo",
+        demo=True,
+        demo_public=public,
+    )
     if public and url:
         # Loopback is what makes a built-in owner session legal (Settings refuses it elsewhere);
         # a public demo is that session on purpose, so the address is set after the check.
@@ -291,6 +335,7 @@ def prepare(directory, url="", public=False):
 def build(directory, now=None, url="", public=False):
     """A ready demo in `directory`: its registry, database and files. Returns its Settings."""
     from . import demo_seed
+
     os.environ["TICO_UPDATE_CHECK"] = "off"
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
@@ -311,9 +356,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="tico demo", description=__doc__.split("\n")[0])
     parser.add_argument("--host", default=None, help="address to listen on (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--public-demo", action="store_true",
-                        help="serve non-loopback addresses on purpose; the demo is then read-only")
-    parser.add_argument("--url", default="", help="the browser address, e.g. http://localhost:8877 or https://demo.example.com")
+    parser.add_argument(
+        "--public-demo", action="store_true", help="serve non-loopback addresses on purpose; the demo is then read-only"
+    )
+    parser.add_argument(
+        "--url", default="", help="the browser address, e.g. http://localhost:8877 or https://demo.example.com"
+    )
     parser.add_argument("--in-container", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--data-dir", default="", help="keep the demo's files here (default: a temporary folder)")
     args = parser.parse_args(argv)
@@ -325,6 +373,7 @@ def main(argv=None):
         os.environ.pop(name, None)
     from .server import run
     from .screen_binary import prepare as prepare_relay
+
     prepare_relay()
     directory = Path(args.data_dir or tempfile.mkdtemp(prefix="tico-demo-"))
     directory.mkdir(parents=True, exist_ok=True)
@@ -337,13 +386,16 @@ def main(argv=None):
             if args.port != DEFAULT_PORT and not args.public_demo and not args.url:
                 settings.public_url = settings.runner_url = f"http://127.0.0.1:{args.port}"
             browser_url = args.url.rstrip("/") if args.url else f"http://localhost:{args.port}"
-            print(f"\nTico demo is ready: open {browser_url}\n"
-                  "It is fictional sample data (acme.example); bots do not run and nothing leaves this computer.\n"
-                  "Press Ctrl+C to stop; everything is discarded.\n", flush=True)
+            print(
+                f"\nTico demo is ready: open {browser_url}\n"
+                "It is fictional sample data (acme.example); bots do not run and nothing leaves this computer.\n"
+                "Press Ctrl+C to stop; everything is discarded.\n",
+                flush=True,
+            )
             run(settings=settings, host=host, port=args.port, log_level="warning")
     finally:
         signal.signal(signal.SIGTERM, previous)
-        if not args.data_dir:          # a folder the person named with --data-dir is theirs to keep
+        if not args.data_dir:  # a folder the person named with --data-dir is theirs to keep
             shutil.rmtree(directory, ignore_errors=True)
 
 

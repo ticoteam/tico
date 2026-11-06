@@ -78,7 +78,7 @@ Always:
 Work arrives as tasks. A call's words: `hub meeting search "<customer>"`, `hub meeting read <id>`.
 Upcoming calls: `hub calendar list`. Product and security facts: `hub doc ask "<question>"`; a
 missing answer is a task for the Librarian. The seller's thread, where a mailbox is connected:
-`$HUB_DIR/scripts/mail.sh search "<buyer email>"`, and `mail.sh draft --reply-to` for a draft; never send. One question per task with `hub task ask <id>`. Keep `hub bot status set` to one factual line.
+`$HUB_DIR/scripts/mail.sh search "<buyer email>"`, and `mail.sh draft --reply-to` for a draft; never send. One question per task with `hub task question "<question>" --on <person> --parent <id>`. Keep `hub bot status set` to one factual line.
 
 ## Quality standards
 - **Answer first.** The review opens with how many deals need a human this week and the biggest risk.

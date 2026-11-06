@@ -31,8 +31,9 @@ const THEMES = ['light', 'dark'];
 // open a dialog).
 const PAGES = [
   {name: 'updates', route: '#/updates', ready: 'Write your update'},
-  {name: 'tasks', route: '#/tasks', ready: 'Needs you', steps: async page => {
-    await page.click('#task-view [data-view="list"]');
+  {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', steps: async page => {
+    await page.click('#task-scope');
+    await page.click('#task-filter-pop [data-task-type="general"]');
     await page.getByText('Draft replies for the open support tickets').first().waitFor();
   }},
   {name: 'needs-you', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?'},
@@ -50,7 +51,7 @@ const PAGES = [
     await page.locator('.use-line').first().click();
     await page.locator('.use-col').first().waitFor();
   }},
-  {name: 'settings-health', route: '#/settings', tab: 'health', ready: 'Setup check'},
+  {name: 'settings-health', route: '#/settings/health', ready: 'Setup check'},
   {name: 'devices', route: '#/settings', tab: 'devices', ready: "Ana's MacBook"},
   {name: 'support', route: '#/updates', ready: 'Write your update', steps: async page => {
     await page.evaluate(() => window.supportOpen());
@@ -175,7 +176,7 @@ async function main() {
           await page.keyboard.press('Escape').catch(() => {});
           const route = typeof spec.route === 'function' ? await spec.route(page) : spec.route;
           await page.evaluate(hash => { location.hash = hash; }, route);
-          // Settings renders after the route, and keeps Health, Email & Phone and Mail in a More group that starts closed.
+          // Settings renders after the route, and keeps System, Webhooks and Billing in a More group that starts closed.
           if (spec.tab) {
             const tab = page.locator(`[data-settings-tab="${spec.tab}"]`);
             await page.locator('#settings-more').waitFor({state: 'attached'}).catch(() => {});

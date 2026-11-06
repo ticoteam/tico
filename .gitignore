@@ -7,6 +7,8 @@ app/target/
 app/gen/
 
 node_modules/
+# The UI's compiled TypeScript (npm run build:ui).
+/build/
 .venv/
 .tmp-*
 .pytest_cache/

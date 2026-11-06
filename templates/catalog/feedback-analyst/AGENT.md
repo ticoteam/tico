@@ -85,7 +85,7 @@ Always:
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Feedback comes from tasks and files humans attach, from
 Support Agent's digests and known-issues, and from imported customer calls (`hub meeting search "<theme>"`, then
 `hub meeting read <id>`). Where a mailbox is connected, `$HUB_DIR/scripts/mail.sh search "<query> newer_than:7d"`.
-Ask the recipient one question with `hub task ask <id>`. Something a human must decide is
+Ask the recipient one question with `hub task question "<question>" --on <person> --parent <id>`. Something a human must decide is
 `hub task create --owner <person>`. Finish every task, quiet week or not.
 
 ## Quality standards

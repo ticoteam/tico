@@ -11,6 +11,7 @@ automation (backend/automations.py, trigger `due`) that opens the due date's tas
   A sync keeps a linked routine's paused or running state.
 - Completing its task marks the day Satisfied, and a day already marked by hand is skipped: backend/rule_due.py.
 """
+
 from . import automation_due
 from . import automations as AU
 from . import hubdb as H
@@ -18,9 +19,9 @@ from . import rule_due as D
 from .store import Problem
 
 STEP_ID = "open"
-NAME_MAX = 120          # an automation's name (automation_flow.check)
-TITLE_MAX = 300         # a create_task's title (automation_actions._create_task)
-UNCHANGED = object()    # an edit that leaves the routine as it is
+NAME_MAX = 120  # an automation's name (automation_flow.check)
+TITLE_MAX = 300  # a create_task's title (automation_actions._create_task)
+UNCHANGED = object()  # an edit that leaves the routine as it is
 
 
 def task_days_of(body, key="task_days"):
@@ -32,22 +33,41 @@ def task_days_of(body, key="task_days"):
     if value is None:
         return None
     if type(value) is not int or not 0 <= value <= automation_due.MAX_OPEN_DAYS:
-        raise Problem("validation", f"task_days is a whole number of days from 0 to {automation_due.MAX_OPEN_DAYS}", 422)
+        raise Problem(
+            "validation", f"task_days is a whole number of days from 0 to {automation_due.MAX_OPEN_DAYS}", 422
+        )
     return value
 
 
 def _flow(row, rule_text, days, before=None):
     title = " ".join(str(rule_text or "").split())
     owner = "person:" + row["owner"][6:] if row["owner"].startswith("human:") else row["owner"]
-    trigger = {"type": "due", "first_due": row["first_due_on"], "repeats": row["repeats"], "open_days": days,
-               "tz": row["timezone"], "rule_due_id": row["id"]}
-    step = {"id": STEP_ID, "type": "action", "do": "create_task",
-            "args": {"title": title[:TITLE_MAX], "owner": row["owner"]}}
-    name = title if len(title) <= NAME_MAX else title[:NAME_MAX - 1].rstrip() + "…"
+    trigger = {
+        "type": "due",
+        "first_due": row["first_due_on"],
+        "repeats": row["repeats"],
+        "open_days": days,
+        "tz": row["timezone"],
+        "rule_due_id": row["id"],
+    }
+    step = {
+        "id": STEP_ID,
+        "type": "action",
+        "do": "create_task",
+        "args": {"title": title[:TITLE_MAX], "owner": row["owner"]},
+    }
+    name = title if len(title) <= NAME_MAX else title[: NAME_MAX - 1].rstrip() + "…"
     # A new routine starts on; one already linked keeps its state, so an edit never resumes a paused one.
     enabled = bool(before.get("enabled", True)) if before else True
-    return {**(before or {}), "name": name, "owner": owner, "trigger": trigger, "steps": [step], "enabled": enabled,
-            "builtin": False}
+    return {
+        **(before or {}),
+        "name": name,
+        "owner": owner,
+        "trigger": trigger,
+        "steps": [step],
+        "enabled": enabled,
+        "builtin": False,
+    }
 
 
 def current_days(c, row):

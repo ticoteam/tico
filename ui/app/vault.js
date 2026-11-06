@@ -1,4 +1,4 @@
-/* ui/app/vault.js — Credential vault dialogs (reveal, add or edit, share, delete) for Library › Tools
+/* ui/app/vault.js — Credential vault dialogs (reveal, add or edit, share, delete) for Tools
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -13,7 +13,7 @@ function vaultClose() {
   if (dialog.open) dialog.close();
   dialog.replaceChildren();
 }
-// Read the vault again after a change and let Library › Tools redraw what it shows of it (ui/app/redesign-library.js).
+// Read the vault again after a change and let Tools redraw what it shows of it (ui/app/redesign-library.js).
 async function vaultLoad() {
   try { await vaultFetch(); }
   catch (error) { toast(error.message, true); }

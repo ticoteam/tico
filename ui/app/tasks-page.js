@@ -45,24 +45,24 @@ function pageTasks(forced, openId = '') {
   main.innerHTML = `<div class="tasks-page"><div class="tasks-pane" id="tasks-pane">
       <header class="tl-head">
         <h1>Tasks</h1>
-        <div class="tl-tabs" id="task-view" role="tablist" aria-label="Task views"></div>
+        <button type="button" class="tl-scope" id="task-scope" aria-haspopup="menu" aria-expanded="false"></button>
         <span class="spacer"></span>
-        <div class="tl-type-search"><div class="tl-types" id="task-type" role="group" aria-label="Task type"></div>
-        <div class="tl-search">${TL_ICON.search}<input type="search" id="task-q" spellcheck="false" aria-label="Search tasks" placeholder="Search" autocomplete="off"><kbd aria-hidden="true">/</kbd></div></div>
-        <button type="button" class="tl-decide tl-decide-head" data-go-through hidden></button>
-        <button class="primary tl-new" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}<span>New task</span></button>
-      </header>
-      <div class="tl-bar" id="task-bar">
         <span class="tl-who-wrap" id="task-who-wrap" hidden></span>
+        <div class="tl-search">${TL_ICON.search}<input type="search" id="task-q" spellcheck="false" aria-label="Search tasks" placeholder="Search" autocomplete="off"><kbd aria-hidden="true">/</kbd></div>
+        <button type="button" class="tl-ib tl-filter" id="task-filter" aria-haspopup="true" aria-label="Filter" title="Filter">${TL_ICON.filter}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>
+        <div class="tl-pair" id="task-layout" role="group" aria-label="Layout">
+          <button type="button" data-layout="list" aria-pressed="false" aria-label="List" title="List">${TL_ICON.list}</button>
+          <button type="button" data-layout="board" aria-pressed="false" aria-label="Board" title="Board">${TL_ICON.board}</button></div>
+        <span class="tl-finished-slot"><span class="tl-pair tl-finished" id="task-finished" role="group" aria-label="Finished" hidden></span></span>
+        <button type="button" class="tl-ib" id="task-archive" aria-pressed="false" aria-label="Finished" title="Finished tasks">${TL_ICON.archive}</button>
+        <button type="button" class="tl-decide" data-go-through hidden></button>
+        <button type="button" class="tl-ib" id="task-more" aria-haspopup="menu" aria-expanded="false" aria-label="More" title="More">${TL_ICON.dots}</button>
+        <button class="primary tl-new" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}</button>
+      </header>
+      <div class="tl-bar" id="task-bar" hidden>
+        <span class="tl-finished-bar"></span>
         <div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="task-chips"></span>
-          <button type="button" class="tl-addf" id="task-filter" aria-haspopup="true">${TL_ICON.filter}<span>Filter</span></button>
           <button type="button" class="linkish tl-clear" id="task-filter-clear" hidden>Clear</button></div>
-        <span class="spacer"></span>
-        <button type="button" class="tl-decide tl-decide-bar" data-go-through hidden></button>
-        ${S.me?.role === 'bot' ? '' : `<button type="button" class="tl-addf tl-ic" id="task-stats" aria-label="Task stats" title="Task stats">${TL_ICON.chart}</button>`}
-        <button type="button" class="tl-addf tl-ic tl-pin" id="task-pin" aria-pressed="false" aria-label="Pin to the sidebar" title="Pin to the sidebar">${TL_ICON.pin}</button>
-        <button type="button" class="tl-addf tl-selmode" id="task-select-mode" aria-pressed="false" hidden>Select</button>
-        <span class="tl-groupby" id="task-group-wrap"></span>
       </div>
       <span id="tl-sel-word" hidden>Selected</span>
       <div id="task-body"></div>
@@ -71,16 +71,21 @@ function pageTasks(forced, openId = '') {
     <div id="task-filter-pop" class="tl-pop" popover></div><div id="task-card-pops"></div>`;
   const bar = $('#task-bar');
   bar.onscroll = () => tasksBarEdge(bar);
-  if (window.ResizeObserver) new ResizeObserver(() => tasksBarEdge(bar)).observe(bar);
-  $('#task-type').onclick = ev => {
-    const button = ev.target.closest('[data-task-type]');
-    if (button) taskPipelineSelect(state, button.dataset.taskType);
-    else if (ev.target.closest('#task-type-more')) taskPipelineMenu(state, $('#task-type-more'));
-  };
-  $('#task-pin').onclick = () => tasksPinToggle(state);
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => tasksBarEdge(bar)).observe(bar);
+    // A narrower row folds the search to its icon; measured on the next frame, outside the observer's own delivery.
+    new ResizeObserver(() => requestAnimationFrame(() => tasksHeadFit(state))).observe($('#tasks-pane .tl-head'));
+  }
+  $('#task-scope').onclick = ev => tasksScopeMenu(state, ev.currentTarget);
+  $('#task-layout').onclick = ev => { const b = ev.target.closest('[data-layout]'); if (b && b.dataset.layout !== state.view) tasksSetView(state, b.dataset.layout); };
+  $('#task-archive').onclick = () => tasksArchiveToggle(state);
+  $('#tasks-pane').addEventListener('click', ev => {
+    const b = ev.target.closest('#task-finished [data-view]');
+    if (b && b.dataset.view !== state.view) { tasksSetView(state, b.dataset.view); $(`#task-finished [data-view="${b.dataset.view}"]`)?.focus(); }
+  });
+  $('#task-more').onclick = ev => tasksMoreMenu(state, ev.currentTarget);
   // Catch up: the Needs you cards from the first, one at a time (decide.js).
   for (const b of document.querySelectorAll('#tasks-pane [data-go-through]')) b.onclick = () => decideGoThrough();
-  $('#task-stats')?.addEventListener('click', () => taskStatsOpen(state));
   $('#task-new').onclick = () => { const p = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); };
   const search = $('#task-q');
   search.oninput = () => {
@@ -99,21 +104,6 @@ function pageTasks(forced, openId = '') {
     search.value = state.q = '';
     clearTimeout(state.searchTimer);
     tasksRender(state);
-  };
-  const tabs = $('#task-view');
-  tabs.onclick = ev => {
-    const b = ev.target.closest('[data-view]'); if (!b || b.dataset.view === state.view) return;
-    tasksSetView(state, b.dataset.view);
-  };
-  tabs.onkeydown = ev => {
-    const list = [...tabs.querySelectorAll('[role=tab]')], at = list.indexOf(document.activeElement);
-    if (at < 0) return;
-    const to = {ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: list.length - 1}[ev.key];
-    if (to == null) return;
-    ev.preventDefault();
-    const next = list[(to + list.length) % list.length];
-    tasksSetView(state, next.dataset.view);
-    $(`#task-view [data-view="${next.dataset.view}"]`)?.focus();
   };
   $('#task-filter').onclick = ev => tasksFieldMenu(state, ev.currentTarget);
   $('#task-chips').onclick = ev => {
@@ -134,12 +124,6 @@ function pageTasks(forced, openId = '') {
     $('#task-filter')?.focus();
   };
   $('#task-who-wrap').onclick = ev => { const b = ev.target.closest('#task-who'); if (b) tasksWhoMenu(state, b); };
-  $('#task-group-wrap').onclick = ev => { const b = ev.target.closest('#task-group'); if (b) tasksGroupMenu(state, b); };
-  $('#task-select-mode').onclick = () => {
-    state.selectMode = !state.selectMode;
-    if (!state.selectMode) tasksSelectionClear(state);
-    tasksTools(state); tasksSelectionPaint(state);
-  };
   $('#task-bulk').onclick = ev => {
     const b = ev.target.closest('[data-bulk]'); if (!b) return;
     tasksBulkMenu(state, b.dataset.bulk, b);
@@ -148,7 +132,7 @@ function pageTasks(forced, openId = '') {
   pop.addEventListener('keydown', tasksMenuKeys);
   pop.addEventListener('toggle', ev => {
     if (ev.newState !== 'closed') return;
-    $('#task-type-more')?.setAttribute('aria-expanded', 'false');
+    for (const id of ['#task-scope', '#task-more']) $(id)?.setAttribute('aria-expanded', 'false');
     const anchor = state.menuAnchor; state.menuAnchor = null;
     if (anchor?.isConnected && (pop.contains(document.activeElement) || document.activeElement === document.body)) anchor.focus();
   });
@@ -193,7 +177,13 @@ function pageTasks(forced, openId = '') {
     if (want && TASKS_ST === state) await decideWanted(want);
   })();
 }
+// The views are the scope (You, or a type's open tasks), the layout (list or board) and the finished feed (Done,
+// Closed, Snoozed): the layout is kept for the next type picked, and leaving the finished feed goes back to where it was.
+const tasksLayoutView = view => view === 'list' || view === 'board';
+const tasksArchived = view => tasksFinishedView(view) || view === 'snoozed';
 function tasksSetView(state, view) {
+  if (tasksArchived(view) && !tasksArchived(state.view)) state.back = state.view;
+  if (tasksLayoutView(view)) state.layout = view;
   state.view = view;
   tasksMenuClose();
   state.selectMode = false;
@@ -210,6 +200,18 @@ function tasksDoneEnsure(state) {
 }
 function tasksNormalise(state, forced) {
   if (!TASK_VIEWS.some(([k]) => k === state.view)) state.view = forced || 'foryou';
+  if (tasksLayoutView(state.view)) state.layout = state.view;
+  if (!tasksLayoutView(state.layout)) state.layout = 'list';
+}
+// The archive button: the finished feed of the type in view, and pressed again, back to the list it left.
+function tasksArchiveToggle(state) {
+  if (!tasksArchived(state.view)) { tasksSetView(state, 'done'); return; }
+  tasksSetView(state, state.back === 'foryou' || tasksLayoutView(state.back) ? state.back : state.layout);
+}
+// The scope menu's type: that type's open tasks in the layout last used.
+function tasksScopeType(state, id) {
+  taskPipelineSelect(state, id);
+  if (!tasksLayoutView(state.view)) tasksSetView(state, state.layout || 'list');
 }
 function tasksRemember(state) {
   taskPipelineRemember(state);
@@ -229,13 +231,13 @@ function tasksKeep(state) {
   S.lastRead.tasks = {key: activeTasksPath(), tasks: state.tasks, labels: state.labels, tags: state.tags, filtered: state.filtered,
     since: state.activeComplete ? state.since : null, fullAt: state.fullAt};
 }
-function taskOwnerOptions(selected = '') {
+function taskOwnerOptions(selected = '', blank = 'Who is this for?') {
   const people = (S.people || []).filter(p => !p.hidden)
     .slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
   const bots = (S.emps || []).filter(e => e.status !== 'archived' && (!isHiddenBot(e.id) || [e.id, 'bot:' + e.id].includes(selected)))
     .slice().sort((a, b) => byBotOrder(a, b) || String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
   const pick = value => value === selected ? ' selected' : '';
-  return `<option value="">Who is this for?</option>
+  return `<option value="">${esc(blank)}</option>
     <optgroup label="Humans">${people.map(p =>
       `<option value="human:${esc(p.id)}"${pick('human:' + p.id) || pick(p.id)}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
     <optgroup label="Bots">${bots.map(e =>
@@ -284,6 +286,7 @@ function openTaskCreate(owner = '', opts = {}) {
         <div class="r3">
           <label>Tags <input type="text" name="labels" list="task-label-list-new" placeholder="bug, pricing-page" aria-label="Tag keys, comma separated" size="18" value="${esc((opts.labels || []).join(', '))}"><datalist id="task-label-list-new">${(TASKS_ST?.labels || []).map(l => `<option value="${esc(l)}">`).join('')}</datalist></label>
           <label><input type="checkbox" name="top"> Top of their queue</label>
+          <label><input type="checkbox" name="follow"> Follow</label>
         </div>
         <label>Serves <select name="goal" aria-label="The goal this task serves"><option value="">No goal</option></select></label>
         <label>Details (required)<textarea name="body" required aria-label="Details" placeholder="Details"></textarea></label>
@@ -324,6 +327,7 @@ function openTaskCreate(owner = '', opts = {}) {
     const labels = form.labels.value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
     if (labels.length) payload.labels = labels;
     if (form.top.checked) payload.top = true;
+    if (form.elements.follow.checked) payload.follow = true;
     if (form.link.value.trim()) payload.links = [form.link.value.trim()];
     if (parent) payload.relations = [{task: parent.id, kind: 'parent'}];
     try {
@@ -562,7 +566,6 @@ function companyNeedGroups(items) {
   return [...groups.values()].sort((a, b) => a.firstNeed - b.firstNeed || a.firstRank - b.firstRank
     || String(b.updated_at).localeCompare(String(a.updated_at)) || actorLabel(a.actor).localeCompare(actorLabel(b.actor)));
 }
-function tasksTabsPaint(state) { tasksPaint($('#task-view'), tasksTabsHTML(state)); }
 // The body redraws on every load (the 30-second poll reloads the list): only rows that changed are replaced, so the
 // focus, the scroll, the cursor, the selection and the open peek all stay. A hidden row leaves the selection.
 // A `data-patch-key` node keeps what the person did in it (opened, typed) through redraws. With a `data-patch-sig` its
@@ -625,7 +628,7 @@ function tasksRender(state) {
     : active.id === 'board-more' ? '#board-more' : active.matches('[data-clear-filters]') ? '[data-clear-filters]' : '';
   decidePaintButton();
   el.dataset.view = state.view;
-  el.setAttribute('role', 'tabpanel'); el.setAttribute('aria-labelledby', 'task-tab-' + state.view);
+  el.setAttribute('role', 'region');
   const items = taskItems(state);
   let html = state.loading && !tasksFinishedView(state.view) && !items.length
     ? skelRows(6)
@@ -649,6 +652,6 @@ function tasksRender(state) {
     row?.classList.add('peeked'); row?.querySelector('[data-open-task]')?.setAttribute('aria-current', 'true');
   }
   tasksSelectionPaint(state);
-  tasksTabsPaint(state);
+  if (tasksScopePaint(state)) tasksHeadFit(state);
   fbSync();
 }

@@ -1,4 +1,5 @@
-/* ui/app/integrations.js — One tool's page (Library › Tools draws it beside its list) and the credential helpers
+/* ui/app/integrations.js — One declared tool's page (Tools › Keys draws it beside its list, #/tools/<service> on its
+   own; ui/app/redesign-library.js) and the credential helpers
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -31,18 +32,14 @@ async function vaultFetch() {
   VAULT = await get('/v2/credentials');
   return VAULT;
 }
-// The old Tools page (#/integrations, #/integrations/<service>) is Library › Tools now (ui/app/redesign-library.js).
-function pageIntegrations() {
-  rdToolsOpen(RD_TOOLS + S.route.slice(INTEGRATIONS.length));
-}
 // A write level in words: what a bot may change there (backend/integrations.py `write_level`).
 const TOOL_WRITES = {never: ['Read only', 'ok'], approval: ['Approval', 'waiting'], allowed: ['Freely', '']};
 const toolWritePill = level => { const [word, tone] = TOOL_WRITES[level] || [level || '', '']; return `<span class="pill ${tone}">${esc(word)}</span>`; };
-// One tool's page drawn into #int-detail, under Library › Tools' address (`base`): its heading (with `head`, the
+// One tool's page drawn into #int-detail, under a Tools address (`base`): its heading (with `head`, the
 // phone's back link, before the title), then `facts(page)` (who has it, its credentials, its issues: the slot
 // #tool-facts, which the page redraws alone when they change), then what the page says, its queries and learnings.
 // `after(page)` runs once it is drawn. Anyone signed in adds a learning; the owner deletes one.
-async function integrationDetail(service, load, {base = RD_TOOLS, head = '', facts = null, after = null} = {}) {
+async function integrationDetail(service, load, {base = TOOLS_ROUTE, head = '', facts = null, after = null} = {}) {
   let page;
   try { page = await get('/v2/tools/' + encodeURIComponent(service)); }
   catch (e) {
@@ -51,7 +48,8 @@ async function integrationDetail(service, load, {base = RD_TOOLS, head = '', fac
     return;
   }
   if (load !== INT_LOAD || !$('#int-detail')) return;
-  if (page.service !== service) { location.replace(base + '/' + page.service + (location.hash.includes('?') ? '?' + location.hash.split('?')[1] : '')); return; }
+  // Another name for the same tool goes to its own; a page with no service (an older hub) stays put.
+  if (page.service && page.service !== service) { location.replace(base + '/' + page.service + (location.hash.includes('?') ? '?' + location.hash.split('?')[1] : '')); return; }
   // A query entry carries `sql`, or `mongo` for a MongoDB database; bots run either with `hub db`.
   const queryText = q => q.sql ? q.sql.trim() : JSON.stringify(q.mongo, null, 2);
   const queryHtml = q => `<details class="int-query" data-query="${esc(q.id)}"><summary><span class="id">${esc(q.id)}</span><strong>${esc(q.title)}</strong>${q.database ? `<span class="pill">${esc(q.database)}</span>` : ''}<span class="desc">${esc(q.description || '')}</span></summary>
