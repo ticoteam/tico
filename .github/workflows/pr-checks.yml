@@ -179,9 +179,10 @@ jobs:
           if-no-files-found: warn
 
   static:
-    # Every change, on both tiers: pinned ruff against its baseline (no new findings or suppressions), pyright on the
-    # boundary modules, migration names, the UI's generated API types, the runner wire contract, shell scripts
-    # (shellcheck) and workflows (actionlint). Seconds each once installed; tools are pinned.
+    # Every change, on both tiers: pinned ruff against its baseline (no new findings or suppressions), basedpyright on
+    # the backend against its baseline (strict for new modules), migration names, the UI's generated API types, the
+    # OpenAPI document, the runner wire contract, shell scripts (shellcheck) and workflows (actionlint). Seconds each
+    # once installed; tools are pinned.
     name: static checks
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ${{ github.event_name == 'merge_group' && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
@@ -219,10 +220,14 @@ jobs:
         run: bash scripts/ci_install.sh python && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.0
       - name: Python lint
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" LINT_BASE_REF="$BASE_SHA" bash scripts/lint.sh
-      - name: Boundary types
+      - name: Types (basedpyright baseline, strict new modules)
+        env:
+          PYRIGHT_BASE_REF: ${{ env.BASE_SHA }}
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_types.sh
       - name: UI types
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_types.sh --base "$BASE_SHA"
+      - name: OpenAPI document (docs/openapi/v2.json is what the generator writes)
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" python3 -m backend.openapi_v2 --check
       - name: UI lint setup
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: UI lint

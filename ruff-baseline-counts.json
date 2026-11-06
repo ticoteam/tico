@@ -246,7 +246,7 @@
     "S110": 1
   },
   "backend/market_watch.py": {
-    "BLE001": 3
+    "BLE001": 2
   },
   "backend/mcp.py": {
     "BLE001": 1,
@@ -509,8 +509,7 @@
     "PLW1510": 1
   },
   "clients/gateway.py": {
-    "B018": 1,
-    "BLE001": 2
+    "B018": 1
   },
   "clients/harness_manifests.py": {
     "B904": 1
