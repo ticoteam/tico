@@ -291,8 +291,16 @@ def _digits(text: str) -> str:
     return re.sub(r"\D", "", text)
 
 
+def _first(body: object) -> object:
+    """A searchStream error comes as a list of one; anything else as itself."""
+    if isinstance(body, list):
+        items = cast(list[Any], body)
+        return items[0] if items else {}
+    return body
+
+
 def _google_error(reply: Reply) -> str:
-    body = reply.body[0] if isinstance(reply.body, list) and reply.body else reply.body
+    body = _first(reply.body)
     err = _dict(_dict(body).get("error"))
     message = str(err.get("message") or "")
     for detail in _list(err.get("details")):
@@ -303,7 +311,7 @@ def _google_error(reply: Reply) -> str:
 
 
 def _google_throttled(reply: Reply) -> bool:
-    body = reply.body[0] if isinstance(reply.body, list) and reply.body else reply.body
+    body = _first(reply.body)
     return str(_dict(_dict(body).get("error")).get("status") or "") == "RESOURCE_EXHAUSTED"
 
 
@@ -373,8 +381,8 @@ class _Google:
         self._check(reply)
         if reply.status != 200:
             raise Failed(f"Google Ads account {customer}: " + _google_error(reply))
-        batches = reply.body if isinstance(reply.body, list) else [reply.body]
-        return [_dict(r) for b in cast(list[Any], batches) for r in _list(_dict(b).get("results"))]
+        batches: list[Any] = cast(list[Any], reply.body) if isinstance(reply.body, list) else [reply.body]
+        return [_dict(r) for b in batches for r in _list(_dict(b).get("results"))]
 
 
 CLIENTS = ("SELECT customer_client.id, customer_client.descriptive_name, customer_client.currency_code, "
@@ -385,15 +393,16 @@ def fetch_google(http_: Http, secrets: Mapping[str, str], start: str, end: str) 
     api = _Google(http_, secrets, google_token(http_, secrets))
     login = _digits(secrets.get("login_customer_id", ""))
     named = [_digits(x) for x in re.split(r"[,\s;]+", secrets.get("customer_ids", "")) if _digits(x)]
-    roots = list(dict.fromkeys([*([login] if login else []), *named, *api.accessible()]))
+    first: list[str] = [login] if login else []
+    roots: list[str] = list(dict.fromkeys([*first, *named, *api.accessible()]))
     found: dict[str, Account] = {}
     for root in roots:
         via = login or root
-        rows = api.search(root, via, CLIENTS)
-        if rows is None and via != root:
+        clients = api.search(root, via, CLIENTS)
+        if clients is None and via != root:
             via = root
-            rows = api.search(root, root, CLIENTS)
-        for row in rows or []:
+            clients = api.search(root, root, CLIENTS)
+        for row in clients or []:
             cc = _dict(row.get("customerClient"))
             cid = _digits(str(cc.get("id") or ""))
             if not cid or cc.get("manager") is True or cid in found:
