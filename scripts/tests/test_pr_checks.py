@@ -644,7 +644,7 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
     restored = list(caches(pr))
     warmed = list(caches(warm))
     assert {w[0] for w in warmed} == {r[0] for r in restored} == {
-        "pip", "npm", "pr-rust-lint", "pr-conformance", "pr-recorder",
+        "pip", "npm", "pr-rust-lint", "pr-desktop", "pr-conformance", "pr-recorder",
         "playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}",
         "playwright-system-ubuntu24-x64-${{ steps.image.outputs.version }}-${{ hashFiles('package-lock.json', "
         "'scripts/ci_install.sh', 'scripts/playwright-system-packages.json') }}"}

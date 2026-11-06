@@ -228,8 +228,61 @@ jobs:
       - if: steps.changed.outputs.run == 'true'
         run: bash scripts/rust_checks.sh
 
+  desktop-app:
+    # The Tauri desktop app (app/): rustfmt, clippy -D warnings and its unit tests, on Linux with the build dependencies
+    # app.yml installs. Always reported, so it can be required: a PR without app changes passes it in seconds.
+    name: desktop app
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: App changed
+        id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" != pull_request ] || git diff --name-only "$BASE"...HEAD | grep -q '^app/'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changed.outputs.run == 'true'
+        name: Rust 1.92.0 with rustfmt and clippy (the version scripts/rust_checks.sh pins)
+        run: rustup toolchain install 1.92.0 --profile minimal --component clippy,rustfmt
+      - if: steps.changed.outputs.run == 'true'
+        name: Linux build dependencies (the ones app.yml installs)
+        run: |
+          sudo sed -i \
+            -e 's|mirror+file:/etc/apt/apt-mirrors.txt|https://archive.ubuntu.com/ubuntu/|g' \
+            -e 's|http://azure\.archive\.ubuntu\.com/ubuntu/|https://archive.ubuntu.com/ubuntu/|g' \
+            /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libpulse-dev
+      - if: steps.changed.outputs.run == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: app -> target
+          shared-key: pr-desktop
+          # A failing run keeps its compiled dependencies, so the next push does not start from nothing.
+          cache-on-failure: true
+      - if: steps.changed.outputs.run == 'true'
+        name: rustfmt
+        working-directory: app
+        run: cargo +1.92.0 fmt --check
+      - if: steps.changed.outputs.run == 'true'
+        name: clippy
+        working-directory: app
+        run: cargo +1.92.0 clippy --locked --all-targets -- -D warnings
+      - if: steps.changed.outputs.run == 'true'
+        name: unit tests
+        working-directory: app
+        run: cargo +1.92.0 test --locked
+
   recorder-changes:
-    # Tico Recorder changed (recorder/): its macOS tests run below. Always reported, so it can be required.
+    # Tico Recorder changed (recorder/): its macOS checks run below. Always reported, so it can be required.
     name: recorder changed
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
@@ -263,10 +316,17 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: recorder
           shared-key: pr-recorder
+      - name: Format and lint, with the desktop and cli features
+        working-directory: recorder
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets --features desktop,cli -- -D warnings
       - name: Tests with the desktop feature
         working-directory: recorder
         run: cargo test --locked --features desktop,cli
@@ -334,7 +394,7 @@ jobs:
     # job queued after the cancellation can wait for a runner that never comes, holding the newer head's run pending
     # in the same concurrency group.
     if: ${{ !cancelled() && !github.event.pull_request.draft }}
-    needs: [plan, tests, caddy-linux, static, rust-lint, recorder-changes, recorder]
+    needs: [plan, tests, caddy-linux, static, rust-lint, desktop-app, recorder-changes, recorder]
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below,
     # and the gate after it must still run. A hang in the receipt canceled the whole job at three minutes on #2487.
@@ -366,6 +426,7 @@ jobs:
           CADDY: ${{ needs.caddy-linux.result }}
           STATIC: ${{ needs.static.result }}
           RUST_LINT: ${{ needs.rust-lint.result }}
+          DESKTOP_APP: ${{ needs.desktop-app.result }}
           RECORDER_CHANGES: ${{ needs.recorder-changes.result }}
           RECORDER: ${{ needs.recorder.result }}
         run: |
@@ -373,6 +434,7 @@ jobs:
           test "$TESTS" = success
           test "$STATIC" = success
           test "$RUST_LINT" = success
+          test "$DESKTOP_APP" = success
           test "$RECORDER_CHANGES" = success
           case "$CADDY" in success|skipped) ;; *) exit 1 ;; esac
           case "$RECORDER" in success|skipped) ;; *) exit 1 ;; esac
