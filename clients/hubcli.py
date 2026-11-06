@@ -496,6 +496,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub update show <id>                   one update with its thread
     hub update create "<- bullets>" [--kind daily|weekly] [--learnings-saved N] [--suggestion TEXT ...] [--delivery-batch ID]
                                            post your own update when Tico asks (three bullets)
+    hub update create --skip               nothing real to report: posts nothing, the request closes as skipped
     hub update create --slides-file week.json [--day D]   a week in review: {goal, kpis, done, focus, blockers}
     hub update redo --day D [--kind weekly|daily] [--bot B ...] [--with-managers]   ask the bots to redo a past day (owner)
     hub update mark-read [ids...] [--all] [--unread]
@@ -3445,6 +3446,7 @@ def parser():
     s.add_argument("--suggestion", action="append", dest="suggestions_seen",
                    help="a suggestion you acted on (repeatable)")
     s.add_argument("--delivery-batch", dest="delivery_batch_id", help="the delivery this post answers, when Tico named one")
+    s.add_argument("--skip", action="store_true", help="nothing real to report since your last update: post nothing")
     s.set_defaults(fn="update create")
     s = upd.add_parser("redo", help="ask the bots again for a past day's update in the current shape (owner)")
     s.add_argument("--day", required=True)

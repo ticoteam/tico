@@ -5748,11 +5748,13 @@ _SLIDES = {
       "kpis, done, focus, blockers. One of each a day; posting again replaces it. One that breaks the "
       "rules is posted with a `warning` saying how to write the next one; an empty one is refused. A delivery "
       "turn (learnings or suggestions only) posts nothing: report `learnings_saved`, `suggestions_seen` and "
-      "`delivery_batch_id` only if you post.",
+      "`delivery_batch_id` only if you post. Nothing real to report (nothing finished, started, decided, or newly "
+      "waiting or blocked)? Send `skip` true with no body or slides instead: nothing is posted.",
       {"body": _s("A daily: three lines, each starting with '- ', plus any `Blocked:` or `Suggestion:` lines"),
        "slides": _SLIDES,
        "kind": _s("daily or weekly; Tico picks from the day when omitted", enum=["daily", "weekly"]),
        "day": _s("YYYY-MM-DD, only when Tico asks you to redo a past day"),
+       "skip": {"type": "boolean", "description": "Nothing real to report: nothing is posted, and the request closes as skipped"},
        "learnings_saved": {"type": "integer", "minimum": 0, "maximum": 15,
                            "description": "How many of the learnings Tico handed you you kept"},
        "suggestions_seen": {"type": "array", "items": {"type": "string"}, "maxItems": 10,
@@ -5766,6 +5768,7 @@ def update_post(api, args):
     if isinstance(slides, str):
         slides = json.loads(slides)
     fields = (("body", args.get("body")), ("slides", slides), ("kind", args.get("kind")), ("day", args.get("day")),
+              ("skip", True if args.get("skip") else None),
               ("learnings_saved", args.get("learnings_saved")), ("suggestions_seen", args.get("suggestions_seen")),
               ("delivery_batch_id", args.get("delivery_batch_id")))
     out = api.post("updates", {k: v for k, v in fields if v is not None}, key=_key(args))
