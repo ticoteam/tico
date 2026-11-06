@@ -547,6 +547,8 @@ def run(args, who=None):
         "gateway search",
         "gateway fetch",
         "gateway image",
+        "gateway video",
+        "gateway video-status",
     ):
         return via_tool(client, args)
     if args.cmd == "decision":

@@ -47,6 +47,7 @@ TRANSIENT = ("unreachable", "busy")
 # States where the connection is not working: the Gateway refuses the key, or the key may not go to its URL.
 REFUSED = ("revoked", "unknown", "bad_url")
 CAP_MESSAGE = "Gateway cap reached"
+IMAGE_MODEL = "tico-images-1.0"
 # What each state says to the people who own the connection.
 MESSAGES = {
     "connected": "Connected.",
@@ -473,11 +474,30 @@ def search(url, key, query, max_results=5, headers=None, timeout=25, opener=None
     )
 
 
-def image(url, key, prompt, category, images=(), size=None, count=1, headers=None, timeout=130, opener=None):
-    """Tico HQ's image maker (`POST <base>/images`, the gateway key): (status, {model, category, images: [{mime, b64}],
-    usage: {cost_usd}} or {}, error code). The references are base64 data URLs the caller has checked; the images come
-    back as the Gateway sent them. A count the Gateway gives less than asked for is the answer's own."""
-    body = {"prompt": str(prompt)[:4000], "category": str(category), "count": max(1, min(4, int(count)))}
+def image(
+    url,
+    key,
+    prompt,
+    category=None,
+    images=(),
+    size=None,
+    count=1,
+    headers=None,
+    timeout=130,
+    opener=None,
+    model=IMAGE_MODEL,
+    quality=None,
+):
+    """Tico HQ's image maker (`POST <base>/images`, the gateway key): (status, {model, category or quality, images:
+    [{mime, b64}], usage: {cost_usd}} or {}, error code). `model` is HQ's id (tico-images-low, tico-images-high, tico-svg,
+    or the alias tico-images-1.0 that takes a `category`); a chat model takes `category`, the SVG model `quality`. The
+    references are base64 data URLs the caller has checked; the images come back as the Gateway sent them. A count the
+    Gateway gives less than asked for is the answer's own."""
+    body = {"model": str(model), "prompt": str(prompt)[:4000], "count": max(1, min(4, int(count)))}
+    if category:
+        body["category"] = str(category)
+    if quality:
+        body["quality"] = str(quality)
     if images:
         body["images"] = [str(ref) for ref in images][:4]
     if size:
@@ -494,16 +514,114 @@ def image(url, key, prompt, category, images=(), size=None, count=1, headers=Non
     ][:4]
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
     cost = usage.get("cost_usd")
-    return (
-        200,
-        {
-            "model": str(payload.get("model") or "")[:60],
-            "category": str(payload.get("category") or category)[:20],
-            "images": made,
-            "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None},
-        },
-        "",
+    answer = {
+        "model": str(payload.get("model") or model)[:60],
+        "images": made,
+        "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None},
+    }
+    if category:
+        answer["category"] = str(payload.get("category") or category)[:20]
+    if quality:
+        answer["quality"] = str(payload.get("quality") or quality)[:20]
+    return 200, answer, ""
+
+
+# A video job's answer keys the caller may see (HQ's public view: no provider id, no request, no content path).
+VIDEO_FIELDS = ("id", "status", "seconds", "resolution", "aspect", "audio", "cost_usd")
+VIDEO_MODEL = "tico-video"
+# The most one video's MP4 the computer takes from HQ (a 4k, 15-second clip is well under this).
+VIDEO_MAX_BYTES = 150 * 1024 * 1024
+VIDEO_TIMEOUT = 120
+_JOB = re.compile(r"gv_[0-9a-f]{24}")
+
+
+def job_path(job_id):
+    """`/videos/<id>` for a job id HQ made (`gv_` and 24 hex digits); None for anything else."""
+    return "/videos/" + job_id if _JOB.fullmatch(str(job_id)) else None
+
+
+def video_submit(url, key, body, headers=None, timeout=TIMEOUT, opener=None):
+    """Tico HQ's video maker (`POST <base>/videos`, the gateway key): (202, {id, status}, "") for a queued job, or
+    (status, {}, error code). `body` is the request as the door takes it (model, prompt, seconds, resolution, aspect,
+    audio and the frames that are given)."""
+    status, payload, code = _post(
+        safe_base(url) + "/videos", body, {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener
     )
+    if status != 202:
+        return status, {}, code
+    if not _JOB.fullmatch(str(payload.get("id") or "")):
+        return 502, {}, "unreadable"
+    return 202, {"id": str(payload["id"]), "status": str(payload.get("status") or "queued")[:20]}, ""
+
+
+def video_status(url, key, job_id, headers=None, timeout=TIMEOUT, opener=None):
+    """Tico HQ's view of a video job (`GET <base>/videos/<id>`): (200, the VIDEO_FIELDS of the job, ""), or (status, {},
+    error code). An id that is not a job id is 404 here, as HQ answers an unknown one."""
+    path = job_path(job_id)
+    if path is None:
+        return 404, {}, NOT_FOUND
+    status, payload, code = _get(
+        safe_base(url) + path, {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener
+    )
+    if status != 200:
+        return status, {}, code
+    job = {field: payload[field] for field in VIDEO_FIELDS if field in payload}
+    if "cost_usd" in job and (isinstance(job["cost_usd"], bool) or not isinstance(job["cost_usd"], (int, float))):
+        job["cost_usd"] = None
+    return 200, job, ""
+
+
+def video_content(url, key, job_id, headers=None, timeout=VIDEO_TIMEOUT, opener=None, limit=VIDEO_MAX_BYTES):
+    """The MP4 of a done job (`GET <base>/videos/<id>/content`): (200, bytes, ""), or (status, b"", code) -- 409 not_ready
+    or failed, 410 expired. A video longer than `limit` is (200, b"", "too_large")."""
+    path = job_path(job_id)
+    if path is None:
+        return 404, b"", NOT_FOUND
+    return _get_bytes(
+        safe_base(url) + path + "/content",
+        {"Authorization": "Bearer " + key, **(headers or {})},
+        timeout,
+        opener,
+        limit,
+    )
+
+
+def _get(url, headers, timeout, opener):
+    """(status, payload, code) for a GET to the Gateway, as `_post` answers a POST."""
+    status, body, code = _exchange(url, headers, "application/json", timeout, opener, None)
+    if status != 200:
+        return status, {}, code
+    try:
+        payload = json.loads(body or b"{}")
+    except ValueError:
+        return 0, {}, "unreadable"
+    return 200, payload if isinstance(payload, dict) else {}, ""
+
+
+def _get_bytes(url, headers, timeout, opener, limit):
+    """(status, bytes, code) for a GET of a binary answer, at most `limit` bytes."""
+    return _exchange(url, headers, "video/mp4", timeout, opener, limit)
+
+
+def _exchange(url, headers, accept, timeout, opener, limit):
+    """(status, body, code) for one GET: the body of a 2xx answer (at most `limit` bytes, when given), else the Gateway's
+    error code. An unreachable Gateway is status 0."""
+    request = urllib.request.Request(url, method="GET", headers={**headers, "Accept": accept})
+    try:
+        with (opener or _send)(request, timeout=timeout) as response:
+            body = response.read(limit + 1) if limit else response.read()
+        if limit and len(body) > limit:
+            return 200, b"", "too_large"
+        return getattr(response, "status", 200), body, ""
+    except urllib.error.HTTPError as exc:
+        with exc:
+            try:
+                code = _code(exc.read())
+            except (OSError, ValueError, AttributeError):
+                code = ""
+            return exc.code, b"", code or str(exc.code)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return 0, b"", "unreachable"
 
 
 def fetch(url, key, page, max_tokens=10000, headers=None, timeout=35, opener=None):
