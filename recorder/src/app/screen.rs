@@ -6,7 +6,9 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(any(target_os = "macos", test))]
+use std::time::Instant;
 use tauri::Emitter;
 use tico_recorder_native::{network::Tico, settings, signin, store::Store, workspace};
 #[cfg(target_os = "macos")]
