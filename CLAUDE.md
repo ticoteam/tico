@@ -17,7 +17,7 @@ included, run `npm ci && npx playwright install chromium` and install `backend/r
 first: runner images ship neither. Without Google Chrome, set `TICO_BROWSER_CHANNEL=` (empty) so the scripts use
 Playwright's Chromium. On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
 the parallel suite is the release check's job on a full-size machine. The PR checks
-workflow runs only the cheap checks (lint, generated types, the wire contract, workflows, shell scripts) on each push to a
+workflow runs only the cheap checks (lint, generated types, the OpenAPI document, the wire contract, workflows, shell scripts) on each push to a
 pull request, on free GitHub-hosted runners; `checks` is the one required check. The merge queue runs the tests, once per
 queue group on the merged result, on RunsOn Spot VMs (4 vCPU; x64 labels take the m and r families of generations 6–8) in Tico's own AWS account: the tests a measured static
 dependency map (imports, plus files run or read by path) says use the change, the Caddy image job when the change reaches
@@ -60,8 +60,10 @@ Run scripts/check.sh before pushing; `git config core.hooksPath .githooks` runs 
 
 ## How we work
 Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The author marks the PR ready for
-review once the tests they touched pass with `scripts/remote.py`, then merges with `gh pr merge <N> --merge` once it is
-reviewed (`--squash` and `--auto` also enqueue): main's merge queue runs the full selected checks on the merged result before it lands.
+review once the tests they touched pass with `scripts/remote.py`. Once it is reviewed, enqueue it with
+`gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once.
+Don't rebase or merge main to be current; rebase only when GitHub reports a conflict. If the queue removes the PR,
+read why before you push again. Never use `--admin` or the REST merge endpoint: both skip the queue.
 PR checks on each push are lint only. A red release candidate caused by your merge is your top priority. Releases ship from
 release windows (weekdays 07:30, 11:00, 14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00;
 docs/releasing.md#release-windows); never tag. Hotfixes (`hotfix.yml`) are for
@@ -104,4 +106,7 @@ flight file, not the database.
   UI file as TypeScript (`ui/app/name.ts`, listed in index.html by that name; strict types, no `any`). `npm run build:ui`
   compiles it to `build/ui/` (`npm run watch:ui` while editing; tests and `backend.server` build it when they can), and the
   server refuses a missing or stale build (ui/README.md).
+- Generated files: `ui/types/api.d.ts` is written by `scripts/check_ui_types.sh` and never committed. `docs/openapi/v2.json`
+  is written by `python3 -m backend.openapi_v2`; never edit it by hand. On a rebase conflict, resolve
+  `backend/openapi_v2.py` and regenerate (CONTRIBUTING.md registers the merge driver that handles most).
 - Comments say why in the present tense; they do not name who asked or when.
