@@ -298,7 +298,7 @@ const HUB_PATHS: &[&str] = &[
     "approval request", "approval show", "approvals", "approvals approve", "approvals decline",
     "approvals list", "approvals read-back", "approvals request", "approvals show", "ask", "assistant",
     "assistant change", "assistant change list", "assistant change restore", "assistant learn",
-    "assistant learned", "assistant proposals", "assistant propose", "assistant read", "assistant send",
+    "assistant learned", "assistant morning", "assistant proposals", "assistant propose", "assistant read", "assistant send",
     "assistant withdraw", "audiences", "audiences list", "audit", "automation", "automation create",
     "automation delete", "automation discard", "automation guide", "automation held", "automation inbox",
     "automation list", "automation question-sets", "automation recent-runs", "automation restore",

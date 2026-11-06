@@ -1438,6 +1438,20 @@ def test_a_propose_without_for_sends_no_recipient(monkeypatch):
     assert "for" not in client.post.call_args.args[1]
 
 
+def test_the_morning_message_posts_its_person_and_body_to_the_assistant(monkeypatch):
+    """`hub assistant morning --for human:<id> --body <text>` reaches the server as assistant/morning with both fields."""
+    from clients import hubcli, remotecli
+    client = mock.Mock()
+    client.post.return_value = {"message_id": "m1"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    args = hubcli.parser().parse_args(["assistant", "morning", "--for", "human:ana", "--body", "Hi"])
+    assert args.fn == "assistant morning"
+    remotecli.run(args)
+    assert client.post.call_args.args[0] == "assistant/morning"
+    assert client.post.call_args.args[1] == {"for": "human:ana", "body": "Hi"}
+
+
 def test_approval_list_is_the_pending_default_and_the_mcp_tool_matches(monkeypatch):
     """`hub approval list` runs `approval list` (GET approvals, pending by default, with --from/--since passed through),
     and the MCP tool `hub_approval_list` takes the same arguments."""

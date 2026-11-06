@@ -262,6 +262,72 @@ def test_the_providers_keys_are_never_a_chat_write(api):
     assert res.status_code == 403 and res.json()["error"]["code"] == "confirm_required", res.text
 
 
+def morning(api, token, for_person="human:ana", body="Close the invoice first.", expected=200):
+    r = api.post("/api/v2/assistant/morning", json={"for": for_person, "body": body}, headers=headers(token))
+    assert r.status_code == expected, r.text
+    return r.json()
+
+
+def test_the_morning_message_lands_in_the_persons_assistant_chat_once_a_company_day(api, monkeypatch):
+    coo = setup_attempt(api, "coo")[2]["token"]           # the Assistant bot's own identity (its background run)
+    monkeypatch.setattr(H, "now", lambda: "2026-11-06T09:00:00.000000Z")       # 01:00 on Nov 6 in Los Angeles
+    made = morning(api, coo)
+    assert made["day"] == "2026-11-06" and made["next_at"] == "2026-11-07T08:00:00.000000Z", made
+    assert made["conversation_id"] == api_room(api, "ana-test") and made["conversation_id"] != api_room(api, "ben-test")
+    with api.app.state.store.read() as c:
+        sender, recipient, kind, body, refs = c.execute(
+            "SELECT sender_id, recipient_id, kind, body, refs FROM messages WHERE id=?", (made["message_id"],)).fetchone()
+        audit = c.execute("SELECT actor FROM events WHERE action='assistant.morning' AND target=?",
+                          (made["message_id"],)).fetchone()
+    assert (sender, recipient, kind, body) == ("bot:coo", "human:ana", "say", "Close the invoice first.")
+    assert json.loads(refs) == {"assistant": True, "morning": "2026-11-06"}, refs
+    assert audit is not None and audit[0] == "human:ana"
+
+
+def test_a_second_morning_message_the_same_company_day_is_refused_with_the_next_time(api, monkeypatch):
+    coo = setup_attempt(api, "coo")[2]["token"]
+    monkeypatch.setattr(H, "now", lambda: "2026-11-05T23:30:00.000000Z")       # 15:30 on Nov 5 in Los Angeles
+    assert morning(api, coo)["day"] == "2026-11-05"
+    # 22:00 on Nov 5 in Los Angeles is already Nov 6 in UTC, and it is the same company day: still refused.
+    monkeypatch.setattr(H, "now", lambda: "2026-11-06T06:00:00.000000Z")
+    refused = api.post("/api/v2/assistant/morning", json={"for": "human:ana", "body": "Again."}, headers=headers(coo))
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "already_sent_today", refused.text
+    assert refused.json()["error"]["next_at"] == "2026-11-06T08:00:00.000000Z", refused.text
+    # Midnight in Los Angeles starts the next company day, and its message goes.
+    monkeypatch.setattr(H, "now", lambda: "2026-11-06T08:00:00.000000Z")
+    assert morning(api, coo, body="A new day.")["day"] == "2026-11-06"
+
+
+def test_only_the_assistants_background_run_sends_the_morning_message(api):
+    coo = setup_attempt(api, "coo")[2]["token"]
+    other_bot = setup_attempt(api, "ops")[2]["token"]
+    morning(api, other_bot, expected=403)
+    morning(api, "ana-test", expected=403)                  # a person, even the one it is for
+    turn = assistant_turn(api, "ana-test")[1]["token"]
+    morning(api, turn, expected=403)                        # the Assistant's chat turn is the person's, not its run
+    morning(api, coo, for_person="bot:ops", expected=403)   # only a person gets one
+
+
+def test_a_morning_message_is_only_for_an_active_person(api):
+    coo = setup_attempt(api, "coo")[2]["token"]
+    morning(api, coo, for_person="human:ghost", expected=404)
+    post(api, "access/people/cara", {"sign_in": False})
+    morning(api, coo, for_person="human:cara", expected=404)
+
+
+def test_a_morning_message_is_at_most_two_thousand_characters(api):
+    coo = setup_attempt(api, "coo")[2]["token"]
+    r = api.post("/api/v2/assistant/morning", json={"for": "human:ana", "body": "x" * 2001}, headers=headers(coo))
+    assert r.status_code == 422, r.text
+
+
+def test_the_morning_tool_is_offered_to_the_assistant_and_its_bot_and_to_no_one_else():
+    offered = {kind: {t["name"] for t in hubtools.listing(local=True, kind=kind)}
+               for kind in ("assistant", "bot", "owner", "admin", "member", "botops", "agent")}
+    assert "hub_assistant_morning" in offered["assistant"] and "hub_assistant_morning" in offered["bot"]
+    assert not any("hub_assistant_morning" in names for kind, names in offered.items() if kind not in ("assistant", "bot"))
+
+
 def _turn_message_id(api, attempt):
     """The person's message that started this turn (the `turn` a run cites)."""
     with api.app.state.store.read() as c:

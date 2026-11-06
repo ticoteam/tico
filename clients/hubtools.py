@@ -6271,6 +6271,17 @@ def assistant_propose(api, args):
     return api.post("assistant/actions", sent, key=_key(args))
 
 
+@tool("hub_assistant_morning", "The Assistant's one morning message to a person, from its own background run only: "
+      "what they can do today to move their goals, in their Assistant chat, as you. It is a message, not a card: "
+      "nothing to confirm, nothing closed for them. Once a company day per person: a second one that day is refused "
+      "(already_sent_today). Markdown, at most 2000 characters.",
+      {"for_person": _s("The person (human:<id>) whose Assistant chat gets the message"),
+       "body": _s("The message, in Markdown, at most 2000 characters")},
+      required=("for_person", "body"), writes=True)
+def assistant_morning(api, args):
+    return api.post("assistant/morning", {"for": args["for_person"], "body": args["body"]}, key=_key(args))
+
+
 @tool("hub_assistant_withdraw", "Take back a Confirm card that still waits for the person (its id from "
       "hub_assistant_proposals): it is marked withdrawn and never runs, and the card owner's chat says who withdrew it, "
       "with the reason if you give one. Any teammate may withdraw; only the card's owner can confirm it.",
@@ -7970,6 +7981,9 @@ AUDIENCE = {
     # The Assistant bot's own background run (a routine, kind `bot`) proposes a card for its person too; the server admits
     # only the Assistant bot, and only with `for` naming an active person (backend/app.py propose).
     "hub_assistant_propose": ("assistant", "bot"), "hub_approval_read_back": ("assistant",),
+    # The morning message is the same background run's: the server admits only the Assistant bot, once a company day
+    # per person (backend/assistant.py morning). The Assistant's listing carries it too (the evals' default kind).
+    "hub_assistant_morning": ("assistant", "bot"),
     # Any teammate may withdraw a waiting card or find one (backend/assistant.py teammate); confirming stays the owner's.
     "hub_assistant_withdraw": KINDS, "hub_assistant_proposals": KINDS,
     # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.

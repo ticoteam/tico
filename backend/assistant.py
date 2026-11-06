@@ -19,6 +19,7 @@ import re
 import secrets
 import unicodedata
 import uuid
+from datetime import datetime, time, timedelta, timezone
 from urllib.parse import unquote
 
 import httpx
@@ -36,6 +37,7 @@ RUNNING_TTL_S = 120                # a confirm that has not settled in two minut
 CONFIRM_TTL_H = 24                 # a proposal nobody confirmed for a day is not run
 MAX_PENDING = 20
 MAX_BACKGROUND_PER_DAY = 5      # cards the Assistant's own background run may put in one person's chat a day
+MORNING_KEY = "morning"         # the message's refs key: the company day it was sent for (one a day per person)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS assistant_actions (
@@ -1363,6 +1365,15 @@ def chat_room(c, settings, who, create=True):
     return ensure_room(c, who.actor, settings.assistant_bot) if create else find_room(c, who.actor)
 
 
+def morning_day():
+    """The company day a morning message is for: today's date on the company's clock (updates.ZONE, the zone the update
+    ladder and the automations read, not UTC), and the UTC instant that day ends, when the next one may go."""
+    from .updates import ZONE
+    local = H.parse_ts(H.now()).astimezone(ZONE)
+    ends = datetime.combine(local.date() + timedelta(days=1), time(0), tzinfo=ZONE)
+    return local.date().isoformat(), ends.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+
 def availability(c, settings, who):
     slug = chat_bot(c, settings, who)
     bot = H.bot(c, slug)
@@ -1831,6 +1842,38 @@ def install(app, store, auth, mutate, onboarding):
             room = chat_room(c, settings, who)
             return create_proposal(c, settings, who, room, "assistant", body.summary, body.method, body.path, body.body,
                                    request.headers.get("x-tico-on-behalf-of"), routes=request.app.routes)
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/assistant/morning")
+    def morning(request: Request, body: M.AssistantMorning):
+        """The Assistant's one morning message to a person: what they can do today to move their goals, in their own
+        Assistant chat, as the Assistant. No card and nothing to confirm. Only the Assistant bot's background run may
+        send it, for an active person, and once a company day per person: a second one that day is refused
+        `409 already_sent_today`, whatever the caller sends."""
+        caller = request.state.identity
+        assistant_run = H.is_bot(caller.actor) and H.actor_id(caller.actor) == settings.assistant_bot
+        if not assistant_run or not H.is_human(body.for_person):
+            raise Problem("forbidden", "Only the " + settings.assistant_name + " sends a person their morning message, "
+                          "from its own background run, and only to that person", 403)
+
+        def work(c):
+            found = auth.chat_person(c, body.for_person, settings.assistant_bot)
+            if not found:
+                raise Problem("not_found", "No active person " + body.for_person + " to send a morning message to", 404)
+            day, next_at = morning_day()
+            sent = c.execute("SELECT 1 FROM messages WHERE recipient_id=? AND sender_id=? AND kind='say' AND "
+                             "json_extract(refs,'$." + MORNING_KEY + "')=? LIMIT 1",
+                             (found.actor, "bot:" + settings.assistant_bot, day)).fetchone()
+            if sent:
+                raise Problem("already_sent_today", "The " + settings.assistant_name + " has already sent this person "
+                              "their morning message today; the next can go at " + next_at + " (midnight, "
+                              "company time)", 409, extra={"next_at": next_at})
+            room = chat_room(c, settings, found)
+            message = H._write_message(c, "bot:" + settings.assistant_bot, found.actor, body.body, room, "say",
+                                       {"assistant": True, MORNING_KEY: day}, None, None, delivered_at=H.now())
+            H.event(c, found.actor, "assistant.morning", message["id"],
+                    {"day": day, "by": caller.actor, "chars": len(body.body)})
+            return {"message_id": message["id"], "conversation_id": room["id"], "day": day, "next_at": next_at}
         return mutate(request, body, work)
 
     def propose_setting(c, who, method, path, data, summary, asked=None, what=None):

@@ -291,6 +291,13 @@ when the card is made.
 per person, and never with an approve step. The card is yours: it runs only on your tap, as you, and says the Assistant
 proposed it. Any other bot, or a person naming someone else, gets `403`.
 
+The same run may send you **one morning message a day**: `hub assistant morning --for human:<id> --body "<text>"` (`POST
+/api/v2/assistant/morning`, `hub_assistant_morning`). It is a plain message in your own Assistant DM, from the
+Assistant, with no card and nothing to confirm: what you can do today to move your goals. The server allows one per
+person per company day (the company's clock, not UTC); a second that day is `409 already_sent_today` and says when the
+next can go. Only the Assistant bot may send it, for an active person; other callers get `403`, and a person who is
+gone or signed out gets `404`.
+
 Any teammate, person or bot, can withdraw a Confirm card that still waits (`hub assistant withdraw <id>`, `POST
 /api/v2/assistant/actions/{aid}/withdraw`, or `hub_assistant_withdraw`; `hub assistant proposals` lists the waiting cards
 with their ids). The card is marked withdrawn and never runs, and the owner's DM says who withdrew it, with the reason if
