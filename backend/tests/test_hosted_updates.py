@@ -176,3 +176,15 @@ def test_a_target_taken_back_before_it_starts_is_dropped_and_hq_answers_are_chec
     assert hosted.tick(T0 + 2 * HU.CHECK_S) == "done"
     assert hosted.tick(T0 + HU.IDLE_WAIT_S + HU.CHECK_S) == "done" and hosted.updater.started == []
     assert len(events(hosted.store, "system.update.unscheduled")) == 1
+
+
+def test_a_pre_update_copy_does_not_use_up_the_settle_window(api, hosted, monkeypatch):  # noqa: F811
+    hosted.hq.target = TARGET
+    assert hosted.tick(T0) == "updating"
+    hosted.updater.state = {"state": "snapshotting", "from": "0.4.9", "to": "0.4.11"}
+    assert hosted.tick(T0 + 60) == "updating"
+    assert hosted.tick(T0 + HU.SETTLE_S + 60) == "updating"              # 46 minutes in, still copying: not timed out
+    hosted.updater.state = {"state": "pulling", "from": "0.4.9", "to": "0.4.11"}
+    assert hosted.tick(T0 + HU.SETTLE_S + 700) == "updating"             # the copy took about 11 minutes of the hour
+    assert hosted.tick(T0 + 2 * HU.SETTLE_S + 700) == "done"            # the window resumes counting after the copy
+    assert events(hosted.store, "system.update.finished")[-1][1]["outcome"] == "timed_out"

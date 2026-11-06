@@ -3527,7 +3527,7 @@ def trigger_rotate(api, args):
 @tool("hub_trigger_sign", "Verify every call to a trigger. `preset`: hmac (GitHub's X-Hub-Signature-256 or X-Signature), "
       "github, standard (Standard Webhooks; the secret is whsec_ and base64) or stripe; the current preset, else hmac, "
       "when empty. `secret` is the one the sender gave you; empty makes a new one, returned once. `off` stops checking. "
-      "BotOps asked by a person can't pass a secret on: they type it in Settings > Webhooks > Incoming.",
+      "BotOps asked by a person can't pass a secret on: they type it in Automations › Incoming webhooks.",
       {**TRIGGER, "preset": {"type": "string", "enum": ["hmac", "github", "standard", "stripe", "slack"]},
        "secret": _s("The sender's signing secret, 16+ characters; empty makes one"),
        "off": {"type": "boolean", "description": "true stops checking signatures"}},
@@ -3582,7 +3582,7 @@ TRIGGER = _s("The trigger id (`id` in hub_trigger_list)")
 
 @tool("hub_trigger_relay_create", "Give a trigger a second address through Tico Gateway, which keeps what is sent to it "
       "while this server is off or unreachable and hands it over when the server is back. Needs the Tico Gateway "
-      "connected in Settings > Gateway. The answer's `address` carries the secret and is shown only now; the trigger's "
+      "connected in Settings > Models. The answer's `address` carries the secret and is shown only now; the trigger's "
       "own address keeps working. The server still checks signatures itself.",
       {"trigger": TRIGGER}, required=("trigger",), writes=True)
 def trigger_relay_create(api, args):
@@ -4479,6 +4479,20 @@ def bot_suggest_to_original(api, args):
 def skill_copy(api, args):
     from clients import botcopy
     return botcopy.run_skill(_as_person(api), args)
+
+
+@tool("hub_skill_submit", "Propose a skill folder to the company's Skills directory, as the person who asked you (a bot or a person may propose; an "
+      "admin approves it after screening). The folder is read on this computer: `skills/<skill>` or `.claude/skills/<skill>` in its repository, "
+      "else `~/.claude/skills/<skill>`. A symlink, a binary file, or anything over the limits is refused here with the reason, never truncated; "
+      "the whole folder is sent. An update of a skill the directory has is based on its latest version unless `base` names another.",
+      {"skill": _s("The skill's folder name, lowercase letters, digits, dots and hyphens"),
+       "path": _s("The folder, when it is not in one of the usual places"),
+       "note": _s("One line for the admin, up to 200 characters"),
+       "base": {"type": "integer", "minimum": 1, "description": "The version an update is based on (default: the latest)"}},
+      required=("skill",), writes=True, local=True)
+def skill_submit(api, args):
+    from clients import skills
+    return skills.run_submit(_as_person(api), args)
 
 
 @tool("hub_agent_pair_show", "Preview a pairing code: profile, host, harness and expiry, without changing a credential.",
@@ -5748,11 +5762,13 @@ _SLIDES = {
       "kpis, done, focus, blockers. One of each a day; posting again replaces it. One that breaks the "
       "rules is posted with a `warning` saying how to write the next one; an empty one is refused. A delivery "
       "turn (learnings or suggestions only) posts nothing: report `learnings_saved`, `suggestions_seen` and "
-      "`delivery_batch_id` only if you post.",
+      "`delivery_batch_id` only if you post. Nothing real to report (nothing finished, started, decided, or newly "
+      "waiting or blocked)? Send `skip` true with no body or slides instead: nothing is posted.",
       {"body": _s("A daily: three lines, each starting with '- ', plus any `Blocked:` or `Suggestion:` lines"),
        "slides": _SLIDES,
        "kind": _s("daily or weekly; Tico picks from the day when omitted", enum=["daily", "weekly"]),
        "day": _s("YYYY-MM-DD, only when Tico asks you to redo a past day"),
+       "skip": {"type": "boolean", "description": "Nothing real to report: nothing is posted, and the request closes as skipped"},
        "learnings_saved": {"type": "integer", "minimum": 0, "maximum": 15,
                            "description": "How many of the learnings Tico handed you you kept"},
        "suggestions_seen": {"type": "array", "items": {"type": "string"}, "maxItems": 10,
@@ -5766,6 +5782,7 @@ def update_post(api, args):
     if isinstance(slides, str):
         slides = json.loads(slides)
     fields = (("body", args.get("body")), ("slides", slides), ("kind", args.get("kind")), ("day", args.get("day")),
+              ("skip", True if args.get("skip") else None),
               ("learnings_saved", args.get("learnings_saved")), ("suggestions_seen", args.get("suggestions_seen")),
               ("delivery_batch_id", args.get("delivery_batch_id")))
     out = api.post("updates", {k: v for k, v in fields if v is not None}, key=_key(args))
@@ -7988,6 +8005,7 @@ AUDIENCE = {
     "hub_maintenance_set": REQUESTER, "hub_maintenance_run": REQUESTER,
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
+    "hub_skill_submit": PEOPLE + BOTS,              # any person or bot proposes; an admin approves (backend/skills.py)
     "hub_repo_review": ("bot", "botops"),
     "hub_repo_product_create": ("owner", "bot", "botops"),   # a bot needs Create product repositories (server)
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},

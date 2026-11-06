@@ -136,20 +136,10 @@ def test_a_reviewer_takes_review_children_only_and_wakes_for_its_request_and_peo
 
 
 @pytest.mark.parametrize("title,parent_step,child", [
-    ("Post Release QA pass: v1.2.3", None, False),
     ("Release QA: v1.2.3", None, False),
-    ("Post Launch QA: runtime installation", None, False),
-    ("Post Release QA sweep", None, False),
-    ("Post-release checks: shared question card", None, True),
-    ("Hosting preview: carry remaining installed-build and live acceptance", None, True),
     ("Verify shipped behavior", "Post Release QA", True),
-    ("Verify the change", "Review 1", True),
-    ("Verify the change", "Review 2", True),
-    ("Verify the change", "In QA", True),
     ("Verify the change", "Second opinion", True),       # a renamed review step: its flow says it is a check
     ("Review 1: legacy request", None, True),
-    ("Review 2: legacy request", None, True),
-    ("Security: legacy request", None, True),
 ])
 def test_release_qa_uses_one_classification_for_creation_pull_wake_and_health(api, title, parent_step, child):
     with api.app.state.store.transaction() as c:
@@ -200,7 +190,7 @@ CHANGE_VERB_NOT_RUNS = [f"Finish {form} production acceptance tests" for form in
 ]
 
 
-@pytest.mark.parametrize("title,child", [
+_ORDINARY = [
     ("Build the thing", False), ("QA: orphan review", False),
     ("Implement acceptance criteria", False), ("Implement acceptance criteria", True),
     ("Release checklist planning", False), ("Post-release documentation", True),
@@ -235,7 +225,21 @@ CHANGE_VERB_NOT_RUNS = [f"Finish {form} production acceptance tests" for form in
       for i, t in enumerate(WIDE_GAP_NOT_RUNS) for child in (False, True)],
     *[pytest.param(t, child, id=f"production-acceptance-change-{i}-{'child' if child else 'top'}")
       for i, t in enumerate(CHANGE_VERB_NOT_RUNS) for child in (False, True)],
-])
+]
+
+
+RELEASE_QA_TITLES = [
+    ("Post Release QA pass: v1.2.3", False), ("Post Launch QA: runtime installation", False),
+    ("Post Release QA sweep", False), ("Post-release checks: shared question card", True),
+    ("Hosting preview: carry remaining installed-build and live acceptance", True),
+    ("Review 2: legacy request", True), ("Security: legacy request", True),
+]
+ORDINARY_TASKS = [p.values if hasattr(p, "values") else p for p in _ORDINARY]
+KEPT = [("Build the thing", False), ("Implement acceptance criteria", True),
+        ("Run production acceptance dashboard", True)]
+
+
+@pytest.mark.parametrize("title,child", KEPT)
 def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
     with api.app.state.store.transaction() as c:
         add_bot(c, "checker")
@@ -251,7 +255,7 @@ def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
         assert raised.value.rule == "profile"
 
 
-@pytest.mark.parametrize("title", [
+TOP_LEVEL_RUNS = [
     "Run waitlist production acceptance after existing release and admin gates clear",
     "Execute production acceptance for the waitlist",
     "Re-run production acceptance on the release candidate",
@@ -259,31 +263,47 @@ def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
     "Production acceptance run: waitlist release",
     "Run production acceptance tests for the waitlist",
     "Run the production acceptance suite",
-])
-def test_a_top_level_production_acceptance_run_reads_as_review_work(api, title):
-    with api.app.state.store.transaction() as c:
-        add_bot(c, "checker")
-        put(c, "checker", P.REVIEWER)
-        made = H.task_create(c, "bot:ops", title, "x", "bot:checker")
-        assert P.is_review_task(c, H.task(c, made["id"]))
-
-
-@pytest.mark.parametrize("title", [
+]
+PARENT_LINKED_RUNS = [
     "Run production acceptance for the waitlist",
     "Run the production acceptance suite",
     "Run waitlist production acceptance after existing release and admin gates clear",
     "Execute production acceptance for the waitlist",
     "Production acceptance run for the waitlist",
-])
-def test_a_parent_linked_production_acceptance_run_reads_as_review_work(api, title):
-    """Product ruling A (Dev 750, task 34f2faaf): a run linked to a parent counts as review QA, as a top-level run does."""
+]
+
+
+def test_the_title_classifier_reads_every_run_as_review_work_and_every_ordinary_title_as_ordinary(api):
+    """Product ruling A (Dev 750, task 34f2faaf): a run linked to a parent counts as review QA, as a top-level run does.
+    One reviewer and one parent; the classifier is pure over the title, so the whole table is a loop."""
     with api.app.state.store.transaction() as c:
         add_bot(c, "checker")
         put(c, "checker", P.REVIEWER)
         parent = H.task_create(c, "bot:ops", "Build it", "x", "bot:cpo")
-        made = H.task_create(c, "bot:ops", title, "x", "bot:checker", parent_id=parent["id"])
-        assert P.is_review_task(c, H.task(c, made["id"]))
-        assert P.is_review_task(c, {"title": title, "owner_id": "bot:checker"}, parent_id=parent["id"])
+        for title in TOP_LEVEL_RUNS:
+            made = H.task_create(c, "bot:ops", title, "x", "bot:checker")
+            assert P.is_review_task(c, H.task(c, made["id"])), title
+        for title in PARENT_LINKED_RUNS:
+            made = H.task_create(c, "bot:ops", title, "x", "bot:checker", parent_id=parent["id"])
+            assert P.is_review_task(c, H.task(c, made["id"])), title
+            assert P.is_review_task(c, {"title": title, "owner_id": "bot:checker"}, parent_id=parent["id"]), title
+        # The release-QA titles the end-to-end table above no longer repeats: each classifies the same through is_review_task.
+        for title, child in RELEASE_QA_TITLES:
+            parent_for = parent["id"] if child else None
+            made = H.task_create(c, "bot:ops", title, "x", "bot:checker", parent_id=parent_for)
+            assert P.is_review_task(c, H.task(c, made["id"])), title
+            assert P.is_review_task(c, {"title": title, "owner_id": "bot:checker"}, parent_id=parent_for), title
+        for step, kind in (("Review 1", "review"), ("Review 2", "review"), ("In QA", "qa")):
+            step_id = "unit-" + step.replace(" ", "-").lower()
+            c.execute("INSERT INTO task_steps(id,type_id,name,position,status,flow) VALUES(?,'general',?,98,'review',?)",
+                      (step_id, step, json.dumps({"check": kind})))
+            holder = H.task_create(c, "bot:ops", "Build it " + step, "x", "bot:cpo")
+            c.execute("UPDATE tasks SET step_id=? WHERE id=?", (step_id, holder["id"]))
+            assert P.is_review_task(c, {"title": "Verify the change", "owner_id": "bot:checker"},
+                                    parent_id=holder["id"]), step
+        for title, child in ORDINARY_TASKS:
+            row = {"title": title, "owner_id": "bot:cpo"}
+            assert not P.is_review_task(c, row, parent_id=parent["id"] if child else None), (title, child)
 
 
 def test_a_top_level_production_acceptance_run_is_review_work_for_a_reviewer_and_health_stops_counting_it(api):

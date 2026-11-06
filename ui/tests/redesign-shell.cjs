@@ -1,6 +1,6 @@
 // The redesign's shell (ui/app/redesign.js, ui/app/strategy-budget.js) against fixtures shaped per the redesign CONTRACT
 // (fixtures/redesign-*.json, the Acme example): the sidebar's order, helpers off the Team list, old addresses
-// redirected, Settings with its System tab and no design switch, the Strategy tabs with no Strategy Bot
+// redirected (System's to Automations' System jobs), Settings with no design switch, the Strategy tabs with no Strategy Bot
 // beside them (it is a helper of the Assistant; Ask is the way in), the Budget tab drawing (its tree and edits are
 // strategy-budget.cjs), a task cap's 409 read as its message, and no "CEO Bot" anywhere. Phone first (390×844), then desktop.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots.
@@ -145,7 +145,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       // The goals tree answers slowly: #/goals/g-1 is left before it arrives, as a person tapping on would.
       const {page, errors, goals} = await open(browser, {goalsDelay: 400});
       await page.locator('#tree li').first().waitFor();
-      assert.deepEqual(await railKeys(page), ['side-update', 'overview', 'welcome', 'strategy', 'growth', 'finance', 'updates', 'tasks', 'automations', 'tools',
+      assert.deepEqual(await railKeys(page), ['side-update', 'overview', 'rd-co', 'welcome', 'updates', 'tasks', 'automations', 'tools',
         'library', 'rd-lib', 'rules', 'rd-rules', 'nav-pins', 'threads',
         'side-section', 'nav-inboxes-section'], tag + ': the order');
       assert.equal(await page.getAttribute('a[data-nav="automations"]', 'href'), '#/automations', tag + ': Automations');
@@ -198,7 +198,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       const {page, errors} = await open(browser, {viewport: DESKTOP, route: '#/strategy/budget'});
       await page.locator('[data-bt-open="bot:builder"]').waitFor();
       const shown = await shownRail(page);
-      assert.deepEqual(shown, ['Overview', 'Strategy', 'Growth', 'Updates', 'Tasks', 'Automations', 'Tools', 'Library', 'Docs', 'Files', 'Meetings', 'Rules'], tag + ': the rail, with no Strategy Bot entry');
+      assert.deepEqual(shown, ['Company', 'Strategy', 'Growth', 'Updates', 'Tasks', 'Automations', 'Tools', 'Library', 'Docs', 'Files', 'Meetings', 'Rules'], tag + ': the rail, with no Strategy Bot entry');
       assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0, tag + ': the Strategy Bot is off the Team list');
       assert.ok(!shown.includes('Goals'), tag + ': Goals left the rail');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': Message bots hidden');
@@ -206,6 +206,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       assert.equal(await page.locator('#sbot, #sbot-fab').count(), 0, tag + ': no Strategy Bot rail');
       assert.equal(await page.locator('#main').evaluate(el => el.classList.contains('sbot-open')), false);
       await shot(page, 'desktop-budget');
+      if (shots) { await page.evaluate(() => window.ticoTheme.set('light')); await shot(page, 'desktop-budget-light'); await page.evaluate(() => window.ticoTheme.set('dark')); }
 
       // A task cap's 409: the message is what a person reads, in a toast's words and in the bot's chat.
       const said = await page.evaluate(() => post('/v2/tasks', {title: 'Check the Acme release'}).then(() => '', e => e.message));
@@ -237,11 +238,12 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       await shot(page, 'desktop-settings');
       for (const old of ['#/settings/rules', '#/settings/routines', '#/settings/recurring']) {
         await page.evaluate(h => { location.hash = h; }, old);
-        assert.ok(await hashSoon(page, '#/settings/system'), `${tag}: ${old} lands on System`);
+        assert.ok(await hashSoon(page, '#/automations/system-jobs'), `${tag}: ${old} lands on System jobs`);
       }
-      assert.equal(await page.locator('[data-settings-tab="system"][aria-selected="true"], [data-settings-tab="system"].cur, [data-settings-tab="system"][aria-current]').count(), 1, tag + ': System is the tab shown');
-      assert.equal(await page.locator('#settings-system #set-rules-card, #settings-system [data-bot-routines]').count(), 0, tag + ': no wake rules or bot routines');
-      await shot(page, 'desktop-settings-system');
+      assert.equal(await page.locator('[data-settings-tab="system"]').count(), 0, tag + ': no System tab');
+      await page.locator('#set-system-routines').waitFor();
+      assert.equal(await page.locator('#set-rules-card, [data-bot-routines]').count(), 0, tag + ': no wake rules or bot routines');
+      await shot(page, 'desktop-automations-system-jobs');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }

@@ -144,8 +144,8 @@ server up. Collect, Clean up, Check health, Learn, Suggest, Dream and other inte
 Tico then records "server.sleep" in History and asks to stop the
 server, passing the time of the next routine, Maintenance run, daily job, release hour or send retry as its wake-up time.
 
-A sleeping server starts again when a webhook arrives at an address through Tico Gateway (Settings > Webhooks >
-Through Tico Gateway), when that routine time comes, or when someone signs in at your account page. A server Tico stopped
+A sleeping server starts again when a webhook arrives at an address through Tico Gateway (Settings > Models > Tico
+Gateway > Webhooks), when that routine time comes, or when someone signs in at your account page. A server Tico stopped
 because the balance ran out never starts on its own, and webhooks sent to it wait at Tico Gateway until it runs again.
 If the stop request fails, Health says so and the server keeps running.
 

@@ -86,7 +86,7 @@ countWatch($('#main'), '.tl-tabs .cnt, .bcol > header .cnt', b => {
   bar.setAttribute('aria-hidden', 'true');
   bar.hidden = true;
   scroller.prepend(bar);
-  const ROWS = ':scope > .nav-link.cur, #tree a.node.cur, #tree a.dept-label.cur, .inbox-list a.cur';
+  const ROWS = ':scope > .nav-link.cur, :scope > .nav-row > .nav-link.cur, :scope > .rd-lib > .nav-link.cur, #tree a.node.cur, #tree a.dept-label.cur, .inbox-list a.cur';
   let at = '', queued = 0;
   const place = () => {
     queued = 0;

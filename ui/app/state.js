@@ -54,7 +54,7 @@ const assistantBot = () => S.config.assistant_bot || CONFIG_DEFAULTS.assistant_b
 // The built-in Counsel's slug (backend/hubdb.py COUNSEL): Tico's own name, so a team's own bot named counsel stays theirs.
 const COUNSEL_BOT = 'tico-counsel';
 // The assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager and Counsel are built in to every team: pause and rename
-// them, never archive or delete. None is on the org chart: their settings are Settings > Bots and Settings > System.
+// them, never archive or delete. None is on the org chart: their settings are Settings > Bots and their bot page's Settings.
 const isBuiltInBot = slug => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'goal-manager' || slug === 'task-manager' || slug === 'bookkeeper' || slug === COUNSEL_BOT;
 // The Assistant's helpers (backend/assistant.py HELPERS): everyone's one chat is their Assistant, which hands these the
 // work. Nobody chats with them: their bot pages have no composer, and every "ask" on a page opens the Ask panel.

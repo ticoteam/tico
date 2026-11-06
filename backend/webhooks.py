@@ -1152,7 +1152,7 @@ def auto_disable(c, now=None):
             c.execute("SAVEPOINT webhook_disable")
             task = H.task_create(c, H.KEEPER, f"Webhook {hook['name']} was turned off",
                                  f"Every attempt to reach it failed for {DISABLE_DAYS} days, so Tico stopped sending. "
-                                 f"Fix the address, then turn it on in Settings > Webhooks or `hub webhook enable {hook['id']}`; "
+                                 f"Fix the address, then turn it on in Tools › Webhooks or `hub webhook enable {hook['id']}`; "
                                  f"Tico then offers to send again what it held back.", hook["created_by"], lint=False)
             c.execute("UPDATE webhooks SET notify_task=? WHERE id=?", (task["id"], hook["id"]))
             c.execute("RELEASE webhook_disable")

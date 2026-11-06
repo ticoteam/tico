@@ -33,10 +33,28 @@ const SHELL = {
 // Opens Tools › Settings › Email on a fresh page. `clock` installs Playwright's fake timers before the page loads.
 const READY = '#set-google [data-google-mode], #set-google .google-card';
 const CARD = '#/tools/settings/email';
+// Whether the card is on the page and shown, as watchable() in ui/google-connect.js reads it before a timer checks.
+const cardShown = page => page.evaluate(() => !!MB_GOOGLE_HOST?.isConnected && !MB_GOOGLE_HOST.closest('[hidden]'));
+// A new page draws in a view transition (ui/app/router.js routeChanged), a frame or more after the address changes,
+// and the card stays on the page until then. Running the fake clock in that gap fires the card's timers as if it were
+// still shown, so each move waits until the card has really left or come back.
+const moved = async (page, shown, what) => {
+  const end = Date.now() + 8000;
+  while (await cardShown(page) !== shown) {
+    if (Date.now() > end) throw new Error(`Timed out waiting for ${what}`);
+    await new Promise(r => setTimeout(r, 20));
+  }
+};
 // Back to the card from another Settings tab, as its Settings link does.
-const back = page => page.evaluate(card => { location.hash = card; }, CARD);
+const back = async page => {
+  await page.evaluate(card => { location.hash = card; }, CARD);
+  await moved(page, true, 'the card to be back on the page after returning to Tools › Settings › Email');
+};
 // Away to another page: the card's host is kept off the page, so what it shows is read from the host itself.
-const away = page => page.evaluate(() => { location.hash = '#/settings/general'; });
+const away = async page => {
+  await page.evaluate(() => { location.hash = '#/settings/general'; });
+  await moved(page, false, 'the card to leave the page after going to Settings › General');
+};
 const heldResult = page => page.evaluate(() => MB_GOOGLE_HOST?.querySelector('[data-ws-check-result]')?.textContent || '');
 const heldShows = async (page, re) => { const end = Date.now() + 8000; while (!re.test(await heldResult(page))) { if (Date.now() > end) throw new Error('Timed out waiting for ' + re); await new Promise(r => setTimeout(r, 50)); } };
 async function open(browser, fake, {width = 1440, clock = false, ready = READY} = {}) {

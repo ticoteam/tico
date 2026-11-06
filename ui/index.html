@@ -119,16 +119,18 @@
   </header>
   <!-- The rail, whole from the first paint: the app's code adds and moves no row (ui/tests/sidebar-first-paint.cjs). What
        waits on an answer starts as this browser last heard it, marked on <html> by ui/theme.js before the paint: Finance
-       (finance.js) and Finish setup (notices.js) for whoever signed in here last, Library open unless folded here, Rules
-       folded unless opened here (redesign.js). The Assistant is Ask, and its helpers have no row. Replay, Learnings, Usage,
+       (finance.js) and Finish setup (notices.js) for whoever signed in here last, Company and Library open unless folded
+       here, Rules folded unless opened here (redesign.js). The Assistant is Ask, and its helpers have no row. Replay, Learnings, Usage,
        Changelog and Settings sit in the account menu below. The phone drawer (More) shows the same, opened. -->
   <nav class="side-scroll" aria-label="Pages and bots">
     <div id="side-update" class="side-rec finishing" role="status" hidden title="Tico is installing an update. Bots finish what they are doing; new work waits a few minutes, then starts on its own."><span class="dot" aria-hidden="true"></span><span class="side-rec-time">Updating</span><span class="side-rec-title">Tico · new bot work starts after</span></div>
-    <a class="nav-link" href="#/home" data-nav="overview"><span class="nav-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M5 21V3h14v18M2 21h20M5 9h14M5 15h14M10 3v6m4 0v6m-4 0v6"/></svg></span>Overview</a>
+    <div class="nav-row rd-lib-row rd-co-row"><a class="nav-link rd-lib-head" href="#/home" data-nav="overview" data-alias="overview"><span class="nav-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M5 21V3h14v18M2 21h20M5 9h14M5 15h14M10 3v6m4 0v6m-4 0v6"/></svg></span>Company</a><button class="rd-lib-toggle rd-co-toggle" type="button" aria-label="Company pages" aria-controls="rd-co" aria-expanded="true"><span class="section-chev" aria-hidden="true">›</span></button></div>
+    <div class="rd-lib rd-co" id="rd-co">
+      <a class="nav-link" href="#/strategy/market" data-nav="strategy"><span class="nav-icon" aria-hidden="true">flag</span>Strategy</a>
+      <a class="nav-link" href="#/finance" data-nav="finance" id="nav-finance"><span class="nav-icon" aria-hidden="true">account_balance_wallet</span>Finance</a>
+      <a class="nav-link" href="#/growth" data-nav="growth"><span class="nav-icon" aria-hidden="true">rocket_launch</span>Growth</a>
+    </div>
     <a class="nav-link" href="#/welcome" data-nav="welcome" id="nav-welcome"><span class="nav-icon" aria-hidden="true">check_circle</span>Finish setup</a>
-    <a class="nav-link" href="#/strategy/market" data-nav="strategy"><span class="nav-icon" aria-hidden="true">flag</span>Strategy</a>
-    <a class="nav-link" href="#/growth" data-nav="growth"><span class="nav-icon" aria-hidden="true">rocket_launch</span>Growth</a>
-    <a class="nav-link" href="#/finance" data-nav="finance" id="nav-finance"><span class="nav-icon" aria-hidden="true">account_balance_wallet</span>Finance</a>
     <a class="nav-link" href="#/updates" data-nav="updates"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Updates<span class="nav-badge" data-upd-badge hidden></span></a>
     <a class="nav-link" href="#/tasks" data-nav="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks<span class="nav-badge" data-needs-badge hidden></span></a>
     <a class="nav-link" href="#/automations" data-nav="automations"><span class="nav-icon" aria-hidden="true">bolt</span>Automations</a>
@@ -392,7 +394,6 @@
 <script src="/tico/ui/app/settings-people.js"></script>
 <script src="/tico/ui/app/welcome.js"></script>
 <script src="/tico/ui/app/updates.js"></script>
-<script src="/tico/ui/app/updates-chat.js"></script>
 <script src="/tico/ui/app/ask-rules.js"></script>
 <script src="/tico/ui/app/ask-panel.js"></script>
 <script src="/tico/ui/app/goals.js"></script>
@@ -416,6 +417,7 @@
 <script src="/tico/ui/app/strategy-budget.js"></script>
 <script src="/tico/ui/app/finance.js"></script>
 <script src="/tico/ui/app/finance-pnl.js"></script>
+<script src="/tico/ui/app/finance-budgets.js"></script>
 <script src="/tico/ui/app/finance-books.js"></script>
 <script src="/tico/ui/app/finance-docs.js"></script>
 <script src="/tico/ui/app/finance-admin.js"></script>

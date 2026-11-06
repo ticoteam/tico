@@ -9,7 +9,7 @@ in step 1 instead of the server's own address.
 
 ## 1. Make the incoming webhook in Tico
 
-In Settings → Webhooks → Incoming, add a webhook named *GitHub issues* with the id `github`. Or:
+In Automations → Incoming webhooks, add a webhook named *GitHub issues* with the id `github`. Or:
 
 ```
 hub trigger create "GitHub issues" --id github

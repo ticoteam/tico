@@ -10,7 +10,7 @@ or add a reader.
 
 ## Where to find it
 
-Owners and admins open **Overview → Share** (`#/overview/company-page`). The tab shows the page as it would read
+Owners and admins open **Company → Share** (`#/overview/company-page`). The tab shows the page as it would read
 for the audience you pick, approved or not. The share icon has transparency, the address and, unless the page
 is Closed, the people who can read: add one by email or copy a one-time invite link. **Manage** (`#/company-page`) has
 everything else: editions, disclosure, stats, audiences, reader settings, CSV import, invite links, accent and logo. ⌘K finds it too.

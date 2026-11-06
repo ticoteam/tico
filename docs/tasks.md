@@ -219,7 +219,7 @@ the limit its queued work waits and says so, on every computer.
 
 `hub bot keep-tasks-going <bot> 3` sets a cap; `off` turns it off and `unlimited` restores the default.
 Omit the value to read it. The matching MCP tool and `POST /api/v2/bots/{bot}/keep-tasks-going` use
-the same permissions and revision check. **Settings → System** lists **Start assigned tasks** using
+the same permissions and revision check. **Automations → System jobs** lists **Start assigned tasks** using
 WHEN/THEN wording; its `start_task` catalog action uses the same task delivery and claim checks.
 
 Hand a ready batch of On Deck tickets to builders in one pass. Each assigned ticket already has its
@@ -550,11 +550,11 @@ question put before this change still takes **Keep** or **Close** from the perso
 Stale ticket review finds open tasks that look finished or forgotten and suggests what to do with
 them. It only suggests: nothing changes unless the task's owner accepts.
 
-**Turn it on.** Go to **Settings > System** and switch on **Stale ticket review**. It is off by
+**Turn it on.** Go to **Automations > System jobs** and switch on **Stale ticket review**. It is off by
 default, and an owner or an admin can turn it on or off, pick how often it runs, or run it now. (A server started with
 `TICO_STALE_REVIEW=1` has it on by default; a choice saved in Settings wins.)
 
-**What it looks for.** Once an hour (or on the schedule picked in Settings > System), Tico checks every open, doing, waiting and review task that is
+**What it looks for.** Once an hour (or on the schedule picked in Automations > System jobs), Tico checks every open, doing, waiting and review task that is
 not snoozed and has no run going. A task is a candidate when one of these is true:
 
 - every pull request linked to it is merged, closed or shipped;

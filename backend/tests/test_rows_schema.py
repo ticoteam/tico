@@ -68,6 +68,16 @@ TABLES = {
     rows.ToolRow: "tools",
     rows.ToolCheckRow: "tool_checks",
     rows.ToolCallRow: "tool_calls",
+    rows.SkillRow: "skills",
+    rows.SkillVersionRow: "skill_versions",
+    rows.SkillProposalRow: "skill_proposals",
+    rows.SkillScreeningRow: "skill_screenings",
+    rows.SkillInstallRow: "skill_installs",
+    rows.SkillReceiptRow: "skill_receipts",
+    rows.SkillUsageRow: "skill_usages",
+    rows.SkillUsageDailyRow: "skill_usage_dailies",
+    rows.SkillDeviceRow: "skill_devices",
+    rows.SkillDeviceCodeRow: "skill_device_codes",
 }
 
 

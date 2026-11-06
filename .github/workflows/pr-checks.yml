@@ -1,28 +1,33 @@
 # Read-only PR checks, including slow MCP/CLI/golden contracts on affected changes in a parallel contracts job.
-# Main keeps the full default suite and contracts; Release validation is independent.
+# Pull requests only: main is tested by its pull requests and by Release validation (ci.yml), which runs the whole
+# release gate on each candidate and records the per-file timings these checks size their groups from.
 # Jobs run on RunsOn spot VMs in Tico's own AWS account. Fork PRs stay on GitHub-hosted runners so outside code
-# never runs on our machines.
+# never runs on our machines. A draft pull request runs nothing: every job is skipped, and marking it ready for review
+# runs the checks. main requires no check, so a skipped run proves nothing: only the ready-for-review run's passing
+# checks count, and Tico reads a head whose every check was skipped as pending (backend/github.py _overall).
+# Converting a pull request back to a draft starts no run: such a run would cancel the one in progress on the same head,
+# and a cancelled check keeps the review gate blocking that head (backend/review_gate.py).
+# Without main pushes, pr-cache.yml keeps the main-branch caches these jobs restore from fresh.
 name: PR checks
 
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
   actions: read
 
 concurrency:
-  # A newer push to a pull request cancels its superseded run. Each main push has its own group and always
-  # completes, so every main commit gets full-suite results and timings. Release validation never cancels a gate.
-  group: pr-checks-${{ github.event.pull_request.number || github.sha }}
+  # A newer push to a pull request cancels its superseded run. Release validation never cancels a gate.
+  group: pr-checks-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   plan:
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 12
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -40,23 +45,31 @@ jobs:
       - name: Install (five minutes per attempt, one retry)
         timeout-minutes: 11
         run: bash scripts/ci_install.sh python
-      - name: Restore measured timings from the latest successful full main run
+      - name: Restore measured timings from a recent successful Release validation run
         # Optional: missing/expired artifacts stop immediately; transient errors get only 90s of retry backoff.
+        # Release validation runs the same pytest flags these jobs pass (pr_checks.PYTEST_FLAGS), slow tests included.
         timeout-minutes: 2
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p previous-timings
-          run=$(gh run list --workflow pr-checks.yml --branch main --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty') || run=''
-          if [ -n "$run" ]; then
-            bash scripts/ci/retry.sh --max-attempts 3 --clear previous-timings --permanent 'HTTP (404|410)|no (valid )?artifacts? (match|found)' -- gh run download "$run" --name pr-python-timings --dir previous-timings || echo "No measured timings yet; use collected counts this run"
-          fi
+          # The newest of the last five successful runs that has the artifact: one without it (older than the timings
+          # job, or expired) is skipped at once; a transient error spends the short retry budget once and ends the walk.
+          runs=$(gh run list --workflow ci.yml --branch main --event workflow_dispatch --status success --limit 5 --json databaseId --jq '.[].databaseId') || runs=''
+          for run in $runs; do
+            if log=$(bash scripts/ci/retry.sh --max-attempts 3 --clear previous-timings --permanent 'HTTP (404|410)|no (valid )?artifacts? (match|found)' -- gh run download "$run" --name test-timings --dir previous-timings); then
+              printf '%s\n' "$log"; echo "Timings from Release validation run $run"; break
+            fi
+            printf '%s\n' "$log"
+            case $log in *'failed permanently'*) ;; *) break ;; esac
+          done
+          [ -f previous-timings/durations.json ] || echo "No measured timings yet; use collected counts this run"
       - name: Select affected tests and size measured Python and browser groups
         id: plan
         env:
           EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py plan --event "$EVENT" --base "$BASE" --timings previous-timings/durations.json'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -70,7 +83,7 @@ jobs:
   tests:
     needs: plan
     name: ${{ matrix.suite }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=4cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -143,7 +156,8 @@ jobs:
     # Every PR: pinned ruff against its baseline (no new findings or suppressions), pyright on the boundary modules,
     # migration names, the UI's generated API types and the runner wire contract. Seconds each; tools are pinned.
     name: static checks
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -172,7 +186,7 @@ jobs:
         run: bash scripts/ci_install.sh python && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.0
       - name: Python lint
         env:
-          LINT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          LINT_BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/lint.sh
       - name: Boundary types
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_types.sh
@@ -185,7 +199,8 @@ jobs:
     # rustfmt and clippy -D warnings (scripts/rust_checks.sh), when a crate it checks changed. Always reported, so it
     # can be required: a PR without Rust changes passes it in seconds.
     name: rust lint
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=4cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -196,7 +211,7 @@ jobs:
         id: changed
         env:
           EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ "$EVENT" != pull_request ] || git diff --name-only "$BASE"...HEAD | grep -qE '^(runner-rs|relay-rs|tools/release-command|tools/trust-list-check|contracts/runner)/|^scripts/rust(_checks\.sh|-fmt-pending\.txt)$'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -216,7 +231,8 @@ jobs:
   recorder-changes:
     # Tico Recorder changed (recorder/): its macOS tests run below. Always reported, so it can be required.
     name: recorder changed
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 5
     outputs:
       run: ${{ steps.changed.outputs.run }}
@@ -229,7 +245,7 @@ jobs:
         id: changed
         env:
           EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ "$EVENT" != pull_request ] || git diff --name-only "$BASE"...HEAD | grep -q '^recorder/'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -259,7 +275,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.caddy == 'true'
     name: caddy-linux-${{ matrix.arch }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=4cpu-linux-{1}/extras=s3-cache', github.run_id, matrix.arch == 'arm64' && 'arm64' || 'x64') || matrix.runner }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}/extras=s3-cache', github.run_id, matrix.arch == 'arm64' && 'arm64' || 'x64') || matrix.runner }}
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -317,9 +333,9 @@ jobs:
     # Failed runs keep their timing receipt, but a canceled run (a superseded pull request push) ends here: a final
     # job queued after the cancellation can wait for a runner that never comes, holding the newer head's run pending
     # in the same concurrency group.
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && !github.event.pull_request.draft }}
     needs: [plan, tests, caddy-linux, static, rust-lint, recorder-changes, recorder]
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below,
     # and the gate after it must still run. A hang in the receipt canceled the whole job at three minutes on #2487.
     timeout-minutes: 4
@@ -342,15 +358,6 @@ jobs:
         run: |
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" | python3 scripts/pr_checks.py receipt >> "$GITHUB_STEP_SUMMARY"
           echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
-      - name: Record measured per-file times
-        if: github.event_name == 'push' && needs.tests.result == 'success'
-        run: python3 scripts/pr_checks.py durations
-      - if: github.event_name == 'push' && needs.tests.result == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: pr-python-timings
-          path: durations.json
-          retention-days: 30
       - name: Required checks passed
         if: always()
         env:

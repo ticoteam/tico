@@ -1,6 +1,6 @@
 // Offline regression for company subscriptions given to computers (backend/model_subscriptions.py): a subscription is a
 // company's saved plan login or API key; a computer holds at most one per AI tool; a bot never picks one.
-//  - Settings has a Models tab between Computers and Repositories with Subscriptions, Tico Gateway, Defaults and
+//  - Settings has a Models tab after Computers with Subscriptions, Tico Gateway, Defaults and
 //    Limits; old links (AI providers, Subscriptions, Chat, the Models card on Computers) open it;
 //  - Add subscription: a kind search box that starts on Claude plan, a required name, an owner (you unless changed), the
 //    own-bots line, POST {kind, name, secret} (owner_id only when changed); an API key has no owner and no such line;
@@ -202,7 +202,7 @@ async function until(page, check, what) {
 async function navigation(browser) {
   const {page, errors} = await open(browser, {tab: 'general'});
   const tabs = await page.locator('#settings-tabs > [data-settings-tab]').evaluateAll(list => list.map(b => b.dataset.settingsTab));
-  assert.deepEqual(tabs.slice(tabs.indexOf('devices'), tabs.indexOf('devices') + 3), ['devices', 'models', 'repos'], 'Models sits between Computers and Repositories');
+  assert.deepEqual(tabs.slice(tabs.indexOf('devices'), tabs.indexOf('devices') + 2), ['devices', 'models'], 'Models sits after Computers');
   for (const alias of ['models', 'providers', 'chat', 'subscriptions', 'limits']) {
     await page.evaluate(() => settingsShow('general'));
     await page.evaluate(alias => settingsShow(alias), alias);

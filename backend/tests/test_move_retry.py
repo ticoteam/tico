@@ -195,13 +195,29 @@ def test_permission_failure_keeps_its_step_without_escalation_and_moves_when_git
     assert step(api, task) == 'Review 1'
 
 
-@pytest.mark.parametrize('mode', ['mint-403', 'read-403'])
-@pytest.mark.parametrize('response_headers,message,temporary', [
+RATE_LIMITS = [
     pytest.param({'X-RateLimit-Remaining': '0'}, 'Permission unavailable', True, id='primary-limit'),
     pytest.param({'Retry-After': '60'}, 'Try later', True, id='secondary-retry-after'),
     pytest.param({}, 'API RATE LIMIT exceeded', True, id='secondary-rate-message'),
     pytest.param({}, 'ABUSE detection triggered', True, id='secondary-abuse-message'),
     pytest.param({}, 'Resource not accessible', False, id='plain-forbidden'),
+]
+
+
+@pytest.mark.parametrize('response_headers,message,temporary', RATE_LIMITS)
+def test_both_403_classifiers_tell_a_rate_limit_from_plain_forbidden(response_headers, message, temporary):
+    """The end-to-end cases below keep three of these; every shape goes through both classifiers here."""
+    import httpx
+    from backend import github_app, github_reviews
+    response = httpx.Response(403, headers=response_headers, json={'message': message})
+    assert github_reviews.throttled(response) is temporary
+    assert github_app.rate_limited(response) is temporary
+
+
+@pytest.mark.parametrize('mode,response_headers,message,temporary', [
+    pytest.param('mint-403', {'X-RateLimit-Remaining': '0'}, 'Permission unavailable', True, id='mint-primary-limit'),
+    pytest.param('read-403', {}, 'API RATE LIMIT exceeded', True, id='read-secondary-rate-message'),
+    pytest.param('read-403', {}, 'Resource not accessible', False, id='read-plain-forbidden'),
 ])
 def test_github_403_rate_limits_retry_quietly_but_plain_403_needs_access(
         api, monkeypatch, mode, response_headers, message, temporary):

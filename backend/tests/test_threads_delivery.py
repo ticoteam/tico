@@ -5,6 +5,7 @@ ben and cara (humans); the bots come from the api fixture.
 """
 
 import json
+import threading
 
 import pytest
 
@@ -659,9 +660,18 @@ def test_the_schedulers_own_tick_lets_a_capped_wake_go(api, monkeypatch):
 
 def test_with_nothing_capped_the_pass_takes_no_write(api, monkeypatch):
     store = api.app.state.store
-    monkeypatch.setattr(store, "transaction", lambda *a, **k: pytest.fail("no write with nothing capped"))
+    real, me, wrote = store.transaction, threading.get_ident(), []
+
+    # Only this thread's writes count: the app's own workers keep writing meanwhile, and failing them inside their
+    # loop (pytest.fail is a BaseException) killed one, so teardown waited 300 s for it.
+    def transaction(*a, **k):
+        if threading.get_ident() == me:
+            wrote.append(a)
+        return real(*a, **k)
+    monkeypatch.setattr(store, "transaction", transaction)
     assert threads.reopen_due(store) == 0
     monkeypatch.undo()
+    assert wrote == [], "no write with nothing capped"
 
 
 # ----------------------------------------------------------------------------- thread.created, from every route

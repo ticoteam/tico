@@ -1,4 +1,4 @@
-/* ui/app/overview-graph.js — Overview › Graph (#/overview/graph): the team chart drawn top down, each teammate carrying
+/* ui/app/overview-graph.js — Company › Graph (#/overview/graph): the team chart drawn top down, each teammate carrying
    its rules or its goals (?view=rules or ?view=goals, so a reload or a link keeps the choice). The tree is the sidebar's
    (orgTreeByParent, orgTreeWithHelpers, orgSorted): the same groups, report order and built-ins left off. Rules come
    from GET /api/v2/rules/by-teammate, goals from GET /api/v2/goals/tree; both are read with the viewer's rights, and
@@ -496,7 +496,7 @@ function pageOverviewGraph() {
   graphStop();
   const view = ogViewOf(S.route);
   main.innerHTML = `<section class="overview-page og-page" aria-label="Team graph">
-    <div class="overview-tabs"><h1>Overview</h1>${dashTabsHTML('graph')}</div>
+    <div class="overview-tabs"><h1>Company</h1>${dashTabsHTML('graph')}</div>
     <div class="og-bar"><div class="og-seg" role="group" aria-label="Show">${[['rules', 'Rules'], ['goals', 'Goals']].map(([v, l]) =>
       `<button type="button" data-og-view="${v}" aria-pressed="${v === view}">${l}</button>`).join('')}</div>
       <div class="og-status" id="og-status" hidden></div></div>

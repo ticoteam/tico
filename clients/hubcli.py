@@ -497,6 +497,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub update show <id>                   one update with its thread
     hub update create "<- bullets>" [--kind daily|weekly] [--learnings-saved N] [--suggestion TEXT ...] [--delivery-batch ID]
                                            post your own update when Tico asks (three bullets)
+    hub update create --skip               nothing real to report: posts nothing, the request closes as skipped
     hub update create --slides-file week.json [--day D]   a week in review: {goal, kpis, done, focus, blockers}
     hub update redo --day D [--kind weekly|daily] [--bot B ...] [--with-managers]   ask the bots to redo a past day (owner)
     hub update mark-read [ids...] [--all] [--unread]
@@ -591,6 +592,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            a pull request (or a task with the diff) for the original from the copy's changes
     hub skill copy <skill> --from <bot> --to <bot> [<bot> ...] [--replace]
                                            copy skills/<skill>/ into other bots' repositories, a commit in each
+    hub skill submit <skill> [--path DIR] [--note TEXT] [--base N]
+                                           propose a skill folder to the company's Skills directory; an admin approves it (docs/skills.md)
     hub bot repo-create <slug> [--template OWNER/REPO | --empty]
                                            owner or BotOps: create <org>/bot-<slug> from a template (docs/github-app.md)
     hub human add <email> [--name N] [--title T] [--reports-to P]
@@ -3029,7 +3032,7 @@ def parser():
     s.add_argument("--group", help="only this group: task, approval, needs_you, bot, release, meeting, strategy, market, "
                                    "inbound, health, webhook, tico, custom")
     s.set_defaults(fn="event-types")
-    trigger = sub.add_parser("trigger", help="webhooks that start automations (Settings > Webhooks)").add_subparsers(dest="sub")
+    trigger = sub.add_parser("trigger", help="webhooks that start automations (Automations › Incoming webhooks)").add_subparsers(dest="sub")
     s = trigger.add_parser("list")
     s.set_defaults(fn="trigger list")
     s = trigger.add_parser("create", help="make a webhook trigger; the address with its secret is shown once")
@@ -3217,7 +3220,7 @@ def parser():
     s.set_defaults(fn="approval decline")
 
     webhook = sub.add_parser("webhook", help="outgoing webhooks: Tico posts events to an address you choose "
-                                              "(Settings > Webhooks)").add_subparsers(dest="sub")
+                                              "(Tools › Webhooks)").add_subparsers(dest="sub")
     s = webhook.add_parser("list", help="the endpoints you may see, with 7-day delivered and failed counts")
     s.add_argument("--limit", type=int)
     s.add_argument("--offset", type=int)
@@ -3446,6 +3449,7 @@ def parser():
     s.add_argument("--suggestion", action="append", dest="suggestions_seen",
                    help="a suggestion you acted on (repeatable)")
     s.add_argument("--delivery-batch", dest="delivery_batch_id", help="the delivery this post answers, when Tico named one")
+    s.add_argument("--skip", action="store_true", help="nothing real to report since your last update: post nothing")
     s.set_defaults(fn="update create")
     s = upd.add_parser("redo", help="ask the bots again for a past day's update in the current shape (owner)")
     s.add_argument("--day", required=True)
@@ -3814,13 +3818,19 @@ def parser():
     s.add_argument("bot")
     s.add_argument("--since")
     s.set_defaults(fn="bot status history")
-    skill = sub.add_parser("skill", help="a bot's skills: copy one to other bots").add_subparsers(dest="sub")
+    skill = sub.add_parser("skill", help="a bot's skills: copy one to other bots, or propose one to the company's Skills directory").add_subparsers(dest="sub")
     s = skill.add_parser("copy", help="copy skills/<skill>/ from one bot into others, a commit in each (BotOps)")
     s.add_argument("skill", help="the skill's folder name under skills/")
     s.add_argument("--from", dest="bot", required=True, metavar="BOT", help="the bot that has the skill")
     s.add_argument("--to", nargs="+", required=True, metavar="BOT", help="the bots to copy it to")
     s.add_argument("--replace", action="store_true", help="replace a different skill of the same name")
     s.set_defaults(fn="skill copy")
+    s = skill.add_parser("submit", help="propose skills/<skill>/ to the company's Skills directory; an admin approves it after screening")
+    s.add_argument("skill", help="the skill's folder name")
+    s.add_argument("--path", metavar="DIR", help="the folder, when it is not in the usual place")
+    s.add_argument("--note", metavar="TEXT", help="one line for the admin (200 characters)")
+    s.add_argument("--base", type=int, metavar="N", help="the version an update is based on (default: the latest)")
+    s.set_defaults(fn="skill submit")
     agent = sub.add_parser("agent", help="external agents: connect a Hermes profile to a bot").add_subparsers(dest="sub")
     pair = agent.add_parser("pair", help="approve or decline the code a Hermes profile printed when it asked to pair").add_subparsers(dest="subsub")
     s = pair.add_parser("show", help="preview the profile, computer and expiry without changing a credential")
@@ -4091,7 +4101,7 @@ def parser():
 RUNNER_CONFIG = Path.home() / ".config" / "tico" / "runner.json"
 # Read-only commands a person or a script on the Mac may run outside a turn with the runner credential.
 # The commands that work in this computer's workspace of bot repositories.
-WORKSPACE_COMMANDS = ("bot check", "bot copy", "bot update-from-original", "bot suggest-to-original", "skill copy")
+WORKSPACE_COMMANDS = ("bot check", "bot copy", "bot update-from-original", "bot suggest-to-original", "skill copy", "skill submit")
 READ_OUTSIDE_A_TURN = ("sql", "tool list", "tool show", "tool query-search")
 
 

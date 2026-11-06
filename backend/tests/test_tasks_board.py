@@ -849,44 +849,33 @@ def test_an_owner_bot_cannot_close_a_marketing_idea_onto_another_board_that_has_
         assert H.task(c, tid)["status"] == "open"
 
 
-def test_the_verdict_alias_on_a_live_server_pauses_an_idea_with_its_result_as_the_note(api, live, monkeypatch):
-    with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c)
+def _idea(c, title):
+    return H.task_create(c, "human:ana", title, "Spend $200 for two weeks.", "bot:cmo", type="idea")["id"]
+
+
+def test_cli_aliases_file_list_and_give_verdicts_on_a_live_server(api, live, monkeypatch, capsys):
     monkeypatch.setenv("HUB_API_URL", live)
     monkeypatch.setenv("HUB_TOKEN", bot_token(api, "cmo"))
+    with api.app.state.store.transaction() as c:
+        tid = _idea(c, 'Try referral ads')
     assert hubcli.main(["growth", "idea", "verdict", tid, "--status", "paused", "--result", "CPA 31 so far"]) == 0
     with api.app.state.store.transaction() as c:
         task = H.task(c, tid)
     assert (task["status"], task["step_id"], task["note"]) == ("waiting", "idea-paused", "Result: CPA 31 so far")
-
-
-def test_the_verdict_alias_on_a_live_server_pauses_an_idea_with_no_result_and_a_note_says_so(api, live, monkeypatch):
     with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c)
-    monkeypatch.setenv("HUB_API_URL", live)
-    monkeypatch.setenv("HUB_TOKEN", bot_token(api, "cmo"))
+        tid = _idea(c, 'Try paid video')
     assert hubcli.main(["growth", "idea", "verdict", tid, "--status", "paused"]) == 0
     with api.app.state.store.transaction() as c:
         task = H.task(c, tid)
     assert (task["status"], task["step_id"], task["note"]) == ("waiting", "idea-paused", "Test paused")
-
-
-def test_the_verdict_alias_on_a_live_server_finishes_an_idea_the_owner_bot_won(api, live, monkeypatch):
     with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c)
-    monkeypatch.setenv("HUB_API_URL", live)
-    monkeypatch.setenv("HUB_TOKEN", bot_token(api, "cmo"))
+        tid = _idea(c, 'Try partner swaps')
     assert hubcli.main(["growth", "idea", "verdict", tid, "--status", "won", "--result", "CPA 31",
                         "--learning", "Video works"]) == 0
     with api.app.state.store.transaction() as c:
         task = H.task(c, tid)
     assert (task["status"], task["closed_by_id"], task["note"]) == (
         "closed", "bot:cmo", "Result: CPA 31\nLearning: Video works")
-
-
-def test_the_alias_files_and_lists_ideas_under_the_marketing_type_id_on_a_live_server(api, live, monkeypatch, capsys):
-    monkeypatch.setenv("HUB_API_URL", live)
-    monkeypatch.setenv("HUB_TOKEN", bot_token(api, "cmo"))
     assert hubcli.main(["growth", "idea", "create", "--title", "Referral card", "--channel", "referral"]) == 0
     with api.app.state.store.transaction() as c:
         row = c.execute("SELECT type_id FROM tasks WHERE title='Referral card'").fetchone()
