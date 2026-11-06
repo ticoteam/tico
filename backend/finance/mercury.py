@@ -134,14 +134,15 @@ class Mercury:
                 with send(request, timeout=TIMEOUT) as response:
                     return Answer(int(getattr(response, "status", 200) or 200), _parse(cast(bytes, response.read())))
             except urllib.error.HTTPError as exc:
-                if exc.code == 429 and attempt < TRIES_429:
-                    self._sleep(_retry_after(exc.headers.get("Retry-After") if exc.headers else None, attempt))
-                    continue
-                try:
-                    raw = exc.read()
-                except (OSError, http.client.HTTPException):
-                    raw = b""
-                return Answer(exc.code, _parse(raw))
+                with exc:
+                    if exc.code == 429 and attempt < TRIES_429:
+                        self._sleep(_retry_after(exc.headers.get("Retry-After") if exc.headers else None, attempt))
+                        continue
+                    try:
+                        raw = exc.read()
+                    except (OSError, http.client.HTTPException):
+                        raw = b""
+                    return Answer(exc.code, _parse(raw))
             except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException):
                 return Answer(None, {})
         return Answer(429, {})

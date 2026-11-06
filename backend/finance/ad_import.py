@@ -245,17 +245,18 @@ class Http:
             with send(request, timeout=TIMEOUT) as response:
                 return Reply(int(getattr(response, "status", 200) or 200), _parse(cast(bytes, response.read())))
         except urllib.error.HTTPError as exc:
-            try:
-                raw = exc.read()
-            except (OSError, http.client.HTTPException):
-                raw = b""
-            after: float | None = None
-            try:
-                after = float(str(exc.headers.get("Retry-After"))) if exc.headers and exc.headers.get("Retry-After") \
-                    else None
-            except ValueError:
-                after = None
-            return Reply(exc.code, _parse(raw), after)
+            with exc:
+                try:
+                    raw = exc.read()
+                except (OSError, http.client.HTTPException):
+                    raw = b""
+                after: float | None = None
+                try:
+                    after = float(str(exc.headers.get("Retry-After"))) if exc.headers and exc.headers.get("Retry-After") \
+                        else None
+                except ValueError:
+                    after = None
+                return Reply(exc.code, _parse(raw), after)
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException):
             return Reply(None, {})
 
