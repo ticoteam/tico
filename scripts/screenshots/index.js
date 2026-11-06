@@ -32,7 +32,8 @@ const THEMES = ['light', 'dark'];
 const PAGES = [
   {name: 'updates', route: '#/updates', ready: 'Write your update'},
   {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', steps: async page => {
-    await page.click('#task-view [data-view="list"]');
+    await page.click('#task-scope');
+    await page.click('#task-filter-pop [data-task-type="general"]');
     await page.getByText('Draft replies for the open support tickets').first().waitFor();
   }},
   {name: 'needs-you', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?'},

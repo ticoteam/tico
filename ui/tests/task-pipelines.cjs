@@ -152,22 +152,23 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.reload();
     await boardLoaded();
     assert.equal(await page.locator('#task-body .bcard').count(), 3, 'folded again, finished work leaves the board');
-    // Done and Closed are their own views in the tab row's More, Closed right after Done; each lists only its status.
-    await page.locator('#task-view-more').click();
-    assert.deepEqual((await page.locator('#task-filter-pop [data-pick-view]').evaluateAll(b => b.map(x => x.textContent))).slice(-2), ['Done', 'Closed']);
-    await page.keyboard.press('Escape');
+    // Done and Closed are the archive's views, Closed right after Done; each lists only its status.
+    await page.locator('#task-archive').click();
+    assert.deepEqual((await page.locator('#task-finished [data-view]').evaluateAll(b => b.map(x => x.textContent))).slice(0, 2), ['Done', 'Closed']);
     for (const [view, title] of [['done', 'Finished campaign'], ['closed', 'Dropped campaign']]) {
-      await page.locator('#task-view-more').click();
-      await page.locator(`#task-filter-pop [data-pick-view="${view}"]`).click();
+      await page.locator(`#task-finished [data-view="${view}"]`).click();
       await page.waitForFunction(title => [...document.querySelectorAll('#task-body .tl-title')].map(n => n.textContent).join('|') === title, title);
     }
-    await page.locator('#task-view [data-view="board"]').click();
+    await page.locator('#task-archive').click();
+    await page.waitForFunction(() => TASKS_ST.view === 'board');
     await page.locator('#task-body .bcol').first().waitFor();
     assert.equal(await page.locator('#task-body').getByText('General task', {exact: true}).count(), 0);
     // The saved type appears in the header, and the address carries it.
-    assert.equal(await page.locator('#task-type-more').innerText(), 'Marketing');
-    assert.deepEqual(await page.locator('#task-type [data-task-type]').evaluateAll(buttons => buttons.map(b => [b.dataset.taskType, b.textContent])),
-      [['general', 'General'], ['product-roadmap', 'Roadmap'], ['dev-tickets', 'Dev tickets']]);
+    assert.equal(await page.locator('#task-scope .tl-scope-l').innerText(), 'Marketing');
+    await page.locator('#task-scope').click();
+    assert.deepEqual(await page.locator('#task-filter-pop [data-task-type]').evaluateAll(buttons => buttons.map(b => [b.dataset.taskType, b.textContent.replace('✓', '')])),
+      [['general', 'General'], ['product-roadmap', 'Roadmap'], ['dev-tickets', 'Dev tickets'], ['marketing', 'Marketing'], ['engineering', 'Engineering']]);
+    await page.keyboard.press('Escape');
     assert.equal(await page.locator('[data-chip="type"]').count(), 0);
     await page.waitForFunction(() => location.hash.includes('type=marketing'));
     // Column headings name their steps without circular status glyphs.
@@ -335,7 +336,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     Object.assign(tasks.find(task => task.id === 'plan'), {status: 'review'});
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.waitForFunction(() => document.querySelectorAll('#task-body .bcard').length === 4 && document.querySelector('#task-bulk').hidden);
-    await page.locator('[data-task-type="general"]').click();
+    await page.locator('#task-scope').click();
+    await page.locator('#task-filter-pop [data-task-type="general"]').click();
     await page.waitForFunction(() => location.hash.includes('type=general'));
     assert.equal(await page.locator('#task-body .bcol').count(), 5, 'General has its own working columns and a finished strip');
     assert.equal(await page.locator('#task-body .bcard').count(), 2, 'General never includes Marketing tasks');

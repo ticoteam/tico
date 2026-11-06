@@ -104,7 +104,9 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   assert.equal(reads.delta, delta + 1, 'the 2-minute refresh reads what changed with a question on the page');
   // The remaining checks deliberately omit changes from the task cursor. Open exercises that task-list fallback;
   // Needs you reads its own current feed, which can already contain a change the task cursor missed.
-  await page.locator('#task-tab-list').click();
+  await page.locator('#task-scope').click();
+  await page.locator(`#task-filter-pop [data-task-type="${await page.evaluate(() => TASKS_ST.type)}"]`).click();
+  await page.waitForFunction(() => TASKS_ST.view === 'list');
 
   // The task changed in a way the delta read does not bring: the list still shows the old copy.
   server.title = 'Draft the final release notes';
