@@ -1,0 +1,46 @@
+{
+  "tests": [
+    {
+      "id": "backend/tests/test_attempt_contention.py::test_100_attempt_routes_during_heartbeat_and_scheduler",
+      "reason": "Timing budget under a loaded box: failed 4 Release validation runs Nov 3-5 and passed between them.",
+      "owner": "BotOps",
+      "added": "2026-11-06",
+      "expires": "2026-11-20"
+    },
+    {
+      "id": "backend/tests/test_attempt_contention_scale.py::test_busy_install_routes",
+      "reason": "Timing budget under a loaded box: failed 4 Release validation runs Nov 3-4 and passed between them.",
+      "owner": "BotOps",
+      "added": "2026-11-06",
+      "expires": "2026-11-20"
+    },
+    {
+      "id": "backend/tests/test_sql_scale.py::test_bot_and_member_reads_stay_under_five_seconds_on_production_sized_history",
+      "reason": "Five-second wall-clock cap on a production-sized history: failed 3 Release validation runs Nov 4-5 and passed between them.",
+      "owner": "BotOps",
+      "added": "2026-11-06",
+      "expires": "2026-11-20"
+    },
+    {
+      "id": "ui/tests/google-tab.cjs",
+      "reason": "Browser script about 250 s per failure: failed 4 Release validation runs Nov 4 and Nov 6 and passed between them.",
+      "owner": "BotOps",
+      "added": "2026-11-06",
+      "expires": "2026-11-20"
+    },
+    {
+      "id": "ui/tests/chat-send-signin.cjs",
+      "reason": "Browser script about 300 s per failure: failed 2 Release validation runs Nov 5 and passed on the next runs.",
+      "owner": "BotOps",
+      "added": "2026-11-06",
+      "expires": "2026-11-20"
+    },
+    {
+      "id": "backend/tests/test_screen_relay_contract.py::test_private_protocol_fences_replays_stale_grants_and_lease_loss",
+      "reason": "Relay start hit Address in use (os error 98) on Nov 4 and passed 12 minutes later: a port race.",
+      "owner": "BotOps",
+      "added": "2026-11-06",
+      "expires": "2026-11-20"
+    }
+  ]
+}
