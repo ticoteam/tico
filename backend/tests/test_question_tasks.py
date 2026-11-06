@@ -1,7 +1,12 @@
 """Question tasks (backend/question_tasks.py, spec D8): `hub task question` files a task the person owns with the
 question on its fields and no ask message; answering closes it and the bot hears it once."""
 
+import json
+
+import pytest
+
 from backend import ask_deadlines, still_needed, hubdb as H, task_relations as TR
+
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
 from backend.tests.test_mcp import call
 
@@ -21,6 +26,20 @@ def _work(api, title="Pick a launch date", **extra):
         api, "tasks", {"owner": "ops", "title": title, "body": "Choose when the Acme launch goes out.", **extra}
     )
     return work, claim(api, r)
+
+
+def strip_sources(conn, tid):
+    """A question as stored before its options and default named their pages: the close must still find the source
+    from the review's entries, not from the stored options."""
+    questions, default = conn.execute("SELECT questions, if_no_answer FROM tasks WHERE id=?", (tid,)).fetchone()
+    questions, default = json.loads(questions), json.loads(default)
+    for q in questions:
+        for o in q.get("options") or []:
+            o.pop("source", None)
+    default.pop("source", None)
+    conn.execute(
+        "UPDATE tasks SET questions=?, if_no_answer=? WHERE id=?", (json.dumps(questions), json.dumps(default), tid)
+    )
 
 
 def _read(api, sql, args=()):
@@ -457,3 +476,49 @@ def test_a_board_row_carries_no_empty_question_fields(api):
     plain = post(api, "tasks", {"owner": "human:ana", "title": "Sign the lease", "body": "Ready"})
     row = get(api, f"tasks/{plain['id']}")["task"]
     assert not {"questions", "answer", "if_no_answer", "review", "spend", "asked_at", "question_topic"} & set(row)
+
+
+@pytest.mark.parametrize("kind", ["reversible", "send"])
+def test_a_default_on_a_restricted_page_title_leaves_no_event_naming_it_to_outsiders(api, kind):
+    """A date-driven close copies its default's words: the picked page's title goes ahead (or the question expires,
+    naming it), and the events that close writes stay redacted for a person outside the page's audience."""
+    from backend.auth import Identity
+    from backend.tests.test_file_reviews import ask as review_ask
+    from backend.tests.test_files import turn
+    from backend.tests.test_page_audience import edit
+    from backend.tests.test_pages import HTML, page
+
+    reader = post(api, "access/people", {"name": "Reader", "email": "reader@acme.example"})
+    assert reader["person"] == "reader"
+    api.app.state.store.settings.test_identities["reader-test"] = Identity(
+        "human:reader", "human", "reader@acme.example"
+    )
+    _, attempt = turn(api)
+    tid = post(api, "tasks", {"owner": "ops", "title": "Review folios", "body": "Review", "private": False})["id"]
+    title = "Audience secret"
+    fid = page(api, attempt, task=tid, name="folio.html", title=title).json()["page"]["file_id"]
+    ordinary = page(api, attempt, task=tid, name="ordinary.html", title="Ordinary folio", data=HTML).json()["page"][
+        "file_id"
+    ]
+    by = H.shift(H.now(), days=4)
+    card = review_ask(
+        api,
+        attempt["token"],
+        [{"file": fid}, {"file": ordinary}],
+        on="reader",
+        private=False,
+        pick=True,
+        question="Which folio should ship?",
+        if_no_answer={"do": title, "kind": kind, "by": by},
+    )["task"]
+    with api.app.state.store.transaction() as c:
+        strip_sources(c, card["id"])
+    edit(api, fid, {"people": ["reader"]})
+    with api.app.state.store.transaction() as c:
+        done = ask_deadlines.sweep(c, H.shift(by, hours=1))
+    assert card["id"] in done["went_ahead"] + done["expired"]
+    rows = _read(api, "SELECT detail FROM events WHERE target=? OR detail LIKE ?", (card["id"], f"%{title}%"))
+    assert any(title in r[0] for r in rows), "the close should have written the title somewhere"
+    sql = api.post("/api/v2/sql", json={"sql": "SELECT * FROM events"}, headers=headers("cara-test"))
+    assert sql.status_code == 200, sql.text
+    assert title not in json.dumps(sql.json()["rows"]), "an event naming the restricted page reached an outsider"

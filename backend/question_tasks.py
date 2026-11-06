@@ -201,19 +201,21 @@ def as_ask(row):
     if questions and questions[0].get("id") != FIRST_ID:
         # Reworded in place (fold): an answer names the current question id (task_review.checked_answers).
         refs["asked_again_at"] = asked_at(row)
-    return {
-        "id": row["id"],
-        "kind": "ask",
-        "question_task": True,
-        "sender_id": row["requester_id"],
-        "recipient_id": row["owner_id"],
-        "body": (questions[0].get("question") if questions else row["title"]),
-        "created_at": asked_at(row),
-        "conversation_id": row.get("conversation_id"),
-        "refs": refs,
-        "read_at": None,
-        "delivered_at": None,
-    }
+    return with_pick_sources(
+        {
+            "id": row["id"],
+            "kind": "ask",
+            "question_task": True,
+            "sender_id": row["requester_id"],
+            "recipient_id": row["owner_id"],
+            "body": (questions[0].get("question") if questions else row["title"]),
+            "created_at": asked_at(row),
+            "conversation_id": row.get("conversation_id"),
+            "refs": refs,
+            "read_at": None,
+            "delivered_at": None,
+        }
+    )
 
 
 def store(conn, task_id, ask, topic=None):
@@ -469,7 +471,7 @@ def answer(c, auth, who, task_id, body, warn=""):
         raise Problem("forbidden", "The asker cannot answer their own question", 403)
     if not may_answer(c, auth, who, row):
         raise Problem("forbidden", "Only the person it asks, or someone acting for them, answers this question", 403)
-    asked = with_pick_sources(as_ask(row))
+    asked = as_ask(row)
     questions = {q["id"]: q for q in asked["refs"]["questions"]}
     body, passed = checked_answers(questions, asked["refs"], body)
     given = {
