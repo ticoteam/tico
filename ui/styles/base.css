@@ -68,7 +68,7 @@ html.cloud-locked body>:not(#cloud-lock):not(#signed-out):not(script){visibility
 *{box-sizing:border-box}
 html,body{height:100%}
 /* The rails' widths; dragging an edge changes them (ui/app/rails.js, ui/styles/rails.css). */
-:root{--rail-left:236px;--rail-right:320px;--rail-chat:360px}
+:root{--rail-left:236px;--rail-right:320px}
 body{margin:0;font:var(--t-md)/var(--lh) var(--sans);color:var(--ink);background:var(--bg);display:grid;grid-template-columns:var(--rail-left) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);min-height:100vh}
 a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}
 /* no specificity of its own, so forms.css's one line-height (20px: every field and button 32px tall) is not reset by it */
