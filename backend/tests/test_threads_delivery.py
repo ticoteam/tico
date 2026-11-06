@@ -162,14 +162,18 @@ def test_a_message_naming_nobody_reaches_only_the_live_followers(api):
     assert rows(api, "SELECT 1 FROM events WHERE action='judge.call'") == []
 
 
-def test_a_bots_plain_post_reaches_a_following_bot_at_its_next_turn_and_a_mention_wakes_it(api):
+def test_a_bots_plain_post_reaches_a_following_bot_at_its_next_turn_and_a_flagged_one_wakes_it(api):
     thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo"))
     on_live(api, "bot:cpo", thread["id"])
     plain = bot_post(api, "bot:ops", thread["id"], "A status line")
     row = delivery(api, plain["id"], "bot:cpo")
     assert row["reason"] == "follower" and row["mode"] == "defer" and not row["carrier_id"]
+    # A bot's plain @mention is reached, and the wake rules hold it for the bot's next turn ("comment" is a note).
     named = bot_post(api, "bot:ops", thread["id"], "@cpo can you take this?")
     row = delivery(api, named["id"], "bot:cpo")
+    assert row["reason"] == "mention" and row["mode"] == "defer" and not row["carrier_id"]
+    flagged = bot_post(api, "bot:ops", thread["id"], "@cpo this one is urgent", refs={"needs_action": True})
+    row = delivery(api, flagged["id"], "bot:cpo")
     assert row["reason"] == "mention" and row["carrier_id"] and queued_job(api, row["carrier_id"]) == "queued"
 
 

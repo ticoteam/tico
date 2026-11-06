@@ -6316,10 +6316,12 @@ def is_comment(msg):
     """Written by `task_comment`: a say tagged `comment`. Not a question, an answer, a notice, an
     approval, a bot's reply to its run or a chat message that only mentions the task."""
     refs = msg.get("refs") or {}
-    # `moved_home`: the mark a comment in a room that moved into a Home carries (bot_home_merge._mark_moved).
+    # `moved_home`: the mark a comment in a room that moved into a Home carries (bot_home_merge._mark_moved); the
+    # rest are the marks its way and a bot-to-bot hold leave (threads.PRIMARY_MARKS).
     return (msg.get("kind") == "say" and bool(refs.get("comment"))
             and not (set(refs) - {"task", "comment", "quiet", "via", "rule", "wake_immediate",
-                                         "delivery", "moved_home"}))
+                                         "delivery", "moved_home", "send_way", "send_defer_for", "can_wait",
+                                         "held_by"}))
 
 
 def _withdraw_queued_comment_copies(conn, message_id):

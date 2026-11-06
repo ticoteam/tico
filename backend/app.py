@@ -5404,6 +5404,11 @@ def create_app(settings=None):
                              approval_id=body.approval_id, extra_refs=extra or None,
                              way=None if ask else way, defer_for=defer_for)
         due = None
+        # The bot the comment went to first: the follower it was for, or the bot its @mention reached.
+        reached = msg.get("recipient_id") if H.is_bot(msg.get("recipient_id")) else None
+        bot = bot or reached
+        if way == "defer" and not ask and reached and (msg.get("refs") or {}).get("delivery") == "queue":
+            way = "queue"           # Defer never with an @mention: the bot it names is reached, queued (D6)
         if way == "defer" and not ask:
             found = c.execute("SELECT due_at FROM deferrals WHERE item=? OR item IN (SELECT carrier_id FROM "
                               "message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL) LIMIT 1",

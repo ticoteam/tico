@@ -65170,7 +65170,10 @@
             "type": "string"
           },
           "recipient_id": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "kind": {
             "type": "string"
