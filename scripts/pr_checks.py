@@ -57,12 +57,12 @@ CHANGELOG_REFUSAL = (
     "No PR edits CHANGELOG.md; the Technical Writer writes notes at the release cut. Remove your CHANGELOG.md changes."
 )
 RELEASE_TRAILER = re.compile(r"^Changelog-Release:[ \t]*v?(\d+\.\d+\.\d+)[ \t]*$", re.M)
-# Each check VM has 4 vCPUs and runs 4 test workers. Groups are sized so a VM finishes in about
-# TICO_CI_JOB_SECONDS, setup included: short Spot jobs are rarely interrupted and lose little when one is.
+# Each check VM has 4 vCPUs (the largest size these checks use) and runs 4 test workers. Groups are sized so a VM
+# finishes in about TICO_CI_JOB_SECONDS, setup included. Short Spot jobs are rarely interrupted and lose little when one is.
 # The cap only guards against a runaway plan. At 16 it held the suite to 16 VMs once the measured default suite grew
 # past 16 x 540 s (Oct 23: 3,300 one-worker seconds; Nov 5: 39,900), so every full run's shards took 11-14 minutes.
 WORKERS = 4
-JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 180))
+JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 300))
 SETUP_SECONDS = {"python": 45, "browser": 70}  # measured boot, checkout and warm install
 MAX_JOBS = int(os.environ.get("TICO_CI_MAX_JOBS", 64))
 # Python jobs pass the release gate's own flags: restore a worker-local schema snapshot instead of migrating a fresh

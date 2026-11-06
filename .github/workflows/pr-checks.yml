@@ -27,11 +27,12 @@ concurrency:
 jobs:
   plan:
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 12
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       caddy: ${{ steps.plan.outputs.caddy }}
+      recorder: ${{ steps.recorder.outputs.run }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -76,6 +77,17 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py plan --event "$EVENT" --base "$BASE" --timings previous-timings/durations.json'
+      # Tico Recorder changed (recorder/): the recorder job below runs its macOS checks. It runs in the plan so no VM
+      # starts only to diff the branch; the plan's checkout is full-depth.
+      - name: Recorder changed
+        id: recorder
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" != pull_request ] || git diff --name-only "$BASE"...HEAD | grep -q '^recorder/'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pr-check-plan
@@ -88,7 +100,7 @@ jobs:
   tests:
     needs: plan
     name: ${{ matrix.suite }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -163,7 +175,7 @@ jobs:
     # (actionlint). Seconds each; tools are pinned.
     name: static checks
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -222,7 +234,7 @@ jobs:
     # can be required: a PR without Rust changes passes it in seconds.
     name: rust lint
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -255,7 +267,7 @@ jobs:
     # app.yml installs. Always reported, so it can be required: a PR without app changes passes it in seconds.
     name: desktop app
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -310,34 +322,12 @@ jobs:
           TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
         run: cargo +1.92.0 test --locked
 
-  recorder-changes:
-    # Tico Recorder changed (recorder/): its macOS checks run below. Always reported, so it can be required.
-    name: recorder changed
-    if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
-    timeout-minutes: 5
-    outputs:
-      run: ${{ steps.changed.outputs.run }}
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - name: Recorder changed
-        id: changed
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha }}
-        run: |
-          if [ "$EVENT" != pull_request ] || git diff --name-only "$BASE"...HEAD | grep -q '^recorder/'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
-
   recorder:
     # The Rust crate with the desktop feature (the window, the updater), on macOS: it links the system frameworks.
+    # It runs when the plan sees a change under recorder/ (the plan job's recorder output).
     name: recorder tests
-    needs: recorder-changes
-    if: needs.recorder-changes.outputs.run == 'true'
+    needs: plan
+    if: needs.plan.outputs.recorder == 'true'
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -366,7 +356,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.caddy == 'true'
     name: caddy-linux-${{ matrix.arch }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}/extras=s3-cache', github.run_id, matrix.arch == 'arm64' && 'arm64' || 'x64') || matrix.runner }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.arch == 'arm64' && 'arm64' || 'x64', matrix.arch != 'arm64' && '/family=m8+m7+m6+c8+c7+c6+r8+r7' || '') || matrix.runner }}
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -428,8 +418,8 @@ jobs:
     # job queued after the cancellation can wait for a runner that never comes, holding the newer head's run pending
     # in the same concurrency group.
     if: ${{ !cancelled() && !github.event.pull_request.draft }}
-    needs: [plan, tests, caddy-linux, static, rust-lint, desktop-app, recorder-changes, recorder]
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    needs: [plan, tests, caddy-linux, static, rust-lint, desktop-app, recorder]
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below,
     # and the gate after it must still run. A hang in the receipt canceled the whole job at three minutes on #2487.
     timeout-minutes: 4
@@ -461,7 +451,6 @@ jobs:
           STATIC: ${{ needs.static.result }}
           RUST_LINT: ${{ needs.rust-lint.result }}
           DESKTOP_APP: ${{ needs.desktop-app.result }}
-          RECORDER_CHANGES: ${{ needs.recorder-changes.result }}
           RECORDER: ${{ needs.recorder.result }}
         run: |
           test "$PLAN" = success
@@ -469,6 +458,5 @@ jobs:
           test "$STATIC" = success
           test "$RUST_LINT" = success
           test "$DESKTOP_APP" = success
-          test "$RECORDER_CHANGES" = success
           case "$CADDY" in success|skipped) ;; *) exit 1 ;; esac
           case "$RECORDER" in success|skipped) ;; *) exit 1 ;; esac
