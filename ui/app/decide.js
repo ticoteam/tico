@@ -588,7 +588,7 @@ function decideWriteBody(c, what, i, note) {
     // @mention is what wakes it (backend/threads.py mentions matches a bot by its slug).
     const asker = c.it.ask?.sender_id, quote = String(decideAskText(c.it) || c.it.title || '').replace(/\s+/g, ' ').trim();
     const said = quote.length > DEC_CLARIFY_CLIP ? quote.slice(0, DEC_CLARIFY_CLIP).trimEnd() + '…' : quote;
-    const person = S.me?.name ? ` for ${S.me.name}` : '';
+    const me = /** @type {any} */ (S.me), person = me?.name ? ` for ${me.name}` : '';
     return {writes: [{path: `/v2/tasks/${id}/comments`, body: {text: `@${actorSlug(asker)} Please clarify this${person}: "${said}" ${DEC_CLARIFY_PROMPT}`}}],
       label: `Asked ${actorLabel(asker) || to} to clarify`};
   }
