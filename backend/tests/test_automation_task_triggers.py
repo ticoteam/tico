@@ -178,14 +178,14 @@ def test_a_task_trigger_automation_does_not_reenter_from_its_bot_turn(api):
     from backend import automations
     from backend.tests.test_api import runner
 
-    automation = make(api, {"type": "event", "name": "task.step_changed"}, [
+    automation = make(api, {"type": "event", "name": "task.done"}, [
         {"id": "wake", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Review this task."}}
     ])
     with api.app.state.store.transaction() as c:
         typ = task_type(c)
         task = H.task_create(c, "human:ana", "One task event", "Synthetic body", "bot:ops", type=typ["id"],
                              step="Open", lint=False, deduplicate=False)
-        H.task_update(c, "human:ana", task["id"], step="In QA", note="Start the task-trigger automation", mover=True)
+        H.task_update(c, "human:ana", task["id"], status="done", note="Start the task-trigger automation", mover=True)
     api.app.state.store.automations.drain()
     assert started(api, automation) == 1
 
@@ -208,7 +208,8 @@ def test_a_task_trigger_automation_does_not_reenter_from_its_bot_turn(api):
         run_token = H.RUN.set(attempt_id)
         chain_token = automations.CHAIN.set(())
         try:
-            H.task_update(c, "bot:ops", task["id"], step="Open", note="Bot changed the task", mover=True)
+            H.task_update(c, "bot:ops", task["id"], status="doing", note="Bot reopened the task", mover=True)
+            H.task_update(c, "bot:ops", task["id"], status="done", note="Bot finished the task", mover=True)
         finally:
             automations.CHAIN.reset(chain_token)
             H.RUN.reset(run_token)
