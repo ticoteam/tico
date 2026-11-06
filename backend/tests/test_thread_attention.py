@@ -21,7 +21,8 @@ def say(api, thread_id, text, *, actor="human:cara", **kw):
 
 
 def old_question(api, thread_id, text, *, actor="human:cara", to="human:ana"):
-    """An ask row as an older file holds it: nothing writes one now, but the thread still lists it until answered."""
+    """An ask row as an older file holds it: nothing writes one now. A person's is listed until answered, as any
+    message from a person addressed to her is."""
     with api.app.state.store.transaction() as c:
         return old_ask(c, actor, to, text, conversation_id=thread_id)
 
@@ -91,10 +92,10 @@ def test_a_message_to_the_person_is_listed_until_they_reply(api):
 
 def test_a_question_is_listed_until_the_person_answers_in_the_thread(api):
     tid = members_thread(api)
-    old_question(api, tid, "Which lease, the Main St one?")
-    assert [i["conversation_id"] for i in needs(api, "thread_ask")] == [tid]
+    old_question(api, tid, "Which lease, the Main St one?")       # a person's: listed as any message to her is
+    assert [i["conversation_id"] for i in needs(api, "thread_mention")] == [tid]
     say(api, tid, "The Main St one.", actor="human:ana")
-    assert needs(api, "thread_ask") == []
+    assert needs(api, "thread_mention") == []
 
 
 def test_a_mention_from_outside_the_audience_reaches_no_one(api):
