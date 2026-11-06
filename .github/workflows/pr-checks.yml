@@ -1,5 +1,6 @@
 # Read-only PR checks, including slow MCP/CLI/golden contracts on affected changes in a parallel contracts job.
-# Main keeps the full default suite and contracts; Release validation is independent.
+# Pull requests only: main is tested by its pull requests and by Release validation (ci.yml), which runs the whole
+# release gate on each candidate and records the per-file timings these checks size their groups from.
 # Jobs run on RunsOn spot VMs in Tico's own AWS account. Fork PRs stay on GitHub-hosted runners so outside code
 # never runs on our machines. A draft pull request runs nothing: every job is skipped (GitHub counts a skipped required
 # check as passed, and a draft cannot merge), marking it ready for review runs the checks, and converting it back to a
@@ -10,17 +11,14 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
-  push:
-    branches: [main]
 
 permissions:
   contents: read
   actions: read
 
 concurrency:
-  # A newer push to a pull request cancels its superseded run. Each main push has its own group and always
-  # completes, so every main commit gets full-suite results and timings. Release validation never cancels a gate.
-  group: pr-checks-${{ github.event.pull_request.number || github.sha }}
+  # A newer push to a pull request cancels its superseded run. Release validation never cancels a gate.
+  group: pr-checks-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
@@ -44,23 +42,24 @@ jobs:
       - name: Install (five minutes per attempt, one retry)
         timeout-minutes: 11
         run: bash scripts/ci_install.sh python
-      - name: Restore measured timings from the latest successful full main run
+      - name: Restore measured timings from the latest successful Release validation run
         # Optional: missing/expired artifacts stop immediately; transient errors get only 90s of retry backoff.
+        # Release validation runs the same pytest flags these jobs pass (pr_checks.PYTEST_FLAGS), slow tests included.
         timeout-minutes: 2
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p previous-timings
-          run=$(gh run list --workflow pr-checks.yml --branch main --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty') || run=''
+          run=$(gh run list --workflow ci.yml --branch main --event workflow_dispatch --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty') || run=''
           if [ -n "$run" ]; then
-            bash scripts/ci/retry.sh --max-attempts 3 --clear previous-timings --permanent 'HTTP (404|410)|no (valid )?artifacts? (match|found)' -- gh run download "$run" --name pr-python-timings --dir previous-timings || echo "No measured timings yet; use collected counts this run"
+            bash scripts/ci/retry.sh --max-attempts 3 --clear previous-timings --permanent 'HTTP (404|410)|no (valid )?artifacts? (match|found)' -- gh run download "$run" --name test-timings --dir previous-timings || echo "No measured timings yet; use collected counts this run"
           fi
       - name: Select affected tests and size measured Python and browser groups
         id: plan
         env:
           EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py plan --event "$EVENT" --base "$BASE" --timings previous-timings/durations.json'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -177,7 +176,7 @@ jobs:
         run: bash scripts/ci_install.sh python && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.0
       - name: Python lint
         env:
-          LINT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          LINT_BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/lint.sh
       - name: Boundary types
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_types.sh
@@ -202,7 +201,7 @@ jobs:
         id: changed
         env:
           EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ "$EVENT" != pull_request ] || git diff --name-only "$BASE"...HEAD | grep -qE '^(runner-rs|relay-rs|tools/release-command|tools/trust-list-check|contracts/runner)/|^scripts/rust(_checks\.sh|-fmt-pending\.txt)$'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -236,7 +235,7 @@ jobs:
         id: changed
         env:
           EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ "$EVENT" != pull_request ] || git diff --name-only "$BASE"...HEAD | grep -q '^recorder/'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -349,15 +348,6 @@ jobs:
         run: |
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" | python3 scripts/pr_checks.py receipt >> "$GITHUB_STEP_SUMMARY"
           echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
-      - name: Record measured per-file times
-        if: github.event_name == 'push' && needs.tests.result == 'success'
-        run: python3 scripts/pr_checks.py durations
-      - if: github.event_name == 'push' && needs.tests.result == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: pr-python-timings
-          path: durations.json
-          retention-days: 30
       - name: Required checks passed
         if: always()
         env:
