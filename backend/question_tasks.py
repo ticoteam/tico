@@ -12,6 +12,7 @@ task per topic per person and bot (`open_for`, `fold`). ask_deadlines and still_
 """
 
 import json
+from contextlib import contextmanager
 
 from . import hubdb as H
 from . import task_relations as TR
@@ -42,11 +43,31 @@ def fields(row):
 
 def view_fields(row):
     """fields() as a task view carries them: the review's files without their attachments, which only the card's ask
-    carries, decorated for each reader (visuals.decorate: a file the reader may not open says nothing of itself)."""
+    carries, decorated for each reader (visuals.decorate: a file the reader may not open says nothing of itself). An
+    answer that copies a page's words brings their sources (body_sources), so a reader who may not open that page
+    reads none of the task's text (files.readable_page_refs)."""
     f = fields(row)
     if isinstance(f["review"], dict):
         f["review"] = {k: v for k, v in f["review"].items() if k != "attachments"}
-    return f
+    sources = (f["answer"] or {}).get("body_sources") if isinstance(f["answer"], dict) else None
+    return {**f, **({"body_sources": sources} if sources else {})}
+
+
+@contextmanager
+def sourced(conn, sources):
+    """Stamp `sources` on every history event and message the close inside writes (its note, the bot's wake, the
+    parent's note): each copies the answer's words, so each is redacted for a reader who may not open those pages."""
+    hist = conn.execute("SELECT coalesce(max(rowid), 0) FROM history_events").fetchone()[0]
+    msgs = conn.execute("SELECT coalesce(max(rowid), 0) FROM messages").fetchone()[0]
+    yield
+    if not sources:
+        return
+    for table, column, mark in (("history_events", "data", hist), ("messages", "refs", msgs)):
+        for rid, value in conn.execute(f"SELECT rowid, {column} FROM {table} WHERE rowid>?", (mark,)).fetchall():
+            value = H._json(value, {}) or {}
+            if isinstance(value, dict):
+                _, value = H.sourced_text("", sources, value)
+                conn.execute(f"UPDATE {table} SET {column}=? WHERE rowid=?", (json.dumps(value, sort_keys=True), rid))
 
 
 def is_question(row):
@@ -253,7 +274,8 @@ def answer(c, auth, who, task_id, body, warn=""):
     # The pages its words copy (body_sources) stay with them, so a reader who may not open one gets it redacted.
     value = {**refs["answer"], "text": text, **({"body_sources": refs["body_sources"]} if refs.get("body_sources") else {})}
     record(c, task_id, value)
-    H.task_update(c, who.actor, task_id, status="declined" if body.dismiss else "done", note=text)
+    with sourced(c, value.get("body_sources")):
+        H.task_update(c, who.actor, task_id, status="declined" if body.dismiss else "done", note=text)
     if value.get("reviewed"):
         file_reviews.record(c, who, task_id, task_id, task_id, value["reviewed"])
     return {"answer": value, "comments": H.task_comments(c, task_id, actor=privacy.actor(who)), "woke": True}
@@ -279,7 +301,12 @@ def take_recommendation(c, auth, who, row, version=None):
         question = asked["refs"]["questions"][0]
         return answer(c, auth, who, row["id"], M.TaskAnswer(target={"task": row["id"]},
                                                             answers={question["id"]: [rec["option"]]}))
-    H.task_update(c, who.actor, row["id"], status="done", note="Yes, do what you recommend: " + rec["do"])
+    text, refs = H.answer_text(asked, rec["do"], text="Yes, do what you recommend: " + rec["do"])
+    record(c, row["id"], {"target": {"task": row["id"]}, "answers": {}, "other": text, "dismiss": False,
+                          "by": who.actor, "at": H.now(), "text": text, "recommended": True,
+                          **({"body_sources": refs["body_sources"]} if refs.get("body_sources") else {})})
+    with sourced(c, refs.get("body_sources")):      # the bot's default may copy a page's words
+        H.task_update(c, who.actor, row["id"], status="done", note=text)
     return {"answer": _load(H.task(c, row["id"]).get("answer")), "woke": True}
 
 
@@ -305,14 +332,22 @@ def settle(conn, row, text, *, answers=None):
     text, refs = H.answer_text(asked, (asked["refs"].get("if_no_answer") or {}).get("do") or "", text=text, refs=refs)
     record(conn, row["id"], {**refs["answer"], "text": text,
                              **({"body_sources": refs["body_sources"]} if refs.get("body_sources") else {})})
-    H.task_update(conn, H.KEEPER, row["id"], status="done", note=text)
+    with sourced(conn, refs.get("body_sources")):
+        H.task_update(conn, H.KEEPER, row["id"], status="done", note=text)
     H.event(conn, H.KEEPER, "ask.went_ahead", row["id"], {"to": row["owner_id"], "bot": row["requester_id"],
                                                          "task": row["id"]})
 
 
 def expire(conn, row, text):
     """Its date passed and nothing goes ahead on its own: the question task closes, and the bot hears why."""
-    H.task_close(conn, H.KEEPER, row["id"], text, strict=False)
+    asked = as_ask(row)
+    _, refs = H.answer_text(asked, (asked["refs"].get("if_no_answer") or {}).get("do") or "", text=text)
+    # No answer, but how it ended: what the note says the bot would have done keeps its sources (view_fields).
+    record(conn, row["id"], {"target": {"task": row["id"]}, "answers": {}, "other": None, "dismiss": False,
+                             "by": H.KEEPER, "at": H.now(), "text": text, "if_no_answer": "expired",
+                             **({"body_sources": refs["body_sources"]} if refs.get("body_sources") else {})})
+    with sourced(conn, refs.get("body_sources")):          # the note names what the bot said it would do
+        H.task_close(conn, H.KEEPER, row["id"], text, strict=False)
     H.event(conn, H.KEEPER, "ask.expired", row["id"], {"to": row["owner_id"], "bot": row["requester_id"],
                                                       "task": row["id"]})
 

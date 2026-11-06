@@ -57,7 +57,7 @@ def test_real_pick_labels_and_generated_answer_bodies_retain_sources(api):
     option = made["question"]["refs"]["questions"][0]["options"][0]
     assert option["source"] == {"file": fid, "version": 1}
     answered = review_answer(api, made, [option["label"]], token="ben-test")
-    assert answered["comment"]["refs"]["body_sources"] == [{"file": fid, "version": 1}]
+    assert answered["answer"]["body_sources"] == [{"file": fid, "version": 1}]
     edit(api, fid, {"people": ["ben"]})
     for deleted in (False, True):
         if deleted:
@@ -156,13 +156,15 @@ def test_automatic_defaults_keep_label_and_body_provenance(api, kind, outcome):
     with api.app.state.store.transaction() as c:
         settled = ask_deadlines.sweep(c, H.shift(H.now(), days=6))
         assert made["question"]["id"] in settled[outcome]
-        answer = c.execute("SELECT refs FROM messages WHERE in_reply_to=? AND kind='answer'",
-                           (made["question"]["id"],)).fetchone()
-        refs = H._json(answer["refs"], {})
-        assert refs["body_sources"] == [{"file": fid, "version": 1}]
+        # A question task: the keeper's answer is on the task, and what its close wrote keeps the page as its source.
+        closed = c.execute("SELECT data FROM history_events WHERE subject_id=? AND kind='status' ORDER BY rowid DESC",
+                           (made["task"]["id"],)).fetchone()
+        assert H._json(closed["data"], {})["body_sources"] == [{"file": fid, "version": 1}]
         if outcome == "went_ahead":
-            assert refs["answer"]["label_sources"] == {"decision": {"Confidential draft": {"file": fid, "version": 1},
-                                                                      "public": {"file": ordinary, "version": 1}}}
+            answer = H._json(H.task(c, made["task"]["id"])["answer"], {})
+            assert answer["body_sources"] == [{"file": fid, "version": 1}]
+            assert answer["label_sources"] == {"decision": {"Confidential draft": {"file": fid, "version": 1},
+                                                            "public": {"file": ordinary, "version": 1}}}
     edit(api, fid, {"people": ["ben"]})
     for deleted in (False, True):
         if deleted:

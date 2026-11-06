@@ -69,6 +69,11 @@ def same_versions(entries):
     mine = {(e["file"], e["version"]) for e in entries}
 
     def same(c, task_id):
+        own = c.execute("SELECT review FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if own and own[0]:
+            # A question task (backend/question_tasks.py) keeps its review on itself.
+            files = (H._json(own[0], {}) or {}).get("files") or []
+            return {(f.get("file"), f.get("version")) for f in files} == mine
         row = c.execute("SELECT m.refs FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
                         "WHERE t.id=? AND json_extract(m.refs,'$.review') IS NOT NULL "
                         "ORDER BY m.created_at DESC, m.id DESC LIMIT 1", (task_id,)).fetchone()

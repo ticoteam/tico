@@ -5240,6 +5240,10 @@ def _answered(conn, actor, task_id, card, told=None):
         return False
     name = person_name(conn, person)
     said = str(card.get("note") or "").strip() or {"done": "Done.", "declined": "Declined."}.get(card["status"], "")
+    if card.get("questions") and '"body_sources"' in str(card.get("answer") or ""):
+        # A question task's answer that copies a page's words stays on that task, redacted per reader there; the
+        # bot task's note only says it was answered.
+        said = ""
     closer = "The system" if actor == KEEPER else person_name(conn, actor)   # the keeper closes an ask that expired
     if card["status"] == "closed":
         who = f"{name} closed the ask" if actor == person else f"{closer} closed the ask to {name}"

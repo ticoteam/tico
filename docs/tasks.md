@@ -596,7 +596,8 @@ Decide and the task's **Needs you** box show the same question card: the same te
 `hub task question "<question>" --on <person>` (MCP `hub_task_question`) files a **question task**: a task the person
 owns, with the question stored on the task itself (its picks, the recommended pick, what happens if nobody answers,
 files under review, and a spend). The bot sends no separate question message. Asked from one of the bot's own tasks,
-the question task is that task's subtask, and the bot's task is blocked on it. Otherwise it is a task on its own for
+the question task is that task's subtask, and the bot's task is blocked on it (unless the question is private and
+the bot's task is not). Otherwise it is a task on its own for
 that person. A bot never files a question task for another bot: the request is refused and points the bot to a direct
 message instead.
 
@@ -611,7 +612,7 @@ The bot hears the answer once, on its own task, or as the question task's reques
 The question card draws a question task the same way it draws a question message. The same topic rule applies too:
 one open question task per topic per person. A question task closes on its date the way a question message does (see
 [When nobody answers a bot's ask](#when-nobody-answers-a-bots-ask)): the default goes ahead as the answer, or the
-task closes and the bot hears why.
+task closes and the bot hears why. With no date, it goes back to the bot after two business days.
 The header names the real asker, or **Tico** for a system check. It shows the question's age, such as
 "asked 3 days ago", and **holds up:** with the parent task or roadmap item's title.
 The question comes next, followed by **Why it matters:**.
