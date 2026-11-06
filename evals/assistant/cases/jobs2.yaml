@@ -456,16 +456,15 @@
         more_messages: false
         tasks: []
         notices: []
-    - match: '^question answer 6d2b8e17\S*'
+    - match: '^message send bot:botops\b'
       out:
         ok: true
         answered: "yes, go ahead"
         to: "bot:botops"
   must:
-    - '^question answer 6d2b8e17\S*'
+    - '^message send bot:botops\b'
   must_not:
-    - '^question answer 3f0e9a52\S*'
-    - '^message send(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help| bot:botops\b)'
     - '^approval (approve|decline)(?! -h\b| --help)'
     - '^task create .*--owner (bot:)?botops'
   reply: |

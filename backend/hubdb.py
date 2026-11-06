@@ -8058,6 +8058,7 @@ def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
             "SELECT DISTINCT bot_id FROM jobs WHERE state IN ('queued','leased','running')")}
     except sqlite3.OperationalError:     # a local hub has no jobs table
         busy = set()
+    prime_asks(conn, rows)
     out = []
     for row in rows:
         slug = actor_id(row["owner_id"])
@@ -8163,6 +8164,7 @@ def stalled_tasks(conn, at=None, task_ids=None, queued_here=None):
             "WHERE s.deleted_at IS NULL AND coalesce(sc.enabled,1)=1 AND s.next_due_at IS NOT NULL AND s.next_due_at<=?", (soon,))}
     except sqlite3.OperationalError:
         routine = set()
+    prime_asks(conn, rows)
     out, base = [], parse_ts(at)
     for row in rows:
         slug = actor_id(row["owner_id"])
@@ -9540,20 +9542,44 @@ def _owner_asked(conn, row, person):
         (row["id"], person, row["owner_id"])).fetchone() is not None
 
 
+ASKED_SQL = ("SELECT wq.id FROM task_relations wr JOIN tasks wq ON wq.id=wr.from_task WHERE wr.to_task=? "
+             "AND wr.kind IN ('parent','blocks') AND wq.questions IS NOT NULL AND wq.answer IS NULL "
+             f"AND wq.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) ORDER BY wq.created_at, wq.rowid")
+
+
+def prime_asks(conn, rows):
+    """unanswered_ask's question reads for these tasks and their live blockers, one read a 500 tasks (read_cache), so a
+    loop of one-task checks (the stuck and stalled lists, own_stuck_blockers) reads none of them again."""
+    from .read_cache import cache, prime_rows
+    rows = [r for r in rows if r]
+    if cache(conn) is None or not rows:
+        return
+    ids = {r["id"] for r in rows}
+    for blocks in TR.live_blockers_many(conn, sorted(ids), ACTIVE_STATUSES).values():
+        ids.update(b["id"] for b in blocks)
+    found = {(tid,): [] for tid in ids}
+    for part in chunks(sorted(ids)):
+        for to_task, card in conn.execute(
+                "SELECT wr.to_task, wq.id FROM task_relations wr JOIN tasks wq ON wq.id=wr.from_task "
+                f"WHERE wr.to_task IN ({','.join('?' * len(part))}) AND wr.kind IN ('parent','blocks') "
+                "AND wq.questions IS NOT NULL AND wq.answer IS NULL "
+                f"AND wq.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) ORDER BY wq.created_at, wq.rowid",
+                part):
+            found[(to_task,)].append((card,))
+    prime_rows(conn, ASKED_SQL, found)
+
+
 def unanswered_ask(conn, task_row, *, actor=None):
     """The open question this task waits on, in the card shape (question_tasks.as_ask), or None: its own, when it is a
     question task, else the oldest open question task under it or blocking it (question_tasks.waits_sql) that `actor`
     may read."""
     from . import question_tasks
+    from .read_cache import rows as cached_rows
     if not task_row:
         return None
     if question_tasks.is_open(task_row):
         return question_tasks.as_ask(task_row)
-    for found in conn.execute(
-            "SELECT wq.id FROM task_relations wr JOIN tasks wq ON wq.id=wr.from_task WHERE wr.to_task=? "
-            "AND wr.kind IN ('parent','blocks') AND wq.questions IS NOT NULL AND wq.answer IS NULL "
-            f"AND wq.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) ORDER BY wq.created_at, wq.rowid",
-            (task_row["id"],)).fetchall():
+    for found in cached_rows(conn, ASKED_SQL, (task_row["id"],)):
         card = task(conn, found[0])
         if card and (actor is None or task_private_readable(conn, actor, card)):
             return question_tasks.as_ask(card)

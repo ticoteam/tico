@@ -751,7 +751,7 @@ def test_a_steps_only_type_changes_status_only_by_a_step_move(api):
     for token, change in (('ana-test', {'status': 'declined'}), (ops, {'status': 'done', 'note': 'Fixed.'})):
         assert post(api, path, {'version': version(), **change}, token=token, expected=422)['error']['code'] == 'kind'
     # A working status still changes without a step: the bot's ask sets it waiting.
-    assert post(api, path + '/ask', {'text': 'Which page?'}, token=ops)
+    assert post(api, 'task-questions', {'on': 'human:ana', 'question': 'Which page?', 'parent': ticket['id']}, token=ops)
     assert get(api, path)['task']['status'] == 'waiting'
     assert get(api, path)['task']['step']['name'] == 'On Deck'
     with api.app.state.store.read() as c:

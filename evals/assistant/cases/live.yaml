@@ -305,7 +305,6 @@
   must:
     - "^needs-you show\\b"
     - "^task (bulk close|close)\\b"
-    - "^question answer\\b"
     - "^approval decline\\b"
   must_not:
     - "^approval approve\\b"
@@ -352,7 +351,7 @@
       out: {status: declined, note: "declined as the person, via Assistant"}
   must:
     - "^needs-you show\\b"
-    - "^(question answer|task (bulk close|close)|approval decline)\\b"
+    - "^(task (bulk close|close)|approval decline)\\b"
   must_not:
     - "^approval approve\\b"
     - "^message send\\b"

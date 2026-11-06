@@ -1,5 +1,6 @@
 """A paused task picks back up from its checkpoint. An idle task is a line on its bot's roundup, not a question to a
-person; a "Still wanted?" question put before that change is still answered by its person (backend/still_wanted.py)."""
+person. A "Still wanted?" question put before that change is withdrawn by migration 0093, so nothing answers it now
+(its Keep / Close choice in backend/still_wanted.py is only read by the pure check below)."""
 from backend import still_wanted, task_roundup
 from backend.store import H
 from backend.tests.test_api import api, post, get, runner, assign, ready, claim  # noqa: F401
@@ -51,21 +52,11 @@ def idle(api, title, days=8):
 
 
 def asks(api, task_id):
+    """The question tasks put under a task (question tasks are its children now, not comments)."""
     with api.app.state.store.read() as c:
-        return [m for m in H.task_comments(c, task_id) if m["kind"] == "ask"]
-
-
-def legacy_ask(api, task):
-    """A "Still wanted?" question as the nudge put it before it was removed: its answer still acts."""
-    ask = {"questions": [{"id": still_wanted.QUESTION_ID, "header": "Still wanted?",
-                          "question": f"Still wanted? {task['title']}",
-                          "options": [{"label": still_wanted.KEEP, "description": "Keep it open"},
-                                      {"label": still_wanted.CLOSE, "description": "Close it"}],
-                          "multi": False, "other": False}], "who": "human:ana"}
-    with api.app.state.store.transaction() as c:
-        H.task_comment(c, H.KEEPER, task["id"], "Nothing has happened on this task for 7 days. Still wanted?",
-                       wake=False, ask=ask, extra_refs={"still_wanted": True})
-    return asks(api, task["id"])[-1]
+        return [row[0] for row in c.execute(
+            "SELECT t.id FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
+            "WHERE r.to_task=? AND t.questions IS NOT NULL", (task_id,))]
 
 
 def test_an_idle_task_is_not_asked_about_and_its_bot_lists_it_on_the_roundup(api):
@@ -80,18 +71,6 @@ def test_an_idle_task_is_not_asked_about_and_its_bot_lists_it_on_the_roundup(api
         text, _, _ = task_roundup._list(c, "ops", H.now(), {})
     assert "Old idea" in text
     assert asks(api, stale["id"]) == [], "no question goes to a person about an idle task"
-
-
-def test_keep_and_close_on_a_question_put_before_the_nudge_was_removed_still_act(api):
-    kept, closed = idle(api, "Keep me"), idle(api, "Drop me")
-    for task, label in ((kept, "Keep"), (closed, "Close")):
-        ask = legacy_ask(api, task)
-        post(api, f"tasks/{task['id']}/answers",
-             {"target": {"comment": ask["id"]}, "answers": {"still_wanted": [label]}})
-    with api.app.state.store.read() as c:
-        kept_row, closed_row = H.task(c, kept["id"]), H.task(c, closed["id"])
-        assert kept_row["status"] == "open"
-        assert closed_row["status"] == "closed" and closed_row["closed_by_id"] == "human:ana"
 
 
 def test_only_the_person_asked_decides_still_wanted():

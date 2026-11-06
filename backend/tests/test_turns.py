@@ -158,7 +158,7 @@ def test_a_hub_phrase_is_the_longest_command_it_starts_with():
     assert turns.tool_label({"tool": "Bash", "summary": "hub meeting search"}) == "Searching"
     assert turns.tool_label({"tool": "Bash", "summary": "hub settings set"}) == "Changing a setting"
     assert turns.tool_label({"tool": "shell", "summary": "hub history"}) == "Reading the chat"
-    assert turns.tool_label({"tool": "Bash", "summary": "hub ask"}) == "Asking a teammate"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub task question"}) == "Asking a teammate"
 
 
 def test_an_unmapped_hub_command_never_shows_its_words():

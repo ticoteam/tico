@@ -4732,7 +4732,8 @@ class Execution:
                              "SELECT active_message.conversation_id FROM attempts active_attempt "
                              "JOIN jobs active_job ON active_job.id=active_attempt.job_id "
                              "JOIN messages active_message ON active_message.id=active_job.message_id "
-                             "WHERE active_attempt.id=?) OR m.conversation_id=? OR (m.kind='ask' AND m.wait_s>0 "
+                             "WHERE active_attempt.id=?) OR m.conversation_id=? OR ((m.kind='ask' "
+                             "OR json_extract(m.refs,'$.needs_action')=1) AND m.wait_s>0 "
                              "AND m.sender_id LIKE 'bot:%')) ORDER BY m.rowid",
                              (attempt["bot_id"], claim_holds.REASON, H.now(), aid, task_room)).fetchall()
         read_at = c.total_changes

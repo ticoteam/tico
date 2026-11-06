@@ -339,6 +339,7 @@ def counts_many(c, tasks_by_bot, who=None):
                 f"SELECT * FROM {H.TASKS} tasks WHERE owner_id=? AND status IN ('open','doing')", ('bot:' + bot,)))
     every = [row for tasks in tasks_by_bot.values() for row in tasks]
     suspect = maybe_waiting(c, every)
+    person_held = person_waits(c, [row['id'] for row in every if row['id'] in suspect])
     steps = step_names(c, every)
     held = set()
     for part in H.chunks(tasks_by_bot):
@@ -353,7 +354,7 @@ def counts_many(c, tasks_by_bot, who=None):
                 continue            # a held task takes no place in the bot's optional task cap
             if who is not None and not privacy.task_readable(c, who, row):
                 continue
-            if row['id'] in suspect and waiting(c, row):
+            if row['id'] in suspect and (row['id'] in person_held or waiting(c, row)):
                 continue
             if row['status'] == 'doing':
                 going += 1
@@ -361,6 +362,19 @@ def counts_many(c, tasks_by_bot, who=None):
                 queued += 1
         out[bot] = {'going': going, 'waiting': queued}
     return out
+
+
+def person_waits(c, ids):
+    """The ids among `ids` with an open subtask a person owns. `waiting` holds such a task on that subtask whatever else
+    is true (wait_detail returns its first open child that is not a bot's review), so counts_many reads these once for
+    all of them rather than each task's other waits one at a time (a question task is such a child)."""
+    held = set()
+    for part in H.chunks(ids):
+        held.update(r[0] for r in c.execute(
+            "SELECT DISTINCT r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+            f"WHERE r.kind='parent' AND r.to_task IN ({_marks(part)}) "
+            "AND t.status NOT IN ('done','closed','declined') AND t.owner_id NOT LIKE 'bot:%'", part))
+    return held
 
 
 def refusal(c, row, config, woken=False, result=False, *, message=None, suspect=None):
