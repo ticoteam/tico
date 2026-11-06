@@ -179,7 +179,7 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
 - A thread can reach outside the company through a linked Slack channel. Unlinking it removes the outside readers at
   once ([Slack](slack.md)).
 - A message the org rules hold writes nothing. The author may withdraw it, and so may the person a bot reports to; only
-  the reviewer sends it anyway ([Rules](rules-plan.md)).
+  the reviewer sends it anyway. A held message nobody decides within 24 hours expires unsent ([Rules](rules-plan.md)).
 
 A page's maintainer bot and its managers may narrow **Who can see it**, archive and restore it. The audience applies
 to people and bots after inherited file visibility, including wider pins; the maintainer and managers always pass
