@@ -301,7 +301,7 @@ def test_a_special_room_stays_its_owners_and_reaches_its_bot(acme):
 
 
 # ----------------------------------------------------------------------------- Needs you (finding 17)
-def test_an_old_ask_leaves_needs_you_with_the_thread_and_comes_back_with_it(acme):
+def test_an_old_ask_in_a_thread_is_history_not_a_needs_you_item(acme):
     api, tokens = acme
     store, auth = api.app.state.store, api.app.state.auth
     thread = create_thread(api, "ana-test", members=["bot:counsel", "human:cara"])
@@ -312,11 +312,12 @@ def test_an_old_ask_leaves_needs_you_with_the_thread_and_comes_back_with_it(acme
         with store.read() as c:
             return asked["id"] in {i["id"] for i in views.needs_items(c, auth, who(api, "cara"), lambda *a, **k: None)}
 
-    assert listed()
-    remove_member(api, "ana-test", thread["id"], "human:cara")
+    # Since step 6c Needs you lists question tasks; an ask message left from before is history (its question moved
+    # at start, question_tasks.move_asks), whether or not she is in the thread.
     assert not listed()
+    remove_member(api, "ana-test", thread["id"], "human:cara")
     add_member(api, "ana-test", thread["id"], "human:cara")
-    assert listed()
+    assert not listed()
 
 
 # ----------------------------------------------------------------------------- search (finding 30)

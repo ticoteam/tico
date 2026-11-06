@@ -74,14 +74,15 @@ def test_an_old_bot_delivery_in_a_task_thread_no_longer_counts_as_unread(api):
 
 
 def test_a_bot_question_task_for_a_person_who_stopped_following_still_needs_them(api):
-    thread_id = task_thread(api)
-    with api.app.state.store.transaction() as c:   # Ben stops following: the question reaches him only through Needs you
-        c.execute("UPDATE thread_followers SET following=0 WHERE thread_id=? AND actor='human:ben'", (thread_id,))
-        parent = H.task(c, c.execute("SELECT task_id FROM conversations WHERE id=?", (thread_id,)).fetchone()[0])
+    with api.app.state.store.transaction() as c:   # Ben's task for ops; he stops following its thread
+        parent = H.task_create(c, "human:ben", "Budget review", "Details.", "bot:ops", lint=False)
+        c.execute("UPDATE thread_followers SET following=0 WHERE thread_id=? AND actor='human:ben'",
+                  (parent["conversation_id"],))
         asked = QT.ask_plain(c, "bot:ops", "human:ben", "Is the total final? If yes, I'll send it to the board.",
                              parent=parent)
         assert QT.is_open(asked) and H.unanswered_ask(c, parent)["id"] == asked["id"]
-    assert delivery(api, asked["id"], "human:ben") is None
+        # The question is his own task, so it reaches him through Needs you, not the thread.
+        assert asked["id"] in {t["id"] for t in H.needs_you(c, "human:ben")["tasks"]}
 
 
 def test_a_bot_message_that_mentions_the_person_in_a_task_thread_reaches_them(api):
