@@ -1387,6 +1387,12 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
                  "defer_for": defer_for or ("24h" if refs.get("task") else "never")}
     if entry:
         reason = entry["reason"]
+        if primary.startswith("human:") and reason in ("follower", "digest"):
+            # Written to a person who also follows: it addresses them (Needs you lists it), unless only following
+            # lets it reach them (a bot's post in a task's thread, hubdb.delivery_counts_sql).
+            written = "ask" if message.get("kind") == "ask" else "addressed"
+            if H.counts_for_person(c, message, written, thread["id"]):
+                reason = written
         c.execute("UPDATE message_deliveries SET reason=? WHERE message_id=? AND recipient=?",
                   (reason if reason in REASONS else "addressed", message["id"], primary))
         # The trigger wrote no row for a bot's post in a task's thread to a person (hubdb.delivery_counts_sql): one that
@@ -1399,6 +1405,8 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
             sent = _deliver_person(c, thread, root, message, primary, reason, replay, warnings)
             if sent:
                 out.append(sent)
+        elif primary.startswith("human:"):
+            _follow(c, thread["id"], primary, FOLLOWS.get(reason, "joined"), seq, root)
         elif reason in FOLLOWS:
             _follow(c, thread["id"], primary, FOLLOWS[reason], seq, root)
     if primary and primary.startswith("bot:"):
@@ -1475,8 +1483,9 @@ def _deliver_person(c, thread, root, message, person, reason, replay, warnings):
     did = _insert_delivery(c, message, person, thread, root, "queue", reason if reason in REASONS else "member")
     if unsolicited and did:
         c.execute("UPDATE message_deliveries SET unsolicited=1 WHERE id=?", (did,))
-    if reason in FOLLOWS:
-        _follow(c, thread["id"], person, FOLLOWS[reason], (message.get("seq") or 1) - 1, root)
+    # A mention or a reply follows; anything else that reaches a person (their DM, a message written to them) gives
+    # them the thread's row, a sidebar place and a read mark, as a join does, which follows nothing on a chat.
+    _follow(c, thread["id"], person, FOLLOWS.get(reason, "joined"), (message.get("seq") or 1) - 1, root)
     if did is None:
         return None
     return {"recipient": person, "mode": "queue", "reason": reason}
