@@ -153,10 +153,15 @@ def replay(c, ctx, writes):
 
         found = R.decide(ctx, w["sender"], w["receiver"], w["kind"], count=count)
         if not found.allowed:
-            shared = w["task_id"] and R.on_task(c, w["task_id"], w["sender"], w["receiver"], before=w["at"])
-            asked = shared or R.solicited(
-                c, w["sender"], w["receiver"], w["conversation_id"], w["in_reply_to"], before=w["at"]
-            )
+            if w["receiver"].startswith("human:"):
+                asked = R.person_asked(
+                    c, w["sender"], w["receiver"], w["task_id"], w["conversation_id"], w["in_reply_to"], before=w["at"]
+                )
+            else:
+                shared = w["task_id"] and R.on_task(c, w["task_id"], w["sender"], w["receiver"], before=w["at"])
+                asked = shared or R.solicited(
+                    c, w["sender"], w["receiver"], w["conversation_id"], w["in_reply_to"], before=w["at"]
+                )
             if not asked:
                 refused.append({**w, "code": found.why, "via": found.via})
         sent[(w["sender"], w["kind"], today)] += 1
