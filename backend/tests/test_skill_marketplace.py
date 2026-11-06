@@ -8,6 +8,7 @@ import zipfile
 from backend import skill_marketplace
 from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)
 from backend.tests.test_skill_devices import add_skill, bearer, connect, install_for, rows
+from clients.skills import RESERVED
 
 
 def test_marketplace_is_the_persons_own_with_latest_and_pinned_versions(api):
@@ -81,3 +82,16 @@ def test_the_helper_is_served_without_sign_in_and_nothing_else_is(api):
     assert r.status_code == 200 and api.app.state.store.settings.public_url in r.text and "__TICO_SERVER__" not in r.text
     assert api.get("/api/v2/skills/marketplace.json").status_code == 401
     assert api.get("/api/v2/skills/devices").status_code == 401
+
+
+def test_the_registry_name_routes_never_shadow_the_helpers_routes(api):
+    """backend/skills.py's GET skills/{name} mounts after these routes, and no skill may take their path words."""
+    device = bearer(connect(api)["token"])
+    r = api.get("/api/v2/skills/marketplace.json", headers=device)
+    assert r.status_code == 200 and r.json()["name"] == "tico", r.text
+    assert "devices" in api.get("/api/v2/skills/devices", headers=headers("cara-test")).json()
+    assert api.get("/api/v2/skills/helper.mjs").status_code == 200
+    for name in sorted(RESERVED):
+        refused = api.post("/api/v2/skills/proposals", headers=headers("ana-test"), json={
+            "name": name, "files": [{"path": "SKILL.md", "content": f"---\nname: {name}\ndescription: x\n---\n\nx\n"}]})
+        assert refused.status_code == 422 and "reserved" in refused.text, (name, refused.text)

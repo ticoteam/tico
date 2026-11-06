@@ -24,6 +24,8 @@ from threading import Lock
 
 from fastapi import Request, Response
 
+from clients.skills import RESERVED
+
 from .skill_devices import NAME, SCOPE
 from .store import Problem
 
@@ -62,7 +64,7 @@ def resolved_installs(c, person_id):
     out = []
     for r in rows:
         version = _checked(r)
-        if version and version["name"] != HOOKS_PLUGIN:
+        if version and version["name"] not in RESERVED:
             out.append(version)
     return out
 

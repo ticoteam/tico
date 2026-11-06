@@ -8592,7 +8592,7 @@ def create_app(settings=None):
     company_page_api.register(app, store, auth, mutate, settings)
     from .service_keys import install_service_keys
     install_service_keys(app, store, auth, mutate)
-    # People's own Claude Code (docs/skills-claude-code.md): the helper's devices, then its marketplace.
+    # People's own Claude Code (docs/skills.md, People's Claude Code): the helper's devices, then its marketplace.
     from . import skill_devices, skill_marketplace
     skill_devices.install(app, store, auth, mutate, settings)
     skill_marketplace.install(app, store, auth, settings)

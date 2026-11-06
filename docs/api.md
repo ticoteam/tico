@@ -145,7 +145,7 @@ only files, updates and closes tasks, such as your product's backend, uses a ser
 `Authorization: Bearer tico_sk_...`: it is no one on your roster and reaches `POST /api/v2/inbound/tasks` and nothing
 else ([service-keys.md](service-keys.md)).
 A person's skills helper holds a device token, `Authorization: Bearer tico_sd_...`: it is that person, but reaches only
-the skills marketplace, its zips and the helper's two reports ([skills-claude-code.md](skills-claude-code.md)).
+the skills marketplace, its zips and the helper's two reports ([skills.md](skills.md#peoples-claude-code)).
 
 ## Who can see, read and write to a bot
 

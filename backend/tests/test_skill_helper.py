@@ -72,6 +72,22 @@ def test_report_posts_only_known_names_while_reporting_is_on(tmp_path, server):
     assert "secret" not in json.dumps(server.seen) and "private" not in json.dumps(server.seen)
 
 
+def test_a_typed_name_wins_over_the_model_skill_call_it_causes(tmp_path, server):
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    typed = {"session_id": "sess-2", "expansion_type": "slash_command", "command_name": "deploy:deploy", "prompt_id": "p1",
+             "prompt": "/deploy:deploy the private words"}
+    echo = {"session_id": "sess-2", "tool_name": "Skill", "tool_input": {"skill": "deploy:deploy"}, "tool_use_id": "toolu_1"}
+    assert report(tmp_path, url, typed, trigger="person")[0].returncode == 0
+    assert report(tmp_path, url, echo)[0].returncode == 0                                    # same session, within 30 s
+    assert report(tmp_path, url, dict(echo, session_id="sess-3", tool_use_id="toolu_2"))[0].returncode == 0
+    mark = tmp_path / "skills-typed" / (hashlib.sha256(b"sess-2").hexdigest() + ".json")
+    assert set(json.loads(mark.read_text())) == {"skill", "ts"} and "private" not in mark.read_text()
+    mark.write_text(json.dumps({"skill": "deploy", "ts": int(time.time() * 1000) - 31_000}))
+    assert report(tmp_path, url, dict(echo, tool_use_id="toolu_3"))[0].returncode == 0     # a later model call counts
+    assert [(e["trigger"], e["tool_use_id"]) for _, _, body in server.seen for e in body["events"]] == \
+        [("person", "p1"), ("model", "toolu_2"), ("model", "toolu_3")]
+
+
 def test_report_exits_0_quietly_when_the_server_is_down(tmp_path):
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))

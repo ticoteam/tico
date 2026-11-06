@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Tico skills helper: connects your own Claude Code to your company's skills in Tico (docs/skills-claude-code.md).
+// Tico skills helper: connects your own Claude Code to your company's skills in Tico (docs/skills.md, People's Claude Code).
 //
 //   node skills-helper.mjs setup [--server URL]   connect this computer (opens the browser to approve)
 //   node skills-helper.mjs sync [--quiet]         install, update and remove skills to match Tico
@@ -26,6 +26,8 @@ const DIR = process.env.TICO_SKILLS_DIR || path.join(os.homedir(), '.tico');
 const CONFIG = path.join(DIR, 'skills.json');
 const INSTALLED = path.join(DIR, 'skills-helper.mjs');
 const LOCK = path.join(DIR, 'skills-sync.lock');
+const TYPED = path.join(DIR, 'skills-typed');  // per session: the last /name a person typed, {skill, ts}
+const TYPED_WINDOW_MS = 30_000;
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
 const CLAUDE = process.env.TICO_CLAUDE_BIN || 'claude';
@@ -243,6 +245,25 @@ function skillName(raw, known) {
   return plugin === skill && known.includes(skill) ? skill : null;
 }
 
+function markTyped(sessionKey, skill) {
+  try {
+    fs.mkdirSync(TYPED, { recursive: true, mode: 0o700 });
+    const now = Date.now();
+    for (const f of fs.readdirSync(TYPED)) {     // a day's sessions at most
+      const p = path.join(TYPED, f);
+      try { if (now - fs.statSync(p).mtimeMs > 86_400_000) fs.rmSync(p, { force: true }); } catch { /* ignored */ }
+    }
+    writeAtomic(path.join(TYPED, sessionKey + '.json'), JSON.stringify({ skill, ts: now }), 0o600);
+  } catch { /* ignored */ }
+}
+
+function typedRecently(sessionKey, skill) {
+  try {
+    const last = JSON.parse(fs.readFileSync(path.join(TYPED, sessionKey + '.json'), 'utf8'));
+    return last?.skill === skill && Date.now() - Number(last.ts) < TYPED_WINDOW_MS;
+  } catch { return false; }
+}
+
 async function report(trigger) {
   const cfg = loadConfig();
   const input = await readStdin(1500);
@@ -262,7 +283,11 @@ async function report(trigger) {
   } else return;
   const name = skillName(raw, cfg.skills);
   if (!name || !hook.session_id || !use) return;
-  const event = { name, trigger, session_key: sha256(hook.session_id), tool_use_id: String(use).slice(0, 128), used_at: new Date().toISOString() };
+  const sessionKey = sha256(hook.session_id);
+  // A typed /name also makes the model call the Skill tool: the typed event wins, the model's echo is dropped.
+  if (trigger === 'person') markTyped(sessionKey, name);
+  else if (typedRecently(sessionKey, name)) return;
+  const event = { name, trigger, session_key: sessionKey, tool_use_id: String(use).slice(0, 128), used_at: new Date().toISOString() };
   await api(cfg, 'POST', 'skills/usage', { events: [event] }, { timeout: 2000 }).catch(() => {});
 }
 
@@ -292,6 +317,7 @@ async function remove() {
     if (!r || ![200, 401, 409].includes(r.status)) warn('Could not revoke this device in Tico; revoke it there.');
   }
   for (const f of [CONFIG, INSTALLED, LOCK]) fs.rmSync(f, { force: true });
+  fs.rmSync(TYPED, { recursive: true, force: true });
   say('Disconnected.');
 }
 
