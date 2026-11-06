@@ -1730,6 +1730,85 @@ def test_a_snooze_set_again_then_released_is_open_from_the_first_set(ben_off, mo
         assert A.load_at(c, "human:ben", stamp(11, 30)) == 5   # ended at eleven
 
 
+def test_a_snooze_set_at_the_replay_instant_is_open_then(ben_off):
+    """The snooze counts from the instant it was set, as the live plate does: created at ten, it is open at ten."""
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        TH.put(c, tid, "snoozed", stamp(10), until_at=stamp(12), by_id="human:ben", reason="")
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(9, 59)) == 5    # not yet set a minute before
+        assert A.load_at(c, "human:ben", stamp(10)) == 4       # set at ten: left out at ten
+
+
+def test_a_snooze_set_at_the_replay_instant_by_the_history_is_open_then(ben_off, monkeypatch):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        monkeypatch.setattr(H, "now", lambda: stamp(10))
+        H.TS.snooze(c, "human:ben", tid, stamp(12))
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(9, 59)) == 5
+        assert A.load_at(c, "human:ben", stamp(10)) == 4
+
+
+def test_a_snooze_ended_at_the_replay_instant_is_not_open_then(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        TH.put(c, tid, "snoozed", stamp(8), until_at=stamp(12), by_id="human:ben", reason="")
+        TH.release(c, tid, "snoozed", stamp(10))                # ended at the instant of the replay: not open then
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(10)) == 5
+
+
+def delivered_for_ben(api, monkeypatch, asked_at):
+    """A bot's task Ben requested, done at half past eight, and the bot's question to Ben asked at `asked_at` (its
+    acceptance question once done, when asked after it). Returns the task's id."""
+    question = {"questions": [{"id": "read", "header": "Notes", "question": "Does the launch note read right?",
+                               "multi": False, "other": True,
+                               "options": [{"label": "Yes", "description": ""}, {"label": "No", "description": ""}]}],
+                "who": "human:ben"}
+    with api.app.state.store.transaction() as c:
+        monkeypatch.setattr(H, "now", lambda: stamp(8))
+        tid = H.task_create(c, "human:ben", "Ship the launch notes", "", "bot:ops", lint=False)["id"]
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (stamp(8), tid))
+        monkeypatch.setattr(H, "now", lambda: stamp(8, 30))
+        H.task_update(c, "bot:ops", tid, status="done", note="Shipped.")
+        monkeypatch.setattr(H, "now", lambda: asked_at)
+        ask = H.task_comment(c, "bot:ops", tid, "Does the launch note read right?", wake=False, ask=question)
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (asked_at, ask["id"]))
+    return tid
+
+
+def test_a_done_task_keeps_its_requesters_acceptance_question_open_then(ben_off, monkeypatch):
+    """The live read keeps a done task's unanswered acceptance question to its requester; the replay keeps it too."""
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+    tid = delivered_for_ben(api, monkeypatch, stamp(9))
+    with api.app.state.store.read() as c:
+        assert tid in {t["id"] for t in H.tasks_asked_of(c, "human:ben")}
+        assert A.load_at(c, "human:ben", stamp(10)) == 6       # the five open tasks, and the acceptance question
+
+
+def test_a_question_asked_before_the_task_was_done_is_not_its_acceptance_question(ben_off, monkeypatch):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+    delivered_for_ben(api, monkeypatch, stamp(8, 15))          # asked before the half past eight it was done
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(10)) == 5
+
+
 def wait_on_ben(api):
     """A bot's task waiting on Ben from quarter to nine, set up as the declined-wait test above does."""
     with api.app.state.store.transaction() as c:

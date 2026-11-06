@@ -758,22 +758,25 @@ _STATUS_AT = ("COALESCE((SELECT e.new FROM history_events e WHERE e.subject_type
               "(SELECT COALESCE(e.old, e.new) FROM history_events e WHERE e.subject_type='task' "
               "AND e.subject_id=tasks.id AND e.kind='status' ORDER BY e.created_at, e.rowid LIMIT 1), tasks.status)")
 # A snooze open then, read from the task's snooze history (history_events, kind 'snoozed_until': the date it was set to,
-# None when it ended). The last such change before the time gives the date it had then; it is open while that date is
-# still ahead. task_holds keeps one open row, so a snooze set again moves that row's set time: the history keeps the
-# first set. With no change before the time, the first change's old date is what it had then. With no history at all,
-# the open hold row says (a snooze from before the history, as task_holds' backfill carried it).
-# hubdb.needs_you reads only the snoozes open now. The time is bound four times here (the last change before it, the
-# history's existence, the legacy hold's set and release), and once more in `_SNOOZED_AT`'s comparison with the date.
+# None when it ended). The last such change at or before the time gives the date it had then; it is open while that date
+# is still ahead. task_holds keeps one open row, so a snooze set again moves that row's set time: the history keeps the
+# first set. With no change at or before the time, the first change's old date is what it had then. With no history at
+# all, the open hold row says (a snooze from before the history, as task_holds' backfill carried it).
+# A snooze counts from the instant it was set (created_at <= the time) until the instant it ended (released_at > it),
+# as the live plate does: set at the replayed instant, it is open then.
+# hubdb.needs_you reads only the snoozes open now. The time is bound four times here (the last change at or before it,
+# the history's existence, the legacy hold's set and release), and once more in `_SNOOZED_AT`'s comparison with the
+# date.
 _SNOOZE_AT = ("(CASE WHEN EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id "
-              "AND e.kind='snoozed_until' AND e.created_at<?) "
+              "AND e.kind='snoozed_until' AND e.created_at<=?) "
               "THEN (SELECT e.new FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id "
-              "AND e.kind='snoozed_until' AND e.created_at<? ORDER BY e.created_at DESC, e.rowid DESC LIMIT 1) "
+              "AND e.kind='snoozed_until' AND e.created_at<=? ORDER BY e.created_at DESC, e.rowid DESC LIMIT 1) "
               "WHEN EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id "
               "AND e.kind='snoozed_until') "
               "THEN (SELECT e.old FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id "
               "AND e.kind='snoozed_until' ORDER BY e.created_at, e.rowid LIMIT 1) "
               "ELSE (SELECT sh.until_at FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
-              "AND sh.created_at<? AND (sh.released_at IS NULL OR sh.released_at>?)) END)")
+              "AND sh.created_at<=? AND (sh.released_at IS NULL OR sh.released_at>?)) END)")
 _SNOOZED_AT = f"COALESCE(({_SNOOZE_AT})>?, 0)=0"
 # Open then, as the live plate counts it (hubdb.needs_you: ACTIVE_STATUSES, snoozed left out, not done or closed).
 _ACTIVE_AT = ("owner_id=? AND created_at<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
@@ -788,6 +791,13 @@ _SNOOZED_T = _SNOOZED_AT.replace("tasks.", "t.")
 _SNOOZE_BINDS = 5
 _WAIT_THEN = ("(SELECT e.new FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id "
               "AND e.kind='waiting_on' AND e.created_at<? ORDER BY e.created_at DESC LIMIT 1)")
+# A bot's question `m` to a person open then (six times `at`): asked before it, not deleted, superseded or expired, and
+# not answered before it.
+_ASK_OPEN_AT = ("m.created_at<? AND (m.deleted_at IS NULL OR m.deleted_at>?) "
+                "AND (m.superseded_at IS NULL OR m.superseded_at>?) "
+                "AND (m.expires_at IS NULL OR m.expires_at>?) AND NOT EXISTS (SELECT 1 FROM messages a WHERE "
+                "(a.id=m.answered_by_id OR (a.in_reply_to=m.id AND a.kind='answer')) AND a.created_at<? "
+                "AND (a.deleted_at IS NULL OR a.deleted_at>=?))")
 
 
 def _active_args(person, at):
@@ -864,11 +874,11 @@ def _leave_out(it):
 def load_at(c, person, at, leave_out=""):
     """The open items as `load` counted the person's Needs you just before `at` (a replayed item's time), from what
     the rows say then: the tasks they owned and were open, the tasks waiting on them (the last `waiting_on` change
-    before `at`, and the status then), the bots' questions to them open then (on a task that was open, or loose), and
-    the approvals waiting on them. A task is left out while a snooze was open then: set by `at`, not released by it, and
-    its date still ahead of it. `leave_out` is the replayed task itself, which
-    the live gate never counts (it reads before the item is written). Reads only. Approximate where the rows do not
-    keep a history: a question's status is read from its answer and deletion times."""
+    before `at`, and the status then), the bots' questions to them open then (on a task that was open, or loose; a done
+    task's acceptance question too), and the approvals waiting on them. A task is left out while a snooze was open then:
+    set by `at` or before it, not released by then, and its date still ahead of it. `leave_out` is the replayed task
+    itself, which the live gate never counts (it reads before the item is written). Reads only. Approximate where the
+    rows do not keep a history: a question's status is read from its answer and deletion times."""
     # The owned ones as live: off the product lane and off numbered types (`tasks(tickets=False)`).
     owned = {r[0] for r in c.execute(
         f"SELECT id FROM tasks WHERE {_ACTIVE_AT} AND COALESCE(lane,'company')<>'product' AND NOT EXISTS "
@@ -885,14 +895,23 @@ def load_at(c, person, at, leave_out=""):
         f"LEFT JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} AND t.created_at<? AND (t.done_at IS NULL OR t.done_at>?) "
         f"AND (t.closed_at IS NULL OR t.closed_at>?) AND {_SNOOZED_T} AND {_STATUS_T} "
         f"IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
-        "WHERE m.recipient_id=? AND m.kind='ask' AND m.sender_id LIKE 'bot:%' AND m.created_at<? "
-        "AND (m.deleted_at IS NULL OR m.deleted_at>?) AND (m.superseded_at IS NULL OR m.superseded_at>?) "
-        "AND (m.expires_at IS NULL OR m.expires_at>?) AND NOT EXISTS (SELECT 1 FROM messages a WHERE "
-        "(a.id=m.answered_by_id OR (a.in_reply_to=m.id AND a.kind='answer')) AND a.created_at<? "
-        "AND (a.deleted_at IS NULL OR a.deleted_at>=?)) "
+        f"WHERE m.recipient_id=? AND m.kind='ask' AND m.sender_id LIKE 'bot:%' AND {_ASK_OPEN_AT} "
         f"AND ({H.MESSAGE_TASK_SQL} IS NULL OR t.id IS NOT NULL)",
         (*(at,) * (3 + _SNOOZE_BINDS + 1), *H.ACTIVE_STATUSES, person, *(at,) * 6)).fetchall()
-    on_tasks = {r["tid"] for r in asks if r["tid"]}
+    # A done task keeps one question open: its requester's acceptance ask (hubdb.tasks_asked_of, which reads it live).
+    # Asked to the requester once the task was done, with structured questions, and not stuck. The task's status is read
+    # as of `at`; the ask's done time and stuck flag are read from its rows now, as elsewhere here. A snooze does not
+    # leave it out, as the live read does not check one.
+    accepts = c.execute(
+        f"SELECT m.id AS mid, {H.MESSAGE_TASK_SQL} AS tid FROM messages m "
+        "JOIN conversations cv ON cv.id=m.conversation_id "
+        f"JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} AND t.created_at<? AND (t.closed_at IS NULL OR t.closed_at>?) "
+        f"AND {_STATUS_T}='done' "
+        f"WHERE m.recipient_id=? AND t.requester_id=m.recipient_id AND m.kind='ask' AND m.sender_id LIKE 'bot:%' "
+        f"AND {_ASK_OPEN_AT} AND json_type(m.refs,'$.questions')='array' AND m.created_at>=coalesce(t.done_at,'') "
+        "AND json_extract(m.refs,'$.stuck') IS NOT 1",
+        (at, at, at, person, *(at,) * 6)).fetchall()
+    on_tasks = {r["tid"] for r in asks + accepts if r["tid"]}
     loose = {r["mid"] for r in asks if not r["tid"]}
     ids = (owned | waiting | on_tasks | loose) - {leave_out}
     approvals = c.execute(
