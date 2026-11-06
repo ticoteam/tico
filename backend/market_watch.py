@@ -17,6 +17,7 @@ is deleted there, and each check files the changes HQ found since a stored curso
 A watch HQ does not hold yet is read here as before. Release feeds are read only through the Gateway.
 """
 
+import contextlib
 import difflib
 import hashlib
 import json
@@ -38,6 +39,18 @@ from . import models as M
 from .store import Problem
 
 log = logging.getLogger("tico.market_watch")
+
+
+@contextlib.contextmanager
+def _guard(what, on_error=None):
+    """A failure inside the block is logged as "Could not <what>" and passed to on_error; the caller keeps going."""
+    try:
+        yield
+    except Exception as exc:  # one page's failure must not stop the others, the cursor, or the request
+        log.warning("Could not %s (%s)", what, type(exc).__name__)
+        if on_error is not None:
+            on_error(exc)
+
 
 KINDS = ("pricing", "careers", "changelog", "docs", "home", "other", "release")
 RELEASE = "release"  # a product's releases: `github:owner/repo` or a feed address, read only through the Gateway
@@ -398,15 +411,11 @@ def file_signal(c, change):
 def _file_one(c, change):
     """file_signal inside a savepoint: a change that cannot be filed is logged and skipped, so the cursor still moves."""
     c.execute("SAVEPOINT signal_change")
-    try:
+    filed = 0
+    with _guard("file a Gateway page change", on_error=lambda _: c.execute("ROLLBACK TO signal_change")):
         filed = file_signal(c, change)
-        c.execute("RELEASE signal_change")
-        return filed
-    except Exception as exc:
-        c.execute("ROLLBACK TO signal_change")
-        c.execute("RELEASE signal_change")
-        log.warning("Could not file a Gateway page change (%s)", type(exc).__name__)
-        return 0
+    c.execute("RELEASE signal_change")
+    return filed
 
 
 def mirror(store, key, base, pull=True):
@@ -492,10 +501,8 @@ def sync_soon(store):
         return False
 
     def work():
-        try:
+        with _guard("mirror the page watches"):
             mirror(store, *link, pull=False)
-        except Exception as exc:
-            log.warning("Could not mirror the page watches (%s)", type(exc).__name__)
 
     spawn(work)
     return True
@@ -509,25 +516,20 @@ def run_checks(store, limit=BATCH):
     link = connection(store)
     out = {"read": 0, "changed": 0, "errors": 0}
     if link is not None:
-        try:
+        mirrored = None
+        with _guard("read the Gateway's page changes"):
             mirrored = mirror(store, *link)
-        except Exception as exc:
-            log.warning("Could not read the Gateway's page changes (%s)", type(exc).__name__)
-            mirrored = None
         for key in ("read", "changed", "errors"):
             out[key] += (mirrored or {}).get(key, 0)
     with store.read() as c:
         watches = due(c, limit, skip_mirrored=link is not None)
     for watch in watches:
         result = read(watch["url"])
-        try:
+        with _guard("record a page check"):
             with store.transaction() as c:
                 if record(c, watch, result):
                     out["changed"] += 1
-        except Exception as exc:
-            log.warning("Could not record a page check (%s)", type(exc).__name__)
-            continue
-        out["read"] += 1
+            out["read"] += 1
         out["errors"] += result["status"] != "ok"
     return out
 
@@ -553,11 +555,9 @@ def start(store):
 
         run = SR.Run("market_watch")
         try:
-            found = run_checks(store)
-            run.did(words(found), quiet=not (found["changed"] or found["errors"]))
-        except Exception as exc:
-            run.error = SR.failure_words(exc)
-            log.warning("Page check failed (%s)", type(exc).__name__)
+            with _guard("run the page check", on_error=lambda exc: setattr(run, "error", SR.failure_words(exc))):
+                found = run_checks(store)
+                run.did(words(found), quiet=not (found["changed"] or found["errors"]))
         finally:
             _RUNNING.release()
             SR.write(store, run)

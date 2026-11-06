@@ -20,6 +20,7 @@ minute per key, so the server asks it gently (backend/gateway_connection.py `che
 import datetime
 import hashlib
 import hmac
+import http.client
 import json
 import os
 import re
@@ -308,7 +309,7 @@ def check(key, url="", timeout=TIMEOUT, opener=None):
         with exc:
             try:
                 code = _code(exc.read())
-            except Exception:
+            except (OSError, http.client.HTTPException, ValueError):
                 code = ""
             state, used = state_of_error(exc.code, code), None
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
@@ -413,7 +414,7 @@ def _post(url, body, headers, timeout, opener):
         with exc:
             try:
                 code = _code(exc.read())
-            except Exception:
+            except (OSError, http.client.HTTPException, ValueError):
                 code = ""
             return exc.code, {}, code or str(exc.code)
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
@@ -592,7 +593,7 @@ def _call(method, url, body=None, headers=None, timeout=TIMEOUT, opener=None):
         with exc:
             try:
                 code = _code(exc.read(4096))
-            except Exception:
+            except (OSError, http.client.HTTPException, ValueError):
                 code = ""
             return exc.code, {}, code or str(exc.code)
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
