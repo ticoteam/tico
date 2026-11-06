@@ -97,7 +97,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-task-tail{padding:6px 0 2px}
 /* The Tasks section's tabs: one row that scrolls sideways when it overflows, never wraps. */
 /* No cap on a bot's tabs: past the rail's width the bar scrolls sideways, and a thin scrollbar says there is more. */
-.bot-task-tabs.tabs.slim{flex-wrap:wrap;margin:2px 0 6px;gap:2px}
+.bot-task-tabs.tabs.slim{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin;margin:2px 0 6px;gap:2px}
 .bot-task-tabs::-webkit-scrollbar{height:4px}
 .bot-task-tabs::-webkit-scrollbar-thumb{border-radius:2px;background:var(--line)}
 .bot-task-tabs.tabs.slim button{flex:none;white-space:nowrap;min-height:26px;padding:3px 8px;font-size:var(--t-sm)}

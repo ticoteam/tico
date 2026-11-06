@@ -177,53 +177,15 @@ function sendWayHold(btn, open, can = () => true) {
   }, true);
 }
 
-// ----------------------------------------------------------------- Follow and "Who it reaches"
-// The line under a thread's or a task's composer: Follow, and "Reaches N", which opens who the message would reach and
-// how (GET /v2/threads/{id}/reach). Posting never follows (D4): ticked, Follow follows the thread once the message is
-// sent. Its last choice is the person's per kind of thread, kept on the server (compose.follow.task, compose.follow.chat),
-// and it hides once you follow.
-const COMPOSE_FOLLOW = {task: null, chat: null};       // kind -> the kept choice; null until read
-const COMPOSE_FOLLOW_PICKS = {task: 0, chat: 0};
+// ----------------------------------------------------------------- "Who it reaches"
+// The line under a thread's or a task's composer: who the message would reach and how (GET /v2/threads/{id}/reach).
+// Posting never follows (D4); following lives on the task's Followers row and the Threads page, not under the box.
 const COMPOSE_REACHES = new Set();                     // the reach lines on screen
 const composeFootHTML = () => `<div class="p-foot" hidden>
-    <label class="p-follow" hidden><input type="checkbox" data-compose-follow>Follow</label>
     <span class="p-reach-wrap"><button type="button" class="p-reach" aria-haspopup="dialog" aria-expanded="false" title="Who it reaches" hidden></button>
       <div class="p-menu p-reach-pop" role="dialog" aria-label="Who it reaches" hidden></div></span></div>`;
-// The kept choice for `kind`, read once; a tick made while the read was out wins.
-async function composeFollowRead(kind) {
-  if (COMPOSE_FOLLOW[kind] !== null) return;
-  COMPOSE_FOLLOW[kind] = false;
-  if (typeof S === 'undefined' || !S.me?.cloud) return;
-  const picks = COMPOSE_FOLLOW_PICKS[kind];
-  const v = (await v2Get('/v2/preferences/compose.follow.' + kind))?.value;
-  if (COMPOSE_FOLLOW_PICKS[kind] !== picks || v !== true) return;
-  COMPOSE_FOLLOW[kind] = true;
-  for (const box of document.querySelectorAll(`input[data-compose-follow="${kind}"]`)) box.checked = true;
-}
-function composeFollowPick(kind, on) {
-  COMPOSE_FOLLOW[kind] = !!on; COMPOSE_FOLLOW_PICKS[kind]++;
-  for (const box of document.querySelectorAll(`input[data-compose-follow="${kind}"]`)) box.checked = !!on;
-  if (typeof S !== 'undefined' && S.me?.cloud) void post('/v2/preferences/compose.follow.' + kind, {value: !!on}).catch(() => {});
-}
-// Follow shows for `kind` ('task' or 'chat') while `offer` is true (you don't follow yet), ticked as last time.
-function composeFollowPaint(foot, kind, offer) {
-  const label = foot?.querySelector('.p-follow'), box = label?.querySelector('input');
-  if (!box) return;
-  label.hidden = !offer;
-  composeFootShow(foot);
-  if (!offer) return;
-  // The label says what is followed: a bare "Follow" under a composer reads as following the bot.
-  const says = kind === 'task' ? 'Follow this task' : 'Follow this chat';
-  if (label.lastChild?.textContent !== says) label.lastChild.textContent = says;
-  label.title = 'Get every new message here, not only replies to yours';
-  if (box.dataset.composeFollow !== kind) { box.dataset.composeFollow = kind; box.onchange = () => composeFollowPick(kind, box.checked); }
-  if (COMPOSE_FOLLOW[kind] === null) void composeFollowRead(kind);
-  box.checked = !!COMPOSE_FOLLOW[kind];
-}
 // The line shows only with something on it.
-const composeFootShow = foot => { foot.hidden = foot.querySelector('.p-follow').hidden && foot.querySelector('.p-reach').hidden; };
-// Whether Follow is showing and ticked: the send follows once it has gone.
-const composeFollowWanted = foot => { const l = foot?.querySelector('.p-follow'); return !!l && !l.hidden && !!l.querySelector('input')?.checked; };
+const composeFootShow = foot => { foot.hidden = foot.querySelector('.p-reach').hidden; };
 
 // What each one gets, in a word or two: a bot by the way, a person notified (threads.plan).
 function reachWord(r) {

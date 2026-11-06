@@ -20,7 +20,7 @@ const BOT_DETAIL_TABS = ['info', 'rules', 'instructions', 'history', 'settings']
 // A bot's conversation is two threads: its Home (public, ui/app/thread-view.js) and the viewer's DM with it.
 const BOT_TABS = ['home', 'dm', 'tasks', ...BOT_DETAIL_TABS];
 const BOT_WORK_TABS = ['home', 'dm', 'tasks'];
-const BOT_TAB_LABELS = {home: 'Home', dm: 'DM', tasks: 'Tasks', info: 'Info'};
+const BOT_TAB_LABELS = {home: 'Home', dm: 'DM', tasks: 'Tasks', info: 'More'};
 // The assistant is talked to only on each person's own Assistant page (#/assistant), and its helpers take their work
 // from it: neither has a DM, and the assistant has no Home.
 const botTabs = slug => {
@@ -361,7 +361,7 @@ async function pageBot(slug, tab) {
   const work = botTabs(slug).filter(t => BOT_WORK_TABS.includes(t));
   const base = `#/bot/${encodeURIComponent(slug)}`;
   const talkTabs = work.filter(t => t === 'home' || t === 'dm');
-  // One chat tab at every width: with both Home and DM, the Incognito toggle above the chat flips to the DM.
+  // One chat tab at every width: with both Home and DM, the lock in the top line (Incognito) flips to the DM.
   const tabsShown = [...work.filter(t => !(t === 'dm' && talkTabs.length > 1)), 'info'];
   // The goal leads the page; chat and tasks sit side by side under it on a
   // desktop. Narrower, the top line holds the bot and Chat · Tasks · Info; configuration has its own tabs.
@@ -382,7 +382,8 @@ async function pageBot(slug, tab) {
     </div>
     ${limited ? '' : '<span class="bot-top-acts" id="bot-top-acts"></span>'}
     ${limited ? '' : '<section class="bot-goal" id="bot-goal" aria-label="Goal"><span class="muted">Loading the goal…</span></section>'}
-    <a class="ghost bot-more-btn" id="bot-more-btn" href="${base}/info" aria-label="Info" title="Info"><svg class="bot-more-i" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.6" r=".4" fill="currentColor"/></svg></a>
+    ${limited || talkTabs.length < 2 ? '' : `<button type="button" class="bot-incognito" id="bot-incognito" aria-pressed="false" aria-label="Incognito" title="Incognito: a private chat with this bot, not the team's Home"><span class="nav-icon" aria-hidden="true">lock</span><span class="bi-label">Incognito</span></button>`}
+    <a class="ghost bot-more-btn" id="bot-more-btn" href="${base}/info" aria-label="More" title="More"><svg class="bot-more-i" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></a>
   </div>
   <div id="bot-banners"><div id="bot-limit-host">${limited ? '' : botLimitHTML(slug)}</div>
   <div id="bot-onboard-host">${frBotBannerHTML(e)}</div><div id="bot-dream-host"></div></div>
@@ -390,7 +391,6 @@ async function pageBot(slug, tab) {
 
   <div class="bot-work" id="bot-work">
   <div id="pane-chat" hidden>
-    ${limited || talkTabs.length < 2 ? '' : `<div class="bot-talk-bar"><button type="button" class="bot-incognito" id="bot-incognito" aria-pressed="false" aria-label="Incognito" title="Incognito: a private chat with this bot, not the team's Home"><span class="nav-icon" aria-hidden="true">lock</span><span>Incognito</span></button></div>`}
     <div id="conv-paused" class="conv-paused" role="status" hidden></div>
     <div class="bot-thread" id="bot-thread"></div>
   </div>
@@ -508,8 +508,8 @@ async function pageBot(slug, tab) {
     const b = ev.target.closest('[data-bt]'); if (!b) return;
     location.hash = b.dataset.bt === work[0] ? base : `${base}/${b.dataset.bt}`;
   };
-  // Wide, the top tabs give way to Home and DM beside Tasks; the incognito toggle on the left flips between them.
-  const incognito = $('#pane-chat #bot-incognito');
+  // The lock in the top line flips the chat between Home and the private DM; it says Incognito only while on.
+  const incognito = $('#bot-incognito');
   if (incognito) incognito.onclick = () => {
     const next = incognito.getAttribute('aria-pressed') === 'true' ? 'home' : 'dm';
     location.hash = next === work[0] ? base : `${base}/${next}`;
@@ -680,8 +680,8 @@ function showBotTab(tab) {
   // Home or DM on the left: the one asked for, else (Tasks beside it) the last one shown, else the first.
   if (chat) botThreadShow(view === 'home' || view === 'dm' ? view : talk.includes(BOT.thread?.kind) ? BOT.thread.kind : talk[0]);
   else botThreadStop();
-  const incognitoOn = $('#pane-chat #bot-incognito');
-  if (incognitoOn) incognitoOn.setAttribute('aria-pressed', String(BOT.thread?.kind === 'dm'));
+  const incognitoOn = $('#bot-incognito');
+  if (incognitoOn) { incognitoOn.setAttribute('aria-pressed', String(BOT.thread?.kind === 'dm')); incognitoOn.hidden = !chat; }
   const once = (key, fn) => { if (!BOT.loaded.has(key)) { BOT.loaded.add(key); fn(BOT.slug); } };
   if (split || view === 'tasks') {
     once('tasks', loadBotTasksV2);

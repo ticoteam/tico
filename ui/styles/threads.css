@@ -47,7 +47,7 @@
 a.th-who:hover{text-decoration:underline}
 .th-bot{align-self:center;padding:1px 5px;border-radius:4px;background:var(--surface2);color:var(--muted);font-size:var(--t-xs);font-weight:600;letter-spacing:.02em;line-height:1.3}
 .th-head time,.th-edited{color:var(--muted);font-size:var(--t-xs)}
-.th-body,.th-body.md{overflow-wrap:anywhere;max-width:34em}   /* about 70 characters a line */
+.th-body{overflow-wrap:anywhere}
 @media (max-width:760px){.th-who{padding-block:10px;margin-block:-10px}.pill-thread .p-text{box-sizing:border-box;min-height:44px;padding-block:11px;line-height:22px}.th-body,.th-body.md{font-size:16px}.pill-thread .p-icon{min-width:44px;height:44px;padding:0 12px}}   /* messages are reading text on a phone */
 .th-body.md>:first-child{margin-top:0}.th-body.md>:last-child{margin-bottom:0}
 .th-main>.run-did{margin:2px 0 4px}
@@ -198,18 +198,18 @@ a.src-name:hover{color:var(--ink);text-decoration:underline}
 
 /* the bot page: Home and DM fill the pane; the link to every thread with the bot sits quietly above */
 #main.bot-chat-layout #pane-chat>.bot-thread{display:flex;flex:1;flex-direction:column;min-height:0;width:100%;max-width:var(--read-width);margin:0 auto}
-/* Incognito (a private DM, not the team's Home) above the thread at every width: one control, one name */
-.bot-talk-bar{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin:0 0 4px}
 /* the thread's call, Members and menu, in the page's top line */
 .bot-top-acts{order:3;flex:none;align-self:center;display:inline-flex}
 .bot-top-acts[hidden]{display:none}
 .bot-top-acts .thv-titleline{gap:4px;padding:0}
 @media (max-width:1099px){.bot-top-acts{order:2}}
-#main.bot-chat-layout #pane-chat>.bot-talk-bar{width:100%;max-width:var(--read-width);margin-left:auto;margin-right:auto}
-.bot-incognito{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border:0;border-radius:7px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
-.bot-incognito .nav-icon{font-size:16px}
+/* Incognito (a private DM, not the team's Home): a lock in the top line beside More; it says Incognito only while on */
+.bot-incognito{order:3;flex:none;align-self:center;display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:32px;height:32px;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.bot-incognito[hidden],.bot-incognito:not([aria-pressed=true]) .bi-label{display:none}
+.bot-incognito .nav-icon{font-size:18px}
+@media (max-width:1099px){.bot-incognito{order:2}}
 .pill-thread .p-pill{border-color:#656766}   /* the composer's edge reads against the page (3:1) */
-@media (max-width:760px){.bot-incognito{min-height:44px;padding:0 10px}}
+@media (max-width:760px){.bot-incognito{min-width:44px;height:44px}}
 .bot-incognito:hover{color:var(--ink);background:var(--hover)}
 .bot-incognito[aria-pressed=true]{color:var(--ink);background:var(--raised);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .bot-incognito:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
