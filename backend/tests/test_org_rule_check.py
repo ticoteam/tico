@@ -1481,8 +1481,9 @@ def ask(api, question, token="ops-test", **more):
     return r.json()
 
 
-def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled):
+def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled, monkeypatch):
     api, judge = ruled
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     color_rule(api)
     assert chat(api, "Our favorite color is blue.")["held"]
     assert post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")["held"]
@@ -1501,9 +1502,10 @@ def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled):
     assert "Our favorite color is teal" in judge.calls[2]["state"]["output"]
 
 
-def test_the_update_tool_answers_with_the_hold_or_the_warning(ruled):
+def test_the_update_tool_answers_with_the_hold_or_the_warning(ruled, monkeypatch):
     from backend.tests.test_org_rules_surfaces import mcp
     api, _ = ruled
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     made = color_rule(api)
     error, held = mcp(api, "hub_update_create", {"body": "- Our favorite color is blue."}, token="ops-test")
     assert not error and held["held"]["outcome"] == "blocked"
@@ -1512,8 +1514,9 @@ def test_the_update_tool_answers_with_the_hold_or_the_warning(ruled):
     assert not error and posted["rule_warning"] and posted["body"].startswith("Warning:")
 
 
-def test_chat_updates_and_task_questions_carry_a_warn_rules_line(ruled):
+def test_chat_updates_and_task_questions_carry_a_warn_rules_line(ruled, monkeypatch):
     api, _ = ruled
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     color_rule(api, if_broken="warn")
     got = chat(api, "Our favorite color is blue.")
     assert got["rule_warning"] and got["message"]["body"].startswith("Warning:")
@@ -1526,8 +1529,9 @@ def test_chat_updates_and_task_questions_carry_a_warn_rules_line(ruled):
     assert row["note"].startswith("Warning:") and row["waiting_on"] == "human:ana"
 
 
-def test_send_anyway_delivers_a_held_chat_update_and_task_question_once(ruled):
+def test_send_anyway_delivers_a_held_chat_update_and_task_question_once(ruled, monkeypatch):
     api, judge = ruled
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     color_rule(api, if_broken="escalate", reviewer="ben")
     holds = [chat(api, "Our favorite color is blue.")["held"]["id"],
              post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")["held"]["id"],
@@ -1579,6 +1583,7 @@ def test_public_task_text_is_checked_for_the_whole_company(ruled):
 
 def test_with_no_rule_in_force_bot_writes_resolve_no_audience(ruled, monkeypatch):
     api, judge = ruled
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}}, token="ops-test")    # suggested only
     resolved = []
     monkeypatch.setattr(K, "company", lambda c: resolved.append("company") or [])
