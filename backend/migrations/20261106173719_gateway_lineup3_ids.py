@@ -46,9 +46,9 @@ PLACES = (
     ("registry_metadata", "value", True),
     ("task_run_models", "model", False),
     ("task_check_models", "model", False),
-    ("automations", "flow_json", True),
-    ("schedules", "definition_json", True),
-    ("task_rules", "actions_json", True),
+    ("automations", "flow", True),
+    ("schedules", "definition", True),
+    ("task_rules", "actions", True),
 )
 
 

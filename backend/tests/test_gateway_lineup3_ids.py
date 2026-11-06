@@ -87,7 +87,7 @@ def _db():
         CREATE TABLE bot_settings(bot_id TEXT PRIMARY KEY, model TEXT, fallback TEXT, extra TEXT);
         CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE task_run_models(task_id TEXT, model TEXT);
-        CREATE TABLE automations(id TEXT PRIMARY KEY, flow_json TEXT);
+        CREATE TABLE automations(id TEXT PRIMARY KEY, flow TEXT);
         """
     )
     conn.executemany(
@@ -169,4 +169,5 @@ def test_every_place_the_migration_rewrites_is_a_real_table_and_column(api):
         present = [(table, column) for table, column, _ in MIGRATION.PLACES if table in tables]
         for table, column in present:
             assert column in {row[1] for row in c.execute(f"PRAGMA table_info({table})")}, (table, column)
-    assert {"bot_settings", "registry_metadata", "task_run_models", "task_check_models"} <= {t for t, _ in present}
+    # task_rules is made on first use, so a new database may not have it yet.
+    assert {t for t, _, _ in MIGRATION.PLACES} - {"task_rules"} <= {t for t, _ in present}
