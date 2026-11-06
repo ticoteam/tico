@@ -275,14 +275,13 @@ def test_icon_failure_reports_safe_category_without_private_response(
     assert not (tmp_path / "app/company-config.json").exists()
 
 
-@pytest.mark.parametrize("failure,diagnostic", [("tls", "TLS certificate verification failed"), ("http", "HTTP 503")])
-def test_icon_outage_skips_company_with_warning_instead_of_failing(failure, diagnostic, tmp_path, monkeypatch, capsys):
-    import ssl
-    from urllib.error import HTTPError, URLError
+def test_icon_server_outage_retries_then_skips_company_with_warning(tmp_path, monkeypatch, capsys):
+    from urllib.error import HTTPError
     from scripts import company_apps
 
     monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([ENTRY]))
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "output"))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary"))
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     private = "private-response-and-credentials"
     attempts, delays = [], []
@@ -290,9 +289,7 @@ def test_icon_outage_skips_company_with_warning_instead_of_failing(failure, diag
     class Opener:
         def open(self, request, timeout):
             attempts.append(request.full_url)
-            if failure == "http":
-                raise HTTPError(request.full_url, 503, private, {}, None)
-            raise URLError(ssl.SSLCertVerificationError(1, private))
+            raise HTTPError(request.full_url, 503, private, {}, None)
 
     monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
     monkeypatch.setattr(company_apps.time, "sleep", delays.append)
@@ -301,10 +298,45 @@ def test_icon_outage_skips_company_with_warning_instead_of_failing(failure, diag
     assert delays == [30, 60, 90, 120, 120, 120, 120]
     assert (tmp_path / "output").read_text() == "available=false\n"
     output = capsys.readouterr()
-    assert "::warning::Company app icon unavailable" in output.err
-    assert diagnostic in output.err
+    assert "::warning::Company app icon unavailable (HTTP 503" in output.err
     assert private not in output.out + output.err
-    assert all(value not in output.out + output.err for value in ENTRY.values())
+    summary = (tmp_path / "summary").read_text()
+    assert summary.startswith("Company app skipped: icon unavailable (HTTP 503")
+    assert "The installed app stays on its current version." in summary
+    assert all(value not in output.out + output.err + summary for value in ENTRY.values())
+
+
+def test_icon_tls_certificate_failure_is_not_retried_and_skips_company(tmp_path, monkeypatch, capsys):
+    import ssl
+    from urllib.error import URLError
+    from scripts import company_apps
+
+    monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([ENTRY]))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "output"))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary"))
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    private = "private-certificate-details"
+    attempts = []
+
+    class Opener:
+        def open(self, request, timeout):
+            attempts.append(request.full_url)
+            raise URLError(ssl.SSLCertVerificationError(1, private))
+
+    monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
+    monkeypatch.setattr(company_apps.time, "sleep", lambda *args: pytest.fail("Certificate failures must not retry"))
+    assert main(["icon", "--company", key(ENTRY)]) == 0
+    assert len(attempts) == 1
+    assert (tmp_path / "output").read_text() == "available=false\n"
+    output = capsys.readouterr()
+    assert "::warning::Company app icon unavailable (TLS certificate verification failed)" in output.err
+    summary = (tmp_path / "summary").read_text()
+    assert summary == (
+        "Company app skipped: icon unavailable (TLS certificate verification failed). "
+        "The installed app stays on its current version.\n"
+    )
+    assert private not in output.out + output.err + summary
+    assert all(value not in output.out + output.err + summary for value in ENTRY.values())
 
 
 @pytest.mark.parametrize("body,available", [(b"\x89PNG\r\n\x1a\nlogo", True), (b"<html>not a logo</html>", None)])

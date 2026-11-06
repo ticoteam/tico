@@ -177,6 +177,12 @@ class SafeRedirect(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def certificate_rejected(exc):
+    # urllib wraps handshake failures in URLError; a bad certificate stays bad until the server is fixed.
+    reason = exc.reason if isinstance(exc, URLError) else exc
+    return isinstance(reason, ssl.SSLCertVerificationError)
+
+
 def download_icon(icon_url):
     # A company server may be restarting for the release while its desktop build starts.
     for attempt in range(1, 9):
@@ -186,6 +192,8 @@ def download_icon(icon_url):
         except (URLError, TimeoutError, ConnectionError, IncompleteRead) as exc:
             if isinstance(exc, HTTPError):
                 exc.close()  # the retry or the raise below does not read the answer
+            if certificate_rejected(exc):
+                raise  # retrying cannot change the server's certificate, so report it at once
             if isinstance(exc, HTTPError) and exc.code not in (408, 429) and not 500 <= exc.code < 600:
                 raise
             if attempt == 8:
@@ -217,6 +225,12 @@ def write_output(name, value):
             stream.write(f"{name}={value}\n")
 
 
+def write_summary(line):
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
+            stream.write(line + "\n")
+
+
 def check_icon(entry):
     # Runs once per company before its builds. A download outage (network, DNS, TLS, timeout or HTTP status
     # after the retries) skips this company's build and publish with a warning, so the release run stays green.
@@ -226,12 +240,15 @@ def check_icon(entry):
     try:
         download_icon(icon_address(entry))
     except (OSError, IncompleteRead) as exc:
+        reason = failure_reason(exc)
         print(
-            "::warning::Company app icon unavailable "
-            f"({failure_reason(exc)}); this company's build and publish are skipped and its installed app stays "
-            "on its current version",
+            f"::warning::Company app icon unavailable ({reason}); this company's build and publish are skipped "
+            "and its installed app stays on its current version",
             file=sys.stderr,
             flush=True,
+        )
+        write_summary(
+            f"Company app skipped: icon unavailable ({reason}). The installed app stays on its current version."
         )
         write_output("available", "false")
         return 0
