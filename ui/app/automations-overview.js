@@ -168,8 +168,8 @@ function auWarn(a) {
 }
 function auPill(a) {
   const st = auState(a);
-  // The two built-ins with screens of their own (automations-maintenance.js) say so.
-  return (a.id === AU_MAINT || a.id === AU_SYSJOBS ? AU_BUILTIN_PILL : '') + (a.pending ? '<span class="pill">Pending</span>' : '')
+  // The built-ins with screens of their own (automations-maintenance.js, settings-webhooks.js) say so.
+  return ([AU_MAINT, AU_SYSJOBS, AU_HOOKS].includes(a.id) ? AU_BUILTIN_PILL : '') + (a.pending ? '<span class="pill">Pending</span>' : '')
     + (st === 'paused' ? '<span class="pill waiting">Paused</span>' : st === 'off' ? '<span class="pill">Off</span>'
       : st === 'hold' ? '<span class="pill waiting">On hold</span>' : '');
 }

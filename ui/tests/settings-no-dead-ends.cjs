@@ -2,7 +2,8 @@
 //  - every #/settings/<name> link the app draws opens a real tab: a name Settings doesn't know would land on General
 //    with nothing said, which is how "Picks and services" once opened Updates;
 //  - Gateway is no tab: #/settings/gateway (and a card under it) opens Models with the Tico Gateway card in view; Health
-//    is no tab either: #/settings/health opens its page with no tab highlighted;
+//    is no tab either: #/settings/health opens its page with no tab highlighted; nor is Repositories: its addresses open
+//    General with the Repositories card in view;
 //  - while a tab is shown the address bar names it (#/settings/<tab>), so it can be copied or shared: opening an address
 //    shows its tab's own, picking another tab follows without a history step, a reload reopens it, and a redraw
 //    (route() called again, as a status change does) keeps Settings and the tab; System is gone: its old addresses
@@ -20,13 +21,14 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 // Names the router or settingsShow takes besides the tabs and their aliases (ui/app/router.js, settingsShow).
-const SPECIAL = ['models', 'providers', 'tags', 'types', 'triggers', 'runs', 'roadmap', 'subscriptions',
+const SPECIAL = ['models', 'providers', 'tags', 'types', 'runs', 'roadmap', 'subscriptions',
   'storage', 'team', 'company', 'assistant', 'privacy'];
 // Old names that leave Settings: Listening moved to Strategy › Market (ui/app/redesign.js; redesign-shell.cjs checks it),
 // the old Strategy Bot address only redirects to its tab (ui/app/router.js), so no link is drawn to it, and Inboxes'
-// old addresses redirect to Tools (ui/app/tools.js toolsRoute; checked below), and System's (Rules and Routines before it)
-// leave for Automations (ui/app/settings.js settingsMovedOut; checked below).
-const MOVED = ['listening', 'ceo', 'inboxes', 'rules', 'routines'];
+// old addresses redirect to Tools (ui/app/tools.js toolsRoute; checked below), System's (Rules and Routines before it)
+// leave for Automations (ui/app/settings.js settingsMovedOut; checked below), and Webhooks (once Triggers) went to
+// Automations, Tools and Models (ui/app/settings-webhooks.js whOldAddress; settings-webhooks.cjs checks them).
+const MOVED = ['listening', 'ceo', 'inboxes', 'rules', 'routines', 'webhooks', 'triggers'];
 
 // Every #/settings/<name> address written in the UI's sources.
 function settingsLinks() {
@@ -113,7 +115,16 @@ const address = page => page.evaluate(() => location.hash);
         assert.equal(await address(page), '#/settings/models', old);
         await page.waitForFunction(() => { const r = document.querySelector('#settings-gateway-card[data-drawn]')?.getBoundingClientRect(); return r && !SETTINGS_REVEAL && r.top < innerHeight && r.bottom > 0; });
       }
-      assert.equal(await page.locator('#settings-tabs [data-settings-tab=gateway], #settings-tabs [data-settings-tab=health]').count(), 0, 'no Gateway or Health tab');
+      // The old Repositories tab's addresses open General scrolled to its card once it is drawn.
+      for (const old of ['#/settings/repos', '#/settings/repositories', '#/settings/repos/set-repos', '#/repositories']) {
+        await go(page, '#/settings/models');
+        await go(page, old);
+        assert.equal(await selected(page), 'general', old);
+        assert.equal(await address(page), '#/settings/general', old);
+        await page.waitForFunction(() => { const r = document.querySelector('#set-repos[data-drawn]')?.getBoundingClientRect(); return r && !SETTINGS_REVEAL && r.top < innerHeight && r.bottom > 0; });
+      }
+      assert.equal(await page.locator('#settings-tabs [data-settings-tab=gateway], #settings-tabs [data-settings-tab=health], #settings-tabs [data-settings-tab=repos], #settings-tabs [data-settings-tab=webhooks]').count(), 0,
+        'no Gateway, Health, Repositories or Webhooks tab');
 
       // A Settings address survives a refresh in a new tab: the address, not the last tab, decides.
       const fresh = await context.newPage();

@@ -137,9 +137,10 @@ async function pageAutomations() {
       });
     }
     auShell();
-    const q = new URLSearchParams(S.route.split('?')[1] || '').get('q');
-    if (q) { AU.f.q = q.trim().toLowerCase(); AU.root.querySelector('.au-q').value = q; }
   }
+  // A search in the address (a webhook's Automations link, from inside this page too) narrows the list.
+  const q = new URLSearchParams(S.route.split('?')[1] || '').get('q');
+  if (q) { AU.f.q = q.trim().toLowerCase(); AU.root.querySelector('.au-q').value = q; }
   const state = AU;
   state.view = view;
   state.root.dataset.screen = id ? 'detail' : 'list';
@@ -155,6 +156,8 @@ async function pageAutomations() {
       if (AU !== state || state.id !== id) return;
     } else if (id === AU_SYSJOBS) {
       // System jobs is its own screen too (automations-maintenance.js), read from /v2/system-routines.
+    } else if (id === AU_HOOKS) {
+      // Incoming webhooks are their own screen too (ui/app/settings-webhooks.js), read from /v2/triggers.
     } else if (id) {
       auDrawHead(); auDrawPane();
       // A slow answer for an automation left behind must not land on the one now open.
@@ -248,15 +251,17 @@ async function auAllAutomations() {
   return out;
 }
 async function auLoadList(state) {
-  // Maintenance is read alongside: its row leads the list (automations-maintenance.js); an older hub has none.
+  // Maintenance and the incoming webhooks are read alongside: their rows lead the list (automations-maintenance.js,
+  // settings-webhooks.js); an older hub has none.
   const gen = state.mtGen;
-  const [found, groups, maint] = await Promise.all([
+  const [found, groups, maint, hooks] = await Promise.all([
     auAllAutomations().catch(e => ({error: e})),
     get('/v2/groups').catch(() => ({groups: []})),
     get('/v2/maintenance').catch(() => null),
+    get('/v2/triggers').catch(() => null),
   ]);
   const m = state.mtGen === gen ? maint : state.maint;
-  const list = found.error ? found : auMaintList(found, m);
+  const list = found.error ? found : auMaintList(auHooksList(found, hooks), m);
   // A read that lands after the page was left is kept for the next visit when nothing is kept yet.
   if (AU !== state) {
     if (!list.error && !S.lastRead.automations) S.lastRead.automations = {list, groups: Array.isArray(groups) ? groups : groups.groups || [], maint: auMaintOk(m) ? m : null};
@@ -313,6 +318,7 @@ function auDrawHead() {
   if (!AU.id) { hd.innerHTML = ''; return; }
   if (AU.id === AU_MAINT) { auMaintHead(hd); return; }
   if (AU.id === AU_SYSJOBS) { auSysJobsHead(hd); return; }
+  if (AU.id === AU_HOOKS) { auHooksHead(hd); return; }
   const row = a && (AU.list || []).find(x => x.id === a.id);
   const name = a?.name || row?.name || '';
   const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU.id, v)}" aria-selected="${AU.view === v}">${v === 'flow' ? 'Flow' : 'Runs'}</a>`).join('');
@@ -337,6 +343,7 @@ function auDrawPane() {
   if (!AU.id) { pane.innerHTML = ''; return; }
   if (AU.id === AU_MAINT) { auMaintPane(pane); return; }
   if (AU.id === AU_SYSJOBS) { auSysJobsPane(pane); return; }
+  if (AU.id === AU_HOOKS) { auHooksPane(pane); return; }
   if (!AU.cur) { pane.innerHTML = '<p class="muted au-pad">Loading…</p>'; return; }
   const top = pane.scrollTop;
   if (AU.view === 'runs') auRunsDraw(pane); else pane.innerHTML = auFlowHTML(AU.cur);

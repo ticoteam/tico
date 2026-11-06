@@ -645,8 +645,8 @@ async function settingsLinks(browser) {
     reason=why;
     // Settings was last left on another tab, which a plain link to #/settings would reopen.
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('#settings-tabs [data-settings-tab=repos]').click();
-    await page.locator('#settings-tabs [data-settings-tab=repos][aria-selected=true]').waitFor();
+    await page.locator('#settings-tabs [data-settings-tab=tasks]').click();
+    await page.locator('#settings-tabs [data-settings-tab=tasks][aria-selected=true]').waitFor();
     await page.goto('https://tico-ui.test/#/assistant');
     await page.locator('.conv-run.chat .thinking').getByRole('link',{name,exact:true}).click();
     await page.locator(`#settings-tabs [data-settings-tab=${tab}][aria-selected=true]`).waitFor();

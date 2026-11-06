@@ -54,7 +54,7 @@ def test_absent_pending_or_only_skipped_checks_still_need_passing_receipt(api, m
 
 
 def test_cached_webhook_green_does_not_supply_the_receipt(api):
-    # Without a fresh GitHub read the gate has only the webhook-built cache, where a skipped check reads as passing.
+    # Without a fresh GitHub read the gate has only the webhook-built cache, where a neutral check reads as passing and a re-run replaces a failure.
     task = ticket(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE task_links SET detail=json_set(detail,'$.checks',json(?)) WHERE task_id=? AND kind='pr'",
