@@ -46,7 +46,7 @@ placeholder:
 
     {"changed": "Northwind bundles checks into CI; buyers ask for one bill.",
      "money": "The low end is biggest and shrinking; storefront and scenes grow fastest.",
-     "players": "Northwind owns the low end; Globex is moving into ours.",
+     "players": "Northwind owns the low end; Initech is moving into ours.",
      "reach": "Marketplaces for homes; installers for towns and shops.",
      "saying": "Talk doubled this week; most of it is about price."}
 

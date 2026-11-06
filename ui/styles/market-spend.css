@@ -18,7 +18,7 @@
 .mkt-lab{margin:0;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .mkt-up{color:var(--ok)}
 .mkt-down{color:var(--fail)}
-.mkt-sure{display:inline-block;padding:1px 6px;border-radius:5px;background:var(--wait-bg);color:var(--wait);font-size:var(--t-xs);font-weight:600;white-space:nowrap}
+.mkt-sure{display:inline-block;padding:1px 6px;border-radius:5px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-xs);font-weight:600;white-space:nowrap}
 .mkt-sure.r{background:var(--ok-bg);color:var(--ok)}
 
 /* Three tiles: the market's size, its fastest segment, our share. */
@@ -42,7 +42,7 @@
 .mkt-kind{flex:none;padding:1px 6px;border-radius:5px;font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;background:var(--surface2);color:var(--muted)}
 .mkt-kind.k-change{background:var(--run-bg);color:var(--run)}
 .mkt-kind.k-signal{background:var(--ok-bg);color:var(--ok)}
-.mkt-kind.k-theme{background:var(--wait-bg);color:var(--wait)}
+.mkt-kind.k-theme{background:var(--wait-bg);color:var(--wait-ink)}
 .mkt-bet{flex:none;padding:1px 7px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:var(--t-xs);text-decoration:none;white-space:nowrap}
 .mkt-bet:hover{color:var(--ink);background:var(--surface2);text-decoration:none}
 
