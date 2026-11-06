@@ -1588,7 +1588,7 @@ def status_inputs(c, bots):
     """What `status` reads for each of many bots, one query per kind per 500 bots:
     {bot id: {"tasks": [...], "approvals": [...]}}, to pass to `status` as keywords."""
     snapshot(c)
-    out = {bot: {"tasks": [], "approvals": []} for bot in bots}
+    out: dict[str, dict[str, list]] = {bot: {"tasks": [], "approvals": []} for bot in bots}
     for part in H.chunks(out):
         actors = ["bot:" + bot for bot in part]
         marks = " IN (" + ",".join("?" * len(actors)) + ")"

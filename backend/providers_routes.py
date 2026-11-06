@@ -5,13 +5,14 @@ from fastapi.responses import JSONResponse
 from . import models as M
 from .store import Problem
 from . import providers as Providers
-from fastapi import Request
+from fastapi import Request, Response
 from . import cloud_access
 from .execution import flag_cut
 from clients import gateway as gateway_client
 from . import gateway_connection
 from . import gateway_page
 from . import gateway_tiers
+import hashlib
 import json
 from . import model_login
 from . import releases
@@ -185,6 +186,36 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
             )
         return answer
 
+    @app.post("/api/v2/gateway/digest")
+    def gateway_digest(request: Request, body: M.GatewayDigest):
+        """Group many items into one digest through the Tico AI Gateway (`tico_gateway_digest`), asked with the company's
+        gateway key and, for a bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
+        who = request.state.identity
+        auth.domain(who)
+        if settings.rehearsal:
+            raise Problem("rehearsal", "Digest is off in rehearsal mode; nothing is sent to the Gateway", 503)
+        with store.read() as c:
+            key, base, _ = gateway_connection.target(c, app.state.vault, settings)
+            header = (
+                gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
+            )
+        if not key:
+            raise Problem(
+                "gateway_not_connected",
+                "The Tico AI Gateway is not connected; the owner saves a gateway key in Settings > Computers",
+                409,
+            )
+        status, answer, code = gateway_client.digest(base, key, body.items, body.focus, body.style, header)
+        if status != 200:
+            if status == 404:
+                raise Problem("gateway_digest_unavailable", "The Tico AI Gateway does not offer digest yet", 503)
+            raise Problem(
+                "gateway_digest_failed",
+                f"Digest failed: {code or status}",
+                503 if status in (0, 429) or status >= 500 else 422,
+            )
+        return answer
+
     app.state.image_slots = threading.BoundedSemaphore(GATEWAY_IMAGE_SLOTS)
 
     @app.post("/api/v2/gateway/images")
@@ -206,16 +237,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
                 "The Tico AI Gateway is not connected; the owner saves a gateway key in Settings > Computers",
                 409,
             )
-        cut = None
-        try:  # a fault in Finance refuses nothing (backend/finance/limits.py)
-            from .finance import reads as finance_reads
-
-            with store.read() as c:
-                cut = finance_reads.video_cutoff(c, who.actor)
-        except Exception as exc:  # noqa: BLE001  a fault in Finance refuses nothing (backend/finance/limits.py)
-            telemetry.capture("finance_video_cutoff", exc)
-        if cut is not None:
-            raise Problem("video_budget_reached", f"{cut.name} budget reached: no new images until it is raised", 409)
+        video_budget_refusal(who, "images")
         if not app.state.image_slots.acquire(blocking=False):
             return JSONResponse(
                 {
@@ -230,7 +252,16 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
             )
         try:
             status, answer, code = gateway_client.image(
-                base, key, body.prompt, body.category, body.images, body.size, body.count, header
+                base,
+                key,
+                body.prompt,
+                body.category,
+                body.images,
+                body.size,
+                body.count,
+                header,
+                model=body.model,
+                quality=body.quality,
             )
         finally:
             app.state.image_slots.release()
@@ -243,6 +274,94 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
                 503 if status in (0, 429) or status >= 500 else 422,
             )
         return answer
+
+    def gateway_for(who):
+        """The company's gateway key, its base and the bot header for `who`; a Problem when the Gateway is not connected."""
+        with store.read() as c:
+            key, base, _ = gateway_connection.target(c, app.state.vault, settings)
+            header = (
+                gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
+            )
+        if not key:
+            raise Problem(
+                "gateway_not_connected",
+                "The Tico AI Gateway is not connected; the owner saves a gateway key in Settings > Computers",
+                409,
+            )
+        return key, base, header
+
+    def video_budget_refusal(who, what):
+        """A Finance budget for video production at its cutoff refuses new pictures and videos (`what` names them)."""
+        cut = None
+        try:  # a fault in Finance refuses nothing (backend/finance/limits.py)
+            from .finance import reads as finance_reads
+
+            with store.read() as c:
+                cut = finance_reads.video_cutoff(c, who.actor)
+        except Exception as exc:  # noqa: BLE001  a fault in Finance refuses nothing (backend/finance/limits.py)
+            telemetry.capture("finance_video_cutoff", exc)
+        if cut is not None:
+            raise Problem("video_budget_reached", f"{cut.name} budget reached: no new {what} until it is raised", 409)
+
+    @app.post("/api/v2/gateway/videos", status_code=202)
+    def gateway_video(request: Request, body: M.GatewayVideo):
+        """Start a video through the Tico AI Gateway (`tico_gateway_video`), asked with the company's gateway key and, for a
+        bot, as that bot. The answer is the job, queued: its id is checked with `GET /api/v2/gateway/videos/{id}`."""
+        who = request.state.identity
+        auth.domain(who)
+        if settings.rehearsal:
+            raise Problem("rehearsal", "Video is off in rehearsal mode; nothing is sent to the Gateway", 503)
+        key, base, header = gateway_for(who)
+        video_budget_refusal(who, "videos")
+        job = {"model": gateway_client.VIDEO_MODEL, **body.model_dump(exclude_none=True)}
+        status, answer, code = gateway_client.video_submit(base, key, job, header)
+        if status != 202:
+            if status == 404:
+                raise Problem("gateway_video_unavailable", "The Tico AI Gateway does not make videos yet", 503)
+            raise Problem(
+                "gateway_video_failed",
+                f"Video failed: {code or status}",
+                503 if status in (0, 429) or status >= 500 else 422,
+            )
+        return answer
+
+    @app.get("/api/v2/gateway/videos/{job_id}")
+    def gateway_video_status(job_id: str, request: Request):
+        """A video job's state, and its price once it is done (`tico_gateway_video_status`)."""
+        who = request.state.identity
+        auth.domain(who)
+        key, base, header = gateway_for(who)
+        status, answer, code = gateway_client.video_status(base, key, job_id, header)
+        if status == 404:
+            raise Problem("gateway_video_not_found", "No such video", 404)
+        if status != 200:
+            raise Problem("gateway_video_failed", f"Video status failed: {code or status}", 503)
+        return answer
+
+    @app.get("/api/v2/gateway/videos/{job_id}/content")
+    def gateway_video_content(job_id: str, request: Request):
+        """The MP4 of a done video, read through the server (`tico_gateway_video_status` saves it). HQ keeps none."""
+        who = request.state.identity
+        auth.domain(who)
+        key, base, header = gateway_for(who)
+        status, data, code = gateway_client.video_content(base, key, job_id, header)
+        if status == 200 and code == "too_large":
+            raise Problem("gateway_video_too_large", "The video is too large to fetch", 413)
+        if status == 200:
+            return Response(
+                data,
+                media_type="video/mp4",
+                headers={"X-Content-SHA256": hashlib.sha256(data).hexdigest(), "Cache-Control": "no-store"},
+            )
+        if status == 404:
+            raise Problem("gateway_video_not_found", "No such video", 404)
+        if status == 409 and code == "failed":
+            raise Problem("gateway_video_failed", "The video failed; nothing was charged", 409)
+        if status == 409:
+            raise Problem("gateway_video_not_ready", "The video is not ready yet", 409)
+        if status == 410:
+            raise Problem("gateway_video_expired", "The video has expired at the Gateway", 410)
+        raise Problem("gateway_video_failed", f"Video fetch failed: {code or status}", 503)
 
     @app.put("/api/v2/providers/gateway")
     def gateway_save(request: Request, body: M.GatewayConnectionSave):

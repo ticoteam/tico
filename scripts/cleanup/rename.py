@@ -2050,7 +2050,8 @@ def settle_sql_sites(wave, report, write):
 # Not touched, by construction: `HUB_*` env names, module names (hubdb.py, hubcli.py, clients/tico.py), `hub.sqlite`,
 # `registry/hub-access.yaml`, `hub_url`, stored ids (`tool: hub`, `"tasks": "hub"`), the old spellings the RENAMED and
 # REMOVED tables answer (`hub say`, `hub_say`), and any path that has a slash or dot before `hub` (`scripts/hub`).
-R1_SKIP_FILES = ("CHANGELOG.md", "scripts/hub", "scripts/tico")  # scripts/hub and scripts/tico are written by hand
+R1_SKIP_FILES = ("CHANGELOG.md", "scripts/hub", "scripts/tico", "scripts/tests/test_tico_dispatch.py")
+# scripts/hub and scripts/tico are written by hand; the dispatch test embeds R0's scripts/tico as history.
 R1_SKIP_DIRS = ("docs/history/", "backend/migrations/", "scripts/cleanup/")
 R1_DETERMINERS = {
     "the", "a", "an", "your", "our", "its", "this", "that", "my", "their", "any", "every", "each", "one", "whole",

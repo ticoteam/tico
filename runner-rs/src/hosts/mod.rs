@@ -959,6 +959,8 @@ const HUB_PATHS: &[&str] = &[
     "gateway fetch",
     "gateway image",
     "gateway search",
+    "gateway video",
+    "gateway video-status",
     "github",
     "github create-bot-repo",
     "goal",

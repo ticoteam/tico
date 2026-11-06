@@ -2390,12 +2390,54 @@ class GatewayFetch(Contract):
     max_tokens: int = Field(default=10000, ge=1000, le=50000)
 
 
+class GatewayDigest(Contract):
+    items: list[dict] = Field(
+        min_length=1, max_length=300
+    )  # {id, title, text, url, source, at}, checked by the Gateway
+    focus: str | None = Field(default=None, max_length=500)
+    style: Literal["brief", "full"] = "brief"
+
+
 class GatewayImage(Contract):
+    # tico-images-1.0 (the default, and what an install that has not updated sends) takes a category; the lineup 3 ids
+    # take one choice each: tico-images-low none, tico-images-high a category, tico-svg a quality. HQ checks the rest.
+    model: Literal["tico-images-1.0", "tico-images-low", "tico-images-high", "tico-svg"] = "tico-images-1.0"
     prompt: str = Field(min_length=1, max_length=4000)
-    category: Literal["storyboard", "photo", "character", "graphic"]
+    category: Literal["storyboard", "photo", "character", "graphic"] | None = None
+    quality: Literal["standard", "pro"] | None = None
     images: list[str] = Field(default_factory=list, max_length=4)  # base64 data URLs, checked by the Gateway
     size: str | None = Field(default=None, max_length=20)
     count: int = Field(default=1, ge=1, le=4)
+
+    @model_validator(mode="after")
+    def one_choice_for_the_model(self):
+        chosen = {"category": self.category, "quality": self.quality}
+        if self.model == "tico-images-1.0" and (self.category is None or self.quality is not None):
+            raise ValueError("tico-images-1.0 takes a category")
+        if self.model == "tico-images-low" and any(chosen.values()):
+            raise ValueError("tico-images-low takes no category or quality")
+        if self.model == "tico-images-high" and (self.quality is not None or self.category == "storyboard"):
+            raise ValueError("tico-images-high takes a photo, graphic or character")
+        if self.model == "tico-svg" and (self.category is not None or self.images or self.size):
+            raise ValueError("tico-svg takes a quality, no references or size")
+        return self
+
+
+class GatewayVideo(Contract):
+    prompt: str = Field(min_length=1, max_length=4000)
+    seconds: int = Field(default=8, ge=3, le=15)
+    resolution: Literal["360p", "720p", "1080p", "4k"] = "720p"
+    aspect: Literal["16:9", "9:16"] = "16:9"
+    audio: bool = True
+    first_frame: str | None = Field(default=None, max_length=3_000_000)  # a base64 data URL, checked by the Gateway
+    last_frame: str | None = Field(default=None, max_length=3_000_000)
+
+    @model_validator(mode="after")
+    def frames_are_pictures(self):
+        for frame in (self.first_frame, self.last_frame):
+            if frame is not None and not frame.startswith(("data:image/png;base64,", "data:image/jpeg;base64,")):
+                raise ValueError("a frame is a PNG or JPEG data URL")
+        return self
 
 
 class SystemUpdate(Contract):
