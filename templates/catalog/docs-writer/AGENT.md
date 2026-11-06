@@ -39,7 +39,8 @@ the requested work and granted Tools. Apply an owner's routine changes directly.
 
 These three need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts on the task:
 - **Committing, merging or publishing any change to the docs.** The starter access is read only, and
-  `.claude/settings.json` denies the write verbs. Keep the draft on the task until write access is granted.
+  `.claude/settings.json` denies the write verbs. Keep the draft on the task until write access is granted. Once granted, a
+  docs-only pull request needs no approval: add a `Changelog:` line to its body, then merge it once its checks are green.
 - **Deleting, renaming or moving a page**, or changing a URL that other pages link to.
 - **Sharing a draft outside the team**, or contacting a user or customer about a page.
 
