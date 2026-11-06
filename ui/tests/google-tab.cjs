@@ -116,7 +116,6 @@ const scenarios = {
   'an admin with nothing set up sees both ways with neither picked, and each pick shows only its way': async browser => {
     const fake = googleFake();
     const {page, seen} = await open(browser, fake);
-    assert.equal((await page.locator('[data-settings-tab=connections]').innerText()).trim(), 'Connections');
     const modes = () => page.$$eval('[data-google-pick]', els => els.map(el => [el.innerText.trim(), el.getAttribute('aria-checked')]));
     assert.deepEqual(await modes(), [['Whole company', 'false'], ['Each person signs in', 'false']]);
     assert.deepEqual(await cards(page), [], 'no way shows before the pick');

@@ -227,7 +227,7 @@ def test_mailbox_routine_class_does_not_override_other_automation_routes(api):
             ids[name] = ident
 
         classes = {name: settings_catalog.stored_class(
-            c, "PATCH", "automations/" + ident, {"name": "renamed"}) for name, ident in ids.items()}
+            c, "PATCH", "/api/v2/automations/" + ident, {"name": "renamed"}) for name, ident in ids.items()}
     assert classes["mail"][2] == "confirm"  # The route keeps its existing Assistant confirmation behavior.
     assert classes["event"][2] == "direct"  # A safe event edit keeps the route's direct behavior.
     assert classes["outbound"][2] == "confirm"  # An external send keeps the route's confirmation gate.

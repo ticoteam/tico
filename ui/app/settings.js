@@ -265,6 +265,7 @@ function pageSettings() {
         ${settingsCanManageBot(botRow(assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
       </div></header><div id="settings-assistant-approvals"></div></section>
       <div id="settings-assistant"></div>
+      <div id="settings-notifications"></div>
       `)}
     ${settingsIsAdmin() ? pane('people', '<div id="settings-people"><div id="set-people">' + skelRows(3, {card: true, dot: false}) + '</div></div>') : ''}
     ${pane('bots', `${settingsStrategyBotShown() ? `<section class="card" id="set-strategy-bot-card"><header><h2>${esc(strategyBotName())}</h2><span class="pill">Built-in</span>
@@ -303,7 +304,7 @@ function pageSettings() {
         <div id="set-webhooks">${skelRows(2, {card: true, dot: false})}</div></section></div>
       ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
       <section class="card" id="settings-tools-link"><header><h2>Tools &amp; Credentials</h2></header>
-        <p class="settings-card-line">The tools bots use and the credentials they sign in with have their own page. <a href="${INTEGRATIONS}">Open Tools &amp; Credentials</a></p></section>`)}
+        <p class="settings-card-line">The tools bots use and the credentials they sign in with have their own page. <a href="#/tools">Open Tools &amp; Credentials</a></p></section>`)}
     ${settingsIsAdmin() ? pane('policies', `<section class="card" id="settings-team"><header><h2>Team</h2></header>
         ${S.me?.cloud && S.me?.role === 'owner' ? `<div class="settings-team-icon">
           <img id="settings-team-icon" alt="Team icon" hidden><span id="settings-team-icon-empty" class="muted">No icon</span>
@@ -387,7 +388,7 @@ function settingsPlace(name) {
 function settingsShow(tab, {group: picked = false} = {}) {
   if (SETTINGS_REVEAL === '#settings-models') SETTINGS_REVEAL = '#settings-defaults';
   if (SETTINGS_REVEAL === '#set-turn-levels') SETTINGS_REVEAL = '#settings-limits';
-  if (tab === 'credentials' || tab === 'cloud') { location.hash = INTEGRATIONS; return; }
+  if (tab === 'credentials' || tab === 'cloud') { location.hash = tab === 'credentials' ? CREDENTIALS : '#/tools'; return; }
   const place = settingsPlace(tab);
   if (tab === 'runs') SETTINGS_HISTORY_VIEW = 'runs';   // the Runs page moved here
   if (!SETTINGS_REVEAL && place.reveal) SETTINGS_REVEAL = place.reveal;
@@ -427,6 +428,7 @@ function settingsShow(tab, {group: picked = false} = {}) {
     load(renderSettingsAssistantApprovals(),
       // The owner's one click when the team has no Assistant (ui/assistant.js): restore it or add it.
       owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
+      !formBusy($('#settings-notifications')) && settingsNotificationsRender(),
       );
   }
   if (on('people') && $('#settings-people') && !formBusy($('#settings-people'))) load(renderSettingsPeople());
