@@ -248,7 +248,9 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
         question="Which folio should ship?",
     )
     picked_label = pick["question"]["refs"]["questions"][0]["options"][0]["label"]
-    picked_answer = review_answer(api, pick, [picked_label], token="reader-test")
+    # A question task is answered on the task itself (its answer is the close, no comment message), so its answer
+    # surface is the task's answers list.
+    review_answer(api, pick, [picked_label], token="reader-test")
     spend_pick = review_ask(
         api,
         "ops-test",
@@ -417,7 +419,8 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
         "tasks/" + tid + "/tree",
         "tasks/" + pick["task"]["id"],
         "tasks/" + pick["task"]["id"] + "/comments",
-        "messages/" + picked_answer["comment"]["id"],
+        "tasks/" + pick["task"]["id"] + "/answers",
+        "tasks/" + spend_pick["task"]["id"] + "/answers",
         "tasks/" + spend_pick["task"]["id"],
         "tasks/" + spend_pick["task"]["id"] + "/comments",
         "approvals/" + approval_id,
