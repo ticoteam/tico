@@ -7981,9 +7981,9 @@ AUDIENCE = {
     # The Assistant bot's own background run (a routine, kind `bot`) proposes a card for its person too; the server admits
     # only the Assistant bot, and only with `for` naming an active person (backend/app.py propose).
     "hub_assistant_propose": ("assistant", "bot"), "hub_approval_read_back": ("assistant",),
-    # The morning message is the same background run's: the server admits only the Assistant bot, once a company day
-    # per person (backend/assistant.py morning). The Assistant's listing carries it too (the evals' default kind).
-    "hub_assistant_morning": ("assistant", "bot"),
+    # The morning message is the background run's alone: the server admits only the Assistant bot, once a company day
+    # per person (backend/assistant.py morning). Not in the assistant listing: that listing sits at the 200 KB cap.
+    "hub_assistant_morning": ("bot",),
     # Any teammate may withdraw a waiting card or find one (backend/assistant.py teammate); confirming stays the owner's.
     "hub_assistant_withdraw": KINDS, "hub_assistant_proposals": KINDS,
     # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
