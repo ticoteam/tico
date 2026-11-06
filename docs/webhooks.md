@@ -7,7 +7,8 @@ A webhook is one program posting a small message to another over HTTP. Tico does
 - **Outgoing**: Tico posts to an address you choose when something happens in Tico, such as a task finishing or an approval being asked.
 - **Through Tico Gateway**: a second address for an incoming webhook that keeps what is sent while your server is off or asleep.
 
-All three live in Settings → Webhooks, on the tabs **Incoming**, **Outgoing** and **Through Tico Gateway**. Everything on the page
+Incoming webhooks are a built-in row on Automations (**Incoming webhooks**), outgoing ones are on Tools (**Add tool → Outgoing webhook**,
+then a row each), and Through Tico Gateway is the **Webhooks** fold of the Tico Gateway card in Settings → Models. Everything there
 is also in `hub` and in the `hub_*` tools for bots and agents ([the table at the end](#the-commands)).
 
 Step by step:
@@ -395,7 +396,7 @@ An endpoint whose attempts have all failed for 5 days is turned off. The five da
 errors after a quiet spell does not count. Tico keeps what was queued, shows the endpoint in Health, files one task for its owner
 and records the turn-off in History.
 
-Fix the address, then turn it on (`hub webhook enable <id>`, or Settings → Webhooks). The answer says how many sends gave up since
+Fix the address, then turn it on (`hub webhook enable <id>`, or Tools → Webhooks). The answer says how many sends gave up since
 the failing began. Two commands send again what was held back; both need the endpoint on and handle at most 500 at a time (`more`
 says to run it again):
 

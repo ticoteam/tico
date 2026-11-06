@@ -205,7 +205,7 @@ existing repository grants keep their normal behavior.
 
 ## Bot repository access
 
-Tick the team's repositories in Settings → Repositories, then choose own only, all ticked, or chosen repositories for each bot. Grants can be read or write. Existing extra repositories become chosen write access automatically. See [Repositories](repositories.md) for settings, tokens, tools and the legacy API alias.
+Tick the team's repositories in Settings → General → Repositories, then choose own only, all ticked, or chosen repositories for each bot. Grants can be read or write. Existing extra repositories become chosen write access automatically. See [Repositories](repositories.md) for settings, tokens, tools and the legacy API alias.
 
 ## Creating bot repositories
 
@@ -249,7 +249,7 @@ computer publishes its history into it on the bot's next run, as for any empty r
 
 ## Creating a product repository
 
-An Owner can create an exact product repository without the `bot-` prefix from **Settings → Repositories**
+An Owner can create an exact product repository without the `bot-` prefix from **Settings → General → Repositories**
 → **New repository**. Enter one repository name, select **Preview** to review the connected organization, exact
 name, and private/empty settings, then select **Create repository**. The API also exposes this flow to the Hub CLI, for the Owner and
 for a bot with **Create product repositories** ([below](#bots-that-create-product-repositories)):
@@ -497,4 +497,4 @@ running release's recorded commit, never latest main or the newest tag. Only ver
 ancestry marks a PR Shipped; errors, missing commits and diverged histories leave it Merged. Failed checks
 retry after at least five minutes. Results are cached in memory for up to 512 immutable pairs and checked
 again after a restart; the shipped event records the verified pair. It creates no push history.
-Apps created before v0.3.1 may have Webhook → Active turned off in GitHub App settings. Their repository list refreshes daily and on Refresh in Settings → Repositories. The App webhook API does not expose the Active switch; enable it in GitHub to receive installation events.
+Apps created before v0.3.1 may have Webhook → Active turned off in GitHub App settings. Their repository list refreshes daily and on Refresh in Settings → General → Repositories. The App webhook API does not expose the Active switch; enable it in GitHub to receive installation events.

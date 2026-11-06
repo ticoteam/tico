@@ -118,12 +118,11 @@ function route(hash = location.hash) {
   else if (S.route === SETTINGS) pageSettings();
   else if (S.route === HELP) { location.replace(OVERVIEW); window.supportOpen?.(); return; }   // Help is the Support pop-up, over Company
   else if (S.route === '#/getting-started') { location.replace(TASKS); return; }   // the checklist is gone
-  else if (S.route === '#/repositories') { SETTINGS_TAB = 'repos'; location.replace(SETTINGS); return; }   // Settings > Repositories
-  // Settings > Webhooks (it was Triggers); #/settings/webhooks/outgoing and /gateway open that tab.
+  else if (S.route === '#/repositories') { SETTINGS_TAB = 'repos'; location.replace(SETTINGS); return; }   // Settings > General › Repositories
+  // Settings > Webhooks (it was Triggers) and its parts: incoming on Automations, outgoing on Tools, through the
+  // Gateway on Models (ui/app/settings-webhooks.js whOldAddress).
   else if (['#/triggers', '#/webhooks', '#/settings/triggers', '#/settings/webhooks'].includes(S.route) || S.route.startsWith('#/settings/webhooks/')) {
-    const tab = S.route.split('/')[3];
-    if (WH_TABS.some(([k]) => k === tab)) Object.assign(WH, {tab, trigger: '', hook: '', shown: null, hookShown: null});
-    SETTINGS_TAB = 'webhooks'; location.replace(SETTINGS); return;
+    location.replace(whOldAddress(S.route)); return;
   }
   else if (S.route === '#/health') { SETTINGS_TAB = 'health'; location.replace(SETTINGS); return; }   // Health moved into Settings
   // Settings > Inboxes and the tabs it replaced are Tools pages now: ui/app/tools.js toolsRoute redirects them first.

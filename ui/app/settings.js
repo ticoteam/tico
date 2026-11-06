@@ -83,15 +83,17 @@ let SETTINGS_ADDRESS = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
 // Health has no tab: General's Health line opens it (Details), and its address still works.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'repos', 'tasks', 'security', 'history',
-  'webhooks', 'health', 'billing'];
+const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'security', 'history',
+  'health', 'billing'];
 // System (it was Rules, before that Routines) is gone: settingsMovedOut sends its addresses on. chat: the old Chat tab; providers and
 // subscriptions: what is the Models tab now; limits: its turn levels; gateway: the Gateway page, now the Tico Gateway
-// card on Models (settingsShow scrolls to it). Inboxes (and Mailboxes, Email & Phone and Mail
+// card on Models (settingsShow scrolls to it); repos: Repositories, now a card on General. Inboxes (and Mailboxes, Email & Phone and Mail
 // before it) moved to Tools; their addresses redirect there (ui/app/tools.js toolsRoute).
 const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos',
   rules: 'system', routines: 'system', recurring: 'system', screening: 'security', chat: 'models', providers: 'models', subscriptions: 'models',
   limits: 'models', 'turn-levels': 'models', gateway: 'models'};
+// Repositories is a card on General (owners and admins): its old tab's addresses scroll to it once drawn.
+const SETTINGS_REPOS_CARD = '#set-repos[data-drawn]';
 // The Gateway card once drawn (renderSettingsProviders marks it), so a link to the old Gateway page lands on it filled in.
 const SETTINGS_GATEWAY_CARD = '#settings-gateway-card[data-drawn]';
 // System's cards left Settings: its jobs are Automations' System jobs, Releases, Task Manager and the Strategy Bot are
@@ -232,12 +234,10 @@ function pageSettings() {
       <button type="button" data-settings-tab="bots" role="tab">Bots</button>
       <button type="button" data-settings-tab="devices" role="tab">Computers</button>
       <button type="button" data-settings-tab="models" role="tab">Models</button>
-      <button type="button" data-settings-tab="repos" role="tab">Repositories</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="security" role="tab">Security</button>' : ''}
       <button type="button" data-settings-tab="history" role="tab">History</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
-        <button type="button" data-settings-tab="webhooks" role="tab">Webhooks</button>
         ${settingsIsAdmin() ? '<button type="button" data-settings-tab="billing" role="tab">Billing</button>' : ''}
       </div></details>
     </div>
@@ -264,6 +264,7 @@ function pageSettings() {
       <div id="settings-notifications"></div>
       ${S.me?.role === 'owner' ? `<section class="card" id="settings-privacy"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-storage"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
+      ${settingsIsAdmin() ? `<section class="card repos-card" id="set-repos">${skelRows(3, {card: true, dot: false})}</section>` : ''}
     </div>
     <div class="settings-pane" id="settings-devices" role="tabpanel">
       <section class="card" id="settings-computers"><header><h2>Computers</h2><button class="primary settings-head-act" type="button" id="machine-add-open">Add computer</button></header><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
@@ -281,7 +282,6 @@ function pageSettings() {
       <section class="card settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsIsAdmin() ? '<section class="card" id="settings-turn-budgets" hidden><header><h2>Run budget</h2></header><div id="set-turn-budgets"></div></section>' : ''}
     </div>
-    <div class="settings-pane" id="settings-repos" role="tabpanel" hidden><section class="card repos-card" id="set-repos">${skelRows(3, {card: true, dot: false})}</section></div>
     <div class="settings-pane" id="settings-health" role="tabpanel" hidden><a class="settings-back" href="#/settings/general" data-settings-back>‹ General</a>
       <div id="settings-issues"></div><div class="hl-page" id="hl-page"></div>
       ${hlSetupCheckHTML()}
@@ -291,11 +291,6 @@ function pageSettings() {
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-security" role="tabpanel" hidden>
       <section class="card" id="set-screening-card"><header><h2>Screening</h2></header><div id="set-screening">${skelRows(3, {card: true, dot: false})}</div></section>
     </div>` : ''}
-    <div class="settings-pane" id="settings-webhooks" role="tabpanel" hidden>
-      <section class="card"><header><h2>Webhooks</h2><div class="theme-seg" id="settings-webhooks-view" role="radiogroup" aria-label="Webhooks">${WH_TABS.map(([k, wide, narrow]) =>
-        `<button type="button" role="radio" data-wh-tab="${k}" aria-checked="${k === WH.tab}">${narrow ? `<span class="sb-wide">${wide}</span><span class="sb-narrow">${narrow}</span>` : wide}</button>`).join('')}</div></header>
-        <div id="set-webhooks">${skelRows(2, {card: true, dot: false})}</div></section>
-    </div>
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
       <section class="card" id="set-ask-filter-card"><header><h2>What bots may put on you</h2></header><div id="set-ask-filter"></div></section>
       <div id="settings-types"></div>
@@ -359,9 +354,22 @@ function pageSettingsThemeBind() {
 function settingsShow(tab) {
   if (tab === 'credentials' || tab === 'cloud') { location.hash = tab === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools'; return; }
   if (tab === 'gateway') SETTINGS_REVEAL = SETTINGS_GATEWAY_CARD;   // and any card the old page's address named
+  if (SETTINGS_REVEAL === '#wh-gateway') {   // the Gateway card's Webhooks fold, opened
+    SETTINGS_REVEAL = SETTINGS_GATEWAY_CARD;
+    const fold = $('[data-gateway-webhooks]');
+    if (fold) fold.open = true; else WH_OPEN_GATEWAY = true;
+  }
   tab = SETTINGS_ALIAS[tab] || tab;
   if (tab === 'tags' || tab === 'types') tab = 'tasks'; // Saved links keep working.
-  if (tab === 'triggers') tab = 'webhooks';             // Settings > Triggers became Webhooks
+  // Webhooks (once Triggers) left Settings: a saved tab opens incoming webhooks on Automations (whOldAddress).
+  if (tab === 'webhooks' || tab === 'triggers') {
+    SETTINGS_TAB = 'general';
+    try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* not remembered */ }
+    location.replace(whOldAddress('#/settings/' + tab)); return;
+  }
+  let reposDenied = false;
+  if (tab === 'repos') { tab = 'general'; if (settingsIsAdmin()) SETTINGS_REVEAL = SETTINGS_REPOS_CARD; else reposDenied = true; }
+  if (SETTINGS_REVEAL === '#set-repos') SETTINGS_REVEAL = SETTINGS_REPOS_CARD;   // a link to the card itself
   if (tab === 'devices' && SETTINGS_MOVED_TO_MODELS.includes(SETTINGS_REVEAL)) tab = 'models';
   if (SETTINGS_GENERAL[tab]) { SETTINGS_REVEAL = SETTINGS_GENERAL[tab]; tab = 'general'; }
   if (tab === 'runs') { tab = 'history'; SETTINGS_HISTORY_VIEW = 'runs'; }   // the Runs page moved here
@@ -371,7 +379,7 @@ function settingsShow(tab) {
   const access = {people: settingsIsAdmin(), billing: settingsIsAdmin(), security: settingsIsAdmin()};
   const shown = access[tab] !== false && (tab === 'health' || tabs.some(button => button.dataset.settingsTab === tab));
   // A tab this person can't see (an admin's link, a role just lost) opens General and says why.
-  SETTINGS_DENIED = !shown && SETTINGS_TABS.includes(tab) && tab !== 'general';
+  SETTINGS_DENIED = reposDenied || (!shown && SETTINGS_TABS.includes(tab) && tab !== 'general');
   SETTINGS_TAB = shown ? tab : 'general';
   // HQ may have changed while Settings was closed, or a previous read may have failed.
   if (['people', 'devices'].includes(SETTINGS_TAB))
@@ -380,7 +388,7 @@ function settingsShow(tab) {
   if (denied) denied.hidden = !SETTINGS_DENIED;
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
   settingsAddress();
-  if (['webhooks', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
+  if (SETTINGS_TAB === 'billing') $('#settings-more').open = true;
   const tasks = $('#settings-tasks');
   if (tasks) tasks.hidden = SETTINGS_TAB !== 'tasks';
   tabs.forEach(button => {
@@ -408,6 +416,9 @@ function settingsShow(tab) {
     const company = $('#settings-company');
     if (team) team.hidden = !settingsIsAdmin();
     if (company) company.hidden = !settingsIsAdmin();
+    const repos = $('#set-repos');
+    if (repos) repos.hidden = !settingsIsAdmin();
+    const reposDraw = () => repos && !repos.hidden && !formBusy(repos) && renderSettingsRepos();
     if (privacy) privacy.hidden = storage.hidden = !owner;
     if (SETTINGS_TAB === 'general') {
       window.hlSummaryDraw?.();
@@ -416,7 +427,10 @@ function settingsShow(tab) {
         owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
         privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
         company && settingsIsAdmin() && renderSettingsCompany(), owner && renderSettingsBotReports(),
-        !formBusy($('#settings-notifications')) && settingsNotificationsRender()]).then(() => settingsReveal(SETTINGS_REVEAL));
+        !formBusy($('#settings-notifications')) && settingsNotificationsRender()])
+        // Repositories reads GitHub's list: drawn after the rest of General (even when a card failed), so it never
+        // holds up the first paint.
+        .then(reposDraw, reposDraw).then(() => settingsReveal(SETTINGS_REVEAL));
     }
   }
   const peoplePane = $('#settings-people');
@@ -425,12 +439,8 @@ function settingsShow(tab) {
   if (billingPane) { billingPane.hidden = SETTINGS_TAB !== 'billing'; if (SETTINGS_TAB === 'billing') void renderSettingsBilling(); }
   const healthPane = $('#settings-health');
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
-  const reposPane = $('#settings-repos');
-  if (reposPane) { reposPane.hidden = SETTINGS_TAB !== 'repos'; if (SETTINGS_TAB === 'repos' && !formBusy(reposPane)) void renderSettingsRepos(); }
   const securityPane = $('#settings-security');
   if (securityPane) { securityPane.hidden = SETTINGS_TAB !== 'security'; if (SETTINGS_TAB === 'security') void renderScreeningCard(); }
-  const webhooksPane = $('#settings-webhooks');
-  if (webhooksPane) { webhooksPane.hidden = SETTINGS_TAB !== 'webhooks'; if (SETTINGS_TAB === 'webhooks' && !formBusy(webhooksPane)) void renderSettingsWebhooks(); }
   settingsRevealSoon(SETTINGS_REVEAL);
 }
 // While Settings is the page, the address bar names the tab shown: #/settings/<tab>, with History's view and filters.

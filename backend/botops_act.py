@@ -672,7 +672,7 @@ def _place(path):
         what = "its repository access" if parts[2:3] == ["repositories"] else "its settings"
         return "#/bot/" + slug + "/more", slug, what
     if parts[0] == "repositories":
-        return "#/repositories", "", "Settings > Repositories"
+        return "#/settings/general/set-repos", "", "Settings > General › Repositories"
     if parts[0] == "tasks" and len(parts) > 1 and parts[1]:
         return "#/task/" + parts[1], "", "the task"
     if parts[0] == "credentials":

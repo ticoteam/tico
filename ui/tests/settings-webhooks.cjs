@@ -1,14 +1,16 @@
-// Settings > Webhooks (ui/app/settings-webhooks.js) against a fake server. Guards: #/triggers and the old Triggers tab
-// land on Webhooks; a new incoming webhook (name, preset, keep days) is made in its three calls and its address and
+// Webhooks (ui/app/settings-webhooks.js) in their three homes against a fake server: incoming on Automations (a built-in
+// row, #/automations/webhooks), outgoing on Tools (#/tools/webhooks), through the Gateway as a fold of Models › Tico
+// Gateway. Guards: #/triggers, the old Settings > Webhooks addresses and a saved Triggers or Webhooks tab land on each
+// part's home, and Settings has no Webhooks tab; an open item is named in the address; a new incoming webhook (name, preset, keep days) is made in its three calls and its address and
 // signing secret show once, gone after Back; a webhook's detail links to its Automations; its call log opens a payload (redacted headers, body) and runs one
 // again, while a refused call is recovered instead; Tico Team's built-in webhook is read-only but for Edit; an outgoing endpoint is made with the catalog's
 // event picker (a whole group is `group.*`) and shows its secret once; its sends retry, and failed or missed sends
 // since a day go again; its edit sets filters and custom headers, and a secret header's value never comes back; the
-// picker leaves out events only automations see (outbound: false); the Gateway tab asks for the Gateway first, then makes an
+// picker leaves out events only automations see (outbound: false); the Gateway fold asks for the Gateway first, then makes an
 // address shown once; Wake this server shows only on a hosted server. The wake address (owner, self-run server only) is
 // set in place, its signing secret stays until Done, a refusal shows under the input, and Turn off clears it. No
 // sideways scroll on a phone.
-// TICO_SHOTS=<dir> saves screenshots.
+// TICO_SHOTS=<dir> saves screenshots (dark).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -53,11 +55,12 @@ function server() {
   };
 }
 
-async function open(browser, hash, viewport = {width: 1280, height: 860}, state = server(), store = {}) {
+async function open(browser, hash, viewport = {width: 1440, height: 900}, state = server(), store = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('dialog', d => d.accept());
+  await page.addInitScript(() => { try { localStorage.setItem('tico.theme', 'dark'); } catch {} });
   if (store.tab) await page.addInitScript(tab => sessionStorage.setItem('tico.settings.tab', tab), store.tab);
   await page.route('**/*', route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -124,6 +127,11 @@ async function open(browser, hash, viewport = {width: 1280, height: 860}, state 
       return json({ok: true});
     }
     if (p === '/api/v2/relay') return json({relay: state.relay});
+    // Models, for the Gateway card that holds the Webhooks fold.
+    if (p === '/api/v2/models') return json({models: [], harnesses: [], default: {runtime: 'claude', model: ''}, enabled_providers: ['anthropic']});
+    if (p === '/api/v2/providers') return json({enabled: ['anthropic'], default: {runtime: 'claude', model: ''}, revision: 1, auto_fallback: true,
+      providers: [{id: 'anthropic', label: 'Anthropic'}]});
+    if (p === '/api/v2/automations') return json({automations: [], next: null});
     if (p === '/api/v2/hooks/wake-url') {
       if (state.role !== 'owner') return json({error: {code: 'forbidden', detail: 'Only the owner may see or change the address that wakes this server'}}, 403);
       if (req.method() !== 'PUT') return json(state.wake);
@@ -141,22 +149,29 @@ async function open(browser, hash, viewport = {width: 1280, height: 860}, state 
 }
 const settled = page => page.evaluate(() => Promise.all(document.getAnimations().map(a => a.finished.catch(() => {}))));
 const noSideways = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
+const hash = page => new URL(page.url()).hash;
+const go = (page, to) => page.evaluate(to => { location.hash = to; }, to);
+// The Gateway's Webhooks fold, drawn again (what reopening it does).
+const redraw = page => page.evaluate(() => whMount('gateway'));
+const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gateway', GATEWAY_LINK = '#/settings/models/wh-gateway';
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
-  const shot = async (page, name, el = '#settings-webhooks') => { if (shots) await page.locator(el).screenshot({path: path.join(shots, name + '.png')}); };
+  const shot = async (page, name, el) => { if (shots) await page.locator(el).screenshot({path: path.join(shots, name + '.png')}); };
+  const view = async (page, name) => { if (shots) { await settled(page); await page.screenshot({path: path.join(shots, name + '.png')}); } };
   try {
     {
-      // #/triggers lands on Settings > Webhooks, Incoming; the list has the built-in Tico Team row.
+      // #/triggers lands on Automations' Incoming webhooks; the list has the built-in Tico Team row.
       const {page, errors, state} = await open(browser, '#/triggers');
-      const pane = page.locator('#settings-webhooks');
+      let pane = page.locator(INCOMING);
       await pane.locator('[data-wh-open="shop"]').waitFor();
-      assert.equal(new URL(page.url()).hash, '#/settings/webhooks');
-      assert.equal(await page.locator('[data-settings-tab="webhooks"]').innerText(), 'Webhooks');
-      assert.equal(await pane.locator('[data-wh-tab="incoming"]').getAttribute('aria-checked'), 'true');
+      assert.equal(hash(page), '#/automations/webhooks');
+      assert.equal(await page.locator('#au-root').getAttribute('data-screen'), 'detail');
+      assert.equal(await page.locator('.au-hd .au-name').innerText(), 'Incoming webhooks');
       assert.match(await pane.locator('[data-wh-open="shop"]').innerText(), /12 in 24h · 2 refused/);
       assert.match(await pane.locator('[data-wh-open="_tico"]').innerText(), /Built-in/);
-      await shot(page, 'incoming-list-desktop');
+      await shot(page, 'incoming-list-desktop', INCOMING);
+      await view(page, 'automations-incoming-webhooks-desktop-dark');
 
       // New webhook: create, then signing, then the settings that differ; the secrets show once.
       await pane.locator('[data-wh-new]').click();
@@ -175,7 +190,7 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       assert.deepEqual(state.posts[2].body, {keep_days: 14, unheard: 'note'});
       assert.equal(await pane.locator('[data-wh-secret="url"] code').innerText(), `${BASE}/orders/sek-ret-123`);
       assert.equal(await pane.locator('[data-wh-secret="signing"] code').innerText(), 'whsec_c2VjcmV0');
-      await shot(page, 'incoming-created-desktop');
+      await shot(page, 'incoming-created-desktop', INCOMING);
       await pane.locator('[data-wh-back]').click();
       await pane.locator('[data-wh-open="orders"]').click();
       await pane.locator('.wh-facts').waitFor();
@@ -187,12 +202,13 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       // Shop: its Automations link, the call log, View payload and Run again.
       await pane.locator('[data-wh-open="shop"]').click();
       await pane.locator('[data-wh-calls]').waitFor();
+      assert.equal(hash(page), '#/automations/webhooks/shop', 'the open webhook is in the address');
       assert.equal(await pane.locator('[data-wh-automations]').getAttribute('href'), '#/automations?q=Shop', 'listeners are Automations');
       assert.equal(await pane.locator('[data-wh-call]').count(), 2);
       assert.equal(await pane.locator('[data-wh-call="d1"] [data-wh-payload]').count(), 1, 'a refused call is kept to look at');
       assert.equal(await pane.locator('[data-wh-call="d1"] [data-wh-replay]').count(), 0, 'a refused call is recovered, not run again');
       assert.match(await pane.locator('[data-wh-call="d1"]').innerText(), /Refused bad signature/);
-      await shot(page, 'incoming-detail-desktop');
+      await shot(page, 'incoming-detail-desktop', INCOMING);
       await pane.locator('[data-wh-call="d2"] [data-wh-payload]').click();
       const payload = page.locator('.wh-dialog');
       await payload.locator('[data-wh-body]').waitFor();
@@ -224,12 +240,15 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       await page.locator('.wh-dialog').waitFor({state: 'detached'});
       assert.deepEqual(state.posts.at(-1), {path: '/api/v2/triggers/_tico', body: {keep_days: 10}});
       await pane.locator('[data-wh-back]').click();
+      await pane.locator('[data-wh-open="shop"]').waitFor();
+      assert.equal(hash(page), '#/automations/webhooks');
 
-      // Outgoing: the picker sends a whole group as group.* and single events by name; the secret shows once.
-      await pane.locator('[data-wh-tab="outgoing"]').click();
+      // Outgoing, on Tools: the picker sends a whole group as group.* and single events by name; the secret shows once.
+      await go(page, '#/tools/webhooks');
+      pane = page.locator(OUTGOING);
       await pane.locator('[data-wh-hook="wh1"]').waitFor();
       assert.match(await pane.locator('[data-wh-hook="wh1"]').innerText(), /Paused[\s\S]*40 sent · 3 failed/);
-      await shot(page, 'outgoing-list-desktop');
+      await shot(page, 'outgoing-list-desktop', OUTGOING);
       await pane.locator('[data-wh-hook-new]').click();
       const make = page.locator('.wh-dialog');
       await make.locator('[name=name]').fill('Make.com');
@@ -251,11 +270,12 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       await pane.locator('[data-wh-back]').click();
       await pane.locator('[data-wh-hook="wh1"]').click();
       await pane.locator('[data-wh-sends]').waitFor();
+      assert.equal(hash(page), '#/tools/webhooks/wh1', 'the open endpoint is in the address');
       assert.equal(await pane.locator('[data-wh-send="s2"] [data-wh-retry]').count(), 1);
       assert.equal(await pane.locator('[data-wh-send="s1"] [data-wh-retry]').count(), 0, 'no retry on a delivered send');
       assert.match(await pane.locator('[data-wh-filter-facts]').innerText(), /Engineering · Engineer/);
       assert.match(await pane.locator('[data-wh-header-facts]').innerText(), /x-api-key secret, x-team/);
-      await shot(page, 'outgoing-detail-desktop');
+      await shot(page, 'outgoing-detail-desktop', OUTGOING);
       // Edit: filters and custom headers. The secret header shows "set", empty, and empty keeps it.
       await pane.locator('[data-wh-hook-edit]').click();
       const edit = page.locator('.wh-dialog');
@@ -300,7 +320,7 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       await pane.locator('[data-wh-hook-pause]').click();
       await page.waitForFunction(() => document.querySelector('[data-wh-hook-pause]')?.textContent === 'Pause');
       // Once it runs again: retry what gave up, or send what it missed, since a day.
-      await shot(page, 'outgoing-resumed-desktop');
+      await shot(page, 'outgoing-resumed-desktop', OUTGOING);
       const caught = page.waitForResponse(r => r.url().endsWith('/wh1/recover'));
       await pane.locator('[data-wh-catchup-do="recover"]').click();
       await caught;
@@ -313,26 +333,27 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       const paths = state.posts.map(x => x.path);
       assert.ok(paths.includes('/api/v2/webhooks/wh1/sends/s2/retry') && paths.includes('/api/v2/webhooks/wh1/example') && paths.includes('/api/v2/webhooks/wh1/resume'), paths.join(' '));
 
-      // Through Tico Gateway: no key yet.
-      await pane.locator('[data-wh-tab="gateway"]').click();
+      // Through Tico Gateway, a fold of Models › Tico Gateway that the old address opens: no key yet.
+      await go(page, '#/settings/webhooks/gateway');
+      pane = page.locator(GATEWAY);
       await pane.locator('[data-wh-no-key]').waitFor();
+      assert.equal(hash(page), '#/settings/models');
+      assert.equal(await page.locator('[data-gateway-webhooks]').evaluate(d => d.open), true);
       assert.match(await pane.locator('[data-wh-no-key]').innerText(), /Connect the Gateway first/);
-      await shot(page, 'gateway-no-key-desktop');
+      await shot(page, 'gateway-no-key-desktop', '#settings-gateway-card');
       // With a key: make an address, shown once.
       state.relay = {...state.relay, key: 'connected', last_pull: AGO(1), pending: 3, active: true};
-      await pane.locator('[data-wh-tab="incoming"]').click();
-      await pane.locator('[data-wh-tab="gateway"]').click();
+      await redraw(page);
       await pane.locator('[data-wh-relay="shop"] [data-wh-relay-do="make"]').click();
       await pane.locator('[data-wh-secret="relay"]').waitFor();
       assert.equal(await pane.locator('[data-wh-secret="relay"] code').innerText(), 'https://gw.tico.dev/v1/hooks/rl_1/gw-secret');
       assert.match(await pane.locator('[data-wh-relay-status]').innerText(), /3 waiting/);
       assert.equal(await pane.locator('[data-wh-relay="_tico"]').count(), 0, 'the built-in has no address to make');
       assert.equal(await pane.locator('[data-wh-wake]').count(), 0, 'no wake switch on a server Tico does not host');
-      await shot(page, 'gateway-desktop');
+      await shot(page, 'gateway-desktop', '#settings-gateway-card');
       // Hosted: Wake this server, per address.
       state.hosted = true;
-      await pane.locator('[data-wh-tab="incoming"]').click();
-      await pane.locator('[data-wh-tab="gateway"]').click();
+      await redraw(page);
       const wake = pane.locator('[data-wh-relay="shop"] [data-wh-wake]');
       await wake.waitFor();
       assert.equal(await wake.isChecked(), true, 'wake: null on a hosted install is on');
@@ -347,15 +368,40 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       await woke2;
       assert.deepEqual(state.posts.at(-1), {path: '/api/v2/triggers/shop/relay/wake', body: {wake: true}});
       await page.waitForFunction(() => !document.querySelector('[data-wh-wake]').disabled);
-      await shot(page, 'gateway-wake-desktop');
+      await shot(page, 'gateway-wake-desktop', '#settings-gateway-card');
       assert.deepEqual(errors, []);
       await page.close();
     }
     {
-      // The old Triggers tab saved in this browser opens Webhooks too.
-      const {page, errors} = await open(browser, '#/settings', undefined, undefined, {tab: 'triggers'});
-      await page.locator('#settings-webhooks [data-wh-open="shop"]').waitFor();
-      assert.equal(await page.locator('#settings-webhooks').isVisible(), true);
+      // Automations lists Incoming webhooks as a built-in row that opens them; Settings has no Webhooks tab.
+      const {page, errors} = await open(browser, '#/automations');
+      const row = page.locator('tr.au-row[data-row="webhooks"]');
+      await row.waitFor();
+      assert.match(await row.innerText(), /Incoming webhooks[\s\S]*2 webhooks/);
+      await row.locator('a').click();
+      await page.locator(`${INCOMING} [data-wh-open="shop"]`).waitFor();
+      assert.equal(hash(page), '#/automations/webhooks');
+      await go(page, '#/settings');
+      await page.locator('#settings-tabs').waitFor();
+      assert.equal(await page.locator('[data-settings-tab="webhooks"], [data-settings-tab="triggers"]').count(), 0);
+      // Old addresses, each at its part's new home.
+      for (const [from, to] of [['#/webhooks', '#/automations/webhooks'], ['#/settings/triggers', '#/automations/webhooks'],
+        ['#/settings/webhooks', '#/automations/webhooks'], ['#/settings/webhooks/incoming', '#/automations/webhooks'],
+        ['#/settings/webhooks/outgoing', '#/tools/webhooks'], ['#/settings/webhooks/gateway', '#/settings/models']]) {
+        await go(page, '#/tools');
+        await page.waitForFunction(() => location.hash === '#/tools');
+        await go(page, from);
+        await page.waitForFunction(to => location.hash === to, to);
+        await page.locator({'#/automations/webhooks': INCOMING, '#/tools/webhooks': OUTGOING, '#/settings/models': GATEWAY}[to]).locator(':scope > *').first().waitFor();
+      }
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    for (const tab of ['triggers', 'webhooks']) {
+      // The old Triggers or Webhooks tab saved in this browser opens incoming webhooks on Automations.
+      const {page, errors} = await open(browser, '#/settings', undefined, undefined, {tab});
+      await page.locator(`${INCOMING} [data-wh-open="shop"]`).waitFor();
+      assert.equal(hash(page), '#/automations/webhooks');
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -363,16 +409,14 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       // The wake address: set in place, its signing secret shown until Done, a refusal under the input, Turn off.
       const state = server();
       state.relay = {...state.relay, key: 'connected', last_pull: AGO(1), pending: 2, active: true};
-      const {page, errors} = await open(browser, '#/settings/webhooks', undefined, state);
-      const pane = page.locator('#settings-webhooks');
-      await pane.locator('[data-wh-open="shop"]').waitFor();
-      await pane.locator('[data-wh-tab="gateway"]').click();
+      const {page, errors} = await open(browser, GATEWAY_LINK, undefined, state);
+      const pane = page.locator(GATEWAY);
       const row = pane.locator('[data-wh-wake-url]');
       await row.locator('[data-wh-wake-value]').waitFor();
       assert.equal(await row.locator('[data-wh-wake-value]').innerText(), 'Off');
       assert.equal(await row.locator('[data-wh-wake-do="off"]').count(), 0, 'nothing to turn off');
       assert.equal(await row.locator('a').getAttribute('href'), 'https://github.com/ticoteam/tico/blob/main/docs/install.md#wake-on-webhook');
-      await shot(page, 'wake-off-desktop');
+      await shot(page, 'wake-off-desktop', GATEWAY);
       // Set: the secret shows once, with its note, and stays across a redraw until Done.
       await row.locator('[data-wh-wake-do="edit"]').click();
       await row.locator('[data-wh-wake-input]').fill('https://wake.acme.example/start');
@@ -383,14 +427,13 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       assert.equal(await secret.locator('code').innerText(), 'whsec_d2FrZS1zZWNyZXQ=');
       assert.match(await secret.innerText(), /Signs the tico\.wake posts\. Not shown again\./);
       assert.equal(await row.locator('[data-wh-wake-value]').innerText(), 'https://wake.acme.example/start');
-      await shot(page, 'wake-set-desktop');
-      await pane.locator('[data-wh-tab="incoming"]').click();
-      await pane.locator('[data-wh-tab="gateway"]').click();
+      await shot(page, 'wake-set-desktop', GATEWAY);
+      await view(page, 'models-gateway-webhooks-desktop-dark');
+      await redraw(page);
       await secret.waitFor();
       await secret.locator('[data-wh-wake-do="done"]').click();
       assert.equal(await secret.count(), 0, 'gone after Done');
-      await pane.locator('[data-wh-tab="incoming"]').click();
-      await pane.locator('[data-wh-tab="gateway"]').click();
+      await redraw(page);
       await row.locator('[data-wh-wake-value]').waitFor();
       assert.equal(await row.locator('[data-wh-wake-value]').innerText(), 'https://wake.acme.example/start', 'read back from the server');
       assert.equal(await secret.count(), 0, 'never shown again');
@@ -402,7 +445,7 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       await row.locator('[data-wh-wake-error]').waitFor();
       assert.equal(await row.locator('[data-wh-wake-error]').innerText(), 'The wake address starts with https://, has a host, and no spaces, user or password');
       assert.equal(await row.locator('[data-wh-wake-input]').inputValue(), 'http://wake.acme.example');
-      await shot(page, 'wake-error-desktop');
+      await shot(page, 'wake-error-desktop', GATEWAY);
       state.wakeFail = {status: 409, code: 'gateway', detail: 'Connect the Tico Gateway first.'};
       await row.locator('[type="submit"]').click();
       await page.waitForFunction(() => document.querySelector('[data-wh-wake-error]')?.textContent === 'Connect the Tico Gateway first.');
@@ -425,19 +468,19 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       const state = server();
       state.relay = {...state.relay, key: 'connected', last_pull: AGO(1), pending: 0};
       state.triggers[0].relay = {address_prefix: 'https://gw.tico.dev/v1/hooks/rl_1', created_at: AGO(60), wake: null};
-      const {page, errors} = await open(browser, '#/settings/webhooks', {width: 390, height: 844}, state);
-      const pane = page.locator('#settings-webhooks');
-      await pane.locator('[data-wh-open="shop"]').waitFor();
-      await pane.locator('[data-wh-tab="gateway"]').click();
+      const {page, errors} = await open(browser, GATEWAY_LINK, {width: 390, height: 844}, state);
+      const pane = page.locator(GATEWAY);
       const row = pane.locator('[data-wh-wake-url]');
       await row.locator('[data-wh-wake-do="edit"]').click();
       await row.locator('[data-wh-wake-input]').fill('https://wake.acme.example/start-tico-server-now');
       assert.ok(await noSideways(page), 'wake edit');
-      await shot(page, 'wake-edit-phone');
+      await shot(page, 'wake-edit-phone', GATEWAY);
       await row.locator('[type="submit"]').click();
       await row.locator('[data-wh-secret="wake"]').waitFor();
       assert.ok(await noSideways(page), 'wake secret');
-      await shot(page, 'wake-set-phone');
+      await shot(page, 'wake-set-phone', GATEWAY);
+      await page.locator('#settings-gateway-card').evaluate(el => el.scrollIntoView({block: 'start'}));
+      await view(page, 'models-gateway-webhooks-phone-dark');
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -446,10 +489,8 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       for (const [what, more] of [['hosted', {hosted: true}], ['member', {role: 'member'}]]) {
         const state = Object.assign(server(), more);
         state.relay = {...state.relay, key: 'connected', last_pull: AGO(1), pending: 0};
-        const {page, errors} = await open(browser, '#/settings/webhooks', undefined, state);
-        const pane = page.locator('#settings-webhooks');
-        await pane.locator('[data-wh-open="shop"]').waitFor();
-        await pane.locator('[data-wh-tab="gateway"]').click();
+        const {page, errors} = await open(browser, GATEWAY_LINK, undefined, state);
+        const pane = page.locator(GATEWAY);
         await pane.locator('[data-wh-relay-status]').waitFor();
         assert.equal(await pane.locator('[data-wh-wake-url]').count(), 0, `no wake address: ${what}`);
         assert.deepEqual(errors, []);
@@ -462,16 +503,16 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       state.relay = {...state.relay, key: 'connected', last_pull: AGO(1), pending: 0};
       state.triggers[0].relay = {address_prefix: 'https://gw.tico.dev/v1/hooks/rl_1', created_at: AGO(60), wake: true};
       state.hosted = true;
-      const {page, errors} = await open(browser, '#/settings/webhooks', {width: 390, height: 844}, state);
-      const pane = page.locator('#settings-webhooks');
+      const {page, errors} = await open(browser, '#/automations/webhooks', {width: 390, height: 844}, state);
+      let pane = page.locator(INCOMING);
       await pane.locator('[data-wh-open="shop"]').waitFor();
-      assert.equal(await pane.locator('[data-wh-tab="gateway"]').innerText(), 'Gateway', 'the short label on a phone');
       assert.ok(await noSideways(page), 'list');
-      await shot(page, 'incoming-list-phone');
+      await shot(page, 'incoming-list-phone', INCOMING);
+      await view(page, 'automations-incoming-webhooks-phone-dark');
       await pane.locator('[data-wh-open="shop"]').click();
       await pane.locator('[data-wh-calls]').waitFor();
       assert.ok(await noSideways(page), 'detail');
-      await shot(page, 'incoming-detail-phone');
+      await shot(page, 'incoming-detail-phone', INCOMING);
       await pane.locator('[data-wh-call="d2"] [data-wh-payload]').click();
       await page.locator('.wh-dialog [data-wh-body]').waitFor();
       if (shots) { await settled(page); await page.screenshot({path: path.join(shots, 'payload-phone.png')}); }
@@ -481,10 +522,11 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       await page.locator('.wh-dialog [name=name]').waitFor();
       if (shots) { await settled(page); await page.screenshot({path: path.join(shots, 'incoming-new-phone.png')}); }
       await page.locator('.wh-dialog [data-close]').click();
-      await pane.locator('[data-wh-tab="outgoing"]').click();
+      await go(page, '#/tools/webhooks');
+      pane = page.locator(OUTGOING);
       await pane.locator('[data-wh-hook="wh1"]').waitFor();
       assert.ok(await noSideways(page), 'outgoing list');
-      await shot(page, 'outgoing-list-phone');
+      await shot(page, 'outgoing-list-phone', OUTGOING);
       await pane.locator('[data-wh-hook-new]').click();
       await page.locator('.wh-dialog [data-wh-events]').waitFor();
       assert.ok(await page.locator('.wh-dialog').evaluate(d => d.scrollWidth <= d.clientWidth + 1), 'the picker fits');
@@ -493,17 +535,18 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       await pane.locator('[data-wh-hook="wh1"]').click();
       await pane.locator('[data-wh-sends]').waitFor();
       assert.ok(await noSideways(page), 'outgoing detail');
-      await shot(page, 'outgoing-detail-phone');
+      await shot(page, 'outgoing-detail-phone', OUTGOING);
       await pane.locator('[data-wh-hook-edit]').click();
       await page.locator('.wh-dialog [data-wh-headers]').waitFor();
       assert.ok(await page.locator('.wh-dialog').evaluate(d => d.scrollWidth <= d.clientWidth + 1), 'the edit form fits');
       if (shots) { await settled(page); await page.locator('.wh-dialog [data-wh-filters]').scrollIntoViewIfNeeded(); await page.screenshot({path: path.join(shots, 'outgoing-edit-phone.png')}); }
       await page.locator('.wh-dialog [data-close]').click();
-      await pane.locator('[data-wh-tab="gateway"]').click();
+      await go(page, GATEWAY_LINK);
+      pane = page.locator(GATEWAY);
       await pane.locator('[data-wh-relays]').waitFor();
       assert.equal(await pane.locator('[data-wh-relay="shop"] [data-wh-wake]').isChecked(), true);
       assert.ok(await noSideways(page), 'gateway');
-      await shot(page, 'gateway-phone');
+      await shot(page, 'gateway-phone', GATEWAY);
       assert.deepEqual(errors, []);
       await page.close();
     }

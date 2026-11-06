@@ -11,6 +11,7 @@
      #/tools/address/<id>, #/tools/address/outbox     one mailing address, letters out  │ (ui/app/inboxes*.js)
      #/tools/settings[/<section>], #/tools/messages   mail and number settings, texts   ┘
      #/tools/keys[/<service> | /credentials/<id>]     every credential, by tool (ui/app/redesign-library.js)
+     #/tools/webhooks[/<id>]                          outgoing webhooks, and one (ui/app/settings-webhooks.js)
      #/tools/<service>                                a declared tool's page, Slack's and GitHub's (same file)
    The old homes of all of it redirect here (toolsRoute): Library › Tools and › Connections, Settings › Inboxes and
    the tabs it replaced, #/integrations and #/credentials.
@@ -121,7 +122,8 @@ function toolsDraw() {
 function toolsAddMenu() {
   const admin = settingsIsAdmin();
   const kinds = Object.values(INBOX_KINDS).filter(k => k.add && (!k.add.admin || admin)).sort((a, b) => a.order - b.order);
-  const items = [...(S.me?.credential_access || admin ? [['api', 'API']] : []), ...kinds.map(k => ['kind:' + k.key, k.add.label])];
+  const items = [...(S.me?.credential_access || admin ? [['api', 'API']] : []), ...kinds.map(k => ['kind:' + k.key, k.add.label]),
+    ['webhook', 'Outgoing webhook']];
   if (!items.length) return '';
   return `<details class="tt-add" data-tl-add><summary class="primary small">Add tool</summary><div class="tt-add-menu" role="menu">
     ${items.map(([k, label]) => `<button type="button" role="menuitem" data-tl-add-item="${esc(k)}">${esc(label)}</button>`).join('')}</div></details>`;
@@ -132,6 +134,7 @@ function toolsAddBind(root) {
     b.closest('details').removeAttribute('open');
     const item = b.dataset.tlAddItem;
     if (item === 'api') { toolsApiCreate(); return; }
+    if (item === 'webhook') { location.hash = WH_HOOKS_ROUTE; void whHookDialog(null); return; }
     INBOX_KINDS[item.slice(5)]?.add?.open(inboxesCtx(IB.run));
   });
 }
@@ -167,6 +170,7 @@ function toolsRoute(r) {
   if (!parts.length) { pageTools(); return true; }
   if (parts[0] === 'api' && parts[1]) { pageToolApi(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
   if (parts[0] === 'keys') { pageRdTools(); return true; }
+  if (parts[0] === 'webhooks') { pageToolWebhooks(parts[1] || ''); return true; }
   const view = inboxesRoute(parts);
   if (view !== null) { toolsInboxPage(view); return true; }
   pageToolService(parts.join('/'));
