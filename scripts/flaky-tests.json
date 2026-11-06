@@ -1,0 +1,46 @@
+{
+  "tests": [
+    {
+      "id": "backend/tests/test_attempt_contention.py::test_100_attempt_routes_during_heartbeat_and_scheduler",
+      "reason": "Timing budget under a loaded box: failed 4 Release validation runs Nov 3-5 and passed between them.",
+      "owner": "BotOps",
+      "added": "2026-11-06",
+      "expires": "2026-11-20"
+    },
+    {
+      "id": "backend/tests/test_attempt_contention_scale.py::test_busy_install_routes",
+      "reason": "Timing budget under a loaded box: failed 4 Release validation runs Nov 3-4 and passed between them.",
+      "owner": "BotOps",
+      "added": "2026-11-06",
+      "expires": "2026-11-20"
+    },
+    {
+      "id": "backend/tests/test_sql_scale.py::test_bot_and_member_reads_stay_under_five_seconds_on_production_sized_history",
+      "reason": "Five-second wall-clock cap on a production-sized history: failed 3 Release validation runs Nov 4-5 and passed between them.",
+      "owner": "BotOps",
+      "added": "2026-11-06",
+      "expires": "2026-11-20"
+    },
+    {
+      "id": "ui/tests/google-tab.cjs",
+      "reason": "Browser script about 250 s per failure: failed 4 Release validation runs Nov 4 and Nov 6 and passed between them.",
+      "owner": "BotOps",
+      "added": "2026-11-06",
+      "expires": "2026-11-20"
+    },
+    {
+      "id": "ui/tests/chat-send-signin.cjs",
+      "reason": "Browser script about 300 s per failure: failed 2 Release validation runs Nov 5 and passed on the next runs.",
+      "owner": "BotOps",
+      "added": "2026-11-06",
+      "expires": "2026-11-20"
+    },
+    {
+      "id": "scripts/tests/test_image_pins.py::test_every_pin_has_a_wheel_for_the_images_python",
+      "reason": "PyPI connection reset while it checked the wheels (Nov 4): a network flake.",
+      "owner": "DevOps Engineer",
+      "added": "2026-11-06",
+      "expires": "2026-11-20"
+    }
+  ]
+}

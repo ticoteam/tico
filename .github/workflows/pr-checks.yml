@@ -217,6 +217,8 @@ jobs:
       - name: Install (five minutes per attempt, one retry)
         timeout-minutes: 11
         run: bash scripts/ci_install.sh python && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.0
+      - name: Flaky test ledger (owner, reason, exit date; stdlib only)
+        run: python3 scripts/flaky_ledger.py --base "$BASE_SHA"
       - name: Python lint
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" LINT_BASE_REF="$BASE_SHA" bash scripts/lint.sh
       - name: Boundary types
