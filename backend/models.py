@@ -1676,6 +1676,53 @@ class SkillCopy(Contract):
     to: list[Slug] = Field(min_length=1, max_length=20)
 
 
+class SkillFile(Contract):
+    """One text file of a skill folder. Its path and size are checked by the rules in clients/skills.py, not here."""
+    path: str
+    content: str
+
+
+class SkillSource(Contract):
+    """Where a proposal came from, as the proposer names it; the server says who proposed it (backend/skills.py)."""
+    repo_path: str | None = Field(default=None, max_length=300)
+    url: str | None = Field(default=None, max_length=500)
+
+
+class SkillPropose(Contract):
+    name: str
+    files: list[SkillFile]
+    source: SkillSource | None = None
+    note: str = Field(default="", max_length=200)
+    base_version: int | None = Field(default=None, ge=1)
+    task_id: str | None = Field(default=None, max_length=200)
+
+
+class SkillApprove(Contract):
+    acknowledged: bool = False
+
+
+class SkillDecline(Contract):
+    reason: str = Field(min_length=1, max_length=300)
+
+
+class SkillInstall(Contract):
+    target_type: Literal["Bot", "Human"]
+    target_id: ID
+    version_policy: Literal["latest", "pinned"] = "latest"
+    pinned_version: int | None = Field(default=None, ge=1)
+
+
+class SkillTarget(Contract):
+    target_type: Literal["Bot", "Human"]
+    target_id: ID
+
+
+class SkillInstallBulk(Contract):
+    targets: list[SkillTarget] = Field(min_length=1, max_length=200)
+    version_policy: Literal["latest", "pinned"] = "latest"
+    pinned_version: int | None = Field(default=None, ge=1)
+
+
 class BotCoOwners(Contract):
     """Add or remove people who own a bot (its creator is the first)."""
     add: list[ID] = Field(default_factory=list, max_length=50)
