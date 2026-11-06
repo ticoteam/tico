@@ -61,7 +61,8 @@ def test_the_owner_run_now_creates_a_run(environment):
 
 def test_a_person_who_is_not_above_the_assistant_does_not_see_the_sweep(environment):
     api, aid = _installed(environment)
-    quinn = as_person(api, "quinn")
+    as_person(api, "quinn")                    # registers the identity; its token is "quinn"
+    quinn = "quinn"
     assert aid not in _listed_ids(api, quinn)
     assert _call(api, "GET", f"automations/{aid}", quinn, expected=403)
     assert _call(api, "PATCH", f"automations/{aid}", quinn, {"enabled": False}, expected=403)
