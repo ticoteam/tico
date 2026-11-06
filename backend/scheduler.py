@@ -155,6 +155,15 @@ def run_thread_bot_digest(store, auth, at, failures=None):
         run.did(SR.words_of(woken, "bot", "No bot digests"), quiet=not woken)
 
 
+def run_skill_usage_rollup(store, auth, at, failures=None):
+    # Skill uses folded into daily counts and raw uses past 90 days deleted (backend/skill_usage.py). Plain code;
+    # nothing new is a quiet run.
+    from . import skill_usage
+    with SR.recording(store, "skill_usage_rollup", failures, "skills") as run:
+        said = skill_usage.words(skill_usage.run(store, at))
+        run.did(said or "Nothing new", quiet=not said)
+
+
 def run_thread_retention(store, auth, at, failures=None):
     # Threads that keep their messages for a set time lose what is past it (backend/thread_retention.py), in short
     # batches. Plain code; nothing past its time is a quiet run.
@@ -175,7 +184,8 @@ FIXED = {"bookkeeper_watch": (run_bookkeeper_watch, timedelta(days=1)),
          "thread_followups": (run_thread_followups, timedelta(minutes=15)),
          "thread_digest": (run_thread_digest, timedelta(hours=1)),
          "thread_bot_digest": (run_thread_bot_digest, timedelta(hours=1)),
-         "thread_retention": (run_thread_retention, timedelta(minutes=15))}
+         "thread_retention": (run_thread_retention, timedelta(minutes=15)),
+         "skill_usage_rollup": (run_skill_usage_rollup, timedelta(hours=1))}
 
 
 def run_now(store, auth, key, actor):

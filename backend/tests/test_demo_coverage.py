@@ -40,6 +40,8 @@ PAGES = {
     "docs": page("docs", "docs"),
     "library": page("docs", "docs"),
     "files": page("files", "files"),
+    # Library › Skills (ui/app/skills.js): the directory, its usage and proposals (backend/demo_sections/skills.py).
+    "skills": page("skills", "skills"),
     "tools": page("tools", "integrations"),
     # The Tools page's one list (backend/api_tools.py); the old Connections row maps here until the nav drops it.
     "connections": page("tool-index", "rows"),
@@ -174,3 +176,12 @@ def test_mail_settings_have_a_read_grant_and_keep_owner_routing(api):
     grant = api.get("/api/v2/postal/addresses/all/grants").json()["grants"][0]
     assert (grant["grantee_id"], grant["level"]) == ("legal-review", "read")
     assert api.get("/api/v2/postal/settings").json()["settings"]["legal_bot_id"] is None
+
+
+def test_skills_page_has_usage_proposals_and_an_unused_install(api):
+    usage = api.get("/api/v2/skills/usage", params={"days": 30}).json()["skills"]
+    assert all(row["uses"] for row in usage) and any(row["top"] for row in usage)
+    pending = api.get("/api/v2/skills/proposals", params={"status": "pending"}).json()["proposals"]
+    assert {p["screen_status"] for p in pending} == {"pending", "screened"}
+    states = {i["coverage"] for i in api.get("/api/v2/skills/refund-check/usage").json()["installs"]}
+    assert {"used", "unused"} <= states

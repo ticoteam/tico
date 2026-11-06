@@ -156,6 +156,8 @@ ACTIONS = {
                             ("loop", "guard", "capped", "paused", "resume", "wake", "thread", "bots")),
     "purge_thread_messages": ("delete messages past the time their thread keeps them, with what was copied from them",
                               ("retention", "purge", "delete", "thread", "messages", "keep")),
+    "roll_up_skill_usage": ("fold skill uses into daily counts and delete raw uses older than 90 days",
+                            ("skills", "usage", "rollup", "retention", "delete")),
     "email_digest": ("email a person once an hour the threads they follow on digest that have new messages: titles, "
                      "unread counts and links, never the messages", ("email", "digest", "unread", "thread", "notify")),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
@@ -398,6 +400,10 @@ JOBS = [
         "Deletes messages past the time their thread keeps them, with what was copied from them, in short batches. Plain "
         "code: nothing past its time is a quiet run.",
         HOUSEKEEPING, "Every 15 minutes", 900, then=("purge_thread_messages",)),
+    Job("skill_usage_rollup", "Skill usage",
+        "Folds skill uses into daily counts for Library › Skills and deletes raw uses older than 90 days. Plain code: "
+        "nothing new is a quiet run.",
+        HOUSEKEEPING, "Hourly", 3600, then=("roll_up_skill_usage",)),
     Job("invariant_checks", "Production checks",
         "Reads a few production invariants in plain code and shows each failing one on Health. Check health files each "
         "one as a BotOps task, closed when the check passes.",
@@ -572,7 +578,8 @@ CONTROLS = {
 # Last runs read by backend/scheduler.py (QUICK and FIXED).
 QUICK_KEYS = ("kpi_asks", "ask_deadlines", "task_manager_report",
               "bookkeeper_check", "bookkeeper_watch",
-              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention")
+              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention",
+              "skill_usage_rollup")
 
 
 def zone():

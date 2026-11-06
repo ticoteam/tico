@@ -160,6 +160,7 @@ Check health runs as a [Maintenance](maintenance.md) step. It has no separate Sy
 | **Start fresh when the topic changes** | Starts a fresh session, like Clear, when a direct-chat message changes the topic. | When it happens |  |
 | **Paused bot replies** | Lets bot replies the loop guard paused in a thread go, as many as its hour has room for. | Every 10 seconds | |
 | **Thread retention** | Deletes messages past the time their thread keeps them, in short batches. | Every 15 minutes | |
+| **Skill usage** | Folds skill uses into daily counts for Library › Skills and deletes raw uses older than 90 days. | Hourly | |
 | **Production checks** | Reads a few production invariants in plain code and shows each failing one on Health. | Every 15 minutes | |
 | **Thread routing** (AI) | Wakes the bots a person's unaddressed thread message is for, three at most. | As messages arrive | |
 | **Thread ranking** (AI) | Gives each thread with new messages in the last 14 days a level from 1 to 10, for the threads API's `sort=important` order. In that order a thread that needs attention comes first, whatever its level. A thread is ranked at most once an hour, and at most 20 threads a pass and 40 an hour. A thread never ranked sits at 5; a failed call keeps its last level. That order otherwise leaves out level 1 threads, threads of finished tasks, and task threads no person owns or asked for. It also stops for the day once the server's Decide calls reach 80% of the bots' daily call budget, so the checks that act on tasks keep room. | Every 5 minutes | |
