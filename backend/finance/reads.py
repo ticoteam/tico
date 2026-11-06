@@ -37,12 +37,14 @@ from .store import access as SA
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import ads as SAD
 from .store import ap as SAP
 from .store import catalog as SC
 from .store import raw_totals as SR
 from .store import tico as ST
 
 UNATTRIBUTED = "Unattributed"
+NOT_IN_VIEW = "Not in your view."     # a budget the viewer may not see, as if there were none
 # Reserved row keys. Every real key is stripped (V.opt_text, L.name_key, SAP.vendor_key), so none starts with a space:
 # a vendor named Other or Unattributed is its own row, never one of these.
 OTHER = " other"                  # the folded "Other · n" row
@@ -500,7 +502,7 @@ def _spent(trees: Sequence[tuple[date, date, _Seen]], b: B.Budget, p: date, q: d
         lo, hi = max(sa, p), min(sz, q)
         if lo <= hi:
             read = budgeting.Netted(seen.view)
-            total += budgeting.actual(seen.ctx, b, lo.isoformat(), hi.isoformat(), read=read)
+            total += budgeting.actual(seen.ctx, b, lo.isoformat(), hi.isoformat(), read=read, live=True)
             excluded = excluded or read.excluded
     return total, excluded
 
@@ -1075,7 +1077,8 @@ def _state_row(s: _Seen, b: B.Budget, st: B.State) -> Row:
             "remaining": None if cut else st.remaining, "pct": None if cut or st.pct is None else str(st.pct),
             "crossed_warn": None if cut else st.crossed_warn, "at_limit": None if cut else st.at_limit,
             "period_start": st.period_start, "period_end": st.period_end,
-            "excluded": st.excluded and not cut}
+            "excluded": st.excluded and not cut,
+            "pace_end": None if cut else st.pace_end, "spent_from": st.spent_from, "as_of": st.as_of}
 
 
 def _budget_row(b: B.Budget) -> Row:
@@ -1093,7 +1096,9 @@ def _visible(s: _Seen, include_inactive: bool) -> list[B.Budget]:
 def budgets(c: sqlite3.Connection, viewer: str, *, include_inactive: bool = False, limit: int = 200,
             at: str | None = None, on: str | None = None) -> Row:
     """Every budget the viewer sees, with where it stands today, or in the period holding the day `on` (past or
-    future): the amount of the version in effect then, and that period's spend and holds."""
+    future): the amount of the version in effect then, and that period's spend and holds. Spend is read live
+    (budgeting's module docstring): in open months the ad platforms' daily spend stands in for their card charges, and
+    each row says its `platform` and its state `pace_end`, `spent_from` and `as_of`."""
     s = _open(c, viewer, at)
     day = dates.day(on) if on else dates.day(s.ctx.today)
     seen = _visible(s, include_inactive)
@@ -1102,10 +1107,11 @@ def budgets(c: sqlite3.Connection, viewer: str, *, include_inactive: bool = Fals
     rows: list[Row] = []
     netted = False
     for b in seen[:most]:
-        st = budgeting.state(s.ctx, b.id, day, read=budgeting.Netted(s.view))
+        st = budgeting.state(s.ctx, b.id, day, read=budgeting.Netted(s.view), live=True)
         state_row = _state_row(s, b, st)
         netted = netted or bool(state_row["excluded"])
-        rows.append({**_budget_row(b), "state": state_row, "card_limits": b.id in carded})
+        rows.append({**_budget_row(b), "platform": budgeting.budget_platform(s.ctx, b), "state": state_row,
+                     "card_limits": b.id in carded})
     return {"budgets": rows, "more": len(seen) > most, "on": day.isoformat(), "view_version": s.view.version,
             "excluded": netted}
 
@@ -1113,7 +1119,8 @@ def budgets(c: sqlite3.Connection, viewer: str, *, include_inactive: bool = Fals
 def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str | None = None,
                      period: str = "month", *, limit: int = 200, at: str | None = None) -> Row:
     """Each visible budget's amount and actual spend per period bucket (a monthly budget prorated over days or
-    weeks)."""
+    weeks). Closed months read the books; open ones read ad spend live (budgeting's module docstring), and
+    `platform_as_of` says when the platforms were last read."""
     s = _open(c, viewer, at)
     if period not in dates.BUCKETS:
         raise invalid(f"period is {'|'.join(dates.BUCKETS)}")
@@ -1140,7 +1147,7 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
         # Judged on each month's own tree: a private line can sit under this budget in a closed month and not now.
         cut = any(private_scope(x.ctx, viewer, b) for _, _, x in trees)
         spent = None if cut else [_spent(trees, b, p, q) for p, q in buckets]
-        rows.append({**_budget_row(b),
+        rows.append({**_budget_row(b), "platform": budgeting.budget_platform(s.ctx, b),
                      "budget": [B.in_window(b, versions[b.id], q, s.ctx.book.fiscal_year_start) for q in buckets],
                      "actual": None if spent is None else [amt for amt, _ in spent],
                      "excluded": spent is not None and any(out for _, out in spent)})
@@ -1149,6 +1156,7 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
                         for p, q in buckets],
             "budgets": rows, "more": len(seen) > most, "view_version": s.view.version,
             "excluded": any(r["excluded"] for r in rows),
+            "platform_as_of": SAD.last_import(c),
             "imported": tab.imported_months(c, s.ctx, s.view, a.isoformat()[:7], z.isoformat()[:7],
                                              s.ctx.book.basis),
             "snapshot": snap}
@@ -1250,12 +1258,14 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
     if name in ("budget_remaining", "budget_pct_used"):
         b = s.ctx.budgets().get(budget_id or "")
         if b is None or not sees_budget(s.ctx, viewer, b):
-            raise FinanceError(NOT_FOUND, "no such budget")
-        row = _state_row(s, b, budgeting.state(s.ctx, b.id, today, read=budgeting.Netted(s.view)))
-        if name == "budget_remaining":
-            return {**base, "value": row["remaining"], "unit": "minor", "currency": currency,
+            raise FinanceError(NOT_FOUND, NOT_IN_VIEW)
+        row = _state_row(s, b, budgeting.state(s.ctx, b.id, today, read=budgeting.Netted(s.view), live=True))
+        ads: Row = {"pace_month_end": row["pace_end"], "spent_from": row["spent_from"],
+                    "platform": budgeting.budget_platform(s.ctx, b), "platform_as_of": row["as_of"],
                     "excluded": row["excluded"]}
-        return {**base, "value": row["pct"], "unit": "percent", "excluded": row["excluded"]}
+        if name == "budget_remaining":
+            return {**base, "value": row["remaining"], "unit": "minor", "currency": currency, **ads}
+        return {**base, "value": row["pct"], "unit": "percent", **ads}
     if name in ("cash", "runway_months"):
         if not (s.view.everything or s.view.balance_sheet or s.view.bs_lines):
             raise denied("cash is on the balance sheet, the owner's unless granted")

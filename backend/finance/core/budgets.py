@@ -80,6 +80,9 @@ class State:
     crossed_warn: bool              # spend reached the warn level
     at_limit: bool                  # spend reached the amount (the cutoff)
     excluded: bool = False          # a budget read netted out settled private lines (marked excluded)
+    pace_end: int | None = None     # the period's spend at today's daily rate (month and quarter budgets)
+    spent_from: str = "books"       # a live read: books | platform (ad platforms' daily spend) | mixed
+    as_of: str | None = None        # a live read: the platforms' last import, when their spend counts
 
 
 @dataclass(frozen=True)

@@ -15,7 +15,7 @@ PLATFORMS = ("google_ads", "meta_ads")
 # The tool service (backend/tool_services.py) each platform imports from.
 SERVICE = {"google_ads": "google-ads", "meta_ads": "meta-ads"}
 PLATFORM_OF = {v: k for k, v in SERVICE.items()}
-LABEL = {"google_ads": "Google Ads", "meta_ads": "Meta"}
+LABEL = {"google_ads": "Google Ads", "meta_ads": "Meta Ads"}
 
 
 @dataclass(frozen=True)
@@ -145,7 +145,7 @@ def deactivate_missing(c: sqlite3.Connection, tool_id: str, seen: Iterable[str],
     """Accounts the login no longer sees stop counting (their spend stays for the record)."""
     keep = sorted(set(seen))
     marks = ",".join("?" * len(keep))
-    c.execute(f"UPDATE fin_ad_accounts SET active=0, updated_at=? WHERE tool_id=? AND active=1"
+    c.execute("UPDATE fin_ad_accounts SET active=0, updated_at=? WHERE tool_id=? AND active=1"
               + (f" AND external_id NOT IN ({marks})" if keep else ""), (at, tool_id, *keep))
 
 
@@ -243,3 +243,25 @@ def warned(c: sqlite3.Connection, budget_id: str, period_key: str) -> set[str]:
         return set()
     return {str(r[0]) for r in c.execute("SELECT level FROM fin_ad_warnings WHERE budget_id=? AND period_key=?",
                                          (budget_id, period_key))}
+
+
+# ------------------------------------------------------------------------------------------------ what budgets read
+def rollup_vendors(c: sqlite3.Connection, book_id: str, start: str, end: str) -> list[str]:
+    """Every vendor key a posted line carries in [start, end]: the keys a live budget read sorts into platform vendors
+    (budgeting.ad_platform) and the rest."""
+    return [str(r[0]) for r in c.execute("SELECT DISTINCT vendor FROM fin_rollups WHERE book_id=? AND day>=? AND day<=? "
+                                         "AND vendor<>''", (book_id, start, end))]
+
+
+def card_holds(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end: str) -> list[tuple[int, str]]:
+    """(amount, merchant) of each card authorization hold in the window still counting on these budgets (held, or
+    settled with no entry yet: what store/budgets.held counts), for a live read to take the ad platforms' out."""
+    if not budget_ids:
+        return []
+    marks = ",".join("?" * len(budget_ids))
+    rows = c.execute(
+        "SELECT CASE WHEN h.status='held' THEN h.amount ELSE COALESCE(h.settled_amount, 0) END, "
+        "COALESCE(f.counterparty, '') FROM fin_holds h LEFT JOIN fin_feed_txns f ON f.id=h.source_id "
+        f"WHERE h.budget_id IN ({marks}) AND h.source='card' AND h.held_on>=? AND h.held_on<=? "
+        "AND (h.status='held' OR (h.status='settled' AND h.entry_id IS NULL))", (*budget_ids, start, end))
+    return [(int(r[0]), str(r[1])) for r in rows]
