@@ -95,7 +95,7 @@ HQ or the server gives.
 | Didn't start (*code*): trying again | HQ refused to make or start the machine. Tico waits 15 seconds after the first refusal, twice as long after the next, and so on, up to 15 minutes. |
 | Couldn't be made or started (*code*): trying again | Something on the server failed during one of Tico's looks at the machine, for example while it was made or started. Tico tries again on each look, about every 10 seconds. |
 | Started, but its work did not run there | Tico started the machine for the bot's work, and the work did not run on it. |
-| Made, but it never connected to this server | Three machines in a row never connected, so Tico makes no more until one connects or a person changes the machine's settings. |
+| Made, but it never connected to this server | Three machines in a row never connected, so Tico makes no more until one connects or a person chooses **Replace machine**. |
 
 The other problems clear once the machine can start again.
 
