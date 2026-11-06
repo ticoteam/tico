@@ -216,7 +216,8 @@ def test_validation_is_dispatch_only_and_keeps_the_title_release_yml_finds():
 def test_window_triggers_match_the_script_and_every_acting_job_shares_one_lane():
     from scripts import release_train
     train, on = _workflow("train.yml")
-    assert [entry["cron"] for entry in on["schedule"]] == release_train.CRONS
+    assert [entry["cron"] for entry in on["schedule"]] == [*release_train.CRONS, release_train.BACKSTOP_CRON]
+    assert train["jobs"]["guard"]["steps"][-1]["env"]["SCHEDULE"] == "${{ github.event.schedule }}"
     assert on["push"] == {"branches": ["main"]}
     assert on["workflow_run"] == {"workflows": ["Release validation"], "types": ["completed"], "branches": ["main"]}
     assert "workflow_dispatch" in on and "concurrency" not in train

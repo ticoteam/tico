@@ -11,6 +11,7 @@ The workflows (.github/workflows/train.yml, hotfix.yml) call it. Environment:
 
     GITHUB_TOKEN, GITHUB_REPOSITORY        the Actions token and repository
     GITHUB_EVENT_NAME                      schedule, push, workflow_run or workflow_dispatch
+    SCHEDULE                               schedule only: the cron that fired (a window cron, or the backstop)
     RUN_EVENT, RUN_CONCLUSION, RUN_TITLE,  workflow_run only: the Release validation run that finished
     RUN_URL
     CANARY_URL, CANARY_UPDATE_KEY          the canary install (Tico Team) and its update key (docs/service-keys.md)
@@ -46,6 +47,9 @@ ROLLOUT_PATH = ROOT / "templates/catalog/release-notes/software/rollout.py"
 # that only delays the promotion, because a push or a finished run inside the window acts on its own.
 WINDOWS = ((14, 30), (22, 0))
 CRONS = ["30 14 * * *", "0 22 * * *"]
+# A backstop for a missed event (a workflow_run that does not fire, say): it takes a step in an open window like a push
+# does, and never opens one, so it never promotes.
+BACKSTOP_CRON = "*/20 * * * *"
 STABLE_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 TITLE = re.compile(r"^Validate ([0-9a-f]{40}) as (v\S+) from (v\S+)$")
 UNFINISHED = {"queued", "pending", "waiting", "requested", "in_progress"}
@@ -449,7 +453,9 @@ def cmd_guard(gh, env, now):
     """Read-only, outside the release concurrency group: decides whether the release job runs at all, so a push that
     finds nothing to do never enters the `release` environment or queues behind (or displaces) a hotfix."""
     event = env.get("GITHUB_EVENT_NAME", "")
-    go, opening = False, event in ("schedule", "workflow_dispatch")
+    # Only a window cron (or a manual run) opens a window; the backstop, or a cron this does not know, acts like a push.
+    opening = event == "workflow_dispatch" or (event == "schedule" and env.get("SCHEDULE", "") in CRONS)
+    go = False
     if event != "workflow_dispatch" and env.get("RELEASE_TRAINS", "").strip() != "on":
         note("Release windows are off (repository variable RELEASE_TRAINS is not `on`)")
     else:
@@ -459,7 +465,7 @@ def cmd_guard(gh, env, now):
             opening = False
         elif opening:
             go = True
-            note("Window step: %s" % ("scheduled window open" if event == "schedule" else "manual run"))
+            note("Window step: %s" % ("window opens (%s)" % env.get("SCHEDULE") if event == "schedule" else "manual run"))
         else:
             plan = plan_step(gh, now, event_run(env))
             go = plan["action"] in ("ship", "dispatch") or bool(plan["red"])

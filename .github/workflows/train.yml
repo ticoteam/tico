@@ -2,7 +2,8 @@
 # 15:00 in Los Angeles in daylight time, 06:30 and 14:00 in standard time) and stays open until a vX.Y.Z release is
 # published after it. Nothing is stored: each run works the window out from GitHub (scripts/release_train.py).
 #   - At the open (schedule) or on a manual run: promote canary (Tico Team) to stable (TIDY) when the bake gate passes.
-#   - While open, on the open, on every push to main and whenever a Release validation run finishes: ship the first green
+#   - While open, on the open, on every push to main, whenever a Release validation run finishes, and every 20 minutes as
+#     a backstop for a missed event (it never opens a window or promotes): ship the first green
 #     candidate (tag it, publish it with release.yml, update the canary), which closes the window; otherwise, when no
 #     validation is running and main's head has none yet, validate main's head as the next patch (ci.yml).
 #   - A red candidate keeps the window open and goes on the one `release-train` issue; a window that ships closes it.
@@ -13,6 +14,7 @@
 name: Release window
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch' && format('Release window (manual, {0})', github.actor)
+  || github.event_name == 'schedule' && github.event.schedule == '*/20 * * * *' && 'Release window check'
   || github.event_name == 'schedule' && 'Release window opens'
   || github.event_name == 'workflow_run' && format('Release window: {0}', github.event.workflow_run.display_title)
   || format('Release window: push {0}', github.sha) }}
@@ -21,6 +23,7 @@ on:
   schedule:
     - cron: '30 14 * * *'
     - cron: '0 22 * * *'
+    - cron: '*/20 * * * *'    # backstop: a step in an open window if an event was missed; never opens one
   push:
     branches: [main]
   workflow_run:
@@ -54,6 +57,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_TRAINS: ${{ vars.RELEASE_TRAINS }}
+          SCHEDULE: ${{ github.event.schedule }}
           RUN_EVENT: ${{ github.event.workflow_run.event }}
           RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           RUN_TITLE: ${{ github.event.workflow_run.display_title }}

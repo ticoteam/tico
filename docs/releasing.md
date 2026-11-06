@@ -62,6 +62,8 @@ Tico's own releases (ticoteam/tico) ship from two windows a day, run by `.github
   past the newest release, Release validation (`ci.yml`) is dispatched for main's head as the next patch.
 - **The first green candidate ships.** When a validation of this window goes green, the window tags that commit,
   publishes it (`release.yml`, dispatched on the tag) and updates the canary. That closes the window.
+- **Notes.** When a release publishes, the monitoring Release Manager files the Technical Writer's "Release notes for
+  vX.Y.Z" task.
 - **A red candidate keeps the window open.** The failure goes on the one open `release-train` issue. Each push to
   main while the window is open validates the new head, one validation at a time. A red head waits for the next push;
   it is not run again. A window still red at the next open carries on. The next window that ships closes the issue.
@@ -77,7 +79,9 @@ Tico's own releases (ticoteam/tico) ship from two windows a day, run by `.github
   even with `RELEASE_TRAINS` off. `python3 scripts/release_train.py status` (with `GITHUB_TOKEN`, and the install
   variables to see them) shows the window, the next step and what each install runs.
 
-Triggers: the two schedules, every push to main, every finished Release validation run, and a manual run. A small
+Triggers: the two window schedules, every push to main, every finished Release validation run, a manual run, and a
+backstop schedule every 20 minutes that takes a step in an open window if an event was missed (it never opens a
+window or promotes). A small
 read-only job decides first, so a push with nothing to do ends in seconds. Every job that acts (the window job and
 the hotfix) shares one concurrency group, so two never start a build or a release at once.
 

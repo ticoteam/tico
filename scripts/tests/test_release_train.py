@@ -228,8 +228,13 @@ def guard(gh, env, tmp_path, monkeypatch):
 
 def test_guard_runs_the_window_job_only_when_it_has_work(tmp_path, monkeypatch):
     on = {"RELEASE_TRAINS": "on"}
-    assert guard(FakeGitHub(), dict(on, GITHUB_EVENT_NAME="schedule"), tmp_path, monkeypatch) == {
-        "go": "true", "open": "true"}
+    assert guard(FakeGitHub(), dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.CRONS[0]), tmp_path,
+                 monkeypatch) == {"go": "true", "open": "true"}
+    # The backstop takes a step in an open window like a push, never opens one (no promotion), and idles otherwise.
+    backstop = dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON)
+    assert guard(FakeGitHub(), backstop, tmp_path, monkeypatch) == {"go": "true", "open": "false"}
+    closed = FakeGitHub([run(C)], published=OPENED + timedelta(minutes=40))
+    assert guard(closed, backstop, tmp_path, monkeypatch) == {"go": "false", "open": "false"}
     assert guard(FakeGitHub(), dict(on, GITHUB_EVENT_NAME="push"), tmp_path, monkeypatch) == {
         "go": "true", "open": "false"}
     busy = FakeGitHub([run(C, status="in_progress", conclusion=None)])
