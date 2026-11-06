@@ -17,7 +17,21 @@ included, run `npm ci && npx playwright install chromium` and install `backend/r
 first: runner images ship neither. Without Google Chrome, set `TICO_BROWSER_CHANNEL=` (empty) so the scripts use
 Playwright's Chromium. On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
 the parallel suite is the release check's job on a full-size machine. The PR checks
-workflow runs, on pull requests to main, the tests a measured static dependency map (imports, plus files run or read by path) says use the change, and skips the Caddy image job unless the change reaches it; a docs page, CHANGELOG.md or GitHub file runs the tests that read it; dependency, conftest, pytest.ini and deleted or unparsable files fall back to the full default Python and core browser suites. Draft pull requests run no checks until marked ready for review; a skipped run is not a pass, so merge only once the ready-for-review run's checks show passing. Main has no PR-check run of its own: its pull requests and Release validation test it (a newer push cancels a pull request's superseded run). Checks run on RunsOn Spot VMs (4 vCPU) in Tico's own AWS account; fork PRs use GitHub-hosted runners. Python and browser groups are sized from the latest successful Release validation run's per-file and per-script timings (collected counts until timings exist) so each VM finishes in about 5 minutes (`TICO_CI_JOB_SECONDS`, 300), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt downloads on warm PR runs; each Install attempt is limited to five minutes, with one retry. The PR job timings check links the per-job timing receipt. Runner/harness changes also run conformance, including slow tests; unclassified UI changes run all browser scripts. The manually dispatched Release validation workflow runs the full release gate across isolated
+workflow runs only the cheap checks (lint, generated types, the wire contract, workflows, shell scripts) on each push to a
+pull request, on free GitHub-hosted runners; `checks` is the one required check. The merge queue runs the tests, once per
+queue group on the merged result, on RunsOn Spot VMs (4 vCPU; x64 labels take the m, c and r families of generations 6–8) in Tico's own AWS account: the tests a measured static
+dependency map (imports, plus files run or read by path) says use the change, the Caddy image job when the change reaches
+it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page,
+CHANGELOG.md or GitHub file runs the tests that read it; dependency, conftest, pytest.ini and deleted or unparsable files
+fall back to the full default Python and core browser suites. Draft pull requests run no checks until marked ready for
+review; a skipped run is not a pass. Main has no check run of its own: the queue tests each change before it lands, and
+Release validation tests each candidate. Agents run the tests they touched with `scripts/remote.py` before marking a PR
+ready. A newer push cancels a pull request's superseded run; a queue group is never canceled. Hosted PR runs cannot read
+RunsOn's cache, so they start cold. Python and browser groups are sized from the latest successful Release validation
+run's per-file and per-script timings (collected counts until timings exist) so each VM finishes in about 5 minutes
+(`TICO_CI_JOB_SECONDS`, 300), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt
+downloads on warm queue runs; each Install attempt is limited to five minutes, with one retry. The PR job timings check
+on a queue run links the per-job timing receipt. Runner/harness changes also run conformance, including slow tests; unclassified UI changes run all browser scripts. The manually dispatched Release validation workflow runs the full release gate across isolated
 RunsOn Linux VMs for an explicit immutable candidate SHA. It never runs on a schedule; the release windows dispatch it (docs/releasing.md#release-windows). The default Python suite runs in parallel in about a minute and the whole
 default run (pytest plus core UI) in about 2 minutes; `python scripts/release_checks.py` runs both and records time and
 load. On a computer several bots share, start a full suite, the browser scripts or a cargo build through
@@ -45,8 +59,10 @@ never ship around a known failure. If a test may fail, it shouldn't exist.
 Run scripts/check.sh before pushing; `git config core.hooksPath .githooks` runs it on every push.
 
 ## How we work
-Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The author merges when checks are
-green and the PR is reviewed. A red release candidate caused by your merge is your top priority. Releases ship from
+Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The author marks the PR ready for
+review once the tests they touched pass with `scripts/remote.py`, then merges with `gh pr merge <N> --merge` once it is
+reviewed (`--auto` works too): main's merge queue runs the full selected checks on the merged result before it lands.
+PR checks on each push are lint only. A red release candidate caused by your merge is your top priority. Releases ship from
 release windows (weekdays 07:30, 14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00;
 docs/releasing.md#release-windows); never tag. Hotfixes (`hotfix.yml`) are for
 major production issues only. The Release Manager bot no longer tags or rolls out Tico releases; it only monitors.

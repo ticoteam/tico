@@ -4,6 +4,7 @@ from collections import Counter
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -87,7 +88,9 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
     monkeypatch.setattr(checks, "guard_changelog", lambda base: guarded.append(base))
     imaged = []
     monkeypatch.setattr(checks, "image_checks", lambda changed: imaged.append(changed))
-    monkeypatch.setattr(checks, "changed_files", lambda base, only=None: [] if only else ["backend/task_loops.py"])
+    monkeypatch.setattr(
+        checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/task_loops.py"]
+    )
     target = tmp_path / "plan.json"
     timing_dir = tmp_path / "previous" / "pr-python-timings-python-1"
     timing_dir.mkdir(parents=True)
@@ -105,7 +108,7 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
     groups = [j for j in main["matrix"]["include"] if j["suite"].startswith("python-")]
     # 48 measured seconds fit one VM; the time target, not a fixed count, sets the number of groups.
     assert len(groups) == 1 and sorted(sum([j["files"] for j in groups], [])) == sorted(files)
-    monkeypatch.setattr(checks, "changed_files", lambda base, only=None: [] if only else ["conftest.py"])
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["conftest.py"])
     assert checks.prepare("pull_request", "base", target)["python"] is None
     monkeypatch.setattr(checks, "ROOT", tmp_path)
     calls = []
@@ -236,7 +239,7 @@ def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fai
     monkeypatch.setattr(
         checks,
         "changed_files",
-        lambda base, only=None: [] if only else ["relay-rs/src/gateway.rs", "runner-rs/src/state.rs"],
+        lambda base, head="HEAD", only=None: [] if only else ["relay-rs/src/gateway.rs", "runner-rs/src/state.rs"],
     )
     target = tmp_path / "plan.json"
     jobs = checks.prepare("pull_request", "base", target)["matrix"]["include"]
@@ -404,7 +407,9 @@ def test_docs_plan_has_an_explicit_no_test_job_and_never_calls_pytest(tmp_path, 
         both = checks.selection(["backend/task_loops.py", read])["python"]
         assert reader in both and "backend/tests/test_scheduler.py" in both, read
     monkeypatch.setattr(
-        checks, "changed_files", lambda _, only=None: [] if only else ["docs/images/removed.png", "README.md"]
+        checks,
+        "changed_files",
+        lambda _, head="HEAD", only=None: [] if only else ["docs/images/removed.png", "README.md"],
     )
     monkeypatch.setattr(checks, "collect", lambda: pytest.fail("docs must not collect tests"))
     target = tmp_path / "plan.json"
@@ -654,7 +659,9 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     monkeypatch.setattr(checks, "browser_scripts", lambda args: listed.append(args) or names)
     monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_api.py": 1}))
     monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
-    monkeypatch.setattr(checks, "changed_files", lambda base, only=None: [] if only else ["ui/app/core.js"])
+    monkeypatch.setattr(
+        checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["ui/app/core.js"]
+    )
     timings = tmp_path / "durations.json"
     timings.write_text(json.dumps({f"ui/tests/{n}.cjs": 60 for n in names}))
     plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", timings)
@@ -830,15 +837,125 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
         assert any((uses, args) == (r[1], r[2]) and machine in r[3] for r in restored), ident
         assert lookup is True or ident in ("pip", "npm"), ident  # setup-python/node have no lookup-only
     assert "schedule" in warm[True] and warm[True]["push"]["branches"] == ["main"]
-    assert set(pr[True]) == {"pull_request"} and "converted_to_draft" not in pr[True]["pull_request"]["types"]
+    assert set(pr[True]) == {"pull_request", "merge_group"}
+    assert "converted_to_draft" not in pr[True]["pull_request"]["types"]
 
 
-def test_the_receipt_step_cannot_fail_or_cancel_the_timings_gate():
-    import yaml
-
-    job = yaml.safe_load((ROOT / ".github" / "workflows" / "pr-checks.yml").read_text())["jobs"]["timings"]
+def test_the_receipt_step_is_cosmetic_and_nothing_waits_on_the_timings_job():
+    job = workflow_jobs()["jobs"]["timings"]
     steps = {step.get("name"): step for step in job["steps"]}
     receipt_step = steps["Per-job timings linked from the PR check"]
     assert receipt_step["continue-on-error"] is True
     assert receipt_step["timeout-minutes"] * 2 <= job["timeout-minutes"]
-    assert steps["Required checks passed"]["if"] == "always()"
+    assert "timings" not in workflow_jobs()["jobs"]["checks"]["needs"]
+
+
+def workflow_jobs():
+    import yaml
+
+    return yaml.safe_load((ROOT / ".github" / "workflows" / "pr-checks.yml").read_text())
+
+
+def test_a_merge_group_diffs_its_queue_base_to_its_queue_head_not_the_checkout(tmp_path):
+    """GitHub merges a queue group into its base, and that merge commit is the change under test: the diff is base to
+    the group's head, whatever the checkout (HEAD) happens to be."""
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
+        ).strip()
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "app.py").write_text("x = 1\n")
+    git("add", "-A")
+    git("commit", "-qm", "Start")
+    base = git("rev-parse", "HEAD")
+    git("checkout", "-qb", "feature")
+    (tmp_path / "app.py").write_text("x = 2\n")
+    (tmp_path / "new.py").write_text("y = 1\n")
+    git("add", "-A")
+    git("commit", "-qm", "Change")
+    git("checkout", "-q", "main")
+    git("merge", "-q", "--no-ff", "--no-edit", "feature")
+    queue_head = git("rev-parse", "HEAD")
+    git("checkout", "-q", base)  # the checkout is the old base; the group's head is the merge commit
+    assert sorted(checks.changed_files(base, queue_head, root=tmp_path)) == ["app.py", "new.py"]
+    assert checks.changed_files(base, queue_head, root=tmp_path, only="A") == ["new.py"]
+    assert checks.changed_files(base, root=tmp_path) == []
+
+
+def test_a_merge_group_plans_its_own_selection_and_never_runs_the_pull_request_gates(tmp_path, monkeypatch, mapped):
+    files = {"backend/tests/test_task_loops.py": 2, "backend/tests/test_auth.py": 10}
+    monkeypatch.setattr(checks, "collect", lambda: Counter(files))
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a merge queue group is checked from its own base, not from a pull request's merge parent")
+
+    monkeypatch.setattr(checks, "merge_parent", refuse)
+    monkeypatch.setattr(checks, "guard_changelog", refuse)
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    seen = []
+
+    def fake_changed(base, head="HEAD", only=None):
+        seen.append((base, head, only))
+        return [] if only else ["backend/task_loops.py"]
+
+    monkeypatch.setattr(checks, "changed_files", fake_changed)
+    target = tmp_path / "plan.json"
+    plan = checks.prepare("merge_group", "queue-base", target, head="queue-head")
+    assert seen == [("queue-base", "queue-head", None), ("queue-base", "queue-head", "A")]
+    assert plan["reason"] == "measured dependency map" and plan["python"] is not None
+    expected = sorted(set(checks.selection(["backend/task_loops.py"])["python"]) & set(files))
+    assert plan["python"] == expected
+    # An empty group diff falls back to the full suite, as a pull request's does.
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [])
+    assert checks.prepare("merge_group", "queue-base", target, head="queue-head")["python"] is None
+
+
+def test_each_push_runs_only_the_cheap_checks_on_hosted_runners_and_the_queue_runs_the_rest():
+    doc = workflow_jobs()
+    assert doc[True]["merge_group"] == {"types": ["checks_requested"]}
+    assert doc[True]["pull_request"]["types"] == ["opened", "synchronize", "reopened", "ready_for_review"]
+    assert doc["concurrency"]["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+    assert "github.ref" in doc["concurrency"]["group"]
+    pull_request_jobs = {name for name, job in doc["jobs"].items() if "merge_group" not in str(job.get("if", ""))}
+    assert pull_request_jobs == {"plan", "static", "checks"}
+    for name in pull_request_jobs - {"checks"}:
+        runs_on = doc["jobs"][name]["runs-on"]
+        # Only the merge queue takes the RunsOn label; every other event gets the free hosted runner.
+        assert runs_on.startswith("${{ github.event_name == 'merge_group' && format('runs-on={0}/"), name
+        assert runs_on.endswith("|| 'ubuntu-24.04' }}"), name
+    assert doc["jobs"]["checks"]["runs-on"] == "ubuntu-24.04"
+    for name in set(doc["jobs"]) - pull_request_jobs:
+        assert "github.event_name == 'merge_group'" in str(doc["jobs"][name]["if"]), name
+
+
+def test_runner_labels_stay_at_two_or_four_vcpus():
+    """Every RunsOn VM stays at xlarge (4 vCPU) or smaller; each x64 label takes main's instance families (#2834)."""
+    text = (ROOT / ".github" / "workflows" / "pr-checks.yml").read_text()
+    assert set(re.findall(r"runner=(\d+)cpu", text)) <= {"2", "4"}
+    families = re.findall(r"runner=\d+cpu-linux-x64(/family=[^/']+)?/", text)
+    assert len(families) == 6 and set(families) == {"/family=m8+m7+m6+c8+c7+c6+r8+r7"}, families
+    # The Caddy image takes the same families on amd64 only; arm64 keeps its label.
+    assert "matrix.arch != 'arm64' && '/family=m8+m7+m6+c8+c7+c6+r8+r7' || ''" in text
+
+
+def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_skipped_passes():
+    gate = workflow_jobs()["jobs"]["checks"]
+    assert gate["name"] == "checks" and "always()" in gate["if"]
+    needs = set(gate["needs"])
+    assert needs == set(workflow_jobs()["jobs"]) - {"checks", "timings"}
+    env = gate["steps"][0]["env"]
+    names = {key: re.search(r"needs\.([\w-]+)\.result", value).group(1) for key, value in env.items()}
+    assert set(names.values()) == needs
+
+    def exit_code(results):
+        run_env = {**os.environ, **{key: results[name] for key, name in names.items()}}
+        return subprocess.run(["bash", "-c", gate["steps"][0]["run"]], env=run_env, capture_output=True).returncode
+
+    passing = dict.fromkeys(needs, "success")
+    assert exit_code(passing) == 0
+    assert exit_code({**passing, "tests": "skipped", "recorder": "skipped", "caddy-linux": "skipped"}) == 0
+    assert exit_code({**passing, "tests": "failure"}) == 1
+    assert exit_code({**passing, "caddy-linux": "cancelled"}) == 1
+    assert exit_code({**passing, "plan": "skipped"}) == 0

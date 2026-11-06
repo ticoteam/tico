@@ -55,13 +55,15 @@ Loop until nothing is left that you can move:
    plumbing. Before merging, run
    the test files for what you touched, plus the checks the change obviously affects (catalog, docs
    counts, tool parity). Do not run the full suite for a merge: each release gets one full run on its frozen candidate
-   (docs/releasing.md). GitHub Actions builds and publishes: the release windows dispatch Release validation, one exact-SHA full release gate, for main's head (docs/releasing.md#release-windows). Separately, the PR checks workflow runs the tests a change reaches (the default Python suite and core browser scripts when it cannot tell) on every pull request to main that is not a draft. Compare a local
+   (docs/releasing.md). GitHub Actions builds and publishes: the release windows dispatch Release validation, one exact-SHA full release gate, for main's head (docs/releasing.md#release-windows). Separately, the PR checks workflow lints every pull request to main that is not a draft, and the merge queue runs the tests a change reaches (the default Python suite and core browser scripts when it cannot tell) before the change lands. Compare a local
    failure against main before calling it yours.
 4. **PR**: title in plain words; body **What / Why / Surfaces / How it was checked**, and `Closes #<n>`.
    **Surfaces** lists which entries of CLAUDE.md's "Hit every surface" applied and what was done for each.
-5. **Merge** when CI is green and the PR is reviewed: the author merges, with `gh pr merge --merge`. Green means the
-   checks of the run after the pull request was marked ready for review show passing, not skipped: a draft's run skips
-   every job and proves nothing. Outside contributors open the pull request and stop there. Merged changes ship in
+5. **Merge** when the PR is reviewed and the tests you changed pass with `scripts/remote.py`: mark the PR ready for
+   review, then run `gh pr merge <n> --merge` (`--auto` works too). That puts the PR in main's merge queue, which runs
+   the selected checks on the merged result and lands it only if they pass; a red run removes the PR from the queue.
+   Green here means the `checks` of the run after the PR was marked ready show passing, not skipped: a draft's run
+   skips every job and proves nothing. Outside contributors open the pull request and stop there. Merged changes ship in
    the next release window; a red candidate caused by your merge is your top priority.
 6. **Record**: one comment on the ticket (PR, what changed, what you decided); close it if the PR
    did not. Tick it in its project; add any decision to the project's **Decisions** with the date.
