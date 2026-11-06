@@ -2,7 +2,7 @@
 // stand-in for GET /api/v2/market/spend and /market/value-chain and their writes (fixtures only, the Acme example): the
 // tiles; treemap areas follow the sizes; the segment panel shows each estimate with its params, and the owner's param
 // edit posts and reads again while a member sees no edit, research or cite; the Offering/Buyer and basis switches ask
-// for the other read; an unsized market leaves the money out; the value chain draws its layers with their spend; the
+// for the other read; an unsized market offers the owner the sizing form and leaves the money out for anyone else; the value chain draws its layers with their spend; the
 // growth chart draws a dot per segment; old view links scroll to their question; a phone never scrolls sideways; note
 // links and old #/market note links open the map.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots (the page on desktop in light, on a phone in dark).
@@ -205,13 +205,24 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Nothing sized: the money and the tiles are left out, the players fall back to the tracked companies, and an old
-    // Spend link lands on the page.
+    // Nothing sized: the tiles are left out, the players fall back to the tracked companies, and an old Spend link
+    // lands on the page. The owner sizes the market from Where is the money going? (one request, an empty sentence
+    // refused); for anyone else the question is left out.
     for (const role of ['owner', 'member']) {
-      const {page, errors} = await open(browser, {role, route: '#/strategy/market/spend', empty: true});
+      const {page, errors, sent} = await open(browser, {role, route: '#/strategy/market/spend', empty: true});
       await page.locator('#mkt-q-players').waitFor();
-      assert.equal(await page.locator('#mkt-q-money').count(), 0, role);
       assert.equal(await page.locator('.mkt-tiles').count(), 0, role);
+      if (role === 'owner') {
+        const form = page.locator('#mkt-q-money [data-mkt-size]');
+        await form.waitFor();
+        await form.locator('button').click();
+        assert.equal(await form.locator('[data-mkt-error]').isVisible(), true, 'an empty sentence is not sent');
+        await form.locator('#mkt-describe').fill('What offices spend on cleaning');
+        await form.locator('button').dblclick();
+        await page.locator('#mkt-q-money [data-mkt-researching]').waitFor();
+        assert.deepEqual(sent, [['POST', '/api/v2/market/spend/research', {description: 'What offices spend on cleaning'}]], 'one research request');
+        assert.equal(await page.locator('[data-mkt-researching] a').getAttribute('href'), '#/task/task-size');
+      } else assert.equal(await page.locator('#mkt-q-money').count(), 0, role);
       assert.deepEqual(await page.locator('.mkt-pl tbody tr button').allInnerTexts(), ['Acme'], role);
       assert.equal(await page.locator('.mkt-pl tr.us').count(), 1, role + ': our row is marked');
       assert.equal(await page.evaluate(() => location.hash), '#/strategy/market/spend');

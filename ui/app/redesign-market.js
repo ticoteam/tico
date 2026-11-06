@@ -5,7 +5,8 @@
    we up against? (the players in GET /api/v2/market/spend, a row opening its note), How does it reach buyers? (the value
    chain) and What are buyers saying? (Listening's posts per day by source over two weeks and the newest posts sent
    somewhere, GET /api/v2/listening/stats `daily` and `recent`, backend/listening.py timeline). Each question carries
-   the briefing's one-line answer when it has one; a question with nothing to show is left out.
+   the briefing's one-line answer when it has one; a question with nothing to show is left out, except that the owner
+   gets Where is the money going? before anything is sized, to start the sizing.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -160,7 +161,7 @@ async function mountMarketPage(shell) {
   const briefing = latest?.briefing || null, answers = briefing?.answers || {};
   const revenue = rdqRevenue(offering);
   const name = [offering?.name, offering?.definition?.geography].filter(Boolean).join(', ');
-  const sized = mktSized(offering) || mktSized(buyer);
+  const sized = mktSized(offering) || mktSized(buyer), sizing = !sized && !!offering && mktOwner();
   const players = rdqPlayersHtml(offering, companies, briefing, revenue);
   const reach = mktChainHtml(chain, rdqChainMoney(offering, buyer, revenue));
   const heard = !!stats && ((stats.recent || []).length > 0 || (stats.daily || []).some(d => Object.values(d.sources || {}).some(Boolean)));
@@ -169,7 +170,7 @@ async function mountMarketPage(shell) {
   const sections = [
     briefing && rdqSection('changed', 'What changed?', answers.changed,
       `${esc(rdbDate(briefing))} · <button class="linkish" type="button" data-rdb-read>Read</button>`, rdqChangedHtml(briefing)),
-    sized && rdqSection('money', 'Where is the money going?', answers.money, '', '<div id="mkt-money"></div>'),
+    (sized || sizing) && rdqSection('money', 'Where is the money going?', answers.money, '', '<div id="mkt-money"></div>'),
     players && rdqSection('players', 'Who are we up against?', answers.players, tracked ? `${tracked} tracked` : '', players),
     reach && rdqSection('reach', 'How does it reach buyers?', answers.reach, '', reach),
     saying && rdqSection('saying', 'What are buyers saying?', answers.saying,
@@ -180,6 +181,7 @@ async function mountMarketPage(shell) {
       <span class="spacer"></span><a class="ghost" href="${MARKET_MAP}">Open map</a></header>
     ${tiles}${sections.join('') || (tiles ? '' : '<p class="market-none">Nothing here yet.</p>')}</div>`;
   const money = sized ? mktSpend(shell.querySelector('#mkt-money'), {offering, buyer}) : null;
+  if (sizing) mktSizeForm(/** @type {HTMLElement} */ (shell.querySelector('#mkt-money')), offering.definition?.description);
   const chainEl = shell.querySelector('.mkt-chain');
   if (chainEl) mktChainBind(chainEl, chain.edges);
   shell.onclick = ev => {

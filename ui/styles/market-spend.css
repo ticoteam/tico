@@ -51,6 +51,8 @@
 .mkt-seg{display:inline-flex;padding:3px;background:var(--surface2);border-radius:999px}
 .mkt-seg button{border:0;background:none;border-radius:999px;padding:3px 12px;color:var(--muted);font-size:var(--t-sm);font-weight:500;cursor:pointer}
 .mkt-seg button[aria-pressed=true]{background:var(--raised);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.mkt-start{display:grid;gap:8px;max-width:560px}
+.mkt-start input{width:100%}
 .mkt-two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start}
 .mkt-two.solo{grid-template-columns:minmax(0,1fr)}
 .mkt-card .mkt-lab+.mkt-growth{margin-top:8px}

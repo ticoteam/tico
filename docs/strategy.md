@@ -14,7 +14,8 @@ spend. Then five questions, each with a one-line answer the Librarian writes wit
 
 - **What changed?** The latest briefing's items, with their kind and the bets they touch. **Read** opens the briefing.
 - **Where is the money going?** The treemap of spend by offering or by buyer, beside size against growth. A box or a dot
-  opens its arithmetic.
+  opens its arithmetic. Before anything is sized, the owner describes the market in a sentence here and the Librarian
+  sizes it.
 - **Who are we up against?** The players in the segments with what they sell, their revenue and share where known, and
   the briefing's last word on each. A row opens the player's note.
 - **How does it reach buyers?** The value chain, with spend or revenue on each node where known.

@@ -130,6 +130,35 @@ const mktGrowthPts = tree => tree.drawn.filter(g => g.seg.size?.spend_usd != nul
 
 // ------------------------------------------------------------------ Where is the money going?
 
+// Nothing sized yet: the owner describes the market in a sentence and the Librarian sizes it (POST
+// /v2/market/spend/research); the notice then stands in for the form until the sizes arrive.
+function mktSizeForm(host, description) {
+  host.innerHTML = `<form class="mkt-card mkt-start" data-mkt-size novalidate>
+      <label class="mkt-lab" for="mkt-describe">Describe the market in a sentence</label>
+      <input id="mkt-describe" name="description" type="text" maxlength="400" autocomplete="off" value="${esc(description || '')}" placeholder="What small offices spend on cleaning services">
+      <p class="err" data-mkt-error role="alert" hidden></p>
+      <div class="market-start-actions"><button class="primary" type="submit">Size the market</button></div></form>`;
+  const form = /** @type {HTMLFormElement} */ (host.querySelector('[data-mkt-size]'));
+  const line = /** @type {HTMLElement} */ (form.querySelector('[data-mkt-error]'));
+  const submit = /** @type {HTMLButtonElement} */ (form.querySelector('[type=submit]'));
+  form.onsubmit = async ev => {
+    ev.preventDefault();
+    if (submit.disabled) return;
+    const description = /** @type {HTMLInputElement} */ (form.elements.namedItem('description')).value.trim();
+    if (!description) { line.textContent = 'Say what the market is.'; line.hidden = false; return; }
+    line.hidden = true;
+    submit.disabled = true;
+    try {
+      const sent = await post('/v2/market/spend/research', {description});
+      host.innerHTML = `<div class="mkt-card market-researching" data-mkt-researching role="status"><span class="market-spin" aria-hidden="true"></span>
+        <div><strong>On it.</strong>${sent?.task_id ? `<p><a href="#/task/${esc(sent.task_id)}">View task</a></p>` : ''}</div></div>`;
+    } catch (error) {
+      submit.disabled = false;
+      line.textContent = error.message || 'That did not go through.'; line.hidden = false;
+    }
+  };
+}
+
 // `first` holds the page's first reads of both dimensions; the switch shows the ones that are sized.
 function mktSpend(host, first) {
   const dims = [['offering', 'Offering'], ['buyer', 'Buyer']].filter(([key]) => mktSized(first[key]));
