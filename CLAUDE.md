@@ -61,7 +61,7 @@ Run scripts/check.sh before pushing; `git config core.hooksPath .githooks` runs 
 ## How we work
 Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The author marks the PR ready for
 review once the tests they touched pass with `scripts/remote.py`, then merges with `gh pr merge <N> --merge` once it is
-reviewed (`--auto` works too): main's merge queue runs the full selected checks on the merged result before it lands.
+reviewed (`--squash` and `--auto` also enqueue): main's merge queue runs the full selected checks on the merged result before it lands.
 PR checks on each push are lint only. A red release candidate caused by your merge is your top priority. Releases ship from
 release windows (weekdays 07:30, 14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00;
 docs/releasing.md#release-windows); never tag. Hotfixes (`hotfix.yml`) are for

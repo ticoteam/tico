@@ -60,7 +60,7 @@ Loop until nothing is left that you can move:
 4. **PR**: title in plain words; body **What / Why / Surfaces / How it was checked**, and `Closes #<n>`.
    **Surfaces** lists which entries of CLAUDE.md's "Hit every surface" applied and what was done for each.
 5. **Merge** when the PR is reviewed and the tests you changed pass with `scripts/remote.py`: mark the PR ready for
-   review, then run `gh pr merge <n> --merge` (`--auto` works too). That puts the PR in main's merge queue, which runs
+   review, then run `gh pr merge <n> --merge` (`--squash` and `--auto` also enqueue). That puts the PR in main's merge queue, which runs
    the selected checks on the merged result and lands it only if they pass; a red run removes the PR from the queue.
    Green here means the `checks` of the run after the PR was marked ready show passing, not skipped: a draft's run
    skips every job and proves nothing. Outside contributors open the pull request and stop there. Merged changes ship in

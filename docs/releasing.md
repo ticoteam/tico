@@ -349,7 +349,7 @@ slow tests and every browser script, and release candidate validation covers tha
 ## Merge queue
 
 Main takes changes only through its merge queue. Mark the pull request ready for review, then run `gh pr merge <N> --merge`
-(`--auto` works too). The queue adds the pull request to a group, merges the group onto the current main, runs the selected
+(`--squash` and `--auto` also enqueue). The queue adds the pull request to a group, merges the group onto the current main, runs the selected
 checks on that merge commit, and moves main only when they pass.
 
 - **Each push to a pull request** (GitHub-hosted, free): plan, static checks, recorder change detection, and the `checks`

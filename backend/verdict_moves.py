@@ -643,7 +643,7 @@ def merge_text(c, row, pr, head, *, announce=True):
     landing = F.merge_step(c, row["type_id"])
     return (
         f"Ready to merge: {name} cleared PR #{number} at head {head} and CI is green. Merge it under the merge "
-        f"rules (gh pr merge {number} --merge --match-head-commit {head}) and post the MERGED line"
+        f"rules (gh pr merge {number} --squash --match-head-commit {head}) and post the MERGED line"
         + (f"; Tico then moves this ticket to {landing['name']}." if landing else ".")
         + f" {AS_APPROVED}"
     )
