@@ -621,9 +621,9 @@ live shared-room rule as before.
   unread).
 - Homes for bots without a shared room, people and groups are created lazily (`threads.home`).
 - Managers of a bot with legacy history: `threads.open_earlier_messages(c, principal, slug)` clears
-  `legacy_audience` on that Home's messages. The 15-minute follow-ups job (`thread_followups.earlier_sweep`) tells each
-  manager once, in their DM with the bot (`refs.earlier_messages.thread_id`, never a wake), since the Home's readers
-  must not see it; the Home's menu and its Earlier messages row carry the same control.
+  `legacy_audience` on that Home's messages, from the Home's menu or its Earlier messages row. A notice once told each
+  manager, in their DM with the bot (`refs.earlier_messages.thread_id`, never a wake); none is sent now, and an old one
+  still shows its Open button.
 - The reader-set equality fixture asserts, per message, the same readers before and after, and again after a
   roster change.
 - Later, once (`bot_home_merge.run_once`, registry_metadata `bot-chats-to-home`, Nov 3 decision): each person's open
@@ -713,7 +713,7 @@ Thread view (`threads.view(c, viewer, row)`):
  "task_id": null, "created_at": "...", "last_message_at": "...", "archived_at": null,
  "last_seq": 4411, "last_unread_seq": 4400,
  "home": {"actor": "bot:legal"},                 // audience=home only
- "me": {"member": true, "following": true, "notify": "live", "last_read_seq": 4400, "unread": 3,
+ "me": {"member": true, "following": true, "follows": true, "notify": "live", "last_read_seq": 4400, "unread": 3,
         "activity": true, "can_post": true, "can_manage": true, "pinned": false},
  "pinned_for_everyone": false,                   // §10.1
  "dm_with": [{"actor": "human:bea", "name": "Bea"}], "dm_with_count": 1,   // DM roots: the others, at most 4 named
@@ -726,7 +726,8 @@ what is new starts in a sub-thread: the oldest unread message or, with nothing u
 activity (`message_id` null). A row with an open Needs attention item points at the oldest item when a sub-thread holds
 it. No `new_at`: open the root. Following a sub-thread lists its root. `dm_with` names only those the reader may be told
 about: everyone, for someone in the DM; only the teammates they may see, for anyone else. `name` can be empty for a bot
-with no display name.
+with no display name. `me.follows` is whether a message naming nobody reaches the viewer as a follower (§4.3): a
+person who only joined a chat or read it has a following row but is not reached, so the composer still offers Follow.
 
 | Route | Service function |
 |---|---|

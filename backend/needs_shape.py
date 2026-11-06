@@ -16,7 +16,7 @@ ACTIONS = {
     "update": "POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; a question task is "
               "answered by its close (a pick: POST /api/v2/tasks/{task id}/answers with target {task})",
     "decide": "the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or "
-              "/api/v2/stale-review/{row id} for each row; a tidy card, POST /api/v2/memory-tidy/cards/{id}/decide",
+              "/api/v2/stale-review/{row id} for each row",
     "add_reading": "POST /api/v2/kpis/{kpi id}/readings",
     "open": "nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)",
 }
@@ -47,8 +47,6 @@ def needs_item(x, reader):
         return item(x, {"type": "approval", "id": x["id"]}, ("decide",))
     if kind == "stale":
         return item(x, None, ("decide",))
-    if kind == "memory_tidy":
-        return item(x, None, ("decide",), x.get("diary"))
     return item(x, None, ("open",), x.get("first_line") or None)
 
 

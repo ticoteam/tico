@@ -68,6 +68,8 @@ pub struct Runner {
     /// Lane and checkout locks, live turns' lanes, the repositories this computer holds (sessions.rs).
     pub lanes: Arc<crate::sessions::Lanes>,
     pub worktrees: Arc<crate::worktrees::Worktrees>,
+    /// The clean-up this computer runs by itself when its workspace volume runs low (crate::disk_clean).
+    disk_clean: Arc<crate::disk_clean::DiskClean>,
     /// The server takes `record_updated` on worktree reports (its heartbeat reply said so).
     worktree_stamp: AtomicBool,
     /// The server accepts short start reservations; claims opt in only after its heartbeat says so.
@@ -169,6 +171,7 @@ impl Runner {
             names: Mutex::new(None),
             lanes: Arc::new(crate::sessions::Lanes::new(repositories)),
             worktrees,
+            disk_clean: Arc::new(crate::disk_clean::DiskClean::new()),
             worktree_stamp: AtomicBool::new(false),
             start_places: AtomicBool::new(false),
             unanswered_claim: Mutex::new(None),
@@ -472,6 +475,14 @@ impl Runner {
         }
         if let Some(apps) = crate::appdriver::readiness(&candidates) {
             readiness_doc["appdriver"] = apps; // only on a Mac with app delivery (crate::appdriver)
+        }
+        if full {
+            // A low workspace volume starts the safe clean-up in the background; its last run is reported.
+            let keep = vec![self.state.directory.clone(), self.config.state_dir(), self.config.path.clone()];
+            self.disk_clean.check(&self.config.projects_dir(), keep, &self.client, self.lanes.clone(), self.worktrees.clone());
+        }
+        if let Some(cleanup) = self.disk_clean.report() {
+            readiness_doc["disk_cleanup"] = cleanup;
         }
         let mut body = json!({
             "version": RUNNER_VERSION,
@@ -1039,9 +1050,7 @@ impl Runner {
                 self.active.lock().unwrap().insert(aid.clone());
                 self.attempt_bots.lock().unwrap().insert(aid.clone(), text_of(&attempt["bot"]));
                 crate::lanes::track(&attempt);
-                let lane = crate::sessions::turn_lane(&attempt);
-                let task = crate::sessions::task_of(&lane);
-                self.lanes.attempts.lock().unwrap().insert(aid.clone(), (text_of(&attempt["bot"]).trim_start_matches("bot:").to_string(), lane, task));
+                self.lanes.attempts.lock().unwrap().insert(aid.clone(), crate::sessions::LiveTurn::of(&attempt));
                 if let Err(e) = self.state.record(&attempt) {
                     log(&format!("Tico runner: could not save attempt {aid} ({e})"));
                 }

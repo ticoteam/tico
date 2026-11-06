@@ -19,10 +19,10 @@ def c(api):
         yield conn
 
 
-def parked(c, prerequisite_owner="bot:ops"):
-    """cpo's task and the prerequisite another bot is working on, linked blocked_by."""
-    task = H.task_create(c, "human:ana", "Ship the receipt gate", "", "bot:cpo", lint=False)
-    pre = H.task_create(c, "human:ana", "Review the receipt gate fix", "", prerequisite_owner, lint=False)
+def parked(c, prerequisite_owner="bot:ops", tag=""):
+    """cpo's task and the prerequisite another bot is working on, linked blocked_by (`tag` keeps titles apart)."""
+    task = H.task_create(c, "human:ana", "Ship the receipt gate" + tag, "", "bot:cpo", lint=False)
+    pre = H.task_create(c, "human:ana", "Review the receipt gate fix" + tag, "", prerequisite_owner, lint=False)
     TR.relate(c, "bot:cpo", task["id"], pre["id"], "blocked_by")
     return task, pre
 
@@ -46,36 +46,36 @@ def test_an_active_bot_owning_the_blocker_is_accepted_and_holds_the_task_without
     assert jobs(c, "cpo") == []
 
 
-@pytest.mark.parametrize("outcome, words", [("done", "is finished"), ("declined", "was declined")])
-def test_the_prerequisite_resolving_wakes_the_owner_once_with_the_outcome(c, outcome, words):
-    task, pre = parked(c)
-    H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on="bot:ops",
-                  note="Needs the review first.")
-    c.execute("DELETE FROM jobs")
-    H.task_update(c, "bot:ops", pre["id"], status=outcome, note="Reviewed.")
-    woke = jobs(c, "cpo")
-    assert len(woke) == 1 and woke[0]["body"].startswith("Unblocked: Ship the receipt gate")
-    assert words in woke[0]["body"]
-    assert json.loads(woke[0]["refs"])["blocker_status"] == outcome
-    assert H.wait_detail(c, H.task(c, task["id"])) is None   # eligible again: nothing holds it
+def test_the_prerequisite_resolving_wakes_the_owner_once_with_the_outcome(c):
+    for outcome, words in [("done", "is finished"), ("declined", "was declined")]:
+        task, pre = parked(c, tag=f" ({outcome})")
+        H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on="bot:ops",
+                      note="Needs the review first.")
+        c.execute("DELETE FROM jobs")
+        H.task_update(c, "bot:ops", pre["id"], status=outcome, note="Reviewed.")
+        woke = jobs(c, "cpo")
+        assert len(woke) == 1 and woke[0]["body"].startswith("Unblocked: Ship the receipt gate")
+        assert words in woke[0]["body"]
+        assert json.loads(woke[0]["refs"])["blocker_status"] == outcome
+        assert H.wait_detail(c, H.task(c, task["id"])) is None   # eligible again: nothing holds it
 
 
-@pytest.mark.parametrize("target, says", [
-    ("bot:finance", "finance is not an active bot on the team"),
-    ("bot:nobody", "bot:nobody is not a person or an active bot on the team"),
-    ("ops!", "ops! is not a person or an active bot on the team"),
-    ("bot:cpo", "first open blocker belongs to another owner"),           # a bot that does not own the prerequisite here
-])
-def test_an_invalid_bot_target_is_refused_with_guidance_and_changes_nothing(c, target, says):
-    task, _ = parked(c)
-    before = dict(H.task(c, task["id"]))
-    with pytest.raises(H.Refused) as refused:
-        H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on=target, note="Waiting on it.")
-    assert refused.value.rule == "waiting_on" and says in str(refused.value)
-    assert "hub task wait" in str(refused.value)            # says how to name a valid target
-    after = dict(H.task(c, task["id"]))
-    assert {k: after[k] for k in ("status", "note", "waiting_on", "version")} == \
-           {k: before[k] for k in ("status", "note", "waiting_on", "version")}
+def test_an_invalid_bot_target_is_refused_with_guidance_and_changes_nothing(c):
+    for target, says in [
+        ("bot:finance", "finance is not an active bot on the team"),
+        ("bot:nobody", "bot:nobody is not a person or an active bot on the team"),
+        ("ops!", "ops! is not a person or an active bot on the team"),
+        ("bot:cpo", "first open blocker belongs to another owner"),       # a bot that does not own the prerequisite here
+    ]:
+        task, _ = parked(c, tag=f" [{target}]")
+        before = dict(H.task(c, task["id"]))
+        with pytest.raises(H.Refused) as refused:
+            H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on=target, note="Waiting on it.")
+        assert refused.value.rule == "waiting_on" and says in str(refused.value)
+        assert "hub task wait" in str(refused.value)            # says how to name a valid target
+        after = dict(H.task(c, task["id"]))
+        assert {k: after[k] for k in ("status", "note", "waiting_on", "version")} == \
+               {k: before[k] for k in ("status", "note", "waiting_on", "version")}
 
 
 def test_a_bot_whose_prerequisite_already_finished_is_refused(c):
@@ -121,39 +121,39 @@ def test_a_bot_wait_after_a_person_wait_keeps_their_ask_open(c):
     assert H.wait_detail(c, H.task(c, other["id"]))["on"] == "human:ana"
 
 
-@pytest.mark.parametrize("readable", [False, True])
-def test_api_bot_wait_mismatch_preserves_task_and_uses_generic_diagnostic(api, readable):
+def test_api_bot_wait_mismatch_preserves_task_and_uses_generic_diagnostic(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug IN ('cpo','ops')")
     _, _, attempt = setup_attempt(api, "cpo", operator="ben")
     token = attempt["token"]
-    with api.app.state.store.transaction() as c:
-        task = H.task_create(c, "human:ana", "Ship after prerequisite", "", "bot:cpo", lint=False, private=False)
-        pre = H.task_create(c, "human:ana", "Complete prerequisite", "", "bot:ops", lint=False, private=False)
-    post(api, "tasks/" + task["id"] + "/relations", {"task": pre["id"], "kind": "blocked_by"})
-    with api.app.state.store.transaction() as c:
-        if not readable:
-            restrict(c, "ops", see={"everyone": True}, read={"people": ["ana"]}, write={"people": ["ana"]})
-        assert H.task_private_readable(c, "bot:cpo", pre)  # company visibility is only part of read access
-        before = dict(H.task(c, task["id"]))
-        events = [dict(r) for r in c.execute("SELECT id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY id", (task["id"],))]
-    detail = get(api, "tasks/" + task["id"], token)["task"]
-    rows = get(api, "tasks", token)["tasks"]
-    listed = next(t for t in rows if t["id"] == task["id"])
-    for served in (detail, listed):
-        links = [r["id"] for rs in served.get("relations", {}).values() for r in rs]
-        assert (pre["id"] in links) is readable
-    assert (pre["id"] in {t["id"] for t in rows}) is readable
-    get(api, "tasks/" + pre["id"], token, expected=200 if readable else 403)
-    response = api.post("/api/v2/tasks/" + task["id"], headers=headers(token), json={
-        "version": before["version"], "status": "waiting", "note": "Needs prerequisite first.",
-        "waiting_on": "bot:cpo"})
-    assert response.status_code == 422, response.text
-    assert response.json()["error"]["code"] == "waiting_on", response.text
-    assert "first open blocker" in response.text
-    assert pre["id"] not in response.text and "ops" not in response.text
-    with api.app.state.store.read() as c:
-        after = dict(H.task(c, task["id"]))
-        assert {k: after[k] for k in ("status", "note", "waiting_on", "version")} == {
-            k: before[k] for k in ("status", "note", "waiting_on", "version")}
-        assert [dict(r) for r in c.execute("SELECT id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY id", (task["id"],))] == events
+    for readable in (True, False):   # False last: it restricts ops
+        with api.app.state.store.transaction() as c:
+            task = H.task_create(c, "human:ana", f"Ship after prerequisite {readable}", "", "bot:cpo", lint=False, private=False)
+            pre = H.task_create(c, "human:ana", f"Complete prerequisite {readable}", "", "bot:ops", lint=False, private=False)
+        post(api, "tasks/" + task["id"] + "/relations", {"task": pre["id"], "kind": "blocked_by"})
+        with api.app.state.store.transaction() as c:
+            if not readable:
+                restrict(c, "ops", see={"everyone": True}, read={"people": ["ana"]}, write={"people": ["ana"]})
+            assert H.task_private_readable(c, "bot:cpo", pre)  # company visibility is only part of read access
+            before = dict(H.task(c, task["id"]))
+            events = [dict(r) for r in c.execute("SELECT id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY id", (task["id"],))]
+        detail = get(api, "tasks/" + task["id"], token)["task"]
+        rows = get(api, "tasks", token)["tasks"]
+        listed = next(t for t in rows if t["id"] == task["id"])
+        for served in (detail, listed):
+            links = [r["id"] for rs in served.get("relations", {}).values() for r in rs]
+            assert (pre["id"] in links) is readable
+        assert (pre["id"] in {t["id"] for t in rows}) is readable
+        get(api, "tasks/" + pre["id"], token, expected=200 if readable else 403)
+        response = api.post("/api/v2/tasks/" + task["id"], headers=headers(token), json={
+            "version": before["version"], "status": "waiting", "note": "Needs prerequisite first.",
+            "waiting_on": "bot:cpo"})
+        assert response.status_code == 422, response.text
+        assert response.json()["error"]["code"] == "waiting_on", response.text
+        assert "first open blocker" in response.text
+        assert pre["id"] not in response.text and "ops" not in response.text
+        with api.app.state.store.read() as c:
+            after = dict(H.task(c, task["id"]))
+            assert {k: after[k] for k in ("status", "note", "waiting_on", "version")} == {
+                k: before[k] for k in ("status", "note", "waiting_on", "version")}
+            assert [dict(r) for r in c.execute("SELECT id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY id", (task["id"],))] == events

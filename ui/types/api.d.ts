@@ -1709,6 +1709,81 @@ export type FinanceActionRequest = {
   payload?: Record<string, unknown>;
 };
 
+export type FinanceAdAccount = {
+  active: boolean;
+  bot_slug: string | null;
+  currency: string;
+  external_id: string;
+  id: string;
+  name: string;
+  tool_id: string;
+};
+
+export type FinanceAdAccountPatch = {
+  bot_slug: string | null;
+};
+
+export type FinanceAdAccounts = {
+  accounts: Array<{
+  active: boolean;
+  bot_slug: string | null;
+  currency: string;
+  external_id: string;
+  id: string;
+  month_to_date: number;
+  name: string;
+}>;
+  books_lines: Array<{
+  code: string;
+  id: string;
+  name: string;
+}>;
+  elsewhere: {
+  tool_id?: string;
+  tool_name?: string;
+} | null;
+  import: {
+  account_id: string;
+  account_name: string;
+  enabled: boolean;
+  every_hours: number;
+  history_from: string;
+  last_error: string;
+  last_import_at: string | null;
+  run_requested: boolean;
+  saved: boolean;
+  status: "never" | "ok" | "reconnect" | "failed";
+};
+  month: string;
+  month_label: string;
+  platform: "google_ads" | "meta_ads";
+  platform_label: string;
+  slots: Array<{
+  credential_id: string;
+  label: string;
+  options: Array<{
+  id: string;
+  name: string;
+}>;
+  required: boolean;
+  slot: string;
+}>;
+  tool_id: string;
+  tool_name: string;
+};
+
+export type FinanceAdImportRequest = {
+  account_id?: string | null;
+  credentials?: Record<string, string | null> | null;
+  enabled: boolean;
+  history_from?: string | null;
+  tool_id: string;
+};
+
+export type FinanceAdRunRequest = {
+  tool_id: string;
+};
+
 export type FinanceBalanceSheet = {
   as_of: string;
   assets: Array<{
@@ -1866,8 +1941,9 @@ export type FinanceCloseChecklist = {
 export type FinanceConnectionRequest = {
   approver_email?: string | null;
   credential_id: string;
+  history_from?: string | null;
   name?: string | null;
-  provider?: "mercury" | "stripe";
+  provider?: "mercury" | "stripe" | "brex";
   server_ip?: string | null;
   token_creator_email?: string | null;
 };
@@ -3686,44 +3762,6 @@ export type MemberAdd = {
   role?: string;
 };
 
-export type MemoryTidyCard = {
-  bot: string;
-  cost_usd: number;
-  created_at: string;
-  diary: string;
-  diff?: string;
-  expires_at: string;
-  id: string;
-  keep_available: boolean;
-  keep_pending?: boolean;
-  kind: "memory_tidy";
-  memory_commit: string;
-  model: string;
-  reason: string;
-  requester_id: string;
-  reviewer: string;
-  status: "open" | "withdrawn" | "discarded" | "kept";
-  title: string;
-};
-
-export type MemoryTidyCardResult = {
-  card: MemoryTidyCard;
-};
-
-export type MemoryTidyCards = {
-  cards: Array<MemoryTidyCard>;
-};
-
-export type MemoryTidyDecision = {
-  decision: "keep" | "discard";
-};
-
-export type MemoryTidyPilot = {
-  bot: string;
-  effort?: "low";
-  model: string;
-};
-
 export type Message = {
   answer?: ReviewAnswer;
   answers?: Array<string | ReviewAnswer>;
@@ -5328,7 +5366,6 @@ export type Suggestion = {
 export type SystemRoutineUpdate = {
   at?: string | null;
   on?: boolean | null;
-  pilots?: Array<MemoryTidyPilot> | null;
   preset?: "15m" | "hourly" | "4h" | "daily" | "business" | null;
 };
 
@@ -7428,14 +7465,6 @@ export type DecideGoalProposalParams = {
 export type DecideGoalProposalBody = GoalProposalDecision;
 export type DecideGoalProposalResponse = GoalProposalResult;
 
-/** POST /api/v2/memory-tidy/cards/{ident}/decide */
-export type DecideMemoryTidyCardParams = {
-  "Idempotency-Key": string;
-  ident: string;
-};
-export type DecideMemoryTidyCardBody = MemoryTidyDecision;
-export type DecideMemoryTidyCardResponse = MemoryTidyCardResult;
-
 /** POST /api/v2/stale-review/{suggestion_id} */
 export type DecideStaleSuggestionParams = {
   "Idempotency-Key": string;
@@ -8422,13 +8451,6 @@ export type GetMeetingTranscriptParams = {
 export type GetMeetingTranscriptBody = never;
 export type GetMeetingTranscriptResponse = unknown;
 
-/** GET /api/v2/memory-tidy/cards/{ident} */
-export type GetMemoryTidyCardParams = {
-  ident: string;
-};
-export type GetMemoryTidyCardBody = never;
-export type GetMemoryTidyCardResponse = MemoryTidyCardResult;
-
 /** GET /api/v2/messages/{mid} */
 export type GetMessageParams = {
   mid: string;
@@ -8636,6 +8658,14 @@ export type GetSkillProposalParams = {
 };
 export type GetSkillProposalBody = never;
 export type GetSkillProposalResponse = unknown;
+
+/** GET /api/v2/skills/{name}/usage */
+export type GetSkillUsageParams = {
+  days?: number;
+  name: string;
+};
+export type GetSkillUsageBody = never;
+export type GetSkillUsageResponse = unknown;
 
 /** GET /api/v2/skills/{name}/versions/{number} */
 export type GetSkillVersionParams = {
@@ -9334,6 +9364,13 @@ export type ListFinanceActionKindsParams = {
 export type ListFinanceActionKindsBody = never;
 export type ListFinanceActionKindsResponse = FinanceActionKinds;
 
+/** GET /api/v2/finance/ad-accounts */
+export type ListFinanceAdAccountsParams = {
+  tool_id: string;
+};
+export type ListFinanceAdAccountsBody = never;
+export type ListFinanceAdAccountsResponse = FinanceAdAccounts;
+
 /** GET /api/v2/finance/bills */
 export type ListFinanceBillsParams = {
   aging?: "current" | "1_30" | "31_60" | "61_90" | "over_90" | null;
@@ -9693,11 +9730,6 @@ export type ListMeetingsParams = {
 export type ListMeetingsBody = never;
 export type ListMeetingsResponse = MeetingReviewList;
 
-/** GET /api/v2/memory-tidy/cards */
-export type ListMemoryTidyCardsParams = Record<string, never>;
-export type ListMemoryTidyCardsBody = never;
-export type ListMemoryTidyCardsResponse = MemoryTidyCards;
-
 /** GET /api/v2/conversations/{cid}/messages */
 export type ListMessagesParams = {
   before?: string | null;
@@ -9718,6 +9750,11 @@ export type ListModelSubscriptionsResponse = ModelSubscriptionList;
 export type ListModelsParams = Record<string, never>;
 export type ListModelsBody = never;
 export type ListModelsResponse = unknown;
+
+/** GET /api/v2/skills/installed */
+export type ListMySkillInstallsParams = Record<string, never>;
+export type ListMySkillInstallsBody = never;
+export type ListMySkillInstallsResponse = unknown;
 
 /** GET /api/v2/me/tokens */
 export type ListMyTokensParams = Record<string, never>;
@@ -9917,6 +9954,11 @@ export type ListServiceKeysParams = Record<string, never>;
 export type ListServiceKeysBody = never;
 export type ListServiceKeysResponse = unknown;
 
+/** GET /api/v2/skills/install-targets */
+export type ListSkillInstallTargetsParams = Record<string, never>;
+export type ListSkillInstallTargetsBody = never;
+export type ListSkillInstallTargetsResponse = unknown;
+
 /** GET /api/v2/skills/installs */
 export type ListSkillInstallsParams = {
   target_id: string;
@@ -9931,6 +9973,13 @@ export type ListSkillProposalsParams = {
 };
 export type ListSkillProposalsBody = never;
 export type ListSkillProposalsResponse = unknown;
+
+/** GET /api/v2/skills/usage */
+export type ListSkillUsageParams = {
+  days?: number;
+};
+export type ListSkillUsageBody = never;
+export type ListSkillUsageResponse = unknown;
 
 /** GET /api/v2/skills */
 export type ListSkillsParams = Record<string, never>;
@@ -11080,6 +11129,13 @@ export type RunAutomationParams = {
 export type RunAutomationBody = RunNow | null;
 export type RunAutomationResponse = AutomationRunNow;
 
+/** POST /api/v2/finance/ad-imports/run */
+export type RunFinanceAdImportParams = {
+  "Idempotency-Key": string;
+};
+export type RunFinanceAdImportBody = FinanceAdRunRequest;
+export type RunFinanceAdImportResponse = FinanceAdAccounts;
+
 /** POST /api/v2/maintenance/run */
 export type RunMaintenanceParams = {
   "Idempotency-Key": string;
@@ -11094,6 +11150,13 @@ export type RunSystemRoutineParams = {
 };
 export type RunSystemRoutineBody = Empty;
 export type RunSystemRoutineResponse = unknown;
+
+/** POST /api/v2/finance/ad-imports */
+export type SaveFinanceAdImportParams = {
+  "Idempotency-Key": string;
+};
+export type SaveFinanceAdImportBody = FinanceAdImportRequest;
+export type SaveFinanceAdImportResponse = FinanceAdAccounts;
 
 /** PATCH /api/v2/maintenance */
 export type SaveMaintenanceParams = {
@@ -11923,6 +11986,14 @@ export type UpdateEditionParams = {
 };
 export type UpdateEditionBody = EditionBody;
 export type UpdateEditionResponse = unknown;
+
+/** PATCH /api/v2/finance/ad-accounts/{ad_account_id} */
+export type UpdateFinanceAdAccountParams = {
+  "Idempotency-Key": string;
+  ad_account_id: string;
+};
+export type UpdateFinanceAdAccountBody = FinanceAdAccountPatch;
+export type UpdateFinanceAdAccountResponse = FinanceAdAccount;
 
 /** POST /api/v2/goals/{gid} */
 export type UpdateGoalParams = {

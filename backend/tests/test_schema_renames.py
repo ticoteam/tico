@@ -93,7 +93,9 @@ RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_ch
            # 0064_history_events moves these five logs into history_events (backend/tests/test_history_events.py).
            "task_events", "goal_events", "market_events", "company_events", "strategy_events",
            # 20261105222012_one_send_policy folds bot_mail_settings into the one sending policy and drops the rule-miss log.
-           "bot_mail_settings", "org_rule_misses"}
+           "bot_mail_settings", "org_rule_misses",
+           # 20261106084204_retire_memory_tidy drops the retired pilot's cards and their Keeps.
+           "memory_tidy_cards", "memory_tidy_keeps"}
 # Moved from runners to runner_states by backend/migrations/0062_runner_states.py after the renames named them.
 RUNNER_STATE = {name for name, _ in importlib.import_module("backend.migrations.0062_runner_states").STATE}
 # Moved out of its table by migration 0070 (backend/migrations/0070_bot_settings.py) into the table named here: the

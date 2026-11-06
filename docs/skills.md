@@ -32,6 +32,37 @@ step against the exact bundle that was screened and the version it was based on.
 refused until it is screened again (`not_screened`, `stale`). A high-risk or unsafe screen needs the admin to acknowledge it.
 Approval makes the next version of the skill. Declining takes a reason of up to 300 characters.
 
+## Screening
+
+The **Skill screening** job (`backend/skill_screening.py`) screens each pending proposal, a few each scheduler pass, oldest
+first. It claims a proposal with a conditional update, so two passes never screen the same one. Each screen writes a
+`skill_screenings` row and sets the proposal's `screen_status`. It is mandatory: there is no switch, and no other model
+answers in place of Decide High.
+
+- **Patterns.** Plain code checks every file and records each hit as `{file, line, pattern}`. It looks for hidden Unicode
+  (zero-width, bidi and tag characters), HTML comments, long base64 or hex blobs, and URLs (each one listed). It also
+  looks for `curl` or `wget` piped to a shell, reads of secrets, env or the keychain, and writes to `.claude/settings*`,
+  hooks, other skills' folders or `AGENT.md`/`CLAUDE.md`. It flags network calls in scripts and the injection phrases
+  that outside-text screening uses. A hit is a hint for the model and the admin, never a verdict on its own.
+- **The model.** Decide High answers the `skill-screen` question set (`questions/skill-screen.json`) with evidence. The
+  state is the skill's name, its description and every file, fenced. For an update it also holds the diff against its
+  base, plus the pattern hits. The model reads the skill as data and judges intent and hiding, not whether it contains
+  commands. It answers a verdict (`safe`, `review` or `unsafe`), a risk (`low`, `medium` or `high`) and five concerns.
+  Its summary and findings (file, line, issue) go on the row.
+- **The risk floor.** A hit for hidden Unicode, a secret read or pipe-to-shell raises a `low` risk to `medium`. So does
+  any concern at 50% or more.
+- **Not screened.** If the state is over 120,000 characters, the row is `not_screened` with the reason `oversize`. With
+  no Gateway, the reason is `unavailable`. At the monthly spend cap it is `cap`, a call that does not answer in time is
+  `timeout`, and any other failure is `error`. A proposal is never marked screened without the model's answer, so it
+  cannot be approved. **Re-run** (`POST skills/proposals/{id}/rescreen`) sends it back to the queue.
+- **Cache.** A bundle already screened with the same sha, base and question set version reuses that answer.
+- **A new question set version** sends every pending proposal screened under an older version back to the queue.
+- **Audit.** Each model call is one `judge.call` row labelled `skill-screen@1`. Each screen is one `skill.screened` event
+  with the name, sha, status, reason, verdict, risk and pattern count, never file contents.
+
+The eval is scenario 11 of `evals/screening` (`python -m evals.screening.run skills`). Its live run is
+`python -m evals.screening.run --skills-live`.
+
 ## Installs
 
 An install is a row: one skill, one bot or one person, and either the latest version or a pinned version. Installing for a
@@ -41,19 +72,58 @@ and nothing applies to people who join later.
 The install list shows two things: what was asked (`desired`: the version the install points at) and what the runner or the
 skills helper reports as staged (`staged`: the sha it actually has). A difference between them is shown as is.
 
+## The Skills page
+
+Library › Skills (`#/library/skills`) has three tabs.
+
+- **Directory**: every approved skill with its version, installs, uses in the last 30 days and when it was last used. A skill opens
+  its page: versions (when and by whom each was approved), the files of any version, **Install** (for yourself, a bot you can write,
+  a person if you're an admin, or a team: a team installs for its current members at once, and nobody who joins later), and its
+  usage over 7 or 30 days by trigger (model, person, nested), by who and the last 20 uses.
+- **Proposals**: admins see every proposal, anyone else their own. Each shows new or update, who proposed it and its screen:
+  Pending, Screened with its risk, or Not screened with **Re-run**. A proposal opens its screening (summary, findings by file and line,
+  pattern hits), its diff (or its files when it's new) and a Stale flag when the skill moved on. **Approve** for a high-risk or
+  unsafe screen needs the "I've read this" tick, as the server does (422 `acknowledgement_required`). **Decline** asks for a reason.
+- **Installed**: your installs and those of the bots you can write: Latest or pinned (with the newer version when there is one),
+  what is wanted against what is staged there (short sha), and **Remove**.
+
+**Use in my Claude Code** shows the one line that sets up the skills helper on your computer, with Copy:
+`curl -fsSL --create-dirs <your Tico>/api/v2/skills/helper.mjs -o ~/.tico/skills-helper.mjs && node ~/.tico/skills-helper.mjs setup`.
+
+Bots on Codex get their installed skills too, from a folder of the turn's own, never the computer's Codex settings. Codex
+reports a use only when a turn's input selects the skill by name; it says nothing when the model opens a skill on its
+own, so a Codex bot's own uses aren't counted (a typed `/name` still is) and its installs read **Unknown**, never **Unused**.
+
+Usage. Each use is one row (skill, who, trigger, where, when) from the runner, the skills helper or a typed `/name`. The hourly
+**Skill usage** job folds them into daily counts and deletes raw rows older than 90 days; the daily counts stay. The page counts
+days before the job's last run from the daily counts and the rest from the raw rows, so a use shows at once. Admins see who used a
+skill; anyone else sees the totals and their own uses (and the ones they asked a bot for). A use links its task or thread only for
+someone who may read it.
+
+Coverage. A skill's installs say **Used**, **Unused** or **Unknown**. Unused needs data: the target reports staging (a receipt),
+reports usage (a bot on a harness that reports every skill use, today Claude Code; a person through a skills helper with
+reporting on), has had the install for 30 days, and has no use
+in those 30 days. Anything else is Unknown, never Unused. Skills used on computers that aren't in the directory aren't collected,
+so the page has no "popular, not in the directory" list.
+
 ## API
 
 Under `/api/v2/skills`: the directory (`GET skills`), a skill with its versions and installs (`GET skills/{name}`), a version with
 its files (`GET skills/{name}/versions/{number}`), proposals (`POST skills/proposals`, `GET skills/proposals`,
 `GET skills/proposals/{id}`, and `approve`, `decline`, `withdraw`, `rescreen` under it), and installs (`POST skills/{name}/installs`,
 `POST skills/{name}/installs/bulk`, `GET skills/installs?target_type=&target_id=`, `DELETE skills/installs/{id}`), and an approved
-version's files by sha (`GET skills/bundles/{sha256}`). The contract is in `docs/openapi/v2.json` under the Skills tag. How a
-runner stages installed skills on a Claude Code turn and reports them: [Harnesses](harnesses.md#company-skills-on-a-claude-code-turn).
+version's files by sha (`GET skills/bundles/{sha256}`). The Skills page reads four more: usage per skill
+(`GET skills/usage?days=7|30`), one skill's usage (`GET skills/{name}/usage?days=7|30`), who the caller may install for
+(`GET skills/install-targets`) and the caller's own installs with those of the bots they can write (`GET skills/installed`).
+Route words such as `usage`, `installed`, `install-targets`, `proposals` and `installs` can't be skill names. The contract is in
+`docs/openapi/v2.json` under the Skills tag. How a runner stages installed skills on a Claude Code or Codex turn and reports
+them: [Harnesses](harnesses.md#company-skills-on-a-claude-code-or-codex-turn).
 
 ## Privacy
 
 Events and logs name a skill, its version and sha, and who did what. They never hold a file's contents or a prompt. A proposal's
-files are readable by its proposer and by admins.
+files are readable by its proposer and by admins. Usage rows hold the skill, who, the trigger, where (task or thread) and when: never a prompt, the
+skill's arguments or a file.
 
 ## People's Claude Code
 

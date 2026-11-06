@@ -17,7 +17,7 @@ from pathlib import Path
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
 # Path words under /api/v2/skills/ (and the helper's own plugin) that a skill name would shadow or be shadowed by.
 RESERVED = frozenset({"marketplace.json", "helper.mjs", "tico-skills", "devices", "usage", "plugins", "bundles", "proposals",
-                      "installs"})
+                      "installs", "installed", "install-targets"})
 MAX_FILES = 100
 MAX_CHARS = 90_000            # the total of every file's text, which must fit the screening state with its diff
 MAX_PATH = 200

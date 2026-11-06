@@ -274,54 +274,6 @@ def _nth(n):
     return {3: "third", 4: "fourth", 5: "fifth"}.get(n, f"{n}th")
 
 
-BACKFILL = "task_holds.backfill"
-
-
-def backfill(conn, at=None):
-    """Once, at the first hourly check after this shipped: every waiting task is put right by the same rules. Its
-    reason names what holds it; a bot's task held by nothing goes back to open, and each bot hears once, however many
-    of its tasks moved. Returns {"fixed", "opened", "woken"}, or None when it already ran."""
-    from . import hubdb as H, review_gate, task_blocked
-    if conn.execute("SELECT 1 FROM events WHERE action=? LIMIT 1", (BACKFILL,)).fetchone():
-        return None
-    at = at or H.now()
-    fixed, opened = 0, {}
-    for row in H._rows(conn.execute(f"SELECT * FROM {H.TASKS} tasks WHERE status='waiting' AND blocked_since IS NOT NULL "
-                                    "ORDER BY created_at, id")):
-        if not _applies(conn, row):
-            continue
-        if holds(conn, row):
-            fixed += refresh(conn, row["id"], at=at) == "held"
-            continue
-        if review_gate.engineering(conn, row) and row.get("blocked_kind") == "dependency":
-            task_blocked.reconcile(conn, row["id"])
-            if H.task(conn, row["id"])["status"] != "waiting":
-                fixed += 1
-                continue
-        active = H.is_bot(row["owner_id"]) and (H.bot(conn, row["owner_id"]) or {}).get("state") == "active"
-        if active and not H.not_yet_due(row, at):
-            note = ("Back to open: nothing Tico tracks was holding it (no open question, child task, blocker, "
-                    "approval or person to wait on). Continue it, ask, or finish it.")
-            H._set_status(conn, H.KEEPER, row, "open", note=note)
-            conn.execute("UPDATE tasks SET note=? WHERE id=?", (note, row["id"]))
-            task_blocked.bump(conn, row)
-            H._task_event(conn, row["id"], H.KEEPER, "note", row.get("note"), note, "")
-            opened.setdefault(row["owner_id"], []).append(row)
-        else:
-            refresh(conn, row["id"], at=at)
-            fixed += 1
-    for owner, rows in opened.items():
-        # One wake per bot, in its first task's room: it names only that task, never another task's title.
-        more = len(rows) - 1
-        H._wake(conn, H.task(conn, rows[0]["id"]), owner,
-                f"Open: {rows[0]['title']}\nNothing Tico tracks was holding it"
-                + (f", nor {more} more of your waiting tasks, now open too" if more else "")
-                + ". Continue each, ask, or finish it.", refs={"news": "assignment"})
-    result = {"fixed": fixed, "opened": sum(len(r) for r in opened.values()), "woken": len(opened)}
-    H.event(conn, H.KEEPER, BACKFILL, "", result)
-    return result
-
-
 # A bot's task waiting on nothing tracked (cause `stranded`) has nothing that will ever move it: a note wakes nobody.
 GRACE_HOURS = 2         # how long it may wait on nothing before it goes back to open
 REOPEN_LIMIT = 3        # reopened this often in 24 hours: it stays parked and its bot's manager is told instead
