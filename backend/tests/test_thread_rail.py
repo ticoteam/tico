@@ -7,7 +7,6 @@ Fictional people only: ana (owner), ben (bot admin) and cara."""
 import importlib
 import json
 import sqlite3
-from pathlib import Path
 
 import pytest
 
@@ -17,8 +16,6 @@ from backend.tests.test_thread_events import cursor, read_as, who
 from backend import thread_rail, threads
 from backend.config import Settings
 from backend.store import H, Problem, Store
-
-FIXTURE = Path(__file__).parent / "fixtures" / "schema_old_main.sql"
 
 
 def new_thread(api, title="Budget", members=("human:ben",), audience="members", token="ana-test", **extra):
@@ -339,17 +336,20 @@ def test_a_pin_event_goes_to_its_reader_and_a_pin_for_everyone_to_everyone_who_r
     assert [(d["thread_id"], d["pinned"], d["pinned_for_everyone"]) for d in sent] == [(thread["id"], True, True)]
 
 
-def test_the_migration_adds_pins_to_an_existing_database_once(tmp_path):
-    path = tmp_path / "old.sqlite"
-    conn = sqlite3.connect(path)
-    conn.executescript(FIXTURE.read_text())
-    conn.close()
+def test_the_pins_migration_run_once_more_changes_nothing(tmp_path):
+    """The upgrade itself (an old database gains thread_pins and the column) is pinned by test_schema_every_table's
+    upgraded-database test; this one checks that 0063 is repeatable on a database that already has it."""
+    path = tmp_path / "hub.sqlite"
     Store(Settings(db_path=path)).initialize()
     conn = sqlite3.connect(path)
     try:
-        assert {r[1] for r in conn.execute("PRAGMA table_info(thread_pins)")} >= {"thread_id", "actor", "pinned"}
-        assert "pinned_for_everyone_at" in {r[1] for r in conn.execute("PRAGMA table_info(conversations)")}
-        importlib.import_module("backend.migrations.0063_thread_pins").up(conn)       # once more changes nothing
+        def shape():
+            return ({r[1] for r in conn.execute("PRAGMA table_info(thread_pins)")},
+                    {r[1] for r in conn.execute("PRAGMA table_info(conversations)")})
+        before = shape()
+        assert {"thread_id", "actor", "pinned"} <= before[0] and "pinned_for_everyone_at" in before[1]
+        importlib.import_module("backend.migrations.0063_thread_pins").up(conn)
+        assert shape() == before
     finally:
         conn.close()
 

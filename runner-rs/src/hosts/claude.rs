@@ -1322,6 +1322,12 @@ impl ClaudeHost {
                 fields["reads_only"] = json!(shell_reads_only(command));
             }
         }
+        if name == "Skill" {
+            // The skill's name alone, for the company's usage counts (backend/skill_runtime.py); never its arguments.
+            if let Some(skill) = input["skill"].as_str().filter(|s| crate::company_skills::name_ok(s)) {
+                fields["skill"] = json!(skill);
+            }
+        }
         if let Some(s) = subagent {
             fields["subagent"] = s;
         }
@@ -2350,6 +2356,20 @@ mod tests {
         let (server, bash) = (rx.try_recv().unwrap(), rx.try_recv().unwrap());
         assert_eq!((server["tool"].as_str(), server["summary"].as_str()), (Some("mcp__repo__run"), Some("")));
         assert_eq!(bash["summary"], "/work/a.txt");
+    }
+
+    #[test]
+    fn a_skill_call_carries_its_name_and_nothing_else() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        host.tool_started(&json!({"id": "s1", "name": "Skill", "input": {"skill": "acme-brief", "args": "the private Q3 numbers"}}), None, "th", "tu");
+        host.tool_started(&json!({"id": "s2", "name": "Skill", "input": {"skill": "plugin:Other Name"}}), None, "th", "tu");
+        host.tool_started(&json!({"id": "s3", "name": "Read", "input": {"skill": "acme-brief", "file_path": "/w/a.md"}}), None, "th", "tu");
+        let (named, plugin, other) = (rx.try_recv().unwrap(), rx.try_recv().unwrap(), rx.try_recv().unwrap());
+        assert_eq!((named["tool"].as_str(), named["status"].as_str(), named["item_id"].as_str(), named["skill"].as_str()),
+                   (Some("Skill"), Some("started"), Some("s1"), Some("acme-brief")));
+        assert!(!named.to_string().contains("private"), "{named}");
+        assert!(plugin.get("skill").is_none() && other.get("skill").is_none());
     }
 
     #[test]

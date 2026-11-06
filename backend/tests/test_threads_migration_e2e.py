@@ -31,6 +31,8 @@ import dataclasses
 import importlib
 import json
 import os
+import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -194,12 +196,10 @@ def report(lines, world, what):
     return f"{len(lines)} reader difference(s) in the {world} world {what}:\n" + "\n".join(lines[:60])
 
 
-# ----------------------------------------------------------------------------- the freshness check (always runs)
-@pytest.mark.parametrize("world", WORLDS)
-def test_goldens_are_todays_reader_sets(world, tmp_path):
+# ----------------------------------------------------------------------------- the freshness check
+def check_golden_is_todays(world, settings):
     """The goldens are what today's predicates read: writer mode regenerates them, and otherwise this fails when they
-    no longer match, so the migration is never compared with a stale baseline."""
-    settings = build(world, tmp_path)
+    no longer match, so the migration is never compared with a stale baseline. Reads `settings` only, never writes."""
     conversations, messages = today_sets(settings)
     now = golden_form(conversations, messages)
     if WRITE:
@@ -212,6 +212,16 @@ def test_goldens_are_todays_reader_sets(world, tmp_path):
     lines = differences(labeled(*full_from_golden(stored, message_owners(settings))), labeled(conversations, messages))
     assert not lines, report(lines, world, "against today's predicates; regenerate with TICO_WRITE_READER_GOLDENS=1")
     assert golden_path(world).read_text() == dump(now), "the golden is not in writer form; regenerate it"
+
+
+def untouched_copy(settings, directory):
+    """The world's database copied before anything reads it, for the freshness check: opening a Store and reading
+    through Auth must not leave state behind for the migration to find."""
+    copy = directory / "freshness" / "hub.sqlite"
+    copy.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(settings.db_path)) as source, closing(sqlite3.connect(copy)) as target:
+        source.backup(target)
+    return dataclasses.replace(settings, db_path=copy)
 
 
 # ----------------------------------------------------------------------------- the migration
@@ -245,26 +255,29 @@ def threads_sets(threads, settings, expected):
         close(store)
 
 
-@pytest.mark.parametrize("world", WORLDS)
-def test_migration_keeps_every_reader_set(world, tmp_path):
+def migrated_world(world, tmp_path):
+    """One build of `world`: its golden is today's reader sets (checked on a copy), then it is migrated and keeps every
+    reader set. Returns the migrated settings, the threads module, the expected sets and the sets after the migration."""
     threads = importlib.import_module("backend.threads")
     settings = build(world, tmp_path)
+    check_golden_is_todays(world, untouched_copy(settings, tmp_path))
     expected = full_from_golden(json.loads(golden_path(world).read_text()), message_owners(settings))
     migrate(settings, threads)
     got = threads_sets(threads, settings, expected)
     lines = differences(labeled(*expected), labeled(*got))
     assert not lines, report(lines, world, "after threads.migrate (each line: expected before, got after)")
+    return settings, threads, expected, got
 
 
-def test_removing_a_person_does_not_widen_any_reader_set(tmp_path):
+def test_the_devcopy_world_goldens_are_todays_and_the_migration_keeps_every_reader_set(tmp_path):
+    migrated_world("devcopy", tmp_path)
+
+
+def test_the_demo_world_goldens_are_todays_and_the_migration_keeps_every_reader_set_and_a_removal_widens_none(tmp_path):
     """Taking someone off the org chart after the migration may narrow reader sets but never widens them: the roster is
     read live, as it is today. Ben has no reports (the bots report to the Assistant), so his removal moves nobody else's
     access. He is primary for the support and inbox bots, the people whose shared rooms would change."""
-    threads = importlib.import_module("backend.threads")
-    settings = demo.build(tmp_path / "demo", now=NOW)
-    expected = full_from_golden(json.loads(golden_path("demo").read_text()), message_owners(settings))
-    migrate(settings, threads)
-    before = threads_sets(threads, settings, expected)
+    settings, threads, expected, before = migrated_world("demo", tmp_path)
     api = TestClient(create_app(settings), base_url="http://127.0.0.1:8765")
     api.headers["Authorization"] = "Bearer " + settings.local_owner_token_file.read_text().strip()
     reply = api.post("/api/v2/people/ben", json={"left": True}, headers={"Idempotency-Key": "roster-ben-left"})

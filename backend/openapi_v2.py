@@ -2237,7 +2237,11 @@ STABLE.extend([
      'Slack, GitHub, meeting importers, Listening, outgoing webhooks and declared tools the caller may see, with status '
      'and who can use each. Follow next with cursor','ToolIndex'),
     ('/api/v2/api-tools/{tool_id}','get','Tools','getApiTool','One API tool: its keys (never a value), who can use it at '
-     'which level, its last checks and calls','ApiTool'),
+     'which level, its last checks and calls; to whoever may change it, who can see it and why. A tool the caller may '
+     'not see is a 404','ApiTool'),
+    ('/api/v2/api-tools/{tool_id}','patch','Tools','updateApiTool','Change a tool\'s settings (credential administrators) '
+     'or who can see it: audience null for Everyone, or an audience for Only listed (the owner, or a credential '
+     'administrator who can see it, who then stays on the list)','ApiToolSettings'),
     ('/api/v2/api-tools/{tool_id}/activity','get','Tools','listApiToolActivity','Calls through the proxy and uses of its '
      'keys, newest first. Follow next with cursor','ApiToolActivity'),
 ])
@@ -2247,22 +2251,38 @@ SCHEMAS['ToolIndexRow'] = obj({'id': 's', 'kind': {'enum': ['api', 'mailbox', 'n
                                'name': 's', 'detail': 's', 'way': 's', 'status': TOOL_STATUS,
                                'who': items(obj({'kind': {'enum': ['bot', 'person']}, 'id': 's', 'name': 's',
                                                  'initials': 's'})),
-                               'who_total': 'i', 'needs_you': 'b', 'href': 's'})
+                               'who_total': 'i', 'needs_you': 'b', 'href': 's',
+                               'private': {'type': 'boolean', 'description': 'An API tool whose Who can see it is Only '
+                                           'listed'}},
+                              required=['id', 'kind', 'name', 'detail', 'way', 'status', 'who', 'who_total', 'needs_you',
+                                        'href'])
 SCHEMAS['ToolIndex'] = obj({'rows': items(ref('ToolIndexRow')),
                             'counts': obj({'all': 'i', 'needs_you': 'i', 'api': 'i', 'mail': 'i', 'websites': 'i'}),
                             'next': 'n'})
-SCHEMAS['ApiTool'] = obj({'tool': obj({'id': 's', 'name': 's', 'service': 's', 'base_url': 's', 'auth_scheme': 's',
-                                       'check_path': 's', 'delivery': {'enum': ['proxy', 'computer']}}),
+SCHEMAS['ApiToolSettings'] = obj({'id': 's', 'name': 's', 'service': 's', 'base_url': 's', 'auth_scheme': 's',
+                                  'check_path': 's', 'delivery': {'enum': ['proxy', 'computer']}, 'private': 'b'})
+SCHEMAS['ApiTool'] = obj({'tool': ref('ApiToolSettings'),
                           'keys': items(obj({'id': 's', 'name': 's', 'preview': 's',
                                              'access_level': {'enum': ['read', 'read_write']},
                                              'expires_on': 'n', 'last_used_at': 'n'},
                                             required=['id', 'name', 'preview', 'access_level'])),
-                          'access': items(obj({'subject': 's', 'kind': {'enum': ['bot', 'person']}, 'name': 's',
-                                               'initials': 's', 'level': {'enum': ['read', 'read_write']},
-                                               'last_used_at': 'n'})),
+                          'access': items(obj({'subject': 's', 'kind': {'enum': ['bot', 'person', 'finance']},
+                                               'name': 's', 'initials': 's', 'level': {'enum': ['read', 'read_write']},
+                                               'last_used_at': 'n',
+                                               'fixed': {'type': 'boolean', 'description': 'Finance reads this key; it '
+                                                         'goes when the source is disconnected, not here'}},
+                                              required=['subject', 'kind', 'name', 'initials', 'level', 'last_used_at'])),
                           'checks': items(obj({'ok': 'b', 'status_code': {'type': ['integer', 'null']}, 'detail': 's',
                                                'checked_at': 's'})),
-                          'recent': items({'type': 'object'}), 'status': TOOL_STATUS, 'can_manage': 'b'})
+                          'recent': items({'type': 'object'}), 'status': TOOL_STATUS, 'can_manage': 'b',
+                          'private': 'b', 'can_set_audience': 'b',
+                          'audience': {'anyOf': [ref('AccessAudience'), {'type': 'null'}],
+                                       'description': 'Only to whoever may change it; null is Everyone'},
+                          'seen_by': items(obj({'subject': 's', 'kind': {'enum': ['person', 'group', 'bot', 'finance']},
+                                                'id': 's', 'name': 's', 'why': {'enum': ['Owner', 'Listed', 'Can use it']}})) | {
+                              'description': 'Only to whoever may change it: who can see an Only listed tool, and why'}},
+                         required=['tool', 'keys', 'access', 'checks', 'recent', 'status', 'can_manage', 'private',
+                                   'can_set_audience'])
 SCHEMAS['ApiToolActivity'] = obj({'rows': items(obj({'id': 's', 'kind': {'enum': ['call', 'use']}, 'actor': 's',
                                                      'result': {'enum': ['sent', 'refused', 'failed', 'use']},
                                                      'at': 's'})), 'next': 'n'})
@@ -3495,6 +3515,7 @@ STABLE.extend([
     ("/api/v2/skills/installs/{iid}", "delete", "Skills", "uninstallSkill", "Take a skill off a bot or person, with the rights to install it", None),
     ("/api/v2/skills/{name}", "get", "Skills", "getSkill", "One skill: its versions and the installs the caller may see", None),
     ("/api/v2/skills/{name}/versions/{number}", "get", "Skills", "getSkillVersion", "One approved version of a skill, with its files", None),
+    ("/api/v2/skills/bundles/{sha256}", "get", "Skills", "getSkillBundle", "An approved version's files by its bundle sha, checked against the sha before it is served", None),
     ("/api/v2/skills/{name}/installs", "post", "Skills", "installSkill", "Install a skill for one bot or person, at the latest version or pinned to one", None),
     ("/api/v2/skills/{name}/installs/bulk", "post", "Skills", "installSkillForTargets", "Install a skill for several bots or people at once, all or nothing", None),
 ])

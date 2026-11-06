@@ -35,6 +35,7 @@ const TOOLS_ICONS = {api: 'api', mailbox: 'mail', number: 'sms', address: 'local
 const TOOLS_TONE = {ok: 'ok', wait: 'waiting', fail: 'fail', run: 'in-progress', idle: ''};
 const TOOLS_WHO_SHOWN = 4;
 let TL = null;   // {run, rows, counts, error, q, show}
+const TOOLS_PRIVATE = ' <span class="pill tt-private" data-private>Private</span>';
 const toolsPill = status => `<span class="pill${TOOLS_TONE[status?.tone] ? ' ' + TOOLS_TONE[status.tone] : ''} tt-status" data-tone="${esc(status?.tone || 'idle')}"><span class="tt-dot" aria-hidden="true"></span>${esc(status?.text || '')}</span>`;
 // One face: a bot's avatar, or a person's photo or initials.
 const toolsFace = (w, size = 22) => w.kind === 'bot' ? avatar(w.id, size)
@@ -103,7 +104,7 @@ function toolsDraw() {
   box.innerHTML = err + `<table class="tt-list"><thead><tr><th>Tool</th><th>Way in</th><th>Who can use it</th><th>Status</th><th aria-hidden="true"></th></tr></thead>
     <tbody>${shown.map(r => `<tr data-tl-row="${esc(r.id)}" data-tl-kind="${esc(r.kind)}"${r.needs_you ? ' data-tl-needs' : ''}>
       <td class="tt-tool"><a href="${esc(r.href || '#/tools')}"><span class="tt-tile" aria-hidden="true"><span class="nav-icon">${TOOLS_ICONS[r.kind] || 'link'}</span></span>
-        <span class="tt-nm"><strong>${esc(r.name)}</strong>${r.detail ? `<span class="muted">${esc(r.detail)}</span>` : ''}</span></a></td>
+        <span class="tt-nm"><strong>${esc(r.name)}${r.private ? TOOLS_PRIVATE : ''}</strong>${r.detail ? `<span class="muted">${esc(r.detail)}</span>` : ''}</span></a></td>
       <td class="tt-way">${r.way ? `<span class="pill">${esc(r.way)}</span>` : ''}</td>
       <td class="tt-who">${toolsWhoHTML(r)}</td>
       <td class="tt-st">${toolsPill(r.status)}</td>
