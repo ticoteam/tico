@@ -583,7 +583,6 @@ async function pillChat(P, text) {
   const btn = pq(P, '.p-send'), label = btn.textContent;
   btn.disabled = true; pillBtnSay(btn, 'Sending…');
   const files = P.files.slice(), scope = sessionScope(pq(P, '.p-text'));
-  const names = files.map(f => f.name);
   try {
     const fd = new FormData();
     fd.append('text', text);
@@ -592,7 +591,6 @@ async function pillChat(P, text) {
     const j = await res.json().catch(() => ({}));
     if (res.status === 409) { pillBusy(P, j, text); return; }
     if (!res.ok) throw new Error(j.error || res.statusText);
-    convChatStarted(P.slug, j, text, names);
     pillAcknowledge(P, text, files, scope);
   } catch (e) { toast(e.message, true); }
   finally { btn.disabled = false; pillBtnSay(btn, label); pillLabel(P); pillButtons(P); }
@@ -627,7 +625,6 @@ async function pillTask(P, text) {
     P.files.forEach(f => fd.append('files', f, f.name));
     const res = await fetch(`${API}/issues`, {method: 'POST', body: await memoryBody(fd)});
     const j = await res.json().catch(() => ({})); if (!res.ok) throw new Error(j.error || res.statusText);
-    if (CONV?.slug === slug) { CONV.pending.push({text, number: j.number, url: j.url}); CONV.sent = true; convRender(CONV); }
     pillAcknowledge(P, text, files, scope); toast(`Queued as #${j.number}`);
     await refresh(true); if (BOT?.slug === slug) loadBotIssues(slug);
   } catch (e) { toast(e.message, true); }

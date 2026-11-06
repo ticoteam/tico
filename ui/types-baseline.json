@@ -14,7 +14,7 @@
     "ui/app/boot.js": 5,
     "ui/app/bot-branches.js": 32,
     "ui/app/bot-budget.js": 1,
-    "ui/app/bot-conversation.js": 3,
+    "ui/app/bot-conversation.js": 1,
     "ui/app/bot-details.js": 29,
     "ui/app/bot-learnings.js": 8,
     "ui/app/bot-page.js": 74,
