@@ -10,9 +10,10 @@
 # desktop files and updater manifest are carried forward. Either way they are added to the published release afterwards,
 # and a desktop failure leaves the server release in place. Tico Recorder (recorder.yml) follows the same way, with
 # its own updater manifest (recorder-latest.json). See docs/releasing.md.
-# Linux jobs run on RunsOn in Tico's own AWS account, on-demand rather than Spot: an interruption must never leave
-# a release half-published. The three jobs between the tag and the published release (validated, runner-changes, release) run on
-# GitHub-hosted Ubuntu, which starts faster and is never interrupted either. macOS builds stay on GitHub-hosted runners.
+# Linux jobs run on RunsOn Spot VMs in Tico's own AWS account: an interrupted job is rerun automatically, and every upload
+# uses --clobber with the manifest last, so a rerun finishes the same release. The three jobs between the tag and the
+# published release (validated, runner-changes, release) run on GitHub-hosted Ubuntu, which starts faster and is never
+# interrupted. macOS builds stay on GitHub-hosted runners.
 # Optional build fan-out starts after publication so it cannot compete for job slots with the core release.
 name: Release
 
@@ -356,7 +357,7 @@ jobs:
       ${{ !cancelled() && needs.validated.result == 'success'
       && (needs.release.result == 'success' || needs.release.result == 'skipped')
       && needs.validated.outputs.dry_run != 'true' }}
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
     permissions:
       contents: read
     outputs:
@@ -409,7 +410,7 @@ jobs:
       ${{ !cancelled() && needs.desktop-changes.result == 'success'
       && (needs.release.result == 'success' || needs.release.result == 'skipped')
       && (needs.desktop.result == 'success' || needs.desktop.result == 'skipped') }}
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
     permissions:
       contents: write   # uploads the desktop files to the published release
     steps:
@@ -464,7 +465,7 @@ jobs:
       ${{ !cancelled() && needs.validated.result == 'success'
       && (needs.release.result == 'success' || needs.release.result == 'skipped')
       && needs.validated.outputs.dry_run != 'true' }}
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
     permissions:
       contents: read
     outputs:
@@ -515,7 +516,7 @@ jobs:
       ${{ !cancelled() && needs.recorder-changes.result == 'success'
       && (needs.release.result == 'success' || needs.release.result == 'skipped')
       && (needs.recorder.result == 'success' || needs.recorder.result == 'skipped') }}
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
     permissions:
       contents: write   # uploads the recorder files to the published release
     steps:
@@ -569,7 +570,7 @@ jobs:
     if: >-
       ${{ !cancelled() && needs.desktop-changes.result == 'success'
       && needs.desktop-changes.outputs.build == 'true' }}
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
     permissions:
       contents: read
     outputs:
