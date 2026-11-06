@@ -323,6 +323,22 @@ def test_qa_pass_before_the_merge_wakes_the_builder_to_merge_and_the_merge_moves
     assert step(api, task) == "Pending Release"
 
 
+def test_the_merge_notice_runs_the_merge_and_never_asks_for_a_merged_line_first(api):
+    """Green means ready to enqueue: the builder runs the merge command, a repo with a merge queue queues the PR instead,
+    and the ticket moves once GitHub reports the merge. No notice asks the builder to claim a merge before it happened."""
+    task = ticket(api, step="In QA")
+    _suite(api, "github-actions", "completed", "success", sha=HEAD)
+    qa = check(api, task, "QA: PR #412")
+    verdict(api, qa, "pass")
+    woke = builder_jobs(api)
+    assert len(woke) == 1 and woke[0]["refs"][V.HANDOFF] == "merge", woke
+    body = woke[0]["body"]
+    assert f"gh pr merge 412 --squash --match-head-commit {HEAD}" in body
+    assert "a repo with a merge queue queues the PR instead" in body
+    assert "once GitHub reports the PR merged" in body
+    assert "MERGED" not in body and "merged line" not in body
+
+
 def test_a_board_without_qa_merges_after_its_last_review_once_ci_is_green(api):
     task = ticket(api, step="Review 2")
     flow(api, task, "Review 2", on_pass="merge")

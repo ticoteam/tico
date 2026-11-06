@@ -19,6 +19,9 @@ step. A person moves the task. The repository's webhook posts here signed with
 - a review requested or withdrawn   -> that person is on or off the task in `github_review_role`
 - a push to main                    -> the commits are recorded, in order, in `main_pushes`
 
+A merge queue (`enqueued`, `dequeued`) sets the link's `merge_queue` state. A removal from the queue for any reason but a
+merge wakes the owner once (`_queue_event`); nothing else about a queued pull request is news.
+
 The last hop is a fact of the deploy, not of GitHub: the release manifest names the commit the
 running code was built from (`release.py` writes it from CI), and `ship_deployed` marks a merged
 link `shipped` once its merge commit is at or before that commit on main. Only the repository this
@@ -346,6 +349,30 @@ def record_health_wait(link, detail, *, check_flow=False):
         detail["health_wait"] = {"reason": reason, "since": H.now(), "head": head}
 
 
+# GitHub's `dequeued` payload has a required `reason` but documents no values, and no value for a merge. Every reason but
+# a merge is a removal, unknown ones included.
+MERGED_REASONS = ("merged",)
+
+
+def _queue_event(c, task, link, detail, action, payload, pr, head):
+    """A pull request's merge-queue state (`detail["merge_queue"]`): queued on `enqueued`, and on `dequeued` the reason it
+    was taken out. Returns the owner's notice for a removal that was not a merge, once per head and reason, else None.
+    A removal also records `merge_queue_failed` on the task: the head's next merge wake is then due again
+    (verdict_moves.pr_notice_seen)."""
+    if action == "enqueued":
+        detail["merge_queue"] = {"state": "queued", "head": head, "at": H.now()}
+        return None
+    reason = str(payload.get("reason") or "").strip()
+    before = detail.get("merge_queue") or {}
+    detail["merge_queue"] = {"state": "dequeued", "reason": reason, "head": head, "at": H.now()}
+    if reason.lower() in MERGED_REASONS or pr.get("merged"):
+        return None
+    if (before.get("state"), before.get("head"), before.get("reason")) == ("dequeued", head, reason):
+        return None  # a redelivery of the removal it already wrote
+    H._task_event(c, task["id"], H.KEEPER, "merge_queue_failed", None, f"{link['url']}@{head}", reason)
+    return f"Removed from the merge queue ({reason or 'unknown'}) at {(head or 'unknown')[:12]}: fix and merge again"
+
+
 def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=False):
     from .review_gate import engineering
 
@@ -432,6 +459,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
                 else:
                     detail.pop("head_login", None)
         wake_once = False
+        queue_item = None
         if (
             state == "merged"
             and link["state"] != "merged"
@@ -443,6 +471,8 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
                 detail,
                 f"Merged: {link['title']}; it is not in the repository Tico releases, so no shipped wake follows {url}",
             )
+        if action in ("enqueued", "dequeued"):
+            queue_item = _queue_event(c, task, link, detail, action, payload, pr, detail.get("head_sha") or "")
         conflict_head = detail.get("head_sha") or "unknown"
         conflict_wake = mergeable == "conflict" and detail.get("conflict_head") != conflict_head
         if mergeable == "conflict":
@@ -495,6 +525,8 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             )
         if wake_once:
             queue_wake(c, task, detail["wake_once_fired"]["item"])
+        if queue_item:
+            queue_wake(c, task, queue_item)
         if state == "closed" and link["state"] != state and link["id"] not in registered or conflict_wake:
             # Closed without merging is news; a conflict is a blocker on the bot's own work.
             queue_wake(

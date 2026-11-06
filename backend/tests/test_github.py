@@ -1652,3 +1652,59 @@ def test_a_hand_off_waits_for_a_branch_check_when_a_push_left_no_webhook_and_no_
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (quiet['id'],))
         c.execute("UPDATE task_links SET detail=json_set(detail,'$.ahead',0) WHERE id=?", (local,))
     assert 'has commits with no pull request linked' in review(quiet)
+
+
+def _queue(api, task_id, action, reason=None, head='a' * 40, **over):
+    """A merge-queue webhook for the task's PR at `head`. GitHub's dequeue `reason` rides on the top-level payload."""
+    body = pr_event(action, head={'sha': head}, **over)
+    if reason is not None:
+        body['reason'] = reason
+    return hook(api, 'pull_request', body)
+
+
+def _sent(api):
+    with api.app.state.store.transaction() as c:
+        return G.flush_wakes(c)
+
+
+@pytest.mark.parametrize('reason', ['CHECKS_FAILED', 'SOME_REASON_GITHUB_ADDED_LATER'])
+def test_a_merge_queue_removal_wakes_the_owner_once_with_its_reason(api, reason):
+    """The queue takes a queued pull request out: its owner is woken once, with the reason and the head. A redelivery says
+    nothing new. The removal makes the head's merge wake due again, and a re-enqueue then removed again is news again."""
+    from backend import verdict_moves as V
+
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship the queued change', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    with api.app.state.store.transaction() as c:
+        assert V._merge_woken(c, H.task(c, task['id']), 'a' * 40, H.task_links(c, task['id'])[0]) is True
+    _queue(api, task['id'], 'enqueued')
+    with api.app.state.store.transaction() as c:
+        assert V._queued(H.task_links(c, task['id'])[0], 'a' * 40)
+    _queue(api, task['id'], 'dequeued', reason)
+    item = f"Removed from the merge queue ({reason}) at {'a' * 12}: fix and merge again"
+    assert _burst(api, task['id']) == [item] and _sent(api) == [task['id']]
+    with api.app.state.store.transaction() as c:
+        assert c.execute('SELECT body FROM messages ORDER BY rowid DESC LIMIT 1').fetchone()[0] == item
+        pr = H.task_links(c, task['id'])[0]
+        assert not V._queued(pr, 'a' * 40)
+        assert V._merge_woken(c, H.task(c, task['id']), 'a' * 40, pr) is True  # due again after the removal
+    _queue(api, task['id'], 'dequeued', reason)  # a redelivery of the same removal
+    assert _burst(api, task['id']) == []
+    _queue(api, task['id'], 'enqueued')
+    _queue(api, task['id'], 'dequeued', reason)  # enqueued again, removed again
+    assert _burst(api, task['id']) == [item]
+
+
+@pytest.mark.parametrize('reason', ['merged', 'MERGED'])
+def test_a_merge_queue_removal_for_a_merge_does_not_wake_the_owner(api, reason):
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship the queued change', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    _queue(api, task['id'], 'enqueued')
+    _queue(api, task['id'], 'dequeued', reason)
+    assert _burst(api, task['id']) == []
+    with api.app.state.store.transaction() as c:
+        queue = H._json(H.task_links(c, task['id'])[0]['detail'], {})['merge_queue']
+    assert (queue['state'], queue['reason']) == ('dequeued', reason)
+    # The merge itself is the closed event: a removal that arrives on a merged pull request is not news either.
+    _queue(api, task['id'], 'dequeued', 'CHECKS_FAILED', merged=True)
+    assert _burst(api, task['id']) == []
