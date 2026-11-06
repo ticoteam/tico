@@ -134,7 +134,7 @@ def test_grow_storage_off_keeps_the_size(grow):
     grow.full(0.2)
     grow.tick(1)
     assert grow.row()["size"] == "default" and not events(grow, "cloud_machine.grew")
-    assert claim_on(grow, computer, "ops")["paused"] is None
+    assert claim_on(grow, computer, "ops").get("paused") is None
     # The company turning it off holds for every own machine that has not chosen.
     post(grow.api, "bots/ops/cloud-machine", {"grow_storage": True})
     post(grow.api, "cloud-machines/shared", {"grow_storage": False})
@@ -165,7 +165,7 @@ def test_at_the_largest_size_it_is_a_problem_on_health_not_a_resize(grow):
     row = grow.row()
     assert row["size"] == "xlarge" and row["problem"] == "disk_full" and row["grow_note"]
     assert len(events(grow, "cloud_machine.grow_blocked")) == 1
-    assert "stop" not in grow.hq.actions() and claim_on(grow, computer, "ops")["paused"] is None
+    assert "stop" not in grow.hq.actions() and claim_on(grow, computer, "ops").get("paused") is None
     with grow.store.read() as c:
         found = CM.health(c, grow.api.app.state.settings)
         assert found and found["status"] == "warn" and row["grow_note"] in found["summary"]

@@ -1387,8 +1387,8 @@ class Manager:
         newest sample) is set to the next size with more disk (`grow_plan`); the drain then restarts it at that size
         without cutting a turn (`decide`, `held`). One that cannot grow says why (`disk_full`) until its disk has room.
         Returns the row as it is now; writes only when something changes."""
-        if current["state"] != "running" or not current["runner_id"] or current["deleting"] or current["enroll_by"]:
-            return current
+        if current["state"] not in ON or not current["runner_id"] or current["deleting"] or current["enroll_by"]:
+            return current                              # (HQ may still list a machine whose runner reports as starting)
         from .performance import latest_disks
         with self.store.read() as c:
             disk = latest_disks(c, [current["runner_id"]], at).get(current["runner_id"])
