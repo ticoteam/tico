@@ -525,22 +525,6 @@ def run(args, who=None):
             "refs": args.ref or [], "steer": getattr(args, "steer", False),
             "needs_action": getattr(args, "needs_action", False), "operation_id": key, **_delivery(args),
             **({"visuals": visuals_from_args(args)} if getattr(args, "visual", None) else {})})
-    if fn == "question answer":
-        return post(f"messages/{args.message_id}/answer", {"text": args.text or args.unknown,
-                    "unknown": bool(args.unknown)}, delegate=getattr(args, "on_behalf_of", None) or False)
-    if fn == "question ask":
-        if len(args.words) < 2:
-            raise APIError("usage", 'hub question ask <bot> [<bot>...] "question"')
-        from clients import hubtools
-        wait = max(0, min(int(args.wait), hubtools.ASK_WAIT_MAX))
-        fields = {"operation_id": key}
-        pending, failed = hubtools.ask_create(client, args.words[:-1], args.words[-1], wait, fields)
-        # Said before the wait: a shell that kills a long wait still leaves the bot holding each id.
-        for mid, bot in pending.items():
-            if routed := pending.routed.get(bot):
-                print("hub: " + routed["rerouted"], file=sys.stderr, flush=True)
-            print(f"hub: asked {bot}, message {mid}; waiting up to {wait} s for the answer", file=sys.stderr, flush=True)
-        return {**failed, **hubtools.ask_wait(client, pending, wait, fields)}
     if fn == "note create":
         text = Path(args.text_file).read_text() if args.text_file else args.text
         payload = {"to": target(args.to), "text": text,
@@ -641,13 +625,10 @@ def run(args, who=None):
             return post(f"tasks/{args.id}/qa-waiver", {"head": args.head, "reason": args.reason})
         if sub in ("list", "snooze", "unsnooze", "readers", "followers", "follow", "unfollow"):
             return via_tool(client, args)
-        if sub == "ask":
-            return post(f"tasks/{args.id}/ask", {"text": args.text})
         if sub == "question":
             return via_tool(client, args)
         if sub == "comment":
-            from clients.task_review import ask_from_args, attachment
-            ask = ask_from_args(args)
+            from clients.task_review import attachment
             references = list(getattr(args, "file", None) or [])
             for index, path in enumerate(getattr(args, "attach", None) or []):
                 made = post(f"tasks/{args.id}/files", attachment(path), suffix=f":attachment:{index}")
@@ -662,8 +643,6 @@ def run(args, who=None):
             body = {"text": args.text}
             if references:
                 body["attachments"] = references
-            if ask is not None:
-                body["ask"] = ask
             if getattr(args, "needs_action", False):
                 body["needs_action"] = True
             body.update(_delivery(args))
@@ -684,9 +663,6 @@ def run(args, who=None):
             return s3links.annotate(post(f"tasks/{args.id}/comments/{args.comment_id}", body), links)
         if sub == "comment-delete":
             return post(f"tasks/{args.id}/comments/{args.comment_id}/delete", {})
-        if sub == "ask-resolve":
-            return post(f"tasks/{args.id}/comments/{args.comment_id}/resolve",
-                        {"quote": args.quote} if args.quote is not None else {})
         if sub == "delete":
             return post(f"tasks/{args.id}/delete", {})
         if sub == "deleted":
@@ -719,11 +695,7 @@ def run(args, who=None):
             return post("tasks/" + args.id, body, delegate=asked)
         if sub == "attach":
             path = Path(args.file)
-            from clients.task_review import ask_from_args
             body = {"name": args.name or path.name}
-            ask = ask_from_args(args)
-            if ask is not None:
-                body["ask"] = ask
             if getattr(args, "note", None) is not None:
                 body["note"] = args.note
             if client.features().get("task_files_multipart"):

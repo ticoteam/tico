@@ -1278,12 +1278,8 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, reach=Non
         raise Problem("privacy", "Discuss private tasks in their task conversation", 403)
 
 
-# A bot's unanswered questions to people, and its undecided approvals: `status` counts the readable ones.
-# `{}` is `=?` for one bot or `IN (...)` for many (`status_inputs`).
-ASKS_SQL = (f"SELECT m.*, {H.MESSAGE_TASK_SQL} AS about FROM messages m "
-            "JOIN conversations cv ON cv.id=m.conversation_id "
-            "WHERE m.kind='ask' AND m.sender_id{} AND m.recipient_id LIKE 'human:%' "
-            f"AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL}")
+# A bot's undecided approvals: `status` counts the readable ones. `{match}` is `=?` for one bot or `IN (...)` for many
+# (`status_inputs`).
 APPROVALS_SQL = ("SELECT m.*, a.task_id AS approval_task{by} FROM approvals a JOIN messages m ON m.id=a.message_id "
                  "WHERE a.requested_by_id{match} AND a.decision IS NULL")
 
@@ -1320,9 +1316,9 @@ def status_tasks(c, match, args):
 
 def status_inputs(c, bots):
     """What `status` reads for each of many bots, one query per kind per 500 bots:
-    {bot id: {"tasks": [...], "approvals": [...], "asks": [...]}}, to pass to `status` as keywords."""
+    {bot id: {"tasks": [...], "approvals": [...]}}, to pass to `status` as keywords."""
     snapshot(c)
-    out = {bot: {"tasks": [], "approvals": [], "asks": []} for bot in bots}
+    out = {bot: {"tasks": [], "approvals": []} for bot in bots}
     for part in H.chunks(out):
         actors = ["bot:" + bot for bot in part]
         marks = " IN (" + ",".join("?" * len(actors)) + ")"
@@ -1333,16 +1329,14 @@ def status_inputs(c, bots):
         # Who asked is read alongside, to sort the rows, and left out of the rows `status` is given.
         for m in c.execute(APPROVALS_SQL.format(by=", a.requested_by_id AS by_", match=marks), actors):
             out[H.actor_id(m["by_"])]["approvals"].append({k: m[k] for k in m.keys() if k != "by_"})
-        for m in c.execute(ASKS_SQL.format(marks), actors):
-            out[H.actor_id(m["sender_id"])]["asks"].append(m)
-    # Each open ask and approval is checked as read here, its tasks, parents and rooms read together: not a few
-    # queries per message, which on a busy team were most of a status page's statements.
+    # Each approval is checked as read here, its tasks, parents and rooms read together: not a few queries per
+    # message, which on a busy team were most of a status page's statements.
     if read_cache.cache(c) is not None:
-        prime_messages(c, [m for kinds in out.values() for m in (*kinds["approvals"], *kinds["asks"])])
+        prime_messages(c, [m for kinds in out.values() for m in kinds["approvals"]])
     return out
 
 
-def status(c, who, row, *, tasks=None, approvals=None, asks=None):
+def status(c, who, row, *, tasks=None, approvals=None):
     """Free-form focus/results can contain task content; hide it when provenance is lost."""
     snapshot(c)
     if not row:
@@ -1363,16 +1357,11 @@ def status(c, who, row, *, tasks=None, approvals=None, asks=None):
         row["open_tasks"] = sum(t["owner_id"] == "bot:" + row["bot"] and t["status"] in H.ACTIVE_STATUSES for t in tasks)
     if "needs_human" in row:
         # One per readable task that waits on a person (hubdb._recount): filed for a person (a question task among
-        # them, as a task set waiting on a person files one), or carrying the bot's unanswered question to one.
+        # them, as a task set waiting on a person files one).
         bot = "bot:" + row["bot"]
         live = {t["id"]: t for t in tasks if t["status"] in H.ACTIVE_STATUSES}
         waits = {i for i, t in live.items()
                  if t["requester_id"] == bot and H.is_human(t["owner_id"])}
-        if len(waits) < len(live):
-            # Both are the message rows (`m.*`) as stored, read in this snapshot.
-            for m in asks if asks is not None else c.execute(ASKS_SQL.format("=?"), (bot,)):
-                if m["about"] in live and m["about"] not in waits and message_readable(c, actor(who), m, current=True):
-                    waits.add(m["about"])
         approvals = approvals if approvals is not None else c.execute(APPROVALS_SQL.format(by="", match="=?"), ("bot:" + row["bot"],))
         # An approval on a task already counted is the same wait, counted once (hubdb.status_counts).
         row["needs_human"] = len(waits) + sum(

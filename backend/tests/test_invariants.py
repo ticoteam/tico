@@ -95,25 +95,18 @@ def test_a_bot_task_in_progress_with_no_run_for_an_hour_fires_and_one_with_a_que
 
 
 def test_a_question_to_a_person_who_has_since_left_fires_and_one_to_a_present_person_does_not(api):
-    tid = post(api, "tasks", {"owner": "ops", "title": "Pick a vendor", "body": "x"})["id"]
-    other = post(api, "tasks", {"owner": "ops", "title": "Set a budget", "body": "x"})["id"]
+    from backend import question_tasks as QT
     store = api.app.state.store
     with store.transaction() as c:
-        task = H.task(c, tid)
-        H.say(c, "bot:ops", "human:ana", "Which vendor?", kind="ask", conversation_id=task["conversation_id"],
-              refs={"task": tid})
-        left = c.execute("SELECT id FROM messages WHERE kind='ask' AND recipient_id='human:ana' "
-                         "ORDER BY created_at DESC LIMIT 1").fetchone()[0]
-        # A second open question, on another task so it does not supersede the first, to a person still present.
-        H.say(c, "bot:ops", "human:ana", "Which budget?", kind="ask",
-              conversation_id=H.task(c, other)["conversation_id"], refs={"task": other})
-        # Ana left after the first question was asked: its recipient is now a person not on the roster.
-        c.execute("UPDATE messages SET recipient_id='human:gone' WHERE id=?", (left,))
+        left = QT.ask_alone(c, "bot:ops", "human:ana", "Which vendor?")["id"]
+        QT.ask_alone(c, "bot:ops", "human:ana", "Which budget?")         # to a person still present
+        # Ana left after the first question was asked: its person is now one not on the roster.
+        c.execute("UPDATE tasks SET owner_id='human:gone' WHERE id=?", (left,))
     assert sweep(api)["owner_unreachable"] == 1
-    assert left in examples(api, "owner_unreachable"), "the example is the message id, never the person"
+    assert left in examples(api, "owner_unreachable"), "the example is the task id, never the person"
     with store.transaction() as c:
-        c.execute("UPDATE messages SET superseded_at=? WHERE recipient_id='human:gone'", (ago(minutes=1),))
-    assert sweep(api)["owner_unreachable"] == 0, "a superseded question is no longer open"
+        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (left,))
+    assert sweep(api)["owner_unreachable"] == 0, "a closed question is no longer open"
 
 
 def test_the_same_rule_refusing_one_bot_more_than_twenty_times_in_a_day_fires(api):

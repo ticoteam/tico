@@ -1,11 +1,11 @@
-"""Questions need someone who can answer: system actors have no inbox."""
-import logging
+"""Who a message may go to: every send's recipient gate (require_recipient), its room (named_destination), and whether
+an actor can read a task's question (can_answer). System actors have no inbox."""
 from copy import copy
 from types import SimpleNamespace
 
 from . import hubdb as H
 from . import reach, read_cache, task_privacy
-from .auth import Auth, Identity
+from .auth import Auth
 from .store import Problem
 
 
@@ -20,7 +20,7 @@ def readable(c, target, source=None):
     from .enqueue import external_bot_sql
     from .harnesses import SYNCED_SQL
     # Synced inboxes take only their person's chat messages. Independent external
-    # agents read asks themselves; a synced bot needs its desktop delivery queue.
+    # agents read their messages themselves; a synced bot needs its desktop delivery queue.
     return not read_cache.one(c,
         "SELECT EXISTS(SELECT 1 FROM bot_settings WHERE bot_id=? AND harness IN (" + SYNCED_SQL + ")) AND "
         + external_bot_sql("?"), (H.actor_id(target), target))[0]
@@ -64,11 +64,11 @@ def named_destination(c, who, body, auth, create=True):
     if H.is_human(who.actor) or str(body.to).lower() == "assistant" or str(body.to).startswith("bot:"):
         return None
     to = body.to if str(body.to).startswith("human:") else auth.target(c, who, body.to)
-    return H.chat_home(c, who.actor, to, {"ask": "ask", "notice": "notice"}.get(body.kind, "chat"), create=create)
+    return H.chat_home(c, who.actor, to, "notice" if body.kind == "notice" else "chat", create=create)
 
 
 def require_recipient(c, who, target, refs=None, conversation_id=None, in_reply_to=None, *,
-                      kind="ask", ctx=None, body=None, auth=None, existing=False, delivered=None):
+                      kind="say", ctx=None, body=None, auth=None, existing=False, delivered=None):
     """Every send recipient gate, used for each routing candidate and again on the actual send.
 
     Existing message repairs preserve their room's audience and meeting gates. Fresh sends also check the sender's
@@ -149,8 +149,6 @@ def require_recipient(c, who, target, refs=None, conversation_id=None, in_reply_
         refs["needs_action"] = True
     if wrong := delivery.check(body.delivery, body.defer_for):
         raise Problem("delivery", wrong, 422)
-    if body.delivery and body.kind == "ask":
-        raise Problem("delivery", "A question always wakes the one it is for: send it without a delivery", 422)
     # How it reaches a bot (backend/delivery.py). With none named a message goes as it always has: a person's
     # steers, a bot's goes as bot-to-bot messages do (backend/bot_to_bot.py).
     way = body.delivery
@@ -192,144 +190,3 @@ def require_recipient(c, who, target, refs=None, conversation_id=None, in_reply_
                                      H.message(c, body.in_reply_to) if body.in_reply_to else None)
     body.to, body.refs, body.conversation_id = to, refs, conversation_id
     return body
-
-
-def resolve(c, actor, target, refs=None, conversation_id=None, in_reply_to=None, source=None, *,
-            body=None, who=None, auth=None, existing=False):
-    """Route a system question up the asker's chart, preserving reach and private sources."""
-    resolved = H.resolve_actor(c, target)
-    refs = dict(refs or {})
-    if not resolved or H.is_human(resolved) or H.is_bot(resolved):
-        return target, refs
-    ctx = reach.context(c)
-    managers = reach._managers(ctx)
-    seen, candidates = {actor}, []
-    at = managers.get(actor)
-    while at and at not in seen:
-        seen.add(at)
-        candidates.append(at)
-        at = managers.get(at)
-    if ctx["owner"] not in seen and ctx["owner"]:
-        candidates.append(ctx["owner"])
-    from .teammate_access import _viewer_for
-    who = who or _viewer_for(c, actor) or Identity(actor, H.actor_kind(actor))
-    auth = auth or _recipient_auth(c)
-    last = None
-    for candidate in candidates:
-        if candidate == actor:
-            continue
-        try:
-            # Recipient preparation may open a room. Candidate checks must leave no writes behind, including
-            # when the rule judge is about to run outside the send transaction.
-            hooks = getattr(c, "after_commit", [])
-            hooks_before = len(hooks)
-            c.execute("SAVEPOINT ask_recipient")
-            try:
-                checked = require_recipient(c, who, candidate, refs, conversation_id, in_reply_to,
-                                            ctx=ctx, body=body, auth=auth, existing=existing)
-                # Only system routing needs someone who can answer now. A named bot keeps its held queue.
-                if not can_answer(c, checked.to, checked.refs, checked.conversation_id, checked.in_reply_to,
-                                  source, sender=who.actor):
-                    raise Problem("recipient", "Recipient cannot read or answer the question", 409)
-            finally:
-                c.execute("ROLLBACK TO ask_recipient")
-                c.execute("RELEASE ask_recipient")
-                del hooks[hooks_before:]
-        except Problem as exc:
-            last = exc
-            continue
-        return checked.to, {**refs, "rerouted_from": resolved, **({"who": checked.to} if "who" in refs else {})}
-    if last:
-        raise last
-    raise Problem("recipient", "The system cannot answer. Set a manager or company owner who can read the question.", 409)
-
-
-def notice(c, message):
-    before = (message.get("refs") or {}).get("rerouted_from")
-    return f"{before} is the system; sent to {H.actor_name(c, message['recipient_id'])}" if before else None
-
-
-def _carry_links(c, old, new):
-    """Move live question pointers; keep the old delivery records as history."""
-    for table, columns in (("task_file_reviews", ("ask_message_id", "comment_id")),
-                           ("approvals", ("message_id",)),
-                           ("task_delegations", ("message_id",)),
-                           ("task_check_back_wakes", ("message_id",))):
-        if H._has_table(c, table):
-            for column in columns:
-                c.execute(f"UPDATE {table} SET {column}=? WHERE {column}=?", (new, old))
-    if H._has_table(c, "message_assets"):
-        c.execute("INSERT OR IGNORE INTO message_assets(message_id,blob_id) "
-                  "SELECT ?,blob_id FROM message_assets WHERE message_id=?", (new, old))
-
-
-def _repair_one(c, row):
-    from . import task_holds
-    old = dict(row)
-    refs = H._json(old["refs"], {}) or {}
-    old["refs"] = refs
-    conv = H.conversation(c, old["conversation_id"])
-    tid = H.message_task_id(old, conv)
-    task = H.task(c, tid) if tid else None
-    if task and task["status"] in H.TASK_ENDED:
-        return None
-    meetings = task_privacy.meeting_sources(c).message(old)
-    if meetings:
-        old["refs"] = {**refs, "live_meetings": sorted(meetings)}
-    # Only the same room preserves its audience, including Home and meeting gates.
-    # A different room gets a fresh notice, with no old words, sources or files.
-    if task:
-        conv = H.conversation(c, task["conversation_id"])
-    copy = bool(task and conv["id"] == old["conversation_id"] and not conv.get("closed_at")
-                and not old.get("legacy_audience"))
-    if copy:
-        refs = dict(old["refs"])
-        refs.setdefault("task", tid)
-        body, reply = old["body"], old["in_reply_to"]
-    else:
-        refs = {"task": tid} if task else {}
-        body = ("Please ask the owner to restate their question here." if task else
-                "Please ask the sender to restate their question here.")
-        reply = None
-    target, refs = resolve(c, old["sender_id"], old["recipient_id"], refs,
-                           conv["id"] if task else None, reply, source=old if copy else None, existing=True)
-    if target == old["recipient_id"]:
-        return None
-    if not task:
-        conv = H._pair_conversation(c, old["sender_id"], target, "ask", allow_held=True)
-    at = H.now()
-    refs.update(resent_from=old["id"], asked_again_at=at)
-    c.execute("UPDATE messages SET superseded_at=? WHERE id=?", (at, old["id"]))
-    new = H._write_message(c, old["sender_id"], target, body, conv, "ask", refs, reply, old["wait_s"])
-    if copy:
-        _carry_links(c, old["id"], new["id"])
-    c.execute("UPDATE messages SET refs=? WHERE id=?",
-              (H._dump({**old["refs"], "resent_as": new["id"]}), old["id"]))
-    if task:
-        task_holds.refresh(c, tid)
-        if (task.get("blocked_reason") or "").startswith("Waiting on " + old["recipient_id"]):
-            task_holds.change(c, tid, "blocked", reason=task_holds.words(c, task_holds.holds(c, H.task(c, tid))))
-        H._task_event(c, tid, H.KEEPER, "ask_resent", old["id"], new["id"], notice(c, new))
-    H.event(c, H.KEEPER, "ask.resent", old["id"], {"to": target, "message": new["id"], "task": tid})
-    return new["id"]
-
-
-def repair(c):
-    """Re-send each open system ask atomically; one failed row must never prevent startup."""
-    moved = []
-    for row in c.execute("SELECT m.* FROM messages m WHERE m.kind='ask' AND m.deleted_at IS NULL "
-                         "AND coalesce(m.recipient_id,'') NOT LIKE 'human:%' "
-                         f"AND coalesce(m.recipient_id,'') NOT LIKE 'bot:%' AND {H.OPEN_ASK_SQL} "
-                         "ORDER BY m.created_at").fetchall():
-        c.execute("SAVEPOINT resend_system_ask")
-        try:
-            mid = _repair_one(c, row)
-        except Exception:
-            c.execute("ROLLBACK TO resend_system_ask")
-            logging.getLogger(__name__).exception("Could not re-send system ask %s; left for Health", row["id"])
-        else:
-            if mid:
-                moved.append(mid)
-        finally:
-            c.execute("RELEASE resend_system_ask")
-    return moved

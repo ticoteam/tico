@@ -1,10 +1,10 @@
-"""Structured reviews use the existing task ask/answer messages and wake path."""
+"""Structured questions: the checks a question task's question meets (check_ask), the answers to one (answer_task),
+and file version notes. Old ask messages on comments and file versions are history (step 6c)."""
 from datetime import timezone
 import html
 import re
 
-from .store import H, Problem, encode
-from . import still_wanted
+from .store import H, Problem
 from . import task_privacy as privacy
 
 
@@ -104,8 +104,9 @@ def file_added(c, who, task_id, item, number, poster=None):
 
 
 def check_ask(c, task_id, ask, auth, who, lint=True):
-    """The ask a comment or file version puts, as stored, after its checks. A bot's ask to a person also keeps the
-    asking rules (hubdb.lint_question), unless the caller checked them already (`lint` false)."""
+    """The question a question task carries (media.question_write), as stored, after its checks: it goes to `ask.who`,
+    else the task's requester. A bot's question to a person also keeps the asking rules (hubdb.lint_question), unless
+    the caller checked them already (`lint` false)."""
     if not ask:
         return None
     value = ask.model_dump(exclude_none=True)
@@ -123,8 +124,11 @@ def check_ask(c, task_id, ask, auth, who, lint=True):
             if not option.get("recommended"):
                 option.pop("recommended", None)
     row = H.task(c, task_id)
-    target, refs = H.task_ask_route(c, who.actor, row, value)
-    value = {k: v for k, v in refs.items() if k != "task"}
+    target = H.resolve_actor(c, ask.who) if ask.who else row["requester_id"]
+    if H.task_private(c, row) and (H.is_human(target) or H.is_bot(target)):
+        from .auth import actor_reads_task
+        if not actor_reads_task(c, target, row):
+            raise Problem("private", "Only someone who can read the task can receive its questions", 403)
     if lint and who.role == "bot":
         H.require_plain_question(c, who.actor, target, ask.questions)
     if ask.who:
@@ -188,83 +192,17 @@ def version_review(c, fid, number, *, actor):
 
 
 def edit_version(c, auth, who, task_id, fid, number, body):
+    """Whoever added a file version changes its note. A question about it is a question task (`hub task question`)."""
     auth.task(c, who, task_id)
     H._writer(c, who.actor, task_id=task_id)
-    if body.ask is not None:
-        comment_rights(c, auth, who, task_id)
     version = file_version(c, task_id, fid, number, auth=auth, who=who)
     if version["actor"] != who.actor:
-        raise Problem("forbidden", "Only whoever added this version may edit its note or question", 403)
-    value = check_ask(c, task_id, body.ask, auth, who)
-    current = version_review(c, fid, number, actor=privacy.actor(who))
+        raise Problem("forbidden", "Only whoever added this version may edit its note", 403)
     c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task_id))
     c.execute("INSERT OR IGNORE INTO task_file_reviews(file_id,version) VALUES(?,?)", (fid, number))
     if "note" in body.model_fields_set:
         c.execute("UPDATE task_file_reviews SET note=? WHERE file_id=? AND version=?", (body.note, fid, number))
-    if "ask" in body.model_fields_set:
-        existing = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=?",
-                             (fid, number)).fetchone()[0]
-        if existing:
-            if value is None or value == {k: v for k, v in (current["ask"] or {}).items() if k != "by"}:
-                return version_review(c, fid, number, actor=privacy.actor(who))
-            if H.answers_to(c, [existing]):
-                raise Problem("validation", "This version's question was answered; attach a new version for another review", 422)
-            asked = H.message(c, existing)
-            H._message_writer(c, who.actor, asked, H.conversation(c, asked["conversation_id"]))
-            row = H.task(c, task_id)
-            recipient, refs = H.task_ask_route(c, who.actor, row, {**asked["refs"], **value})
-            c.execute("UPDATE messages SET refs=?,recipient_id=? WHERE id=?",
-                      (encode(refs), recipient, existing))
-            return version_review(c, fid, number, actor=privacy.actor(who))
-        if value:
-            text, refs = H.sourced_text(body.note or f'Review "{version["name"]}" v{number}.',
-                                       [] if body.note else [{"file": fid, "version": number}],
-                                       {"target": {"file": fid, "version": number}})
-            msg = H.task_comment(c, who.actor, task_id, text, ask=value, extra_refs=refs)
-            c.execute("UPDATE task_file_reviews SET ask_message_id=? WHERE file_id=? AND version=?",
-                      (msg["id"], fid, number))
     return version_review(c, fid, number, actor=privacy.actor(who))
-
-
-def answer_text(c, auth, who, asked, text, *, unknown=False, warn=""):
-    """Only a unique exact label for one question can stand in for a card pick. `warn` (an org rule's Warn,
-    backend/org_rule_check.py) goes on the message the asker reads, after the pick is resolved on `text` itself."""
-    from . import models as M
-    if asked["recipient_id"] != who.actor or asked["sender_id"] == who.actor:
-        raise Problem("forbidden", "Only the question's recipient may answer it", 403)
-    privacy.require_message(c, who, asked)
-    task_id = H.message_task_id(asked, H.conversation(c, asked["conversation_id"]))
-    questions = asked["refs"]["questions"]
-    matches = [o["label"] for q in questions for o in q["options"] if o["label"] == text]
-    if task_id and not unknown and len(questions) == 1 and len(matches) == 1:
-        target = asked["refs"].get("target") or {"comment": asked["id"]}
-        return answer_task(c, auth, who, task_id, M.TaskAnswer(
-            target=target, answers={questions[0]["id"]: matches}), wake=True, warn=warn)
-    # The original words stay on the task; an unmatched note cannot settle its question.
-    note = H.answer(c, who.actor, asked["id"], warn + "\n\n" + text if warn else text, unknown=unknown,
-                    classify_text=text, turn_id=who.attempt_id)
-    return {**note, "decision_open": True,
-            "feedback": "Note saved. Decision still open; choose one of the options."}
-
-
-def reply_answer(c, auth, who, asked, text, warn=""):
-    """A turn's reply to the question it was asked (a completion, Send anyway of a held one), as a message: on an
-    options question the pick is resolved on the reply's own text, as an answer typed in is (`answer_text`), and
-    `warn` goes on the message the asker reads. A pick the reply may not make there stays the plain answer; None when
-    that same pick was already recorded."""
-    if H.has_pick_options(asked):
-        c.execute("SAVEPOINT reply_answer")
-        try:
-            out = answer_text(c, auth, who, asked, text, warn=warn)
-        except Problem:
-            c.execute("ROLLBACK TO reply_answer")
-            c.execute("RELEASE reply_answer")
-        else:
-            c.execute("RELEASE reply_answer")
-            made = out.get("comment") or (out if out.get("id") else None)
-            return H.message(c, made["id"]) if made else None      # None: that very pick was already recorded
-    return H.answer(c, who.actor, asked["id"], warn + "\n\n" + text if warn else text, classify_text=text,
-                    turn_id=who.attempt_id)
 
 
 def checked_answers(questions, refs, body):
@@ -318,81 +256,16 @@ def answer_words(name, questions, body, passed, subject=None):
 
 
 def answer_task(c, auth, who, task_id, body, wake, warn=""):
-    """A structured answer. `warn` (an org rule's Warn) opens the answer comment its readers get; the answer itself
-    (its picks and Other text) is recorded as given."""
+    """A structured answer to a question task (backend/question_tasks.py): the answer is its close. `warn` (an org
+    rule's Warn) opens the answer its readers get. A comment's or file version's ask is history (step 6c): it is not
+    answered any more."""
     H._writer(c, who.actor, task_id=task_id)
-    if body.target.task:
-        # A question task (backend/question_tasks.py): the answer is its close.
-        if body.target.task != task_id:
-            raise Problem("not_found", "Question not found on this task", 404)
-        from . import question_tasks
-        return question_tasks.answer(c, auth, who, task_id, body, warn)
-    mark = H.jobs_mark(c)
-    comment_rights(c, auth, who, task_id)
-    target = body.target.model_dump(exclude_none=True)
-    version = None
-    if body.target.comment:
-        asked = H.message(c, body.target.comment)
-        if not asked or H.message_task_id(asked, H.conversation(c, asked["conversation_id"])) != task_id:
-            raise Problem("not_found", "Question not found on this task", 404)
-        if (asked.get("refs") or {}).get("target"):
-            raise Problem("validation", "Use the file and version target for a file question", 422)
-    else:
-        version = file_version(c, task_id, body.target.file, body.target.version, auth=auth, who=who)
-        review = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=?",
-                           (body.target.file, body.target.version)).fetchone()
-        asked = H.message(c, review[0]) if review and review[0] else None
-    if not asked or asked["kind"] != "ask" or not asked["refs"].get("questions"):
-        raise Problem("validation", "The target has no structured question", 422)
-    privacy.require_message(c, who, asked)
-    H._message_writer(c, who.actor, asked, H.conversation(c, asked["conversation_id"]))
-    if asked["sender_id"] == who.actor:
-        raise Problem("forbidden", "The asker cannot answer their own question", 403)
-    # A bot's question answered by the person it was put to (or its task waits on) is that bot's next move: it wakes.
-    wake = wake or H.is_bot(asked["sender_id"]) and (
-        asked["recipient_id"] == who.actor or H._waits_on(c, H.task(c, task_id), who.actor))
-    questions = {q["id"]: q for q in asked["refs"]["questions"]}
-    body, passed = checked_answers(questions, asked["refs"], body)
-    by = H.human(c, H.actor_id(who.actor)) if H.is_human(who.actor) else H.bot(c, H.actor_id(who.actor))
-    name = readable_text((by or {}).get("name") or H.actor_id(who.actor))
-    subject = f'"{readable_text(version["name"])}" v{body.target.version}' if version else "the question"
-    text = answer_words(name, questions, body, passed, subject if version else None)
-    if body.other:
-        text += " " + body.other
-    if warn:
-        text = warn + "\n\n" + text
-    value = {"target": target, "answers": body.answers, "other": body.other, "dismiss": body.dismiss,
-             "by": who.actor, "at": H.now(), **({"not": {k: v for k, v in passed.items() if v}}
-                                                 if any(passed.values()) else {})}
-    # Files under review (backend/file_reviews.py): the answer says what it judged of each exact version.
-    from . import file_reviews
-    review, spend = asked["refs"].get("review"), asked["refs"].get("spend")
-    labels = [] if body.dismiss else [label for picks in body.answers.values() for label in picks]
-    if review and not body.dismiss:
-        value["reviewed"] = file_reviews.verdicts(review, labels, body.other)
-        file_reviews.require_readable(c, auth, who, value["reviewed"])
-    # Repeated deliveries with a new transport key still record only one identical choice.
-    previous = H.review_answers(c, asked["id"], actor=privacy.actor(who))
-    for answer in previous:
-        if all(answer.get(k) == value.get(k) for k in ("target", "answers", "other", "dismiss", "by")):
-            return {"answer": answer, "comments": H.task_comments(c, task_id, actor=privacy.actor(who)),
-                    "woke": False}
-    if spend and spend["label"] in labels:
-        value["spend_approval"] = file_reviews.spend_approval(c, who, asked, task_id, spend, previous)
-    picked = still_wanted.choice(asked, body, who.actor)
-    if picked == still_wanted.CLOSE:
-        wake = False                 # the close itself tells the bot; the answer need not start a run too
-    text, refs = H.answer_text(asked, body.answers, text=text, passed=passed, refs={"answer": value},
-                               file_subject=bool(version))
-    value = refs["answer"]
-    msg = H.task_comment(c, who.actor, task_id, text, wake=wake, extra_refs=refs,
-                         answer_to=asked["id"], answer_text=body.other or "")
-    if value.get("reviewed"):
-        file_reviews.record(c, who, task_id, asked["id"], msg["id"], value["reviewed"])
-    still_wanted.act(c, who.actor, task_id, picked)
-    return {"comment": {**msg, "answer": value}, "answer": value,
-            "comments": H.task_comments(c, task_id, actor=privacy.actor(who)),
-            **H.comment_delivery(c, msg, since=mark)}
+    if not body.target.task:
+        raise Problem("asks_gone", "Asks are gone: a question is a question task now; answer it with target {task}", 422)
+    if body.target.task != task_id:
+        raise Problem("not_found", "Question not found on this task", 404)
+    from . import question_tasks
+    return question_tasks.answer(c, auth, who, task_id, body, warn)
 
 
 # The newest visual per task. `bot_files_task` (backend/files.py) finds a task's files without scanning every file.

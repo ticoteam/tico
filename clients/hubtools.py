@@ -30,7 +30,6 @@ from pathlib import Path
 
 from clients import s3links
 from clients.agent_skill import WHO_NEEDS_ME
-from clients.task_review import ASK_SCHEMA
 
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26")
 def release_version():
@@ -210,7 +209,7 @@ def _uploaded(made):
       "(a nonempty first line, under 120 words) and capped at 10 unsolicited a day. `fyi` expects no reply. "
       "An ordinary bot-to-bot message does not deliver the recipient's final reply, and waits for the recipient's "
       "next run unless needs_action. "
-      "Use hub_question_ask when you need an answer. Use in_reply_to or steer for a correction to an active run; "
+      "To get an answer from a bot, set needs_action. Use in_reply_to or steer for a correction to an active run; "
       "it is queued until the Computer applies it.",
       {"to": _s("Recipient: a bot slug, `bot:<slug>`, or a human id"),
        "text": _s("The message"),
@@ -418,108 +417,10 @@ def feedback_rule(api, args):
     return api.post("feedback/" + quote(args["id"], safe="") + "/rule", body, key=_key(args))
 
 
-@tool("hub_question_ask", "Ask one or more bots a question and wait for their answers. Returns one entry "
-      "per bot: `answer`, `unknown`, `timeout`, `warning` (delivered to a bot over its spend limit; not waited for) or `error`, "
-      "each with the ask's `message_id` once it was delivered. "
-      "A timed-out ask stays open and its answer reaches you later under that id; an `error` entry was not "
-      "delivered and says why. Calling again with the same question does not send it twice. Asks nest at most "
-      "three deep. To ask a person about a task, use hub_task_ask: that question reaches their Needs you.",
-      {"bots": {"type": "array", "items": {"type": "string"}, "minItems": 1,
-                "description": "Bot slugs to ask"},
-       "text": _s("The question"),
-       "wait_s": {"type": "integer", "minimum": 0, "maximum": ASK_WAIT_MAX, "default": 60,
-                  "description": "How long to wait for answers, in seconds"}},
-      required=("bots", "text"), writes=True)
-def ask(api, args):
-    wait = max(0, min(int(args.get("wait_s", 60) or 0), ASK_WAIT_MAX))
-    pending, failed = ask_create(api, args["bots"], args["text"], wait, args)
-    return {**failed, **ask_wait(api, pending, wait, args)}
-
-
-def ask_key(args, bot, text, wait, i):
-    """The ask's Idempotency-Key: the caller's operation id, or one made from the question itself, so a bot that
-    calls again after a lost reply gets the same message back instead of asking twice (the server keeps keys 48 h)."""
-    if args.get("operation_id"):
-        return _key(args, f":ask:{i}")
-    return "ask:" + hashlib.sha256(json.dumps([bot, text, wait]).encode()).hexdigest()[:48]
-
-
-class PendingAsks(dict):
-    def __init__(self):
-        super().__init__()
-        self.routed = {}
-
-
-def ask_create(api, bots, text, wait, args):
-    """Send the ask to each bot: `({message_id: bot}, {bot: {"error": why} or {"warning": why, "message_id": id}})`. Each send is one short request;
-    the wait is separate (`ask_wait`), so a wait that ends early never loses an id that was handed out."""
-    pending, failed = PendingAsks(), {}
-    for i, bot in enumerate(bots):
-        try:
-            msg = api.post("messages", {"to": bot, "text": text, "kind": "ask", "wait_s": wait},
-                           key=ask_key(args, bot, text, wait, i))
-        except APIError as exc:
-            if exc.code == "unavailable":       # it may have landed: the same key makes a retry safe
-                failed[bot] = {"error": "The question may not have been delivered: Tico did not confirm it in time. "
-                                        "Retry; the same question is not sent twice. Or put it in the task note.",
-                               "retryable": True}
-            else:
-                failed[bot] = {"error": f"The question was not delivered: {exc.detail}. Retry, or put it in the task note."}
-            continue
-        if msg.get("rerouted"):
-            pending.routed[bot] = {"recipient_id": msg["recipient_id"], "rerouted": msg["rerouted"]}
-        if msg.get("warning"):          # over its spend limit: delivered, but no answer comes before it resets
-            failed[bot] = {"warning": msg["warning"], "message_id": msg["id"], **pending.routed.get(bot, {})}
-            continue
-        pending[msg["id"]] = bot
-    if failed and not pending and not any("warning" in v for v in failed.values()):
-        raise APIError("not_delivered", " ".join(v["error"] for v in failed.values()),
-                       retryable=any(v.get("retryable") for v in failed.values()))
-    return pending, failed
-
-
-def ask_wait(api, pending, wait, args):
-    """Poll for the answers until `wait` runs out. An entry that has none yet is `timeout` with its `message_id`,
-    also when Tico stops answering the poll: the ask was delivered and its answer reaches the bot later."""
-    routed = getattr(pending, "routed", {})
-    pending, result = dict(pending), {}
-    deadline = time.monotonic() + wait
-    while pending:
-        try:
-            answers = api.get("answers", ids=",".join(pending))
-        except APIError:
-            break
-        for mid, answer in answers.items():
-            bot = pending.pop(mid)
-            result[bot] = {"unknown" if (answer.get("refs") or {}).get("unknown") else "answer": answer["body"],
-                           "message_id": mid}
-            try:
-                api.post(f"messages/{answer['id']}/ack", {}, key=_key(args, ":ack:" + answer["id"]))
-            except APIError:
-                pass                    # an unacknowledged answer is only delivered again; it is not lost
-        if not pending or time.monotonic() >= deadline:
-            break
-        time.sleep(1)
-    result.update({bot: {"timeout": True, "message_id": mid} for mid, bot in pending.items()})
-    return {bot: {**item, **routed.get(bot, {})} for bot, item in result.items()}
-
-
 # The Assistant, citing the person's message for something they asked for (`_asked`).
 ASKED = _s("Assistant only: the person asked for this in their Assistant chat: `turn` (the message that started "
            "this run) or its id. Omit unless they clearly asked; propose instead")
 
-
-@tool("hub_question_answer", "Answer a question another bot asked you. The Assistant answers a bot's question to its "
-      "person in the person's own words, citing the message where they gave it (on_behalf_of).",
-      {"message_id": _s("The ask's message id"),
-       "text": _s("Your answer"),
-       "unknown": {"type": "boolean", "default": False,
-                   "description": "True when you cannot answer; `text` then says what you would need"},
-       "on_behalf_of": ASKED},
-      required=("message_id", "text"), writes=True)
-def answer(api, args):
-    return _asked(api, args).post(f"messages/{args['message_id']}/answer",
-                                  {"text": args["text"], "unknown": bool(args.get("unknown"))}, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- meetings
@@ -931,13 +832,6 @@ def task_list(api, args):
     return {"tasks": rows, "bots": api.get("bots")} if args.get("all") else rows
 
 
-@tool("hub_task_ask", "Ask the task's requester one question that unblocks you. A system requester routes to your manager or the company owner. One open question at a time; wait for its answer before asking another.",
-      {"id": TASK_ID, "text": _s("The question, and only the question")},
-      required=("id", "text"), writes=True)
-def task_ask(api, args):
-    return api.post(f"tasks/{args['id']}/ask", {"text": args["text"]}, key=_key(args))
-
-
 @tool("hub_task_question", "Put one decision to a person as a task they own, in one call: a pick between 2 to 6 "
       "options (an option may carry an image or file) or, with no options, Yes / No. Asked from a run on one of your "
       "tasks it is that task's subtask and your task is blocked on it; their answer closes it and you hear it once. "
@@ -1260,7 +1154,7 @@ def task_type_delete(api, args):
 
 @tool("hub_task_comment", "Leave a comment on a task: progress, a question for the people on it, "
       "a link to what you found. It is on the record with your name; it is not a chat.",
-      {"id": TASK_ID, "text": _s("The comment"), "ask": ASK_SCHEMA,
+      {"id": TASK_ID, "text": _s("The comment"),
        "public": {"type": "boolean"}, "approval_id": _s("Exact publish approval for a bot public reply"),
        "attachments": {"type": "array", "items": {"type": "string"}, "description": "File versions as file_id@version: on this task, or (a person) a chat file "
                        "you can open as its id@1, which the comment shares to the task"},
@@ -1277,7 +1171,7 @@ def task_type_delete(api, args):
        "defer_for": DEFER_FOR},
       required=("id", "text"), writes=True)
 def task_comment(api, args):
-    body = {k: args[k] for k in ("text", "ask", "attachments", "public", "approval_id", "needs_action") if k in args}
+    body = {k: args[k] for k in ("text", "attachments", "public", "approval_id", "needs_action") if k in args}
     body.update({"delivery": "goal"} if args.get("delivery") == "goal" else _delivery(args))
     local = []
     if args.get("visuals"):
@@ -1314,17 +1208,6 @@ def task_comment_edit(api, args):
       "bot.", {"id": TASK_ID, "comment_id": COMMENT_ID}, required=("id", "comment_id"), writes=True)
 def task_comment_delete(api, args):
     return api.post(f"tasks/{args['id']}/comments/{args['comment_id']}/delete", {}, key=_key(args))
-
-
-@tool("hub_task_ask_resolve", "Settle an open question on a task that the person answered somewhere else, such as "
-      "in chat: pass their words as quote (the question's asker or the task's owner bot). Without quote, the asker "
-      "withdraws a question no longer wanted. Either way it leaves the person's Needs you; it wakes nobody.",
-      {"id": TASK_ID, "comment_id": _s("The question's id (`id` in the task's `comments`)"),
-       "quote": _s("The person's answer in their own words, as they gave it")},
-      required=("id", "comment_id"), writes=True)
-def task_ask_resolve(api, args):
-    body = {"quote": args["quote"]} if args.get("quote") is not None else {}
-    return api.post(f"tasks/{args['id']}/comments/{args['comment_id']}/resolve", body, key=_key(args))
 
 
 @tool("hub_task_delete", "Delete a task made by mistake, such as a duplicate: it goes to the trash and can be "
@@ -2778,7 +2661,7 @@ def intake_resolve(api, args):
        "poster": _s("Optional local PNG or JPEG poster with path"),
        "text": _s("The file's text, for a text or Markdown file"),
        "content_base64": _s("The file's bytes, base64-encoded, for anything that is not text"),
-       "note": {"type": "string", "maxLength": 500}, "ask": ASK_SCHEMA},
+       "note": {"type": "string", "maxLength": 500}},
       required=("id", "name"), writes=True)
 def task_attach(api, args):
     body = {"name": args["name"]}
@@ -2787,7 +2670,7 @@ def task_attach(api, args):
             raise ValueError("Stream local files with hub task attach on your Computer")
         from . import bot_files as BF
         path, _ = BF.local_file(BF.checkout_root(), args["path"])
-        fields = {k: args[k] for k in ("name", "note", "ask") if args.get(k) is not None}
+        fields = {k: args[k] for k in ("name", "note") if args.get(k) is not None}
         if api.features().get("task_files_multipart"):
             uploads = {"file": path}
             if args.get("poster"):
@@ -2800,7 +2683,7 @@ def task_attach(api, args):
         if len(data) > 10_000_000:
             raise ValueError("This server accepts files up to 10 MB")
         body["content_base64"] = base64.b64encode(data).decode()
-    for field in ("text", "content_base64", "note", "ask"):
+    for field in ("text", "content_base64", "note"):
         if args.get(field) is not None:
             body[field] = args[field]
     return api.post(f"tasks/{args['id']}/files", body, key=_key(args))
@@ -5964,8 +5847,8 @@ def _reaction_path(args):
 
 
 def _thread_message(args, **more):
-    """A message body for a thread post or reply: the text, its kind, who it is addressed to and its references."""
-    body = {"text": args["text"], "kind": args.get("kind") or "say", "to": args.get("to"), **more}
+    """A message body for a thread post or reply: the text, who it is addressed to and its references."""
+    body = {"text": args["text"], "kind": "say", "to": args.get("to"), **more}
     if args.get("refs"):
         body["refs"] = _refs(args["refs"])
     return {key: value for key, value in body.items() if value is not None}
@@ -6011,12 +5894,11 @@ def thread_create(api, args):
     return api.post("threads", body, key=_key(args))
 
 
-@tool("hub_thread_post", "Post a message to a thread. kind ask asks the person or bot in `to` for an answer. To answer "
+@tool("hub_thread_post", "Post a message to a thread. To answer "
       "one message, give its id as reply_to: your message stays in the thread, quoting the one it answers, and a bot "
       "you reply to hears it as an @mention. A name in the text does not add anyone: someone outside the thread gets a "
       "warning and nothing else, until you add them with hub_thread_members_add.",
       {"thread": THREAD_ID, "text": _s("The message"),
-       "kind": {"type": "string", "enum": ["say", "ask"], "default": "say"},
        "to": THREAD_ACTOR,
        "reply_to": _s("The id of the message this answers, in the same thread or a sub-thread under it"),
        "refs": {"type": "array", "items": {"type": "string"}, "description": "References like task:<id>"}},
@@ -6221,8 +6103,8 @@ def thread_open_earlier(api, args):
     return api.post(_thread_path(args["thread_id"], "open-earlier"), {}, key=_key(args))
 
 
-@tool("hub_thread_delete", "Delete a message you wrote. It leaves a marker with no text, its sub-thread stays, and the asks "
-      "it answered reopen. Asks, answers and notices cannot be deleted by their writers this way.",
+@tool("hub_thread_delete", "Delete a message you wrote. It leaves a marker with no text and its sub-thread stays. "
+      "Notices cannot be deleted by their writers this way.",
       {"message_id": _s("The message's id")}, required=("message_id",), writes=True)
 def thread_delete(api, args):
     return api.call("DELETE", "messages/" + quote(args["message_id"], safe=""), None, key=_key(args))
@@ -6231,8 +6113,7 @@ def thread_delete(api, args):
 @tool("hub_thread_upload", "Post a message with a local file to a thread: the file is streamed to Tico, and `text` is the "
       "message's words (optional). `under` posts it in that message's sub-thread. Needs a Computer to stream from.",
       {"thread": THREAD_ID, "path": _s("A local file on this computer"), "text": _s("The message's text, optional"),
-       "kind": {"type": "string", "enum": ["say", "ask"], "default": "say", "description": "say, or ask for an answer"},
-       "to": _s("The person or bot an ask is for"),
+       "to": THREAD_ACTOR,
        "under": _s("The message whose sub-thread the file goes under (optional)"),
        "reply_to": _s("The id of the message this answers (optional): the file stays in the thread, quoting it")},
       required=("thread", "path"), writes=True)
@@ -6241,7 +6122,7 @@ def thread_upload(api, args):
         raise ValueError("Stream local files with hub thread upload on your Computer")
     from . import bot_files as BF
     path, _ = BF.local_file(BF.checkout_root(), args["path"])
-    fields = {"text": args.get("text"), "kind": args.get("kind"), "to": args.get("to"),
+    fields = {"text": args.get("text"), "to": args.get("to"),
               "parent_message_id": args.get("under"), "in_reply_to": args.get("reply_to")}
     fields = {name: value for name, value in fields.items() if value is not None}
     return api.post_multipart("uploads/threads/" + quote(str(args["thread"]), safe="") + "/messages", {"file": path},
@@ -7968,7 +7849,6 @@ HUMANS_AND_ASSISTANT = PEOPLE + ("assistant",)      # views.human_only: bots are
 # A write the Assistant may make on its own (backend/assistant.py write_allowed): anything else it proposes.
 ASSISTANT_WRITES = {"hub_email_cancel", "hub_goal_read_back", "hub_goal_save", "hub_goal_create", "hub_goal_update", "hub_kpi_create", "hub_kpi_link", "hub_kpi_target", "hub_kpi_unlink", "hub_proposal_decide", "hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_done", "hub_task_comment", "hub_task_label",
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
-                    "hub_question_answer",
                     "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",
                     "hub_assistant_withdraw",
                     "hub_assistant_change_restore",
@@ -8123,9 +8003,9 @@ ASSISTANT_TOOLS = frozenset({
     "hub_doc_search", "hub_file_import", "hub_file_link", "hub_file_publish", "hub_file_touch",
     "hub_goal_list", "hub_goal_read_back", "hub_goal_save", "hub_goal_show", "hub_health_check",
     "hub_kpi_list", "hub_meeting_read", "hub_meeting_search", "hub_message_list", "hub_message_send",
-    "hub_needs_you_commit", "hub_needs_you_next", "hub_proposal_list", "hub_question_answer",
-    "hub_question_ask", "hub_replay_show", "hub_rules_add", "hub_settings_ask", "hub_settings_find",
-    "hub_settings_set", "hub_settings_show", "hub_strategy_show", "hub_task_ask", "hub_task_close",
+    "hub_needs_you_commit", "hub_needs_you_next", "hub_proposal_list",
+    "hub_replay_show", "hub_rules_add", "hub_settings_ask", "hub_settings_find",
+    "hub_settings_set", "hub_settings_show", "hub_strategy_show", "hub_task_close",
     "hub_task_comment", "hub_task_create", "hub_task_list", "hub_task_question", "hub_task_show",
     "hub_task_update", "hub_team_show",
     "hub_automation_restore", "hub_automation_versions", "hub_bot_model", "hub_bot_pause", "hub_bot_resume",
@@ -8166,7 +8046,6 @@ def listing(local=False, kind=None):
 RENAMED_TOOLS = {
     "hub_say": "hub_message_send", "hub_notice": "hub_message_send", "hub_inbox": "hub_message_list",
     "hub_ack": "hub_message_mark_read", "hub_history": "hub_conversation_show",
-    "hub_ask": "hub_question_ask", "hub_answer": "hub_question_answer",
     "hub_board": "hub_task_list", "hub_task_stuck": "hub_task_list",
     "hub_goals": "hub_goal_list", "hub_goal_auto": "hub_goal_status", "hub_kpi_add": "hub_kpi_create",
     "hub_context_search": "hub_doc_search", "hub_context_show": "hub_doc_read",
@@ -8186,6 +8065,11 @@ RENAMED_TOOLS = {
     "hub_rule_set": "hub_automation_update", "hub_rule_update": "hub_automation_update",
     "hub_rule_delete": "hub_automation_update",
 }
+# Tools taken away with asks (Tico 0.5): a call by one of these names is answered with its replacement, in one line.
+ASK_GONE = "ask a person with hub_task_question; ask a bot with hub_message_send and needs_action"
+ANSWER_GONE = "a question to a person is a question task, answered in Tico (Needs you); a bot's question is a DM"
+REMOVED_TOOLS = {"hub_question_ask": ASK_GONE, "hub_ask": ASK_GONE, "hub_task_ask": ASK_GONE,
+                 "hub_question_answer": ANSWER_GONE, "hub_answer": ANSWER_GONE, "hub_task_ask_resolve": ANSWER_GONE}
 # Older names a call still runs under, unlisted. `hub_task_defer` says when a carried task is picked up again (a
 # hold, not a delivery): `defer` is the delivery word now (backend/delivery.py).
 CALL_ALIASES = {"hub_task_defer": "hub_task_later"}
@@ -8318,6 +8202,9 @@ class Protocol:
                 name = "hub_doc_search"
         name = CALL_ALIASES.get(name, name)
         entry = BY_NAME.get(name)
+        if not entry and name in REMOVED_TOOLS:
+            return self._tool_error(rid, {"error": "removed", "detail": f"`{name}` is gone: {REMOVED_TOOLS[name]}.",
+                                          "retryable": False})
         if not entry and (new := renamed_to(name)):
             return self._tool_error(rid, {"error": "renamed", "detail": f"`{name}` was renamed `{new}` in Tico 0.2.21.",
                                           "renamed_to": new, "retryable": False})

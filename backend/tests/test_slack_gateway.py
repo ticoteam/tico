@@ -304,6 +304,33 @@ def routed_reply(gateway, hub, text="Done."):
     return reply["id"]
 
 
+def test_a_follow_up_answers_the_bots_open_question_task_asked_since_the_person_last_wrote(gateway, hub):
+    """No asks since step 6c: a bot's question to a person is a question task, and their Slack follow-up to the bot's
+    last line answers it when it is the one asked since they last wrote in that thread."""
+    from backend import question_tasks as QT
+    send(gateway, "<@U0BUS6WA4SY> Legal?", answers(legal=0.9))
+    thread = rows(hub, "SELECT * FROM slack_threads")[0]
+    event = {"channel": thread["channel"], "thread_ts": thread["thread_ts"]}
+    with hub.transaction() as c:
+        old = QT.ask_alone(c, "bot:legal", "human:ana", "Is the contract signed?")   # asked before Ana last wrote
+        c.execute("UPDATE tasks SET asked_at='2020-01-01T00:00:00Z', created_at='2020-01-01T00:00:00Z' WHERE id=?",
+                  (old["id"],))
+        card = QT.ask_alone(c, "bot:legal", "human:ana", "Which state's law applies?")
+        H.say(c, "bot:legal", "human:ana", "Which state's law applies?", conversation_id=thread["conversation_id"])
+        G.say_to_bot(c, "human:ana", "legal", event, "Delaware.", {}, H.now())
+    with hub.read() as c:
+        row = H.task(c, card["id"])
+        assert row["status"] == "done" and "Delaware." in (row["note"] or "")
+        assert QT.is_open(H.task(c, old["id"]))
+        assert c.execute("SELECT count(*) FROM messages WHERE kind IN ('ask','answer')").fetchone()[0] == 0
+    with hub.transaction() as c:
+        # A second follow-up, with nothing asked since Ana last wrote, closes nothing.
+        H.say(c, "bot:legal", "human:ana", "Thanks.", conversation_id=thread["conversation_id"])
+        G.say_to_bot(c, "human:ana", "legal", event, "Also Texas.", {}, H.now())
+    with hub.read() as c:
+        assert QT.is_open(H.task(c, old["id"]))
+
+
 class BothJudges:
     """The org rule check's judge for its own `rule-check` calls, and the decision engine for the rest."""
 

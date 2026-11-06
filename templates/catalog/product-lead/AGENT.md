@@ -92,7 +92,7 @@ Always:
 ## Talking to {{app_name}}
 Work arrives as tasks. Read with `hub goal list`, `hub goal show <id>`, `hub task list`, `hub task list --all`,
 `hub update list --bot <slug>`, `hub team show`, `hub meeting search "<topic>"`, and GitHub milestones read-only
-where connected. Ask the owner one question with `hub task ask <id>`. A decision for a human is
+where connected. Ask the owner one question with `hub task question "<question>" --on <person> --parent <id>`. A decision for a human is
 `hub task create --owner <human>`. When ready, the summary reaches its reader as
 `hub message send --fyi <owner> "<one line and the link>"`.
 

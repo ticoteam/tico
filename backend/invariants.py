@@ -106,15 +106,14 @@ def owner_unreachable(c, ctx):
     people = {p["id"]: p for p in roster(c).get("people") or []}
     bots = {row["id"]: row["state"] for row in c.execute("SELECT id, state FROM bots")}
     found = []
-    # Every open ask's addressee and every undecided approval is read: the reachability test is in Python, so a
-    # LIMIT before it could leave an unreachable owner behind reachable ones.
-    open_ask = f"m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL}"
-    targets = [row["recipient_id"] for row in c.execute(f"SELECT DISTINCT m.recipient_id FROM messages m WHERE {open_ask}")]
+    # Every open question task's person and every undecided approval is read: the reachability test is in Python, so
+    # a LIMIT before it could leave an unreachable owner behind reachable ones.
+    from .question_tasks import OPEN_SQL
+    targets = [row[0] for row in c.execute(f"SELECT DISTINCT owner_id FROM tasks WHERE {OPEN_SQL}")]
     for actor in targets:
         if _unreachable(actor, people, bots):
-            found += [row["id"] for row in c.execute(
-                f"SELECT m.id FROM messages m WHERE {open_ask} AND m.recipient_id=? ORDER BY m.created_at LIMIT ?",
-                (actor, LIMIT))]
+            found += [row[0] for row in c.execute(
+                f"SELECT id FROM tasks WHERE {OPEN_SQL} AND owner_id=? ORDER BY created_at LIMIT ?", (actor, LIMIT))]
     for row in c.execute("SELECT a.id, COALESCE(a.decision_owner, m.recipient_id) AS owner_id FROM approvals a "
                          "LEFT JOIN messages m ON m.id=a.message_id WHERE a.decision IS NULL ORDER BY a.created_at").fetchall():
         if row["owner_id"] and _unreachable(row["owner_id"], people, bots):

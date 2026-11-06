@@ -5160,7 +5160,7 @@ class Execution:
                                              conv, "notice", {"withheld": {"bot": row["bot_id"]}}, None, None)
                     # The org rule check's verdict (backend/org_rule_check.py), whether the reply is posted now or
                     # waits on the run until Done: held, the run keeps only the note, never the reply.
-                    rule_gate, asked_text = None, body.text
+                    rule_gate = None
                     if rule_check and not refused:
                         from . import org_rule_check
                         checked = rule_check if target in rule_check["recipients"] else \
@@ -5182,16 +5182,8 @@ class Execution:
                         body = body.model_copy(update={"text": org_rule_check.warned_text(rule_gate, body.text)})
                     if replyable and not refused:
                         def post_reply():
-                            if msg["kind"] == "ask":
-                                # The pick is resolved on the reply's own words; a warning goes on what the asker
-                                # reads (task_review.reply_answer).
-                                from .task_review import reply_answer
-                                from . import org_rule_check
-                                sent = reply_answer(c, self.auth, Identity(actor, "bot", attempt_id=aid), msg,
-                                                    asked_text, org_rule_check.warn_line(rule_gate))
-                            else:
-                                sent = self._say_reply(c, actor, target, text, conv, source, refs,
-                                                       body.parent_message_id, aid, carried)
+                            sent = self._say_reply(c, actor, target, text, conv, source, refs,
+                                                   body.parent_message_id, aid, carried)
                             if sent:
                                 self.stamp_reply(c, sent, row, aid, source)
                             return sent
@@ -5399,7 +5391,6 @@ class Execution:
                 c.execute("UPDATE jobs SET state=? WHERE message_id=?",
                           ("completed" if body.outcome == "completed" else "canceled", incoming["message_id"]))
                 continue
-            answered = incoming["kind"] != "ask" or bool(H.answers_to(c, [incoming["message_id"]]))
             task_id = work_task_id(message, H.conversation(c, message["conversation_id"]))
             deferred = False
             if task_id and task_id != turn_task:
@@ -5408,7 +5399,7 @@ class Execution:
                                     "AND created_at>=? AND (kind='note' OR (kind='status' AND new IN ('done','closed','declined'))) LIMIT 1",
                                     (task_id, actor, row["started_at"] or row["created_at"])).fetchone()
                 deferred = bool(task and task["status"] in H.ACTIVE_STATUSES and not outcome)
-            state = ("queued" if deferred else "completed" if body.outcome == "completed" and answered else
+            state = ("queued" if deferred else "completed" if body.outcome == "completed" else
                      "uncertain" if held_back else "queued" if benched else "canceled" if stopped
                      else "queued" if requeue else "uncertain")
             c.execute("UPDATE jobs SET state=?,attempt_id=CASE WHEN ? THEN NULL ELSE attempt_id END WHERE message_id=?",

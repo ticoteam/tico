@@ -266,7 +266,8 @@ def state_of(conn, task_row):
                 "SELECT r.kind, r.from_task, r.to_task, t.status FROM task_relations r JOIN tasks t ON t.id="
                 "CASE WHEN r.from_task=? THEN r.to_task ELSE r.from_task END "
                 "WHERE ? IN (r.from_task, r.to_task) ORDER BY r.kind, r.from_task, r.to_task", (tid, tid))],
-            "asks": [a["id"] for a in H.open_task_asks(conn, row)],
+            # Ask messages are gone (step 6c): a question task is in "relations". Kept empty, so a hash reads as before.
+            "asks": [],
             "comments": [list(r) for r in conn.execute(
                 "SELECT id, edited_at FROM messages WHERE conversation_id=? AND sender_id<>? AND deleted_at IS NULL "
                 "ORDER BY rowid", (row["conversation_id"], H.KEEPER))],

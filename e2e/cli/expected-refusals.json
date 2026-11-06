@@ -97,7 +97,6 @@
  "origin show": "not_found",
  "proposal create": "lint",
  "proposal decide": "not_found",
- "question answer": "validation",
  "release now": "not_found",
  "rules add": "validation",
  "rules retire": "not_found",

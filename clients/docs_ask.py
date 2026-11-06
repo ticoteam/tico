@@ -76,7 +76,7 @@ def ask(api, question, wait_s=120, key=None, sleep=time.sleep, clock=time.monoto
     wait = max(0, min(int(wait_s or 0), getattr(api, "docs_wait_max", WAIT_MAX)))
     ask_key = key + ":ask" if key else None
     if api.get("me").get("role") == "bot":
-        sent = api.post("messages", {"to": LIBRARIAN, "text": question, "kind": "ask", "wait_s": wait}, key=ask_key)
+        sent = api.post("messages", {"to": LIBRARIAN, "text": question, "needs_action": True, "wait_s": wait}, key=ask_key)
         message_id = sent["id"]
     else:
         sent = api.post("docs/ask", {"question": question}, key=ask_key)

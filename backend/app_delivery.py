@@ -10,7 +10,7 @@ that computer is registered:
   never hands the same message over as well (external_sync.take_inbox);
 - the computer reports what the app's conversation shows (`POST /api/v2/runners/me/app-delivery/{slug}`): the
   bot's new words become its messages here, what the person typed in the app itself is copied in as theirs and
-  read, and a question the bot needs its person for is an ask in their Needs you;
+  read, and a question the bot needs its person for is a question task in their Needs you;
 - what goes wrong with the app is a Health finding on that computer (`health_problems`), until a clean read clears
   it (the listing says which bots' apps have one, so the computer posts an empty clean report for them).
 
@@ -18,7 +18,7 @@ A message is matched to one Tico already holds by sender, words and the time it 
 `refs.app.at`, or when Tico wrote it), within ECHO_HOURS either way: so the daily sync and the app's history meet in the
 middle in either order. The 4.2 read contract has no needs-a-person marker on a message, so the watch reports the
 bot's words as ordinary messages; a question the app needs its person for reaches Needs you through a send's
-`needs_human` error, which becomes one ask whichever of the turn's reply and the error report arrives first.
+`needs_human` error, which becomes one question task whichever of the turn's reply and the error report arrives first.
 
 Unset, cleared, or with the computer revoked, the bot is sync-only exactly as before.
 """
@@ -32,7 +32,7 @@ from . import models as M
 from . import bot_settings as BS
 from . import rooms
 from .harnesses import resolve_harness
-from .store import H, Problem, encode, readiness_document
+from .store import H, Problem, readiness_document
 
 # The desktop apps a runner drives, and the synced harness each one answers for.
 APPS = {"grok": {"label": "Grok", "harness": "grokbot", "provider": "grok"}}
@@ -227,25 +227,11 @@ def _errors(c, runner_id):
     return value if isinstance(value, dict) else {}
 
 
-def _ask(c, actor, person, room, text, refs):
-    """The bot's question to its person: an ask in its chat, which their Needs you lists (H.loose_asks_to). The same
-    open question is not asked twice, and the same words the turn already posted as its reply (a send's `needs_human`
-    completes the turn with them) become that question rather than a second message."""
-    for row in c.execute(f"SELECT m.body FROM messages m WHERE m.conversation_id=? AND m.sender_id=? AND m.recipient_id=? "
-                         f"AND m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL}", (room["id"], actor, person)):
-        if _norm(row[0]) == _norm(text):
-            return False
-    reply = next((row for row in c.execute(
-        "SELECT id,body,refs FROM messages WHERE conversation_id=? AND sender_id=? AND recipient_id=? AND kind='say' "
-        "AND deleted_at IS NULL AND json_extract(refs,'$.app') IS NULL AND created_at>=? ORDER BY created_at DESC",
-        (room["id"], actor, person, H.shift(H.now(), hours=-ECHO_HOURS))) if _norm(row["body"]) == _norm(text)), None)
-    if reply:
-        c.execute("UPDATE messages SET kind='ask',refs=? WHERE id=?",
-                  (encode({**(H._json(reply["refs"], {}) or {}), **refs, "depth": 1}), reply["id"]))
-        H.event(c, actor, "app_delivery.asked", reply["id"], {"to": person, "conversation": room["id"]})
-        return False
-    H._write_message(c, actor, person, text, room, "ask", {**refs, "depth": 1}, None, None)
-    return True
+def _ask(c, actor, person, text):
+    """The bot's question to its person: a question task of its own in their Needs you (question_tasks.ask_alone),
+    asked once while it is open. The turn's reply with the same words stays in the chat as it was."""
+    from . import question_tasks
+    return 1 if question_tasks.ask_alone(c, actor, person, text) else 0
 
 
 def delivered(c, runner_id):
@@ -291,12 +277,12 @@ def report(c, runner_id, slug, body):
         at = said_at(msg.at, now)
         refs = {"app": {"app": found["app"], "key": msg.key, "at": at}}
         if msg.role == "bot":
-            if msg.needs_human:
-                posted += _ask(c, actor, person, room, msg.text, refs)
-            elif not echoes(c, room["id"], actor, msg.text, at=at):
+            if not echoes(c, room["id"], actor, msg.text, at=at):
                 # The bot's own words, unread for its person like any bot's reply.
                 H._write_message(c, actor, person, msg.text, room, "say", refs, None, None)
                 posted += 1
+            if msg.needs_human:
+                posted += _ask(c, actor, person, msg.text)
         elif not echoes(c, room["id"], person, msg.text, at=at):
             # Typed in the app itself: the person's own words, already read, and no job (`quiet`).
             H._write_message(c, person, actor, msg.text, room, "say", {**refs, "quiet": True}, None, None,
@@ -305,7 +291,7 @@ def report(c, runner_id, slug, body):
     errors = _errors(c, runner_id)
     if body.error and body.error.code == "needs_human":
         text = body.error.text or body.error.detail or f"{label} needs you to do something in the app on this computer"
-        posted += _ask(c, actor, person, room, text, {"app": {"app": found["app"], "error": "needs_human"}})
+        posted += _ask(c, actor, person, text)
     elif body.error:
         errors[found["app"]] = {"code": body.error.code, "detail": body.error.detail, "bot": slug, "at": now}
     else:

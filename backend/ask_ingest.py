@@ -162,7 +162,6 @@ def load(c, person):
     Read before the item is written, so it never counts itself."""
     plate = H.needs_you(c, person)
     ids = {t["id"] for t in plate["tasks"]} | {t["id"] for t in plate["waiting"]}
-    ids |= {m["id"] for m in H.loose_asks_to(c, person)}
     approvals = sum(1 for a in plate["approvals"] if a.get("decision_owner") == person)
     return len(ids) + approvals
 
@@ -665,9 +664,8 @@ def reconcile(c, start, end):
 
 
 def on_reply(c, actor, task_id, text, *, text_sources=()):
-    """A person's answer on an open item the gate merged repeats into (hubdb.task_comment, hubdb.answer): passed once
-    to each bot that asked the same thing, on its own task (waking it) or, for a question outside any task, as a
-    message. The Strategy Bot's merge (backend/strategy_merge.py) relays the same way for its own merged items."""
+    """A person's comment on an open item the gate merged repeats into (hubdb.task_comment): passed once to each bot
+    that asked the same thing, on its own task (waking it) or, for an old question outside any task, as a message. The Strategy Bot's merge (backend/strategy_merge.py) relays the same way for its own merged items."""
     if not H.is_human(actor) or not task_id or not str(text or "").strip():
         return
     try:
@@ -695,14 +693,6 @@ def on_reply(c, actor, task_id, text, *, text_sources=()):
                 continue
             H.task_comment(c, H.KEEPER, own["id"], said, wake=True, extra_refs=refs)
         c.execute("UPDATE ask_ingest_items SET passed_at=? WHERE id=?", (H.now(), row["id"]))
-
-
-def withdraw_loose(c, asker, message_id, person):
-    """A merged question outside any task leaves the person's Needs you at once (`loose_asks_to` reads open
-    asks only); it stays in the bot's thread, superseded, as a withdrawn task question does."""
-    c.execute("UPDATE messages SET superseded_at=? WHERE id=?", (H.now(), message_id))
-    H.event(c, asker, "ask.withdrawn", message_id, {"to": person, "by": "ask_ingest"})
-    H.recount(c, [asker])
 
 
 def reply(*decided):

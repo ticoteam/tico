@@ -179,27 +179,6 @@ def prime_waits(c, rows):
             other.add(row['to_task'])
     prime_rows(c, H.OPEN_CHILDREN_SQL, {(tid,): found for tid, found in kids.items()})
     prime(c, OTHER_CHILD_SQL, {(tid, owner_of[tid]): (1,) if tid in other else None for tid in ids})
-    # The owner's unanswered questions about each task (wait_detail), and what answered them (answers_to).
-    asks = {(r['owner_id'], r['id']): [] for r in rows}
-    for part in H.chunks(sorted({owner for owner, _ in asks})):
-        for row in c.execute(
-                f"SELECT m.id,m.recipient_id,m.sender_id,{H.MESSAGE_TASK_SQL} task FROM messages m "
-                f"JOIN conversations cv ON cv.id=m.conversation_id WHERE m.sender_id IN ({_marks(part)}) "
-                "AND m.kind='ask' AND m.superseded_at IS NULL", part):
-            if (row['sender_id'], row['task']) in asks:
-                asks[(row['sender_id'], row['task'])].append(row)
-    prime_rows(c, H.WAIT_ASKS_SQL, {pair: found for pair, found in asks.items() if len(found) <= 1})
-    asked = sorted({found[0]['id'] for found in asks.values() if len(found) == 1})
-    answers = {}
-    for part in H.chunks(asked):
-        for row in c.execute(f"SELECT * FROM messages WHERE in_reply_to IN ({_marks(part)}) AND kind='answer' "
-                             "AND deleted_at IS NULL", part):
-            answers.setdefault(row['in_reply_to'], []).append(row)
-    prime(c, H.ANSWER_SQL, {(mid,): answers[mid][0] if mid in answers else None
-                            for mid in asked if len(answers.get(mid, ())) <= 1})
-    for part in H.chunks(asked):
-        prime(c, H.ANSWERED_BY_SQL, {(row['id'],): row for row in c.execute(
-            f"SELECT answered_by_id,id FROM messages WHERE id IN ({_marks(part)})", part)})
 
 
 def _marks(values):
@@ -244,14 +223,6 @@ def maybe_waiting(c, rows):
           "WHERE r.kind='parent' AND r.to_task IN ({m}) AND t.status NOT IN ('done','closed','declined')", ids)
     found("SELECT DISTINCT task_id FROM task_links WHERE task_id IN ({m}) AND kind='pr' "
           "AND state IN ('open','draft','merged') AND json_extract(detail,'$.wake_once') IS NOT NULL", ids)
-    # an unanswered question the owner asked about the task: owner and task are matched in Python
-    pairs = {(r['owner_id'], r['id']) for r in rows if r['id'] not in suspect}
-    for part in H.chunks(sorted({actor for actor, _ in pairs})):
-        for actor, tid in c.execute(
-                f"SELECT m.sender_id,{H.MESSAGE_TASK_SQL} FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                f"WHERE m.sender_id IN ({_marks(part)}) AND m.kind='ask' AND m.superseded_at IS NULL", part).fetchall():
-            if (actor, tid) in pairs:
-                suspect.add(tid)
     return suspect
 
 

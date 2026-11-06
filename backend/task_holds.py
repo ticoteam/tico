@@ -5,9 +5,8 @@ Holds then cleared under it (a child finished, a question was answered or withdr
 "Waiting on Chris Hawkins" for weeks. Now the reason is derived from the holds Tico tracks (`holds`), every time one
 of them changes (`refresh`):
 
-- a question its owner asked on it (an ask message from before question tasks, until step 6c moves them), a child
-  or blocker still open (a person's question task among them: "waiting on a person" is that, derived), an undecided
-  approval, an account a person reconnects, and the external holds `wait_detail` reads (a worktree, a milestone,
+- a child or blocker still open (a person's question task among them: "waiting on a person" is that, derived), an
+  undecided approval, an account a person reconnects, and the external holds `wait_detail` reads (a worktree, a milestone,
   GitHub);
 - when the last one clears, a bot's task goes back to open at once with a note naming what cleared, and a person's
   task stays where it is with "Nothing left to wait on: <what cleared>";
@@ -49,37 +48,11 @@ def _line(text, limit=160):
     return H._clip(first, limit)
 
 
-def _shared(conn, row, ask):
-    """Whether everyone who reads the task may read this question, so its words may go in the task's reason: asked in
-    the task's own room, with no meeting and no private task besides this one in its provenance (reply chain, inputs,
-    run). A question tied to the task from a stricter source is named only as "a question"."""
-    from . import hubdb as H, task_privacy as TP
-    from .live_privacy import sources
-    from .store import Problem
-    if ask.get("conversation_id") != row.get("conversation_id"):
-        return False
-    try:
-        if sources(conn).message(ask):
-            return False
-        others = TP.message_tasks(conn, ask) - {row["id"]}
-    except Problem:         # provenance that cannot be authorized is not shared
-        return False
-    return not any(r is None or H.task_private(conn, r) for r in TP._task_rows(conn, others).values())
-
-
 def holds(conn, row):
     """Every hold Tico tracks on a task, in the order `wait_detail` reads them: [{"kind", "on", "what"}]. `on` is the
     actor holding it (None for an external hold or an approval with nobody named), `what` a short subject."""
     from . import hubdb as H, task_relations as TR, profiles, review_gate
     out = []
-    asks = H._rows(conn.execute(
-        "SELECT m.* FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-        f"WHERE m.sender_id=? AND m.kind='ask' AND m.superseded_at IS NULL AND {H.MESSAGE_TASK_SQL}=? "
-        "ORDER BY m.created_at", (row["owner_id"], row["id"])))
-    if asks:
-        answered = H.answers_to(conn, [a["id"] for a in asks])
-        out += [{"kind": "ask", "on": a["recipient_id"], "what": _line(a["body"]) if _shared(conn, row, a) else "a question"}
-                for a in asks if a["id"] not in answered]
     engineering = review_gate.engineering(conn, row)
     check = None
     for child in H._rows(conn.execute(
@@ -237,55 +210,6 @@ def ended(conn, row, status):
         refresh(conn, parent, what)
     for blocked in TR.blocked_ids(conn, row["id"]):
         refresh(conn, blocked, what)
-
-
-def withdrawn(conn, task_id, ask_ids, why, *, by=None, told=True):
-    """Questions to people on `task_id` were just withdrawn: its own task ended, a newer question replaced them, or
-    "still needed?" sent them back (a question lives and dies with its own task, never with a task above it). Each
-    question shows whether its person had seen it ("Withdrawn before Chris saw it: <why>"); its asker is told in the
-    same transaction unless it made the withdrawal itself (`by`) or `told` is False (still needed? sends its own one
-    notice per bot); and the task's holds are recomputed, so a bot's task left with nothing to wait on goes back to
-    open with a note naming what happened."""
-    from . import hubdb as H
-    if not ask_ids:
-        return
-    row = H.task(conn, task_id)
-    if not row:
-        return
-    marks = ",".join("?" * len(ask_ids))
-    asks = H._rows(conn.execute(f"SELECT id, sender_id, recipient_id, body, read_at FROM messages "
-                                f"WHERE id IN ({marks}) ORDER BY created_at", list(ask_ids)))
-    why = str(why or "it was withdrawn")
-    day_ago = H.shift(H.now(), hours=-24)
-    noticed = set()
-    for ask in asks:
-        person = name(conn, ask["recipient_id"])
-        status = f"Withdrawn {'after' if ask.get('read_at') else 'before'} {person} saw it: {why}"
-        conn.execute("UPDATE messages SET refs=json_set(coalesce(refs,'{}'),'$.withdrawn',?) WHERE id=?",
-                     (status, ask["id"]))
-        asker = ask["sender_id"]
-        if (not told or asker == by or not H.is_bot(asker) or (asker, ask["recipient_id"]) in noticed
-                or not H.bot_reads_task(conn, asker, row)):
-            continue
-        noticed.add((asker, ask["recipient_id"]))
-        # The same question withdrawn again and again is a re-ask loop: the notice says so (to watch, not a block).
-        again = conn.execute(
-            "SELECT count(*) FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE m.kind='ask' "
-            f"AND m.sender_id=? AND m.recipient_id=? AND m.superseded_at>=? AND {H.MESSAGE_TASK_SQL}=?",
-            (asker, ask["recipient_id"], day_ago, task_id)).fetchone()[0]
-        loop = (f"\nThis is the {_nth(again)} question from you to {person} on this task withdrawn in 24 hours."
-                if again >= 3 else "")
-        H._wake(conn, row, asker, f"Your question to {person} was withdrawn: {row['title']}\n{status}.\n"
-                f"Question: {_line(ask['body'], 300)}{loop}\nAsk again on a live task if you still need it.",
-                refs={"news": "ask_withdrawn", "ask": ask["id"]}, source=ask["id"])
-    if asks:
-        # Its owner asking again or ending it knows already: only the words follow.
-        refresh(conn, task_id, None if by == row["owner_id"] else
-                f"Your question to {name(conn, asks[0]['recipient_id'])} was withdrawn ({why})")
-
-
-def _nth(n):
-    return {3: "third", 4: "fourth", 5: "fifth"}.get(n, f"{n}th")
 
 
 # A bot's task waiting on nothing tracked (cause `stranded`) has nothing that will ever move it: a note wakes nobody.

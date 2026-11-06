@@ -142,8 +142,8 @@ def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
           "--member", "bot:legal", "--body", "Hi"],
          ("POST", "threads", {"title": "Refund policy", "audience": "team", "audience_group_id": "grp1",
                               "members": ["human:ana", "bot:legal"], "body": "Hi"})),
-        (["thread", "post", "th1", "Hello", "--kind", "ask", "--to", "human:ana", "--ref", "task:t9", "--ref", "task:t10"],
-         ("POST", "threads/th1/messages", {"text": "Hello", "kind": "ask", "to": "human:ana",
+        (["thread", "post", "th1", "Hello", "--to", "human:ana", "--ref", "task:t9", "--ref", "task:t10"],
+         ("POST", "threads/th1/messages", {"text": "Hello", "kind": "say", "to": "human:ana",
                                            "refs": {"task": ["t9", "t10"]}})),
         (["thread", "post", "th1", "Yes", "--reply-to", "m7"],
          ("POST", "threads/th1/messages", {"text": "Yes", "kind": "say", "in_reply_to": "m7"})),
@@ -1057,6 +1057,26 @@ def test_hub_notice_list_is_not_the_renamed_notice_send():
     assert argv == ["message", "send", "Deploy done", "--fyi"] and "is now" in said
 
 
+@pytest.mark.parametrize("argv, instead", [
+    (["question", "ask", "ops", "Which plan?"], "hub task question"),
+    (["question", "answer", "m1", "Yes"], "Needs you"),
+    (["ask", "ops", "Which plan?"], "hub task question"),
+    (["answer", "m1", "Yes"], "Needs you"),
+    (["task", "ask", "t1", "Which plan?"], "hub task question"),
+    (["task", "ask-resolve", "t1", "c1"], "Needs you"),
+])
+def test_a_removed_ask_command_prints_one_line_naming_its_replacement(argv, instead, capsys, monkeypatch):
+    """Asks are gone: each old command says in one line what to use instead, sends nothing and exits 1."""
+    monkeypatch.setattr(hubcli, "run", lambda *a: pytest.fail("a removed command ran"))
+    assert hubcli.main(argv) == 1
+    out = capsys.readouterr()
+    lines = out.err.strip().splitlines()
+    assert out.out == "" and len(lines) == 1 and lines[0].startswith('hub: "') and "is gone" in lines[0]
+    assert instead in lines[0]
+    if "ask" in argv[:2] and instead == "hub task question":
+        assert "hub message send" in lines[0] and "--needs-action" in lines[0]
+
+
 def test_goal_checkin_list_with_the_list_word_is_checkin_list():
     """`goal checkin list <id>` is the noun-sub-noun-verb form of `goal checkin-list <id>`: matched before the parse, so it
     never posts a check-in on a goal named "list"."""
@@ -1362,7 +1382,7 @@ def test_thread_delete_runs_the_message_delete_route(monkeypatch):
 
 def test_thread_upload_streams_the_file_to_the_thread_message_route(monkeypatch, tmp_path):
     """`hub thread upload` runs `hub_thread_upload`: the file is streamed (never read whole) as multipart to the thread's
-    upload route, with the text, kind and reply target as form fields."""
+    upload route, with the text and reply target as form fields."""
     from pathlib import Path
     from unittest.mock import Mock
     from clients import remotecli
@@ -1376,10 +1396,10 @@ def test_thread_upload_streams_the_file_to_the_thread_message_route(monkeypatch,
     monkeypatch.setattr(bot_files, "checkout_root", lambda: tmp_path)
     monkeypatch.setattr(Path, "read_bytes", lambda _: pytest.fail("whole file read"))
     remotecli.run(hubcli.parser().parse_args(["thread", "upload", "T1", str(path), "--text", "Q3 numbers",
-                                              "--kind", "ask", "--to", "human:ben", "--under", "m7"]))
+                                              "--to", "human:ben", "--under", "m7"]))
     client.post_multipart.assert_called_once_with(
         "uploads/threads/T1/messages", {"file": path},
-        {"text": "Q3 numbers", "kind": "ask", "to": "human:ben", "parent_message_id": "m7"}, key=None)
+        {"text": "Q3 numbers", "to": "human:ben", "parent_message_id": "m7"}, key=None)
 
 
 def test_thread_slack_resume_posts_to_the_link_resume_route(monkeypatch):

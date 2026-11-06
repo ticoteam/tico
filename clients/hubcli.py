@@ -36,7 +36,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub thread pin|unpin <thread>              pin a thread for yourself, or unpin it (even one pinned for everyone)
     hub thread catch-up [--cursor C] [--limit N]   each thread with something new for you, mentions first, with its
                                                new messages; mark one read with hub thread read <thread> --all
-    hub thread post <thread> "<text>" [--kind say|ask] [--to ACTOR] [--reply-to MESSAGE] [--ref KIND:ID ...]
+    hub thread post <thread> "<text>" [--to ACTOR] [--reply-to MESSAGE] [--ref KIND:ID ...]
                                                --reply-to answers that message: yours stays in the thread, quoting it
     hub thread bot-status <thread>             the bots it waits on: working, up next or can't reply, and why
     hub thread reply <thread> <message> "<text>"   a separate side topic in that message's sub-thread (to answer a
@@ -47,7 +47,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub thread open-earlier <thread>           a bot's manager opens its earlier messages to its Home readers
     hub thread task <message-id> --title T --owner O   a task from a message: private unless the thread is company-wide
     hub thread delete <message-id>             delete a message you wrote (a marker stays)
-    hub thread upload <thread> <file> [--text T] [--kind say|ask] [--to ACTOR] [--under MESSAGE]   a file in a message
+    hub thread upload <thread> <file> [--text T] [--to ACTOR] [--under MESSAGE]   a file in a message
     hub thread follow|unfollow <thread> [--notify live|mentions|digest|muted]
     hub thread read <thread> [--seq N | --all]
     hub thread search "<words>" [--cursor C]   the messages in threads you can read
@@ -59,8 +59,6 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            checks it; --history also brings the channel's earlier messages; --off
                                            takes it away; with the thread alone, lists its links
     hub thread slack-resume <link-id>          check a suspended or refused Slack link again (admins)
-    hub question ask <bot> [<bot>...] "<question>" --wait 60
-    hub question answer <message-id> "<text>" [--unknown "needs X"] [--on-behalf-of turn]
     hub note create <bot> "<text>" [--text-file f] [--defer 4h]  a deferred message: wakes nobody; the bot's next
                                            run reads it (with --defer, a run starts by then if none came)
     hub note list [--to me|X] [--from me|X] [--since 24h|ISO] [--waiting]   notes, newest first
@@ -88,7 +86,6 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            one starts by the time given (24h when none; --next-run is the old name)
                                            blocked on a person? --owner <person> --parent <your task>
                                            for a person, the body's first paragraph is the ask (as --note below)
-    hub task ask <id> "<question>"
     hub task update <id> --status waiting --on <person> --note "<plain ask>"
                                            ask a person on your task: one small subtask for them, yours stays blocked
     hub task question "<question>" --on <person> [--why "<why it matters>"]
@@ -107,8 +104,6 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            the time given; never notifies no follower), --goal sets its goal
     hub task comment-edit <id> <comment-id> "<text>"   change a comment you wrote; wakes nobody
     hub task comment-delete <id> <comment-id>          take back a comment you wrote
-    hub task ask-resolve <id> <question-id> [--quote "<their words>"]
-                                                       a question answered elsewhere, quoted; no --quote withdraws yours
     hub task delete <id>                               delete a task made by mistake, to the trash (a person only)
     hub task requesters <id>                           who asked for it (internal contacts, counts; never tokens)
     hub task requester-save <id> [--requester-id R] [--email E] [--organization O] [--important]
@@ -677,7 +672,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub external sync --provider dots --file f.json   sync your Grok Bots or Dots into Tico
 
 The commands of the last release keep working for one more release, hidden: each prints a one-line "renamed to"
-notice on stderr and runs the new command (RENAMED below).
+notice on stderr and runs the new command (RENAMED below). A command that is gone (REMOVED below) prints one
+line naming what to use instead and exits 1.
 
 Exit codes: 0 fine, 2 `{"refused": <rule>, "detail": "..."}` or a non-retryable API error,
 1 `{"error": "..."}` (bad arguments, no identity, or the API could not be reached).
@@ -1279,7 +1275,6 @@ def parser():
     s = thread.add_parser("post", help="post a message to a thread")
     s.add_argument("thread")
     s.add_argument("text")
-    s.add_argument("--kind", choices=["say", "ask"], help="ask: wants an answer from --to")
     s.add_argument("--to", help="the person or bot it is addressed to: human:<id> or bot:<slug>")
     s.add_argument("--reply-to", dest="reply_to", metavar="MESSAGE",
                    help="the message this answers: yours stays in the thread, quoting it")
@@ -1317,15 +1312,14 @@ def parser():
     s.add_argument("--title", required=True)
     s.add_argument("--owner", required=True, help="a bot slug, a person id, or me")
     s.set_defaults(fn="thread task")
-    s = thread.add_parser("delete", help="delete a message you wrote: a marker stays, and the asks it answered reopen")
+    s = thread.add_parser("delete", help="delete a message you wrote: a marker stays")
     s.add_argument("message_id")
     s.set_defaults(fn="thread delete")
     s = thread.add_parser("upload", help="post a message with a local file to a thread: the file is streamed to Tico")
     s.add_argument("thread")
     s.add_argument("path", help="a local file on this computer")
     s.add_argument("--text", help="the message's text (optional: the file can come alone)")
-    s.add_argument("--kind", choices=["say", "ask"], default="say")
-    s.add_argument("--to", help="the person or bot an ask is for")
+    s.add_argument("--to", help="the person or bot it is addressed to: human:<id> or bot:<slug>")
     s.add_argument("--under", metavar="MESSAGE",
                    help="post the file in that message's sub-thread instead of the thread")
     s.set_defaults(fn="thread upload")
@@ -1385,18 +1379,6 @@ def parser():
     s.add_argument("--history", action="store_true", help="also bring in the channel's earlier messages")
     s.add_argument("--off", action="store_true", help="take the thread's Slack link away")
     s.set_defaults(fn="thread link-slack")
-
-    question = sub.add_parser("question", help="ask other bots a question and wait; answer one asked of you").add_subparsers(dest="sub")
-    s = question.add_parser("ask", description="Ask a teammate. A system recipient routes to your manager or the company owner.")
-    s.add_argument("words", nargs="*")
-    s.add_argument("--wait", type=float, default=60)
-    s.set_defaults(fn="question ask")
-    s = question.add_parser("answer")
-    s.add_argument("message_id")
-    s.add_argument("text", nargs="?", default="")
-    s.add_argument("--unknown")
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="question answer")
 
     note = sub.add_parser("note", help="a deferred message for a bot: no run now, its next run reads it").add_subparsers(dest="sub")
     s = note.add_parser("create", help="leave a bot a deferred message: no run now, its next run reads it")
@@ -1807,10 +1789,6 @@ def parser():
     s.add_argument("--steps-file", dest="steps_file", help="JSON array of steps; keep ids when editing")
     s.add_argument("--delete", action="store_true", help="delete an unused type")
     s.set_defaults(fn="task types")
-    s = task.add_parser("ask", description="Ask the requester. A system requester routes to your manager or the company owner.")
-    s.add_argument("id")
-    s.add_argument("text")
-    s.set_defaults(fn="task ask")
     s = task.add_parser("question", help="put one decision to a person as a task they own: a pick or Yes / No; "
                         "their answer closes it")
     s.add_argument("question")
@@ -1902,10 +1880,6 @@ def parser():
                         "already in Tico); repeat for more")
     s.add_argument("--title", action="append", dest="visual_title", metavar="TITLE",
                    help="the caption for each --visual, in the same order")
-    choices = s.add_mutually_exclusive_group()
-    choices.add_argument("--ask", help="JSON file containing structured questions")
-    choices.add_argument("--choices", help="comma-separated options, each \"LABEL -> WHAT HAPPENS\" (a question to a "
-                                           "person needs the what-happens line)")
     delivery_flags(s, goal=True)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.add_argument("--needs-action", dest="needs_action", action="store_true", help="a bot's message to a bot waits for that bot's next run; this wakes it now")
@@ -1952,12 +1926,6 @@ def parser():
     s.add_argument("id")
     s.add_argument("comment_id", help="the comment's id (its id in the task's comments)")
     s.set_defaults(fn="task comment-delete")
-    s = task.add_parser("ask-resolve", help="settle an open question the person answered elsewhere (--quote their "
-                                            "words), or withdraw one you asked")
-    s.add_argument("id")
-    s.add_argument("comment_id", help="the question's id (its id in the task's comments)")
-    s.add_argument("--quote", help="the person's answer in their own words")
-    s.set_defaults(fn="task ask-resolve")
     s = task.add_parser("delete", help="delete a task made by mistake: its requester or a mover, never a bot")
     s.add_argument("id")
     s.set_defaults(fn="task delete")
@@ -2054,10 +2022,6 @@ def parser():
     s.add_argument("--name", help="the name people see; defaults to the file's own")
     s.add_argument("--poster", help="a PNG or JPEG preview")
     s.add_argument("--note", help="short note on this version (at most 500 characters)")
-    choices = s.add_mutually_exclusive_group()
-    choices.add_argument("--ask", help="JSON file containing structured questions")
-    choices.add_argument("--choices", help="comma-separated options, each \"LABEL -> WHAT HAPPENS\" (a question to a "
-                                           "person needs the what-happens line)")
     s.set_defaults(fn="task attach")
     s = task.add_parser("answers", help="list the task's structured answers, oldest first")
     s.add_argument("id")
@@ -4138,8 +4102,6 @@ RENAMED = [
     (("inbox",), ("message", "list"), (), None),
     (("ack",), ("message", "mark-read"), (), None),
     (("history",), ("conversation", "show"), (), None),
-    (("ask",), ("question", "ask"), (), None),
-    (("answer",), ("question", "answer"), (), None),
     (("notes",), ("note", "list"), (), None),
     (("unnote",), ("note", "delete"), (), None),
     (("board",), ("task", "list"), ("--all",), None),
@@ -4194,6 +4156,22 @@ RENAMED = [
     (("gtm", "sources"), ("growth", "source", "list"), (), None),
 ]
 RENAMED.sort(key=lambda rule: -len(rule[0]))
+
+# Commands taken away with asks (Tico 0.5): each prints one line naming what to use instead and exits 1. The longest
+# old spelling that matches wins.
+ASK_INSTEAD = ('ask a person with: hub task question "<question>" --on <person>; '
+               'ask a bot with: hub message send <bot> "<question>" --needs-action')
+ANSWER_INSTEAD = "a question to a person is a question task: answer it in Tico (Needs you); a bot's question is a DM"
+REMOVED = [
+    (("question", "ask"), ASK_INSTEAD),
+    (("question", "answer"), ANSWER_INSTEAD),
+    (("question",), ASK_INSTEAD),
+    (("ask",), ASK_INSTEAD),
+    (("answer",), ANSWER_INSTEAD),
+    (("task", "ask"), ASK_INSTEAD),
+    (("task", "ask-resolve"), ANSWER_INSTEAD),
+]
+REMOVED.sort(key=lambda rule: -len(rule[0]))
 NOTICE_COMMANDS = ("list",)                             # the subcommands `hub notice` has now
 
 
@@ -4271,6 +4249,14 @@ def parse(p, argv):
     return args
 
 
+def removed_notice(argv):
+    """The one line for a command that is gone (REMOVED), or None."""
+    for old, instead in REMOVED:
+        if tuple(argv[:len(old)]) == old:
+            return f'hub: "{" ".join(old)}" is gone; {instead}'
+    return None
+
+
 def rename_argv(argv):
     """`argv` for the new spelling of an old command line, and the notice to print (or None when nothing was renamed)."""
     argv = list(argv)
@@ -4325,6 +4311,10 @@ def main(argv):
             if code:
                 return code
         return 0
+    gone = removed_notice(argv)
+    if gone:
+        print(gone, file=sys.stderr)
+        return 1
     argv, renamed = rename_argv(argv)
     if renamed:
         print(f"hub: {renamed}; the old name stops working in the next release", file=sys.stderr)

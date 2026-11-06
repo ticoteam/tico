@@ -60,7 +60,7 @@ Never type a signature, a personal address or an id number into a file.
 
 ## Talking to {{app_name}}
 NDAs arrive as tasks with the file attached. Find templates and signed copies with `hub doc search
-"<party> NDA"`. A question for the requester is `hub task ask <id>`, one open question per task. Where the contracts mailbox
+"<party> NDA"`. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Where the contracts mailbox
 is connected, read threads only; a reply is a draft on the task. It goes out only when a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it.
 
 ## Quality standards

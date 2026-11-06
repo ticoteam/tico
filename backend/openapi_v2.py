@@ -294,9 +294,6 @@ STABLE = [
      "Change the text of a comment you wrote; it wakes nobody and is marked edited_at", "CommentResult"),
     ("/api/v2/tasks/{tid}/comments/{mid}/delete", "post", "Tasks", "deleteTaskComment",
      "Delete a comment you wrote from future comment reads and bot context; existing delivered copies remain", "CommentResult"),
-    ("/api/v2/tasks/{tid}/comments/{mid}/resolve", "post", "Tasks", "resolveTaskQuestion",
-     "Settle an open question answered elsewhere ({quote}: its asker or the task's owner bot), or withdraw it ({}: its "
-     "asker); it leaves every Needs you list and wakes nobody", "CommentResult"),
     ("/api/v2/tasks/{tid}/relations", "post", "Tasks", "relateTask",
      "Relate another task to this one ({task, kind}: parent, blocks, blocked_by, related, duplicate_of, "
      "follow_up), or take the relation off with remove", "TaskResult"),
@@ -346,15 +343,12 @@ STABLE = [
      "answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, "
      "limit=<n> (at most 200) a page with `next` to pass as cursor=<next> for the one after it (a cursor from an older version "
      "starts again from the top, with `restart`); without limit or cursor, the whole list", "NeedsYou"),
-    ("/api/v2/messages/{mid}/answer", "post", "Needs you", "answerMessage", "Answer a question a bot asked", None),
     ("/api/v2/needs-you/recommended", "post", "Needs you", "takeRecommendation",
      "Do what the bot recommends: answer its ask with what it said it would do, and close the card", None),
     ("/api/v2/needs-you/seen", "post", "Needs you", "needsYouSeen",
      "The caller's Needs you shows these questions to them (asks=<message ids>, at most 200): each open one is delivered", None),
     ("/api/v2/tasks/{tid}/seen", "post", "Needs you", "taskSeen",
      "The caller opened the task: its open questions to them are read", None),
-    ("/api/v2/needs-you/clarify", "post", "Needs you", "clarifyAsk",
-     "Ask the bot behind a stale question whether it still matters, in clearer words", None),
     ("/api/v2/stale-review/accept-all", "post", "Needs you", "acceptAllStaleSuggestions",
      "Accept the suggestions your Stale tickets card showed (their ids and task versions), each as your own change; "
      "a row whose task changed since is refused on its own and a row added since is left", None),

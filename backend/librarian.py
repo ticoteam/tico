@@ -8,8 +8,8 @@ follow the Librarian's answer on `/api/v2/events` (backend/events.py).
 
 The Librarian acts as itself, never as the person. It only reads docs (`hub doc ...`) and fetches
 public links on its own computer (`hub doc fetch`), so nothing it does needs a person's identity and
-none is mapped to it. A bot that wants an answer sends the Librarian an `ask` message (`hub doc ask`),
-which is the ordinary ask and answer path and needs nothing here.
+none is mapped to it. A bot that wants an answer sends the Librarian a DM flagged needs-action (`hub doc ask`),
+the ordinary message path, which needs nothing here.
 """
 
 import asyncio
@@ -118,7 +118,7 @@ def person(request):
         raise Problem("forbidden", "BotOps does this only for the person who asked it to; the " + NAME
                       + " turns on for the owner", 403)
     if who.role not in ("owner", "human"):
-        raise Problem("identity", "Bots ask the " + NAME + " with `hub doc ask` (a message of kind ask); "
+        raise Problem("identity", "Bots ask the " + NAME + " with `hub doc ask` (a DM flagged needs-action); "
                       "this route is for people", 403)
     return who
 

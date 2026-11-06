@@ -805,7 +805,6 @@ class Scheduler:
                 ended = ended or {}
                 run.did(SR.words_of({"approvals expired": ended.get("stale") or [],
                                      "approvals closed with their task": ended.get("ended") or [],
-                                     "asks cleared": ended.get("asks") or [],
                                      "asked cards expired": ended.get("cards") or []}, none="Nothing expired"))
             # A Finance action whose approval was decided, withdrawn or expired ends now (its hold released).
             with SR.recording(self.store, "finance_upkeep", failures, "finance_approvals") as run:

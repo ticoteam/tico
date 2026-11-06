@@ -1519,45 +1519,22 @@ def _server_settings(c, settings):
 
 
 def unreadable_waits(c):
-    """Name held questions whose recipient cannot sign in, run, or read every task source."""
-    from . import ask_routing, task_privacy
+    """Name waiting tasks whose person (the owner of their open question task) cannot read every task source."""
+    from . import recipients, task_privacy
     task_privacy.snapshot(c)
-    fields = "t.id,t.title,t.owner_id,t.requester_id,t.private,t.readers"
     rows = c.execute(
-        f"SELECT * FROM (SELECT {fields},m.recipient_id AS recipient,m.id AS message_id FROM tasks t "
-        "JOIN messages m ON m.sender_id=t.owner_id JOIN conversations cv ON cv.id=m.conversation_id "
-        f"WHERE {H.MESSAGE_TASK_SQL}=t.id AND t.status='waiting' "
-        f"AND m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL} "
-        # A task waiting on a person's open question task (question_tasks.waits_sql): they are its recipient.
-        f"UNION SELECT {fields},wq.owner_id AS recipient,NULL AS message_id FROM tasks t "
+        "SELECT DISTINCT t.id,t.title,t.owner_id,t.requester_id,t.private,t.readers,wq.owner_id AS recipient FROM tasks t "
         "JOIN task_relations wr ON wr.to_task=t.id AND wr.kind IN ('parent','blocks') JOIN tasks wq ON wq.id=wr.from_task "
         "WHERE t.status='waiting' AND wq.questions IS NOT NULL AND wq.answer IS NULL AND wq.owner_id LIKE 'human:%' "
-        f"AND wq.status IN ({','.join(repr(s) for s in H.ACTIVE_STATUSES)})) w "
-        "ORDER BY w.id")
-    found, seen = [], set()
+        f"AND wq.status IN ({','.join(repr(s) for s in H.ACTIVE_STATUSES)}) ORDER BY t.id")
+    found = []
     for batch in iter(lambda: rows.fetchmany(500), []):
-        # Health polls the whole queue: load its question ancestry and task reads together.
-        mids = sorted({r["message_id"] for r in batch if r["message_id"]})
-        messages = {m["id"]: m for m in c.execute(
-            "SELECT * FROM messages WHERE id IN (SELECT value FROM json_each(?))", (H._dump(mids),))}
-        H.prime_message_rows(c, messages.values())
-        task_privacy.prime_messages(c, messages.values())
-        tids = {r["id"] for r in batch}
-        for message in messages.values():
-            try:
-                tids.update(task_privacy.message_tasks(c, message))
-            except Problem:
-                pass                    # The individual check refuses unreadable provenance.
-        H.prime_tasks(c, tids)
+        # Health polls the whole queue: load the tasks of a batch together.
+        H.prime_tasks(c, {r["id"] for r in batch})
         for r in batch:
             row = dict(r)
-            key = row["id"], row["recipient"]
-            if key in seen:
+            if recipients.can_answer(c, row["recipient"], {"task": row["id"]}, sender=row["owner_id"]):
                 continue
-            source = messages.get(row.pop("message_id"))
-            if ask_routing.can_answer(c, row["recipient"], {"task": row["id"]}, source=source, sender=row["owner_id"]):
-                continue
-            seen.add(key)
             found.append(row)
             if len(found) == 20:
                 return found

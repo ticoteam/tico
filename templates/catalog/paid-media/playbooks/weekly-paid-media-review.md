@@ -52,5 +52,5 @@ three changes each with its evidence, and last fortnight's changes checked.
 
 ## When the export is missing
 
-Say which report is missing and for which dates, ask once with `hub task ask <id>`, and finish with
+Say which report is missing and for which dates, ask once with `hub task question "<question>" --on <person> --parent <id>`, and finish with
 what you have. Never fill a gap from last week's numbers.

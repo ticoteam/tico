@@ -667,7 +667,6 @@ def settings_for(c, bot, ctx=None):
 
     out.append({"text": f"At most {HD.UNSOLICITED_PER_DAY} unasked messages a day to each person", "source": "hubdb",
                 "edit": None})
-    out.append({"text": f"Asks go {HD.MAX_ASK_DEPTH} deep at most", "source": "hubdb", "edit": None})
     out.append({"text": f"{HD.CAP_PER_HOUR} bot-to-bot messages an hour in one chat", "source": "hubdb", "edit": None})
     return out
 

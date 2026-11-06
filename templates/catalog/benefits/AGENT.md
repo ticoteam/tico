@@ -71,7 +71,7 @@ Always:
 ## Talking to {{app_name}}
 Plan documents come through the Librarian: `hub doc ask "<question>"`, then `hub doc read <path>` for the page it cites.
 The roster is `hub team show`. A change a human must submit is `hub task create --owner <person>` with what the provider
-needs. A question for the requester is `hub task ask <id>`, one open question per task.
+needs. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The page opens with the windows closing in the next 14 days.

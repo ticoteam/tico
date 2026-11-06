@@ -47,7 +47,7 @@ Done when: the change is made as the requester and read back, or the refusal is 
 - `hub task comment <id> "<text>"`: a comment on the task, with your name. Add `--defer never` for a quiet note that wakes nobody;
   only whoever you @mention reaches it.
 - `hub task follow <id>` and `hub task unfollow <id>`: follow a task you care about, or stop when you are done with it.
-- `hub task ask <id> "<question>"`: a question on the task.
+- `hub task question "<question>" --on <person> --parent <id>`: a question on the task.
 - `hub task update <id> --status waiting --on <person> --note "<text>"`: set a task waiting on a person, with the one thing they
   must do.
 - `hub task update <id> --status done --note "<result>"`: finish a task you own.
@@ -102,7 +102,7 @@ Done when: the change is made as the requester and read back, or the refusal is 
 
 ## Talk to another bot
 
-- `hub question ask <bot> "<question>"`: ask another bot and wait for its answer. An ask message gets your final answer automatically.
+- `hub message send <bot> "<question>" --needs-action`: ask another bot; it replies in its own time, as a message.
 - `hub message send <bot> "<reply>"`: an ordinary message does not deliver the recipient's final answer to you. When an incoming
   ordinary bot message asks for a reply, send it this way with `--needs-action`, so that bot wakes now and is not left waiting.
 

@@ -811,9 +811,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         else:
             QT.store(c, tid, ask, topic)
             QT.file(c, who.actor, H.task(c, tid), parent)
-        # An old ask to them on the same topic (before question tasks) gives way to this one: Needs you counts it once.
-        QT.supersede_legacy(c, who.actor, person, tid, parent=parent["id"] if parent else None, topic=topic,
-                            private=private)
+            H.hook(c, "needs_you.created", tid, lambda: {"id": tid, "to": person, "from": who.actor,
+                                                         "task_id": parent["id"] if parent else None},
+                   who.actor, revision=0)
         card = H.task(c, tid)
         return {"task": {**card, **QT.fields(card)}, "folded": bool(found), "question": QT.as_ask(card),
                 **({"ingest": made["ingest"]} if made and made.get("ingest") else {}), **org_rule_check.answer(rule)}

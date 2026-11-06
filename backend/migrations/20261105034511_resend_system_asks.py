@@ -1,12 +1,9 @@
-"""Re-send unanswered system asks to their askers' reachable managers or the owner.
+"""Re-sent unanswered system asks to their askers' reachable managers or the owner (before step 6c).
 
-Keep the old ask as history and link it to its replacement. Fresh databases have no asks;
-the repair runs on existing installs, whose message, reach and thread tables already exist.
+A no-op now: asks are gone, and 20261106131713_asks_to_question_tasks moves every open one, a system ask included,
+at the next start (question_tasks.move_asks). Kept so installs that ran it keep its name in their history.
 """
 
 
 def up(conn):
-    from backend import ask_routing, hubdb as H
-    if H._has_table(conn, "messages") and conn.execute(
-            "SELECT 1 FROM messages WHERE kind='ask' AND recipient_id='keeper' LIMIT 1").fetchone():
-        ask_routing.repair(conn)
+    return None

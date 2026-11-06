@@ -407,7 +407,7 @@ def test_what_the_app_shows_is_posted_once_without_echoes_and_a_question_reaches
     assert get(api, "runners/me/app-delivery", token=computer["token"])["bots"][0]["after"] == "k4"
     report(error={"code": "needs_human", "detail": "Grok asks to approve", "text": "Approve the purchase in Grok?"})
     needs = get(api, "needs-you", token="cara-test")
-    assert any(i.get("kind") == "ask" and i["body"] == "Approve the purchase in Grok?" for i in needs["items"])
+    assert any(i["kind"] == "question" and i["ask"]["body"] == "Approve the purchase in Grok?" for i in needs["items"])
     other = mac(api, "cara", "Cara's other Mac")
     refused = api.post("/api/v2/runners/me/app-delivery/grok-designer", headers=headers(other["token"]),
                        json={"app": "grok", "messages": [{"key": "k9", "role": "bot", "text": "Not mine."}]})
@@ -461,14 +461,15 @@ def turn(api, computer, text, reply):
 
 
 def asks_in_needs_you(api, body):
-    return [i for i in get(api, "needs-you", token="cara-test")["items"] if i.get("kind") == "ask" and i["body"] == body]
+    return [i for i in get(api, "needs-you", token="cara-test")["items"]
+            if i["kind"] == "question" and i["ask"]["body"] == body]
 
 
-def test_a_question_the_app_needs_its_person_for_is_one_ask_whichever_arrives_first(api):
+def test_a_question_the_app_needs_its_person_for_is_one_question_task_whichever_arrives_first(api):
     from backend.tests.test_api import claim
     computer, report = delivering(api)
     needs = lambda text: {"code": "needs_human", "detail": "the bot asked", "text": text}
-    # The turn's reply first, then the error report: the reply becomes the question.
+    # The turn's reply first, then the error report: the reply stays a chat line, the question is a question task.
     turn(api, computer, "Send the invoice.", "Which account should I bill?")
     report(error=needs("Which account should I bill?"))
     # The error report first, then the turn's reply: the reply isn't posted again.
@@ -483,7 +484,7 @@ def test_a_question_the_app_needs_its_person_for_is_one_ask_whichever_arrives_fi
                   {"key": "q2", "role": "bot", "text": "Email or paper?"})["posted"] == 0
     for question in ("Which account should I bill?", "Email or paper?"):
         rows = [m for m in room_messages_of(api, "cara", "grok-designer") if m["body"] == question]
-        assert [(m["sender_id"], m["kind"]) for m in rows] == [("bot:" + bot_id(api), "ask")], question
+        assert [(m["sender_id"], m["kind"]) for m in rows] == [("bot:" + bot_id(api), "say")], question
         assert len(asks_in_needs_you(api, question)) == 1, question
 
 

@@ -64,7 +64,7 @@ def held_reason(msg, conn=None):
     if conn is not None:
         bot = (H.bot(conn, bot) or {}).get("slug", bot)
     return (f"held for {bot}'s next run; nothing runs it now. Add --needs-action (needs_action: true) to wake "
-            f"{bot} now, or ask with `hub question ask`.")
+            f"{bot} now.")
 
 
 def hold(conn, msg, task_row=None):

@@ -6,7 +6,7 @@ and no model call. Each department's report is built here from queries Tico alre
 
 - tasks quiet longer than the stall gap with no wait set (`H.stalled_tasks`), with the class Decide gave from the task's
   last messages from an earlier read (`stall_triage.class_of`: unsure or stuck);
-- asks past their deadline, and questions a person has not answered for a business day (`ask_deadlines.open_asks`);
+- question tasks past their deadline, or a person has not answered for a business day (`question_tasks.open_rows`);
 - review and QA tickets with no linked pull request, or two open for one parent and step;
 - tickets whose pull request merged or whose release shipped but whose step did not move (`task_links`);
 - tasks blocked only by their own quiet subtasks (`H.stalled_tasks` `own_blockers`);
@@ -161,22 +161,23 @@ def _quiet(c, at):
 
 
 def _asks(c, at):
-    from . import ask_deadlines, still_needed, team_rules
+    from . import ask_deadlines, question_tasks, still_needed, team_rules
     rules, local = team_rules.load(c), datetime.now(timezone.utc)
     out = []
-    for asked, task in ask_deadlines.open_asks(c, at):
-        if not task or not _readable(c, task):
+    for task in question_tasks.open_rows(c):
+        if not H.is_bot(task.get("requester_id")) or not _readable(c, task):
             continue
-        who = H.actor_id(asked["recipient_id"])
+        asked = question_tasks.as_ask(task)
+        who = H.actor_id(task["owner_id"])
         by = ask_deadlines.fallback_at(asked, rules)
         if by and by <= at:
             out.append(_item("ask_overdue", task, f"a question to {who} is past its deadline and still open",
                              f"hub task get {task['id']}; one line for the department in Needs you, do not answer for {who}",
-                             stamp=asked["id"]))
-        elif still_needed.crossed_at(H.ask_clock(asked), days=1) <= local:
+                             stamp=task["id"]))
+        elif still_needed.crossed_at(question_tasks.asked_at(task), days=1) <= local:
             out.append(_item("ask_unanswered", task, f"a question to {who} has gone a business day unanswered",
                              f"hub task get {task['id']}; one line for the department in Needs you, do not answer for {who}",
-                             stamp=asked["id"]))
+                             stamp=task["id"]))
     return out
 
 
