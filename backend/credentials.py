@@ -580,9 +580,9 @@ class Vault:
                 if held:
                     bot=(H.bot(c,H.actor_id(subject)) or {}).get('slug') or H.actor_id(subject)
                     if key_hidden(c,who,other['id'],self.admins):
-                        # A key of a tool this person may not see is never named to them.
-                        raise Problem('env_in_use',f"{bot} already gets {row['env']} from another credential, and a run "
-                                      'takes one value per variable. '+ask_admin_detail(c,self.admins,'change it'),409)
+                        # A key of a tool this person may not see is never named, nor is its variable or that one
+                        # exists: a refusal that says no more than that the owner (who sees every tool) must do it.
+                        raise Problem('grant_refused',f"You can't give {bot} this credential. Ask the owner",409)
                     ask='' if self.may_revoke(c,who,other['id'],held) else ' '+ask_admin_detail(
                         c,self.admins,f"take {other['name']} away from {bot}")
                     raise Problem('env_in_use',f"{bot} already gets {row['env']} from the credential {other['name']}, and a run "

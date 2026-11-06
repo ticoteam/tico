@@ -9,7 +9,8 @@ questions (decisions) from `messages`.
 Every read goes through the reader's own SQL connection (backend/sql.py): each table there is the view of it that
 `POST /api/v2/sql` gives the same person, so the list never holds a row its reader could not already query. A filter
 only narrows it: by teammate or team (`bot=`, `person=`, `team=`, as Replay takes them; a team includes the groups
-nested under it), matching who acted or whom the row is about, and by `kind=`.
+nested under it), matching who acted or whom the row is about, and by `kind=`. A credential event on a key of a tool
+the reader may not see (backend/api_tools.py `visible`) is not in it at all, though the reader made it.
 """
 
 import csv
@@ -112,9 +113,12 @@ def _sources(kinds):
                       "substr(k.title,1,:text_n) AS title FROM approvals a LEFT JOIN tasks k ON k.id=a.task_id "
                       f"WHERE a.decision='{decision}' AND a.decided_at IS NOT NULL",
                 "a.decided_at", "a.decided_by_id", "a.requested_by_id")
+    # A key of a tool the reader may not see (backend/api_tools.py `visible`) has no rows here at all: `:hidden`.
+    unseen = "coalesce(e.target,'') NOT IN (SELECT value FROM json_each(:hidden))"
     events = {"outbound.blocked": f"e.action='{SEND_OFF}'",
-              "credential.revealed": "e.action IN (" + ",".join(f"'{a}'" for a in REVEALS) + ")",
-              "permission.changed": "e.action IN (" + ",".join(f"'{a}'" for a in PERMISSIONS) + ")"}
+              "credential.revealed": "e.action IN (" + ",".join(f"'{a}'" for a in REVEALS) + f") AND {unseen}",
+              "permission.changed": "e.action IN (" + ",".join(f"'{a}'" for a in PERMISSIONS) + ") AND "
+                                    f"(e.action NOT IN ('credential.granted','credential.revoked') OR {unseen})"}
     for kind, which in events.items():
         if kind in kinds:
             about = ("CASE WHEN e.action IN ('credential.granted','credential.revoked') "
@@ -142,8 +146,9 @@ def _sources(kinds):
     return out
 
 
-def _query(source, actors, first, last, before, limit, people):
-    """Order a source by its indexed time and id; the prefixed id only breaks ties across sources."""
+def _query(source, actors, first, last, before, limit, people, hidden=()):
+    """Order a source by its indexed time and id; the prefixed id only breaks ties across sources. `hidden` is the keys
+    whose credential events the reader never gets."""
     _, select, column, actor, about = source
     at, rid = cursor_of(before)
     where = []
@@ -162,7 +167,8 @@ def _query(source, actors, first, last, before, limit, people):
     ident = column.rsplit(".", 1)[0] + ".id"
     statement = select + "".join(" AND " + w for w in where) + f" ORDER BY {column} DESC, {ident} DESC LIMIT :n"
     return statement, {"first": first, "last": last, "at": at, "rid": rid, "n": limit + 1, "text_n": TEXT_MAX + 1,
-                       "actors": json.dumps(sorted(actors or ())), "people": json.dumps(people)}
+                       "actors": json.dumps(sorted(actors or ())), "people": json.dumps(people),
+                       "hidden": json.dumps(sorted(hidden))}
 
 
 def install(app, store, auth):
@@ -184,12 +190,15 @@ def install(app, store, auth):
         _, seconds = sql.LIMITS[who.role if who.role in sql.LIMITS else "human"]
         deadline = time.monotonic() + seconds
         people = ["human:" + row["id"] for row in c.execute("SELECT id FROM humans")]
+        from .api_tools import hidden_keys
+        vault = getattr(app.state, "vault", None)
+        hidden = hidden_keys(c, who, vault.admins if vault is not None else (), auth)
         conn = sql.connect(store.settings.db_path, c, auth, who, seconds=seconds)
         rows = []
         try:
             conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 2000)
             for source in _sources(kinds):
-                statement, args = _query(source, actors, first, last, before, limit, people)
+                statement, args = _query(source, actors, first, last, before, limit, people, hidden)
                 rows += [{**dict(row), "kind": source[0]} for row in conn.execute(statement, args)]
         except sqlite3.Error as exc:
             if time.monotonic() > deadline or "interrupted" in str(exc):

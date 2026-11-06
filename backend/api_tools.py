@@ -723,17 +723,12 @@ class _Receipt:
 _slug = TS.slug
 
 
-def _unique_id(c, base, who=None, admins=()):
-    """`base`, else `base-2`, `base-3`...; an Only listed tool `who` may not see is never counted out loud: past one,
-    the id takes a random suffix instead, so a new tool's id does not say a hidden one of that name exists."""
-    tid, n = base, 1
-    while (row := c.execute("SELECT * FROM tools WHERE id=?", (tid,)).fetchone()) is not None:
-        if who is not None and row["audience"] is not None and not visible(c, who, row, admins):
-            while c.execute("SELECT 1 FROM tools WHERE id=?", (tid := f"{base}-{H.new_id()[:8].lower()}",)).fetchone():
-                pass
-            return tid
-        n += 1
-        tid = f"{base}-{n}"
+def _unique_id(c, base):
+    """`base`, else `base-<random>` whenever any tool has `base`, seen or not: an id never says how many tools of that
+    name exist, nor (by its shape) that a hidden one does."""
+    tid = base
+    while c.execute("SELECT 1 FROM tools WHERE id=?", (tid,)).fetchone():
+        tid = f"{base}-{H.new_id()[:8].lower()}"
     return tid
 
 
@@ -769,7 +764,7 @@ def create_tool(c, who, body, admins):
     known = TS.defaults(service)
     # A known service's check path belongs to its own address: a tool given another address gets none by default.
     own = not fields["base_url"] or fields["base_url"] == known.get("base_url")
-    tool = {"id": _unique_id(c, _slug(fields["name"]), who, admins), "name": fields["name"].strip(),
+    tool = {"id": _unique_id(c, _slug(fields["name"])), "name": fields["name"].strip(),
             "service": service or fields["service"] or "",
             "base_url": fields["base_url"] or known.get("base_url", ""),
             "auth_scheme": fields["auth_scheme"] or known.get("auth_scheme", "bearer"),
@@ -942,7 +937,7 @@ def ensure_tool(c, who, credential_id, from_computer=False):
         tid = free["id"]
     else:
         base = TS.slug(service or row["name"])
-        made = _unique_id(c, base, who)
+        made = _unique_id(c, base)
         first = made == base or c.execute("SELECT 1 FROM tools WHERE id=? AND audience IS NULL", (base,)).fetchone() is None
         tid = TS.insert_tool(c, service, row["name"], "proxy" if proxy else "computer", who.actor, H.now(), tid=made,
                              first=first)

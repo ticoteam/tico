@@ -347,16 +347,21 @@ def _missing_tool_credentials(c, online_ids):
     return sorted(out)
 
 
-def reserved_credentials(c):
+def reserved_credentials(c, who=None, admins=(), auth=None):
     """(credential name, variable, bot) for each credential a bot holds under a name Tico reserves. The runner leaves
-    such a credential out of the bot's turns, so the bot runs without it until someone renames the variable."""
+    such a credential out of the bot's turns, so the bot runs without it until someone renames the variable. Given
+    `who`, never a key of a tool they may not see (backend/api_tools.py `visible`)."""
     from clients.access_entry import RESERVED_ENV, RESERVED_PREFIXES
     from .credentials import effective_grant
+    hidden = set()
+    if who is not None:
+        from .api_tools import hidden_keys
+        hidden = hidden_keys(c, who, admins, auth)
     out = []
     for row in c.execute("SELECT DISTINCT v.id,v.name,v.env,g.subject FROM credentials v JOIN credential_grants g "
                          "ON g.credential_id=v.id WHERE g.subject LIKE 'bot:%' AND g.revoked_at IS NULL "
                          "AND v.ciphertext IS NOT NULL AND v.env<>'' ORDER BY v.name"):
-        if (row["env"] in RESERVED_ENV or row["env"].startswith(RESERVED_PREFIXES)) \
+        if (row["env"] in RESERVED_ENV or row["env"].startswith(RESERVED_PREFIXES)) and row["id"] not in hidden \
                 and effective_grant(c, row["id"], row["subject"]):
             out.append((row["name"], row["env"], H.actor_id(row["subject"])))
     return out
@@ -2162,7 +2167,7 @@ def view(c, who, settings, auth, github, config):
                              "Missing Credential: " + "; ".join(f"{tool} on {label}" for tool, label in missing_tools[:5])
                              + ("." if len(missing_tools) <= 5 else f"; and {len(missing_tools) - 5} more."),
                              [_fix("Open Keys", "#/tools/keys?show=credentials"), _fix("Open Computers", "#/settings", "devices")]))
-    if full and (reserved := reserved_credentials(c)):
+    if full and (reserved := reserved_credentials(c, who, tuple(settings.credential_admins or ()), auth)):
         checks.append(_check("reserved_credentials", "Credential names", "warn",
                              "Bots run without these credentials, because Tico keeps their variable names for itself: " + "; ".join(f"{name} ({env}) for {_bot_name(c, bot)}" for name, env, bot in reserved[:5])
                              + ("." if len(reserved) <= 5 else f"; and {len(reserved) - 5} more.")

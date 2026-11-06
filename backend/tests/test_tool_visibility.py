@@ -1,7 +1,7 @@
 """Who can see an API tool (backend/api_tools.py `visible`): Only listed hides a tool and its keys from everyone but the
 owner, the list and whoever can use it, on every path: the tool index, the tool's page, its activity, check and writes,
-the vault's list, reveal, change, grant, revoke and delete, the chat card, history, SQL, Add's id and a key stored
-elsewhere. Not visible is a 404, never a 403. Everyone (NULL) keeps the rules from before.
+the vault's list, reveal, change, grant, revoke and delete, the chat card, history, SQL, Add's id, a key stored
+elsewhere, a bot copy, Counsel's hint, Health and the Assistant's card. Not visible is a 404, never a 403. Everyone (NULL) keeps the rules from before.
 
 Ana owns the company and Ben is an admin (both credential administrators); Cara and Eve are members."""
 
@@ -208,8 +208,12 @@ def test_adding_a_tool_or_storing_a_key_never_reveals_a_hidden_tools_id_or_fills
     tid, _, _ = bank(api)
     assert tid == "acme-bank"
     mine = post(api, "api-tools", {"name": "Acme Bank"}, "ben-test")
-    assert mine["id"].startswith("acme-bank-") and mine["id"] != "acme-bank-2"
-    assert post(api, "api-tools", {"name": "Acme Bank"})["id"] == "acme-bank-2"   # Ana sees hers: counted as before
+    ours = post(api, "api-tools", {"name": "Acme Bank"})
+    # A taken id takes a random suffix whoever sees the tool that has it: its shape never says a hidden one exists.
+    for made in (mine["id"], ours["id"]):
+        assert made.startswith("acme-bank-") and len(made) == len("acme-bank-") + 8
+    assert mine["id"] != ours["id"]
+    assert post(api, "api-tools", {"name": "Fresh Tool"}, "ben-test")["id"] == "fresh-tool"     # a free id is the name
     # A known service's key stored in the vault fills the first free tool of that service, never a private one.
     close = tool(api)["id"]
     patch(api, close, {"audience": ONLY})
@@ -267,3 +271,103 @@ def test_level_writes_by_the_owner_still_work_on_a_private_tool(api):
     get(api, f"api-tools/{tid}", "cara-test", expected=404)
     post(api, f"credentials/{ro}/reveal", {}, "cara-test", expected=404)
 
+
+
+def ben_and_ana(api, c):
+    auth = api.app.state.auth
+    return auth.identity_for_actor(c, "human:ben"), auth.identity_for_actor(c, "human:ana")
+
+
+def test_history_drops_a_hidden_keys_events_even_the_ones_the_reader_made(api):
+    """Ben granted and revealed the key while its tool was Everyone; once Ana makes it Only listed, those rows are gone
+    from his Log (not just unnamed), and still in hers."""
+    tid, rw, _ = bank(api, None)
+    post(api, f"credentials/{rw}/grants", {"subject": "bot:ops"}, "ben-test")
+    post(api, f"credentials/{rw}/reveal", {}, "ben-test")
+
+    def rows(token):
+        page = get(api, "history?kind=credential.revealed,permission.changed", token)
+        return {i["id"]: i for i in page["items"] if i["link"] == "#/tools/keys?show=credentials"}
+
+    before = rows("ben-test")
+    assert {i["kind"] for i in before.values()} == {"credential.revealed", "permission.changed"}
+    patch(api, tid, {"audience": ONLY})
+    assert not set(rows("ben-test")) & set(before)
+    assert set(before) <= set(rows("ana-test"))
+
+
+def test_a_new_credentials_name_never_steps_around_a_hidden_keys_name(api):
+    """The chat card renames a new credential whose name is taken; a hidden key's name is not taken for Ben, so the name
+    he gets is the one he asked for, as if the hidden key did not exist."""
+    from backend import credential_cards
+    bank(api)
+    vault = api.app.state.vault
+    post(api, "credentials", {"name": "Ben visible", "env": "BEN_VISIBLE_KEY", "secret": SECRET + "-v"}, "ben-test")
+    with api.app.state.store.transaction() as c:
+        ben, _ = ben_and_ana(api, c)
+        hidden = credential_cards.store_for_bot(c, vault, ben, "ACME_OTHER_KEY", "ops", SECRET + "-a",
+                                                name="Close read_write")
+        seen = credential_cards.store_for_bot(c, vault, ben, "ACME_THIRD_KEY", "ops", SECRET + "-b", name="Ben visible")
+    assert hidden["name"] == "Close read_write"
+    assert seen["name"] != "Ben visible"        # a name he can see is still stepped around, as before
+
+
+def test_counsels_who_hint_never_counts_a_hidden_key(api):
+    from backend import counsel
+    tid, _, _ = bank(api)
+    level(api, tid, "bot:ops", "read_write")
+    with api.app.state.store.read() as c:
+        ben, ana = ben_and_ana(api, c)
+        auth = api.app.state.auth
+        assert counsel.suggested_who(c, "Close", ben, auth)["bots"] == []
+        assert counsel.suggested_who(c, "Close", ana, auth)["bots"] == ["ops"]
+
+
+def test_copying_a_bot_never_reports_or_tries_a_hidden_key(api):
+    """Ops holds the hidden key; Ben's copy of Ops is told the original has none (as if it did not exist), never
+    "Credential not found"; Ana's copy gets it."""
+    from backend import bot_copy
+    tid, rw, _ = bank(api)
+    level(api, tid, "bot:ops", "read_write")
+    vault = api.app.state.vault
+    with api.app.state.store.read() as c:
+        env = c.execute("SELECT env FROM credentials WHERE id=?", (rw,)).fetchone()[0]
+    tools = [{"env": env, "service": ""}]
+    with api.app.state.store.transaction() as c:
+        ben, ana = ben_and_ana(api, c)
+        bens = bot_copy.credentials_for(c, vault, ben, "ops", "coo", tools, [])
+        anas = bot_copy.credentials_for(c, vault, ana, "ops", "coo", tools, [])
+    assert bens["granted"] == [] and bens["needs"][0]["detail"] == "The original has no stored credential for it."
+    assert anas["granted"] == [{"env": env, "service": "", "credential": "Close read_write"}]
+
+
+def test_a_grant_refused_by_a_hidden_holder_names_no_key_nor_its_variable(api):
+    tid, rw, _ = bank(api)
+    level(api, tid, "bot:ops", "read_write")
+    with api.app.state.store.read() as c:
+        env = c.execute("SELECT env FROM credentials WHERE id=?", (rw,)).fetchone()[0]
+    mine = post(api, "credentials", {"name": "Ben bank", "env": env, "secret": SECRET + "-ben"}, "ben-test")["id"]
+    r = api.post(f"/api/v2/credentials/{mine}/grants", json={"subject": "bot:ops"}, headers=headers("ben-test"))
+    assert r.status_code == 409, r.text
+    assert env not in r.text and "Close" not in r.text and "Acme" not in r.text and "another credential" not in r.text
+    # Ana sees the key, so she is told which one.
+    r = api.post(f"/api/v2/credentials/{mine}/grants", json={"subject": "bot:ops"}, headers=headers())
+    assert r.status_code == 409 and "Close read_write" in r.text
+
+
+def test_health_and_the_assistants_card_never_name_a_hidden_key(api):
+    from backend import assistant, health
+    tid, rw, _ = bank(api)
+    level(api, tid, "bot:ops", "read_write")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE credentials SET env='TICO_ACME_BANK' WHERE id=?", (rw,))   # a reserved name, after the grant
+    admins = api.app.state.vault.admins
+    auth = api.app.state.auth
+    with api.app.state.store.read() as c:
+        ben, ana = ben_and_ana(api, c)
+        assert ("Close read_write", "TICO_ACME_BANK", "ops") in health.reserved_credentials(c, ana, admins, auth)
+        assert not [r for r in health.reserved_credentials(c, ben, admins, auth) if r[0] == "Close read_write"]
+        path = f"/api/v2/credentials/{rw}"
+        assert "Close read_write" in assistant.describe(c, "DELETE", path, {}, ana, admins)[0]
+        said = assistant.describe(c, "DELETE", path, {}, ben, admins)[0]
+        assert "Close" not in said and rw in said

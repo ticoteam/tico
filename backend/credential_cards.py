@@ -184,7 +184,8 @@ def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", usern
     unused = next((r for r in rows if not grants.get(r["id"])), None)
     existing = own or unused
     label = (name or "").strip() or env
-    if not existing and c.execute("SELECT 1 FROM credentials WHERE name=?", (label,)).fetchone():
+    # Only a name this person can see counts as taken (names need not be unique): a hidden key's never shows here.
+    if not existing and any(r["id"] not in hidden for r in c.execute("SELECT id FROM credentials WHERE name=?", (label,))):
         label = f"{env} ({row['display_name'] or row['slug']})"
     write = CredentialWrite(name=existing["name"] if existing else label, username=username or (existing["username"] if existing else ""),
                             kind=kind, env=env, secret=SecretStr(value), source="",
