@@ -40,9 +40,11 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
     assert set(derived) <= {m['id'] for m in get(api, 'tasks/' + target['id'] + '/comments')['comments']}
     added = post(api, f"tasks/{target['id']}/comments", {'text': 'Ordinary follow-up'}, 'ben-test')
     mid = added['comment']['id']
+    # The question filed under the target above bumped its version, so the note names the version Ben reads now.
+    version = get(api, 'tasks/' + target['id'], 'ben-test')['task']['version']
     responses = [added, post(api, f"tasks/{target['id']}/comments/{mid}", {'text': 'Revised follow-up'}, 'ben-test'),
                  post(api, f"tasks/{target['id']}/comments/{mid}/delete", {}, 'ben-test'),
-                 post(api, f"tasks/{target['id']}", {'version': target['version'], 'note': 'Still reviewing'}, 'ben-test')]
+                 post(api, f"tasks/{target['id']}", {'version': version, 'note': 'Still reviewing'}, 'ben-test')]
     assert all('Restricted' not in json.dumps(value) for value in responses)
 
 
