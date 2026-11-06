@@ -377,16 +377,20 @@ ROUTE_WRITES = [
 ]
 
 
-@pytest.mark.parametrize("method,path,body", ROUTE_WRITES, ids=[f"{m} {p}" for m, p, _ in ROUTE_WRITES])
-def test_a_private_run_is_refused_on_every_route_that_writes_text_into_a_company_thread(api, method, path, body):
+def test_a_private_run_is_refused_on_every_route_that_writes_text_into_a_company_thread(api):
     _, attempt = private_run(api)
     ctx = _route_context(api, attempt)
-    url = path.format(thread=ctx["thread"], message=ctx["message"])
-    payload = body(ctx)
-    kwargs = {"headers": headers(ctx["token"])}
-    if payload is not None:
-        kwargs["json"] = payload
-    response = api.request(method, url, **kwargs)
-    assert response.status_code == 403, f"{method} {path}: {response.status_code} {response.text}"
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM messages WHERE body LIKE 'Confidential%'").fetchone()[0] == 0
+    codes = set()
+    for method, path, body in ROUTE_WRITES:
+        url = path.format(thread=ctx["thread"], message=ctx["message"])
+        payload = body(ctx)
+        kwargs = {"headers": headers(ctx["token"])}
+        if payload is not None:
+            kwargs["json"] = payload
+        response = api.request(method, url, **kwargs)
+        assert response.status_code == 403, f"{method} {path}: {response.status_code} {response.text}"
+        codes.add(response.json()["error"]["code"])
+        with api.app.state.store.read() as c:
+            assert c.execute("SELECT COUNT(*) FROM messages WHERE body LIKE 'Confidential%'").fetchone()[0] == 0, path
+    # Every route is refused for the same reason, so the run was never quarantined partway through the table.
+    assert len(codes) == 1, codes

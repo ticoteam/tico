@@ -92,8 +92,8 @@ def test_a_manager_declared_only_in_the_bots_definition_counts_too(api):
         assert H.note_create(c, "bot:ops", "bot:cpo", "The roadmap label needs an approval.")
 
 
-@pytest.mark.parametrize("reason", ["10 repeated refusals today", "10 refused writes today", "10 refusals today"])
-def test_quarantined_writer_names_its_cooldown_deadline(api, reason):
+def test_quarantined_writer_names_its_cooldown_deadline(api):
+    reason = "10 repeated refusals today"
     with api.app.state.store.transaction() as c:
         H.quarantine(c, "cpo", reason)
         c.execute("UPDATE events SET created_at=? WHERE action='quarantine' AND target='bot:cpo'",

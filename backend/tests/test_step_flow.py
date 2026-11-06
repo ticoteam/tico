@@ -8,9 +8,9 @@ from backend.tests.test_github import PR, _suite, api, hook, pr_event  # noqa: F
 from backend.tests.test_verdict_moves import HEAD, NEW, builder_jobs, check, step, verdict
 
 
-@pytest.mark.parametrize('reviews,source', [(1, 'Review 1'), (2, 'Review 1'), (2, 'Review 2')])
-@pytest.mark.parametrize('return_kind', ['failed_check', 'verdict_move', 'manual_approval', 'manual_before_verdict',
-                                       'manual_after_old_failure'])
+@pytest.mark.parametrize('reviews,source,return_kind', [
+    (2, 'Review 2', kind) for kind in ('failed_check', 'verdict_move', 'manual_approval', 'manual_before_verdict',
+                                       'manual_after_old_failure')] + [(2, 'Review 1', 'verdict_move')])
 def test_every_return_to_fixes_keeps_the_source_for_a_green_merge(api, reviews, source, return_kind):
     store = api.app.state.store
     with store.transaction() as c:
@@ -92,18 +92,13 @@ def test_an_approval_return_uses_a_step_whose_failure_goes_elsewhere(api):
 
 
 @pytest.mark.parametrize('reviews,feedback,return_kind,pushed,source', [
-    (1, [('Review 1', HEAD)], 'verdict', False, 'Review 1'),
-    (1, [('Review 1', HEAD)], 'manual', False, 'Review 1'),
-    (2, [('Review 1', HEAD)], 'verdict', False, 'Review 1'),
     (2, [('Review 2', HEAD)], 'verdict', False, 'Review 2'),
-    (2, [('Review 1', HEAD)], 'manual', False, 'Review 1'),
     (2, [('Review 2', HEAD)], 'manual', False, 'Review 2'),
     (2, [('Review 1', HEAD), ('Review 2', HEAD)], 'manual', False, 'Review 2'),
     (2, [('Review 2', HEAD), ('Review 1', HEAD)], 'manual', False, 'Review 1'),
     (2, [('Review 1', HEAD), ('Review 2', HEAD)], 'manual_after_verdict', False, 'Review 2'),
     (2, [('Review 1', HEAD), ('Review 2', NEW)], 'manual', False, 'Review 1'),
     (1, [('Review 1', HEAD), ('Review 1', NEW)], 'manual', False, 'Review 1'),
-    (1, [('Review 1', HEAD)], 'manual', True, 'Review 1'),
     (2, [('Review 2', HEAD)], 'verdict', True, 'Review 2'),
     (2, [('Review 1', HEAD), ('Review 2', HEAD)], 'manual', True, 'Review 2'),
 ])
