@@ -114,7 +114,7 @@ def test_review_question_is_filed_when_every_hosted_check_passes_at_the_current_
     assert r.status_code == 200, r.text
     assert any('/commits/' + HEAD + '/check-runs' in p for p in reads), 'the question read GitHub afresh'
     question = r.json()['task']
-    assert question['status'] == 'waiting' and question['waiting_on'] == 'human:ana'
+    assert question['owner_id'] == 'human:ana' and question['questions']      # a question task Ana owns
     # This is the builder's decision question, not a blocked judging check. The minute sweep agrees.
     with api.app.state.store.transaction() as c:
         task_blocked.sweep(c, H.now())
@@ -277,4 +277,4 @@ def test_a_held_review_question_sent_anyway_reads_github_afresh_and_is_filed(api
     assert sent['hold']['state'] == 'sent', sent
     assert any('/commits/' + HEAD + '/check-runs' in p for p in reads), 'Send anyway read GitHub afresh'
     question = sent['result']['task']
-    assert question['status'] == 'waiting' and question['waiting_on'] == 'human:ana'
+    assert question['owner_id'] == 'human:ana' and question['questions']      # a question task Ana owns
