@@ -757,3 +757,92 @@ def test_an_upgraded_computer_stays_held_after_its_samples_are_pruned_and_startu
     assert claim(api, computer, 'finance') is None
     memory(api, computer, .3)
     assert claim(api, computer, 'finance') is not None
+
+
+def test_build_limit_follows_the_computers_disk(api):
+    """One build at once per 15 GB of reported disk, at least 2, never more than the turn limit; 4 without a report."""
+    from backend import start_places
+    from backend.store import encode
+
+    def computer(disk=None, capacity=40, turns_at_once=None):
+        doc = {'schema_version': 1, 'bots': {}}
+        if disk is not None:
+            doc['disk'] = {'total_bytes': disk, 'free_bytes': disk // 2}
+        return {'capacity': capacity, 'turns_at_once': turns_at_once, 'capabilities': '[]', 'readiness': encode(doc)}
+
+    assert start_places.build_limit(computer(51 * 10**9)) == 3
+    assert start_places.build_limit(computer(157 * 10**9)) == 10
+    assert start_places.build_limit(computer(10 * 10**9)) == 2
+    assert start_places.build_limit(computer(None)) == 4
+    assert start_places.build_limit(computer(51 * 10**9, turns_at_once=2)) == 2
+    assert start_places.build_limit(computer(157 * 10**9, capacity=1)) == 1
+
+
+def build_computer(api, disk=51 * 10**9):
+    """A task-lane computer with 8 turns and a reported disk, so the build limit is 3 for a 51 GB disk."""
+    from backend import runner_states
+    from backend.store import encode, readiness_document
+    from backend.tests.test_task_lanes import task_bot
+    computer = task_bot(api, lanes=True)
+    with api.app.state.store.transaction() as c:
+        doc = readiness_document(c.execute('SELECT readiness FROM runners_with_state WHERE id=?',
+                                           (computer['runner_id'],)).fetchone()['readiness'])
+        doc['disk'] = {'total_bytes': disk, 'free_bytes': disk // 2}
+        runner_states.save(c, computer['runner_id'], readiness=encode(doc))
+    return computer
+
+
+def build_task(api, computer, title):
+    """A task on this computer with a worktree link that is present: the signal that its turns are builds."""
+    from backend.tests.test_task_lanes import new_task
+    task = new_task(api, title)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,computer_id,path,detail) "
+                  "VALUES(?,?,'worktree',?,'present','bot:ops',?,?,?,'{}')",
+                  ('tree-' + task['id'], task['id'], 'worktree:' + task['id'], H.now(), computer['runner_id'],
+                   'tasks/' + task['id'] + '/Acme__product'))
+    return task
+
+
+def test_the_fourth_build_waits_on_a_three_build_computer_while_a_repo_free_turn_starts(api):
+    from backend import start_places
+    computer = build_computer(api)
+    rid = computer['runner_id']
+    for i in range(4):
+        build_task(api, computer, f'Build {i}')
+    builds = [claim(api, computer) for _ in range(4)]
+    assert all(builds)
+    with api.app.state.store.read() as c:
+        assert start_places.build_limit(c.execute('SELECT * FROM runners_with_state WHERE id=?', (rid,)).fetchone()) == 3
+        assert start_places.builds_held(c, rid) == 3
+        assert start_places.is_build(c, builds[3]['id'])
+    fourth = builds[3]['id']
+    assert post(api, f'attempts/{fourth}/start-place', {}, computer['token']) == {
+        'reserved': False, 'waiting': 'builds at once'}
+    machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == rid)
+    assert any(w['reason'] == 'builds at once' for w in machine['turn_counts']['waits'])
+    assert 'waiting: builds at once' in machine['turn_summary']
+    # A turn with no repo work is not held by the builds: it takes a place beside the three builds.
+    post(api, 'chat/ops', {'text': 'Quick question, no repo'})
+    chat = claim(api, computer)
+    assert chat is not None and not chat.get('task')
+    assert post(api, f"attempts/{chat['id']}/start-place", {}, computer['token'])['reserved'] is True
+
+
+def test_a_build_waiting_for_a_slot_starts_once_a_running_build_ends(api):
+    computer = build_computer(api)
+    for i in range(4):
+        build_task(api, computer, f'Build {i}')
+    builds = [claim(api, computer) for _ in range(4)]
+    assert all(builds)
+    fourth = builds[3]['id']
+    assert post(api, f'attempts/{fourth}/start-place', {}, computer['token']) == {
+        'reserved': False, 'waiting': 'builds at once'}
+    first = builds[0]['id']
+    post(api, f'attempts/{first}/started', {'thread_id': 'build-1'}, computer['token'])
+    post(api, f'attempts/{first}/complete', {'outcome': 'completed', 'text': '', 'last_seq': 0}, computer['token'])
+    # The runner asks again while it waits; with one build finished the slot is free and the wait ends.
+    assert post(api, f'attempts/{fourth}/start-place', {}, computer['token'])['reserved'] is True
+    post(api, f'attempts/{fourth}/started', {'thread_id': 'build-4'}, computer['token'])
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (fourth,)).fetchone()[0] == 'running'
