@@ -447,10 +447,52 @@ pub fn command_program(command: &str) -> String {
         return command_program(&script);
     }
     let command = if command.contains("<<") { command.split('\n').next().unwrap_or("") } else { command };
-    if let Some(words) = command_runs(command).into_iter().find_map(hub_words) {
+    // A blank run (a comment's end, a trailing separator) holds no work.
+    let runs: Vec<&str> = command_runs(command).into_iter().filter(|run| !run.trim().is_empty()).collect();
+    if let Some(words) = runs.iter().find_map(|run| hub_words(run)) {
         return hub_summary(&words);
     }
-    plain_program(command).map(clip).unwrap_or_default()
+    // The work is the first run past the setup runs before it: `cd web && npm test` names npm. A line that is only
+    // setup names its last run, so `cd /tmp` still reads `cd`.
+    let mut work = runs.as_slice();
+    while let [setup, rest @ ..] = work {
+        if rest.is_empty() || !is_setup_run(setup) {
+            break;
+        }
+        work = rest;
+    }
+    work.first().and_then(|run| plain_program(strip_env(run))).map(clip).unwrap_or_default()
+}
+
+/// A run that only sets the next one up and does no work of its own: `cd <dir>`, `source <file>`, `. <file>`,
+/// `export NAME=value`, `env NAME=value` or bare `NAME=value` assignments. Its words are read only to tell its shape,
+/// never shown, and a redirection makes it work, not setup.
+fn is_setup_run(run: &str) -> bool {
+    let Some(words) = shell_words(run) else { return false };
+    let Some((first, args)) = words.split_first() else { return true };
+    match first.as_str() {
+        "cd" | "source" | "." => args.len() <= 1 && args.iter().all(|w| !w.contains(['<', '>', '|', '&', ';'])),
+        "export" => !args.is_empty() && args.iter().all(|w| is_assignment(w)),
+        "env" => args.iter().all(|w| is_assignment(w) || w == "-i" || w == "-0"),
+        _ => is_assignment(first) && args.iter().all(|w| is_assignment(w)),
+    }
+}
+
+/// A run without its leading `env` and the `NAME=value` words (or `-i`, `-0`) after it, so `env TOKEN=x hub task list`
+/// reads as `hub task list`. Only those flags are taken: another flag may take a word of its own, which is never shown
+/// in its place. A run that is only `env` and its words is kept whole.
+fn strip_env(run: &str) -> &str {
+    static ENV: OnceLock<Regex> = OnceLock::new();
+    let env = ENV.get_or_init(|| {
+        Regex::new(
+            r#"^[ \t]*env(?:[ \t]+(?:-[i0]|[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"\\$`]*"|[A-Za-z0-9._/:@%+,-])*))*[ \t]+"#,
+        )
+        .unwrap()
+    });
+    match env.find(run) {
+        Some(m) if !run[m.end()..].trim().is_empty() && !run[m.end()..].starts_with('-') => &run[m.end()..],
+        _ => run,
+    }
 }
 
 /// The script of a line that is only `sh`, `bash`, `zsh` or `dash`, one plain `-c` flag (`-c`, `-lc`, `-ec`) and one script word.
@@ -521,6 +563,7 @@ fn plain_program(text: &str) -> Option<&str> {
 /// runs only for this, and only the command path is read from the words (`hub_summary`), so a mis-split can at worst
 /// name a real command path and an argument never reaches the summary.
 fn hub_words(run: &str) -> Option<Vec<String>> {
+    let run = strip_env(run);
     if plain_program(run)? != "hub" {
         return None;
     }
@@ -1241,10 +1284,11 @@ mod tests {
         assert_eq!(command_program("cargo test 2>&1 | tail"), "cargo");
         assert_eq!(command_program("cd /tmp"), "cd");
         assert_eq!(command_program("(cd web && npm test)"), "");
-        assert_eq!(command_program("sh -c 'cd x && cargo test'"), "cd");
+        assert_eq!(command_program("sh -c 'cd x && cargo test'"), "cargo");
         assert_eq!(command_program("hub task create --title \"a && hub task close\""), "hub task create");
         assert_eq!(command_program("hub ask botops please check the release"), "hub ask");
-        assert_eq!(command_program("FOO=1 && curl x"), "");
+        assert_eq!(command_program("FOO=1 && curl x"), "curl");
+        assert_eq!(command_program("FOO=1 curl x"), "curl");
         assert_eq!(command_program("X=$(a && sk-live-1) hub task list"), "");
         assert_eq!(tool_summary(&json!({"command": "cd web && hub task list --token sk-live-1"})), "hub task list");
     }
@@ -1265,17 +1309,17 @@ mod tests {
             assert!(!shown.contains("private") && !shown.contains("customer"), "{line:?} showed {shown:?}");
         }
         assert_eq!(command_program("cd /repo <<'EOF'\nprivate-token\nEOF\nnpm test"), "cd");
-        assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "cd");
+        assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "");
         assert_eq!(command_program(">|private-token printf ok"), "");
-        assert_eq!(command_program("cd /tmp && >|private-token printf ok"), "cd");
+        assert_eq!(command_program("cd /tmp && >|private-token printf ok"), "");
         assert_eq!(command_program("(( 1 || private_token ))"), "");
         assert_eq!(command_program("cd /w && hub task close 7f3a"), "hub task close");
-        assert_eq!(command_program("cd /w && npm test"), "cd");
+        assert_eq!(command_program("cd /w && npm test"), "npm");
     }
 
     #[test]
     fn a_shell_comment_is_in_no_run() {
-        assert_eq!(command_program("cd /repo # note; private-token\nnpm test"), "cd");
+        assert_eq!(command_program("cd /repo # note; private-token\nnpm test"), "npm");
         assert_eq!(command_program("cd /repo # note; private-token"), "cd");
         assert_eq!(command_program("echo ok # x && hub task close"), "echo");
         assert_eq!(command_program("cd x; a#b && hub task list"), "hub task list");
@@ -1306,8 +1350,8 @@ mod tests {
         assert_eq!(command_program("<<'EOF'\nhub approval approve\nEOF"), "");
         assert_eq!(command_program("<<EOF\ncustomer-private\nEOF"), "");
         assert_eq!(command_program(">'>' printf customer-private"), "");
-        assert_eq!(command_program("cd /w && >\\> printf customer-private"), "cd");
-        assert_eq!(command_program("cd /w && >'>' hub task close customer-private"), "cd");
+        assert_eq!(command_program("cd /w && >\\> printf customer-private"), "");
+        assert_eq!(command_program("cd /w && >'>' hub task close customer-private"), "");
         assert_eq!(command_program("TOKEN=customer-private >'>' printf customer-private"), "");
         assert_eq!(command_program("2> >(printf customer-private) true"), "");
         assert_eq!(command_program("/bin/zsh -lc 'cd /w && hub needs-you show'"), "hub needs-you show");
@@ -1342,15 +1386,42 @@ mod tests {
         // A heredoc body is no run.
         assert_eq!(command_program("cd /repo <<'EOF'\nprivate-token\nEOF\nnpm test"), "cd");
         // A redirection is skipped to the program behind it, whether its target is attached or the next word.
-        assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "cd");
-        assert_eq!(command_program("cd /repo && > /tmp/customer-123.json printf ok"), "cd");
-        assert_eq!(command_program("cd /w && 2>&1 npm test"), "cd");
+        assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "");
+        assert_eq!(command_program("cd /repo && > /tmp/customer-123.json printf ok"), "");
+        assert_eq!(command_program("cd /w && 2>&1 npm test"), "");
         // A program word is a plain path, and a program name is at most 40 characters.
         assert_eq!(command_program("$HOME/bin/tool --x"), "");
         assert_eq!(command_program(&format!("{} x", "a".repeat(41))), "");
-        // A hub command in a later run still reads; any other line reads as its first program.
+        // A hub command in a later run still reads; a setup run before other work is skipped.
         assert_eq!(command_program("cd /w && hub task close 7f3a"), "hub task close");
-        assert_eq!(command_program("cd /w && npm test"), "cd");
+        assert_eq!(command_program("cd /w && npm test"), "npm");
+    }
+
+    #[test]
+    fn a_setup_run_before_the_work_is_skipped_and_its_arguments_never_show() {
+        assert_eq!(command_program("cd /home/user/workspace/bot-coo && hub task list --status open"), "hub task list");
+        assert_eq!(command_program("cd \"/home/user/My Repo\" && git status"), "git");
+        assert_eq!(command_program("cd /repo && npm test"), "npm");
+        assert_eq!(command_program("cd /repo;npm test"), "npm");
+        assert_eq!(command_program("cd /repo\nnpm test"), "npm");
+        assert_eq!(command_program("cd /repo # note\nnpm test"), "npm");
+        assert_eq!(command_program("cd /repo && export TOKEN=sk-live-1 && cargo test"), "cargo");
+        assert_eq!(command_program("export HUB_TOKEN=sk-live-1 && npm test"), "npm");
+        assert_eq!(command_program("export HUB_TOKEN=sk-live-1 && hub task create --title x"), "hub task create");
+        assert_eq!(command_program("env HUB_TOKEN=sk-live-1 cargo test"), "cargo");
+        assert_eq!(command_program("env HUB_TOKEN=sk-live-1 hub task list --token x"), "hub task list");
+        assert_eq!(command_program("cd /w && env HUB_TOKEN=sk-live-1 hub task close 7f3a"), "hub task close");
+        assert_eq!(command_program("cd /w && env -i A=1 npm test"), "npm");
+        assert_eq!(command_program("source ~/.env.sh && npm test"), "npm");
+        assert_eq!(command_program(". ./secret-env && hub task close 7f3a"), "hub task close");
+        assert_eq!(command_program("cd /w && source a.sh b.sh && npm test"), "source");
+        assert_eq!(command_program("env -u sk-live-1 npm test"), "env");
+        assert_eq!(command_program("cd /w && env -u sk-live-1 npm test"), "env");
+        assert_eq!(command_program("cd /w && export A=1 B=2 && npm test"), "npm");
+        assert_eq!(command_program("cd /w && npm test > out.log"), "npm");
+        assert_eq!(command_program("cd /w"), "cd");
+        assert_eq!(command_program("cd /w && export A=1"), "export");
+        assert!(!command_program("cd /private-customer && export K=sk-live-1 && npm test").contains("private"));
     }
 
     #[test]

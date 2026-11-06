@@ -1,15 +1,15 @@
 """Flat replies and bot status in threads (docs/dev/threads-contract.md §4.8-4.10): a reply stays in the thread it is
 posted to and quotes its target as far as the reader may read it, a person's reply wakes the bot it answers, the flat
-timeline pages the whole open subtree in time order, routing says who it asked, and a thread says which bots it waits
+timeline pages the whole open subtree in time order, nothing is routed any more, and a thread says which bots it waits
 on and why, live and only to its readers. Fictional people only: ana (owner), ben and cara (humans)."""
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import events as E
-from backend import queue_refusals, thread_bot_status, thread_routing, threads
+from backend import queue_refusals, thread_bot_status, threads
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (fixture, helpers)
 from backend.tests.test_thread_events import read_as, who
-from backend.tests.test_threads_delivery import Model, bot_post, delivery, queued_job
+from backend.tests.test_threads_delivery import bot_post, delivery, queued_job
 
 
 def new_thread(api, members=("human:ben", "bot:ops"), title="Budget", token="ana-test"):
@@ -54,9 +54,6 @@ def test_a_reply_stays_in_the_thread_quotes_its_target_and_wakes_the_bot_it_answ
     assert "**" not in reply["reply_to"]["excerpt"]
     woken = delivery(api, reply["id"], "bot:ops")
     assert woken["reason"] == "reply" and woken["mode"] == "queue" and queued_job(api, woken["carrier_id"]) == "queued"
-    # A reply is not routed: it is for the bot it answers.
-    with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM thread_routings WHERE message_id=?", (reply["id"],)).fetchone()
     [shown] = [m for m in timeline(api, thread["id"], "ben-test")["messages"] if m["id"] == reply["id"]]
     assert shown["reply_to"]["id"] == draft["id"] and shown["reply_to"]["author_name"]
 
@@ -157,16 +154,16 @@ def test_a_flat_timeline_leaves_out_an_archived_sub_thread(api):
     assert gone["id"] not in [m["id"] for m in timeline(api, thread["id"], flat=1)["messages"]]
 
 
-# ----------------------------------------------------------------------------- routing line
-def test_a_routed_message_says_who_routing_asked(api):
-    store = api.app.state.store
+# ----------------------------------------------------------------------------- no routing (D14)
+def test_a_message_naming_nobody_is_routed_to_nobody(api):
     thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo", "bot:coo"))
     asked = say(api, thread["id"], "Who can look at the budget?")
     plain = say(api, thread["id"], "@ops thanks")
-    thread_routing.drain(store, primary=Model({"cpo": 0.99}))
+    # Bots follow a chat at mentions: a message naming nobody reaches none of them; an @mention reaches its bot.
+    assert all(delivery(api, asked["id"], b) is None for b in ("bot:ops", "bot:cpo", "bot:coo"))
+    assert delivery(api, plain["id"], "bot:ops")["reason"] == "mention"
     by_id = {m["id"]: m for m in timeline(api, thread["id"], "ben-test")["messages"]}
-    assert [t["actor"] for t in by_id[asked["id"]]["routed"]["to"]] == ["bot:cpo"]
-    assert by_id[plain["id"]]["routed"] is None
+    assert by_id[asked["id"]]["routed"] is None and by_id[plain["id"]]["routed"] is None
 
 
 # ----------------------------------------------------------------------------- bot status

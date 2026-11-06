@@ -30,6 +30,7 @@ mod capture;
 mod client;
 mod cloud_machine;
 mod commands;
+mod company_skills;
 mod config;
 mod credential_imports;
 mod credential_migration;

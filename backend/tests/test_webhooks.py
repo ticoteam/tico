@@ -186,22 +186,28 @@ def test_an_abort_answer_cancels_and_a_server_error_does_not(api, net):
     assert sends(api)[1]["state"] == "ready" and sends(api)[1]["attempts"] == 1
 
 
-@pytest.mark.parametrize("url", ["http://hooks.acme.example/x", "https://user:pw@hooks.acme.example/x", "ftp://hooks.acme.example/x"])
-def test_an_address_the_guard_refuses_cannot_be_saved(api, url):
-    post(api, "webhooks", {"name": "Bad", "url": url, "events": ["*"]}, expected=422)
+REFUSED_BY_THE_GUARD = ["http://hooks.acme.example/x", "https://user:pw@hooks.acme.example/x", "ftp://hooks.acme.example/x"]
+NOT_PUBLIC_BY_ITS_SPELLING = ["https://10.0.0.1/", "https://169.254.169.254/latest", "https://192.168.1.10/x", "https://localhost/x",
+                              "https://[::1]/x", "https://[::ffff:10.0.0.5]/x", "https://2130706433/x", "https://127.1/x",
+                              "https://api.localhost/x", "https://printer.local/x", "https://db.internal/x", "https://localhost./x"]
 
 
-@pytest.mark.parametrize("url", ["https://10.0.0.1/", "https://169.254.169.254/latest", "https://192.168.1.10/x", "https://localhost/x",
-                                 "https://[::1]/x", "https://[::ffff:10.0.0.5]/x", "https://2130706433/x", "https://127.1/x",
-                                 "https://api.localhost/x", "https://printer.local/x", "https://db.internal/x", "https://localhost./x"])
-def test_an_https_address_that_is_not_public_by_its_spelling_cannot_be_saved_or_set(api, url):
+def test_an_address_the_guard_refuses_or_that_is_not_public_by_its_spelling_cannot_be_saved_or_set(api):
     """No name lookup at save: an IP literal outside public space, or a local name, is refused like its http twin."""
-    post(api, "webhooks", {"name": "Bad", "url": url, "events": ["*"]}, expected=422)
-    post(api, "webhooks", {"name": "Bad", "url": url, "events": ["*"], "allow_http": True}, expected=422)
+    def refused(url, path, body):
+        reply = api.post("/api/v2/" + path, json=body, headers=headers("ana-test"))
+        assert reply.status_code == 422, (url, path, reply.status_code, reply.text)
+        return reply.json()
+
+    for url in REFUSED_BY_THE_GUARD:
+        refused(url, "webhooks", {"name": "Bad", "url": url, "events": ["*"]})
     made = make(api)
-    refused = post(api, f"webhooks/{made['id']}/update", {"url": url}, expected=422)
-    assert "public" in refused["error"]["detail"] or "local" in refused["error"]["detail"]
-    assert get(api, f"webhooks/{made['id']}")["webhook"]["url"] == made["url"]
+    for url in NOT_PUBLIC_BY_ITS_SPELLING:
+        refused(url, "webhooks", {"name": "Bad", "url": url, "events": ["*"]})
+        refused(url, "webhooks", {"name": "Bad", "url": url, "events": ["*"], "allow_http": True})
+        detail = refused(url, f"webhooks/{made['id']}/update", {"url": url})["error"]["detail"]
+        assert "public" in detail or "local" in detail, (url, detail)
+        assert get(api, f"webhooks/{made['id']}")["webhook"]["url"] == made["url"], url
 
 
 def test_a_public_ip_literal_and_a_name_that_only_looks_local_can_be_saved(api):

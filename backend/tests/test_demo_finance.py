@@ -2,8 +2,9 @@
 budgets, invoices, bills and rules the demo tells. The bookkeeper's books view is granted and its first rule proposal
 approved before the build, so nothing about them is waiting in Ana's queue.
 
-The demo is built at two moments, early in a month and mid-month in a later quarter. Finance reads its default month
-from its clock, so the test pins that clock to the build's moment, as the demo is shown the day it is built."""
+The demo is built early in a month. Finance reads its default month from its clock, so the test pins that clock to the
+build's moment, as the demo is shown the day it is built. test_demo_other_moments.py runs every test here again on a
+demo built mid-month in a later quarter (each takes `book`, a (settings, now) pair)."""
 
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -17,18 +18,14 @@ from backend.app import create_app
 from backend.bookkeeper import VIEW_TITLE
 from backend.demo_sections.finance import BOOKKEEPER, CONTENT as C
 
-MOMENTS = {
-    "early-month": datetime(2026, 11, 2, 18, 30, tzinfo=timezone.utc),
-    "mid-month": datetime(2027, 1, 15, 12, 0, tzinfo=timezone.utc),
-}
+EARLY_MONTH = datetime(2026, 11, 2, 18, 30, tzinfo=timezone.utc)
 
 
-@pytest.fixture(scope="module", params=list(MOMENTS), ids=list(MOMENTS))
-def book(request, tmp_path_factory):
-    now = MOMENTS[request.param]
-    with time_machine.travel(now, tick=False):
-        settings = demo.build(tmp_path_factory.mktemp("demo-finance"), now=now)
-        yield settings, now
+@pytest.fixture(scope="module")
+def book(tmp_path_factory):
+    with time_machine.travel(EARLY_MONTH, tick=False):
+        settings = demo.build(tmp_path_factory.mktemp("demo-finance"), now=EARLY_MONTH)
+        yield settings, EARLY_MONTH
 
 
 def signed_in(settings):

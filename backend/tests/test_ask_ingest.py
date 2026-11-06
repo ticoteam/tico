@@ -172,7 +172,9 @@ def test_a_clear_task_under_budget_reaches_the_person(gate):
     out = file(api, token)
     assert out["task"]["owner_id"] == "human:ben"
     assert "ingest" not in out, "an item that goes through reads as before"
-    assert [(i["outcome"], i["reason"]) for i in items(api)] == [(A.THROUGH, "under_budget")]
+    [item], [call] = items(api), calls(api)
+    assert (item["outcome"], item["reason"]) == (A.THROUGH, "under_budget")
+    assert (item["call_id"], item["mode"]) == (call["id"], A.ON) and not reasons(api)
     assert len(model.calls) == 1 and model.calls[0]["label"].startswith("person-ask-ingest@")
     assert "Pick the launch date" == model.calls[0]["state"]["item"]["title"]
 
@@ -198,16 +200,6 @@ def test_meeting_a_criterion_gets_it_through_at_that_load(gate):
     out = file(api, token, "Raise the Gateway cap to $400 a month")
     assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
     assert [(i["outcome"], i["reason"]) for i in items(api)] == [(A.THROUGH, "criteria")]
-
-
-def test_a_status_line_is_refused_with_a_fix_to_post_an_update(gate):
-    api, model, token = gate
-    model.kind = "status"
-    before = write_state(api)
-    r = api.post("/api/v2/tasks", json={"owner": "ben", "title": "Merged; release at 17:00Z",
-                                        "body": "Merged; release at 17:00Z."}, headers=headers(token))
-    assert "Post it as an update instead." in assert_refused(api, r, before)
-    assert [i["outcome"] for i in items(api)] == [A.FYI]
 
 
 def test_a_stored_rehearsal_reads_and_acts_as_on(gate):
@@ -423,30 +415,6 @@ def on_plate(api, tid, person="human:ben"):
     return tid in {t["id"] for t in plate["tasks"] + plate["waiting"]}
 
 
-def test_a_refused_question_on_a_task_creates_no_comment(gate):
-    api, model, token = gate
-    plate(api, 15)
-    tid = own_task(api, token)["id"]
-    question = {"questions": [{"id": "date", "header": "Date", "question": "Which launch date do you want?",
-                               "options": [{"label": "Nov 3", "then": "Launch on Nov 3"},
-                                           {"label": "Nov 10", "then": "Launch on Nov 10"}]}], "who": "ben"}
-    before = write_state(api)
-    r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Which launch date do you want?", "ask": question},
-                 headers=headers(token))
-    assert_refused(api, r, before)
-    assert not on_plate(api, tid)
-    assert [(i["kind"], i["outcome"]) for i in items(api)] == [("question", A.SENT_BACK)]
-
-
-def test_a_refused_task_question_creates_no_task_or_question(gate):
-    api, model, token = gate
-    plate(api, 15)
-    before = write_state(api)
-    r = ask_question(api, token)
-    assert_refused(api, r, before)
-    assert [(i["kind"], i["outcome"]) for i in items(api)] == [("task_question", A.SENT_BACK)]
-
-
 def test_a_progress_line_as_a_wait_is_refused_without_changing_the_task(gate):
     api, model, token = gate
     model.kind = "status"
@@ -472,16 +440,6 @@ def test_a_clear_wait_under_budget_is_set(gate):
     with api.app.state.store.read() as c:
         # A bot's wait on a person is one small subtask they own (hubdb._ask_in_subtask), on their plate.
         assert A.load(c, "human:ben") == 1
-
-
-def test_a_refused_loose_question_creates_no_message(gate):
-    api, model, token = gate
-    plate(api, 15)
-    before = write_state(api)
-    assert_refused(api, ask_loose(api, token), before)
-    with api.app.state.store.read() as c:
-        assert H.loose_asks_to(c, "human:ben") == []
-    assert [(i["kind"], i["outcome"]) for i in items(api)] == [("loose", A.SENT_BACK)]
 
 
 def test_a_persons_question_is_not_gated(gate):
@@ -768,18 +726,6 @@ def for_ben(api, title="Plan the November launch"):
         return H.task_create(c, "human:ben", title, "Dates and venue.", "bot:ops", lint=False)
 
 
-def test_a_bots_task_ask_over_budget_is_refused_without_a_question_or_hold(gate):
-    api, model, token = gate
-    plate(api, 15)
-    task = for_ben(api)
-    before = write_state(api)
-    r = api.post(f"/api/v2/tasks/{task['id']}/ask", json={"text": "Which launch date do you want?"},
-                 headers=headers(token))
-    assert "15 open items" in assert_refused(api, r, before)
-    assert not on_plate(api, task["id"])
-    assert [(i["kind"], i["outcome"]) for i in items(api)] == [("task_ask", A.SENT_BACK)]
-
-
 def test_a_refused_task_ask_keeps_the_bots_note_without_posting_a_comment(gate):
     api, model, token = gate
     plate(api, 15)
@@ -853,8 +799,8 @@ def test_a_question_sent_as_a_reply_is_judged(gate):
 
 
 def ask_loose(api, token):
-    return api.post("/api/v2/messages", json={"to": "ben", "text": "Which launch date do you want?", "kind": "ask"},
-                    headers=headers(token))
+    return lambda: api.post("/api/v2/messages", json={"to": "ben", "text": "Which launch date do you want?", "kind": "ask"},
+                            headers=headers(token))
 
 
 def ask_comment(api, token):
@@ -862,40 +808,60 @@ def ask_comment(api, token):
     question = {"questions": [{"id": "date", "header": "Date", "question": "Which launch date do you want?",
                                "options": [{"label": "Nov 3", "then": "Launch on Nov 3"},
                                            {"label": "Nov 10", "then": "Launch on Nov 10"}]}], "who": "ben"}
-    return api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Which launch date do you want?", "ask": question},
-                    headers=headers(token))
+    return lambda: api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Which launch date do you want?", "ask": question},
+                            headers=headers(token))
 
 
 def ask_question(api, token):
-    return api.post("/api/v2/task-questions", json={"on": "human:ben", "question": "Which launch date do you want?"},
-                    headers=headers(token))
+    return lambda: api.post("/api/v2/task-questions", json={"on": "human:ben", "question": "Which launch date do you want?"},
+                            headers=headers(token))
 
 
 def ask_task(api, token):
-    return api.post(f"/api/v2/tasks/{for_ben(api)['id']}/ask", json={"text": "Which launch date do you want?"},
-                    headers=headers(token))
+    tid = for_ben(api)["id"]
+    return lambda: api.post(f"/api/v2/tasks/{tid}/ask", json={"text": "Which launch date do you want?"},
+                            headers=headers(token))
 
 
-@pytest.mark.parametrize("ask", [ask_loose, ask_comment, ask_question, ask_task])
-@pytest.mark.parametrize("load,meets,expected", [
+LOADS = [
     (9, None, (A.THROUGH, "under_budget")),       # B-1: under budget, the question itself not counted
     (10, None, (A.SENT_BACK, "criteria")),
     (29, "Strategy", (A.THROUGH, "criteria")),    # 3B-1
     (99, None, (A.SENT_BACK, "recommends")),      # 10B-1
-])
-def test_a_question_is_judged_against_the_plate_before_it(gate, ask, load, meets, expected):
+]
+# Every way to ask is judged at load 9 (through) and 10 (sent back); the loose question also at 29 and 99, where the
+# decision table (test_the_budget_tightens_as_the_plate_fills) alone decides the rest.
+ASKS = [(ask_loose, "loose", LOADS), (ask_comment, "question", LOADS[:2]), (ask_question, "task_question", LOADS[:2]),
+        (ask_task, "task_ask", LOADS[:2])]
+
+
+def plate_ids(api, person="human:ben"):
+    with api.app.state.store.read() as c:
+        plate = H.needs_you(c, person)
+    return {t["id"] for t in plate["tasks"] + plate["waiting"]}
+
+
+@pytest.mark.parametrize("ask,kind,load,meets,expected", [(ask, kind, *case) for ask, kind, cases in ASKS for case in cases],
+                         ids=lambda v: v.__name__ if callable(v) else None)
+def test_a_question_is_judged_against_the_plate_before_it(gate, ask, kind, load, meets, expected):
     api, model, token = gate
     model.meets = meets
     plate(api, load)
-    r = ask(api, token)
+    send = ask(api, token)
+    before, on_plate_before = write_state(api), plate_ids(api)
+    r = send()
     if expected[0] == A.SENT_BACK:
-        assert_refused(api, r)
+        # A refused question writes no row, comment, hold or plate item, whichever way it was asked.
+        detail = assert_refused(api, r, before)
+        assert f"{load} open items" in detail
+        assert plate_ids(api) == on_plate_before
+        if kind == "loose":
+            with api.app.state.store.read() as c:
+                assert H.loose_asks_to(c, "human:ben") == []
     else:
         assert r.status_code == 200, r.text
     [item] = [i for i in items(api) if i["asker"] == "bot:ops"]
-    assert (item["outcome"], item["reason"], item["load"]) == (*expected, load)
-    if expected[0] == A.SENT_BACK:
-        assert f"{load} open items" in r.json()["error"]["detail"]
+    assert (item["outcome"], item["reason"], item["load"], item["kind"]) == (*expected, load, kind)
 
 
 def test_a_question_on_a_task_already_on_the_plate_counts_it_once(gate):
@@ -1241,14 +1207,12 @@ def test_gate_preserves_person_and_assistant_exclusions(actor, role, via, expect
     assert A.gated(Identity(actor, role, via=via), "assistant") is expected
 
 
-@pytest.mark.parametrize("where,reason", [("load_set", "not_found"), ("open_items", "error"),
-                                        ("server_engine", "unavailable")])
+# A RuntimeError ("error") is covered by test_a_settings_failure_before_the_verdict_keeps_the_failed_open_record.
+@pytest.mark.parametrize("where,reason", [("load_set", "not_found"), ("server_engine", "unavailable")])
 def test_preflight_exception_keeps_failed_open_record(gate, monkeypatch, where, reason):
     from clients.judge import JudgeError
     api, model, token = gate
     def fail(*args, **kwargs):
-        if reason == "error":
-            raise RuntimeError("private item text must not be recorded")
         raise JudgeError(reason, "private item text must not be recorded")
     monkeypatch.setattr(A.J if where == "load_set" else A, where, fail)
     out = file(api, token)
@@ -1284,15 +1248,6 @@ def reasons(api):
     with api.app.state.store.read() as c:
         return {r["target"]: json.loads(r["detail"])["why"]
                 for r in H._rows(c.execute("SELECT target, detail FROM events WHERE action=?", (A.UNRECORDED,)))}
-
-
-def test_a_plain_bot_task_to_a_person_writes_one_row_and_one_judge_call(gate):
-    api, model, token = gate
-    out = file(api, token)
-    assert out["task"]["owner_id"] == "human:ben"
-    [item], [call] = items(api), calls(api)
-    assert (item["call_id"], item["mode"], item["outcome"]) == (call["id"], A.ON, A.THROUGH)
-    assert len(model.calls) == 1 and not reasons(api)
 
 
 def test_a_saved_key_retry_makes_no_new_judge_call(gate):
@@ -1385,6 +1340,7 @@ def test_a_settings_failure_before_the_verdict_keeps_the_failed_open_record(gate
     [item] = items(api)
     assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, "error")
     assert item["ref"] == out["task"]["id"] and item["call_id"] is None
+    assert "settings unreadable" not in str(item), "a plain error's message stays out of the failed-open record (#1798)"
     assert not calls(api) and not model.calls
 
 
@@ -1443,14 +1399,12 @@ def test_a_structured_comment_ask_carries_its_lines(gate):
     assert model_text(model).endswith("Recommended: Nov 10\n\nDates and venue.")
 
 
-def test_a_long_task_body_is_cut_and_the_lines_and_options_survive(gate):
-    api, model, token = gate
-    r = api.post("/api/v2/task-questions", headers=headers(token), json={
-        "on": "human:ben", "question": "Which launch date do you want?", "why": "It sets the venue deposit.",
-        "body": "Long context. " * 300,
-        "options": [{"label": "Nov 3", "then": "Book Nov 3"}, {"label": "Nov 10", "then": "Book Nov 10", "recommended": True}]})
-    assert r.status_code == 200, r.text
-    text = model_text(model)
+def test_a_long_task_body_is_cut_and_the_lines_and_options_survive():
+    """The lines the task-questions route stores (the e2e twin above pins the wiring) come first; the body fills the rest."""
+    questions = [{"question": "Which launch date do you want?", "why": "It sets the venue deposit.",
+                  "options": [{"label": "Nov 3", "then": "Book Nov 3"},
+                              {"label": "Nov 10", "then": "Book Nov 10", "recommended": True}]}]
+    text = A.structured_text(questions, "Long context. " * 300)
     assert len(text) == A.MAX_TEXT
     assert text.startswith("Question: Which launch date do you want?\nWhy: It sets the venue deposit.\n"
                            "Option: Nov 3 (then: Book Nov 3)\nOption: Nov 10 (then: Book Nov 10)\n"
@@ -1572,8 +1526,10 @@ def test_a_replayed_structured_question_judges_the_same_lines(gate):
     assert all("Recommended" not in str(row) and "Tell me" not in str(row) for row in calls(api))
 
 
-@pytest.mark.parametrize("kind", ["status", "own_work"])
-@pytest.mark.parametrize("path", ["create", "handoff", "wait", "comment", "question", "task_ask", "message"])
+# Rollback is per write path, not per kind: every path refuses an own-work ask, and a status line is refused (with its fix) on create.
+@pytest.mark.parametrize("kind,path", [("own_work", path) for path in
+                                       ("create", "handoff", "wait", "comment", "question", "task_ask", "message")]
+                         + [("status", "create")])
 def test_refusals_preserve_all_domain_rows_across_write_paths(gate, kind, path):
     api, model, token = gate
     model.kind = kind
@@ -1581,7 +1537,9 @@ def test_refusals_preserve_all_domain_rows_across_write_paths(gate, kind, path):
         task = own_task(api, token)
     elif path == "task_ask":
         task = for_ben(api)
-    if path == "create":
+    if path == "create" and kind == "status":
+        endpoint, body = "tasks", {"owner": "ben", "title": "Merged; release at 17:00Z", "body": "Merged; release at 17:00Z."}
+    elif path == "create":
         endpoint, body = "tasks", {"owner": "ben", "title": "Pick the launch date", "body": "Nov 3 or Nov 10?"}
     elif path == "handoff":
         endpoint, body = f"tasks/{task['id']}", {"version": task["version"], "owner": "ben"}
@@ -1598,7 +1556,9 @@ def test_refusals_preserve_all_domain_rows_across_write_paths(gate, kind, path):
         endpoint, body = "messages", {"to": "ben", "text": "Which launch date?", "kind": "ask"}
     before = write_state(api)
     r = api.post("/api/v2/" + endpoint, json=body, headers=headers(token))
-    assert_refused(api, r, before)
+    detail = assert_refused(api, r, before)
+    if kind == "status":
+        assert "Post it as an update instead." in detail
     [item], [call] = items(api), calls(api)
     assert item["call_id"] == call["id"]
     assert item["outcome"] == (A.FYI if kind == "status" else A.SENT_BACK)

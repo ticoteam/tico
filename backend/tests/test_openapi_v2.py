@@ -7,6 +7,7 @@ import uuid
 from backend import openapi_v2
 from backend.finance import actions as FA
 from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)
+from backend.tests.test_credentials import setup as setup_vault
 from backend.tests.test_finance_fixtures import account
 
 
@@ -196,6 +197,16 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("getUsage", "get", "/api/v2/usage", params={"bot": "ops", "from": "2026-01-01", "to": "2026-01-03"})
     call("getHealth", "get", "/api/v2/health")
     call("listToolIndex", "get", "/api/v2/tool-index")
+    setup_vault(api)
+    tool = api.post("/api/v2/api-tools", json={"name": "Close CRM"}, headers=headers()).json()
+    call("getApiTool", "get", "/api/v2/api-tools/" + tool["id"])
+    settings = call("updateApiTool", "patch", "/api/v2/api-tools/" + tool["id"],
+                    json={"audience": {"everyone": False, "people": ["cara"], "teams": [], "bots": []}})
+    assert settings["private"] is True
+    seen = call("getApiTool", "get", "/api/v2/api-tools/" + tool["id"])
+    assert seen["private"] and [r["why"] for r in seen["seen_by"]] == ["Owner", "Listed"]
+    call("listApiToolActivity", "get", "/api/v2/api-tools/%s/activity" % tool["id"])
+    assert any(r.get("private") for r in call("listToolIndex", "get", "/api/v2/tool-index")["rows"])
 
 
 

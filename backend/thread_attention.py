@@ -18,7 +18,7 @@ may not see is named only to someone in the same thread (`teammate_access.Known`
 """
 from . import hubdb as H
 
-ADDRESSED = ("mention", "ask", "assign", "addressed")
+ADDRESSED = ("mention", "ask", "assign", "addressed", "reply")
 # The held writes that are a message: a chat's and a run's, and a native thread's post and edit (backend/org_rule_check.py).
 HELD_OPERATIONS = ("message", "reply", "threads", "threads_edit")
 
@@ -94,18 +94,19 @@ def _items(c, viewer):
 
 
 def _addressed(c, me):
-    """Messages a person may have to answer: a person's, a bot's ask, or a message that names this person, that they
-    have not answered since in the same thread. A bot's plain post, one that names nobody, is not theirs to answer."""
+    """Messages a person may have to answer: a person's, a bot's ask, or a message that names or replies to this
+    person, that they have not answered since in the same thread. A bot's plain post, one that names nobody, is not
+    theirs to answer."""
     return [dict(r) for r in c.execute(
         "SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.body, m.created_at, cv.subject FROM message_deliveries d "
         # Pin the partial index so the general recipient index cannot expand this to all of the person's deliveries.
         # CROSS JOIN keeps deliveries first whatever sqlite_stat1 says, then each message and conversation by key.
         "INDEXED BY message_deliveries_addressed "
         "CROSS JOIN messages m ON m.id=d.message_id CROSS JOIN conversations cv ON cv.id=m.conversation_id "
-        "WHERE d.recipient=? AND d.reason IN ('mention','ask','assign','addressed') "
+        "WHERE d.recipient=? AND d.reason IN ('mention','ask','assign','addressed','reply') "
         "AND d.state IN ('pending','delivered','read') AND m.sender_id<>? "
         f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')} "
-        "AND (m.sender_id LIKE 'human:%' OR m.kind='ask' OR d.reason='mention') "
+        "AND (m.sender_id LIKE 'human:%' OR m.kind='ask' OR d.reason IN ('mention','reply')) "
         "AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
         "AND (m.kind<>'ask' OR m.answered_by_id IS NULL) "
         "AND cv.task_id IS NULL AND cv.closed_at IS NULL AND cv.archived_at IS NULL "

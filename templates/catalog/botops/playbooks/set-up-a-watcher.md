@@ -31,7 +31,7 @@ one line:
     tico-event {"op": "comment", "key": "src:123", "ref": "msg:9", "text": "What was added"}
     tico-event {"op": "done", "key": "src:123", "note": "It ended at the source"}
 
-`task` opens a task once per key. `comment` adds a note that wakes the bot (and opens a new task if the old one is finished);
+`task` opens a task once per key. `comment` adds a note to that task; the bot owns the task and follows it, so the note wakes the bot (and opens a new task if the old one is finished);
 `ref` makes a repeat harmless. `done` tells the bot it ended. Everything in an event that came from outside is text, so quote
 it and say it is untrusted. The program holds no Tico credential and cannot do anything else in Tico. Model it on
 `software/hq-tickets` and `software/gh-support` in the Support template.
