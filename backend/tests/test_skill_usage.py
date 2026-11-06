@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import skill_usage as U
 from backend.store import H
 from backend.tests.test_api import api, get, headers, restrict  # noqa: F401  (fixture)
@@ -150,6 +151,7 @@ def test_coverage_is_unknown_without_data_and_unused_only_with_a_receipt_reporti
         assert r.status_code == 200, r.text
     with store.transaction() as c:
         sid = skill_id(api)
+        BS.update(c, ops, {"harness": "claude"})              # a harness that reports every skill use
         c.execute("UPDATE skill_installs SET created_at=?", (ts(NOW - timedelta(days=40)),))
         for target_type, target_id in (("Bot", ops), ("Human", "cara"), ("Human", "ben")):
             c.execute("INSERT INTO skill_receipts (target_type, target_id, skill_id, sha256, source, staged_at) VALUES (?,?,?,?,?,?)",
@@ -169,6 +171,26 @@ def test_coverage_is_unknown_without_data_and_unused_only_with_a_receipt_reporti
     assert states[ops] == ("used", 1) and states["ben"] == ("unknown", 0), "an install under 30 days old says nothing yet"
     # A member sees coverage only for the installs she may see: her own and bots she sees.
     assert "ben" not in {i["target"]["id"] for i in get(api, "skills/triage/usage", "cara-test")["installs"]}
+
+
+def test_a_codex_bot_is_never_unused_since_codex_reports_only_the_skills_its_input_names(api):
+    publish(api)
+    store = api.app.state.store
+    claude, codex = bot_id(api, "ops"), bot_id(api, "finance")
+    for target in (claude, codex):
+        r = api.post("/api/v2/skills/triage/installs", json={"target_type": "Bot", "target_id": target, "version_policy": "latest"},
+                     headers=headers("ana-test"))
+        assert r.status_code == 200, r.text
+    with store.transaction() as c:
+        sid = skill_id(api)
+        BS.update(c, claude, {"harness": "claude"})
+        BS.update(c, codex, {"harness": "codex"})
+        c.execute("UPDATE skill_installs SET created_at=?", (ts(NOW - timedelta(days=40)),))
+        for target in (claude, codex):
+            c.execute("INSERT INTO skill_receipts (target_type, target_id, skill_id, sha256, source, staged_at) VALUES ('Bot',?,?,?,?,?)",
+                      (target, sid, "a" * 64, "runner", H.now()))
+    states = {i["target"]["id"]: i["coverage"] for i in get(api, "skills/triage/usage", "ana-test")["installs"]}
+    assert states == {claude: "unused", codex: "unknown"}
 
 
 def test_install_targets_offer_only_who_the_caller_may_install_for(api):

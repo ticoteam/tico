@@ -46,6 +46,12 @@ def reports_tool_calls(config, runtime=None):
     return bool(manifests.caps(resolve_harness(config, runtime)).get("tool_events"))
 
 
+def reports_skill_uses(config, runtime=None):
+    """True when this bot's host reports each skill its model uses (`skill_events`), so that a bot with no use is a
+    bot that used none. A host that reports only some (Codex: the skills its input names) proves nothing by silence."""
+    return bool(manifests.caps(resolve_harness(config, runtime)).get("skill_events"))
+
+
 def steers(config, runtime=None):
     """True when this bot's host writes a message sent mid-turn into that turn (`steer`); otherwise the message
     waits for the next turn. The runner also needs a Claude Code that echoes its input, which the hub cannot see."""

@@ -92,7 +92,7 @@ Library › Skills (`#/library/skills`) has three tabs.
 
 Bots on Codex get their installed skills too, from a folder of the turn's own, never the computer's Codex settings. Codex
 reports a use only when a turn's input selects the skill by name; it says nothing when the model opens a skill on its
-own, so a Codex bot's own uses aren't counted (a typed `/name` still is).
+own, so a Codex bot's own uses aren't counted (a typed `/name` still is) and its installs read **Unknown**, never **Unused**.
 
 Usage. Each use is one row (skill, who, trigger, where, when) from the runner, the skills helper or a typed `/name`. The hourly
 **Skill usage** job folds them into daily counts and deletes raw rows older than 90 days; the daily counts stay. The page counts
@@ -101,7 +101,8 @@ skill; anyone else sees the totals and their own uses (and the ones they asked a
 someone who may read it.
 
 Coverage. A skill's installs say **Used**, **Unused** or **Unknown**. Unused needs data: the target reports staging (a receipt),
-reports usage (a bot always; a person through a skills helper with reporting on), has had the install for 30 days, and has no use
+reports usage (a bot on a harness that reports every skill use, today Claude Code; a person through a skills helper with
+reporting on), has had the install for 30 days, and has no use
 in those 30 days. Anything else is Unknown, never Unused. Skills used on computers that aren't in the directory aren't collected,
 so the page has no "popular, not in the directory" list.
 

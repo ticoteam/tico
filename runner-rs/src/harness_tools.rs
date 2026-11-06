@@ -116,6 +116,10 @@ pub struct Capabilities {
     /// "" | status-json | app-server: where the signed-in account is read (crate::accounts)
     pub account: String,
     pub tool_events: bool,
+    /// The host reports each skill its model uses (a `Skill` tool event with the name), so a bot with none provably
+    /// used none. Read by the server's skill coverage (backend/skill_usage.py), not by the runner.
+    #[allow(dead_code)]
+    pub skill_events: bool,
     pub mcp_transports: Vec<String>,
     pub mcp_unsupported: String,
     pub resume_after_interrupt: bool,
@@ -160,6 +164,7 @@ impl Default for Capabilities {
             weekly_usage: String::new(),
             account: String::new(),
             tool_events: false,
+            skill_events: false,
             mcp_transports: vec![],
             mcp_unsupported: String::new(),
             resume_after_interrupt: true,
@@ -510,6 +515,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "weekly_usage" => c.weekly_usage = choice(k, v, &["refresh", "turns", "manual"])?,
             "account" => c.account = choice(k, v, &["status-json", "app-server"])?,
             "tool_events" => c.tool_events = flag(k, v)?,
+            "skill_events" => c.skill_events = flag(k, v)?,
             "mcp_transports" => {
                 c.mcp_transports = list(k, v)?;
                 if c.mcp_transports.iter().any(|t| t != "http" && t != "sse") {
