@@ -186,6 +186,36 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
             )
         return answer
 
+    @app.post("/api/v2/gateway/digest")
+    def gateway_digest(request: Request, body: M.GatewayDigest):
+        """Group many items into one digest through the Tico AI Gateway (`hub_gateway_digest`), asked with the company's
+        gateway key and, for a bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
+        who = request.state.identity
+        auth.domain(who)
+        if settings.rehearsal:
+            raise Problem("rehearsal", "Digest is off in rehearsal mode; nothing is sent to the Gateway", 503)
+        with store.read() as c:
+            key, base, _ = gateway_connection.target(c, app.state.vault, settings)
+            header = (
+                gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
+            )
+        if not key:
+            raise Problem(
+                "gateway_not_connected",
+                "The Tico AI Gateway is not connected; the owner saves a gateway key in Settings > Computers",
+                409,
+            )
+        status, answer, code = gateway_client.digest(base, key, body.items, body.focus, body.style, header)
+        if status != 200:
+            if status == 404:
+                raise Problem("gateway_digest_unavailable", "The Tico AI Gateway does not offer digest yet", 503)
+            raise Problem(
+                "gateway_digest_failed",
+                f"Digest failed: {code or status}",
+                503 if status in (0, 429) or status >= 500 else 422,
+            )
+        return answer
+
     app.state.image_slots = threading.BoundedSemaphore(GATEWAY_IMAGE_SLOTS)
 
     @app.post("/api/v2/gateway/images")

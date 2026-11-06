@@ -17,6 +17,9 @@ bets it touches. The Strategy Bot looks only at those.
   money going?), `players` (Who are we up against?), `reach` (How does it reach buyers?) and `saying` (What are buyers
   saying?). The server keeps at most 140 characters of each, cut at a word. A question with no answer shows no line.
 
+When the Librarian gathers many items, `hub gateway digest` groups them through the Gateway ([AI Gateway](ai-gateway.md)): the
+groups order the bullets. The items and the briefing stay the Librarian's.
+
 There is one briefing a week, named by its ISO week (`2026-W44`). Posting the same week again replaces it and keeps the
 first date.
 

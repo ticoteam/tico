@@ -43,7 +43,9 @@ def inbound_wait_timeout(method, path, body, default, *, query=None):
 
 # Routes the server answers only after a chain of model calls (backend/judge.py SLOW_CHAIN_SECONDS, 35 s with Decisions
 # at Medium or High): their callers wait past it.
-SLOW_POSTS = frozenset({"/api/v2/decisions", "/api/v2/gateway/search", "/api/v2/gateway/fetch"})
+SLOW_POSTS = frozenset(
+    {"/api/v2/decisions", "/api/v2/gateway/search", "/api/v2/gateway/fetch", "/api/v2/gateway/digest"}
+)
 SLOW_WAIT = 45
 # A file streamed from disk (a video up to the server's limit): the server stores the bytes after the last one is sent.
 STREAM_WAIT = 600

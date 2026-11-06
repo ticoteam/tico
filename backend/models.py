@@ -2390,6 +2390,14 @@ class GatewayFetch(Contract):
     max_tokens: int = Field(default=10000, ge=1000, le=50000)
 
 
+class GatewayDigest(Contract):
+    items: list[dict] = Field(
+        min_length=1, max_length=300
+    )  # {id, title, text, url, source, at}, checked by the Gateway
+    focus: str | None = Field(default=None, max_length=500)
+    style: Literal["brief", "full"] = "brief"
+
+
 class GatewayImage(Contract):
     # tico-images-1.0 (the default, and what an install that has not updated sends) takes a category; the lineup 3 ids
     # take one choice each: tico-images-low none, tico-images-high a category, tico-svg a quality. HQ checks the rest.
