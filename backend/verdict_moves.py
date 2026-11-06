@@ -631,33 +631,57 @@ def merge_sources(c, row, head, pr=None):
 AS_APPROVED = "Merge it as approved: don't push to the branch; put non-blocking notes in a follow-up PR."
 
 
+def _after_merge(c, row):
+    """What follows the merge command, true with or without a merge queue: a queue takes the PR instead, and the ticket
+    moves when GitHub reports the PR merged (github.pull_request), never on a line the builder posts."""
+    landing = F.merge_step(c, row["type_id"])
+    return (
+        "A repo with a merge queue queues the PR instead; Tico moves this ticket"
+        + (f" to {landing['name']}" if landing else "")
+        + " once GitHub reports the PR merged, so do not announce a merge before then."
+    )
+
+
 def merge_text(c, row, pr, head, *, announce=True):
     if F.pr_checks(c, row):
         prefix = f"Approved at {head}, checks green: " if announce else f"At {head}: "
         return (
             prefix + f"merge PR #{pr['number']} under the repo's merge rules. "
-            f"Use --match-head-commit {head}. {AS_APPROVED} {pr['url']}"
+            f"Use --match-head-commit {head}. {_after_merge(c, row)} {AS_APPROVED} {pr['url']}"
         )
     name = step_of(c, row) or "The last check"
     number = pr.get("number") or "?"
-    landing = F.merge_step(c, row["type_id"])
     return (
         f"Ready to merge: {name} cleared PR #{number} at head {head} and CI is green. Merge it under the merge "
-        f"rules (gh pr merge {number} --squash --match-head-commit {head}) and post the MERGED line"
-        + (f"; Tico then moves this ticket to {landing['name']}." if landing else ".")
-        + f" {AS_APPROVED}"
+        f"rules (gh pr merge {number} --squash --match-head-commit {head}). {_after_merge(c, row)} {AS_APPROVED}"
     )
 
 
+# A removal from a merge queue for a reason other than a merge (github.pull_request writes `merge_queue_failed` at the
+# head) makes the head's next green pass a merge wake again: the builder was told to fix and merge, and that is not done.
+MERGE_REARM = {"merge_wake": "merge_queue_failed"}
+
+
 def pr_notice_seen(c, row, kind, pr, head):
-    """Saved notices use full PR identities too, including older URL spellings."""
+    """Saved notices use full PR identities too, including older URL spellings. The last notice for this PR and head
+    decides: a rearm written after the notice means it was not seen."""
+    rearm = MERGE_REARM.get(kind, kind)
+    seen = False
     for event in c.execute(
-        "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=?", (row["id"], kind)
+        "SELECT kind, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN (?, ?) "
+        "ORDER BY rowid",
+        (row["id"], kind, rearm),
     ):
         url, _, saved_head = str(event["new"] or "").rpartition("@")
         if saved_head == head and PR.same(url, pr):
-            return True
-    return False
+            seen = event["kind"] == kind
+    return seen
+
+
+def _queued(pr, head):
+    """Whether GitHub has this pull request in a merge queue at `head` (github.pull_request keeps `merge_queue`)."""
+    queue = (H._json(pr.get("detail"), {}) or {}).get("merge_queue") or {}
+    return queue.get("state") == "queued" and queue.get("head") == head
 
 
 def _merge_woken(c, row, head, pr=None):
@@ -713,6 +737,8 @@ def merge_wake(c, row, snapshots=None):
         )
     else:
         ready = row and merge_ready(c, row)
+    if ready and _queued(ready[0], ready[1]):
+        return False  # GitHub already has it in the merge queue at this head: nothing to merge again
     sources = (merge_sources(c, row, ready[1], pr=ready[0]) or [row["id"]]) if ready else []
     if ready and F.pr_checks(c, row):
         recipient = merge_recipient(c, row, ready[0])
