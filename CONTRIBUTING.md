@@ -35,6 +35,22 @@ them too when you change what they cover. To run less while you work: `python -m
 for one file, `node scripts/ui-tests.cjs <name>` for one browser script. If you touch `app/`, also run `cargo check`
 there.
 
+## Before you push
+
+`scripts/check.sh` is the fast local gate. It runs each static check that applies to what you changed (the Python
+lint baseline, shellcheck, actionlint, cargo fmt, the migration order, the UI API types and the pyright boundary
+modules), one line per check with its time, and exits non-zero if one fails. It compares against the merge-base
+with origin/main, so committed, uncommitted and new files are all checked. `scripts/check.sh --all` runs every check
+on every tracked file; CI runs the same checks. Turn on the pre-push hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+After that, each `git push` runs `scripts/check.sh` first. To push without it once, use `git push --no-verify`.
+shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
+`scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
+
 ## Profiling API test setup
 
 Each API test creates a fresh app, store, authentication state, registry and database. For targeted

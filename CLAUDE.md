@@ -41,6 +41,9 @@ hold customer text and never enter this repository.
 Tests stay at zero failures. An intermittent test is fixed quickly or deleted; never rerun it until it passes, and
 never ship around a known failure. If a test may fail, it shouldn't exist.
 
+## Before you push
+Run scripts/check.sh before pushing; `git config core.hooksPath .githooks` runs it on every push.
+
 ## How we work
 Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The author merges when checks are
 green and the PR is reviewed. A red release candidate caused by your merge is your top priority. Releases ship from two
