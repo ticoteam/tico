@@ -973,7 +973,7 @@ def describe(c, method, path, body):
          lambda g: ("Revoke" if g[1] else "Make a new") + f" agent credential for bot {bot(g[0])}"),
         (r"/api/v2/repositories/settings", lambda g: {
             "own": "New bots get only their own repository",
-            "all": "New bots get every repository ticked in Settings > Repositories"}.get(
+            "all": "New bots get every repository ticked in Settings > General › Repositories"}.get(
                 body.get("new_bot_default"), "Change which repositories new bots get")),
         (r"/api/v2/repositories/refresh", lambda g: "Refresh the repository list from GitHub"),
         (r"/api/v2/repositories/([^/]+)/([^/]+)", lambda g: f"Change repository {g[1]}: " + fields(body)),

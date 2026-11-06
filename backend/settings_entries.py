@@ -25,7 +25,11 @@ def _card(tab, card=""):
 
 
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "Settings > Computers", "Settings > Bots"
-RULES, HOOKS, TASKS, REPOS = "Automations > System jobs", "Settings > Webhooks", "Settings > Tasks", "Settings > Repositories"
+RULES, TASKS, REPOS = "Automations > System jobs", "Settings > Tasks", "Settings > General > Repositories"
+# Webhooks left Settings: incoming ones are on Automations, outgoing ones on Tools, their Gateway addresses a fold of
+# the Tico Gateway card on Models (ui/app/settings-webhooks.js).
+HOOKS_IN, HOOKS_OUT, HOOKS_GW = "Automations > Incoming webhooks", "Tools > Webhooks", "Settings > Models > Tico Gateway > Webhooks"
+HOOKS_IN_CARD, HOOKS_OUT_CARD = "#/automations/webhooks", "#/tools/webhooks"
 INBOXES, STRATEGY = "Tools", "Strategy bot > Settings"
 # System's other cards moved to the built-in bots' own Settings and to Settings > Security. Releases is on whichever bot
 # is the Release Manager: its address reads the schedule and opens that bot (ui/app/settings.js settingsMovedOut).
@@ -261,7 +265,7 @@ ENTRIES = TEAM_RULES + [
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
-      value="json", card=_card("repos", "set-repos"), words="run edit workflows actions ci product",
+      value="json", card=_card("general", "set-repos"), words="run edit workflows actions ci product",
       confirm_when=(("chosen.run_workflows", (True,)), ("chosen.edit_workflows", (True,)),
                     ("all_repos.run_workflows", (True,)), ("all_repos.edit_workflows", (True,)),
                     ("create_product_repositories", (True,))),
@@ -275,13 +279,13 @@ ENTRIES = TEAM_RULES + [
       "strategy-bot/level", "level", "int", "#/bot/goal-manager/settings"),
     # Repositories
     S("repo.enabled", "Repository on", REPOS, "admin", "direct", "PUT", "repositories/{id}", "enabled",
-      card=_card("repos", "set-repos")),
+      card=_card("general", "set-repos")),
     S("repo.setup_command", "Repository setup command", REPOS, "admin", "direct", "PUT", "repositories/{id}",
-      "setup_command", "text", _card("repos", "set-repos")),
+      "setup_command", "text", _card("general", "set-repos")),
     S("repos.new_bot_default", "New bots get repositories", REPOS, "admin", "direct", "PUT", "repositories/settings",
-      "new_bot_default", "text", _card("repos", "set-repos")),
+      "new_bot_default", "text", _card("general", "set-repos")),
     S("repos.product.create", "New product repository", REPOS, "owner", "confirm", "POST", "github/product-repos",
-      value="json", card=_card("repos", "set-repos")),
+      value="json", card=_card("general", "set-repos")),
     # Rules
     S("rules.system", "What Tico runs on its own", RULES, "admin", "direct", "PUT",
       "system-routines/{id}", value="json", card=SYSTEM_JOBS, words="schedule routine"),
@@ -309,32 +313,30 @@ ENTRIES = TEAM_RULES + [
       value="json", card="#/bot/task-manager/settings"),
     S("task_manager.off", "Task Manager off", TASK_MANAGER, "owner", "direct", "POST",
       "task-manager/turn-off", value="json", card="#/bot/task-manager/settings"),
-    # Webhooks: `incoming`, `outgoing` and `gateway` are the Webhooks tab's own parts, which ui/app/router.js opens from
-    # `#/settings/webhooks/<part>` before the catalogue's generic `#/settings/<tab>/<card>` branch: rename them
-    # together.
-    S("webhooks.incoming.create", "New incoming trigger", HOOKS + " > Incoming", "anyone", "direct", "POST", "triggers",
-      value="json", card=_card("webhooks", "incoming"), words="webhook incoming"),
-    S("webhooks.incoming", "Incoming trigger", HOOKS + " > Incoming", "creator", "direct", "POST", "triggers/{id}",
-      value="json", card=_card("webhooks", "incoming"), words="webhook incoming keep days hourly"),
-    S("webhooks.incoming.signing", "Incoming trigger signing", HOOKS + " > Incoming", "creator", "person", "POST",
-      "triggers/{id}/signing", value="json", card=_card("webhooks", "incoming"),
-      why="A signing secret is typed in Settings, never passed through a bot"),
-    S("webhooks.incoming.rotate", "Rotate an incoming trigger's address", HOOKS + " > Incoming", "creator", "confirm",
+    # Webhooks
+    S("webhooks.incoming.create", "New incoming trigger", HOOKS_IN, "anyone", "direct", "POST", "triggers",
+      value="json", card=HOOKS_IN_CARD, words="webhook incoming"),
+    S("webhooks.incoming", "Incoming trigger", HOOKS_IN, "creator", "direct", "POST", "triggers/{id}",
+      value="json", card=HOOKS_IN_CARD, words="webhook incoming keep days hourly"),
+    S("webhooks.incoming.signing", "Incoming trigger signing", HOOKS_IN, "creator", "person", "POST",
+      "triggers/{id}/signing", value="json", card=HOOKS_IN_CARD,
+      why="A signing secret is typed by a person, never passed through a bot"),
+    S("webhooks.incoming.rotate", "Rotate an incoming trigger's address", HOOKS_IN, "creator", "confirm",
       "POST",
-      "triggers/{id}/rotate", value="json", card=_card("webhooks", "incoming")),
-    S("webhooks.incoming.delete", "Delete an incoming trigger", HOOKS + " > Incoming", "creator", "confirm", "POST",
-      "triggers/{id}/delete", value="json", card=_card("webhooks", "incoming")),
-    S("webhooks.gateway.wake", "Gateway wake", HOOKS + " > Gateway", "creator", "confirm", "POST",
-      "triggers/{id}/relay/wake", "wake", card=_card("webhooks", "gateway")),
+      "triggers/{id}/rotate", value="json", card=HOOKS_IN_CARD),
+    S("webhooks.incoming.delete", "Delete an incoming trigger", HOOKS_IN, "creator", "confirm", "POST",
+      "triggers/{id}/delete", value="json", card=HOOKS_IN_CARD),
+    S("webhooks.gateway.wake", "Gateway wake", HOOKS_GW, "creator", "confirm", "POST",
+      "triggers/{id}/relay/wake", "wake", card=_card("models", "wh-gateway")),
     # Both answer with a signing secret shown only then, which a Confirm card's tap never shows (it keeps the status).
-    S("hooks.wake_url", "Gateway wake URL", HOOKS + " > Gateway", "owner", "person", "PUT", "hooks/wake-url", "url",
-      "text", _card("webhooks", "gateway"),
-      why="Setting the Gateway wake URL shows its signing secret once, in Settings"),
-    S("webhooks.outgoing.create", "New outgoing webhook", HOOKS + " > Outgoing", "anyone", "person", "POST", "webhooks",
-      value="json", card=_card("webhooks", "outgoing"),
-      why="A new outgoing webhook shows its signing secret once, in Settings"),
-    S("webhooks.outgoing", "Outgoing webhook", HOOKS + " > Outgoing", "creator", "confirm", "POST", "webhooks/{id}/update",
-      value="json", card=_card("webhooks", "outgoing")),
+    S("hooks.wake_url", "Gateway wake URL", HOOKS_GW, "owner", "person", "PUT", "hooks/wake-url", "url",
+      "text", _card("models", "wh-gateway"),
+      why="Setting the Gateway wake URL shows its signing secret once, on screen"),
+    S("webhooks.outgoing.create", "New outgoing webhook", HOOKS_OUT, "anyone", "person", "POST", "webhooks",
+      value="json", card=HOOKS_OUT_CARD,
+      why="A new outgoing webhook shows its signing secret once, on screen"),
+    S("webhooks.outgoing", "Outgoing webhook", HOOKS_OUT, "creator", "confirm", "POST", "webhooks/{id}/update",
+      value="json", card=HOOKS_OUT_CARD),
     # Listening
     S("listening.destination", "Listening destination", "Settings > Listening", "owner", "confirm", "PUT",
       "listening/destinations/{id}", value="json", card=_card("listening")),

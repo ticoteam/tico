@@ -18,7 +18,8 @@ let TASK_AUTOMATION_TYPE = '';
 async function askFilterSettingsLoad() {
   const el = $('#set-ask-filter'); if (!el) return;
   const r = await v2Get('/v2/ask-ingest/settings');
-  if (!r?.settings) { $('#set-ask-filter-card').hidden = true; return; }
+  // Settings may have been left while this was read.
+  if (!r?.settings) { const card = $('#set-ask-filter-card'); if (card) card.hidden = true; return; }
   ASK_FILTER = {...r, editing: ASK_FILTER?.editing || 'mine'};
   askFilterSettingsPaint();
 }

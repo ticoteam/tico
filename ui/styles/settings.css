@@ -558,7 +558,7 @@ dialog.access-editor .access-body{flex:1;min-height:0;overflow:auto}
 .theme-seg button{border:0;background:none;border-radius:999px;padding:4px 12px;font-size:var(--t-sm);font-weight:600;color:var(--muted);cursor:pointer}
 .theme-seg button:hover{color:var(--ink)}
 .theme-seg button[aria-checked=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.18)}
-/* Settings > Repositories (ui/app/settings-repositories.js): In use, one 30px line per repository that opens in place;
+/* Settings > General › Repositories (ui/app/settings-repositories.js): In use, one 30px line per repository that opens in place;
    Not in use, one line with a search until searched or opened */
 .repos-card>header{align-items:center;gap:var(--s2);margin-bottom:var(--s2)}
 .repos-card .spacer{flex:1}
@@ -682,7 +682,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .storage-form{display:grid;gap:8px;max-width:520px;margin:12px 0}.storage-form label{display:grid;gap:4px}
 .storage-earlier{margin:6px 0 0;padding-left:18px}
 .storage-tico{margin:12px 0;padding:12px;border:1px solid var(--line);border-radius:8px;max-width:640px}.storage-tico h4{margin:0 0 6px}.storage-tico .row{align-items:center;gap:12px}
-/* Settings > Webhooks (ui/app/settings-webhooks.js) */
+/* Webhooks: Automations › Incoming webhooks, Tools › Webhooks, the Gateway card's fold (ui/app/settings-webhooks.js) */
 #settings-webhooks>.card>header{flex-wrap:wrap;gap:8px}
 #settings-webhooks .sb-narrow{display:none}
 .trigger-secret{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px}
