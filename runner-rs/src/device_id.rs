@@ -55,7 +55,13 @@ fn detect() -> Option<String> {
 pub fn get() -> &'static Option<String> {
     static ID: OnceLock<Option<String>> = OnceLock::new();
     // A container's machine id comes from its image, shared by every container made from it: it proves nothing.
-    ID.get_or_init(|| if crate::follow::kind() == "docker" { None } else { detect() })
+    ID.get_or_init(|| {
+        if crate::follow::kind() == "docker" {
+            None
+        } else {
+            detect()
+        }
+    })
 }
 
 pub fn report(body: &mut Value) {
@@ -72,8 +78,14 @@ mod tests {
     fn device_id_is_stable_salted_and_distinguishes_devices() {
         let raw = "0123456789abcdef0123456789abcdef";
         let first = hash(raw).unwrap();
-        assert_eq!(hash(&format!("{}\n", raw.to_uppercase())), Some(first.clone()));
-        assert_eq!(hash("01234567-89AB-CDEF-0123-456789ABCDEF"), Some(first.clone()));
+        assert_eq!(
+            hash(&format!("{}\n", raw.to_uppercase())),
+            Some(first.clone())
+        );
+        assert_eq!(
+            hash("01234567-89AB-CDEF-0123-456789ABCDEF"),
+            Some(first.clone())
+        );
         assert_eq!(first.len(), 64);
         assert!(!first.contains(raw));
         assert_ne!(first, hex::encode(Sha256::digest(raw.as_bytes())));
@@ -82,7 +94,12 @@ mod tests {
 
     #[test]
     fn device_id_is_unknown_for_missing_uninitialized_or_placeholder_ids() {
-        for raw in ["", "uninitialized", "00000000000000000000000000000000", "ffffffffffffffffffffffffffffffff"] {
+        for raw in [
+            "",
+            "uninitialized",
+            "00000000000000000000000000000000",
+            "ffffffffffffffffffffffffffffffff",
+        ] {
             assert_eq!(hash(raw), None);
         }
     }
@@ -95,7 +112,10 @@ mod tests {
       "IOPlatformUUID" = "01234567-89AB-CDEF-0123-456789ABCDEF"
     }"#;
         assert_eq!(from_ioreg(output), hash("0123456789abcdef0123456789abcdef"));
-        assert_eq!(from_ioreg(r#""IOPlatformSerialNumber" = "0123456789abcdef0123456789abcdef""#), None);
+        assert_eq!(
+            from_ioreg(r#""IOPlatformSerialNumber" = "0123456789abcdef0123456789abcdef""#),
+            None
+        );
         assert_eq!(from_ioreg(r#""IOPlatformUUID" = """#), None);
     }
 
@@ -106,6 +126,9 @@ mod tests {
         report(&mut enrollment);
         report(&mut heartbeat);
         assert_eq!(enrollment.get("device_id"), heartbeat.get("device_id"));
-        assert_eq!(enrollment.get("device_id"), get().as_ref().map(|id| json!(id)).as_ref());
+        assert_eq!(
+            enrollment.get("device_id"),
+            get().as_ref().map(|id| json!(id)).as_ref()
+        );
     }
 }

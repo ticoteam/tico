@@ -32,7 +32,12 @@ pub fn kept(bot: &str) -> Option<String> {
     placements().lock().unwrap().notes.get(bot).cloned()
 }
 
-async fn git(path: &Path, env: &Env, args: &[&str], timeout_s: u64) -> Result<(bool, String), &'static str> {
+async fn git(
+    path: &Path,
+    env: &Env,
+    args: &[&str],
+    timeout_s: u64,
+) -> Result<(bool, String), &'static str> {
     match crate::gitrun::git_as_bot(path, env, args, timeout_s).await {
         Err(crate::gitrun::Fault::Timeout(_)) => Err("timed out"),
         Err(_) => Err("Git command could not run"),
@@ -47,28 +52,84 @@ pub async fn fast_forward(path: &Path, turn: &Env) -> (&'static str, String) {
     let steps = async {
         let instruction_note = crate::repositories::repair_instruction_links(path, &env).await;
         if let Some(note) = &instruction_note {
-            let (_, status) = git(path, &env, &["status", "--porcelain", "--untracked-files=no"], 15).await?;
-            return Err(format!("{note}; changed files: {}", crate::repositories::changed_file_names(&status)));
+            let (_, status) = git(
+                path,
+                &env,
+                &["status", "--porcelain", "--untracked-files=no"],
+                15,
+            )
+            .await?;
+            return Err(format!(
+                "{note}; changed files: {}",
+                crate::repositories::changed_file_names(&status)
+            ));
         }
-        if !git(path, &env, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], 15).await?.0 {
+        if !git(
+            path,
+            &env,
+            &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            15,
+        )
+        .await?
+        .0
+        {
             return Ok(("skipped", "no upstream"));
         }
-        if !git(path, &env, &["fetch", "--quiet", "--no-tags"], 60).await?.0 {
+        if !git(path, &env, &["fetch", "--quiet", "--no-tags"], 60)
+            .await?
+            .0
+        {
             return Ok(("kept", "could not reach GitHub"));
         }
-        if git(path, &env, &["merge-base", "--is-ancestor", "@{u}", "HEAD"], 15).await?.0 {
+        if git(
+            path,
+            &env,
+            &["merge-base", "--is-ancestor", "@{u}", "HEAD"],
+            15,
+        )
+        .await?
+        .0
+        {
             return Ok(("current", ""));
         }
-        if !git(path, &env, &["merge-base", "--is-ancestor", "HEAD", "@{u}"], 15).await?.0 {
-            return Ok(("kept", "it has commits GitHub does not, and GitHub has commits it does not"));
+        if !git(
+            path,
+            &env,
+            &["merge-base", "--is-ancestor", "HEAD", "@{u}"],
+            15,
+        )
+        .await?
+        .0
+        {
+            return Ok((
+                "kept",
+                "it has commits GitHub does not, and GitHub has commits it does not",
+            ));
         }
-        let (ok, status) = git(path, &env, &["status", "--porcelain", "--untracked-files=no"], 15).await?;
-        if !ok { return Err("could not inspect local changes".to_string()); }
+        let (ok, status) = git(
+            path,
+            &env,
+            &["status", "--porcelain", "--untracked-files=no"],
+            15,
+        )
+        .await?;
+        if !ok {
+            return Err("could not inspect local changes".to_string());
+        }
         if !status.trim().is_empty() {
-            return Err(format!("it has uncommitted changes: {}", crate::repositories::changed_file_names(&status)));
+            return Err(format!(
+                "it has uncommitted changes: {}",
+                crate::repositories::changed_file_names(&status)
+            ));
         }
-        let merged = git(path, &env, &["merge", "--ff-only", "--quiet", "@{u}"], 60).await?.0;
-        Ok::<_, String>(if merged { ("updated", "") } else { ("kept", "fast-forward failed") })
+        let merged = git(path, &env, &["merge", "--ff-only", "--quiet", "@{u}"], 60)
+            .await?
+            .0;
+        Ok::<_, String>(if merged {
+            ("updated", "")
+        } else {
+            ("kept", "fast-forward failed")
+        })
     };
     match steps.await {
         Ok((state, detail)) => (state, detail.to_string()),
@@ -78,7 +139,8 @@ pub async fn fast_forward(path: &Path, turn: &Env) -> (&'static str, String) {
 
 /// Before a turn in the bot's checkout: catch the copy up once per placement (`generation`).
 pub async fn catch_up(bot: &str, generation: &Value, path: &Path, env: &Env) {
-    if placements().lock().unwrap().done.get(bot) == Some(generation) || !path.join(".git").exists() {
+    if placements().lock().unwrap().done.get(bot) == Some(generation) || !path.join(".git").exists()
+    {
         return;
     }
     let (state, detail) = fast_forward(path, env).await;
@@ -88,7 +150,9 @@ pub async fn catch_up(bot: &str, generation: &Value, path: &Path, env: &Env) {
     }
     if state == "updated" {
         crate::isolation::adopt(&[path.to_path_buf()]); // updated by the supervisor; the bot user works in it
-        log(&format!("Tico runner: {bot}: brought up to GitHub's history before its first turn here"));
+        log(&format!(
+            "Tico runner: {bot}: brought up to GitHub's history before its first turn here"
+        ));
     }
     if state == "kept" {
         log(&format!("Tico runner: {bot}: kept this computer's copy as it is, not GitHub's latest ({detail})"));
@@ -104,27 +168,80 @@ mod tests {
     use std::process::Command;
 
     fn run(dir: &Path, args: &[&str]) {
-        let ok = Command::new("git").args(args).current_dir(dir).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t.invalid").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t.invalid").output().unwrap();
-        assert!(ok.status.success(), "{args:?}: {}", String::from_utf8_lossy(&ok.stderr));
+        let ok = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t.invalid")
+            .output()
+            .unwrap();
+        assert!(
+            ok.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&ok.stderr)
+        );
     }
 
     #[tokio::test]
     async fn a_returning_bots_old_clone_is_brought_up_once_and_a_diverged_one_is_kept() {
-        let root = std::env::temp_dir().join(format!("tico-placement-{}", uuid::Uuid::new_v4().simple()));
-        let (origin, here, other) = (root.join("origin.git"), root.join("here"), root.join("other"));
+        let root =
+            std::env::temp_dir().join(format!("tico-placement-{}", uuid::Uuid::new_v4().simple()));
+        let (origin, here, other) = (
+            root.join("origin.git"),
+            root.join("here"),
+            root.join("other"),
+        );
         std::fs::create_dir_all(&root).unwrap();
-        run(&root, &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
-        run(&root, &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
+        run(
+            &root,
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "-b",
+                "main",
+                origin.to_str().unwrap(),
+            ],
+        );
+        run(
+            &root,
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
         run(&other, &["commit", "-q", "--allow-empty", "-m", "one"]);
         run(&other, &["push", "-q", "origin", "HEAD:main"]);
-        run(&root, &["clone", "-q", origin.to_str().unwrap(), here.to_str().unwrap()]);
+        run(
+            &root,
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                here.to_str().unwrap(),
+            ],
+        );
         std::fs::write(here.join("untracked.txt"), "x").unwrap(); // untracked files do not keep a copy back
         run(&other, &["commit", "-q", "--allow-empty", "-m", "two"]);
         run(&other, &["push", "-q", "origin", "HEAD:main"]);
         let env = crate::env::process_environment();
         catch_up("coo", &Value::from(1), &here, &env).await;
         assert!(kept("coo").is_none());
-        let head = |p: &Path| String::from_utf8(Command::new("git").args(["rev-parse", "HEAD"]).current_dir(p).output().unwrap().stdout).unwrap();
+        let head = |p: &Path| {
+            String::from_utf8(
+                Command::new("git")
+                    .args(["rev-parse", "HEAD"])
+                    .current_dir(p)
+                    .output()
+                    .unwrap()
+                    .stdout,
+            )
+            .unwrap()
+        };
         assert_eq!(head(&here), head(&other));
         run(&here, &["commit", "-q", "--allow-empty", "-m", "local"]);
         run(&other, &["commit", "-q", "--allow-empty", "-m", "three"]);
@@ -132,7 +249,10 @@ mod tests {
         catch_up("coo", &Value::from(1), &here, &env).await; // the same placement: not asked again
         assert!(kept("coo").is_none());
         catch_up("coo", &Value::from(2), &here, &env).await;
-        assert_eq!(kept("coo").as_deref(), Some("it has commits GitHub does not, and GitHub has commits it does not"));
+        assert_eq!(
+            kept("coo").as_deref(),
+            Some("it has commits GitHub does not, and GitHub has commits it does not")
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

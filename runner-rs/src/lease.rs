@@ -24,7 +24,10 @@ pub(crate) fn handle() -> &'static Handle {
         std::thread::Builder::new()
             .name("tico-lease".into())
             .spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("lease runtime");
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("lease runtime");
                 tx.send(rt.handle().clone()).expect("lease handle");
                 rt.block_on(std::future::pending::<()>());
             })
@@ -34,7 +37,12 @@ pub(crate) fn handle() -> &'static Handle {
 }
 
 /// Renew `aid` every `every` on the lease thread until the turn is done; abort the handle to stop it sooner.
-pub(crate) fn spawn(client: &Client, aid: String, flags: Arc<Flags>, every: Duration) -> tokio::task::JoinHandle<()> {
+pub(crate) fn spawn(
+    client: &Client,
+    aid: String,
+    flags: Arc<Flags>,
+    every: Duration,
+) -> tokio::task::JoinHandle<()> {
     handle().spawn(renew_loop(client.detached(), aid, flags, every))
 }
 
@@ -49,11 +57,14 @@ async fn renew_loop(client: Client, aid: String, flags: Arc<Flags>, every: Durat
             return;
         }
         let before = Instant::now();
-        let renewed = client.post(&format!("attempts/{aid}/renew"), &json!({}), None).await;
+        let renewed = client
+            .post(&format!("attempts/{aid}/renew"), &json!({}), None)
+            .await;
         match renewed.and_then(decode::<RenewAnswer>) {
             Ok(reply) => {
                 let lease = reply.lease_seconds.unwrap_or(60.0);
-                *flags.deadline.lock().unwrap() = before + Duration::from_secs_f64((lease - 10.0).max(0.0));
+                *flags.deadline.lock().unwrap() =
+                    before + Duration::from_secs_f64((lease - 10.0).max(0.0));
                 if reply.stop == Some(true) {
                     // A person pressed Stop, or the bot was quarantined (its `stop_reason`): the turn is interrupted
                     // and reported as interrupted, not lost.
@@ -96,7 +107,10 @@ mod tests {
     fn hub(replies: Vec<(u16, &'static str)>) -> (String, Arc<Mutex<Vec<String>>>) {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             rt.block_on(async move {
                 tx.send(crate::client::tests::serve(replies).await).unwrap();
                 std::future::pending::<()>().await
@@ -110,17 +124,33 @@ mod tests {
         let ok = r#"{"lease_until":"x","lease_seconds":90}"#;
         let (url, seen) = hub(vec![(200, ok); 8]);
         let client = Client::new(&url, "runner-token", 5, 0).unwrap();
-        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
         let flags = flags();
         rt.block_on(async {
-            let renewer = spawn(&client, "a1".into(), flags.clone(), Duration::from_millis(50));
+            let renewer = spawn(
+                &client,
+                "a1".into(),
+                flags.clone(),
+                Duration::from_millis(50),
+            );
             // Both workers busy with synchronous work, the way a long secret scrub or a held state lock would be.
             let block = || tokio::spawn(async { std::thread::sleep(Duration::from_millis(600)) });
             let (a, b) = (block(), block());
             std::thread::sleep(Duration::from_millis(600));
             let renewed = seen.lock().unwrap().len();
-            assert!(renewed >= 3, "only {renewed} renewals while the workers were blocked");
-            assert!(seen.lock().unwrap().iter().all(|r| r.starts_with("POST /api/v2/attempts/a1/renew ")));
+            assert!(
+                renewed >= 3,
+                "only {renewed} renewals while the workers were blocked"
+            );
+            assert!(seen
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|r| r.starts_with("POST /api/v2/attempts/a1/renew ")));
             let _ = (a.await, b.await);
             renewer.abort();
         });
@@ -134,29 +164,56 @@ mod tests {
         let (url, _) = hub(vec![(200, stop); 4]);
         let client = Client::new(&url, "runner-token", 5, 0).unwrap();
         let flags = flags();
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
-            let renewer = spawn(&client, "a3".into(), flags.clone(), Duration::from_millis(20));
+            let renewer = spawn(
+                &client,
+                "a3".into(),
+                flags.clone(),
+                Duration::from_millis(20),
+            );
             tokio::time::timeout(Duration::from_secs(2), async {
                 while !flags.stopped.load(Ordering::SeqCst) {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-            }).await.expect("renewal did not stop the turn");
+            })
+            .await
+            .expect("renewal did not stop the turn");
             renewer.abort();
         });
         assert!(!flags.lost.load(Ordering::SeqCst));
-        assert_eq!(flags.stop_reason.lock().unwrap().as_deref(), Some("Quarantined: 10 refusals today, resumes about 10:05 UTC"));
+        assert_eq!(
+            flags.stop_reason.lock().unwrap().as_deref(),
+            Some("Quarantined: 10 refusals today, resumes about 10:05 UTC")
+        );
     }
 
     #[test]
     fn a_definite_refusal_ends_the_renewals_and_marks_the_lease_lost() {
-        let (url, seen) = hub(vec![(409, r#"{"error":{"code":"stale_lease","detail":"Lease expired","retryable":false}}"#)]);
+        let (url, seen) = hub(vec![(
+            409,
+            r#"{"error":{"code":"stale_lease","detail":"Lease expired","retryable":false}}"#,
+        )]);
         let client = Client::new(&url, "runner-token", 5, 0).unwrap();
         let flags = flags();
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
-            let renewer = spawn(&client, "a2".into(), flags.clone(), Duration::from_millis(20));
-            tokio::time::timeout(Duration::from_secs(5), renewer).await.expect("renewer ended").unwrap();
+            let renewer = spawn(
+                &client,
+                "a2".into(),
+                flags.clone(),
+                Duration::from_millis(20),
+            );
+            tokio::time::timeout(Duration::from_secs(5), renewer)
+                .await
+                .expect("renewer ended")
+                .unwrap();
         });
         assert!(flags.lost.load(Ordering::SeqCst));
         assert_eq!(seen.lock().unwrap().len(), 1);
@@ -167,14 +224,25 @@ mod tests {
         let (url, _) = hub(vec![]);
         let client = Client::new(&url, "runner-token", 5, 0).unwrap();
         let flags = flags();
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
-            let renewer = spawn(&client, "a3".into(), flags.clone(), Duration::from_secs(3600));
+            let renewer = spawn(
+                &client,
+                "a3".into(),
+                flags.clone(),
+                Duration::from_secs(3600),
+            );
             // `notify_waiters` wakes only a renewer already waiting, as at the end of a turn.
             tokio::time::sleep(Duration::from_millis(100)).await;
             flags.done.store(true, Ordering::SeqCst);
             flags.done_notify.notify_waiters();
-            tokio::time::timeout(Duration::from_secs(5), renewer).await.expect("renewer ended").unwrap();
+            tokio::time::timeout(Duration::from_secs(5), renewer)
+                .await
+                .expect("renewer ended")
+                .unwrap();
         });
     }
 }

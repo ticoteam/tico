@@ -17,7 +17,10 @@ pub fn mono_ms() -> u128 {
 }
 
 pub fn epoch_s() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 fn local_stamp() -> String {
@@ -72,11 +75,15 @@ fn say(line: &str, diagnostic: bool) {
 }
 
 /// The last lines that said something went wrong, for the heartbeat's `recent_errors` (outage.py RECENT).
-static RECENT: std::sync::Mutex<std::collections::VecDeque<String>> = std::sync::Mutex::new(std::collections::VecDeque::new());
+static RECENT: std::sync::Mutex<std::collections::VecDeque<String>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
 
 fn remember(line: &str) {
     let stamp = {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let iso = text_of(&iso(&serde_json::json!(now)));
         format!("{}Z", iso.trim_end_matches("+00:00"))
     };
@@ -84,11 +91,21 @@ fn remember(line: &str) {
     if recent.len() == 50 {
         recent.pop_front();
     }
-    recent.push_back(format!("{stamp} {}", line.replace('\n', " ")).chars().take(300).collect());
+    recent.push_back(
+        format!("{stamp} {}", line.replace('\n', " "))
+            .chars()
+            .take(300)
+            .collect(),
+    );
 }
 
 pub fn recent_errors() -> Vec<String> {
-    RECENT.lock().unwrap_or_else(|p| p.into_inner()).iter().cloned().collect()
+    RECENT
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .cloned()
+        .collect()
 }
 
 /// Whether `TICO_RUNNER_TIMINGS=1` asked for timing marks.
@@ -101,8 +118,14 @@ pub fn timings_on() -> bool {
 pub fn mark(name: &str, attempt: &str) {
     crate::flight::phase(name, attempt);
     if timings_on() {
-        let wall = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-        log(&format!("Tico runner: timing mark={name} attempt={attempt} mono_ms={} wall_ms={wall}", mono_ms()));
+        let wall = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        log(&format!(
+            "Tico runner: timing mark={name} attempt={attempt} mono_ms={} wall_ms={wall}",
+            mono_ms()
+        ));
     }
 }
 
@@ -132,7 +155,12 @@ pub fn iso(epoch: &Value) -> Value {
             let whole = s.floor() as i64;
             let (y, m, d) = civil(whole.div_euclid(86_400));
             let rem = whole.rem_euclid(86_400);
-            Value::String(format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}+00:00", rem / 3600, rem % 3600 / 60, rem % 60))
+            Value::String(format!(
+                "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}+00:00",
+                rem / 3600,
+                rem % 3600 / 60,
+                rem % 60
+            ))
         }
         _ => Value::Null,
     }
@@ -145,7 +173,14 @@ pub fn parse_iso(text: &str) -> f64 {
         return 0.0;
     }
     let num = |a: usize, b: usize| t.get(a..b).and_then(|s| s.parse::<i64>().ok());
-    let (Some(y), Some(mo), Some(d), Some(h), Some(mi), Some(s)) = (num(0, 4), num(5, 7), num(8, 10), num(11, 13), num(14, 16), num(17, 19)) else {
+    let (Some(y), Some(mo), Some(d), Some(h), Some(mi), Some(s)) = (
+        num(0, 4),
+        num(5, 7),
+        num(8, 10),
+        num(11, 13),
+        num(14, 16),
+        num(17, 19),
+    ) else {
         return 0.0;
     };
     // days_from_civil
@@ -159,15 +194,24 @@ pub fn parse_iso(text: &str) -> f64 {
     let mut rest = &t[19..];
     let mut frac = 0.0;
     if let Some(stripped) = rest.strip_prefix('.') {
-        let digits: String = stripped.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = stripped
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
         frac = format!("0.{digits}").parse::<f64>().unwrap_or(0.0);
         rest = &stripped[digits.len()..];
     }
     let mut offset = 0i64;
     if rest.starts_with('+') || rest.starts_with('-') {
         let sign = if rest.starts_with('-') { -1 } else { 1 };
-        let hh = rest.get(1..3).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-        let mm = rest.get(4..6).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        let hh = rest
+            .get(1..3)
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0);
+        let mm = rest
+            .get(4..6)
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0);
         offset = sign * (hh * 3600 + mm * 60);
     }
     (days * 86_400 + h * 3600 + mi * 60 + s - offset) as f64 + frac
@@ -237,7 +281,12 @@ pub fn write_script(path: &std::path::Path, body: &str) {
     use std::os::unix::fs::PermissionsExt;
     let source = std::path::PathBuf::from(format!("{}.src", path.display()));
     std::fs::write(&source, body).unwrap();
-    assert!(std::process::Command::new("cp").arg(&source).arg(path).status().unwrap().success());
+    assert!(std::process::Command::new("cp")
+        .arg(&source)
+        .arg(path)
+        .status()
+        .unwrap()
+        .success());
     std::fs::remove_file(&source).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
@@ -285,7 +334,10 @@ mod tests {
 
     #[test]
     fn iso_round_trips_and_matches_pythons_isoformat() {
-        assert_eq!(iso(&json!(1_760_000_000)), json!("2025-10-09T08:53:20+00:00"));
+        assert_eq!(
+            iso(&json!(1_760_000_000)),
+            json!("2025-10-09T08:53:20+00:00")
+        );
         assert_eq!(iso(&json!("x")), Value::Null);
         assert_eq!(parse_iso("2025-10-09T08:53:20Z"), 1_760_000_000.0);
         assert_eq!(parse_iso("2025-10-09T10:53:20+02:00"), 1_760_000_000.0);
@@ -293,7 +345,10 @@ mod tests {
 
     #[test]
     fn py_dumps_spaces_like_python() {
-        assert_eq!(py_dumps(&json!({"a": [1, "é"], "b": {"c": null}})), "{\"a\": [1, \"é\"], \"b\": {\"c\": null}}");
+        assert_eq!(
+            py_dumps(&json!({"a": [1, "é"], "b": {"c": null}})),
+            "{\"a\": [1, \"é\"], \"b\": {\"c\": null}}"
+        );
     }
 
     #[tokio::test]

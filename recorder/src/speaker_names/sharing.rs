@@ -92,10 +92,10 @@ pub(crate) fn correct_shared_names(
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        if let Some((2, text)) = &last {
-            if serde_json::from_str::<Value>(text)?["speaker"] == speaker {
-                continue;
-            }
+        if let Some((2, text)) = &last
+            && serde_json::from_str::<Value>(text)?["speaker"] == speaker
+        {
+            continue;
         }
         // A refused revision never reached Tico, so the next one builds on the last accepted.
         let previous: Option<(i64, String)> = tx
