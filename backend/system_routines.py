@@ -151,7 +151,8 @@ ACTIONS = {
                             ("loop", "guard", "capped", "paused", "resume", "wake", "thread", "bots")),
     "purge_thread_messages": ("delete messages past the time their thread keeps them, with what was copied from them",
                               ("retention", "purge", "delete", "thread", "messages", "keep")),
-    "roll_up_skill_usage": ("fold skill uses into daily counts and delete raw uses older than 90 days",
+    "roll_up_skill_usage": ("fold skill uses into daily counts and delete raw uses, and counts of skills outside the "
+                            "directory, older than 90 days",
                             ("skills", "usage", "rollup", "retention", "delete")),
     "email_digest": ("email a person once an hour the threads they follow on digest that have new messages: titles, "
                      "unread counts and links, never the messages", ("email", "digest", "unread", "thread", "notify")),
@@ -392,7 +393,8 @@ JOBS = [
         "code: nothing past its time is a quiet run.",
         HOUSEKEEPING, "Every 15 minutes", 900, then=("purge_thread_messages",)),
     Job("skill_usage_rollup", "Skill usage",
-        "Folds skill uses into daily counts for Library › Skills and deletes raw uses older than 90 days. Plain code: "
+        "Folds skill uses into daily counts for Library › Skills and deletes raw uses, and the daily counts of skills "
+        "outside the directory, older than 90 days. Plain code: "
         "nothing new is a quiet run.",
         HOUSEKEEPING, "Hourly", 3600, then=("roll_up_skill_usage",)),
     Job("invariant_checks", "Production checks",

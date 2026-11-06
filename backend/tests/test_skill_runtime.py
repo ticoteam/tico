@@ -7,6 +7,7 @@ from backend import skill_runtime as SR
 from backend import skills
 from backend.store import H
 from backend.tests.test_api import api, get, post, runner, setup_attempt  # noqa: F401
+from backend.tests.test_botops_parity import bot_id
 
 BRIEF = [{"path": "SKILL.md", "content": "---\nname: acme-brief\ndescription: Acme brief\n---\nWrite the brief.\n"}]
 BRIEF_2 = [{"path": "SKILL.md", "content": "---\nname: acme-brief\ndescription: Acme brief\n---\nShorter.\n"},
@@ -149,6 +150,26 @@ def test_skill_calls_in_events_count_once_per_tool_id_for_directory_skills_only(
     assert [tuple(r) for r in rows] == [
         (sid, SR.bundle_sha(BRIEF), "Bot", "ops", None, "model", "runner", aid, "toolu_1"),
         (sid, SR.bundle_sha(BRIEF), "Bot", "ops", None, "model", "runner", aid, "toolu_7")]
+
+
+def test_a_bots_call_to_a_skill_outside_the_directory_is_only_a_daily_count_by_name_and_bot(api):
+    machine, _, attempt = setup_attempt(api, "ops")
+    aid = attempt["id"]
+    with api.app.state.store.transaction() as c:
+        add_skill(c, "acme-brief", [BRIEF])
+    post(api, f"attempts/{aid}/started", {"thread_id": "fake-thread"}, machine["token"])
+    first = [tool("repo-own", "toolu_1"), tool("repo-own", "toolu_1"), tool("acme-brief", "toolu_2"),
+             tool("repo-own", "toolu_3", status="completed"), tool("plugin:thing", "toolu_4"), tool("repo-own", "toolu_5")]
+    send_events(api, machine, aid, first, 1)
+    send_events(api, machine, aid, first, 1)          # the runner resends a batch it had no answer for: nothing more
+    send_events(api, machine, aid, [tool("home-notes", "toolu_6")], 7)
+    with api.app.state.store.read() as c:
+        rows = [dict(r) for r in c.execute("SELECT * FROM unlisted_skill_usage_dailies ORDER BY name")]
+        directory = c.execute("SELECT COUNT(*) FROM skill_usages").fetchone()[0]
+    assert [(r["name"], r["bot_id"], r["uses_count"]) for r in rows] == [("home-notes", bot_id(api, "ops"), 1),
+                                                                          ("repo-own", bot_id(api, "ops"), 2)]
+    assert set(rows[0]) == {"used_on", "name", "bot_id", "uses_count"}, "a name, a bot, a day and a count: nothing else"
+    assert directory == 1, "the directory skill is a usage row, not a count"
 
 
 def test_a_persons_slash_name_to_a_bot_is_their_use_of_an_installed_skill(api):

@@ -13,6 +13,10 @@ is unused only when its target reports staging (a receipt), has had the install 
 harness reports every skill use, `skill_events`; a person's skills helper with reporting on), and shows no use in those
 30 days.
 
+Skills a bot used that the directory does not have are a daily count by name and bot only
+(`unlisted_skill_usage_dailies`, written by backend/skill_runtime.py). Admins see them as `popular_elsewhere`; the rollup
+deletes their days past 90; backend/skill_suggestions.py reads them, and the unused installs, for its suggestions.
+
 Rows hold a skill, who, where and when. Nothing here reads or writes prompt text, arguments or file contents.
 """
 from datetime import datetime, timedelta, timezone
@@ -35,6 +39,7 @@ TOP = 5
 RECENT = 20
 UNUSED_DAYS = 30
 TRIGGERS = ("model", "person", "nested")
+POPULAR = 10                             # skills listed as popular outside the directory
 
 
 def _stamp(at):
@@ -91,12 +96,19 @@ def prune(store, at):
     return gone
 
 
+def prune_unlisted(c, at):
+    """Delete the daily counts of skills outside the directory past 90 days. Returns how many days' rows went."""
+    return c.execute("DELETE FROM unlisted_skill_usage_dailies WHERE used_on <= ?",
+                     (_day(at - timedelta(days=KEEP_DAYS)),)).rowcount
+
+
 def run(store, at=None):
-    """One rollup: recompute the touched days, then prune. {days, pruned}."""
+    """One rollup: recompute the touched days, then prune. {days, pruned, unlisted_pruned}."""
     at = at or datetime.now(timezone.utc)
     with store.transaction() as c:
         days = roll_up_days(c, at)
-    return {"days": len(days), "pruned": prune(store, at)}
+        unlisted = prune_unlisted(c, at)
+    return {"days": len(days), "pruned": prune(store, at), "unlisted_pruned": unlisted}
 
 
 # ----------------------------------------------------------------------------- reads
@@ -190,7 +202,31 @@ def overview(c, auth, who, days, at=None):
         e["last_used_at"] = e["last_used_at"] or r["at"]
     skills = c.execute("SELECT id, name FROM skills WHERE deleted_at IS NULL ORDER BY name LIMIT ?", (SK.LIST_CAP,)).fetchall()
     return {"days": days, "admin": admin,
-            "skills": [{"name": s["name"], **entry(s["id"])} for s in skills]}
+            "skills": [{"name": s["name"], **entry(s["id"])} for s in skills],
+            "popular_elsewhere": popular_elsewhere(c, at) if admin else None}
+
+
+def unlisted_usage(c, at, days=UNUSED_DAYS):
+    """[{name, uses, bots: [(bot id, uses)]}] of the skills bots used in the last `days` that the directory does not
+    have (a deleted skill counts as not there), the most used first, each bot the most using first."""
+    first = _bounds(at, days)[0]
+    out = {}
+    for r in c.execute("SELECT u.name, u.bot_id, SUM(u.uses_count) AS uses FROM unlisted_skill_usage_dailies u "
+                       "WHERE u.used_on >= ? AND NOT EXISTS (SELECT 1 FROM skills s WHERE s.name=u.name AND s.deleted_at IS NULL) "
+                       "GROUP BY u.name, u.bot_id", (first,)):
+        out.setdefault(r["name"], []).append((r["bot_id"], r["uses"]))
+    rows = [{"name": name, "uses": sum(n for _, n in bots), "bots": sorted(bots, key=lambda b: (-b[1], b[0]))}
+            for name, bots in out.items()]
+    return sorted(rows, key=lambda r: (-r["uses"], r["name"]))
+
+
+def popular_elsewhere(c, at):
+    """The skills bots used most in the last 30 days that are not in the directory: name, uses and the bots (the most
+    using first). For admins: it names bots and what they ran."""
+    rows = unlisted_usage(c, at)[:POPULAR]
+    names = _names(c, {("Bot", b) for r in rows for b, _ in r["bots"][:TOP]})
+    return [{"name": r["name"], "uses": r["uses"], "bots_count": len(r["bots"]),
+             "bots": [{**_actor_view(names, "Bot", b), "uses": n} for b, n in r["bots"][:TOP]]} for r in rows]
 
 
 def _link(c, auth, who, viewer, row):
@@ -248,6 +284,33 @@ def coverage(c, auth, who, skill, at):
     return out
 
 
+class _Everyone:
+    """The maintenance run reading every install (no caller): coverage()'s visibility check passes for all of them."""
+    role, via, actor = "owner", None, "system"
+
+    def company_role(self, who):
+        return "owner"
+
+    def bot_access(self, c, who, bot_id):
+        return {"see": True}
+
+
+_EVERYONE = _Everyone()
+
+
+def unused_installs(c, at):
+    """Every install that coverage() calls unused, never one it calls unknown: [{id, skill_name, target_type,
+    target_id}]. It reads coverage()'s answer rather than a copy of its rule, so a change to the rule holds here too."""
+    out = []
+    for skill in c.execute("SELECT s.id, s.name FROM skills s WHERE s.deleted_at IS NULL AND EXISTS "
+                           "(SELECT 1 FROM skill_installs i WHERE i.skill_id=s.id) ORDER BY s.name").fetchall():
+        for r in coverage(c, _EVERYONE, _EVERYONE, skill, at):
+            if r["coverage"] == "unused":
+                out.append({"id": r["id"], "skill_name": skill["name"], "target_type": r["target"]["type"],
+                            "target_id": r["target"]["id"]})
+    return out
+
+
 def detail(c, auth, who, name, days, at=None):
     """One skill's usage: totals, per actor (admins all; anyone else themselves), the last uses (admins all; anyone
     else their own and the ones they asked a bot for), and the coverage of the installs they may see."""
@@ -292,10 +355,7 @@ def detail(c, auth, who, name, days, at=None):
     ordered = sorted(shown.items(), key=lambda kv: (-kv[1]["uses"], kv[0][1]))
     return {"skill": skill["name"], "days": days, "admin": admin, "totals": totals,
             "actors": [{**_actor_view(names, t, i), **v} for (t, i), v in ordered],
-            "recent": uses, "installs": coverage(c, auth, who, skill, at),
-            # Skills used on computers that the directory does not have: not collected yet (the helper forwards
-            # directory skills only), so the page has nothing to flag.
-            "popular_elsewhere": None}
+            "recent": uses, "installs": coverage(c, auth, who, skill, at)}
 
 
 def _writable_bots(c, auth, who):
@@ -412,12 +472,15 @@ def install(app, store, auth):
 
 def words(found):
     """The run's result in words for Settings > Routines."""
-    if not found["days"] and not found["pruned"]:
+    unlisted = found.get("unlisted_pruned", 0)
+    if not found["days"] and not found["pruned"] and not unlisted:
         return None
     parts = []
     if found["days"]:
         parts.append(f"{found['days']} day{'s' if found['days'] != 1 else ''} rolled up")
     if found["pruned"]:
         parts.append(f"{found['pruned']} old use{'s' if found['pruned'] != 1 else ''} deleted")
+    if unlisted:
+        parts.append(f"{unlisted} old count{'s' if unlisted != 1 else ''} outside the directory deleted")
     return ", ".join(parts)
 

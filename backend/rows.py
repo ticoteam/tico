@@ -953,6 +953,31 @@ class SkillUsageDailyRow(TypedDict):
     uses_count: int
 
 
+class UnlistedSkillUsageDailyRow(TypedDict):
+    """A bot's uses in a day of a skill the directory does not have: the name, the bot, the day and a count only."""
+    used_on: str
+    name: str
+    bot_id: str
+    uses_count: int
+
+
+class SkillSuggestionRow(TypedDict):
+    """A remove or promote suggestion for Library › Skills (backend/skill_suggestions.py)."""
+    id: str
+    kind: str
+    subject: str
+    name: str
+    target_type: str
+    target_id: str
+    uses_count: int
+    bots_count: int
+    status: str
+    closed_by_id: str | None
+    closed_at: str | None
+    created_at: str
+    updated_at: str
+
+
 class SkillDeviceRow(TypedDict):
     """A person's skills helper; the token is stored only as `token_hash`."""
     id: str

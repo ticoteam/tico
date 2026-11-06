@@ -162,6 +162,7 @@ def test_receipt_and_usage_need_the_device_and_reporting(api):
         event, dict(event), {**event, "name": "ghost", "tool_use_id": "toolu_2"},
         {**event, "trigger": "person", "tool_use_id": "prompt_1", "used_at": "2999-01-01T00:00:00Z"}]})
     assert used.status_code == 200 and used.json() == {"recorded": 2, "duplicates": 1, "dropped": 1}
+    assert rows(api, "SELECT * FROM unlisted_skill_usage_dailies") == [], "a person's skill outside the directory is never kept"
     stored = rows(api, "SELECT skill_id,sha256,actor_type,actor_id,trigger,source,session_key,tool_use_id,used_at "
                        "FROM skill_usages ORDER BY tool_use_id")
     assert [(u["trigger"], u["tool_use_id"]) for u in stored] == [("person", "prompt_1"), ("model", "toolu_1")]

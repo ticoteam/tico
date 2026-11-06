@@ -8434,8 +8434,9 @@ def create_app(settings=None):
             from . import skill_runtime
 
             def ingest(c):
+                before = skill_runtime.last_seq(c, aid)        # events after it are new: a resent batch counts nothing
                 acked = execution.events(c, request.state.identity, aid, body)
-                skill_runtime.record_runner_usage(c, aid, body.events)    # a Skill call's name, scrubbed above
+                skill_runtime.record_runner_usage(c, aid, body.events, after_seq=before)  # a Skill call's name, scrubbed above
                 return acked
             return mutate(request, body, ingest)
 
@@ -8878,9 +8879,12 @@ def create_app(settings=None):
     install_branches(app, store, auth, mutate, settings_admin, execution)
     from .bot_copy import install as install_bot_copy
     install_bot_copy(app, store, auth, mutate, settings_admin, place_now)
-    # Usage reads first: `skills/usage`, `skills/installed` and `skills/install-targets` are not skill names.
+    # Usage reads and suggestions first: `skills/usage`, `skills/installed`, `skills/install-targets` and
+    # `skills/suggestions` are not skill names.
     from .skill_usage import install as install_skill_usage
     install_skill_usage(app, store, auth)
+    from .skill_suggestions import install as install_skill_suggestions
+    install_skill_suggestions(app, store, auth, mutate)
     from .skills import install as install_skills
     install_skills(app, store, auth, mutate)
     from .subscriptions import install as install_subscriptions
