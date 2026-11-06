@@ -79,7 +79,8 @@ function finSrcCols(r) {
     last = at ? ago(at) : '';
     status = sync?.status === 'disconnected' ? ['idle', 'Disconnected'] : sync?.status === 'reconnect' ? ['fail', 'Reconnect']
       : err ? ['fail', 'Error'] : !sync ? ['idle', '—']
-      : sync.status === 'new' ? ['waiting', 'Starting'] : sync.history === 'importing' ? ['waiting', 'Importing'] : ['ok', 'OK'];
+      : sync.status === 'new' ? ['waiting', 'Starting'] : sync.history === 'importing' ? ['waiting', 'Importing']
+      : sync.history === 'checking' ? ['waiting', 'Checking amounts'] : ['ok', 'OK'];
   }
   return {has, feeds, how, last, status};
 }

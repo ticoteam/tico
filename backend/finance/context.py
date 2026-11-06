@@ -2,6 +2,7 @@
 each teammate's rights and view, loaded once per call and never across calls (a revoked grant is gone on the next)."""
 import sqlite3
 from dataclasses import dataclass, field
+from typing import Any
 
 from .core import budgets as B
 from .core import view as VW
@@ -33,6 +34,7 @@ class Ctx:
     _views: dict[str, VW.View] = field(default_factory=lambda: dict[str, VW.View]())
     _budgets: dict[str, B.Budget] | None = None
     _private: dict[str, VW.PrivateLine] | None = None
+    memo: dict[str, Any] = field(default_factory=lambda: dict[str, Any]())   # per-call reads (budgeting's ad spend)
     deciding: bool = False       # set while an approval is rechecked: outcomes then use the true figures
     decider: str = ""            # the person whose decision an approved action commits on (approval_decided), or ""
 
@@ -67,6 +69,7 @@ class Ctx:
         self.accounts = SL.accounts(self.c, self.book.id)
         self._budgets = None
         self._private = None
+        self.memo.clear()
         self._views.clear()
         self._rights.clear()
 

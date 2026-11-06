@@ -57,7 +57,7 @@ def test_auth_is_a_bearer_token_and_the_endpoint_is_off_until_scim_is_the_source
     assert api.post("/api/v2/directory/scim-token", json={}, headers=person_headers(api, "riley")).status_code == 403
 
 
-def test_okta_deactivates_with_a_pathless_patch_and_the_user_stays_listed(scim):
+def _okta_deactivates_with_a_pathless_patch_and_the_user_stays_listed(scim):
     kim = create(scim).json()
     with scim.app.state.store.transaction() as c:
         c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) VALUES(?,?,?,?,?,?)",
@@ -76,7 +76,7 @@ def test_okta_deactivates_with_a_pathless_patch_and_the_user_stays_listed(scim):
     assert back.json()["active"] is True and roster_of(scim)["kim@acme.example"]["hidden"] is False
 
 
-def test_people_added_by_hand_and_the_owner_cannot_be_deactivated_by_scim(scim):
+def _people_added_by_hand_and_the_owner_cannot_be_deactivated_by_scim(scim):
     hand = scim.post("/api/v2/access/people", json={"name": "Hand Made", "email": "hand@acme.example"}, headers=signed_in())
     assert hand.status_code == 200
     ids = {p["email"]: p["id"] for p in roster_of(scim).values()}
@@ -88,11 +88,20 @@ def test_people_added_by_hand_and_the_owner_cannot_be_deactivated_by_scim(scim):
     assert call(scim, "POST", "/Users", {"schemas": [USER], "userName": "hand@acme.example"}).status_code == 409
 
 
-def test_a_burst_of_deactivations_stops_at_the_mass_leave_limit(scim):
-    scim.put("/api/v2/directory", json={"source": "scim", "mass_leave_limit": 2, "expected_revision": 1}, headers=signed_in())
+def _a_burst_of_deactivations_stops_at_the_mass_leave_limit(scim):
+    revision = scim.get("/api/v2/directory", headers=signed_in()).json()["revision"]
+    # Okta's deactivation above already counts as one leave
+    scim.put("/api/v2/directory", json={"source": "scim", "mass_leave_limit": 3, "expected_revision": revision}, headers=signed_in())
     ids = [create(scim, f"u{n}@acme.example").json()["id"] for n in range(3)]
     off = {"schemas": [PATCH], "Operations": [{"op": "replace", "path": "active", "value": False}]}
     assert [call(scim, "PATCH", "/Users/" + i, off).status_code for i in ids] == [200, 200, 429]
     assert call(scim, "PATCH", "/Users/" + ids[2], off).headers["retry-after"] == "3600"
     assert events(scim, "directory.scim_guard") and roster_of(scim)["u2@acme.example"]["hidden"] is False
 
+
+
+def test_scim_deactivation_keeps_people_listed_protects_the_owner_and_stops_a_burst(scim):
+    # The burst runs last: it lowers the mass-leave limit for the install.
+    _people_added_by_hand_and_the_owner_cannot_be_deactivated_by_scim(scim)
+    _okta_deactivates_with_a_pathless_patch_and_the_user_stays_listed(scim)
+    _a_burst_of_deactivations_stops_at_the_mass_leave_limit(scim)

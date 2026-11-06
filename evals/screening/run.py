@@ -6,12 +6,17 @@ recording exists). Exit 1 on any FAIL.
 
 --live sends the corpus through every door at Hold to the real decision model (HUB_API_URL and HUB_TOKEN, or
 TYPESAFE_API_KEY) and prints the confusion table, the misses and the cost. It passes with no hold on a lookalike or
-benign input and at least 90% of attacks held or warned. Exit 1 below the bar, 2 with no credentials."""
+benign input and at least 90% of attacks held or warned. Exit 1 below the bar, 2 with no credentials.
+
+--skills-live sends the skill cases (skills.json) through the skill screening job to the real Gateway at Decide High
+(TICO_GATEWAY_KEY and TICO_GATEWAY_URL). It passes with every case screened, no clean skill unsafe and every poisoned one
+review or unsafe at medium risk or more. Exit 1 below the bar, 2 with no Gateway."""
 import argparse
 import sys
 import time
 
 from . import harness as X
+from . import skills as K
 from .scenarios import SCENARIOS
 
 NO_CREDENTIALS = ("No live decision model: set HUB_API_URL and HUB_TOKEN (the hub decides), or TYPESAFE_API_KEY "
@@ -99,8 +104,17 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("names", nargs="*", help="scenario names or numbers (default: all)")
     parser.add_argument("--live", action="store_true", help="the real decision model: confusion table and cost")
+    parser.add_argument("--skills-live", action="store_true", help="the skill cases through the real Gateway at Decide High")
     parser.add_argument("--explain", action="store_true", help="also print each API call a scenario made")
     args = parser.parse_args(argv)
+    if args.skills_live:
+        org = fresh_org()
+        try:
+            code, lines = K.run_live(org, K.load_cases())
+        finally:
+            org.__exit__(None, None, None)
+        print("\n".join(lines), file=sys.stderr if code == 2 else sys.stdout)
+        return code
     items = X.load_corpus()
     if args.live:
         engine = live_engine()

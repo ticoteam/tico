@@ -17,7 +17,7 @@ from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
 TIMED = {"stale_review", "kpi_asks", "ask_deadlines", "task_manager_report",
-         "bookkeeper_check", "memory_tidy"}   # the jobs with a schedule preset
+         "bookkeeper_check"}   # the jobs with a schedule preset
 
 
 def rows(api, token="ana-test"):

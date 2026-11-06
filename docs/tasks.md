@@ -47,11 +47,11 @@ tasks start with that type. Clearing filters keeps the selected type. Older comb
 deleted types fall back to General.
 
 **You** lists and counts everything that needs you across every board: tasks, questions, waits, recent declines,
-approvals, asks, stale checks and nightly memory tidy. The tab and Tasks navigation badges show the
+approvals, asks and stale checks. The tab and Tasks navigation badges show the
 same count on desktop and phone; the badges hide at zero. Each row shows one face (whoever asks), the
 title with the bot's ask as a muted line under it, and the age; no status, since everything there is open.
 **Group: Kind** sorts it under **Answer**, **Pay**, **Connect**, **Review** and **Do**. Under **Asked by**, approvals, questions
-outside tasks, stale checks and memory tidies lead under **Approvals and questions**, with their own count.
+outside tasks and stale checks lead under **Approvals and questions**, with their own count.
 **Catch up** opens the answerable cards one at a time. It has no number and appears only when a card is
 available. Other rows open the full task. Board, search and task filters stay with Open and Board and
 never narrow this queue. Folded or merged tasks count only through their card. The count includes unread
@@ -1330,7 +1330,9 @@ owner, requester or a mover) may steer, queue or set the goal; anyone else may d
 (`compose.send_way`, [Steer, queue or defer](using-tico.md#steer-queue-or-defer)), or the nearest one you may use
 here (Steer becomes Queue; otherwise Defer). Set as goal is for one comment. A comment that names no way (the API, CLI
 or MCP) is a Steer, as the paragraph on comments above says. `GET /api/v2/threads/{thread_id}/reach` (with `text`,
-`delivery`, `defer_for`, `in_reply_to`) answers who it would reach, each with its mode, before it is sent. Before you send, the box says what the chosen way does, and after, if the server
+`delivery`, `defer_for`, `in_reply_to`) answers who it would reach, each with its mode, before it is sent: **Reaches
+N** under the box opens that list by name (Now, After its turn, Next turn, Notified), as the chosen way and the
+@mentions you type change. Before you send, the box says what the chosen way does, and after, if the server
 sent it another way (a defer that rode along). With no bot on the task (everyone on it is a person) the send is a plain arrow, and the box says no bot gets the
 message. `GET /v2/tasks/{id}` carries
 this view: each bot reply in `comments` has its `run`; `execution` is the owning bot's newest run in the task's own
@@ -1582,7 +1584,9 @@ A task's **followers** are the people and bots who follow its thread, each at a 
   @mentioned.
 - Filing a task does not follow it, for people and bots alike. Choose **Follow** on the new-task form, `follow: true`
   on `POST /api/v2/tasks`, `hub task create --follow`, or `follow` on `hub_task_create`.
-- Commenting does not follow a task either. An @mention does.
+- Commenting does not follow a task either. An @mention does. Under the comment box, **Follow** (shown until you
+  follow) follows the task once your comment is in; it stays ticked or unticked for your next task
+  (`compose.follow.task`).
 - Only someone who can see the task follows it: a private task's followers are its requester, owner, readers and
   inherited readers who chose to. Someone taken off Who can see is no longer listed.
 - Anyone who can see the task follows or unfollows it and sets their own level. Whoever may change the task (as for

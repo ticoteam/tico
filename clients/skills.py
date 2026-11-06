@@ -15,6 +15,9 @@ import subprocess
 from pathlib import Path
 
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
+# Path words under /api/v2/skills/ (and the helper's own plugin) that a skill name would shadow or be shadowed by.
+RESERVED = frozenset({"marketplace.json", "helper.mjs", "tico-skills", "devices", "usage", "plugins", "bundles", "proposals",
+                      "installs", "installed", "install-targets"})
 MAX_FILES = 100
 MAX_CHARS = 90_000            # the total of every file's text, which must fit the screening state with its diff
 MAX_PATH = 200
@@ -85,6 +88,8 @@ def bundle_problem(name, files):
     """Why this bundle is refused (one line), or None when it is one the server accepts."""
     if not isinstance(name, str) or not NAME.match(name):
         return "A skill is named with lowercase letters, digits, dots and hyphens (like triage or tico.helper)"
+    if name in RESERVED:
+        return f"{name} is reserved; choose another name"
     if not isinstance(files, list):
         return "The files are a list of {path, content}"
     if len(files) > MAX_FILES:

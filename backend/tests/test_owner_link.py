@@ -212,15 +212,16 @@ def test_the_apps_next_is_taken_and_the_owner_comes_back_there_but_a_query_secre
     assert signed.status_code == 303 and signed.headers["location"] == here
 
 
-@pytest.mark.parametrize("next_", ["//evil.example/x", "https://evil.example/", "/\\evil.example",
-                                   "/ok\r\nSet-Cookie: x=1", "/auth/owner-link"])
-def test_a_next_that_leaves_the_site_or_the_path_goes_home_instead(hosted, next_):
-    page = hosted.browser.get(owner_link.LINK_PATH, params={"next": next_})
-    assert page.status_code == 200 and 'name="next"' not in page.text
-    token = new_token()
-    hosted.place(token)
-    signed = hosted.browser.post(owner_link.LINK_PATH, data={"token": token, "next": next_}, follow_redirects=False)
-    assert signed.status_code == 303 and signed.headers["location"] == "/"
+def test_a_next_that_leaves_the_site_or_the_path_goes_home_instead(hosted):
+    for next_ in ["//evil.example/x", "https://evil.example/", "/\\evil.example",
+                  "/ok\r\nSet-Cookie: x=1", "/auth/owner-link"]:
+        hosted.browser.cookies.clear()
+        page = hosted.browser.get(owner_link.LINK_PATH, params={"next": next_})
+        assert page.status_code == 200 and 'name="next"' not in page.text, next_
+        token = new_token()
+        hosted.place(token)
+        signed = hosted.browser.post(owner_link.LINK_PATH, data={"token": token, "next": next_}, follow_redirects=False)
+        assert signed.status_code == 303 and signed.headers["location"] == "/", next_
 
 
 def test_sign_out_ends_the_session_and_lands_on_the_link_page(hosted):

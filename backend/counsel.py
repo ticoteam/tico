@@ -170,13 +170,19 @@ def named(source_name, credential_name):
     return bool(want) and any(have[i:i + len(want)] == want for i in range(len(have) - len(want) + 1))
 
 
-def suggested_who(c, source_name):
+def suggested_who(c, source_name, who=None, auth=None):
     """The departments of the bots granted a credential whose name carries this From (backend/credentials.py). Empty
     lists when none is granted: Counsel then leaves Who to the owner. A credential has no vendor field, so the match is
-    on the name's words (`named`)."""
+    on the name's words (`named`). Given `who`, a key of a tool they may not see never counts (backend/api_tools.py
+    `visible`)."""
     if not str(source_name or "").strip():
         return {"groups": [], "bots": []}
-    ids = [r["id"] for r in c.execute("SELECT id, name FROM credentials") if named(source_name, r["name"])]
+    hidden = set()
+    if who is not None:
+        from .api_tools import hidden_keys
+        hidden = hidden_keys(c, who, tuple(getattr(getattr(auth, "settings", None), "credential_admins", ()) or ()), auth)
+    ids = [r["id"] for r in c.execute("SELECT id, name FROM credentials")
+           if r["id"] not in hidden and named(source_name, r["name"])]
     if not ids:
         return {"groups": [], "bots": []}
     marks = ",".join("?" * len(ids))
@@ -378,7 +384,7 @@ def read(c, auth, who, files, blobs, body, found):
     else:
         plan = _link_plan(c, who, body.url, text)
         file_id, number = plan["id"], plan["number"]
-    who_hint = suggested_who(c, source["name"])
+    who_hint = suggested_who(c, source["name"], who, auth)
     open_task = _open_read(c, who, file_id, number, source["id"])
     if open_task:
         # Asked again while the last task for this version and source is open: the same task, no second one (people re-read

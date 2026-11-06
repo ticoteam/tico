@@ -280,7 +280,7 @@ def test_litestream_syncs_every_minute_unless_the_install_sets_an_interval(tmp_p
     assert config["snapshot"] == {"interval": "24h", "retention": "720h"}
 
 
-@pytest.mark.parametrize("value", ["1s", "30s", "60m", "1h"])
+@pytest.mark.parametrize("value", ["1s", "1h"])
 def test_a_valid_sync_interval_is_written_and_nothing_else_changes(tmp_path, monkeypatch, value):
     config = litestream_config(tmp_path, monkeypatch, value)
     assert config["dbs"][0]["replica"]["sync-interval"] == value

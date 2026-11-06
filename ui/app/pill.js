@@ -177,6 +177,142 @@ function sendWayHold(btn, open, can = () => true) {
   }, true);
 }
 
+// ----------------------------------------------------------------- Follow and "Who it reaches"
+// The line under a thread's or a task's composer: Follow, and "Reaches N", which opens who the message would reach and
+// how (GET /v2/threads/{id}/reach). Posting never follows (D4): ticked, Follow follows the thread once the message is
+// sent. Its last choice is the person's per kind of thread, kept on the server (compose.follow.task, compose.follow.chat),
+// and it hides once you follow.
+const COMPOSE_FOLLOW = {task: null, chat: null};       // kind -> the kept choice; null until read
+const COMPOSE_FOLLOW_PICKS = {task: 0, chat: 0};
+const COMPOSE_REACHES = new Set();                     // the reach lines on screen
+const composeFootHTML = () => `<div class="p-foot" hidden>
+    <label class="p-follow" hidden><input type="checkbox" data-compose-follow>Follow</label>
+    <span class="p-reach-wrap"><button type="button" class="p-reach" aria-haspopup="dialog" aria-expanded="false" title="Who it reaches" hidden></button>
+      <div class="p-menu p-reach-pop" role="dialog" aria-label="Who it reaches" hidden></div></span></div>`;
+// The kept choice for `kind`, read once; a tick made while the read was out wins.
+async function composeFollowRead(kind) {
+  if (COMPOSE_FOLLOW[kind] !== null) return;
+  COMPOSE_FOLLOW[kind] = false;
+  if (typeof S === 'undefined' || !S.me?.cloud) return;
+  const picks = COMPOSE_FOLLOW_PICKS[kind];
+  const v = (await v2Get('/v2/preferences/compose.follow.' + kind))?.value;
+  if (COMPOSE_FOLLOW_PICKS[kind] !== picks || v !== true) return;
+  COMPOSE_FOLLOW[kind] = true;
+  for (const box of document.querySelectorAll(`input[data-compose-follow="${kind}"]`)) box.checked = true;
+}
+function composeFollowPick(kind, on) {
+  COMPOSE_FOLLOW[kind] = !!on; COMPOSE_FOLLOW_PICKS[kind]++;
+  for (const box of document.querySelectorAll(`input[data-compose-follow="${kind}"]`)) box.checked = !!on;
+  if (typeof S !== 'undefined' && S.me?.cloud) void post('/v2/preferences/compose.follow.' + kind, {value: !!on}).catch(() => {});
+}
+// Follow shows for `kind` ('task' or 'chat') while `offer` is true (you don't follow yet), ticked as last time.
+function composeFollowPaint(foot, kind, offer) {
+  const label = foot?.querySelector('.p-follow'), box = label?.querySelector('input');
+  if (!box) return;
+  label.hidden = !offer;
+  composeFootShow(foot);
+  if (!offer) return;
+  if (box.dataset.composeFollow !== kind) { box.dataset.composeFollow = kind; box.onchange = () => composeFollowPick(kind, box.checked); }
+  if (COMPOSE_FOLLOW[kind] === null) void composeFollowRead(kind);
+  box.checked = !!COMPOSE_FOLLOW[kind];
+}
+// The line shows only with something on it.
+const composeFootShow = foot => { foot.hidden = foot.querySelector('.p-follow').hidden && foot.querySelector('.p-reach').hidden; };
+// Whether Follow is showing and ticked: the send follows once it has gone.
+const composeFollowWanted = foot => { const l = foot?.querySelector('.p-follow'); return !!l && !l.hidden && !!l.querySelector('input')?.checked; };
+
+// What each one gets, in a word or two: a bot by the way, a person notified (threads.plan).
+function reachWord(r) {
+  if (r.mode === 'digest') return 'Digest';
+  if (!String(r.actor).startsWith('bot:')) return 'Notified';
+  if (r.mode === 'steer') return 'Now';
+  if (r.mode === 'queue') return 'After its turn';
+  if (r.mode === 'defer') return r.defer_for && r.defer_for !== 'never' ? `Next turn, within ${r.defer_for}` : 'Next turn';
+  return String(r.mode || '');
+}
+// The server reads only the @mentions in the words, so only the bit after each @ goes: typing elsewhere asks nothing,
+// and a long message never makes a long URL.
+function reachMentions(text) {
+  const t = String(text || ''), out = [];
+  for (let i = t.indexOf('@'); i >= 0 && out.length < 20; i = t.indexOf('@', i + 1)) out.push(t.slice(i, i + 64));
+  return out.join('\n');
+}
+// One composer's reach line. `src` gives the thread id, the way (a send_way mode, '' for the server's Steer, 'goal'
+// for no message), the words and the message replied to; `update()` after any of them changes: a short wait, then one
+// read at a time.
+function composeReach(foot, src) {
+  const R = {foot, src, want: '', got: '', busy: false, timer: 0, data: null, html: ''};
+  const btn = foot.querySelector('.p-reach'), pop = foot.querySelector('.p-reach-pop');
+  btn.onclick = () => composeReachOpen(R, pop.hidden);
+  foot.querySelector('.p-reach-wrap').addEventListener('keydown', ev => {
+    if (ev.key !== 'Escape' || pop.hidden) return;
+    ev.preventDefault(); ev.stopPropagation();
+    composeReachOpen(R, false); btn.focus();
+  }, true);
+  R.update = () => composeReachUpdate(R);
+  COMPOSE_REACHES.add(R);
+  return R;
+}
+// A press outside an open list closes it.
+document.addEventListener('pointerdown', ev => {
+  for (const R of COMPOSE_REACHES) {
+    if (!R.foot.isConnected) { COMPOSE_REACHES.delete(R); continue; }
+    if (!R.foot.querySelector('.p-reach-pop').hidden && !R.foot.querySelector('.p-reach-wrap').contains(ev.target)) composeReachOpen(R, false);
+  }
+});
+function composeReachKey(R) {
+  const id = R.src.thread(), mode = R.src.mode() || '';
+  if (!id || mode === 'goal') return '';
+  return JSON.stringify([id, mode, reachMentions(R.src.text()), R.src.reply?.() || '']);
+}
+function composeReachUpdate(R) {
+  const key = composeReachKey(R);
+  if (key === R.want) return;
+  R.want = key;
+  clearTimeout(R.timer);
+  if (!key) { R.data = null; R.got = ''; composeReachPaint(R); return; }
+  R.timer = setTimeout(() => void composeReachRead(R), R.got ? 350 : 0);
+}
+async function composeReachRead(R) {
+  if (R.busy || !R.want || R.want === R.got) return;
+  R.busy = true;
+  const key = R.want, [id, mode, text, reply] = JSON.parse(key), way = deliveryBody(mode);
+  const q = new URLSearchParams();
+  if (text) q.set('text', text);
+  if (way.delivery) q.set('delivery', way.delivery);
+  if (way.defer_for) q.set('defer_for', way.defer_for);
+  if (reply) q.set('in_reply_to', reply);
+  let data = null;
+  try { data = await get(`/v2/threads/${encodeURIComponent(id)}/reach${q.size ? '?' + q : ''}`, {fresh: true}); } catch {}
+  R.busy = false;
+  if (!R.foot.isConnected) { COMPOSE_REACHES.delete(R); return; }
+  R.got = key;
+  if (key !== R.want) { void composeReachRead(R); return; }     // the words or the way changed while it was out
+  R.data = Array.isArray(data?.reaches) ? data : null;
+  composeReachPaint(R);
+}
+function composeReachRowHTML(actor, word) {
+  return `<div class="p-reach-row" role="listitem">${actorAvatar(actor, 18)}<span class="p-reach-name">${esc(actorName(actor))}</span><span class="p-reach-mode">${esc(word)}</span></div>`;
+}
+function composeReachPaint(R) {
+  const btn = R.foot.querySelector('.p-reach'), pop = R.foot.querySelector('.p-reach-pop'), d = R.data;
+  btn.hidden = !d;
+  composeFootShow(R.foot);
+  if (!d) { composeReachOpen(R, false); return; }
+  const n = d.reaches.length, says = n ? `Reaches ${n}` : 'Reaches no one';
+  if (btn.textContent !== says) btn.textContent = says;
+  const rows = [...d.reaches.map(r => composeReachRowHTML(r.actor, reachWord(r) + (r.adds_reader ? ', can now see it' : ''))),
+    ...(d.outside || []).map(a => composeReachRowHTML(a, 'Not reached'))];
+  const html = rows.length ? `<div role="list">${rows.join('')}</div>` : '<p class="p-reach-none">No one gets this</p>';
+  if (R.html !== html) { pop.innerHTML = html; R.html = html; }
+}
+function composeReachOpen(R, open) {
+  const btn = R.foot.querySelector('.p-reach'), pop = R.foot.querySelector('.p-reach-pop');
+  if (!open && pop.hidden) return;
+  pop.hidden = !open || btn.hidden;
+  btn.setAttribute('aria-expanded', String(!pop.hidden));
+}
+
 // A phone or tablet typing on its screen keyboard: a coarse pointer, or touch on a narrow screen.
 const touchKeyboard = () => matchMedia('(pointer: coarse)').matches || (navigator.maxTouchPoints > 0 && innerWidth <= 760);
 // cfg.send replaces where Send goes (the Assistant page posts to /v2/assistant/messages); cfg.files === false

@@ -11,7 +11,7 @@ from backend.tests.test_tasks_board import api, get, headers, post, relate
 from backend import bot_settings as BS
 
 
-def test_engineering_children_drive_approved_roadmap_and_reopen(api):
+def _engineering_children_drive_approved_roadmap_and_reopen(api):
     roadmap = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve exports', 'body': 'Research exports.',
                                  'type': 'Product roadmap', 'step': 'Approved'})
     child = post(api, 'tasks', {'owner': 'ops', 'title': 'Build exports', 'body': 'Implement exports.',
@@ -42,7 +42,15 @@ def _dev_tickets(api):
     return dev
 
 
+def _unique(api, title):
+    """The stories share one install, and a task with the same title and owner is refused as a duplicate."""
+    seen = api.__dict__.setdefault('_titles', {})
+    seen[title] = seen.get(title, 0) + 1
+    return title if seen[title] == 1 else f'{title} ({seen[title]})'
+
+
 def _building(api, dev, title, tickets=2):
+    title = _unique(api, title)
     item = post(api, 'tasks', {'owner': 'cpo', 'title': title, 'body': 'Spec.', 'type': 'Product roadmap',
                                'step': 'Approved'})
     children = [post(api, 'tasks', {'owner': 'ops', 'title': f'{title} part {n}', 'body': 'Build it.',
@@ -71,8 +79,7 @@ def _roadmap_step(api, item):
     return get(api, 'tasks/' + item['id'])['task']['step']['name']
 
 
-def test_a_dev_ticket_closed_without_shipping_does_not_ship_the_roadmap_item(api):
-    dev = _dev_tickets(api)
+def _a_dev_ticket_closed_without_shipping_does_not_ship_the_roadmap_item(api, dev):
     item, (done, dropped) = _building(api, dev, 'Exports')
     _step(api, done, 'Done')
     assert _roadmap_step(api, item) == 'Building'
@@ -91,8 +98,7 @@ def test_a_dev_ticket_closed_without_shipping_does_not_ship_the_roadmap_item(api
     assert _roadmap_step(api, item) == 'Approved'
 
 
-def test_a_shipped_dev_ticket_its_requester_closes_still_counts_as_shipped(api):
-    dev = _dev_tickets(api)
+def _a_shipped_dev_ticket_its_requester_closes_still_counts_as_shipped(api, dev):
     item, children = _building(api, dev, 'Reports')
     for child in children:
         _step(api, child, 'Done')
@@ -121,7 +127,7 @@ def test_a_shipped_dev_ticket_its_requester_closes_still_counts_as_shipped(api):
     assert _roadmap_step(api, item) == 'Approved'
 
 
-def test_a_default_engineering_ticket_at_done_closed_ships_the_roadmap_item(api):
+def _a_default_engineering_ticket_at_done_closed_ships_the_roadmap_item(api):
     item = post(api, 'tasks', {'owner': 'cpo', 'title': 'Search', 'body': 'Spec.', 'type': 'Product roadmap',
                                'step': 'Approved'})
     child = post(api, 'tasks', {'owner': 'ops', 'title': 'Build search', 'body': 'Build it.',
@@ -135,6 +141,7 @@ def test_a_default_engineering_ticket_at_done_closed_ships_the_roadmap_item(api)
 
 
 def _ticket(api, dev, title, item=None, kind='parent', token='ana-test'):
+    title = _unique(api, title)
     body = {'owner': 'ops', 'title': title, 'body': 'Build it.', 'type': dev['id']}
     if item:
         body['relations'] = [{'task': item['id'], 'kind': kind}]
@@ -142,6 +149,7 @@ def _ticket(api, dev, title, item=None, kind='parent', token='ana-test'):
 
 
 def _item(api, title, step='Approved'):
+    title = _unique(api, title)
     return post(api, 'tasks', {'owner': 'cpo', 'title': title, 'body': 'Spec.', 'type': 'Product roadmap',
                                'step': step})
 
@@ -151,9 +159,8 @@ def _item_moves(api, item):
         return c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step'", (item['id'],)).fetchone()[0]
 
 
-def test_an_item_whose_only_engineering_link_is_blocked_by_moves_when_that_ticket_moves(api):
+def _an_item_whose_only_engineering_link_is_blocked_by_moves_when_that_ticket_moves(api, dev):
     from backend import task_relations as TR
-    dev = _dev_tickets(api)
     item = _item(api, 'Exports')
     ticket = _ticket(api, dev, 'Build exports')
     relate(api, item['id'], ticket['id'], 'blocked_by')
@@ -205,8 +212,7 @@ def test_an_item_whose_only_engineering_link_is_blocked_by_moves_when_that_ticke
     assert _roadmap_step(api, item) == 'Ready to ship'
 
 
-def test_the_first_ticket_in_progress_moves_the_item_and_a_second_does_not_move_it_again(api):
-    dev = _dev_tickets(api)
+def _the_first_ticket_in_progress_moves_the_item_and_a_second_does_not_move_it_again(api, dev):
     item = _item(api, 'Imports')
     child = _ticket(api, dev, 'Build imports', item)
     blocker = _ticket(api, dev, 'Check imports')
@@ -220,8 +226,7 @@ def test_the_first_ticket_in_progress_moves_the_item_and_a_second_does_not_move_
     assert _roadmap_step(api, item) == 'Building' and _item_moves(api, item) == before + 1
 
 
-def test_every_ticket_past_qa_makes_the_item_ready_to_ship_and_every_one_done_ships_it(api):
-    dev = _dev_tickets(api)
+def _every_ticket_past_qa_makes_the_item_ready_to_ship_and_every_one_done_ships_it(api, dev):
     item, (first, second) = _building(api, dev, 'Reports')
     _step(api, first, 'Pending Release')
     _step(api, second, 'In QA')
@@ -235,9 +240,8 @@ def test_every_ticket_past_qa_makes_the_item_ready_to_ship_and_every_one_done_sh
     assert _roadmap_step(api, item) == 'Shipped'
 
 
-def test_a_roadmap_item_moved_or_closed_by_hand_stays_until_a_ticket_moves(api):
+def _a_roadmap_item_moved_or_closed_by_hand_stays_until_a_ticket_moves(api, dev):
     """Tickets closed without shipping send the item back to Approved; a person can still ship or close it."""
-    dev = _dev_tickets(api)
     item, children = _building(api, dev, 'Chat')
     for child in children:
         _step(api, child, 'Closed')
@@ -253,8 +257,7 @@ def test_a_roadmap_item_moved_or_closed_by_hand_stays_until_a_ticket_moves(api):
     assert get(api, 'tasks/' + item['id'])['task']['status'] == 'closed'
 
 
-def test_a_closed_ticket_counts_toward_neither_ready_to_ship_nor_shipped(api):
-    dev = _dev_tickets(api)
+def _a_closed_ticket_counts_toward_neither_ready_to_ship_nor_shipped(api, dev):
     item, (kept, dropped) = _building(api, dev, 'Sharing')
     _step(api, dropped, 'Pending Release')
     _step(api, dropped, 'Closed')                   # closed after QA, but not shipped
@@ -271,9 +274,8 @@ def test_a_closed_ticket_counts_toward_neither_ready_to_ship_nor_shipped(api):
     assert _roadmap_step(api, item) == 'Approved'
 
 
-def test_an_item_follows_its_tickets_back(api):
+def _an_item_follows_its_tickets_back(api, dev):
     """The backward rule: on every change the item takes the step its tickets call for, back as well as forward."""
-    dev = _dev_tickets(api)
     item, (first, second) = _building(api, dev, 'Billing')
     for ticket in (first, second):
         _step(api, ticket, 'Done')
@@ -290,6 +292,24 @@ def test_an_item_follows_its_tickets_back(api):
     ticket = _ticket(api, dev, 'Prototype billing', spec)
     _step(api, ticket, 'In Progress')
     assert _roadmap_step(api, spec) == 'Spec'
+
+
+def test_a_roadmap_item_follows_its_tickets_forward_and_back(api):
+    dev = _dev_tickets(api)
+    _engineering_children_drive_approved_roadmap_and_reopen(api)
+    _a_default_engineering_ticket_at_done_closed_ships_the_roadmap_item(api)
+    _every_ticket_past_qa_makes_the_item_ready_to_ship_and_every_one_done_ships_it(api, dev)
+    _an_item_follows_its_tickets_back(api, dev)
+    _the_first_ticket_in_progress_moves_the_item_and_a_second_does_not_move_it_again(api, dev)
+
+
+def test_closed_hand_moved_and_blocked_by_tickets_move_the_roadmap_item_only_as_they_should(api):
+    dev = _dev_tickets(api)
+    _a_dev_ticket_closed_without_shipping_does_not_ship_the_roadmap_item(api, dev)
+    _a_shipped_dev_ticket_its_requester_closes_still_counts_as_shipped(api, dev)
+    _a_closed_ticket_counts_toward_neither_ready_to_ship_nor_shipped(api, dev)
+    _a_roadmap_item_moved_or_closed_by_hand_stays_until_a_ticket_moves(api, dev)
+    _an_item_whose_only_engineering_link_is_blocked_by_moves_when_that_ticket_moves(api, dev)
 
 
 def test_the_ready_to_ship_step_is_added_once_right_after_building(api):
@@ -834,10 +854,10 @@ def test_internal_text_never_becomes_public_text(api):
     assert all(text not in listed.text + shown for text in ('jane@', '$40k', 'Keep Acme happy'))
 
 
-def test_first_version_copies_leave_private_tasks_and_the_product_type_turns_private(api):
+def _first_version_copies_leave_private_tasks_and_the_product_type_turns_private(api):
     from backend import roadmaps as R
     hidden = post(api, 'tasks', {'owner': 'cpo', 'title': 'Old idea', 'body': 'Internal notes', 'type': 'Product roadmap'})
-    shown = post(api, 'tasks', {'owner': 'cpo', 'title': 'Shown idea', 'body': 'Shown notes', 'type': 'Product roadmap',
+    shown = post(api, 'tasks', {'owner': 'cpo', 'title': 'Shown idea (first)', 'body': 'Shown notes', 'type': 'Product roadmap',
                                'visibility': 'public', 'public_title': 'Shown idea', 'public_summary': 'Shown notes'})
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM registry_metadata WHERE key='roadmaps_explicit_public_text'")
@@ -852,7 +872,7 @@ def test_first_version_copies_leave_private_tasks_and_the_product_type_turns_pri
         assert H.type_get(c, 'product-roadmap')['default_visibility'] == 'public'
 
 
-def test_first_version_copies_edited_since_or_published_at_creation_are_cleared(api):
+def _first_version_copies_edited_since_or_published_at_creation_are_cleared(api):
     from backend import roadmaps as R
     edited = post(api, 'tasks', {'owner': 'cpo', 'title': 'Old title', 'body': 'Old notes', 'type': 'Product roadmap'})
     copied = post(api, 'tasks', {'owner': 'cpo', 'title': 'Acme churn', 'body': 'jane@acme.example', 'type': 'Product roadmap'})
@@ -892,7 +912,7 @@ def test_first_version_copies_edited_since_or_published_at_creation_are_cleared(
     assert api.get('/public/roadmaps/roadmap/tasks/' + copied['id']).status_code == 404
 
 
-def test_first_version_copies_are_cleared_per_field_when_only_the_public_title_was_rewritten(api):
+def _first_version_copies_are_cleared_per_field_when_only_the_public_title_was_rewritten(api):
     from backend import roadmaps as R
     shown = post(api, 'tasks', {'owner': 'cpo', 'title': 'D', 'body': 'secret internal body', 'type': 'Product roadmap'})
     hidden = post(api, 'tasks', {'owner': 'cpo', 'title': 'E', 'body': 'other internal body', 'type': 'Product roadmap'})
@@ -921,6 +941,13 @@ def test_first_version_copies_are_cleared_per_field_when_only_the_public_title_w
                                "AND note LIKE 'Cleared:%'", (shown['id'],)).fetchone()) == ('secret internal body', '')
         assert c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='visibility' AND note LIKE 'Unpublished:%'",
                          (retitled['id'],)).fetchone()
+
+
+def test_first_version_copies_are_cleared_once_and_only_what_was_a_copy(api):
+    # The first story leaves the Product roadmap type public by default, so it runs last.
+    _first_version_copies_are_cleared_per_field_when_only_the_public_title_was_rewritten(api)
+    _first_version_copies_edited_since_or_published_at_creation_are_cleared(api)
+    _first_version_copies_leave_private_tasks_and_the_product_type_turns_private(api)
 
 
 def test_a_requester_token_withdraws_after_unlabel_disable_and_delete(api):
@@ -1083,7 +1110,7 @@ def test_suggestions_go_to_the_chosen_then_automatic_bot_and_never_an_archived_o
     turned_away()
 
 
-def test_suggestions_receiver_order_and_states(api):
+def _suggestions_receiver_order_and_states(api):
     with api.app.state.store.transaction() as c:
         BS.update(c, 'cpo', {'template': 'product-manager'})
         BS.update(c, 'cmo', {'template': 'product-lead'})
@@ -1106,7 +1133,7 @@ def test_suggestions_receiver_order_and_states(api):
     assert receiver('ops', ops='archived', cpo='archived', cmo='archived') == (None, 'chosen_archived')
 
 
-def test_only_owners_and_admins_choose_the_suggestions_bot_and_a_type_manager_stays_fixed(api):
+def _only_owners_and_admins_choose_the_suggestions_bot_and_a_type_manager_stays_fixed(api):
     post(api, 'roadmaps/settings', {'suggestions_bot': 'cpo'}, token='ben-test', expected=403)
     assert get(api, 'roadmaps/settings', token='ben-test')['suggestions_bot'] is None
     assert 'No active bot' in post(api, 'roadmaps/settings', {'suggestions_bot': 'nobody'}, expected=422)['error']['detail']
@@ -1147,3 +1174,8 @@ def test_a_new_step_on_a_private_by_default_type_has_no_public_name_until_given_
     hidden = post(api, f"task-types/{open_type['id']}", {'default_visibility': 'private',
                                                        'steps': keep + [{'name': 'Legal review', 'status': 'review'}]})['type']
     assert {s['name']: s['public_name'] for s in hidden['steps']} == {'Drafted': 'Drafted', 'Legal review': ''}
+
+
+def test_who_may_choose_the_suggestions_bot_and_which_bot_receives_them(api):
+    _only_owners_and_admins_choose_the_suggestions_bot_and_a_type_manager_stays_fixed(api)
+    _suggestions_receiver_order_and_states(api)

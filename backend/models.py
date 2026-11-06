@@ -1305,6 +1305,24 @@ class DiskReadiness(Contract):
     free_bytes: int = Field(ge=0)
 
 
+class DiskCleanupClass(Contract):
+    # tmp, finished_task_cache or git (runner-rs/src/disk_clean.rs Class)
+    kind: str = Field(max_length=40)
+    count: int = Field(ge=0)
+    bytes: int = Field(ge=0)
+
+
+class DiskCleanupReadiness(Contract):
+    """The last clean-up the computer ran by itself on a low workspace volume (runner-rs/src/disk_clean.rs)."""
+    at: str = Field(max_length=40)
+    free_before_bytes: int = Field(ge=0)
+    free_after_bytes: int = Field(ge=0)
+    low_bytes: int = Field(ge=0)
+    freed_bytes: int = Field(ge=0)
+    classes: list[DiskCleanupClass] = Field(default_factory=list, max_length=10)
+    still_low: StrictBool = False
+
+
 class ContainerExecReadiness(Contract):
     """A throwaway container start on the computer (runner-rs/src/readiness_extra.rs)."""
     ok: StrictBool
@@ -1368,6 +1386,8 @@ class StructuredReadiness(Contract):
     worktree_recovery: bool | None = None
     schema_version: Literal[1] = 1
     disk: DiskReadiness | None = None
+    # Sent once the computer has cleaned up a low disk by itself; an older server's 422 drops it for ten minutes.
+    disk_cleanup: DiskCleanupReadiness | None = None
     # Bots run as their own user here (runner-rs/src/isolation.rs), so a Tico model may run (backend/models_preset.py).
     isolated: bool | None = None
     # Not isolated, but a Tico cloud machine: one company's trust group, whose Tico models run on the runner's relay
@@ -1395,7 +1415,7 @@ class StructuredReadiness(Contract):
         data = handler(self)
         if data.get("disk") is None:
             data.pop("disk", None)
-        for field in ("container_exec", "github_auth", "browser_launch", "engine", "screen", "appdriver"):
+        for field in ("disk_cleanup", "container_exec", "github_auth", "browser_launch", "engine", "screen", "appdriver"):
             if data.get(field) is None:
                 data.pop(field, None)
         if not data.get("recent_errors"):
@@ -1477,7 +1497,8 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
-    # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
+    # The assignment_* values name the retired temporary assignments (#420), and memory_tidy_packets_v1 the retired
+    # Nightly memory tidy pilot; a runner still sends them.
     capabilities: list[Literal[
         "assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1",
         "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1",
@@ -2655,16 +2676,9 @@ class Empty(Contract):
     pass
 
 
-class MemoryTidyPilot(Contract):
-    bot: str = Field(min_length=1, max_length=100)
-    model: str = Field(min_length=1, max_length=100)
-    effort: Literal["low"] = "low"
-
-
 class SystemRoutineUpdate(Contract):
     """One system routine's switch, schedule preset or daily time (backend/system_routines.py); only what is sent
     changes."""
-    pilots: list[MemoryTidyPilot] | None = Field(default=None, max_length=3)
     on: bool | None = None
     preset: Literal["15m", "hourly", "4h", "daily", "business"] | None = None
     at: str | None = Field(default=None, max_length=5)
