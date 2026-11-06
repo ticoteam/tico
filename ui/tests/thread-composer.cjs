@@ -588,8 +588,9 @@ async function followReach(browser) {
     await reachBtn.click();
     const said = loc => loc.locator('.p-reach-row').evaluateAll(xs => xs.map(x => [x.querySelector('.p-reach-name').textContent, x.querySelector('.p-reach-mode').textContent]));
     assert.deepEqual(await said(pop), [['Engineering Manager', 'Now']]);
-    await pick(page, 'queue');
+    await page.locator('#bot-thread .thv-scroll, #bot-thread').first().dispatchEvent('pointerdown');
     assert.equal(await pop.isHidden(), true, 'a press elsewhere closes the list');
+    await pick(page, 'queue');
     await page.waitForFunction(() => document.querySelector('#bot-thread .p-reach-pop .p-reach-mode')?.textContent === 'After its turn');
     assert.equal(api.reachReads.at(-1).delivery, 'queue', 'a new way asks again');
     // Typing asks after a pause, one read at a time, and only the @mentions go.
