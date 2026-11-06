@@ -16,7 +16,6 @@ interface Window {
   __callLeaveTimeoutMs?: number;
   threadHref: any;
   threadRowHref: any;
-  __TICO_OVERVIEW_TEST_PROBE__?: any;
 }
 
 /** Vendored marked.min.js, loaded by a plain <script> in index.html. */
