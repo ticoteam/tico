@@ -55,7 +55,14 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 
   await page.goto('https://tico-ui.test/#/updates');
   await page.waitForFunction(() => S.v2.needsVersion === 'v1' && THREADS.needsSeen === 'v1' && liveConnected() && THREADS.on && !THREADS.loading, null, {timeout: t(8000)});
-  await quiet();
+  // Adding the threads topic restarts the live stream, and that restart can read the list once more: the reads settle
+  // before the reconnect is counted, so a slow restart is not taken for a read the reconnect caused.
+  for (let still = 0, last = ''; still < t(1500);) {
+    const now = JSON.stringify(reads);
+    if (now === last) still += 50; else { still = 0; last = now; }
+    await page.waitForTimeout(50);
+  }
+  await page.waitForFunction(() => !THREADS.loading && LIVE.readyTopics?.includes('threads'), null, {timeout: t(5000)});
 
   // The first connect named v1 and the list was read (the wait above). A reconnect naming it: nothing is read again.
   let before = {...reads};
