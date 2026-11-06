@@ -5406,7 +5406,7 @@ def create_app(settings=None):
         msg = H.task_comment(c, who.actor, task_id, text, wake=way != "defer", ask=ask, public=body.public,
                              approval_id=body.approval_id, extra_refs=extra or None,
                              way=None if ask else way, defer_for=defer_for, people_notified=people,
-                             delegate=directs and way != "defer", reach=who.role == "bot")
+                             delegate=directs and way != "defer", reach=who if who.role == "bot" else None)
         due = None
         # The bot the comment went to first: the follower it was for, or the bot its @mention reached.
         reached = msg.get("recipient_id") if H.is_bot(msg.get("recipient_id")) else None

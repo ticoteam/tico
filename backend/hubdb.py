@@ -6034,7 +6034,7 @@ def task_ask_recipient(conn, actor, row, ask):
 
 @private_task_write
 def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=None, answer_to=None, answer_text=None,
-                 public=False, approval_id=None, way=None, defer_for=None, delegate=None, reach=False,
+                 public=False, approval_id=None, way=None, defer_for=None, delegate=None, reach=None,
                  people_notified=False):
     """A comment on a task: one message in the task's thread, tagged with the task, from whoever wrote it. It goes as
     any post there does (threads.post): to whom it addresses (its @mentions, the author it replies to) and to the
@@ -6043,8 +6043,8 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     nobody following is notified. A bot's comment flagged needs-action steers whatever `wake` says (bot_to_bot).
     `people_notified`: a Defer never that binds the bots only (a reader who may not wake them: people are notified as
     their level says). `delegate`: whether a person's comment delegates the task to the bots it wakes (default: `wake`;
-    only one who may direct the task does). `reach`: a bot's own write through the API, checked against its reach as a
-    thread post is (threads.post)."""
+    only one who may direct the task does). `reach`: the bot's Identity when this is its own write through the API, so
+    whoever the comment reaches is checked against the bot's reach as a thread post is (reach.check_thread)."""
     _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
@@ -6088,7 +6088,10 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         owner = row["owner_id"]
         to = owner if ((actor == KEEPER or not task_followers.thread_id(conn, row)) and is_bot(owner) and owner != actor
                        and task_private_readable(conn, owner, row)) else None
-        msg = threads.post(conn, actor, conv["id"], text, refs=refs, to_actor=to, reach=reach)
+        if reach is not None:
+            from . import reach as R
+            R.check_thread(conn, reach, conv["id"], text)
+        msg = threads.post(conn, actor, conv["id"], text, refs=refs, to_actor=to)
     from . import wake_rules
     wake_rules.own_comment(conn, msg, row)        # token saving 2/9: a bot's own comment never wakes it; log the skip
     hook(conn, "task.commented", task_id, lambda: _task_facts(conn, task_id, actor, comment_id=msg["id"]), actor, revision=msg["id"])
