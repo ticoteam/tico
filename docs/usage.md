@@ -1,7 +1,7 @@
 # Usage
 
-Account menu > **Usage** shows what the bots' model runs cost, as an estimate: the tokens each run used, priced at the provider's public
-list price. It is not an invoice.
+Account menu > **Usage** shows what the bots' model runs cost, as an estimate: the tokens each run used. Most models are priced at the
+provider's public list price; Terra is priced at Tico's approved rate, not the list price. It is not an invoice.
 
 ## Where the numbers come from
 
