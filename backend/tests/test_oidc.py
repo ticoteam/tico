@@ -616,11 +616,11 @@ def test_a_public_mail_domain_is_never_admitted_by_default_with_a_gmail_owner(si
     assert _humans_with(signin, "pat@gmail.com") == [] and signin.sessions() == []
 
 
-@pytest.mark.parametrize("prompt,sent", [("select_account", "select_account"), ("login", "login"), ("consent", None)])
-def test_login_passes_only_the_two_prompts_to_the_provider(signin, prompt, sent):
-    began = signin.api.get("/auth/login", params={"prompt": prompt}, follow_redirects=False)
-    query = {k: v[0] for k, v in parse_qs(urlparse(began.headers["location"]).query).items()}
-    assert query.get("prompt") == sent
+def test_login_passes_only_the_two_prompts_to_the_provider(signin):
+    for prompt, sent in (("select_account", "select_account"), ("login", "login"), ("consent", None)):
+        began = signin.api.get("/auth/login", params={"prompt": prompt}, follow_redirects=False)
+        query = {k: v[0] for k, v in parse_qs(urlparse(began.headers["location"]).query).items()}
+        assert query.get("prompt") == sent, prompt
 
 
 def _roster_with_bot_and_sign_in_off(auth):

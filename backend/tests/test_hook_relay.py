@@ -444,11 +444,12 @@ def test_the_wake_address_needs_the_gateway_key_and_never_leaves_a_rehearsal(api
     assert hq.calls == [] and get(api, "hooks/wake-url")["url"] is None
 
 
-@pytest.mark.parametrize("url", ["http://wake.acme.example/start", "https://ana:pw@wake.acme.example/start", "ftp://wake.acme.example",
-                                 "https:///start", "wake.acme.example", "", "https://wake.acme.example/a b"])
-def test_a_wake_address_that_is_not_plain_https_is_refused_before_hq_is_asked(api, hq, url):
-    put(api, "hooks/wake-url", {"url": url}, expected=422)
-    assert hq.calls == []
+def test_every_non_plain_https_wake_address_is_refused_before_hq_is_asked(api, hq):
+    urls = ["http://wake.acme.example/start", "https://ana:pw@wake.acme.example/start", "ftp://wake.acme.example",
+            "https:///start", "wake.acme.example", "", "https://wake.acme.example/a b"]
+    for url in urls:
+        put(api, "hooks/wake-url", {"url": url}, expected=422)
+        assert hq.calls == [], url
 
 
 def test_an_address_hq_refuses_is_a_422_and_leaves_the_old_one(api, hq):

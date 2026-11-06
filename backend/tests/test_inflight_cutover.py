@@ -61,8 +61,11 @@ def upgraded(tmp_path):
     conn.close()
 
 
-def test_an_approval_asked_before_the_cutover_is_one_decision_and_is_spent_once(upgraded):
+def test_approvals_asked_and_decided_before_the_cutover_are_each_spent_once_after_it(upgraded):
+    """Both approvals share one upgraded hub (the fixture is per test, so one boot covers both stories). They touch
+    different rows, so each story's checks run in full, in order."""
     conn = upgraded
+    # An approval asked before the cutover is one decision and is spent once.
     open_ask = H.approval(conn, "appr-open")
     assert open_ask["payload"] == RELEASE and open_ask["payload_hash"] == released_hash(RELEASE)
     assert H.payload_hash(RELEASE) == released_hash(RELEASE)            # the same payload hashes the same way
@@ -76,15 +79,12 @@ def test_an_approval_asked_before_the_cutover_is_one_decision_and_is_spent_once(
     with pytest.raises(H.Refused) as twice:
         H.approval_consume(conn, CMO, "appr-open")
     assert twice.value.rule == "consumed"
-
-
-def test_an_approval_decided_before_the_cutover_is_spent_after_it_with_its_delegation(upgraded):
-    conn = upgraded
+    # An approval decided before the cutover is spent after it, with its delegation.
     approved = H.approval(conn, "appr-yes")
-    assert approved["decision"] == "approved" and approved["consumed_at"] is None
-    assert approved["decided_for"] == {"cited": ["msg-9"], "for": ANA, "run": "run-1"}
+    assert approved["decision"] == "approved" and approved["consumed_at"] is None, "appr-yes"
+    assert approved["decided_for"] == {"cited": ["msg-9"], "for": ANA, "run": "run-1"}, "appr-yes"
     spent = H.approval_consume(conn, CMO, "appr-yes")
-    assert spent["consumed_at"] and spent["decided_for"] == approved["decided_for"]
+    assert spent["consumed_at"] and spent["decided_for"] == approved["decided_for"], "appr-yes"
 
 
 def test_a_webhook_send_queued_before_the_run_rename_is_delivered_as_a_run_and_signed(api, net):

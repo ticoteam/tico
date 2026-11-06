@@ -289,27 +289,28 @@ def test_t4_a_persons_message_comment_and_approval_always_wake_a_parked_bot(api)
         assert skips(c) == []
 
 
-@pytest.mark.parametrize("kind,refs,body,key", [
-    ("say", {}, "Hi", "person"),
-    ("ask", {}, "Which release?", "ask"),
-    ("answer", {}, "v0.3.62", "ask"),
-    ("steer", {}, "Stop and fix the tests", "ask"),
-    ("notice", {"approval": "a1"}, "Approved", "approval"),
-    ("notice", {"questions": [{"id": "q"}]}, "Pick one", "approval"),
-    ("notice", {"needs_action": True}, "Blocked on you", "needs_action"),
-    ("notice", {}, "Review done.\nVERDICT: changes PR #12 head " + "a" * 40, "gate"),
-])
-def test_each_always_wake_case_is_never_filtered_even_on_a_parked_task_by_its_own_bot(api, kind, refs, body, key):
+def test_each_always_wake_case_is_never_filtered_even_on_a_parked_task_by_its_own_bot(api):
+    # One story for every always-wake case, each on its own fresh parked task (one setup, not one per case).
+    cases = [
+        ("say", {}, "Hi", "person"),
+        ("ask", {}, "Which release?", "ask"),
+        ("answer", {}, "v0.3.62", "ask"),
+        ("steer", {}, "Stop and fix the tests", "ask"),
+        ("notice", {"approval": "a1"}, "Approved", "approval"),
+        ("notice", {"questions": [{"id": "q"}]}, "Pick one", "approval"),
+        ("notice", {"needs_action": True}, "Blocked on you", "needs_action"),
+        ("notice", {}, "Review done.\nVERDICT: changes PR #12 head " + "a" * 40, "gate"),
+    ]
     setup(api)
     with api.app.state.store.transaction() as c:
-        task, _ = parked_task(c)
-        actor = "human:ana" if key == "person" else H.KEEPER
-        cause = "human:ana" if key == "person" else "bot:cpo"
-        assert W.always_wakes(c, actor, "bot:cpo", kind, refs, body, cause) == key
-        assert W.rule_for(c, actor, "bot:cpo", kind, {**refs, "task": task["id"]}, body, task, cause) is None
+        for n, (kind, refs, body, key) in enumerate(cases):
+            task, _ = parked_task(c, title=f"Build case {n}")
+            actor = "human:ana" if key == "person" else H.KEEPER
+            cause = "human:ana" if key == "person" else "bot:cpo"
+            assert W.always_wakes(c, actor, "bot:cpo", kind, refs, body, cause) == key, body
+            assert W.rule_for(c, actor, "bot:cpo", kind, {**refs, "task": task["id"]}, body, task, cause) is None, body
 
 
-@pytest.mark.parametrize("parked_on", ["blocked_by", "wake_once"])
 def test_a_reply_the_parked_bot_waits_on_wakes_it(api, parked_on):
     # A plain reply passes bot_to_bot.can_wait as urgent; the parked rule must not then hold it.
     setup(api)

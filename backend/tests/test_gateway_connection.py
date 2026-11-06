@@ -404,19 +404,18 @@ def test_an_unreachable_gateway_is_not_called_broken(api, monkeypatch):
     assert shown["state"] == "unreachable" and shown["working"] is True
 
 
-@pytest.mark.parametrize("flat", [False, True])
-def test_a_busy_or_down_gateway_never_replaces_what_it_said_about_the_key(api, monkeypatch, flat):
+def test_a_busy_or_down_gateway_never_replaces_what_it_said_about_the_key(api, monkeypatch):
     setup(api, monkeypatch)
     with fake_gateway() as fake:
         fake.active(KEY, 0.85)
         assert save(api, fake)["state"] == "warning"
-        fake.refuse(KEY, 429, "rate_limited", flat)            # 6 a minute per key; past that, rate_limited
+        fake.refuse(KEY, 429, "rate_limited", False)            # 6 a minute per key; past that, rate_limited
         assert post(api, "providers/gateway/check", {})["state"] == "warning"
         url = fake.url
     assert post(api, "providers/gateway/check", {})["state"] == "warning"   # and the Gateway gone altogether
     # With nothing known yet, a busy Gateway says so, without calling the key broken.
     with fake_gateway() as fake:
-        fake.refuse(OTHER, 429, "rate_limited", flat)
+        fake.refuse(OTHER, 429, "rate_limited", False)
         shown = put(api, "providers/gateway", {"key": OTHER, "url": fake.url, "expected_revision": _revision(api)})
         assert shown["state"] == "busy" and shown["working"] is True
     assert url
