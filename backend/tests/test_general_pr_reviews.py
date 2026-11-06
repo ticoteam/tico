@@ -224,7 +224,7 @@ def test_later_public_pass_keeps_the_findings_source_audience(api, private, titl
 
 
 @pytest.mark.parametrize("private,other_merger", [
-    pytest.param(True, False, id="private-parent-wake"), pytest.param(False, True, id="public-merge-task")])
+    pytest.param(True, False, id="private-parent-wake"), pytest.param(True, True, id="private-merge-task")])
 def test_delayed_merge_notice_keeps_its_approval_sources(api, private, other_merger):
     from backend import task_privacy
     from backend.tests.test_api import unrelated_task_managers
@@ -406,19 +406,17 @@ def engineering_pr_pair(api):
         return task, H.task_links(c, task["id"])
 
 
-@pytest.mark.parametrize("queued", [True], ids=["queued"])
-def test_engineering_without_check_steps_reviews_each_green_pr_once(api, monkeypatch, queued):
+def test_engineering_without_check_steps_reviews_each_green_pr_once(api, monkeypatch):
     from backend import review_gate
     task, prs = engineering_pr_pair(api)
     snapshots = {p["id"]: {**H._json(p["detail"], {}), "at": H.now()} for p in prs}
     monkeypatch.setattr(review_gate, "snapshot", lambda service, links: snapshots)
-    if queued:
-        with api.app.state.store.transaction() as c:
-            c.execute("UPDATE runner_states SET last_seen_at=?", (H.shift(H.now(), minutes=-10),))
-        P.retry(api.app.state.store, service=api.app.state.github_app)
-        with api.app.state.store.transaction() as c:
-            assert len(P.waiting(c, task["id"])) == 2
-            c.execute("UPDATE runner_states SET last_seen_at=?", (H.now(),))
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=?", (H.shift(H.now(), minutes=-10),))
+    P.retry(api.app.state.store, service=api.app.state.github_app)
+    with api.app.state.store.transaction() as c:
+        assert len(P.waiting(c, task["id"])) == 2
+        c.execute("UPDATE runner_states SET last_seen_at=?", (H.now(),))
     filed = P.retry(api.app.state.store, service=api.app.state.github_app)
     assert len(filed) == 2
     reviews = children(api, task)
@@ -591,7 +589,8 @@ def test_ambiguous_legacy_number_is_logged_and_bound_review_is_reused(api, caplo
 
 @pytest.mark.parametrize("reviews,case,head", [
     pytest.param(1, "hold", HEAD, id="hold-merge-next"), pytest.param(2, "hold", HEAD, id="hold-review-2-next"),
-    pytest.param(1, "backfill", HEAD, id="backfill-merge-next"), pytest.param(1, "old-head", OLD, id="old-head-merge-next")])
+    pytest.param(1, "backfill", HEAD, id="backfill-merge-next"), pytest.param(1, "backfill-done", HEAD, id="backfill-done-merge-next"),
+    pytest.param(1, "old-head", OLD, id="old-head-merge-next")])
 def test_undelivered_approval_replays_once_at_current_head(api, monkeypatch, reviews, case, head):
     setup(api, reviews=reviews)
     task = task_pr(api)

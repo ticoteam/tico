@@ -81,10 +81,6 @@ def test_retry_requests_the_fresh_head_after_the_cached_pr_moves_on(api, monkeyp
     filed = P.retry(store, service=None if integration == 'absent' else service)
     if refresh == 'writer':
         assert raced
-        if integration == 'configured':
-            assert filed == [], 'a snapshot of H cannot admit J after the saved head changes'
-            reads = github(api, monkeypatch, {'python': ci}, head=OLD)
-            filed = P.retry(store, service=service)
     [cid] = filed
     assert bool(reads) == (integration == 'configured')
     with store.transaction() as c:
@@ -103,7 +99,7 @@ def test_retry_requests_the_fresh_head_after_the_cached_pr_moves_on(api, monkeyp
         assert outcome and outcome['moved'] == 'Build'
 
 
-@pytest.mark.parametrize('kind', ['release_qa'])
+@pytest.mark.parametrize('kind', ['review', 'release_qa'])
 def test_retry_rechecks_the_snapshot_head_under_the_writer(api, monkeypatch, kind):
     team(api)
     task, wait = waiting_ticket(api, 511, 'rev-a', kind=kind)

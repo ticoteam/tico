@@ -191,7 +191,6 @@ CHANGE_VERB_NOT_RUNS = [f"Finish {form} production acceptance tests" for form in
 
 
 _ORDINARY = [
-
     ("Build the thing", False), ("QA: orphan review", False),
     ("Implement acceptance criteria", False), ("Implement acceptance criteria", True),
     ("Release checklist planning", False), ("Post-release documentation", True),
@@ -229,6 +228,12 @@ _ORDINARY = [
 ]
 
 
+RELEASE_QA_TITLES = [
+    ("Post Release QA pass: v1.2.3", False), ("Post Launch QA: runtime installation", False),
+    ("Post Release QA sweep", False), ("Post-release checks: shared question card", True),
+    ("Hosting preview: carry remaining installed-build and live acceptance", True),
+    ("Review 2: legacy request", True), ("Security: legacy request", True),
+]
 ORDINARY_TASKS = [p.values if hasattr(p, "values") else p for p in _ORDINARY]
 KEPT = [("Build the thing", False), ("Implement acceptance criteria", True),
         ("Run production acceptance dashboard", True)]
@@ -282,6 +287,20 @@ def test_the_title_classifier_reads_every_run_as_review_work_and_every_ordinary_
             made = H.task_create(c, "bot:ops", title, "x", "bot:checker", parent_id=parent["id"])
             assert P.is_review_task(c, H.task(c, made["id"])), title
             assert P.is_review_task(c, {"title": title, "owner_id": "bot:checker"}, parent_id=parent["id"]), title
+        # The release-QA titles the end-to-end table above no longer repeats: each classifies the same through is_review_task.
+        for title, child in RELEASE_QA_TITLES:
+            parent_for = parent["id"] if child else None
+            made = H.task_create(c, "bot:ops", title, "x", "bot:checker", parent_id=parent_for)
+            assert P.is_review_task(c, H.task(c, made["id"])), title
+            assert P.is_review_task(c, {"title": title, "owner_id": "bot:checker"}, parent_id=parent_for), title
+        for step, kind in (("Review 1", "review"), ("Review 2", "review"), ("In QA", "qa")):
+            step_id = "unit-" + step.replace(" ", "-").lower()
+            c.execute("INSERT INTO task_steps(id,type_id,name,position,status,flow) VALUES(?,'general',?,98,'review',?)",
+                      (step_id, step, json.dumps({"check": kind})))
+            holder = H.task_create(c, "bot:ops", "Build it " + step, "x", "bot:cpo")
+            c.execute("UPDATE tasks SET step_id=? WHERE id=?", (step_id, holder["id"]))
+            assert P.is_review_task(c, {"title": "Verify the change", "owner_id": "bot:checker"},
+                                    parent_id=holder["id"]), step
         for title, child in ORDINARY_TASKS:
             row = {"title": title, "owner_id": "bot:cpo"}
             assert not P.is_review_task(c, row, parent_id=parent["id"] if child else None), (title, child)

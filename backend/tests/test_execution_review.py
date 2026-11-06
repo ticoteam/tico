@@ -121,13 +121,12 @@ def test_a_reported_reset_holds_the_bot_until_then_and_the_tick_releases_it(api,
                          (seq,)).fetchone()
 
 
-@pytest.mark.parametrize("reset", ["days9"])
-def test_an_unbelievable_reported_reset_keeps_the_default_wait(api, reset):
+def test_an_unbelievable_reported_reset_keeps_the_default_wait(api):
     from backend.execution import LIMIT_COOLDOWN, limit_cooldown
     from backend.store import H
     machine, message, attempt = setup_attempt(api)
     now = H.now()
-    at = {"days9": H.shift(now, days=9), "past": H.shift(now, minutes=-10), "naive": H.shift(now, hours=1)[:19]}[reset]
+    at = H.shift(now, days=9)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "odd-reset"}, machine["token"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": 0, "limited": True,
          "limit_resets_at": at, "text": ""}, machine["token"])
@@ -2133,6 +2132,7 @@ def test_restart_uses_start_evidence_and_does_not_hold_internal_shell_writes(api
 
 
 @pytest.mark.parametrize('tool,label', [
+    ('mcp__hub__hub_release_now', 'publish release'),
     ('mcp__hub__hub_webhook_send', 'send webhook'),
 ])
 def test_restart_with_hub_publish_or_send_call_is_held_and_names_it(api, tool, label):

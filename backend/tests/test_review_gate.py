@@ -244,10 +244,10 @@ def test_review_child_without_a_pr_cannot_queue_the_reviewer(api):
 
 def test_gate_consumes_each_agreed_receipt_source(api):
     for n, where in enumerate(['note', 'owner', 'keeper', 'child']):
-        _consumes_source(api, ticket(api) if n == 0 else _another_ticket(api, n), where)
+        _consumes_source(api, ticket(api) if n == 0 else another_ticket(api, n), where)
 
 
-def _another_ticket(api, n):
+def another_ticket(api, n):
     """One more ticket of the same type for a table of rows in one test, the only task holding the PR link."""
     with api.app.state.store.read() as c:
         typ = H.type_get(c, 'Dev tickets')

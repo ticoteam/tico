@@ -1061,9 +1061,17 @@ def fresh_work(api, token, n):
             new_task(api, f"Check the archive {n}", owner="scout"))
 
 
+def _named(label, call, *args):
+    """Run one loop case; a failed assert names the mutation or source in its message."""
+    try:
+        call(*args)
+    except AssertionError as error:
+        raise AssertionError(f"[{label}] {error}") from error
+
+
 def _every(api, external_work, mutations, case):
     for n, mutation in enumerate(mutations):
-        case(api, external_work if n == 0 else fresh_work(api, external_work[0], n), mutation)
+        _named(mutation, case, api, external_work if n == 0 else fresh_work(api, external_work[0], n), mutation)
 
 
 def test_external_message_mutations_check_the_stored_message_and_native_task(api, external_work):
@@ -1090,7 +1098,7 @@ def test_external_task_mutations_fence_the_explicit_task_and_allow_an_unheld_tas
     for n, mutation in enumerate(["snooze", "unsnooze", "check-back", "later", "defer", "relations",
                                   "reverse_relation", "wait_task", "wait_pr", "links", "unlink", "files",
                                   "edit", "delete_comment", "resolve", "answers", "ask", "update"]):
-        _task_mutation(api, token, mutation, n)
+        _named(mutation, _task_mutation, api, token, mutation, n)
 
 
 def test_notes_from_held_sources_stay_pending_and_unread_until_release(api, monkeypatch):
@@ -1099,4 +1107,4 @@ def test_notes_from_held_sources_stay_pending_and_unread_until_release(api, monk
     monkeypatch.setattr(threads, "NOTES_READ", 1)
     machine = task_bot(api, lanes=True)
     for n, source in enumerate(["task", "task_padded", "task_id", "task_room", "chat", "chat_blank_task"]):
-        _held_notes(api, machine, source, n)
+        _named(source, _held_notes, api, machine, source, n)

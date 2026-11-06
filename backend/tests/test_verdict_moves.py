@@ -998,3 +998,16 @@ def test_a_webhook_that_drops_a_non_passing_check_marks_the_head_before_any_full
         assert _link(api, task)["checks"] != "passing", n
     assert _link(api, task)["checks"] == state
     assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+
+
+def test_the_dropped_check_marker_keeps_the_pending_state_without_a_server():
+    """The pending arm of the dropped-check marker (the webhook tests above keep only the failing arm)."""
+    from backend import github
+    checks = {"shard 0": "pending", "shard 1": "passing"}
+    assert github._dropped(checks, {"shard 1"}) == "pending"
+    assert github._dropped({**checks, "shard 2": "failing"}, {"shard 1"}) == "failing"
+    assert github._dropped(checks, {"shard 0", "shard 1"}) is None
+    assert github._with_dropped("passing", "pending") == "pending"
+    assert github._with_dropped("pending", None) == "pending"
+    assert github._with_dropped("failing", "pending") == "failing"
+    assert github._with_dropped("passing", None) == "passing"

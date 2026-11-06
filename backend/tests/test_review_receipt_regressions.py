@@ -6,20 +6,8 @@ import pytest
 
 from backend import hubdb as H, test_receipts, review_gate
 from backend.tests.test_github import api, get, headers, hook, post, pr_event, PR
-from backend.tests.test_review_gate import HEAD, OLD, ticket, move
+from backend.tests.test_review_gate import HEAD, OLD, ticket, move, another_ticket
 from backend import bot_settings as BS
-
-
-def another_ticket(api, n):
-    """One more Dev ticket for a table of rows in one test: titled apart and the only task holding the PR link."""
-    with api.app.state.store.read() as c:
-        typ = H.type_get(c, 'Dev tickets')
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': f'Improve messages {n}', 'body': 'Build messages.',
-                              'type': typ['id'], 'step': 'In Progress', 'links': [PR]})
-    hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM task_links WHERE task_id<>?", (task['id'],))
-    return get(api, 'tasks/' + task['id'])['task']
 
 
 def github(api, monkeypatch, checks=(), statuses=()):

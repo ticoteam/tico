@@ -129,13 +129,12 @@ def test_done_tells_the_private_tasks_owner_and_its_wait_clears(api):
                for r in jobs), jobs
 
 
-@pytest.mark.parametrize("under", [True])
 @pytest.mark.parametrize("words", [
     "Background: the vendor's intake form posts every upload to the shared bucket before the chat setting is read.",
     "Comment",
     "Criteria",
 ])
-def test_words_copied_from_the_private_work_are_a_correction_naming_the_copy_check(api, under, words):
+def test_words_copied_from_the_private_work_are_a_correction_naming_the_copy_check(api, words):
     row = private_work(api)
     with api.app.state.store.transaction() as c:
         H.task_comment(c, "bot:cpo", row["id"], "Note for ops: the bucket lifecycle rule deletes refused uploads only "
@@ -147,20 +146,18 @@ def test_words_copied_from_the_private_work_are_a_correction_naming_the_copy_che
     elif words == "Criteria":
         words = "Done when the quarantine report lists every refused upload with its owner and the hour it was deleted."
     attempt = run_on(api)
-    correction(api, filed(row["id"] if under else None, body=words), attempt["token"], "copies 12 or more words")
+    correction(api, filed(row["id"], body=words), attempt["token"], "copies 12 or more words")
 
 
-@pytest.mark.parametrize("under", [True])
-def test_a_secret_shaped_value_is_a_correction_naming_that_check(api, under):
+def test_a_secret_shaped_value_is_a_correction_naming_that_check(api):
     row = private_work(api)
     attempt = run_on(api)
-    body = filed(row["id"] if under else None, body="Push the fix with token ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8")
+    body = filed(row["id"], body="Push the fix with token ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8")
     correction(api, body, attempt["token"], "secret-shaped")
 
 
-@pytest.mark.parametrize("under", [True])
 @pytest.mark.parametrize("carried", ["file", "attachment", "link"])
-def test_a_file_or_link_from_the_private_task_is_a_correction_naming_that_check(api, under, carried):
+def test_a_file_or_link_from_the_private_task_is_a_correction_naming_that_check(api, carried):
     row = private_work(api)
     url = "https://docs.acme.example/vendor-intake-review"
     with api.app.state.store.transaction() as c:
@@ -176,7 +173,7 @@ def test_a_file_or_link_from_the_private_task_is_a_correction_naming_that_check(
     extra = {"file": {"body": f"See {FILE} for the failing request."},
              "attachment": {"body": f"The attachment {blob} shows the failing request."},
              "link": {"links": [url]}}[carried]
-    correction(api, filed(row["id"] if under else None, **extra), attempt["token"], "file or link from a private task")
+    correction(api, filed(row["id"], **extra), attempt["token"], "file or link from a private task")
 
 
 def test_a_bot_that_only_reads_the_private_task_is_refused(api):
@@ -315,11 +312,10 @@ def test_a_role_name_gets_the_words_checks_as_sent_and_as_stored(api, under, nam
     assert _rows(api) == before
 
 
-@pytest.mark.parametrize("under", [True])
-def test_a_plain_role_still_files(api, under):
+def test_a_plain_role_still_files(api):
     row = private_work(api)
     attempt = run_on(api)
-    body = filed(row["id"] if under else None, roles={"Reviewer": ["doc-updater"]})
+    body = filed(row["id"], roles={"Reviewer": ["doc-updater"]})
     assert not dry_run(api, body, attempt["token"])
     made = post(api, "tasks", body, attempt["token"])
     assert get(api, "tasks/" + made["id"], bot_token(api, "finance"))["task"]["roles"] == {"reviewer": ["bot:doc-updater"]}
