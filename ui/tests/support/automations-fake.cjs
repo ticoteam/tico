@@ -285,6 +285,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
       }
     }
     if (p === '/api/v2/automations/question-sets') return json({sets: fx.question_sets});
+    if (p === '/api/v2/task-types') return json({types: fx.task_types || []});
     // A template fill saves nothing; like the hub it refuses an owner the viewer may not make an automation for (another
     // person) and one that can't hear the inbox (a group on an email address).
     if (p === '/api/v2/automations/templates') return json({templates: clone(TEMPLATES)});

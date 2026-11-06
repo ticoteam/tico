@@ -93,16 +93,21 @@ def test_created_action_cannot_start_a_same_or_alternate_rule_chain(api):
             assert all("maximum chain depth is one" in e["note"] for e in events)
 
 
-def test_sourceless_create_action_cannot_start_a_task_trigger_chain(api):
+def test_event_rule_created_task_can_start_a_task_trigger_chain(api):
     from backend import rules as R
-    rule(api, "webhook.received", "create_task", {"owner": "ops", "title": "From webhook"})
+    source = rule(api, "webhook.received", "create_task", {"owner": "ops", "title": "From webhook"})
     made = rule(api, action="create_task", params={"owner": "ops", "title": "Must not chain"})
     with api.app.state.store.transaction() as c:
         R.judge_event(c, "webhook.received", {"trigger": "synthetic", "delivery": "one"})
-        assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 2
         task = c.execute("SELECT id FROM tasks WHERE title='From webhook'").fetchone()
-        assert history(c, task[0])[0]["new"] == made["id"]
-        assert "maximum chain depth is one" in history(c, task[0])[0]["note"]
+        task_history = history(c, task[0])
+        assert task_history[0]["new"] == made["id"]
+        assert task_history[0]["new"] != source["id"]
+        assert "maximum chain depth is one" not in task_history[0]["note"]
+        child = c.execute("SELECT id FROM tasks WHERE title='Must not chain'").fetchone()
+        assert any(e["new"] == made["id"] and "maximum chain depth is one" in e["note"]
+                   for e in history(c, child[0]))
 
 
 def test_missing_bot_and_throwing_action_preserve_task_and_row_error_time(api, monkeypatch):
@@ -262,14 +267,16 @@ def test_scopes_and_all_five_conditions_match_task_owner_not_message_recipient(a
         assert not history(c, unmatched["id"])
 
 
-def test_decline_and_step_action_runs_only_after_final_task_write(api):
+@pytest.mark.parametrize("status", ["done", "declined"])
+def test_done_or_decline_step_action_does_not_start_an_entered_step_rule_in_the_same_chain(api, status):
     with api.app.state.store.transaction() as c:
         typ = task_type(c)
         task = make(c, type=typ["id"])
-    moved = rule(api, "task.declined", "move_step", {"step": "In QA"})
+    event = "task.done" if status == "done" else "task.declined"
+    moved = rule(api, event, "move_step", {"step": "In QA"})
     rule(api, "task.step_changed", when={"step": "In QA"}, params={"text": "Must not chain"})
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "human:ana", task["id"], status="declined", note="Declined")
+        H.task_update(c, "human:ana", task["id"], status=status, note=status.title())
         after = H.task(c, task["id"])
         assert after["status"] == "review" and after["step_id"] == next(s["id"] for s in typ["steps"] if s["name"] == "In QA")
         assert moved["id"] in after["note"] and "Must not chain" not in after["note"]

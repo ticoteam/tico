@@ -511,7 +511,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('input[data-fin-vb="GitHub"]').waitFor();
       await page.locator('input[data-fin-vb="GitHub"]').fill('950');
       await page.locator('input[data-fin-vb="GitHub"]').press('Enter');
-      await page.waitForTimeout(150);
+      await settled(() => actions(writes).at(-1)?.kind === 'budget_update'
+        && actions(writes).at(-1)?.payload?.budget_id === 'b-github');
       assert.deepEqual(actions(writes).at(-1), {kind: 'budget_update', payload: {budget_id: 'b-github', amount: 95000, effective_from: next + '-01'}},
         tag + ': a vendor budget changes from the month shown');
       assert.equal(await page.locator('input[data-fin-vb="Figma"]').count(), 0, tag + ': a quarterly vendor budget is not edited as a month');

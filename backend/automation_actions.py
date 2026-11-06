@@ -262,6 +262,7 @@ def _actor(c, auto):
 
 
 def _create_task(c, auto, run_id, args, values, step=None):
+    task_of(c, auto, values)
     title = " ".join(_text(args, "title").split())[:300]
     if not title:
         return _fail("create_task needs a title")
@@ -470,6 +471,7 @@ def _webhook(c, auto, kind, hook, data):
 
 
 def _call_webhook(c, auto, run_id, args, values):
+    task_of(c, auto, values)
     return _webhook(c, auto, str(args.get("type") or "custom.automation"), args.get("webhook"),
                     args.get("data") if args.get("data") is not None else {"automation": auto["id"], "run": run_id})
 

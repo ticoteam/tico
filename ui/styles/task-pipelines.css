@@ -1,5 +1,12 @@
 .task-type-row { padding:16px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; align-items:center; gap:12px; }
 .task-type-row strong { min-width:100px; }
+.task-type-intro { flex:0 0 100%; color:var(--muted); }
+.task-automation-type { display:flex; align-items:center; gap:12px; margin:0 16px 16px; }
+.task-automation-sections { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr)); gap:12px; padding:0 16px 16px; }
+.task-automation-section { border:1px solid var(--line); border-radius:var(--radius); padding:14px; }
+.task-automation-section h3 { margin:0; font-size:1rem; }
+.task-automation-rule { border-top:1px solid var(--line); margin-top:12px; padding-top:10px; }
+.task-automation-rule .err { margin:6px 0 0; }
 #set-types > button { margin:16px; }
 .task-type-editor label { display:block; margin-bottom:16px; }
 .task-type-editor [data-steps] { display:grid; gap:10px; margin-bottom:12px; }

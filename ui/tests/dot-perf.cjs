@@ -78,7 +78,8 @@ async function frames(page, act) {
     f.obs.observe({type: 'longtask'});
   });
   await act();
-  await page.waitForTimeout(300);
+  // A longer window keeps one host-scheduling hiccup from becoming the p95 of a short animation.
+  await page.waitForTimeout(1000);
   return page.evaluate(() => {
     const f = window.__frames; f.on = false; f.obs.disconnect();
     const gaps = f.gaps.slice(1).sort((a, b) => a - b);

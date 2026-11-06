@@ -125,9 +125,23 @@ const AU_EV_CUSTOM = '__custom';
 const auEvCustom = (t, ed) => ed?.evCustom ?? (!!t.name && !AU_EVENTS[t.name] && !AU_EVENT_MORE[t.name] && !String(t.name).startsWith('tico.builtin.'));
 function auEventField(t, ed) {
   const custom = auEvCustom(t, ed);
-  const list = [...auWithCur(Object.entries(AU_EVENTS), custom ? '' : t.name, auEventWords(t.name)), [AU_EV_CUSTOM, 'Custom…']];
-  const pick = auSel('evpick', list, custom ? AU_EV_CUSTOM : t.name, `aria-label="Event"${t.name && !custom ? ` title="${esc(t.name)}"` : ''}`);
-  return auFld('Event', pick + (custom ? auIn('trigger.name', t.name, 'custom.name', 'aria-label="Custom event"') : ''));
+  // A task event's automation offers the five task triggers only (Dev 666); any other keeps the whole catalog.
+  const list = auTaskTrigger(t) ? AU_TASK_EVENTS.map(n => [n, AU_EVENTS[n]])
+    : [...auWithCur(Object.entries(AU_EVENTS), custom ? '' : t.name, auEventWords(t.name)), [AU_EV_CUSTOM, 'Custom…']];
+  const label = auTaskTrigger(t) ? 'Trigger' : 'Event';
+  const pick = auSel('evpick', list, custom ? AU_EV_CUSTOM : t.name, `aria-label="${label}"${t.name && !custom ? ` title="${esc(t.name)}"` : ''}`);
+  return auFld(label, pick + (custom ? auIn('trigger.name', t.name, 'custom.name', 'aria-label="Custom event"') : ''));
+}
+// A "task step changed" trigger names its step: the step filter already saved, or the one picked here (Dev 666).
+const AU_STEP_FIELD = 'event.data.step';
+const auStepPick = (t, ed) => ed?.stepPick ?? (t.filters || []).find(f => f.field === AU_STEP_FIELD)?.value ?? '';
+function auStepChoices(t) {
+  const typeId = (t.filters || []).find(f => f.field === 'event.data.type_id')?.value;
+  const seen = new Map();
+  (typeId ? TASK_TYPES.filter(x => x.id === typeId) : TASK_TYPES).forEach(x => {
+    (x.steps || []).forEach(st => { if (!seen.has(st.id)) seen.set(st.id, st.name); });
+  });
+  return [...seen];
 }
 function auTriggerFields(t, ed) {
   const src = {message: () => auFld('Inbox', auIn('trigger.inbox', t.inbox)),
@@ -142,7 +156,9 @@ function auTriggerFields(t, ed) {
       + auFld('Time zone', auIn('trigger.tz', t.tz))}[t.type];
   // When: a schedule, an event or a due date (a kind made elsewhere, such as a message, shows as itself).
   const when = auFld('When', auSel('ttype', auWithCur(AU_WHEN, t.type, AU_TRIGGER_WORDS[t.type] || t.type), t.type));
-  return when + (src ? src() : '')
+  const pick = auStepPick(t, ed), stepped = t.type === 'event' && t.name === 'task.step_changed';
+  const step = stepped ? auFld('Step', auSel('stepPick', auWithCur([['', 'Choose a step'], ...auStepChoices(t)], pick, pick), pick, 'aria-label="Step"')) : '';
+  return when + (src ? src() : '') + step
     + auBox('Filters', auCondRows('trigger.filters', t.filters) + auPlus('trigger.filters', 'cond', 'Filter'));
 }
 function auFilterFields(s) {
@@ -151,7 +167,7 @@ function auFilterFields(s) {
       <span class="au-sp"></span>${auX('step.rules', i, 'Remove rule')}</div>
     ${auCondRows(`step.rules.${i}.when`, r.when)}${auPlus(`step.rules.${i}.when`, 'cond', 'Condition')}
     <div class="au-then"><span class="nav-icon" aria-hidden="true">arrow_forward</span>${(r.then || []).map((x, j) =>
-      `<span class="au-ir">${auSel(`step.rules.${i}.then.${j}.do`, Object.entries(AU_ACTIONS), auThenDo(x), 'aria-label="Then"')}${(r.then || []).length > 1 ? auX(`step.rules.${i}.then`, j) : ''}</span>`).join('')}
+      `<span class="au-ir">${auSel(`step.rules.${i}.then.${j}.do`, auActionChoices(auThenDo(x)), auThenDo(x), 'aria-label="Then"')}${(r.then || []).length > 1 ? auX(`step.rules.${i}.then`, j) : ''}</span>`).join('')}
       ${auPlus(`step.rules.${i}.then`, 'then', 'Action')}</div>
     <label class="au-chk"><input type="checkbox" data-b="step.rules.${i}.stop"${auRuleNext(r) === 'end' ? ' checked' : ''}${auDis()}>Stop here</label></div>`).join('')
     + auPlus('step.rules', 'rule', 'Rule'));
@@ -226,7 +242,7 @@ function auActionFields(s) {
     post_update: () => auFld('Text', auTa('step.args.text', auArg('post_update', a), 4)),
     call_webhook: () => auFld('Webhook', auIn('step.args.webhook', auArg('call_webhook', a))),
   }[s.do];
-  return auFld('Action', auSel('step.do', Object.entries(AU_ACTIONS), s.do, 'data-redraw')) + (args ? args() : '');
+  return auFld('Action', auSel('step.do', auActionChoices(s.do), s.do, 'data-redraw')) + (args ? args() : '');
 }
 function auPathsFields(s, ed) {
   return auBox('Paths', (s.paths || []).map((p, i) => `<div class="au-rb${String(ed.path) === String(i) ? ' focus' : ''}" data-path-ed="${i}">
@@ -259,6 +275,9 @@ function auEdWire(box) {
       ed.evCustom = v === AU_EV_CUSTOM;
       if (!ed.evCustom) ed.trigger.name = v;
       else if (AU_EVENTS[ed.trigger.name] || AU_EVENT_MORE[ed.trigger.name]) ed.trigger.name = '';
+      // The step filter belongs to "enters a step" only: another event drops it, so it cannot narrow that event (Dev 666).
+      if (ed.trigger.name !== 'task.step_changed' && (ed.trigger.filters || []).some(f => f.field === AU_STEP_FIELD))
+        ed.trigger.filters = ed.trigger.filters.filter(f => f.field !== AU_STEP_FIELD);
       auDrawSide();
       if (ed.evCustom) box.querySelector('[data-b="trigger.name"]')?.focus();
       return;
@@ -328,6 +347,13 @@ async function auEdSave(button) {
   if (ed.kind === 'trigger') {
     body = {trigger: ed.trigger.type === 'event' ? {...ed.trigger, name: String(ed.trigger.name || '').trim()} : ed.trigger};
     if (ed.trigger.type === 'event' && !body.trigger.name) { toast('Name the event', true); if (button) button.disabled = false; return; }
+    if (body.trigger.name === 'task.step_changed') {
+      // "Enters a step" is not saved until a step is chosen.
+      const pick = auStepPick(ed.trigger, ed);
+      if (!pick) { toast('Choose a step', true); if (button) button.disabled = false; return; }
+      body.trigger = {...body.trigger, filters: [...(body.trigger.filters || []).filter(f => f.field !== AU_STEP_FIELD),
+        {field: AU_STEP_FIELD, op: 'is', value: pick}]};
+    }
     if (ed.trigger.type === 'due') {
       const t = body.trigger, days = Number(t.open_days ?? 14);
       const bad = !/^\d{4}-\d{2}-\d{2}$/.test(String(t.first_due || '')) ? 'Pick the first due date'

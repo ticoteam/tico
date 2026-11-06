@@ -6838,6 +6838,18 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         from . import threads
         threads._emit_thread_created(conn, conversation(conn, conv["id"]), actor)
     hook(conn, "task.created", row["id"], lambda: _task_facts(conn, row["id"], actor, parent_id=parent_id), actor, revision=0)
+    # Webhook subscribers receive task.created once; the starting step goes to Automations only.
+    # Match hook()'s suppression: private reader replies must not wake automation bots.
+    if made.get("step_id") and not NO_TRIGGERS.get():
+        try:
+            from . import automations
+            automations.on_event(
+                conn, "task.step_changed", row["id"],
+                lambda: _task_facts(conn, row["id"], actor,
+                                    change={"field": "step", "from": None, "to": made["step_id"]}, initial_step=True),
+                actor)
+        except Exception:
+            logging.getLogger(__name__).warning("automations did not hear the starting task step", exc_info=True)
     from . import task_trigger_rules
     task_trigger_rules.created(conn, row["id"], actor)
     # Give a bot the rest of this relationship's active work with the new task. The runner puts

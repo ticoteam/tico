@@ -15,10 +15,13 @@ const auClone = x => x == null ? x : JSON.parse(JSON.stringify(x));
 const auApi = id => '/v2/automations/' + encodeURIComponent(id);
 // One page visit's state; a route within the page keeps it (the list, the chat), leaving drops it.
 let AU = null;
+let AU_TASK_ACTION_DRAFT = null;
 // Leaving keeps the list, its teams and its counts for the next visit (S.lastRead), which draws them at once.
 function automationsStop() {
   if (!AU) return;
-  if (AU.list && !AU.listError) S.lastRead.automations = {list: AU.list, groups: AU.groups, stats: AU.stats, range: AU.range, maint: AU.maint};
+  if (AU.cur?.taskActionDraft) AU_TASK_ACTION_DRAFT = null;
+  if (AU.list && !AU.listError) S.lastRead.automations = {list: AU.list, groups: AU.groups, stats: AU.stats,
+    range: AU.range, maint: AU.maint};
   AU = null;
 }
 
@@ -143,6 +146,12 @@ async function pageAutomations() {
   if (q) { AU.f.q = q.trim().toLowerCase(); AU.root.querySelector('.au-q').value = q; }
   const state = AU;
   state.view = view;
+  // The step and type labels read the task types, which the Tasks pages load; this page loads them too (Dev 666).
+  void taskTypesLoad({cached: true}).then(() => {
+    if (AU !== state) return;
+    auDrawHead(); auDrawSide();
+    if (!state.ed) auDrawPane();   // an editor open on the page keeps what the person has typed
+  }, () => {});
   state.root.dataset.screen = id ? 'detail' : 'list';
   if (state.list === null) { auRangeDraw(); auDrawTable(); await auLoadList(state); }
   if (AU !== state) return;
@@ -162,7 +171,7 @@ async function pageAutomations() {
       auDrawHead(); auDrawPane();
       // A slow answer for an automation left behind must not land on the one now open.
       let cur;
-      try { cur = auNormal(await get(auApi(id))); }
+      try { cur = AU_TASK_ACTION_DRAFT?.id === id ? auNormal(auClone(AU_TASK_ACTION_DRAFT)) : auNormal(await get(auApi(id))); }
       catch (e) { if (AU === state && state.id === id) { state.cur = null; state.root.querySelector('.au-pane').innerHTML = [403, 404].includes(e.status)
         ? '<p class="muted au-pad">Not shared with you</p>' : `<p class="err">${esc(e.message)}</p>`; } return; }
       if (AU !== state || state.id !== id) return;
@@ -176,6 +185,13 @@ async function pageAutomations() {
 }
 // GET answers the automation itself; a wrapped {automation} is read the same.
 const auNormal = x => { const a = x?.automation || x || {}; a.steps ||= []; a.trigger ||= {}; return a; };
+
+function auOpenTaskActionDraft(trigger, typeName = '') {
+  const id = 'draft-task-action-' + Math.random().toString(36).slice(2, 9);
+  AU_TASK_ACTION_DRAFT = {id, name: `${typeName || 'Task'} action`, owner_id: 'person:' + S.me.id,
+    enabled: false, builtin: false, can_edit: true, version: 0, trigger: auClone(trigger), steps: [], taskActionDraft: true};
+  location.hash = auHref(id);
+}
 
 function auShell() {
   $('#main').innerHTML = `<div class="au" id="au-root">
@@ -284,8 +300,9 @@ function auSwitch(on, label, attrs = '') {
 }
 // The header's on/off: the switch for whoever may pause it, else whether it is off.
 function auHeadSwitch(a, name) {
+  if (a.taskActionDraft) return '';
   if (auMayPause(a)) return auSwitch(a.enabled !== false, name + ' on', 'data-on-cur');
-  return a.enabled === false ? `<span class="pill${a.paused ? ' waiting' : ''}">${a.paused ? 'Paused' : 'Off'}</span>` : '';
+  return a.enabled === false ? `<span class="pill${a.paused ? ' waiting' : ''}">${a.paused ? esc(a.paused_reason || 'Paused') : 'Off'}</span>` : '';
 }
 // The run guard's hold, on its own line: how many runs wait, and Release or Drop for whoever may change it.
 function auHoldLine(a) {
@@ -321,7 +338,7 @@ function auDrawHead() {
   if (AU.id === AU_HOOKS) { auHooksHead(hd); return; }
   const row = a && (AU.list || []).find(x => x.id === a.id);
   const name = a?.name || row?.name || '';
-  const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU.id, v)}" aria-selected="${AU.view === v}">${v === 'flow' ? 'Flow' : 'Runs'}</a>`).join('');
+  const seg = a?.taskActionDraft ? '' : ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU.id, v)}" aria-selected="${AU.view === v}">${v === 'flow' ? 'Flow' : 'Runs'}</a>`).join('');
   hd.innerHTML = `<h2 class="au-name">${esc(name)}</h2>
     ${a ? `<span class="au-own" title="${esc(auActorName(a.owner_id))}">${personCircle(auActorName(a.owner_id), 18)}<span class="au-own-n">${esc(auActorName(a.owner_id))}</span></span>
     <span class="au-sp"></span>
@@ -331,10 +348,10 @@ function auDrawHead() {
         : `<span class="au-chip"><span class="nav-icon" aria-hidden="true">payments</span>${esc(auSpendWords(a))}</span>`}
       <button class="au-help" type="button" aria-label="Spend limit help" data-help="Spend limit per 30 minutes. It resumes on its own.">?</button>`}
       <span class="au-sp au-sp-phone"></span>
-      <div class="au-seg" role="tablist" aria-label="View">${seg}</div>
+      ${seg ? `<div class="au-seg" role="tablist" aria-label="View">${seg}</div>` : ''}
     </div>
-    <button class="au-chip au-ver" type="button" data-versions aria-label="Versions, v${a.version}">v${esc(a.version)}${row?.pending ? ' · Proposed' : ''}</button>
-    <button class="au-icon au-more" type="button" aria-label="Options" aria-haspopup="menu" data-more><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
+    ${a.taskActionDraft ? '' : `<button class="au-chip au-ver" type="button" data-versions aria-label="Versions, v${a.version}">v${esc(a.version)}${row?.pending ? ' · Proposed' : ''}</button>`}
+    ${a.taskActionDraft ? '' : '<button class="au-icon au-more" type="button" aria-label="Options" aria-haspopup="menu" data-more><span class="nav-icon" aria-hidden="true">more_horiz</span></button>'}
     ${auHeadLock(a)}${auHoldLine(a)}${auWarn(a)}` : ''}`;
 }
 
@@ -371,12 +388,37 @@ function auDrawSide() {
 async function auWrite(body, done) {
   const a = AU.cur, state = AU;
   try {
-    const out = auNormal(await patch(auApi(a.id), body));
+    const draft = a.taskActionDraft;
+    if (draft && !auDraftHasAction(body.steps || a.steps)) {
+      if (Object.hasOwn(body, 'trigger')) a.trigger = auClone(body.trigger);
+      if (Object.hasOwn(body, 'spend_cap')) a.spend_cap = auClone(body.spend_cap);
+      AU_TASK_ACTION_DRAFT = auClone(a);
+      auDrawHead(); auDrawPane();
+      toast('Saved to draft. Add an Action to create this automation.');
+      return a;
+    }
+    const request = draft
+      ? post('/v2/automations', {name: a.name, owner: a.owner_id, enabled: false, builtin: false,
+        trigger: a.trigger, steps: a.steps, ...(a.spend_cap ? {spend_cap: a.spend_cap} : {}), ...body})
+      : patch(auApi(a.id), body);
+    const out = auNormal(await request);
     if (AU !== state) return null;
-    auAdopt(out);
+    if (draft) {
+      delete out.taskActionDraft;
+      state.cur = out;
+      state.id = out.id;
+      if (state.list) state.list = [out, ...state.list.filter(x => x.id !== out.id)];
+      AU_TASK_ACTION_DRAFT = null;
+      location.hash = auHref(out.id);
+      auDrawList(); auDrawHead(); auDrawPane(); auDrawSide();
+    } else auAdopt(out);
     if (done) toast(done(out));
     return out;
   } catch (e) { toast(e.message, true); if (AU === state) { auDrawList(); auDrawHead(); auDrawPane(); } return null; }
+}
+function auDraftHasAction(steps) {
+  return (steps || []).some(step => step?.type === 'action' && AU_TASK_ACTION_KEYS.includes(step.do)
+    || step?.type === 'paths' && [...(step.paths || []).map(path => path.steps), step.otherwise?.steps].some(auDraftHasAction));
 }
 function auAdopt(a) {
   if (!AU) return;
@@ -435,6 +477,7 @@ function auOnClick(e) {
 // so it is shown off with why).
 function auMoreHTML() {
   const a = AU.cur;
+  if (a.taskActionDraft) return '';
   return `${a.can_edit && !a.readonly ? '<button type="button" role="menuitem" data-mi="run"><span class="nav-icon" aria-hidden="true">play_arrow</span>Test run</button>' : ''}
     ${auApplies(a) ? '<button type="button" role="menuitem" data-mi="apply"><span class="nav-icon" aria-hidden="true">dashboard_customize</span>Apply template</button>' : ''}
     <button type="button" role="menuitem" data-mi="versions"><span class="nav-icon" aria-hidden="true">history</span>Versions</button>
@@ -449,7 +492,7 @@ async function auMoreAct(what) {
   if (what === 'apply') { auApplyTemplate(); return; }
   if (what !== 'delete' || a.builtin || !confirm(`Delete ${a.name}?`)) return;
   try {
-    await writeRequest('DELETE', auApi(a.id));
+    await writeRequest('DELETE', auApi(a.id), {});
     if (AU !== state) return;
     state.list = state.list.filter(x => x.id !== a.id);
     toast('Deleted');

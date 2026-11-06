@@ -19,15 +19,6 @@ log = logging.getLogger(__name__)
 
 
 @contextmanager
-def from_action(rule_id):
-    token = _CHAIN.set(_CHAIN.get() or (rule_id,))
-    try:
-        yield
-    finally:
-        _CHAIN.reset(token)
-
-
-@contextmanager
 def pending(conn):
     current = _PENDING.get()
     if current is not None and current["conn"] is conn:
@@ -46,6 +37,12 @@ def pending(conn):
             judge(conn, item)
     finally:
         _PENDING.reset(token)
+
+
+def _write_chain(conn):
+    """The automation that made this task, either in its action or the bot turn it started."""
+    from . import automations as A
+    return tuple(A.CHAIN.get() or A._turn_chain(conn))
 
 
 def unblocked(conn):
@@ -81,8 +78,14 @@ def enqueue(conn, event, task, actor, revision, *, field=None, new=None):
         return
     state = _PENDING.get()
     facts = {"step_id" if field == "step" else field: new} if field in ("step", "status") else {}
+    rule_chain = _CHAIN.get()
+    auto_chain = ()
+    if not rule_chain and (event == "task.created" or event == "task.step_changed" and str(revision) == "created"):
+        auto_chain = _write_chain(conn)
     item = {"event": event, "task": task, "actor": actor, "revision": str(revision),
-            "chain": _CHAIN.get(), "facts": facts, "row": None}
+            "chain": rule_chain or auto_chain,
+            "by": "rule" if rule_chain else ("automation" if auto_chain else ""),
+            "facts": facts, "row": None}
     if state is not None and state["conn"] is conn:
         state["items"].append(item)
     else:
@@ -158,7 +161,10 @@ def judge(conn, item):
                                 (rule["id"], item["task"], item["event"], item["revision"], H.now())).rowcount:
                 continue
             if item["chain"]:
-                _history(conn, item, rule, action, "Skipped: an Action already caused this change; maximum chain depth is one")
+                why = ("Skipped: a routine made this change; this Task Trigger was skipped"
+                       if item.get("by") == "automation" else
+                       "Skipped: an Action already caused this change; maximum chain depth is one")
+                _history(conn, item, rule, action, why)
                 continue
             count = conn.execute("SELECT count(*) FROM rule_task_runs WHERE rule_id=? AND fired=1 AND ran_at>?",
                                  (rule["id"], H.shift(H.now(), hours=-1))).fetchone()[0]

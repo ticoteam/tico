@@ -169,6 +169,18 @@ def test_an_action_rule_runs_as_the_keeper_and_a_failed_action_wakes_the_bot(api
         assert H.task(c, other["id"])["status"] != "closed"
 
 
+def test_message_rule_actions_do_not_set_the_task_trigger_chain(api, monkeypatch):
+    from backend import task_trigger_rules as TTR
+
+    seen = []
+    monkeypatch.setattr(R, "_act", lambda *args: seen.append(TTR._CHAIN.get()))
+    with api.app.state.store.transaction() as c:
+        decision = R.Decision(R.ACTION, "message-rule", params={"action": "close"})
+        result = R.carry_out(c, decision, "human:ana", "bot:cpo", "say", {}, "Synthetic message", {})
+    assert result.outcome == R.NOTE
+    assert seen == [()], "ordinary message rules do not suppress Task Triggers on their new tasks"
+
+
 def tagged(c, task, *keys):
     """`task` with these tags on it, put there by a person's write, as a fresh row."""
     for key in keys:

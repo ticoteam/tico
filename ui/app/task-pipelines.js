@@ -179,6 +179,13 @@ function taskTypesSettingsMount() {
 function taskTypesSettingsShow(tab) {
   if (tab === 'tasks' && S.me?.cloud) void renderTaskTypes();
 }
+// Add action on a type's row opens a draft for an off automation whose Trigger is a task created of this type.
+// canMove() gates both this Add action and type editing. The automation is created when its first Action is saved.
+async function taskTypeAddAction(type) {
+  if (!type || !S.me || !canMove()) return;
+  void taskAutomationAddAction({type: 'event', name: 'task.created',
+    filters: [{field: 'event.data.type_id', op: 'is', value: type.id}]}, type.name);
+}
 
 async function renderTaskTypes() {
   const host = $('#set-types'); if (!host) return;
@@ -188,10 +195,15 @@ async function renderTaskTypes() {
     if (!host.isConnected) return;
     const mover = canMove();
     host.innerHTML = TASK_TYPES.map(type => `<div class="task-type-row"><strong>${esc(type.name)}</strong>
+      <div class="task-type-intro">Trigger: a task of type ${esc(type.name)} is created.</div>
       <div>${type.steps.map(step => `<span class="tlabel"${step.check_pool?.length ? ` title="${esc('Check pool: ' + step.check_pool.map(botSlug).join(', ') + ' · ' + (step.check_limit || 2) + ' open checks each')}"` : ''}>${esc(step.name)}${step.check_pool?.length ? ` · ${step.check_pool.length} checker${step.check_pool.length === 1 ? '' : 's'}` : ''}</span>`).join(' ')}</div>
+      <span class="spacer"></span>${mover ? `<button class="ghost" type="button" data-add-action="${esc(type.id)}">Add action</button>` : ''}
       ${mover && type.id !== 'general' ? `<button class="ghost" type="button" data-edit-type="${esc(type.id)}">Edit</button>` : ''}</div>`).join('')
       + (mover ? '<button class="primary" type="button" data-new-type>New type</button>' : '');
     host.querySelectorAll('[data-edit-type]').forEach(button => button.onclick = () => taskTypeEditor(TASK_TYPES.find(type => type.id === button.dataset.editType)));
+    host.querySelectorAll('[data-add-action]').forEach(button => {
+      button.onclick = () => taskTypeAddAction(TASK_TYPES.find(type => type.id === button.dataset.addAction));
+    });
     const add = host.querySelector('[data-new-type]'); if (add) add.onclick = () => taskTypeEditor();
   } catch (error) { host.textContent = error.message; }
 }

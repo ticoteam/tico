@@ -110,6 +110,10 @@ TURN_WAIT_DAYS = 1
 STALE_MINUTES = 15       # a claimed run not saved by then was cut off: queued again, to go on from its last save
 MAX_RESUMES = 3          # a run cut off this often is failed: it may be what stops the server
 MAX_CHAIN = 3            # automations started by automations: at most this deep, never the same one twice
+# The five task events a saved automation may hear (the task-trigger rules, Dev 666). Task-trigger automation chains
+# run one level deep across these events. A saved one that runs TASK_PAUSE_RUNS times in an hour is paused.
+TASK_TRIGGER_EVENTS = ("task.created", "task.step_changed", "task.done", "task.declined", "task.closed")
+TASK_PAUSE_RUNS = 50
 MAX_IN_FLIGHT = 10       # runs one automation has going at once, turns included; the rest queue
 TURN_SLOT_MINUTES = 30   # a turn holds its slot until it reports, up to this long: one that never reports frees it
 MAIL_LOOKBACK_HOURS = 24  # a mailbox's first sync acts on mail this recent; its watch then never moves
@@ -166,12 +170,12 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None):
     flow = flow_of(row)
     if detail:
         flow["steps"] = _with_questions(flow["steps"])
-    last = c.execute("SELECT id, status, started_at, finished_at FROM automation_runs WHERE automation_id=? "
+    last = c.execute("SELECT id, status, started_at, finished_at, saved_state FROM automation_runs WHERE automation_id=? "
                      "ORDER BY started_at DESC LIMIT 1", (row["id"],)).fetchone()
     from . import redesign_migration
     out = {"id": row["id"], **{k: v for k, v in flow.items() if k != "owner"}, "owner_id": flow["owner"],
            "version": row["version"], "created_at": row["created_at"],
-           "created_by_id": row["created_by_id"], "updated_at": row["updated_at"], "last_run": dict(last) if last else None,
+           "created_by_id": row["created_by_id"], "updated_at": row["updated_at"], "last_run": _last_run(last),
            "kind": AO.kind_of(flow),
            # Wake rules that name a step their type does not have: they never fire until one is changed.
            "problems": redesign_migration.wake_problems(c, row["id"], flow) if flow.get("wakes") else []}
@@ -183,10 +187,14 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None):
         out["next_due_at"], out["next_run"] = (None, None) if not day else (
             day.isoformat(), _iso(D.fire_at(day, D.open_days_of(flow["trigger"]), D.zone_of(flow["trigger"]))))
     if flow.get("enabled") is False:
-        # Paused, not just off: the run guard turned it off and nobody has changed it since.
+        # Paused, not just off: the run guard or the task-event pause turned it off and nobody has changed it since.
         guard = c.execute("SELECT max(created_at) FROM events WHERE target=? AND action='automation.run_guard'",
                           (row["id"],)).fetchone()[0]
-        out["paused"] = bool(guard and guard >= row["updated_at"])
+        task_pause = c.execute("SELECT max(created_at) FROM events WHERE target=? AND action='automation.task_pause'",
+                               (row["id"],)).fetchone()[0]
+        out["paused"] = bool(guard and guard >= row["updated_at"]) or bool(task_pause and task_pause >= row["updated_at"])
+        if task_pause and task_pause >= row["updated_at"]:
+            out["paused_reason"] = "Paused: too many runs"
     if hold := hold_of(c, row["id"]):
         out["hold"] = hold
     job = AO.system_key(flow)
@@ -202,6 +210,19 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None):
     if who is not None:
         out["can_edit"] = may_change(c, who, flow, chart)
         out["can_pause"] = may_pause(c, who, flow, out["can_edit"])
+    return out
+
+
+def _last_run(last):
+    """The automation's last run as its row shows it; a failed run carries its error in words."""
+    if not last:
+        return None
+    out = {k: last[k] for k in ("id", "status", "started_at", "finished_at")}
+    if out["status"] == "failed":
+        try:
+            out["error"] = _run_error(json.loads(last["saved_state"] or "{}"))
+        except (TypeError, ValueError, AttributeError):
+            out["error"] = "failed"
     return out
 
 
@@ -1281,6 +1302,8 @@ def _queue(c, row, payload, ref="", *, manual=False, chain=()):
         # One Slack or mail message, one run: a message offered again (its mail row swept, or a label change exported
         # it again) starts nothing new. The run stays after its message's row goes (automation_runs_trigger).
         return None
+    if not manual and _task_pause(c, row, payload, ref):
+        return None
     held = _hold_row(c, row["id"])
     if held and manual:
         return None
@@ -1377,16 +1400,25 @@ def fire(c, kind, payload, ref="", match=None, access=None, only=None):
     counts toward its day. Returns the queued run ids. Never raises: an automation problem must not undo the write
     that triggered it."""
     try:
-        chain = CHAIN.get() or _turn_chain(c)
-        if len(chain) >= MAX_CHAIN:
+        from . import task_trigger_rules
+
+        action_chain = CHAIN.get()
+        turn_chain = _turn_chain(c) if not action_chain else ()
+        chain = action_chain or turn_chain
+        rule_chain = task_trigger_rules._CHAIN.get()
+        if len(action_chain) >= MAX_CHAIN:
             return []
+        event = payload.get("event") if isinstance(payload, dict) else None
+        event_data = event.get("data") if isinstance(event, dict) else None
+        routine_created_task = bool(turn_chain and isinstance(event, dict) and
+                                    (event.get("name") == "task.created" or
+                                     isinstance(event_data, dict) and event_data.get("initial_step")))
+        task_trigger_turn = _task_trigger_chain(c, turn_chain)
         queued = []
         for row in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL AND enabled=1 AND trigger_type=? "
                              + ("AND id=? " if only else "") + "ORDER BY created_at",
                              (kind, *((only,) if only else ()))).fetchall():
             row = dict(row)
-            if row["id"] in chain:
-                continue
             flow = flow_of(row)
             if flow.get("readonly"):   # a built-in that shows work Tico runs itself
                 continue
@@ -1395,10 +1427,23 @@ def fire(c, kind, payload, ref="", match=None, access=None, only=None):
                 continue
             if row["builtin"] and _stands_down(c, row["id"], trigger):
                 continue
-            if (access and not access(row)) or not F.all_hold(trigger.get("filters") or [], payload):
+            task_trigger = kind == "event" and not row["builtin"] and _task_trigger(trigger)
+            row_chain = chain
+            if turn_chain and task_trigger and not routine_created_task and not task_trigger_turn:
+                # Routines may trigger other tasks; their own task is held at creation. Task-trigger chains stay intact.
+                row_chain = action_chain
+            if row["id"] in row_chain:
+                continue
+            if len(row_chain) >= MAX_CHAIN:
+                continue
+            heard = _event_payload_for_owner(c, row, payload) if kind == "event" else payload
+            if (access and not access(row)) or not F.all_hold(trigger.get("filters") or [], heard):
                 _count(c, row["id"], "dropped")
                 continue
-            rid = queue(c, row, payload, ref, chain=(*chain, row["id"]))
+            if (row_chain or rule_chain) and task_trigger:
+                _chained_task_event(c, row, heard, row_chain, rule_action=bool(rule_chain and not row_chain))
+                continue
+            rid = queue(c, row, heard, ref, chain=(*row_chain, row["id"]))
             if rid:
                 queued.append(rid)
         return queued
@@ -1406,6 +1451,86 @@ def fire(c, kind, payload, ref="", match=None, access=None, only=None):
         import logging
         logging.getLogger(__name__).warning("automation trigger %s failed", kind, exc_info=True)
         return []
+
+
+def _task_trigger(trigger):
+    from . import event_catalog as CAT
+    return (CAT.canonical(trigger.get("name")) or trigger.get("name")) in TASK_TRIGGER_EVENTS
+
+
+def _task_trigger_chain(c, chain):
+    """Whether a bot turn was started by a saved automation on one of the five task events."""
+    if not chain:
+        return False
+    placeholders = ",".join("?" for _ in chain)
+    rows = c.execute(f"SELECT flow FROM automations WHERE id IN ({placeholders})", tuple(chain)).fetchall()
+    for row in rows:
+        try:
+            trigger = (json.loads(row["flow"]) or {}).get("trigger") or {}
+        except (TypeError, ValueError):
+            continue
+        if _task_trigger(trigger):
+            return True
+    return False
+
+
+def _event_payload_for_owner(c, row, payload):
+    """A task event keeps its identifying fields, but private text reaches only an automation owner who can read it."""
+    task = payload.get("task") if isinstance(payload, dict) else None
+    tid = task.get("id") if isinstance(task, dict) else None
+    row_task = H.task(c, tid) if tid else None
+    if not row_task or not H.task_private(c, row_task):
+        return payload
+    from . import automation_actions as AA
+    if H.task_private_readable(c, AA.acts_as(c, {"flow": flow_of(row)}), row_task):
+        return payload
+    safe_task = {key: value for key, value in task.items() if key not in ("title", "body")}
+    event = payload.get("event") or {}
+    data = event.get("data")
+    safe_event = {**event, **({"data": {key: value for key, value in data.items() if key not in ("title", "body")}}
+                              if isinstance(data, dict) else {})}
+    return {**payload, "event": safe_event, "task": safe_task}
+
+
+def _chained_task_event(c, row, payload, chain, *, rule_action=False):
+    """Skip a task-triggered automation that would extend an existing chain, and name its source in task history."""
+    _count(c, row["id"], "dropped")
+    subject = (payload.get("event") or {}).get("subject")
+    if subject and H.task(c, subject):
+        if rule_action:
+            reason = "a Task Trigger Action made this change"
+        else:
+            maker = c.execute("SELECT flow FROM automations WHERE id=?", (chain[-1],)).fetchone()
+            made_by = flow_of(maker)["name"] if maker else chain[-1]
+            reason = f"routine {made_by} made this change"
+        text = (f"Automation {flow_of(row)['name']} did not run: {reason}, and task-triggered automations run one level "
+                "deep.")
+        H._task_event(c, subject, H.KEEPER, "automation", None, row["id"], text)
+
+
+def _task_pause(c, row, payload, ref):
+    """More than TASK_PAUSE_RUNS task-event runs in an hour pauses a saved automation: it is turned off, its row says why,
+    and this run is not started. Returns True when it paused."""
+    name = str(ref).split(":", 1)[0]
+    if row["builtin"] or name not in TASK_TRIGGER_EVENTS:
+        return False
+    since = H.shift(H.now(), hours=-1)
+    # Re-enabling saves the row; prior runs must not immediately pause it again.
+    updated_at = row.get("updated_at") or ""
+    count = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=? AND started_at>=? AND started_at>? AND "
+                      "substr(trigger_ref,1,instr(trigger_ref,':')-1) IN (?,?,?,?,?)",
+                      (row["id"], since, updated_at, *TASK_TRIGGER_EVENTS)).fetchone()[0]
+    if count < TASK_PAUSE_RUNS:
+        return False
+    flow = {**flow_of(row), "enabled": False}
+    c.execute("UPDATE automations SET enabled=0, flow=? WHERE id=?", (json.dumps(flow, default=str), row["id"]))
+    H.event(c, H.KEEPER, "automation.task_pause", row["id"], {"runs": count, "reason": "too many runs"})
+    subject = (payload.get("event") or {}).get("subject")
+    if subject and H.task(c, subject):
+        H._task_event(c, subject, H.KEEPER, "automation", None, row["id"],
+                      f"Automation {flow['name']} is paused: too many runs (more than {TASK_PAUSE_RUNS} in an hour). "
+                      "This run did not start.")
+    return True
 
 
 def hub_checks(c, task):
@@ -1421,6 +1546,12 @@ def on_event(c, type_, subject, data, actor, access=None):
     name = CAT.canonical(type_) or type_
     facts = data() if callable(data) else (data or {})
     payload = {"event": {"name": name, "subject": subject, "actor": actor, **({"data": facts} if facts else {})}}
+    if name.startswith("task.") and (task := H.task(c, subject)):
+        # The task a task event is about, as its actions read it (`task.id`, the note's and create task's task), and its
+        # type, so a filter can name the type. This payload only: outgoing webhooks keep their data.
+        payload["task"] = _event_task(task)
+        if isinstance(facts, dict):
+            payload["event"]["data"] = {**facts, "type_id": payload["task"]["type_id"]}
     # A trigger may name an event by an alias (a converted routine's `release_published`): it hears the canonical name.
     fire(c, "event", payload, f"{name}:{subject}",
          lambda t: CAT.matches(t["name"], name) or (CAT.canonical(t["name"]) or t["name"]) == name, access=access)
@@ -1432,6 +1563,14 @@ def on_event(c, type_, subject, data, actor, access=None):
             owner = F.owner_ref(facts["owner_id"])
             fire(c, "task_received", {"task": task, "event": {"name": name}}, f"task:{subject}:{name}",
                  lambda t: F.owner_ref(t["to"]) == owner)
+
+
+def _event_task(task):
+    """A task event's task as an automation reads it: the fields its flow names, and its type (the general type when it
+    has none, as hubdb reads it)."""
+    fields = ("id", "title", "body", "status", "requester", "step_id")
+    return {**{k: task.get(renames.current_column("tasks", k)) for k in fields},
+            "type_id": task.get("type_id") or H.GENERAL_TYPE, "owner": task.get("owner_id")}
 
 
 def _received_task(task, owner):
