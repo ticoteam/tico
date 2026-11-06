@@ -16,7 +16,7 @@ const uiDir = path.join(__dirname, '..');
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
 const people = [{id: 'ana', name: 'Ana Silva', role: 'owner'}, {id: 'cara', name: 'Cara Lee', role: 'member', team: 'mkt'},
-  {id: 'mia', name: 'Mia Park', role: 'member', team: 'mkt'}];
+  {id: 'mia', name: 'Mia Park', role: 'member', team: 'mkt'}, {id: 'ned', name: 'Ned Cole', role: 'member', team: 'mkt'}];
 const emps = [['rental-mgr', 'Rental Marketing Manager', 'rental'], ['rental-google', 'Rental Google Ad Owner', 'rental'],
   ['rental-social', 'Rental Social Ad Owner', 'rental'], ['consumer-mgr', 'Consumer Marketing Manager', 'consumer'],
   ['consumer-google', 'Consumer Google Ad Owner', 'consumer']].map(([name, display_name, team]) =>
@@ -28,6 +28,7 @@ const mate = (teammate, kind, team, def, extra = {}) => ({teammate, kind, team, 
 const MATES = [mate('human:ana', 'person', '', 'everything', {rights: ALL_RIGHTS}),
   mate('human:cara', 'person', 'mkt', 'team_expenses', {default_team: 'mkt'}),
   mate('human:mia', 'person', 'mkt', 'own_expenses', {rights: ['finance.budgets']}),
+  mate('human:ned', 'person', 'mkt', 'none', {budgets: 1}),
   ...emps.map(e => mate('bot:' + e.name, 'bot', e.team, 'own_expenses'))];
 const access = viewer => ({teams, private_lines: [], defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'}, view_version: 'v1',
   teammates: viewer === 'ana' ? MATES : MATES.filter(m => m.teammate === 'human:' + viewer), can_view_as: viewer === 'ana', can_edit_defaults: viewer === 'ana'});
@@ -70,6 +71,8 @@ const BUDGETS = [
   budget('b-consumer', 'Consumer Marketing Manager', 300000, 250000, {team: 'consumer', parent_id: 'b-mkt'}),
   budget('b-consumer-g', 'Consumer Google Ad Owner', 300000, 250000, {team: 'consumer', teammate: 'bot:consumer-google', vendor: 'Google Ads', parent_id: 'b-consumer'}, ad('google_ads', 290000)),
   budget('b-video', 'Video production', null, 0, {account_id: null, catch_all: true})];
+// Ned's own budget: all GET /v2/finance/budgets gives a teammate who sees nothing else (handlers.reads_budget).
+const NED = budget('b-ned', 'Trade shows', 200000, 45000, {teammate: 'human:ned', account_id: 'a-6400'});
 const plainRow = b => { const {platform, ...rest} = b; const {pace_end, spent_from, as_of, ...state} = b.state; return {...rest, state}; };
 
 // Tools: one Mercury tool with a Read key and a Read and write key, one Google Ads tool; no Stripe, Brex or Meta Ads.
@@ -114,6 +117,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/finance/pnl') return json(pnl(url));
     if (p === '/api/v2/finance/budgets') {
       if (viewer === 'cara') return denied();
+      if (viewer === 'ned') return json({budgets: [NED], more: false, on: url.searchParams.get('at'), excluded: false});
       if (hub.hold && url.searchParams.get('at') === hub.hold.at) await hub.hold.wait;
       return json({budgets: plain ? BUDGETS.map(plainRow) : BUDGETS, more, on: url.searchParams.get('at'), excluded: false});
     }
@@ -276,6 +280,26 @@ async function shot(page, name) {
       await page.locator('#fin-pl').waitFor();
       assert.ok(!(await tabs(page)).includes('Budgets'), tag + ': no Budgets tab');
       assert.ok(!reads.some(r => r.startsWith('/api/v2/finance/budgets')), tag + ': budgets never read');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // A teammate who sees nothing else in Finance but has a budget of their own: My budget alone, read only.
+    {
+      const tag = 'my budget';
+      const {page, errors, reads, writes} = await open(browser, {viewer: 'ned'});
+      await page.waitForFunction(() => location.hash.startsWith('#/finance/mine'));
+      await row(page, 'b-ned').waitFor();
+      assert.deepEqual(await tabs(page), ['My budget'], tag + ': the only tab');
+      assert.deepEqual(await page.locator('tr[data-fin-bud] td:first-child').allInnerTexts(), ['Trade shows'], tag + ': their own budget');
+      assert.equal(await page.locator('tr.fin-grp').count(), 0, tag + ': no groups');
+      assert.equal(await page.locator('[data-fin-bud-add], [data-fin-q], td[data-fin-bud-amt]').count(), 0, tag + ': no + Budget, search or edits');
+      assert.ok(!reads.some(r => r.startsWith('/api/v2/finance/pnl')), tag + ': no P&L read');
+      await row(page, 'b-ned').click();
+      await page.locator('#fin-rail h2').waitFor();
+      assert.match(await page.locator('#fin-rail').innerText(), /Trade shows[\s\S]*Left\s+\$1,550/, tag + ': details in the rail');
+      await page.evaluate(() => { location.hash = '#/finance/pnl'; });
+      await page.waitForFunction(() => location.hash.startsWith('#/finance/mine'));
+      assert.deepEqual(writes, [], tag + ': nothing written');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }

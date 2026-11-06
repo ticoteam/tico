@@ -1648,6 +1648,7 @@ export type FinanceAccess = {
   others_see: string;
 }>;
   teammates: Array<{
+  budgets: number;
   default: "everything" | "team_expenses" | "own_expenses" | "none";
   default_team: string | null;
   grants: Array<Record<string, unknown>>;
