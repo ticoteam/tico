@@ -8579,6 +8579,13 @@ export type GetSkillParams = {
 export type GetSkillBody = never;
 export type GetSkillResponse = unknown;
 
+/** GET /api/v2/skills/bundles/{sha256} */
+export type GetSkillBundleParams = {
+  sha256: string;
+};
+export type GetSkillBundleBody = never;
+export type GetSkillBundleResponse = unknown;
+
 /** GET /api/v2/skills/proposals/{pid} */
 export type GetSkillProposalParams = {
   pid: string;
