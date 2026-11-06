@@ -155,7 +155,9 @@ def maintenance_runs_end(tmp_path):
     yield
     for thread in threading.enumerate():
         if thread.name == "maintenance-run":
-            thread.join()
+            thread.join(timeout=60)
+            if thread.is_alive():
+                pytest.fail("maintenance run still going 60 s after the test")
 
 
 @pytest.fixture(scope="session")
