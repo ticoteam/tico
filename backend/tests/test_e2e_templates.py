@@ -35,7 +35,7 @@ def test_a_company_from_each_template_has_its_bot_and_a_first_task_queues_a_job(
         try:
             check_template(api, tmp_path, template)
         except Exception as exc:
-            exc.add_note(f"in the core template {template!r}")      # one test loops them all: say which one failed
+            exc.add_note(f"in the core template {template!r}")  # one test loops them all: say which one failed
             raise
 
 
@@ -46,15 +46,25 @@ def check_template(api, tmp_path, template):
     assert catalog.committed(repo), f"{repo} was not committed"
     assert catalog.check(repo, slug) == [], f"{template} does not pass the preflight checks"
 
-    post(api, "bots", {"slug": slug, "display_name": card.get("name") or template, "template": template,
-                       "status": "active"})
+    post(
+        api,
+        "bots",
+        {"slug": slug, "display_name": card.get("name") or template, "template": template, "status": "active"},
+    )
     made = get(api, f"bots/{slug}")
     assert made["slug"] == slug
-    bot_id = made["id"]                   # a new bot's id is a UUIDv7 unless it is a product bot; jobs name the id
+    bot_id = made["id"]  # a new bot's id is a UUIDv7 unless it is a product bot; jobs name the id
     # A new bot is still onboarding and takes no task until a person above it on the org chart says it is ready.
     post(api, f"bots/{slug}/onboarded", {})
 
     before = jobs_for(api, bot_id)
-    post(api, "tasks", {"owner": slug, "title": f"First task for {template}",
-                        "body": "Say what you can do for the company this week, in two sentences."})
+    post(
+        api,
+        "tasks",
+        {
+            "owner": slug,
+            "title": f"First task for {template}",
+            "body": "Say what you can do for the company this week, in two sentences.",
+        },
+    )
     assert jobs_for(api, bot_id) == before + 1, "the first task did not queue a job for the bot"

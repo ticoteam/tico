@@ -27,7 +27,9 @@ def email_cli(api, live, monkeypatch):
 
 
 @pytest.mark.parametrize("caller", ["person", "assistant"])
-def test_email_commands_reach_the_api_as_the_person_or_their_assistant(email_cli, live, capsys, assistant_token, caller):
+def test_email_commands_reach_the_api_as_the_person_or_their_assistant(
+    email_cli, live, capsys, assistant_token, caller
+):
     token = "ana-test" if caller == "person" else assistant_token
     assert email_cli(token, "mailboxes", "--json") == 0
     boxes = json.loads(capsys.readouterr().out)["mailboxes"]
@@ -66,10 +68,13 @@ def test_email_mcp_reads_share_the_same_rights_and_are_offered_to_the_assistant(
     names = {"hub_email_" + action for action in ("mailboxes", "inbox", "search", "thread", "message")}
     assert names <= {tool["name"] for tool in hubtools.listing(kind="assistant")}
     assert not names & {tool["name"] for tool in hubtools.listing(kind="bot")}
-    for name, args in (("mailboxes", {}), ("inbox", {"mailbox": SHARED}),
-                       ("search", {"mailbox": BOX, "q": "from:sender"}),
-                       ("thread", {"mailbox": SHARED, "id": "t1"}),
-                       ("message", {"mailbox": SHARED, "id": "m1"})):
+    for name, args in (
+        ("mailboxes", {}),
+        ("inbox", {"mailbox": SHARED}),
+        ("search", {"mailbox": BOX, "q": "from:sender"}),
+        ("thread", {"mailbox": SHARED, "id": "t1"}),
+        ("message", {"mailbox": SHARED, "id": "m1"}),
+    ):
         error, result = call(api, "hub_email_" + name, args, token=assistant_token)
         assert not error, result
     error, result = call(api, "hub_email_message", {"mailbox": SHARED, "id": "m1"}, token="cara-test")
@@ -86,13 +91,17 @@ def test_archive_cli_reports_count_and_a_runnable_undo(email_cli, live, capsys, 
 
 
 def test_organize_cli_query_limits_json_and_mark_read_commands(email_cli, live, capsys):
-    assert email_cli("ana-test", "archive", SHARED, "--query", "in:inbox category:promotions",
-                     "--limit", "1", "--json") == 0
+    assert (
+        email_cli("ana-test", "archive", SHARED, "--query", "in:inbox category:promotions", "--limit", "1", "--json")
+        == 0
+    )
     result = json.loads(capsys.readouterr().out)
     assert result["count"] == 1 and result["undo"] == {"action": "unarchive", "ids": ["m2"]}
     assert live["calls"][0][1]["q"] == ["in:inbox category:promotions"]
-    for action, inverse, add, remove in (("mark-read", "mark-unread", [], ["UNREAD"]),
-                                         ("mark-unread", "mark-read", ["UNREAD"], [])):
+    for action, inverse, add, remove in (
+        ("mark-read", "mark-unread", [], ["UNREAD"]),
+        ("mark-unread", "mark-read", ["UNREAD"], []),
+    ):
         assert email_cli("ana-test", action, BOX, "m1") == 0
         assert f"Undo: hub email {inverse} {BOX} m1" in capsys.readouterr().out
         assert live["writes"][-1][1] == {"ids": ["m1"], "addLabelIds": add, "removeLabelIds": remove}
@@ -134,7 +143,12 @@ def test_email_organize_mcp_tools_are_available_and_use_the_callers_rights(api, 
 
 def test_long_undo_output_points_to_json_with_all_ids():
     ids = [str(i).zfill(16) for i in range(500)]
-    result = {"mailbox": BOX, "action": "archive", "count": 500, "ids": ids,
-              "undo": {"action": "unarchive", "ids": ids}}
+    result = {
+        "mailbox": BOX,
+        "action": "archive",
+        "count": 500,
+        "ids": ids,
+        "undo": {"action": "unarchive", "ids": ids},
+    }
     assert "--json" in remotecli.email_text(result, "archive")
     assert len(remotecli.email_text(result, "archive")) < 200

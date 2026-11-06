@@ -1,5 +1,6 @@
 """Who follows a task (backend/task_followers.py): the owner by default, a filer or commenter only by choice, a new
 owner on reassignment, levels, who may change whose follow, and only readers of a private task."""
+
 import importlib.util
 import sqlite3
 from pathlib import Path
@@ -17,6 +18,7 @@ TASK = {"title": "Ops weekly sweep", "body": "Check the queue and close what is 
 @pytest.fixture(autouse=True)
 def private_tasks_have_an_unrelated_manager(api):
     from backend.tests.test_api import unrelated_task_managers
+
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
 
@@ -49,8 +51,10 @@ def unfollow(api, tid, body=None, token="ana-test"):
 def rows(api, tid):
     with api.app.state.store.read() as c:
         thread = F.thread_id(c, H.task(c, tid))
-        return {r[0]: (r[1], r[2]) for r in c.execute(
-            "SELECT actor, following, reason FROM thread_followers WHERE thread_id=?", (thread,))}
+        return {
+            r[0]: (r[1], r[2])
+            for r in c.execute("SELECT actor, following, reason FROM thread_followers WHERE thread_id=?", (thread,))
+        }
 
 
 def test_the_owner_follows_and_filing_does_not(api):
@@ -59,15 +63,17 @@ def test_the_owner_follows_and_filing_does_not(api):
     mine = followers(api, row["id"])
     assert mine["following"] is False and mine["notify"] is None
     assert [(f["actor"], f["notify"], f["reason"]) for f in get(api, "tasks/" + row["id"])["task"]["followers"]] == [
-        ("bot:ops", "live", "owner")]
+        ("bot:ops", "live", "owner")
+    ]
     chosen = made(api, follow=True, title="Ops monthly sweep", body="Check the month and close what is done.")
     assert who(api, chosen["id"]) == {"bot:ops": ("live", "owner"), "human:ana": ("live", "manual")}
     assert followers(api, chosen["id"])["following"] is True
     # A bot that files a task follows it only when it says so.
     with api.app.state.store.transaction() as c:
         quiet = H.task_create(c, "bot:cpo", "Zip intake", "Triage the zip advisories.", "bot:ops", lint=False)
-        chose = H.task_create(c, "bot:cpo", "Zip intake again", "Triage them again.", "bot:ops", lint=False,
-                              follow=True)
+        chose = H.task_create(
+            c, "bot:cpo", "Zip intake again", "Triage them again.", "bot:ops", lint=False, follow=True
+        )
     assert who(api, quiet["id"]) == {"bot:ops": ("live", "owner")}
     assert who(api, chose["id"]) == {"bot:ops": ("live", "owner"), "bot:cpo": ("live", "manual")}
 
@@ -103,18 +109,19 @@ def test_levels_unfollow_and_history(api):
     r = follow(api, row["id"], {"notify": "mentions"}, "ben-test")
     assert r.status_code == 200 and r.json()["following"] is True and r.json()["notify"] == "mentions", r.text
     assert follow(api, row["id"], {"notify": "muted"}, "ben-test").json()["notify"] == "muted"
-    assert follow(api, row["id"], None, "ben-test").json()["notify"] == "muted"     # no level keeps yours
+    assert follow(api, row["id"], None, "ben-test").json()["notify"] == "muted"  # no level keeps yours
     r = follow(api, row["id"], {"notify": "loud"}, "ben-test")
     assert r.status_code == 422, r.text
     r = unfollow(api, row["id"], None, "ben-test")
     assert r.status_code == 200 and r.json()["following"] is False and "human:ben" not in who(api, row["id"]), r.text
-    assert unfollow(api, row["id"], None, "ben-test").status_code == 200                # already off: nothing changes
+    assert unfollow(api, row["id"], None, "ben-test").status_code == 200  # already off: nothing changes
     # The owner may stop following too, and come back at live.
     assert unfollow(api, row["id"], {"actor": "ops"}).status_code == 200
     assert who(api, row["id"]) == {}
     with api.app.state.store.read() as c:
-        changes = c.execute("SELECT actor FROM events WHERE action='task.followers' AND target=? "
-                            "ORDER BY created_at", (row["id"],)).fetchall()
+        changes = c.execute(
+            "SELECT actor FROM events WHERE action='task.followers' AND target=? ORDER BY created_at", (row["id"],)
+        ).fetchall()
     assert [r[0] for r in changes] == ["human:ben"] * 3 + ["human:ana"], changes
 
 
@@ -129,8 +136,11 @@ def test_who_changes_whose_follow(api):
     # The requester adds and sets others; an editor's level change keeps their reason.
     assert follow(api, row["id"], {"actor": "bot:cpo"}).status_code == 200
     assert follow(api, row["id"], {"actor": "ben", "notify": "digest"}).status_code == 200
-    assert who(api, row["id"]) == {"human:ben": ("digest", "owner"), "human:cara": ("live", "manual"),
-                                   "bot:cpo": ("live", "manual")}
+    assert who(api, row["id"]) == {
+        "human:ben": ("digest", "owner"),
+        "human:cara": ("live", "manual"),
+        "bot:cpo": ("live", "manual"),
+    }
     assert unfollow(api, row["id"], {"actor": "cara"}).status_code == 200
     r = follow(api, row["id"], {"actor": "nobody-here"})
     assert r.status_code in (404, 422), r.text
@@ -166,7 +176,7 @@ def test_a_bot_adds_followers_only_in_its_reach(api):
     # Taking someone off, or its own level, needs no reach.
     assert unfollow(api, row["id"], {"actor": "cara"}, token).status_code == 200
     assert follow(api, row["id"], {"notify": "digest"}, token).status_code == 200
-    assert who(api, row["id"]) == {"bot:ops": ("digest", "manual")}      # setting your own level is a choice
+    assert who(api, row["id"]) == {"bot:ops": ("digest", "manual")}  # setting your own level is a choice
 
 
 def test_a_task_in_a_shared_chat_has_no_followers(api):
@@ -208,35 +218,63 @@ def test_backfill_seeds_owners_and_drops_bots_that_only_posted():
     with sqlite3.connect(":memory:") as c:
         c.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY, owner_id TEXT, status TEXT, conversation_id TEXT)")
         c.execute("CREATE TABLE conversations(id TEXT PRIMARY KEY, kind TEXT, task_id TEXT, root_id TEXT)")
-        c.execute("CREATE TABLE thread_followers(id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, actor TEXT NOT NULL, "
-                  "following INTEGER NOT NULL DEFAULT 1, notify TEXT NOT NULL DEFAULT 'live', reason TEXT NOT NULL "
-                  "DEFAULT 'manual', last_read_seq INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, "
-                  "updated_at TEXT NOT NULL, UNIQUE (thread_id, actor))")
-        c.executemany("INSERT INTO tasks VALUES(?,?,?,?)", [
-            ("t1", "bot:ops", "open", "c1"), ("t2", "human:ben", "doing", "c2"), ("t3", "bot:ops", "closed", "c3"),
-            ("t4", "bot:ops", "open", "chat")])
-        c.executemany("INSERT INTO conversations VALUES(?,?,?,?)", [
-            ("c1", "task", "t1", None), ("c2", "task", "t2", None), ("c3", "task", "t3", None),
-            ("c1-sub", "thread", None, "c1"), ("chat", "group", None, None)])
-        c.executemany("INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,"
-                      "created_at,updated_at) VALUES(?,?,?,?,?,?,?,'then','then')", [
-                          ("f1", "c1", "bot:cpo", 1, "live", "posted", 4),     # a bot that only posted: drops
-                          ("f2", "c1", "human:ana", 1, "live", "posted", 4),   # a person: stays
-                          ("f3", "c1-sub", "bot:cmo", 1, "live", "posted", 2),  # under a task thread: drops
-                          ("f4", "c2", "human:ben", 1, "digest", "posted", 3),  # the owner: becomes owner, keeps level
-                          ("f5", "c1", "bot:cmo", 1, "mentions", "manual", 1),  # chosen: stays
-                          ("f6", "chat", "bot:cpo", 1, "live", "posted", 9),   # a chat: stays
-                          ("f7", "c3", "bot:cpo", 0, "live", "read", 5)])      # a read mark: stays
+        c.execute(
+            "CREATE TABLE thread_followers(id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, actor TEXT NOT NULL, "
+            "following INTEGER NOT NULL DEFAULT 1, notify TEXT NOT NULL DEFAULT 'live', reason TEXT NOT NULL "
+            "DEFAULT 'manual', last_read_seq INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL, UNIQUE (thread_id, actor))"
+        )
+        c.executemany(
+            "INSERT INTO tasks VALUES(?,?,?,?)",
+            [
+                ("t1", "bot:ops", "open", "c1"),
+                ("t2", "human:ben", "doing", "c2"),
+                ("t3", "bot:ops", "closed", "c3"),
+                ("t4", "bot:ops", "open", "chat"),
+            ],
+        )
+        c.executemany(
+            "INSERT INTO conversations VALUES(?,?,?,?)",
+            [
+                ("c1", "task", "t1", None),
+                ("c2", "task", "t2", None),
+                ("c3", "task", "t3", None),
+                ("c1-sub", "thread", None, "c1"),
+                ("chat", "group", None, None),
+            ],
+        )
+        c.executemany(
+            "INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,"
+            "created_at,updated_at) VALUES(?,?,?,?,?,?,?,'then','then')",
+            [
+                ("f1", "c1", "bot:cpo", 1, "live", "posted", 4),  # a bot that only posted: drops
+                ("f2", "c1", "human:ana", 1, "live", "posted", 4),  # a person: stays
+                ("f3", "c1-sub", "bot:cmo", 1, "live", "posted", 2),  # under a task thread: drops
+                ("f4", "c2", "human:ben", 1, "digest", "posted", 3),  # the owner: becomes owner, keeps level
+                ("f5", "c1", "bot:cmo", 1, "mentions", "manual", 1),  # chosen: stays
+                ("f6", "chat", "bot:cpo", 1, "live", "posted", 9),  # a chat: stays
+                ("f7", "c3", "bot:cpo", 0, "live", "read", 5),
+            ],
+        )  # a read mark: stays
         up(c)
-        got = {(r[0], r[1]): r[2:] for r in c.execute(
-            "SELECT thread_id, actor, following, notify, reason, last_read_seq FROM thread_followers")}
+        got = {
+            (r[0], r[1]): r[2:]
+            for r in c.execute(
+                "SELECT thread_id, actor, following, notify, reason, last_read_seq FROM thread_followers"
+            )
+        }
         assert got == {
-            ("c1", "bot:cpo"): (0, "live", "read", 4), ("c1", "human:ana"): (1, "live", "posted", 4),
-            ("c1-sub", "bot:cmo"): (0, "live", "read", 2), ("c2", "human:ben"): (1, "digest", "owner", 3),
-            ("c1", "bot:cmo"): (1, "mentions", "manual", 1), ("chat", "bot:cpo"): (1, "live", "posted", 9),
-            ("c3", "bot:cpo"): (0, "live", "read", 5), ("c1", "bot:ops"): (1, "live", "owner", 0)}
+            ("c1", "bot:cpo"): (0, "live", "read", 4),
+            ("c1", "human:ana"): (1, "live", "posted", 4),
+            ("c1-sub", "bot:cmo"): (0, "live", "read", 2),
+            ("c2", "human:ben"): (1, "digest", "owner", 3),
+            ("c1", "bot:cmo"): (1, "mentions", "manual", 1),
+            ("chat", "bot:cpo"): (1, "live", "posted", 9),
+            ("c3", "bot:cpo"): (0, "live", "read", 5),
+            ("c1", "bot:ops"): (1, "live", "owner", 0),
+        }
         before = c.execute("SELECT * FROM thread_followers ORDER BY id").fetchall()
         up(c)
         assert c.execute("SELECT * FROM thread_followers ORDER BY id").fetchall() == before
     with sqlite3.connect(":memory:") as c:
-        up(c)                                       # a database with no threads yet has nothing to backfill
+        up(c)  # a database with no threads yet has nothing to backfill

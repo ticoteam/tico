@@ -23,48 +23,102 @@ AUTH_SCHEME = re.compile(r"^(bearer|basic_user|basic_password|header:[A-Za-z0-9-
 
 
 def _s(name, base_url, check_path="", auth="bearer", env="", aliases=(), username="", headers=None):
-    return {"name": name, "base_url": base_url, "check_path": check_path, "auth_scheme": auth, "env": env,
-            "aliases": tuple(aliases), "username": username, "headers": dict(headers or {})}
+    return {
+        "name": name,
+        "base_url": base_url,
+        "check_path": check_path,
+        "auth_scheme": auth,
+        "env": env,
+        "aliases": tuple(aliases),
+        "username": username,
+        "headers": dict(headers or {}),
+    }
 
 
 # Keys are bot_tools.SERVICE_NAMES ids where one exists, so a tool and a bot.yaml declaration name a service alike.
 SERVICES = {
     "close-crm": _s("Close CRM", "https://api.close.com", "/api/v1/me/", "basic_user", "CLOSE_API_KEY", ("close",)),
     "stripe": _s("Stripe", "https://api.stripe.com", "/v1/balance", env="STRIPE_API_KEY"),
-    "github": _s("GitHub", "https://api.github.com", "/user", env="GITHUB_TOKEN", headers={"Accept": "application/vnd.github+json"}),
+    "github": _s(
+        "GitHub",
+        "https://api.github.com",
+        "/user",
+        env="GITHUB_TOKEN",
+        headers={"Accept": "application/vnd.github+json"},
+    ),
     "openai": _s("OpenAI", "https://api.openai.com", "/v1/models", env="OPENAI_API_KEY"),
-    "anthropic": _s("Anthropic", "https://api.anthropic.com", "/v1/models", "header:x-api-key", "ANTHROPIC_API_KEY",
-                    headers={"anthropic-version": "2023-06-01"}),
+    "anthropic": _s(
+        "Anthropic",
+        "https://api.anthropic.com",
+        "/v1/models",
+        "header:x-api-key",
+        "ANTHROPIC_API_KEY",
+        headers={"anthropic-version": "2023-06-01"},
+    ),
     "openrouter": _s("OpenRouter", "https://openrouter.ai", "/api/v1/key", env="OPENROUTER_API_KEY"),
     "posthog": _s("PostHog", "https://us.posthog.com", "/api/users/@me/", env="POSTHOG_API_KEY"),
-    "notion": _s("Notion", "https://api.notion.com", "/v1/users/me", env="NOTION_API_KEY", headers={"Notion-Version": "2022-06-28"}),
+    "notion": _s(
+        "Notion",
+        "https://api.notion.com",
+        "/v1/users/me",
+        env="NOTION_API_KEY",
+        headers={"Notion-Version": "2022-06-28"},
+    ),
     "linear": _s("Linear", "https://api.linear.app", "", "header:Authorization", "LINEAR_API_KEY"),
     "calendly": _s("Calendly", "https://api.calendly.com", "/users/me", env="CALENDLY_API_KEY"),
     "brex": _s("Brex", "https://platform.brexapis.com", "/v2/users/me", env="BREX_API_KEY"),
     "mercury": _s("Mercury", "https://api.mercury.com/api/v1", "/accounts", env="MERCURY_API_KEY"),
-    "cloudflare": _s("Cloudflare", "https://api.cloudflare.com/client/v4", "/user/tokens/verify", env="CLOUDFLARE_API_TOKEN"),
-    "hugging-face": _s("Hugging Face", "https://huggingface.co", "/api/whoami-v2", env="HF_TOKEN", aliases=("huggingface", "hf")),
-    "elevenlabs": _s("ElevenLabs", "https://api.elevenlabs.io", "/v1/user", "header:xi-api-key", "ELEVENLABS_API_KEY",
-                     ("eleven labs",)),
+    "cloudflare": _s(
+        "Cloudflare", "https://api.cloudflare.com/client/v4", "/user/tokens/verify", env="CLOUDFLARE_API_TOKEN"
+    ),
+    "hugging-face": _s(
+        "Hugging Face", "https://huggingface.co", "/api/whoami-v2", env="HF_TOKEN", aliases=("huggingface", "hf")
+    ),
+    "elevenlabs": _s(
+        "ElevenLabs",
+        "https://api.elevenlabs.io",
+        "/v1/user",
+        "header:xi-api-key",
+        "ELEVENLABS_API_KEY",
+        ("eleven labs",),
+    ),
     "heygen": _s("HeyGen", "https://api.heygen.com", "/v2/user/remaining_quota", "header:X-Api-Key", "HEYGEN_API_KEY"),
-    "twilio": _s("Twilio", "https://api.twilio.com", "/2010-04-01/Accounts.json", "basic_password", "TWILIO_AUTH_TOKEN"),
+    "twilio": _s(
+        "Twilio", "https://api.twilio.com", "/2010-04-01/Accounts.json", "basic_password", "TWILIO_AUTH_TOKEN"
+    ),
     "airtable": _s("Airtable", "https://api.airtable.com", "/v0/meta/whoami", env="AIRTABLE_API_KEY"),
     "hubspot": _s("HubSpot", "https://api.hubapi.com", "/account-info/v3/details", env="HUBSPOT_ACCESS_TOKEN"),
     "sendgrid": _s("SendGrid", "https://api.sendgrid.com", "/v3/user/profile", env="SENDGRID_API_KEY"),
     "intercom": _s("Intercom", "https://api.intercom.io", "/me", env="INTERCOM_ACCESS_TOKEN"),
-    "mailgun": _s("Mailgun", "https://api.mailgun.net", "/v3/domains", "basic_password", "MAILGUN_API_KEY", username="api"),
+    "mailgun": _s(
+        "Mailgun", "https://api.mailgun.net", "/v3/domains", "basic_password", "MAILGUN_API_KEY", username="api"
+    ),
     "pipedrive": _s("Pipedrive", "https://api.pipedrive.com", "/v1/users/me", "query:api_token", "PIPEDRIVE_API_TOKEN"),
-    "digitalocean": _s("DigitalOcean", "https://api.digitalocean.com", "/v2/account", env="DIGITALOCEAN_TOKEN",
-                       aliases=("digital ocean",)),
+    "digitalocean": _s(
+        "DigitalOcean",
+        "https://api.digitalocean.com",
+        "/v2/account",
+        env="DIGITALOCEAN_TOKEN",
+        aliases=("digital ocean",),
+    ),
     "sentry": _s("Sentry", "https://sentry.io", "/api/0/", env="SENTRY_AUTH_TOKEN"),
     "asana": _s("Asana", "https://app.asana.com", "/api/1.0/users/me", env="ASANA_ACCESS_TOKEN"),
-    "clickup": _s("ClickUp", "https://api.clickup.com", "/api/v2/user", "header:Authorization", "CLICKUP_API_TOKEN",
-                  ("click up",)),
-    "postmark": _s("Postmark", "https://api.postmarkapp.com", "/server", "header:X-Postmark-Server-Token",
-                   "POSTMARK_SERVER_TOKEN", headers={"Accept": "application/json"}),
+    "clickup": _s(
+        "ClickUp", "https://api.clickup.com", "/api/v2/user", "header:Authorization", "CLICKUP_API_TOKEN", ("click up",)
+    ),
+    "postmark": _s(
+        "Postmark",
+        "https://api.postmarkapp.com",
+        "/server",
+        "header:X-Postmark-Server-Token",
+        "POSTMARK_SERVER_TOKEN",
+        headers={"Accept": "application/json"},
+    ),
     "render": _s("Render", "https://api.render.com", "/v1/owners", env="RENDER_API_KEY"),
     "vercel": _s("Vercel", "https://api.vercel.com", "/v2/user", env="VERCEL_TOKEN"),
-    "gemini": _s("Gemini", "https://generativelanguage.googleapis.com", "", "query:key", "GEMINI_API_KEY", ("google ai",)),
+    "gemini": _s(
+        "Gemini", "https://generativelanguage.googleapis.com", "", "query:key", "GEMINI_API_KEY", ("google ai",)
+    ),
     "xai": _s("xAI", "https://api.x.ai", "", env="XAI_API_KEY"),
     "resend": _s("Resend", "https://api.resend.com", "", env="RESEND_API_KEY"),
     "attio": _s("Attio", "https://api.attio.com", "", env="ATTIO_API_KEY"),
@@ -72,8 +126,13 @@ SERVICES = {
     "apollo": _s("Apollo", "https://api.apollo.io", "", "header:X-Api-Key", "APOLLO_API_KEY"),
     "deepgram": _s("Deepgram", "https://api.deepgram.com", "", "header:Authorization", "DEEPGRAM_API_KEY"),
     # A bearer call to /me with a bad token answers 401 (code 190); in the query string it would answer 400.
-    "meta-ads": _s("Meta Ads", "https://graph.facebook.com/v26.0", "/me", env="META_ACCESS_TOKEN",
-                   aliases=("facebook ads", "fb ads", "meta", "facebook")),
+    "meta-ads": _s(
+        "Meta Ads",
+        "https://graph.facebook.com/v26.0",
+        "/me",
+        env="META_ACCESS_TOKEN",
+        aliases=("facebook ads", "fb ads", "meta", "facebook"),
+    ),
     # OAuth (client id and secret, refresh token, developer token, login customer id): no single key goes on a call, so
     # there is no proxy address or check. Bots use it from their computers; Finance's ad spend import
     # (backend/finance/ad_import.py) exchanges the refresh token itself.
@@ -112,7 +171,7 @@ def match(env="", name="", service=""):
     for text in (env, name):
         words = _words(text)
         for prefix, key in PREFIXES:
-            if words[:len(prefix)] == prefix:
+            if words[: len(prefix)] == prefix:
                 return key
     return None
 
@@ -124,10 +183,17 @@ def is_tool_key(kind, env, name, source, stored, on_computers):
     key or shared model login (`on_computers`: a computer_keys row or a grant to the computers; or a `computers:`
     source), Finance's bank logins (`finance`), a bot's own `HUB_` key back into Tico, passwords and files."""
     from backend.providers import RUNTIME_KEY_NAMES
+
     env, source = env or "", source or ""
-    return (kind in ("api_key", "token") and bool(stored) and not on_computers
-            and (env or str(name or "").strip()) not in RUNTIME_KEY_NAMES and not env.startswith("HUB_")
-            and not source.startswith("computers:") and source != "finance")
+    return (
+        kind in ("api_key", "token")
+        and bool(stored)
+        and not on_computers
+        and (env or str(name or "").strip()) not in RUNTIME_KEY_NAMES
+        and not env.startswith("HUB_")
+        and not source.startswith("computers:")
+        and source != "finance"
+    )
 
 
 def slug(text):
@@ -151,9 +217,19 @@ def insert_tool(conn, service, name, delivery, created_by, created_at, updated_a
     conn.execute(
         "INSERT INTO tools(id,name,service,base_url,auth_scheme,check_path,delivery,created_by,created_at,updated_at)"
         " VALUES(?,?,?,?,?,?,?,?,?,?)",
-        (tid, fields["name"] if service and first else str(name or "").strip() or tid, service or "",
-         fields.get("base_url", ""), fields.get("auth_scheme", "bearer"), fields.get("check_path", ""), delivery,
-         created_by or "", created_at, updated_at or created_at))
+        (
+            tid,
+            fields["name"] if service and first else str(name or "").strip() or tid,
+            service or "",
+            fields.get("base_url", ""),
+            fields.get("auth_scheme", "bearer"),
+            fields.get("check_path", ""),
+            delivery,
+            created_by or "",
+            created_at,
+            updated_at or created_at,
+        ),
+    )
     return tid
 
 
@@ -162,8 +238,14 @@ def defaults(service):
     row = SERVICES.get(service or "")
     if not row:
         return {}
-    return {"name": row["name"], "base_url": row["base_url"], "auth_scheme": row["auth_scheme"],
-            "check_path": row["check_path"], "env": row["env"], "username": row["username"]}
+    return {
+        "name": row["name"],
+        "base_url": row["base_url"],
+        "auth_scheme": row["auth_scheme"],
+        "check_path": row["check_path"],
+        "env": row["env"],
+        "username": row["username"],
+    }
 
 
 def apply_auth(scheme, secret, username=""):

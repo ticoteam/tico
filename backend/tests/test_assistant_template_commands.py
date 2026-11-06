@@ -134,7 +134,7 @@ def test_every_hub_command_in_the_template_parses():
             failures.append(f"{where}: unbalanced quotes in `{text}`")
             continue
         if expected_to_exist(argv):
-            pending.append(where)         # lands with chris/assistant-tools
+            pending.append(where)  # lands with chris/assistant-tools
             continue
         # A bare mention ("`hub task create`" in prose, two words) only has to name a real command: a missing argument is fine.
         bare = len(argv) <= 2
@@ -159,5 +159,9 @@ def test_every_playbook_or_skill_the_assistant_names_exists():
     for path in [ASSISTANT / "AGENT.md", *sorted((ASSISTANT / "playbooks").glob("*.md"))]:
         named.update(PATH_IN_TEXT.findall(path.read_text()))
     assert named, "the Assistant names no playbook or skill"
-    missing = sorted(p for p in named if not (ASSISTANT / p.rstrip("/")).exists() and not (ASSISTANT / (p.rstrip("/") + ".md")).exists())
+    missing = sorted(
+        p
+        for p in named
+        if not (ASSISTANT / p.rstrip("/")).exists() and not (ASSISTANT / (p.rstrip("/") + ".md")).exists()
+    )
     assert not missing, missing

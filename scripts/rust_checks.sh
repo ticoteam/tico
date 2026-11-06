@@ -4,7 +4,6 @@
 # The toolchain is pinned here, not in rust-toolchain.toml: installs that run from a checkout build runner-rs with
 # whatever cargo they have (runner_support/engine.py build), and a pin there would make each of them download it first.
 # 1.92.0 is the release images' version (Dockerfile); RUST_TOOLCHAIN overrides it.
-# rustc's dead_code is allowed for clippy only (baseline: test-only helpers), so ordinary builds still warn.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -20,7 +19,7 @@ for crate in $CRATES; do
     echo "fmt: $crate: cargo fmt --check failed (diff above; run cargo fmt in $crate)"; status=1
   fi
 
-  if (cd "$crate" && cargo +"$TOOLCHAIN" clippy --locked --all-targets -- -D warnings -A dead_code); then
+  if (cd "$crate" && cargo +"$TOOLCHAIN" clippy --locked --all-targets -- -D warnings); then
     echo "clippy: $crate: clean"
   else
     echo "clippy: $crate: findings"; status=1

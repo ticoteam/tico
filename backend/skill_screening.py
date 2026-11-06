@@ -21,6 +21,7 @@ someone screens it again. A proposal is never `screened` without a model answer.
 question set version is reused instead of paying again; a new question set version sends pending proposals back to be
 screened (approved versions are not re-gated). Events name the proposal, the skill and the outcome, never a file's text.
 """
+
 import difflib
 import json
 import logging
@@ -39,15 +40,20 @@ LOG = logging.getLogger("tico.skill_screening")
 
 SET = "skill-screen"
 JOB = "skill_screening"
-BATCH = 3                       # proposals claimed per pass: each may take a model call of up to 90 seconds
-LEASE_MINUTES = 10              # a claim older than this was left by a stopped worker and is taken again
+BATCH = 3  # proposals claimed per pass: each may take a model call of up to 90 seconds
+LEASE_MINUTES = 10  # a claim older than this was left by a stopped worker and is taken again
 VERDICTS = ("safe", "review", "unsafe")
 RISKS = ("low", "medium", "high")
-FLAGS = ("description_mismatch", "hidden_or_conditional_behaviour", "exfiltration", "permission_or_safety_bypass",
-         "instructions_to_other_agents_or_reviewers")
-FLAG_AT = 0.5                   # a concern at or over this raises the risk to at least medium (the set's `flag` threshold)
+FLAGS = (
+    "description_mismatch",
+    "hidden_or_conditional_behaviour",
+    "exfiltration",
+    "permission_or_safety_bypass",
+    "instructions_to_other_agents_or_reviewers",
+)
+FLAG_AT = 0.5  # a concern at or over this raises the risk to at least medium (the set's `flag` threshold)
 FLOOR_KINDS = ("hidden_unicode", "secret_read", "pipe_to_shell")
-PER_KIND = 50                   # hits kept per pattern kind, so one noisy kind never hides another
+PER_KIND = 50  # hits kept per pattern kind, so one noisy kind never hides another
 URL_CHARS = 300
 FENCE = "skill-file"
 
@@ -59,7 +65,9 @@ URL = re.compile(r"\b(?:https?|ftp|wss?)://[^\s<>\"'`)\]]+", re.I)
 PIPE = re.compile(
     r"\b(?:curl|wget|iwr|Invoke-WebRequest)\b[^\n|]*\|\s*(?:sudo\s+)?(?:(?:ba|z|da|k)?sh|python3?|node|perl|ruby|iex)\b"
     r"|\b(?:ba|z)?sh\s+(?:-c\s+)?[\"']?\$\(\s*(?:curl|wget)\b"
-    r"|\b(?:ba|z)?sh\s+<\(\s*(?:curl|wget)\b", re.I)
+    r"|\b(?:ba|z)?sh\s+<\(\s*(?:curl|wget)\b",
+    re.I,
+)
 SECRET = re.compile(
     r"(?<![\w.-])\.env(?![\w.-])|~/\.ssh\b|\.ssh/|\bid_(?:rsa|ed25519|ecdsa)\b"
     r"|\bsecurity\s+(?:find|dump)-(?:generic|internet)-password\b|\bsecurity\s+dump-keychain\b|\bprintenv\b"
@@ -67,17 +75,25 @@ SECRET = re.compile(
     r"|JSON\.stringify\(\s*process\.env\s*\)|Object\.(?:entries|keys|values)\(\s*process\.env\s*\)"
     r"|\.aws/(?:credentials|config)\b|\bAWS_SECRET_ACCESS_KEY\b|\.config/gcloud\b|application_default_credentials\.json"
     r"|\bGOOGLE_APPLICATION_CREDENTIALS\b|\.netrc\b|\.git-credentials\b|\.docker/config\.json|\.kube/config\b"
-    r"|^\s*env\s*(?:\||>|$)", re.I | re.M)
+    r"|^\s*env\s*(?:\||>|$)",
+    re.I | re.M,
+)
 AGENT_PATH = re.compile(
     r"\.claude/(?:settings[\w.-]*|hooks)\b|\bhooks?\.json\b|[\"']hooks[\"']\s*:|\bAGENTS?\.md\b|\bCLAUDE\.md\b"
-    r"|(?:\.claude|\.codex|\.agents)/skills/(?P<other>[a-z0-9._-]+)|\.codex/(?:config|hooks)", re.I)
+    r"|(?:\.claude|\.codex|\.agents)/skills/(?P<other>[a-z0-9._-]+)|\.codex/(?:config|hooks)",
+    re.I,
+)
 WRITE = re.compile(
     r">>?|\btee\b|\bwrite|\bopen\([^\n]*[\"'][wa]\+?b?[\"']|\bcp\b|\bmv\b|\bsed\s+-i|\becho\b|\bappend|\bmodif|\bedit"
-    r"|\bupdate|\binsert|\breplace|\bln\s+-s|\bdump\(|writeFile|fs\.write|json\.dump|\bset\b|\badd\b", re.I)
+    r"|\bupdate|\binsert|\breplace|\bln\s+-s|\bdump\(|writeFile|fs\.write|json\.dump|\bset\b|\badd\b",
+    re.I,
+)
 NETWORK = re.compile(
     r"\brequests\.(?:get|post|put|patch|delete|head|request|Session)\b|\burllib(?:\.request|3)?\b|\bhttp\.client\b"
     r"|\bhttpx\b|\baiohttp\b|\bsocket\.(?:socket|create_connection)\b|\bfetch\s*\(|\baxios\b|\bXMLHttpRequest\b"
-    r"|\bcurl\b|\bwget\b|\bnc\s+-|\bnetcat\b|\bncat\b|Invoke-WebRequest|Invoke-RestMethod|/dev/tcp/|\bscp\s", re.I)
+    r"|\bcurl\b|\bwget\b|\bnc\s+-|\bnetcat\b|\bncat\b|Invoke-WebRequest|Invoke-RestMethod|/dev/tcp/|\bscp\s",
+    re.I,
+)
 SCRIPTS = (".py", ".sh", ".bash", ".zsh", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl", ".ps1", ".php", ".go", ".lua")
 
 
@@ -145,29 +161,43 @@ def full_diff(before, after):
     """The unified diff of every changed file, uncut: the state must hold all of it or the screen is `oversize`."""
     old = {item["path"]: item["content"] for item in before}
     new = {item["path"]: item["content"] for item in after}
-    return "".join(_unified(rel, old.get(rel), new.get(rel))
-                   for rel in sorted(set(old) | set(new)) if old.get(rel) != new.get(rel))
+    return "".join(
+        _unified(rel, old.get(rel), new.get(rel)) for rel in sorted(set(old) | set(new)) if old.get(rel) != new.get(rel)
+    )
 
 
 def _unified(rel, before, after):
     """One file's unified diff. A last line with no newline is marked as git marks it, so it never runs into the next
     line (clients/botcopy.py `unified` joins them)."""
+
     def lines(text):
         out = (text or "").splitlines(keepends=True)
         if out and not out[-1].endswith("\n"):
             out[-1] += "\n\\ No newline at end of file\n"
         return out
-    return "".join(difflib.unified_diff(lines(before), lines(after), "a/" + rel if before is not None else "/dev/null",
-                                        "b/" + rel if after is not None else "/dev/null"))
+
+    return "".join(
+        difflib.unified_diff(
+            lines(before),
+            lines(after),
+            "a/" + rel if before is not None else "/dev/null",
+            "b/" + rel if after is not None else "/dev/null",
+        )
+    )
 
 
 def build_state(name, description, files, base_files, patterns):
     """What the model reads: the skill's name and description, every file fenced as data, the diff against the base for
     an update, and the pattern hits."""
-    state = {"name": name, "description": description,
-             "files": [{"path": f["path"], "content": _fenced(f["path"], f["content"])}
-                       for f in sorted(files, key=lambda f: f["path"])],
-             "patterns": patterns}
+    state = {
+        "name": name,
+        "description": description,
+        "files": [
+            {"path": f["path"], "content": _fenced(f["path"], f["content"])}
+            for f in sorted(files, key=lambda f: f["path"])
+        ],
+        "patterns": patterns,
+    }
     if base_files is not None:
         state["diff"] = _fenced("diff", full_diff(base_files, files))
     return state
@@ -197,8 +227,10 @@ def question_set():
 
 # ----------------------------------------------------------------------------------------------- the queue
 # The question set of a proposal's latest screen ('' when it has none); `{table}` names the proposal row.
-_LATEST_SET = ("COALESCE((SELECT s.question_set FROM skill_screenings s WHERE s.proposal_id = {table}.id "
-               "ORDER BY s.created_at DESC, s.rowid DESC LIMIT 1), '')")
+_LATEST_SET = (
+    "COALESCE((SELECT s.question_set FROM skill_screenings s WHERE s.proposal_id = {table}.id "
+    "ORDER BY s.created_at DESC, s.rowid DESC LIMIT 1), '')"
+)
 
 
 def _lease_cutoff():
@@ -209,29 +241,47 @@ def requeue(c, label):
     """Pending proposals whose latest screen was made with another question set version go back to be screened. Approved
     versions are left as they are. Returns how many."""
     latest = _LATEST_SET.format(table="skill_proposals")
-    return c.execute(f"UPDATE skill_proposals SET screen_status='pending', updated_at=? WHERE status='pending' AND "
-                     f"screen_status IN ('screened','not_screened') AND {latest} <> ?", (H.now(), label)).rowcount
+    return c.execute(
+        f"UPDATE skill_proposals SET screen_status='pending', updated_at=? WHERE status='pending' AND "
+        f"screen_status IN ('screened','not_screened') AND {latest} <> ?",
+        (H.now(), label),
+    ).rowcount
 
 
 def recover(c):
     """A claim a stopped worker left past its lease goes back to pending."""
-    return c.execute("UPDATE skill_proposals SET screen_status='pending', updated_at=? WHERE status='pending' AND "
-                     "screen_status='screening' AND updated_at<?", (H.now(), _lease_cutoff())).rowcount
+    return c.execute(
+        "UPDATE skill_proposals SET screen_status='pending', updated_at=? WHERE status='pending' AND "
+        "screen_status='screening' AND updated_at<?",
+        (H.now(), _lease_cutoff()),
+    ).rowcount
 
 
 def due(c, label=None):
     """Whether a pass has anything to do: a proposal waiting, a lapsed claim, or a screen from an older set version."""
-    stale = f" OR (p.screen_status IN ('screened','not_screened') AND {_LATEST_SET.format(table='p')} <> ?)" if label else ""
+    stale = (
+        f" OR (p.screen_status IN ('screened','not_screened') AND {_LATEST_SET.format(table='p')} <> ?)"
+        if label
+        else ""
+    )
     args = (_lease_cutoff(), label) if label else (_lease_cutoff(),)
-    return bool(c.execute("SELECT 1 FROM skill_proposals p WHERE p.status='pending' AND (p.screen_status='pending' OR "
-                          f"(p.screen_status='screening' AND p.updated_at<?){stale}) LIMIT 1", args).fetchone())
+    return bool(
+        c.execute(
+            "SELECT 1 FROM skill_proposals p WHERE p.status='pending' AND (p.screen_status='pending' OR "
+            f"(p.screen_status='screening' AND p.updated_at<?){stale}) LIMIT 1",
+            args,
+        ).fetchone()
+    )
 
 
 def claim(c, pid):
     """The claim stamp when this pass took the proposal (pending -> screening), else None: someone else has it."""
     stamp = H.now()
-    taken = c.execute("UPDATE skill_proposals SET screen_status='screening', updated_at=? WHERE id=? AND status='pending' "
-                      "AND screen_status='pending'", (stamp, pid)).rowcount
+    taken = c.execute(
+        "UPDATE skill_proposals SET screen_status='screening', updated_at=? WHERE id=? AND status='pending' "
+        "AND screen_status='pending'",
+        (stamp, pid),
+    ).rowcount
     return stamp if taken else None
 
 
@@ -245,10 +295,18 @@ def _json(text, default):
 
 
 def _outcome(status, question_set, patterns, reason=None, **fields):
-    return {"status": status, "question_set": question_set, "patterns": patterns, "reason": reason,
-            "verdict": fields.get("verdict"), "risk": fields.get("risk"), "summary": fields.get("summary"),
-            "findings": fields.get("findings") or [], "judge_call_id": fields.get("judge_call_id"),
-            "cached_from": fields.get("cached_from")}
+    return {
+        "status": status,
+        "question_set": question_set,
+        "patterns": patterns,
+        "reason": reason,
+        "verdict": fields.get("verdict"),
+        "risk": fields.get("risk"),
+        "summary": fields.get("summary"),
+        "findings": fields.get("findings") or [],
+        "judge_call_id": fields.get("judge_call_id"),
+        "cached_from": fields.get("cached_from"),
+    }
 
 
 def _reason(exc, seconds, timeout):
@@ -258,8 +316,11 @@ def _reason(exc, seconds, timeout):
         return "cap"
     if code in ("unconfigured", "auth"):
         return "unavailable"
-    if code == "unavailable" and not getattr(exc, "status", 0) and (
-            seconds >= timeout - 1 or "time" in str(getattr(exc, "detail", "")).lower()):
+    if (
+        code == "unavailable"
+        and not getattr(exc, "status", 0)
+        and (seconds >= timeout - 1 or "time" in str(getattr(exc, "detail", "")).lower())
+    ):
         return "timeout"
     return "error"
 
@@ -273,17 +334,22 @@ def raised_risk(risk, hits, flags, flag_at=FLAG_AT):
 
 def _cached(c, row, label):
     """A `screened` row for this exact bundle, base and question set version, of a proposal with the same name."""
-    found = c.execute("SELECT s.* FROM skill_screenings s JOIN skill_proposals p ON p.id = s.proposal_id WHERE "
-                      "s.status='screened' AND s.sha256=? AND s.base_version_id IS ? AND s.question_set=? AND p.name=? "
-                      "ORDER BY s.created_at DESC, s.rowid DESC LIMIT 1",
-                      (row["sha256"], row["base_version_id"], label, row["name"])).fetchone()
+    found = c.execute(
+        "SELECT s.* FROM skill_screenings s JOIN skill_proposals p ON p.id = s.proposal_id WHERE "
+        "s.status='screened' AND s.sha256=? AND s.base_version_id IS ? AND s.question_set=? AND p.name=? "
+        "ORDER BY s.created_at DESC, s.rowid DESC LIMIT 1",
+        (row["sha256"], row["base_version_id"], label, row["name"]),
+    ).fetchone()
     return dict(found) if found else None
 
 
 def _judge_call(store, label, since):
     with store.read() as c:
-        found = c.execute("SELECT id FROM events WHERE action='judge.call' AND target=? AND created_at>=? "
-                          "ORDER BY rowid DESC LIMIT 1", (label, since)).fetchone()
+        found = c.execute(
+            "SELECT id FROM events WHERE action='judge.call' AND target=? AND created_at>=? "
+            "ORDER BY rowid DESC LIMIT 1",
+            (label, since),
+        ).fetchone()
     return found[0] if found else None
 
 
@@ -294,7 +360,7 @@ def screen(store, row, base_files, engine_for=None):
     qset = question_set()
     label = qset["label"] if qset else SET
     if bundles.bundle_sha(files) != row["sha256"]:
-        return _outcome("not_screened", label, [], "error")      # the stored bundle is not the one proposed
+        return _outcome("not_screened", label, [], "error")  # the stored bundle is not the one proposed
     every = pattern_hits(files, row["name"])
     hits = kept_hits(every)
     if not qset:
@@ -302,9 +368,17 @@ def screen(store, row, base_files, engine_for=None):
     with store.read() as c:
         cached = _cached(c, row, label)
     if cached:
-        return _outcome("screened", label, _json(cached["patterns"], hits), verdict=cached["verdict"], risk=cached["risk"],
-                        summary=cached["summary"], findings=_json(cached["findings"], []),
-                        judge_call_id=cached["judge_call_id"], cached_from=cached["id"])
+        return _outcome(
+            "screened",
+            label,
+            _json(cached["patterns"], hits),
+            verdict=cached["verdict"],
+            risk=cached["risk"],
+            summary=cached["summary"],
+            findings=_json(cached["findings"], []),
+            judge_call_id=cached["judge_call_id"],
+            cached_from=cached["id"],
+        )
     state = build_state(row["name"], row["description"], files, base_files, hits)
     if state_chars(state) > J.MAX_STATE_CHARS:
         return _outcome("not_screened", label, hits, "oversize")
@@ -317,8 +391,13 @@ def screen(store, row, base_files, engine_for=None):
     try:
         result = engine(state, qset["questions"], label=label, evidence=True)
     except J.JudgeError as exc:
-        return _outcome("not_screened", label, hits, _reason(exc, time.monotonic() - started, STRICT_SECONDS),
-                        judge_call_id=_judge_call(store, label, since))
+        return _outcome(
+            "not_screened",
+            label,
+            hits,
+            _reason(exc, time.monotonic() - started, STRICT_SECONDS),
+            judge_call_id=_judge_call(store, label, since),
+        )
     call_id = _judge_call(store, label, since)
     answers = (result or {}).get("answers") or {}
     try:
@@ -330,29 +409,66 @@ def screen(store, row, base_files, engine_for=None):
         return _outcome("not_screened", label, hits, "error", judge_call_id=call_id)
     evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
     flag_at = float((qset.get("thresholds") or {}).get("flag", FLAG_AT))
-    return _outcome("screened", label, hits, verdict=verdict, risk=raised_risk(risk, every, flags, flag_at),
-                    summary=evidence.get("summary"), findings=evidence.get("findings") or [], judge_call_id=call_id)
+    return _outcome(
+        "screened",
+        label,
+        hits,
+        verdict=verdict,
+        risk=raised_risk(risk, every, flags, flag_at),
+        summary=evidence.get("summary"),
+        findings=evidence.get("findings") or [],
+        judge_call_id=call_id,
+    )
 
 
 def finish(store, row, stamp, outcome):
     """Write the outcome, only while this pass still holds the claim (a rescreen or a lapsed lease took it back: the
     result is dropped and the proposal is screened again). Returns whether it was written."""
     with store.transaction() as c:
-        moved = c.execute("UPDATE skill_proposals SET screen_status=?, updated_at=? WHERE id=? AND screen_status='screening' "
-                          "AND (updated_at=? OR status<>'pending')",
-                          (outcome["status"], H.now(), row["id"], stamp)).rowcount
+        moved = c.execute(
+            "UPDATE skill_proposals SET screen_status=?, updated_at=? WHERE id=? AND screen_status='screening' "
+            "AND (updated_at=? OR status<>'pending')",
+            (outcome["status"], H.now(), row["id"], stamp),
+        ).rowcount
         if not moved:
             return False
-        c.execute("INSERT INTO skill_screenings (id, proposal_id, sha256, base_version_id, question_set, status, reason, "
-                  "verdict, risk, summary, findings, patterns, judge_call_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                  ("sks_" + uuid.uuid4().hex[:24], row["id"], row["sha256"], row["base_version_id"], outcome["question_set"],
-                   outcome["status"], outcome["reason"], outcome["verdict"], outcome["risk"], outcome["summary"],
-                   json.dumps(outcome["findings"], ensure_ascii=False), json.dumps(outcome["patterns"], ensure_ascii=False),
-                   outcome["judge_call_id"], H.now()))
-        H.event(c, H.KEEPER, "skill.screened", row["id"], {
-            "name": row["name"], "sha256": row["sha256"], "status": outcome["status"], "reason": outcome["reason"],
-            "verdict": outcome["verdict"], "risk": outcome["risk"], "question_set": outcome["question_set"],
-            "patterns": len(outcome["patterns"]), "cached": bool(outcome["cached_from"])})
+        c.execute(
+            "INSERT INTO skill_screenings (id, proposal_id, sha256, base_version_id, question_set, status, reason, "
+            "verdict, risk, summary, findings, patterns, judge_call_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "sks_" + uuid.uuid4().hex[:24],
+                row["id"],
+                row["sha256"],
+                row["base_version_id"],
+                outcome["question_set"],
+                outcome["status"],
+                outcome["reason"],
+                outcome["verdict"],
+                outcome["risk"],
+                outcome["summary"],
+                json.dumps(outcome["findings"], ensure_ascii=False),
+                json.dumps(outcome["patterns"], ensure_ascii=False),
+                outcome["judge_call_id"],
+                H.now(),
+            ),
+        )
+        H.event(
+            c,
+            H.KEEPER,
+            "skill.screened",
+            row["id"],
+            {
+                "name": row["name"],
+                "sha256": row["sha256"],
+                "status": outcome["status"],
+                "reason": outcome["reason"],
+                "verdict": outcome["verdict"],
+                "risk": outcome["risk"],
+                "question_set": outcome["question_set"],
+                "patterns": len(outcome["patterns"]),
+                "cached": bool(outcome["cached_from"]),
+            },
+        )
     return True
 
 
@@ -363,8 +479,11 @@ def screen_one(store, pid, engine_for=None):
         if not stamp:
             return None
         row = dict(c.execute("SELECT * FROM skill_proposals WHERE id=?", (pid,)).fetchone())
-        base = c.execute("SELECT files FROM skill_versions WHERE id=?", (row["base_version_id"],)).fetchone() \
-            if row["base_version_id"] else None
+        base = (
+            c.execute("SELECT files FROM skill_versions WHERE id=?", (row["base_version_id"],)).fetchone()
+            if row["base_version_id"]
+            else None
+        )
     base_files = _json(base["files"], []) if base else None
     try:
         outcome = screen(store, row, base_files, engine_for)
@@ -383,8 +502,14 @@ def drain(store, limit=BATCH, engine_for=None):
             requeue(c, qset["label"])
         recover(c)
     with store.read() as c:
-        ids = [r[0] for r in c.execute("SELECT id FROM skill_proposals WHERE status='pending' AND screen_status='pending' "
-                                       "ORDER BY created_at, id LIMIT ?", (limit,)).fetchall()]
+        ids = [
+            r[0]
+            for r in c.execute(
+                "SELECT id FROM skill_proposals WHERE status='pending' AND screen_status='pending' "
+                "ORDER BY created_at, id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        ]
     done = []
     for pid in ids:
         status = screen_one(store, pid, engine_for)
@@ -399,6 +524,7 @@ _RUNNING = threading.Lock()
 
 def _words(done):
     from . import system_routines as SR
+
     screened = done.count("screened")
     parts = [SR.count_words(screened, "skill screened", "skills screened")] if screened else []
     if len(done) - screened:
@@ -408,6 +534,7 @@ def _words(done):
 
 def _worker(store):
     from . import system_routines as SR
+
     try:
         with SR.recording(store, JOB) as run:
             done = drain(store)

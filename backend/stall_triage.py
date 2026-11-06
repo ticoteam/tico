@@ -5,6 +5,7 @@ stuck, or unsure). Nothing reads tasks that way now: the task roundup (backend/t
 verdict is written. Existing verdicts stay for the Task Manager, which shows one only while the task still stands as it
 did when it was read (class_of).
 """
+
 from .store import H
 
 SCHEMA = """
@@ -28,6 +29,6 @@ def class_of(c, row):
         found = verdict_of(c, row["id"])
         if found and found["class"] in (UNSURE, STUCK) and found["stand"] == H._stall_stand(c, row):
             return found["class"]
-    except Exception:       # noqa: BLE001 - a missing table or an unreadable task is no class
+    except Exception:  # noqa: BLE001 - a missing table or an unreadable task is no class
         pass
     return None

@@ -35,6 +35,7 @@ from a 0600 file that is removed right after, every printed line has it masked, 
 line that sets TICO_ENROLL_TOKEN is taken out of those files (on every boot, in case boat writes its block again).
 The code is single-use and lasts 15 minutes, so one that survives somewhere still enrolls nothing.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -63,8 +64,13 @@ FONT_PACKAGES = ("fonts-liberation", "fonts-noto-color-emoji")
 NODE_MAJOR = 22
 CHROME_KEY_URL = "https://dl.google.com/linux/linux_signing_key.pub"
 NODE_KEY_URL = "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
-JOBS = ("bot", "connectors", "close-calls", "importers")   # scripts/tico-computer install's units (runner_support/systemd_units.py)
-DEFAULT_USER = "user"                                       # boat's sandbox user (docs.boat.dev/machines/tools)
+JOBS = (
+    "bot",
+    "connectors",
+    "close-calls",
+    "importers",
+)  # scripts/tico-computer install's units (runner_support/systemd_units.py)
+DEFAULT_USER = "user"  # boat's sandbox user (docs.boat.dev/machines/tools)
 URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$")
 CODE_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 LINE_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
@@ -76,6 +82,7 @@ class Refused(Exception):
 
 
 # -- reading the variables --------------------------------------------------------------------------------------------
+
 
 def parse(text: str) -> dict[str, str]:
     """`KEY=value` and `export KEY=value` lines, unquoted the way sh would; anything else is skipped."""
@@ -129,8 +136,7 @@ def scrub(path: Path) -> bool:
     text = read(path)
     if TOKEN not in text:
         return False
-    kept = [line for line in text.splitlines(keepends=True)
-            if not ((m := LINE_RE.match(line)) and m.group(1) == TOKEN)]
+    kept = [line for line in text.splitlines(keepends=True) if not ((m := LINE_RE.match(line)) and m.group(1) == TOKEN)]
     if len(kept) == len(text.splitlines(keepends=True)):
         return False
     info = path.stat()
@@ -150,12 +156,24 @@ def scrub(path: Path) -> bool:
 
 # -- the machine ------------------------------------------------------------------------------------------------------
 
+
 class Machine:
     """One machine's paths and the commands it runs. Everything that touches the system goes through `run`, so the
     tests drive it with a fake."""
 
-    def __init__(self, *, user: str, home: Path, uid: int, gid: int, root: Path, run=subprocess.run, say=print,
-                 sleep=time.sleep, etc: Path = Path("/etc")):
+    def __init__(
+        self,
+        *,
+        user: str,
+        home: Path,
+        uid: int,
+        gid: int,
+        root: Path,
+        run=subprocess.run,
+        say=print,
+        sleep=time.sleep,
+        etc: Path = Path("/etc"),
+    ):
         self.user, self.home, self.uid, self.gid, self.root = user, home, uid, gid, root
         self.run, self.say, self.sleep, self.etc = run, say, sleep, etc
 
@@ -186,10 +204,19 @@ class Machine:
     def user_env(self) -> list[str]:
         """A clean environment for the user's commands: nothing of this service's, so the code never rides along."""
         runtime = f"/run/user/{self.uid}"
-        return ["env", "-i", f"HOME={self.home}", f"USER={self.user}", f"LOGNAME={self.user}",
-                f"PATH={self.home}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                f"XDG_RUNTIME_DIR={runtime}", f"DBUS_SESSION_BUS_ADDRESS=unix:path={runtime}/bus",
-                "LANG=C.UTF-8", f"TICO_ROOT={self.root}", f"TICO_RUNNER_PYTHON={self.python}"]
+        return [
+            "env",
+            "-i",
+            f"HOME={self.home}",
+            f"USER={self.user}",
+            f"LOGNAME={self.user}",
+            f"PATH={self.home}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            f"XDG_RUNTIME_DIR={runtime}",
+            f"DBUS_SESSION_BUS_ADDRESS=unix:path={runtime}/bus",
+            "LANG=C.UTF-8",
+            f"TICO_ROOT={self.root}",
+            f"TICO_RUNNER_PYTHON={self.python}",
+        ]
 
     def as_user(self, *args: str, timeout: int = 900, secret: str = "") -> subprocess.CompletedProcess:
         command = ["runuser", "-u", self.user, "--", *self.user_env(), *args]
@@ -218,6 +245,7 @@ def load(etc: Path = Path("/etc"), **kw) -> Machine | None:
 
 # -- boot -------------------------------------------------------------------------------------------------------------
 
+
 def enroll(m: Machine, code: str, hub: str) -> bool:
     m.projects.mkdir(mode=0o700, parents=True, exist_ok=True)
     (m.projects / "secrets").mkdir(mode=0o700, exist_ok=True)
@@ -234,11 +262,26 @@ def enroll(m: Machine, code: str, hub: str) -> bool:
                 return True
             binary = m.as_user(str(m.python), "-m", "runner_support.engine", "path", timeout=60)
             if binary.returncode or not (binary.stdout or "").strip():
-                m.say("no Rust runner in this checkout: rebuild the base image (python3 -m runner_support.cloud_machine base)")
+                m.say(
+                    "no Rust runner in this checkout: rebuild the base image (python3 -m runner_support.cloud_machine base)"
+                )
                 return False
-            done = m.as_user((binary.stdout or "").strip().splitlines()[-1], "--config", str(m.config), "enroll",
-                             "--url", hub, "--code-file", code_file, "--label", "cloud machine",
-                             "--projects", str(m.projects), timeout=120, secret=code)
+            done = m.as_user(
+                (binary.stdout or "").strip().splitlines()[-1],
+                "--config",
+                str(m.config),
+                "enroll",
+                "--url",
+                hub,
+                "--code-file",
+                code_file,
+                "--label",
+                "cloud machine",
+                "--projects",
+                str(m.projects),
+                timeout=120,
+                secret=code,
+            )
             if not done.returncode and m.config.exists():
                 return True
             m.say(f"enroll attempt {attempt} of {ATTEMPTS} failed")
@@ -291,35 +334,40 @@ def boot(m: Machine | None, environ: dict[str, str]) -> int:
 
 # -- base -------------------------------------------------------------------------------------------------------------
 
+
 def sudoers_text(user: str) -> str:
-    return (f"# Tico cloud machine (runner_support/cloud_machine.py base): its bots are one trust group, so its runner may "
-            f"use sudo.\n"
-            f"{user} ALL=(ALL) NOPASSWD:ALL\n")
+    return (
+        f"# Tico cloud machine (runner_support/cloud_machine.py base): its bots are one trust group, so its runner may "
+        f"use sudo.\n"
+        f"{user} ALL=(ALL) NOPASSWD:ALL\n"
+    )
 
 
 def unit_text(m: Machine) -> str:
-    return "\n".join([
-        "[Unit]",
-        "Description=Tico cloud machine: enroll the runner once, then start it",
-        # The user's systemd (lingering) runs the runner's units; this one only needs it up before it talks to it.
-        f"Wants=network-online.target user@{m.uid}.service",
-        f"After=network-online.target user@{m.uid}.service",
-        "StartLimitIntervalSec=0",
-        "",
-        "[Service]",
-        "Type=oneshot",
-        f"WorkingDirectory={m.root}",
-        # `runner.cloud_machine`, not `runner_support.cloud_machine`: a saved image may boot a checkout on an older
-        # release, which has only runner/. Here runner/cloud_machine.py forwards it (runner/__init__.py).
-        f"ExecStart={m.python} -m runner.cloud_machine boot",
-        "Restart=on-failure",
-        "RestartSec=30",
-        "Environment=PYTHONUNBUFFERED=1",
-        "",
-        "[Install]",
-        "WantedBy=multi-user.target",
-        "",
-    ])
+    return "\n".join(
+        [
+            "[Unit]",
+            "Description=Tico cloud machine: enroll the runner once, then start it",
+            # The user's systemd (lingering) runs the runner's units; this one only needs it up before it talks to it.
+            f"Wants=network-online.target user@{m.uid}.service",
+            f"After=network-online.target user@{m.uid}.service",
+            "StartLimitIntervalSec=0",
+            "",
+            "[Service]",
+            "Type=oneshot",
+            f"WorkingDirectory={m.root}",
+            # `runner.cloud_machine`, not `runner_support.cloud_machine`: a saved image may boot a checkout on an older
+            # release, which has only runner/. Here runner/cloud_machine.py forwards it (runner/__init__.py).
+            f"ExecStart={m.python} -m runner.cloud_machine boot",
+            "Restart=on-failure",
+            "RestartSec=30",
+            "Environment=PYTHONUNBUFFERED=1",
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target",
+            "",
+        ]
+    )
 
 
 def write_root_file(path: Path, text: str, mode: int) -> None:
@@ -340,12 +388,15 @@ def tool_files(arch: str, apt: Path = APT) -> dict[Path, str]:
     """The apt sources for Node.js and (only where Google builds it) Chrome. Written only once their signing keys are on
     disk: apt refuses a repository whose Signed-By key is missing, and the whole `apt-get update` with it."""
     sources, keyrings = apt / "sources.list.d", apt / "keyrings"
-    files = {sources / "nodesource.sources": (
-        "Types: deb\n"
-        f"URIs: https://deb.nodesource.com/node_{NODE_MAJOR}.x\n"
-        "Suites: nodistro\n"
-        "Components: main\n"
-        f"Signed-By: {keyrings / 'nodesource.asc'}\n")}
+    files = {
+        sources / "nodesource.sources": (
+            "Types: deb\n"
+            f"URIs: https://deb.nodesource.com/node_{NODE_MAJOR}.x\n"
+            "Suites: nodistro\n"
+            "Components: main\n"
+            f"Signed-By: {keyrings / 'nodesource.asc'}\n"
+        )
+    }
     if arch == "x86_64":
         files[sources / "google-chrome.sources"] = (
             "Types: deb\n"
@@ -353,7 +404,8 @@ def tool_files(arch: str, apt: Path = APT) -> dict[Path, str]:
             "Suites: stable\n"
             "Components: main\n"
             "Architectures: amd64\n"
-            f"Signed-By: {keyrings / 'google-chrome.asc'}\n")
+            f"Signed-By: {keyrings / 'google-chrome.asc'}\n"
+        )
     return files
 
 
@@ -367,8 +419,9 @@ def tool_commands(arch: str, apt: Path = APT) -> list[tuple[str, list[str] | dic
     install = [*get, "install", "-y", "-q", "--no-install-recommends"]
     keys = [("NodeSource's signing key", ["curl", "-fsSL", NODE_KEY_URL, "-o", str(keyrings / "nodesource.asc")])]
     if arch == "x86_64":
-        keys.insert(0, ("Google's signing key",
-                        ["curl", "-fsSL", CHROME_KEY_URL, "-o", str(keyrings / "google-chrome.asc")]))
+        keys.insert(
+            0, ("Google's signing key", ["curl", "-fsSL", CHROME_KEY_URL, "-o", str(keyrings / "google-chrome.asc")])
+        )
     packages = [browser_package(arch), *DISPLAY_PACKAGES, *FONT_PACKAGES, "nodejs"]
     return [
         ("the package lists", [*get, "update", "-qq"]),
@@ -379,8 +432,10 @@ def tool_commands(arch: str, apt: Path = APT) -> list[tuple[str, list[str] | dic
         ("the package lists with the new repositories", [*get, "update", "-qq"]),
         (" ".join(packages), [*install, *packages]),
         # boat's image ships Node 24 ahead of apt's 22 on PATH, so the check is a floor, not an exact match
-        (f"Node.js {NODE_MAJOR} or newer", ["node", "-e", f"process.exit(Number(process.versions.node.split('.')[0]) "
-                                                          f">= {NODE_MAJOR} ? 0 : 1)"]),
+        (
+            f"Node.js {NODE_MAJOR} or newer",
+            ["node", "-e", f"process.exit(Number(process.versions.node.split('.')[0]) >= {NODE_MAJOR} ? 0 : 1)"],
+        ),
         ("npm", ["npm", "--version"]),
     ]
 
@@ -407,6 +462,7 @@ def tools(m: Machine, *, arch: str, apt: Path = APT) -> None:
 
 def checkout_release(root: Path, run=subprocess.run) -> str:
     from runner_support import release_update
+
     return release_update.checkout_release(root, run=run)
 
 
@@ -432,19 +488,41 @@ def drop_ascii_token(bashrc: Path) -> int:
     return removed
 
 
-def base(m: Machine, *, release: str, sudoers: Path = SUDOERS, unit_dir: Path = UNIT_DIR, apt: Path = APT,
-         arch: str | None = None) -> None:
+def base(
+    m: Machine,
+    *,
+    release: str,
+    sudoers: Path = SUDOERS,
+    unit_dir: Path = UNIT_DIR,
+    apt: Path = APT,
+    arch: str | None = None,
+) -> None:
     if m.config.exists():
-        raise Refused(f"{m.config} exists: this computer is enrolled, and every machine made from its snapshot would "
-                      "be that same runner. Build the base on a new sandbox.")
+        raise Refused(
+            f"{m.config} exists: this computer is enrolled, and every machine made from its snapshot would "
+            "be that same runner. Build the base on a new sandbox."
+        )
     if not release:
         raise Refused(f"{m.root} is not on a release tag: check out the release first (git checkout vX.Y.Z)")
     m.say(f"preparing the runner of release {release} for {m.user}")
     # The same three steps as scripts/setup-runner.sh, as the user, so the checkout and venv stay theirs.
-    steps = [] if m.python.exists() else [("the runner's Python", ["python3", "-m", "venv", str(m.python.parent.parent)])]
+    steps = (
+        [] if m.python.exists() else [("the runner's Python", ["python3", "-m", "venv", str(m.python.parent.parent)])]
+    )
     steps += [
-        ("its packages", [str(m.python), "-m", "pip", "install", "--disable-pip-version-check", "-q",
-                          "-r", str(m.root / "backend" / "requirements.txt")]),
+        (
+            "its packages",
+            [
+                str(m.python),
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "-q",
+                "-r",
+                str(m.root / "backend" / "requirements.txt"),
+            ],
+        ),
         ("the Rust runner of this release", [str(m.python), "-m", "runner_support.engine", "prepare"]),
     ]
     for what, command in steps:
@@ -464,8 +542,11 @@ def base(m: Machine, *, release: str, sudoers: Path = SUDOERS, unit_dir: Path = 
     m.say(f"{m.user} may use sudo without a password ({sudoers})")
     if m.system("loginctl", "enable-linger", m.user).returncode:
         raise Refused(f"loginctl enable-linger {m.user} failed: the runner would not start at boot")
-    write_root_file(marker_path(m.etc), json.dumps({"user": m.user, "root": str(m.root), "release": release}, indent=2)
-                    + "\n", 0o644)
+    write_root_file(
+        marker_path(m.etc),
+        json.dumps({"user": m.user, "root": str(m.root), "release": release}, indent=2) + "\n",
+        0o644,
+    )
     write_root_file(unit_dir / UNIT, unit_text(m), 0o644)
     for command in (["systemctl", "daemon-reload"], ["systemctl", "enable", UNIT]):
         if m.system(*command).returncode:
@@ -476,7 +557,9 @@ def base(m: Machine, *, release: str, sudoers: Path = SUDOERS, unit_dir: Path = 
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="python3 -m runner_support.cloud_machine", description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(
+        prog="python3 -m runner_support.cloud_machine", description=__doc__.split("\n\n")[0]
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("base", help="prepare the sandbox a base snapshot is saved from (as root, once)")
     b.add_argument("--user", default=DEFAULT_USER, help=f"the user the runner runs as (default {DEFAULT_USER})")

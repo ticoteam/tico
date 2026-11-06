@@ -12,7 +12,6 @@ async function refresh(force) {
   const v2 = v2Refresh(), computers = overviewLoadComputers();
   try {
     // BotOps and other sessions can change the chart. Publish a complete roster together so groups and members agree.
-    // GitHub Issues are retired: /api/issues always answers [], so S.issues stays empty and is not read.
     const seatsDue = force || S.seats === undefined || ++SEATS_POLLS % 5 === 0 || Date.now() - SEATS_AT > 600e3;
     // A forced refresh follows a change: an in-flight read (including startup's notification preference read of
     // /humans) may already hold the old roster. Ask again instead of joining that read.
@@ -47,7 +46,7 @@ async function refresh(force) {
     if (TASKS_ST && isTasksRoute(S.route) && !TASKS_ST.fullRead) void tasksLoad(TASKS_ST, {poll: true});
     // The Active column beside the chat was loaded once and never again, so a task the bot closed
     // stayed listed until a reload. The poll redraws it too.
-    if (BOT && isKeeper(BOT.slug) && BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
+    if (BOT && BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
   }
 }
 
@@ -108,7 +107,7 @@ function liveTasksApply(events) {
     if (changed && list === state) { tasksTools(state); tasksRender(state); }
   }
   // These read whole lists, so at most every 15 s and not in a hidden tab (liveThrottle).
-  if (BOT && isKeeper(BOT.slug)) {
+  if (BOT) {
     const me = 'bot:' + BOT.slug;
     if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me || d.task?.requester_id === me)) liveThrottle('bot-tasks', () => {
       if (!BOT || BOT.slug !== me.slice(4)) return;
@@ -146,7 +145,7 @@ function liveWire() {
       renderTree();
       if (OVERVIEW_PAGE) overviewNeedsDraw();
       if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
-      if (BOT && isKeeper(BOT.slug)) botNeedsChanged(BOT.slug);
+      if (BOT) botNeedsChanged(BOT.slug);
     }, 200);
   }).catch(() => {}));
   // My dashboard reads itself again when what its cards show may have moved (ui/app/dashboard.js dashFollow).

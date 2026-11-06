@@ -542,6 +542,7 @@ pub fn forget(key: &str, turn: &Turn) {
 }
 
 /// The login once it is this turn's turn (Slot::order).
+#[cfg(test)]
 pub async fn take(key: &str, turn: &Turn) -> Held {
     match wait_for(key, turn, || None, |_| {}, Duration::from_secs(3600)).await {
         Ok(held) => held,

@@ -12,50 +12,84 @@ from backend.tests.test_task_privacy_reads import traced_get
 def privacy_parties(api):
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
-        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('rn','Mac','ana','th',?)", (H.now(),))
+        c.execute(
+            "INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('rn','Mac','ana','th',?)", (H.now(),)
+        )
 
 
 def blob(c, bid):
-    c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) "
-              "VALUES(?,'human:ana',?,1,'note.md','text/markdown',?)", (bid, bid, H.now()))
+    c.execute(
+        "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) "
+        "VALUES(?,'human:ana',?,1,'note.md','text/markdown',?)",
+        (bid, bid, H.now()),
+    )
 
 
 def seed(c, size):
     parent = H.task_create(c, "human:ana", f"Release {size}", "Checklist", "bot:ops", lint=False)
     for n in range(size):
         key = f"{size}-{n}"
-        source = H.task_create(c, "human:ben", f"Source {key}", "Input", "human:ben",
-                               private=n == 1, lint=False)
+        source = H.task_create(c, "human:ben", f"Source {key}", "Input", "human:ben", private=n == 1, lint=False)
         input_ = H.task_comment(c, "human:ben", source["id"], "Input " + key, wake=False)
         moved = H.task_comment(c, "human:ben", source["id"], "Moved " + key, wake=False)
-        reply = H.task_comment(c, "human:ana", parent["id"], "Request " + key, wake=False,
-                               extra_refs={"inputs": [input_["id"]], "answers": [input_["id"]]})
+        reply = H.task_comment(
+            c,
+            "human:ana",
+            parent["id"],
+            "Request " + key,
+            wake=False,
+            extra_refs={"inputs": [input_["id"]], "answers": [input_["id"]]},
+        )
         aid = "run-" + key
-        c.execute("INSERT INTO jobs(id,message_id,bot_id,state,created_at,attempt_id) VALUES(?,?,'ops','completed',?,?)",
-                  ("job-" + key, reply["id"], H.now(), aid))
-        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
-                  "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + key, aid, H.now(), H.now()))
+        c.execute(
+            "INSERT INTO jobs(id,message_id,bot_id,state,created_at,attempt_id) VALUES(?,?,'ops','completed',?,?)",
+            ("job-" + key, reply["id"], H.now(), aid),
+        )
+        c.execute(
+            "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
+            "VALUES(?,?,'ops','rn',0,?,'completed',?,?)",
+            (aid, "job-" + key, aid, H.now(), H.now()),
+        )
         c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, input_["id"]))
-        H.event(c, "human:ana", privacy.INPUT_MOVED, aid,
-                {"message_id": moved["id"], "tasks": [source["id"]], "to_attempt": "missing-" + key})
+        H.event(
+            c,
+            "human:ana",
+            privacy.INPUT_MOVED,
+            aid,
+            {"message_id": moved["id"], "tasks": [source["id"]], "to_attempt": "missing-" + key},
+        )
         c.execute("UPDATE attempts SET trigger='task',task_id=?,exit='ok' WHERE id=?", (parent["id"], aid))
-        H.task_comment(c, "bot:ops", parent["id"], "Done " + key, wake=False,
-                       extra_refs={"turn_id": aid, "related_task": source["id"]})
+        H.task_comment(
+            c,
+            "bot:ops",
+            parent["id"],
+            "Done " + key,
+            wake=False,
+            extra_refs={"turn_id": aid, "related_task": source["id"]},
+        )
         H._task_event(c, parent["id"], "human:ana", "note", None, source["id"], "")
         bid, fid = "blob-" + key, "file-" + key
         blob(c, bid)
         blob(c, "media-" + key)
-        c.execute("INSERT INTO blob_media(blob_id,poster_blob_id,media_state) VALUES(?,?,'ready')",
-                  ("media-" + key, bid))
+        c.execute(
+            "INSERT INTO blob_media(blob_id,poster_blob_id,media_state) VALUES(?,?,'ready')", ("media-" + key, bid)
+        )
         c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (source["id"], "media-" + key))
-        c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,current_version,task_id,"
-                  "first_activity_at,last_activity_at) VALUES(?,'ops',?,?,?,'document','tico_blob',1,?,?,?)",
-                  (fid, "task:" + source["id"], fid, "File " + key, source["id"], H.now(), H.now()))
-        c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,attempt_id,actor,created_at) "
-                  "VALUES(?,1,?,?,1,'note.md','text/markdown',?,'bot:ops',?)", (fid, bid, bid, aid, H.now()))
+        c.execute(
+            "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,current_version,task_id,"
+            "first_activity_at,last_activity_at) VALUES(?,'ops',?,?,?,'document','tico_blob',1,?,?,?)",
+            (fid, "task:" + source["id"], fid, "File " + key, source["id"], H.now(), H.now()),
+        )
+        c.execute(
+            "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,attempt_id,actor,created_at) "
+            "VALUES(?,1,?,?,1,'note.md','text/markdown',?,'bot:ops',?)",
+            (fid, bid, bid, aid, H.now()),
+        )
         c.execute("INSERT INTO message_assets(message_id,blob_id) VALUES(?,?)", (reply["id"], bid))
-        c.execute("INSERT INTO bot_file_activity(file_id,actor,action,task_id,created_at) VALUES(?,'human:ben','created',?,?)",
-                  ("file-3-0" if size == 30 else fid, source["id"], H.now()))
+        c.execute(
+            "INSERT INTO bot_file_activity(file_id,actor,action,task_id,created_at) VALUES(?,'human:ben','created',?,?)",
+            ("file-3-0" if size == 30 else fid, source["id"], H.now()),
+        )
     return parent["id"]
 
 
@@ -68,8 +102,11 @@ def test_distinct_file_and_task_provenance_is_batched(api, monkeypatch):
             tid = seed(c, size)
         for surface in surfaces:
             for viewer in ("ana-test", "ben-test"):
-                path = {"files": "bots/ops/files?limit=2", "task": "tasks/" + tid,
-                        "activity": "files/file-3-0/activity"}[surface]
+                path = {
+                    "files": "bots/ops/files?limit=2",
+                    "task": "tasks/" + tid,
+                    "activity": "files/file-3-0/activity",
+                }[surface]
                 page, counts[surface, size, viewer] = traced_get(api, path, viewer)
                 pages[surface, viewer] = path, page
                 expected = size - (viewer == "ana-test")
@@ -101,10 +138,23 @@ def test_task_questions_batch_answers_without_exposing_private_replies(api, monk
             parent = H.task_create(c, "human:ana", f"Review {size}", "Checklist", "bot:ops", lint=False)
             hidden = H.task_create(c, "human:ben", f"Private {size}", "Secret", "human:ben", private=True, lint=False)
             for n in range(size):
-                ask = H.task_comment(c, "bot:ops", parent["id"], f"Question {n}", wake=False,
-                                     ask={"who": "human:ana", "questions": [{"id": "ship", "question": "Ship?"}]})
-                H.task_comment(c, "human:ana", parent["id"], f"Answer {n}", wake=False, answer_to=ask["id"],
-                               extra_refs={"related_task": hidden["id"]} if n == 1 else None)
+                ask = H.task_comment(
+                    c,
+                    "bot:ops",
+                    parent["id"],
+                    f"Question {n}",
+                    wake=False,
+                    ask={"who": "human:ana", "questions": [{"id": "ship", "question": "Ship?"}]},
+                )
+                H.task_comment(
+                    c,
+                    "human:ana",
+                    parent["id"],
+                    f"Answer {n}",
+                    wake=False,
+                    answer_to=ask["id"],
+                    extra_refs={"related_task": hidden["id"]} if n == 1 else None,
+                )
         for viewer in ("ana-test", "ben-test"):
             page, counts[size, viewer] = traced_get(api, "tasks/" + parent["id"], viewer)
             pages[viewer] = page
@@ -125,7 +175,9 @@ def test_blob_cycles_keep_private_provenance_in_both_orders(api):
         hidden = H.task_create(c, "human:ben", "Private", "Secret", "human:ben", private=True, lint=False)
         for bid in ("a", "b"):
             blob(c, bid)
-        c.execute("INSERT INTO blob_media(blob_id,poster_blob_id,media_state) VALUES('a','b','ready'),('b','a','ready')")
+        c.execute(
+            "INSERT INTO blob_media(blob_id,poster_blob_id,media_state) VALUES('a','b','ready'),('b','a','ready')"
+        )
         c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,'b')", (hidden["id"],))
     for primed in (False, True):
         for reverse in (False, True):
@@ -144,8 +196,10 @@ def test_blob_depth_cap_cannot_reuse_a_shorter_walk(api):
         for n in range(102):
             blob(c, f"depth-{n}")
         for n in range(101):
-            c.execute("INSERT INTO blob_media(blob_id,poster_blob_id,media_state) VALUES(?,?,'ready')",
-                      (f"depth-{n + 1}", f"depth-{n}"))
+            c.execute(
+                "INSERT INTO blob_media(blob_id,poster_blob_id,media_state) VALUES(?,?,'ready')",
+                (f"depth-{n + 1}", f"depth-{n}"),
+            )
     for primed in (False, True):
         for reverse in (False, True):
             with api.app.state.store.read() as c:

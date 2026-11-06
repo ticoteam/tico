@@ -1,4 +1,5 @@
 """Offline regressions for sign-in, retry scheduling and source-owned Granola summaries."""
+
 import asyncio
 import base64
 import json
@@ -17,9 +18,12 @@ def metadata(provider, **changes):
     return saved
 
 
-@pytest.mark.parametrize("claim,expected", [
-    ({"email": "account@example.com", "email_verified": False}, None),
-])
+@pytest.mark.parametrize(
+    "claim,expected",
+    [
+        ({"email": "account@example.com", "email_verified": False}, None),
+    ],
+)
 def test_account_email_is_display_only_and_omits_missing_or_unverified_claims(api, claim, expected):
     provider = Provider(api)
     original = provider.handle
@@ -66,7 +70,10 @@ def test_transient_transcript_failure_never_infers_free_plan(api, failure):
     original = provider.handle
 
     def handle(request):
-        if request.url.path == "/mcp" and json.loads(request.content).get("params", {}).get("name") == "get_meeting_transcript":
+        if (
+            request.url.path == "/mcp"
+            and json.loads(request.content).get("params", {}).get("name") == "get_meeting_transcript"
+        ):
             if failure == "network":
                 raise httpx.ConnectError("fake-provider-sensitive", request=request)
             if failure == "rate_limit":
@@ -133,12 +140,16 @@ def test_regenerated_summary_keeps_human_notes_and_other_fields(api):
         rid = c.execute("SELECT id FROM meetings").fetchone()[0]
     record = api.get("/api/meetings/" + rid, headers=headers()).json()
     original_notes = record["notes"]
-    edit = api.post("/api/meetings/" + rid + "/edit", json={"version": record["version"],
-                    "title": "Human title", "note": "Human meeting log"}, headers=headers())
+    edit = api.post(
+        "/api/meetings/" + rid + "/edit",
+        json={"version": record["version"], "title": "Human title", "note": "Human meeting log"},
+        headers=headers(),
+    )
     assert edit.status_code == 200
     with api.app.state.store.transaction() as c:
         from backend.media import save
         from backend.meetings import get
+
         stored = get(rid, c)
         save(c, stored["metadata"], notes="Human summary")
     before = api.get("/api/meetings/" + rid, headers=headers()).json()
@@ -146,8 +157,22 @@ def test_regenerated_summary_keeps_human_notes_and_other_fields(api):
 
     def handle(request):
         if request.url.path == "/mcp" and json.loads(request.content).get("params", {}).get("name") == "get_meetings":
-            return httpx.Response(200, json={"result": {"structuredContent": {"meetings": [
-                {"id": "not_12345678901234", "title": "Provider title", "summary": "Regenerated summary"}]}}})
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "structuredContent": {
+                            "meetings": [
+                                {
+                                    "id": "not_12345678901234",
+                                    "title": "Provider title",
+                                    "summary": "Regenerated summary",
+                                }
+                            ]
+                        }
+                    }
+                },
+            )
         return original(request)
 
     provider.service.transport = httpx.MockTransport(handle)

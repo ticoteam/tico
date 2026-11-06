@@ -32,12 +32,22 @@ def hub(live, token, *argv):
 
 def test_a_bot_sees_the_other_bots_with_reports_to_and_department_except_those_it_may_not_see(api, live):
     _, _, attempt = setup_attempt(api, "ops")
-    hidden = A.stored({"see": A.audience({"people": ["ana"]}), "read": A.audience({"people": ["ana"]}),
-                       "write": A.audience({"people": ["ana"]})})
+    hidden = A.stored(
+        {
+            "see": A.audience({"people": ["ana"]}),
+            "read": A.audience({"people": ["ana"]}),
+            "write": A.audience({"people": ["ana"]}),
+        }
+    )
     with api.app.state.store.transaction() as c:
-        for slug, boss, template in (("cpo", "human:ana", "support-lead"), ("ops", "cpo", "support"),
-                                     ("finance", "cpo", None), ("doc-updater", "cpo", None),
-                                     ("product-design", "doc-updater", None), ("coo", "human:ana", None)):
+        for slug, boss, template in (
+            ("cpo", "human:ana", "support-lead"),
+            ("ops", "cpo", "support"),
+            ("finance", "cpo", None),
+            ("doc-updater", "cpo", None),
+            ("product-design", "doc-updater", None),
+            ("coo", "human:ana", None),
+        ):
             c.execute('UPDATE bot_config SET reports_to=? WHERE bot=?', (boss, slug))
             BS.update(c, slug, {'template': template})
         c.execute("UPDATE bot_config SET access=? WHERE bot='doc-updater'", (hidden,))
@@ -54,11 +64,13 @@ def test_a_bot_sees_the_other_bots_with_reports_to_and_department_except_those_i
     bots = {b["id"]: b for b in org["bots"]}
     assert set(bots) == {"coo", "ops", "cpo", "product-design", "finance"}, "everything but the bot it may not see"
     assert [bots[b]["reports_to"] for b in ("cpo", "ops", "finance")] == ["human:ana", "cpo", "cpo"]
-    assert bots["cpo"]["department"] == bots["ops"]["department"] == "Customer Support", "its group's name, as the bot itself or through its manager"
+    assert bots["cpo"]["department"] == bots["ops"]["department"] == "Customer Support", (
+        "its group's name, as the bot itself or through its manager"
+    )
     assert bots["finance"]["department"] == "Customer Support", "in no group of its own: its manager's group"
     assert bots["coo"]["department"] == "", "a bot in no department says so"
     assert (bots["ops"]["template"], bots["finance"]["template"]) == ("support", "")
-    assert bots["product-design"]["reports_to"] == "cpo" and bots["product-design"]["org_parent"] == "b:cpo", \
+    assert bots["product-design"]["reports_to"] == "cpo" and bots["product-design"]["org_parent"] == "b:cpo", (
         "under the hidden bot's manager, not dropped"
+    )
     assert {p["id"] for p in org["people"]} == {"ana", "ben", "cara"}
-

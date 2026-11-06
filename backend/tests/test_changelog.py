@@ -1,4 +1,5 @@
 """One shipped-history flow, the per-person acknowledgement/privacy boundary and shipped notes staying as tagged."""
+
 import os
 import re
 import shutil
@@ -57,9 +58,14 @@ def test_a_prerelease_uses_its_own_notes_or_only_its_matching_base():
 def test_prerelease_notes_cli_uses_matching_base_and_refuses_missing_notes(tmp_path):
     changelog = tmp_path / "CHANGELOG.md"
     changelog.write_text("## [1.2.3]\n- This release.\n")
+
     def extract(version):
-        return subprocess.run([sys.executable, str(ROOT / "scripts/changelog_notes.py"), version, str(changelog)],
-                              capture_output=True, text=True)
+        return subprocess.run(
+            [sys.executable, str(ROOT / "scripts/changelog_notes.py"), version, str(changelog)],
+            capture_output=True,
+            text=True,
+        )
+
     candidate = extract("v1.2.3-rc.1")
     assert candidate.returncode == 0 and candidate.stdout == "- This release.\n" and not candidate.stderr
     missing = extract("v1.2.4-rc.1")
@@ -78,13 +84,18 @@ def test_bundled_history_api_and_mcp(api, monkeypatch, tmp_path):
     assert first["unread_count"] == 2
     second = api.get("/api/v2/changelog?kind=product&limit=1&offset=1", headers=headers("ben-test")).json()
     assert second["entries"][0]["id"] == "release-0.1.0" and second["next_offset"] is None
-    err, result = call(api, "hub_changelog_list", {"since_version": "0.1.0", "q": "restore", "unread": True}, token="ben-test")
+    err, result = call(
+        api, "hub_changelog_list", {"since_version": "0.1.0", "q": "restore", "unread": True}, token="ben-test"
+    )
     assert not err and [r["version"] for r in result["entries"]] == ["0.2.0"]
     assert result["unread_count"] == 2
     document = api.get("/api/v2/openapi.json", headers=headers()).json()
     assert conforms(result, document["components"]["schemas"]["ChangelogList"], document) is None
     assert api.get("/api/v2/changelog?since_version=latest", headers=headers()).status_code == 422
-    assert api.get("/api/changelog", headers=headers()).json()["entries"] == api.get("/api/v2/changelog", headers=headers()).json()["entries"]
+    assert (
+        api.get("/api/changelog", headers=headers()).json()["entries"]
+        == api.get("/api/v2/changelog", headers=headers()).json()["entries"]
+    )
     # Same-day announcements keep their ids when a registry list is reordered.
     monkeypatch.setattr(api.app.state.store.settings, "registry_dir", tmp_path)
     announcements = tmp_path / "product-updates.yaml"
@@ -99,23 +110,50 @@ def test_read_state_is_personal_and_only_acknowledges_shown_changes(api, monkeyp
     monkeypatch.setattr(releases, "ROOT", tmp_path)
     (tmp_path / "CHANGELOG.md").write_text(NOTES)
     with api.app.state.store.transaction() as c:
-        private = H.task_create(c, "human:ana", "Review the private packet", "Private packet", "bot:ops", private=True, lint=False)
-        c.execute("UPDATE tasks SET status='done', note=? WHERE id=?", ("Private outcome only for the requester.", private["id"]))
+        private = H.task_create(
+            c, "human:ana", "Review the private packet", "Private packet", "bot:ops", private=True, lint=False
+        )
+        c.execute(
+            "UPDATE tasks SET status='done', note=? WHERE id=?",
+            ("Private outcome only for the requester.", private["id"]),
+        )
         for i in range(125):
-            task = H.task_create(c, "human:ana", "Check the public packet %s" % i, "Public packet", "bot:ops", lint=False)
-            c.execute("UPDATE tasks SET status='done', note=? WHERE id=?", ("Public work completed and reported to the team.", task["id"]))
+            task = H.task_create(
+                c, "human:ana", "Check the public packet %s" % i, "Public packet", "bot:ops", lint=False
+            )
+            c.execute(
+                "UPDATE tasks SET status='done', note=? WHERE id=?",
+                ("Public work completed and reported to the team.", task["id"]),
+            )
     listing = api.get("/api/v2/changelog", headers=headers("ben-test")).json()
     assert len([r for r in listing["entries"] if r["kind"] == "product"]) == 2
     assert private["id"] not in str(listing) and "Private outcome" not in str(listing)
     # Two tabs acknowledge different entries. The second write must merge, not replace the first.
     err, result = call(api, "hub_changelog_mark_read", {"ids": ["release-0.1.0", "release-0.3.0"]}, token="ben-test")
     assert not err and result["unread_count"] == 1
-    assert api.post("/api/v2/changelog/read", json={"ids": ["release-0.2.0"]}, headers=headers("ben-test")).json()["unread_count"] == 0
+    assert (
+        api.post("/api/v2/changelog/read", json={"ids": ["release-0.2.0"]}, headers=headers("ben-test")).json()[
+            "unread_count"
+        ]
+        == 0
+    )
     assert api.get("/api/v2/config", headers=headers("ben-test")).json()["changelog"]["unread_count"] == 0
     assert api.get("/api/v2/changelog?unread=true", headers=headers("ben-test")).json()["entries"] == []
     assert api.get("/api/v2/changelog?unread=true", headers=headers()).json()["unread_count"] == 2
-    assert api.post("/api/changelog", json={"title": "Team news", "bullets": ["A new team feature."]}, headers=headers("ben-test")).status_code == 403
-    assert api.post("/api/changelog", json={"title": "Team news", "bullets": ["A new team feature."]}, headers=headers()).status_code == 200
+    assert (
+        api.post(
+            "/api/changelog",
+            json={"title": "Team news", "bullets": ["A new team feature."]},
+            headers=headers("ben-test"),
+        ).status_code
+        == 403
+    )
+    assert (
+        api.post(
+            "/api/changelog", json={"title": "Team news", "bullets": ["A new team feature."]}, headers=headers()
+        ).status_code
+        == 200
+    )
     unread = api.get("/api/v2/changelog?unread=true", headers=headers("ben-test")).json()
     assert unread["unread_count"] == 1 and unread["entries"][0]["title"] == "Team news"
     # A future release cannot be pre-acknowledged, and appears after this server upgrades.
@@ -146,7 +184,7 @@ def released_edits(root):
         header, _, out = out.partition(b"\n")
         if header.split()[1:2] == [b"blob"]:
             size = int(header.split()[2])
-            shipped, out = section(out[:size].decode(), tag[1:]), out[size + 1:]
+            shipped, out = section(out[:size].decode(), tag[1:]), out[size + 1 :]
             read += 1
             if not shipped and tag[1:] in here:
                 added = git("log", "--reverse", "--format=%H", "-S", f"## [{tag[1:]}]", "--", "CHANGELOG.md")
@@ -164,8 +202,10 @@ def test_released_changelog_sections_match_their_tags():
     edited = released_edits(ROOT) if shutil.which("git") else None
     if edited is None:
         pytest.skip("no release tags in this checkout (shallow clone or tags not fetched)")
-    assert not edited, "your CHANGELOG line landed in the released %s section; merge main and move it under ## [Unreleased]" % (
-        ", ".join("[%s]" % v for v in edited))
+    assert not edited, (
+        "your CHANGELOG line landed in the released %s section; merge main and move it under ## [Unreleased]"
+        % (", ".join("[%s]" % v for v in edited))
+    )
 
 
 # A Release Manager's notes merge-back or an erratum names each released section it may change in a commit trailer.
@@ -207,7 +247,7 @@ def changes_outside_unreleased(root, main="origin/main", head="HEAD"):
     for hunk in re.finditer(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", diff, re.M):
         start, count, start2, count2 = (int(n) if n is not None else 1 for n in hunk.groups())
         # A side with count 0 (a pure addition or removal) reads no lines.
-        places += before[start - 1:start - 1 + count] + after[start2 - 1:start2 - 1 + count2]
+        places += before[start - 1 : start - 1 + count] + after[start2 - 1 : start2 - 1 + count2]
     allowed = set(RELEASE_TRAILER.findall(git("log", "--format=%B", main + ".." + head).stdout))
     allowed |= {"links", "preamble"} if allowed else set()  # a merge-back also moves the compare links
     return sorted(set(places) - allowed - {"Unreleased"})
@@ -215,16 +255,23 @@ def changes_outside_unreleased(root, main="origin/main", head="HEAD"):
 
 def outside_unreleased_message(places):
     names = {"links": "the link references", "preamble": "the preamble above ## [Unreleased]"}
-    where = "conflicts with main" if places == [CONFLICT] else "adds or changes lines in " + ", ".join(
-        names.get(p, "the released [%s] section" % p) for p in places)
-    return ("CHANGELOG.md: this branch %s; merge main and move your line under ## [Unreleased] (a release notes "
-            "merge-back or erratum names each section it changes in a `Changelog-Release: vX.Y.Z` commit trailer)" % where)
+    where = (
+        "conflicts with main"
+        if places == [CONFLICT]
+        else "adds or changes lines in " + ", ".join(names.get(p, "the released [%s] section" % p) for p in places)
+    )
+    return (
+        "CHANGELOG.md: this branch %s; merge main and move your line under ## [Unreleased] (a release notes "
+        "merge-back or erratum names each section it changes in a `Changelog-Release: vX.Y.Z` commit trailer)" % where
+    )
 
 
 def test_pr_changelog_lines_stay_under_unreleased():
     # Release validation runs this suite on a candidate from its release branch: an empty Unreleased and its own
     # new section, which test_released_changelog_sections_match_their_tags checks. A pull request is never one.
-    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request" and not section((ROOT / "CHANGELOG.md").read_text(), "Unreleased"):
+    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request" and not section(
+        (ROOT / "CHANGELOG.md").read_text(), "Unreleased"
+    ):
         pytest.skip("a release candidate (empty Unreleased); its notes are checked against its tag")
     outside = changes_outside_unreleased(ROOT) if shutil.which("git") else None
     if outside is None:
@@ -234,8 +281,12 @@ def test_pr_changelog_lines_stay_under_unreleased():
 
 def test_changelog_guard_refuses_lines_outside_unreleased(tmp_path):
     def git(*args):
-        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@acme.example", *args],
-                              capture_output=True, text=True, check=True).stdout
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@acme.example", *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
 
     def commit(text, message="Change"):
         (tmp_path / "CHANGELOG.md").write_text(text)
@@ -259,7 +310,9 @@ def test_changelog_guard_refuses_lines_outside_unreleased(tmp_path):
     commit(shipped.replace("- Browse.\n", "- Browse.\n- Archive tasks.\n") + links)
     assert changes_outside_unreleased(tmp_path) == ["0.1.0"]
     message = outside_unreleased_message(["0.1.0"])
-    assert "the released [0.1.0] section" in message and "merge main and move your line under ## [Unreleased]" in message
+    assert (
+        "the released [0.1.0] section" in message and "merge main and move your line under ## [Unreleased]" in message
+    )
     assert "\n" not in message
     commit(shipped.replace("- Browse.", "- Browse the team.") + links)  # changing a shipped line counts too
     assert changes_outside_unreleased(tmp_path) == ["0.1.0"]
@@ -269,7 +322,11 @@ def test_changelog_guard_refuses_lines_outside_unreleased(tmp_path):
     # The Release Manager's notes merge-back passes only with its trailer, and only for the section it names.
     git("checkout", "-q", "-b", "notes", fork)
     released = shipped.replace("## [Unreleased]\n\n", "## [Unreleased]\n\n## [0.2.0] - 2026-10-02\n\n")
-    moved = released + links.replace("v0.1.0...HEAD", "v0.2.0...HEAD") + "[0.2.0]: https://github.com/acme/app/compare/v0.1.0...v0.2.0\n"
+    moved = (
+        released
+        + links.replace("v0.1.0...HEAD", "v0.2.0...HEAD")
+        + "[0.2.0]: https://github.com/acme/app/compare/v0.1.0...v0.2.0\n"
+    )
     commit(moved, "Release notes: merge back v0.2.0")
     assert changes_outside_unreleased(tmp_path) == ["0.2.0", "links"]
     git("commit", "-q", "--amend", "-m", "Release notes: merge back v0.2.0\n\nChangelog-Release: v0.2.0")
@@ -298,20 +355,28 @@ def test_changelog_guard_refuses_lines_outside_unreleased(tmp_path):
     git("checkout", "-q", "-b", "conflict", fork)
     commit(shipped.replace("## [Unreleased]\n\n", "## [Unreleased]\n\n## [9.9.9]\n\n") + links)
     assert changes_outside_unreleased(tmp_path) == [CONFLICT]
-    assert outside_unreleased_message([CONFLICT]).startswith("CHANGELOG.md: this branch conflicts with main; merge main")
+    assert outside_unreleased_message([CONFLICT]).startswith(
+        "CHANGELOG.md: this branch conflicts with main; merge main"
+    )
 
 
 def test_tag_before_its_notes_reach_main_is_not_an_edit(tmp_path):
     def git(*args):
-        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@acme.example", *args],
-                              capture_output=True, text=True, check=True).stdout
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@acme.example", *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
 
     def commit(text):
         (tmp_path / "CHANGELOG.md").write_text(text)
         git("commit", "-qam", "Change")
 
     git("init", "-q", "-b", "main")
-    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n- Search tasks.\n\n## [1.0.0] - 2026-10-01\n- Browse.\n")
+    (tmp_path / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## [Unreleased]\n- Search tasks.\n\n## [1.0.0] - 2026-10-01\n- Browse.\n"
+    )
     git("add", "CHANGELOG.md")
     git("commit", "-qm", "Start")
     git("tag", "v1.0.0")
@@ -332,16 +397,25 @@ def test_tag_before_its_notes_reach_main_is_not_an_edit(tmp_path):
     tagged = notes.replace("## [Unreleased]\n", "## [Unreleased]\n- Pin tasks.\n")
     commit(tagged)
     git("tag", "v1.2.0")
-    commit(tagged.replace("## [Unreleased]\n- Pin tasks.\n", "## [Unreleased]\n\n## [1.2.0] - 2026-10-03\n- Pin tasks.\n"))
+    commit(
+        tagged.replace("## [Unreleased]\n- Pin tasks.\n", "## [Unreleased]\n\n## [1.2.0] - 2026-10-03\n- Pin tasks.\n")
+    )
     assert released_edits(tmp_path) == []
-    commit(tagged.replace("## [Unreleased]\n- Pin tasks.\n", "## [Unreleased]\n\n## [1.2.0] - 2026-10-03\n- Pin a task.\n"))
+    commit(
+        tagged.replace("## [Unreleased]\n- Pin tasks.\n", "## [Unreleased]\n\n## [1.2.0] - 2026-10-03\n- Pin a task.\n")
+    )
     assert released_edits(tmp_path) == ["1.2.0"]
 
 
 def test_guard_refuses_lines_that_landed_in_released_sections():
     # #831 and #855 put their lines in the section just released; each squash against its parent replays that merge.
-    replays = {"0f93d87a4f66f8880b948f75c4df1685132f6709": "0.3.55", "6b180f1fc191b098593fe5b5a29d427461168d7a": "0.3.56"}
-    if not shutil.which("git") or any(subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e", c + "^"]).returncode for c in replays):
+    replays = {
+        "0f93d87a4f66f8880b948f75c4df1685132f6709": "0.3.55",
+        "6b180f1fc191b098593fe5b5a29d427461168d7a": "0.3.56",
+    }
+    if not shutil.which("git") or any(
+        subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e", c + "^"]).returncode for c in replays
+    ):
         pytest.skip("no full history in this checkout")
     for squash, version in replays.items():
         assert changes_outside_unreleased(ROOT, main=squash + "^", head=squash) == [version]

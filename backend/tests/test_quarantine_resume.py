@@ -18,7 +18,9 @@ def test_a_lifted_chat_hold_leaves_a_chat_notice_and_an_escape_leaves_the_bot_a_
     token = bot_token(api, "cpo")
     item = post(api, "tasks", {"owner": "cpo", "title": "Research exports", "body": "x"})
     for _ in range(H.QUARANTINE_AT + 1):
-        r = api.post("/api/v2/tasks/" + item["id"], json={"version": item["version"], "number": 993}, headers=headers(token))
+        r = api.post(
+            "/api/v2/tasks/" + item["id"], json={"version": item["version"], "number": 993}, headers=headers(token)
+        )
         assert r.status_code == 403, r.text
     with api.app.state.store.read() as c:
         assert H.bot(c, "cpo")["state"] == "active"
@@ -28,8 +30,9 @@ def test_a_lifted_chat_hold_leaves_a_chat_notice_and_an_escape_leaves_the_bot_a_
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE quarantine_holds SET created_at=?", (H.shift(H.now(), seconds=-3700),))
         assert H.lift_cooled_quarantines(c) == ["cpo"]
-        note = c.execute("SELECT body FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1",
-                         (hold["conversation_id"],)).fetchone()
+        note = c.execute(
+            "SELECT body FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1", (hold["conversation_id"],)
+        ).fetchone()
     assert notes_for(api, "cpo") == []
     assert "identity rule" in note["body"] and note["body"].endswith(H.QUARANTINE_LIFTED)
     # A person clearing it leaves the same note; so does an escape, naming what the check stopped.
@@ -83,6 +86,7 @@ def test_a_quarantined_bots_manager_bot_writes_to_it_and_it_waits_but_no_other_b
 
 def test_a_manager_declared_only_in_the_bots_definition_counts_too(api):
     import json
+
     with api.app.state.store.transaction() as c:
         config = BS.read(c, 'cpo')
         c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot='cpo'")
@@ -96,8 +100,9 @@ def test_quarantined_writer_names_its_cooldown_deadline(api):
     reason = "10 repeated refusals today"
     with api.app.state.store.transaction() as c:
         H.quarantine(c, "cpo", reason)
-        c.execute("UPDATE events SET created_at=? WHERE action='quarantine' AND target='bot:cpo'",
-                  ("2026-11-01T23:32:00Z",))
+        c.execute(
+            "UPDATE events SET created_at=? WHERE action='quarantine' AND target='bot:cpo'", ("2026-11-01T23:32:00Z",)
+        )
         with pytest.raises(H.Refused) as got:
             H._writer(c, "bot:cpo")
         assert got.value.rule == "quarantined"
@@ -129,12 +134,14 @@ def test_quarantined_writer_needing_a_person_keeps_the_existing_refusal(api, rea
 def test_quarantine_batch_and_single_read_pick_the_same_newest_event_on_a_tied_time(api):
     """Two quarantine events with the same `ts`: the batch and the single-row read both take the one inserted last."""
     from backend.read_cache import one
+
     store = api.app.state.store
     with store.transaction() as c:
         for event_id, reason in (("older", "first"), ("newer", "second")):
-            c.execute("INSERT INTO events(id,created_at,actor,action,target,detail) VALUES(?,?,?,?,?,?)",
-                      (event_id, "2026-11-01T10:00:00Z", "owner", "quarantine", "bot:tied",
-                       json.dumps({"reason": reason})))
+            c.execute(
+                "INSERT INTO events(id,created_at,actor,action,target,detail) VALUES(?,?,?,?,?,?)",
+                (event_id, "2026-11-01T10:00:00Z", "owner", "quarantine", "bot:tied", json.dumps({"reason": reason})),
+            )
     with store.read_transaction() as c:
         H.prime_quarantines(c, ["tied"])
         batched = json.loads(one(c, H.QUARANTINE_DETAIL_SQL, ("bot:tied",))["detail"])["reason"]

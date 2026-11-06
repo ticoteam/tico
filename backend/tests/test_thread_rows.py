@@ -1,4 +1,5 @@
 """A row in a thread list: a root speaks for its sub-threads and opens what is new in them; a DM says who it is with."""
+
 from types import SimpleNamespace
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
@@ -12,8 +13,11 @@ from backend.tests.threads_e2e import call, ok
 
 
 def reply_under(api, thread_id, parent_id, text, token="ben-test"):
-    response = api.post(f"/api/v2/threads/{thread_id}/messages", json={"text": text, "parent_message_id": parent_id},
-                        headers=headers(token))
+    response = api.post(
+        f"/api/v2/threads/{thread_id}/messages",
+        json={"text": text, "parent_message_id": parent_id},
+        headers=headers(token),
+    )
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -117,7 +121,9 @@ def test_following_only_a_sub_thread_lists_its_root_and_unfollowing_takes_it_awa
     first = say(api, thread["id"], "Kickoff notes", token="cara-test")
     reply = reply_under(api, thread["id"], first["id"], "Risks?", token="cara-test")
     assert row_of(sidebar(api, token="ana-test"), thread["id"]) is None
-    follow = api.put(f"/api/v2/threads/{reply['thread_id']}/follow", json={"notify": "live"}, headers=headers("ana-test"))
+    follow = api.put(
+        f"/api/v2/threads/{reply['thread_id']}/follow", json={"notify": "live"}, headers=headers("ana-test")
+    )
     assert follow.status_code == 200, follow.text
     listed = sidebar(api, token="ana-test")
     assert row_of(listed, thread["id"]) is not None and row_of(listed, reply["thread_id"]) is None
@@ -129,7 +135,9 @@ def test_the_unread_threads_card_lists_roots_with_a_dms_people_and_the_place_to_
     thread = new_thread(api, title="Launch", members=("human:ben",), body="Launch is Tuesday")
     first = say(api, thread["id"], "Kickoff notes")
     reply = reply_under(api, thread["id"], first["id"], "Risks?")
-    made = api.post("/api/v2/threads/dm", json={"members": ["human:ana"], "body": "Got a minute?"}, headers=headers("ben-test"))
+    made = api.post(
+        "/api/v2/threads/dm", json={"members": ["human:ana"], "body": "Got a minute?"}, headers=headers("ben-test")
+    )
     assert made.status_code == 200, made.text
     dm = made.json().get("thread") or made.json()
     with api.app.state.store.read() as c:
@@ -143,7 +151,9 @@ def test_the_unread_threads_card_lists_roots_with_a_dms_people_and_the_place_to_
 
 # ----------------------------------------------------------------------------- Threads and DMs are paged apart
 def test_many_threads_leave_an_older_dm_on_the_first_page_and_each_list_pages_on(api):
-    old = api.post("/api/v2/threads/dm", json={"members": ["human:ben"], "body": "An old DM"}, headers=headers("ana-test"))
+    old = api.post(
+        "/api/v2/threads/dm", json={"members": ["human:ben"], "body": "An old DM"}, headers=headers("ana-test")
+    )
     assert old.status_code == 200, old.text
     dm = old.json().get("thread") or old.json()
     made = [new_thread(api, title=f"Thread {i}", body="Newer") for i in range(5)]
@@ -192,7 +202,15 @@ def dm_rows(api, token):
 def test_a_dm_row_names_the_others_without_a_members_read(acme):
     api, _ = acme
     one = ok(call(api, "POST", "threads/dm", "cara-test", {"members": ["human:eve"]}))
-    many = ok(call(api, "POST", "threads/dm", "cara-test", {"members": ["human:eve", "human:fay", "human:ben", "human:ana"], "title": "Plans"}))
+    many = ok(
+        call(
+            api,
+            "POST",
+            "threads/dm",
+            "cara-test",
+            {"members": ["human:eve", "human:fay", "human:ben", "human:ana"], "title": "Plans"},
+        )
+    )
     rows = dm_rows(api, "cara-test")
     assert [p["actor"] for p in rows[one["id"]]["dm_with"]] == ["human:eve"] and rows[one["id"]]["dm_with_count"] == 1
     assert "human:cara" not in {p["actor"] for p in rows[many["id"]]["dm_with"]}
@@ -305,17 +323,24 @@ def sidebar_statements(api, token, **params):
 
 def test_the_statements_of_a_sidebar_page_stay_flat_as_a_viewer_follows_more_threads(api):
     for i in range(2):
-        ok_company = api.post("/api/v2/threads", json={"title": f"Company {i}", "audience": "company", "body": "hi"},
-                              headers=headers("ana-test"))
+        ok_company = api.post(
+            "/api/v2/threads",
+            json={"title": f"Company {i}", "audience": "company", "body": "hi"},
+            headers=headers("ana-test"),
+        )
         assert ok_company.status_code == 200, ok_company.text
     sidebar_statements(api, "ben-test", limit=2)  # warm: the roster is read once per process
     few, _ = sidebar_statements(api, "ben-test", limit=2)
     for i in range(30):
-        made = api.post("/api/v2/threads", json={"title": f"Watched {i}", "audience": "company", "body": "hi"},
-                        headers=headers("ana-test"))
+        made = api.post(
+            "/api/v2/threads",
+            json={"title": f"Watched {i}", "audience": "company", "body": "hi"},
+            headers=headers("ana-test"),
+        )
         assert made.status_code == 200, made.text
-        followed = api.put(f"/api/v2/threads/{made.json()['id']}/follow", json={"notify": "live"},
-                           headers=headers("ben-test"))
+        followed = api.put(
+            f"/api/v2/threads/{made.json()['id']}/follow", json={"notify": "live"}, headers=headers("ben-test")
+        )
         assert followed.status_code == 200, followed.text
     many, listed = sidebar_statements(api, "ben-test", limit=2)
     assert len(listed["threads"]) == 2

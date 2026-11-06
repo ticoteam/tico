@@ -61,9 +61,16 @@ def test_an_earlier_version_and_a_diff_show_the_change(built):
         diff = api.get("/api/v2/strategy/diff?from=1&to=2").json()
     assert [v["n"] for v in versions] == [2, 1]
     assert [field["key"] for field in diff["fields"]] == [
-        "summary", "sections.serve", "sections.sell", "sections.proof", "sections.how", "sections.not"]
+        "summary",
+        "sections.serve",
+        "sections.sell",
+        "sections.proof",
+        "sections.how",
+        "sections.not",
+    ]
     assert [bet["statement"] for bet in diff["bets"]["added"]] == [
-        "Business installs are the margin; homes are the volume and the brand."]
+        "Business installs are the margin; homes are the volume and the brand."
+    ]
 
 
 def test_bets_serve_the_goals_the_core_seed_made(built):
@@ -92,7 +99,7 @@ def test_the_strategy_bot_proposal_is_accepted_into_the_draft(built):
     [bet] = [b for b in strategy["bets"] if b["statement"] == statement]
     assert bet["status"] == "proposed"
     assert bet["wrong_if"]["kind"] == "text" and bet["wrong_if"]["check_by"] > NOW.date().isoformat()
-    assert statement not in str(strategy["current"])                            # in the draft, not published
+    assert statement not in str(strategy["current"])  # in the draft, not published
     assert not [item for item in needs["items"] if item["kind"] == "proposal"]
 
 
@@ -137,7 +144,8 @@ def test_the_owners_card_for_the_proposal_was_filed_when_it_was_proposed_and_clo
             "SELECT t.owner_id, t.status, t.created_at, p.proposed_at, p.decided_at FROM goal_proposals p "
             "JOIN tasks t ON t.title = 'Decide a suggested change to your strategy' "
             "AND t.body LIKE '%from this week''s market briefing%' "
-            "WHERE p.kind = 'strategy_draft' AND p.status = 'confirmed'").fetchone()
+            "WHERE p.kind = 'strategy_draft' AND p.status = 'confirmed'"
+        ).fetchone()
         assert not db.execute("SELECT 1 FROM goal_asks WHERE kind = 'proposal'").fetchone()
     assert row is not None
     owner, status, created, proposed, decided = row

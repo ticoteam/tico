@@ -1,4 +1,5 @@
 """Bounded supervisor reads from bot-writable checkouts and Git metadata."""
+
 import os
 import stat
 from contextlib import contextmanager

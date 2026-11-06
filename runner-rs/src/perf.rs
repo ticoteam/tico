@@ -48,7 +48,6 @@ pub fn enabled() -> bool {
 #[derive(Clone, Debug, Default)]
 struct Proc {
     pid: u32,
-    ppid: u32,
     /// CPU time used so far, user and system, in milliseconds.
     cpu_ms: u64,
     rss: u64,
@@ -260,6 +259,7 @@ fn list_procs() -> Vec<Proc> {
 }
 
 /// `/proc/<pid>/stat`: the name sits in parentheses and may hold spaces or parentheses itself.
+#[cfg(any(target_os = "linux", test))]
 fn parse_stat(pid: u32, stat: &str, tick: u64, page: u64) -> Option<Proc> {
     let open = stat.find('(')?;
     let close = stat.rfind(')')?;
@@ -267,9 +267,10 @@ fn parse_stat(pid: u32, stat: &str, tick: u64, page: u64) -> Option<Proc> {
     let rest: Vec<&str> = stat.get(close + 1..)?.split_whitespace().collect();
     let num = |i: usize| rest.get(i).and_then(|v| v.parse::<u64>().ok());
     let ticks = num(11)? + num(12)?;
+    // Column one is the parent's pid: nothing reads it, but a line without a number there is skipped.
+    num(1)?;
     Some(Proc {
         pid,
-        ppid: num(1)? as u32,
         cpu_ms: ticks * 1000 / tick.max(1),
         rss: num(21)? * page,
         name,
@@ -305,6 +306,7 @@ fn system_cpu() -> Option<(u64, u64)> {
     parse_cpu_line(std::fs::read_to_string("/proc/stat").ok()?.lines().next()?)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_cpu_line(line: &str) -> Option<(u64, u64)> {
     let mut parts = line.split_whitespace();
     if parts.next()? != "cpu" {
@@ -327,6 +329,7 @@ fn memory() -> Memory {
         .unwrap_or_default()
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_meminfo(text: &str) -> Memory {
     let field = |name: &str| {
         text.lines()
@@ -397,13 +400,13 @@ fn list_procs() -> Vec<Proc> {
 fn parse_ps_line(line: &str) -> Option<Proc> {
     let mut parts = line.split_whitespace();
     let pid = parts.next()?.parse().ok()?;
-    let ppid = parts.next()?.parse().ok()?;
+    // Column two is the parent's pid: nothing reads it, but a line without a number there is skipped.
+    parts.next()?.parse::<u32>().ok()?;
     let rss = parts.next()?.parse::<u64>().ok()? * 1024;
     let cpu_ms = parse_cpu_time(parts.next()?)?;
     let name = parts.collect::<Vec<_>>().join(" ");
     Some(Proc {
         pid,
-        ppid,
         cpu_ms,
         rss,
         name,
@@ -518,6 +521,7 @@ pub fn memory_percent() -> Option<f64> {
 }
 
 /// Linux start waiters share a memory reading for at most a second, independently of diagnostics.
+#[cfg(not(test))]
 pub async fn start_memory() -> Option<f64> {
     static SAMPLE: std::sync::OnceLock<tokio::sync::Mutex<Option<(Instant, Option<f64>)>>> =
         std::sync::OnceLock::new();
@@ -633,10 +637,9 @@ pub async fn run_loop(runner: Arc<Runner>) {
 mod tests {
     use super::*;
 
-    fn p(pid: u32, ppid: u32, rss: u64, name: &str) -> Proc {
+    fn p(pid: u32, rss: u64, name: &str) -> Proc {
         Proc {
             pid,
-            ppid,
             cpu_ms: 0,
             rss,
             name: name.into(),
@@ -698,10 +701,10 @@ mod tests {
             "ClaudeHelper"
         );
         let procs = vec![
-            p(1, 0, 10, "cargo"),
-            p(2, 0, 10, "cargo"),
-            p(3, 0, 5000, "postgres"),
-            p(4, 0, 1, "idle"),
+            p(1, 10, "cargo"),
+            p(2, 10, "cargo"),
+            p(3, 5000, "postgres"),
+            p(4, 1, "idle"),
         ];
         let top = top_names(&procs, &[30.0, 30.0, 0.0, 0.0]);
         assert_eq!(top[0]["name"], "cargo");
@@ -715,14 +718,8 @@ mod tests {
         let stat = "4242 (my (odd) name) S 1 4242 4242 0 -1 4194560 100 0 0 0 250 50 0 0 20 0 1 0 12345 1000 300 0";
         let proc = parse_stat(4242, stat, 100, 4096).unwrap();
         assert_eq!(
-            (
-                proc.name.as_str(),
-                proc.ppid,
-                proc.cpu_ms,
-                proc.rss,
-                proc.start
-            ),
-            ("my (odd) name", 1, 3000, 300 * 4096, 12345)
+            (proc.name.as_str(), proc.cpu_ms, proc.rss, proc.start),
+            ("my (odd) name", 3000, 300 * 4096, 12345)
         );
         assert_eq!(
             parse_cpu_line("cpu  100 0 50 800 50 0 0 0 0 0"),
@@ -742,8 +739,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            (proc.pid, proc.ppid, proc.rss, proc.cpu_ms),
-            (812, 1, 20480 * 1024, 62500)
+            (proc.pid, proc.rss, proc.cpu_ms),
+            (812, 20480 * 1024, 62500)
         );
         assert_eq!(parse_cpu_time("1-00:00:01"), Some(86_401_000));
         let vm = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:  10.\nPages active: 99.\nPages inactive: 5.\nPages purgeable: 4.\nPages wired down: 30.\nFile-backed pages: 60.\nAnonymous pages: 50.\nPages occupied by compressor: 6.\n";

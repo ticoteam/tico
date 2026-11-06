@@ -1,4 +1,5 @@
 """The systemd user units `scripts/tico-computer install` writes for a Linux checkout runner."""
+
 import os
 import plistlib
 import re
@@ -13,8 +14,15 @@ import pytest
 from runner_support import systemd_units as su
 
 ROOT = Path(__file__).resolve().parents[2]
-KW = dict(python="/srv/tico/runtime/runner-venv/bin/python", config="/home/ana/.config/tico/runner.json", root="/srv/tico",
-          log="/home/ana/.config/tico/logs/tico-bot.log", path="/usr/local/bin:/usr/bin", home="/home/ana", user="ana")
+KW = dict(
+    python="/srv/tico/runtime/runner-venv/bin/python",
+    config="/home/ana/.config/tico/runner.json",
+    root="/srv/tico",
+    log="/home/ana/.config/tico/logs/tico-bot.log",
+    path="/usr/local/bin:/usr/bin",
+    home="/home/ana",
+    user="ana",
+)
 
 
 def test_each_helper_runs_its_own_command_and_an_environment_has_its_own_names():
@@ -24,7 +32,9 @@ def test_each_helper_runs_its_own_command_and_an_environment_has_its_own_names()
         assert f"TICO_SYSTEMD_UNIT=tico-{kind}.service" in text
     acme = su.render("bot", env_slug="acme", **KW)
     assert "TICO_SYSTEMD_UNIT=tico-acme-bot.service" in acme and "Description=Tico runner (acme)" in acme
-    assert su.helper_units("tico-acme-bot.service") == {k: f"tico-acme-{k}.service" for k in ("connectors", "close-calls", "importers")}
+    assert su.helper_units("tico-acme-bot.service") == {
+        k: f"tico-acme-{k}.service" for k in ("connectors", "close-calls", "importers")
+    }
     assert su.helper_units("tico-bot.service")["importers"] == "tico-importers.service"
     assert su.helper_units("something.service") == {}
 
@@ -35,8 +45,17 @@ def test_a_path_with_spaces_or_percent_signs_stays_one_word_and_no_variable_expa
 
 
 def test_the_local_server_reads_its_settings_from_the_environments_file():
-    text = su.render("api", python="/py", config="", root="/srv/tico", log="/l", path="/usr/bin", env_slug="acme",
-                     env_file="/home/ana/.config/tico/environments/acme/server.env", port="8123")
+    text = su.render(
+        "api",
+        python="/py",
+        config="",
+        root="/srv/tico",
+        log="/l",
+        path="/usr/bin",
+        env_slug="acme",
+        env_file="/home/ana/.config/tico/environments/acme/server.env",
+        port="8123",
+    )
     assert "EnvironmentFile=/home/ana/.config/tico/environments/acme/server.env" in text
     assert '"-m" "backend.server"' in text and '"--port" "8123"' in text
     with pytest.raises(ValueError):
@@ -57,8 +76,10 @@ def run_through_forwarder(argv):
     assert argv[1:3] == ["-m", "runner"], argv
     command = argv[-1]
     args = [*argv[3:-1], "--help"] if command == "run" else [*argv[3:], "--help"]
-    old, new = (subprocess.run([sys.executable, "-m", module, *args], cwd=ROOT, capture_output=True, text=True,
-                               timeout=60) for module in ("runner", "runner_support"))
+    old, new = (
+        subprocess.run([sys.executable, "-m", module, *args], cwd=ROOT, capture_output=True, text=True, timeout=60)
+        for module in ("runner", "runner_support")
+    )
     assert old.returncode == new.returncode == 0, old.stderr
     assert old.stdout == new.stdout and command in old.stdout
 
@@ -78,16 +99,30 @@ def test_a_launchd_plist_starts_its_job_by_the_runner_name_an_older_release_also
     script = (ROOT / "scripts" / "tico-computer").read_text()
     body = re.search(r'cat > "\$file" <<PL\n(.*?)\nPL\n', script, re.S).group(1)
     command = {"bot": "run"}.get(kind, kind)
-    rendered = subprocess.run(["bash", "-c", f"cat <<PL\n{body}\nPL\n"], capture_output=True, check=True, timeout=30,
-                              env={"PATH": os.defpath, "PYTHON": "/py", "CONFIG": "/cfg/runner.json", "command": command,
-                                   "service": "team.tico." + kind, "HUB": str(ROOT), "HOME": "/home/ana", "USER": "ana",
-                                   "log": "/l"})
+    rendered = subprocess.run(
+        ["bash", "-c", f"cat <<PL\n{body}\nPL\n"],
+        capture_output=True,
+        check=True,
+        timeout=30,
+        env={
+            "PATH": os.defpath,
+            "PYTHON": "/py",
+            "CONFIG": "/cfg/runner.json",
+            "command": command,
+            "service": "team.tico." + kind,
+            "HUB": str(ROOT),
+            "HOME": "/home/ana",
+            "USER": "ana",
+            "log": "/l",
+        },
+    )
     argv = plistlib.loads(rendered.stdout)["ProgramArguments"]
     assert argv == ["/py", "-m", "runner", "--config", "/cfg/runner.json", command]
     run_through_forwarder(argv)
 
 
 # -- scripts/tico-computer on Linux, with systemctl and loginctl faked ----------------------------------------------
+
 
 def fake_linux(tmp_path, linger="no"):
     if sys.platform != "linux":
@@ -98,7 +133,8 @@ def fake_linux(tmp_path, linger="no"):
     (bin_dir / "systemctl").write_text(
         f'#!/bin/sh\necho "systemctl $*" >> {log}\n'
         'case "$*" in *"show-environment"*) echo HOME=/x;; esac\n'
-        'case "$*" in *"show tico-bot.service"*) printf "ActiveState=active\\nSubState=running\\nMainPID=77\\nExecMainStatus=0\\n";; esac\nexit 0\n')
+        'case "$*" in *"show tico-bot.service"*) printf "ActiveState=active\\nSubState=running\\nMainPID=77\\nExecMainStatus=0\\n";; esac\nexit 0\n'
+    )
     (bin_dir / "loginctl").write_text(f'#!/bin/sh\necho "loginctl $*" >> {log}\necho {linger}\n')
     for f in bin_dir.iterdir():
         f.chmod(0o755)
@@ -107,15 +143,26 @@ def fake_linux(tmp_path, linger="no"):
     config.chmod(0o600)
     # A turn's shell startup hook must not restore PATH over the fake supervisor commands.
     env = {k: os.environ[k] for k in ("PYTHONPATH", "LANG") if k in os.environ}
-    env.update({"TICO_OS": "Linux", "PATH": f"{bin_dir}:{os.environ.get('PATH', os.defpath)}", "HOME": str(tmp_path / "home"),
-           "TICO_RUNNER_PYTHON": sys.executable, "TICO_RUNNER_CONFIG": str(config), "TICO_SYSTEMD_USER_DIR": str(tmp_path / "units"),
-           "XDG_CONFIG_HOME": str(tmp_path / "xdg"), "USER": "ana"})
+    env.update(
+        {
+            "TICO_OS": "Linux",
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', os.defpath)}",
+            "HOME": str(tmp_path / "home"),
+            "TICO_RUNNER_PYTHON": sys.executable,
+            "TICO_RUNNER_CONFIG": str(config),
+            "TICO_SYSTEMD_USER_DIR": str(tmp_path / "units"),
+            "XDG_CONFIG_HOME": str(tmp_path / "xdg"),
+            "USER": "ana",
+        }
+    )
     (tmp_path / "home").mkdir()
     return env, log
 
 
 def tico(env, *args):
-    return subprocess.run([str(ROOT / "scripts" / "tico-computer"), *args], capture_output=True, text=True, env=env, timeout=120)
+    return subprocess.run(
+        [str(ROOT / "scripts" / "tico-computer"), *args], capture_output=True, text=True, env=env, timeout=120
+    )
 
 
 @pytest.mark.slow
@@ -129,7 +176,7 @@ def test_install_on_linux_writes_units_starts_them_and_explains_linger(tmp_path)
         assert f"systemctl --user restart tico-{kind}.service" in log.read_text()
         assert f"installed tico-{kind}.service" in done.stdout
     assert "systemctl --user daemon-reload" in log.read_text()
-    assert "loginctl enable-linger ana" in done.stdout                   # linger is off: say so
+    assert "loginctl enable-linger ana" in done.stdout  # linger is off: say so
 
 
 @pytest.mark.slow
@@ -150,7 +197,7 @@ def test_status_and_restart_on_linux_read_systemd(tmp_path):
     assert installed.returncode == 0, installed.stdout + installed.stderr
     restarted = tico(env, "restart", "bot")
     assert restarted.returncode == 0 and "restarted tico-bot.service" in restarted.stdout
-    status = tico(env, "status")                                          # the cloud is unreachable here; the job lines come first
+    status = tico(env, "status")  # the cloud is unreachable here; the job lines come first
     assert "bot: running (pid 77)" in status.stdout and "connectors: not installed" in status.stdout
 
 

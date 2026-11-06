@@ -184,8 +184,8 @@ the recoveries waiting. At **Acts on its own**, the Strategy Bot makes the chang
 recovery, and posts a comment on the goal saying what it did and why; you undo a decision in the Strategy Bot log. A change
 you undid is never made alone again: tried again, it becomes an item in your Needs you.
 
-When several bots ask you the same thing, the Strategy Bot can make them **one item** (`POST /api/v2/strategy-bot/merge`).
-Their tasks leave your Needs you while it is open, and your one answer goes to every bot that asked. If the item ends
+When several bots ask you the same thing, the Strategy Bot can make them **one item** (`POST /api/v2/strategy-bot/merge`), a
+question task for you. Their tasks leave your Needs you while it is open, and your one answer goes to every bot that asked. If the item ends
 without an answer, they come back as they were. A merged item counts toward the 5 a day.
 
 After 10 recoveries in a row approved with its pick unchanged, the Monday note offers **Acts on its own** once, and at most once

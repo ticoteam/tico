@@ -24,6 +24,7 @@ when that is missing or older than the source, the bundle is not built (StaleBui
 Set TICO_UI_BUNDLE=off to serve the separate files as index.html lists them (editing the UI).
 `python3 -m backend.ui_bundle <ui dir> <out dir>` writes the page and both bundles, for the browser tests.
 """
+
 import gzip
 import hashlib
 import os
@@ -56,7 +57,7 @@ def enabled():
 
 
 def _tag(kind, url):
-    return (f'<script src="{url}"></script>\n' if kind == "js" else f'<link rel="stylesheet" href="{url}">\n')
+    return f'<script src="{url}"></script>\n' if kind == "js" else f'<link rel="stylesheet" href="{url}">\n'
 
 
 def part_path(kind, n):
@@ -87,8 +88,10 @@ class Bundle:
         # STANDALONE path -> the `?v=` the page names it with.
         self.versions = dict(versions or {})
         # The bundle's URL path -> the part served there.
-        self.parts = {**{part_path("js", n): b for n, b in enumerate(js_parts)},
-                      **{part_path("css", n): b for n, b in enumerate(css_parts)}}
+        self.parts = {
+            **{part_path("js", n): b for n, b in enumerate(js_parts)},
+            **{part_path("css", n): b for n, b in enumerate(css_parts)},
+        }
         self.etag = {path: _etag(body) for path, body in self.parts.items()}
         # Sent to a browser that accepts it (the server has no other compression); its own strong ETag.
         self.gz = {path: gzip.compress(body, 6, mtime=0) for path, body in self.parts.items()}
@@ -122,13 +125,13 @@ def build(ui_dir):
         for ref in REF.findall(body):
             if not ref.startswith(PREFIX) or ".." in ref.split("/"):
                 raise BundleError(f"{ref}: only files under {PREFIX} can be bundled")
-            name = ref[len(PREFIX):]
+            name = ref[len(PREFIX) :]
             path = ui_dir / name
             if not path.is_file():
                 raise BundleError(f"{ref}: no such file")
             if kind == "js" and name.endswith(".ts"):
                 typed.append(path)
-                path = ui_build.compiled(ui_dir, name)       # StaleBuild, not a fallback to the separate files
+                path = ui_build.compiled(ui_dir, name)  # StaleBuild, not a fallback to the separate files
             files[kind].append((name, path))
     if not files["js"] or not files["css"]:
         raise BundleError("index.html has no bundle regions")
@@ -144,13 +147,19 @@ def build(ui_dir):
         js.append(f"// file: {name}\n{text.rstrip()}\n\n".encode())
     css = [f"/* file: {name} */\n{path.read_text().rstrip()}\n\n".encode() for name, path in files["css"]]
     # Each part is a script of its own, so each opens with the directive; the first also marks where the run starts.
-    js_parts = [b"'use strict';\n" + (BUNDLE_MARK.encode() if n == 0 else b"") + b"\n" + part
-                for n, part in enumerate(split(js))]
+    js_parts = [
+        b"'use strict';\n" + (BUNDLE_MARK.encode() if n == 0 else b"") + b"\n" + part
+        for n, part in enumerate(split(js))
+    ]
     css_parts = split(css)
     version = {"js": _etag(b"".join(js_parts))[1:17], "css": _etag(b"".join(css_parts))[1:17]}
     count = {"js": len(js_parts), "css": len(css_parts)}
-    page = REGION.sub(lambda m: "".join(_tag(m.group(1), f"{part_path(m.group(1), n)}?v={version[m.group(1)]}")
-                                        for n in range(count[m.group(1)])), html)
+    page = REGION.sub(
+        lambda m: "".join(
+            _tag(m.group(1), f"{part_path(m.group(1), n)}?v={version[m.group(1)]}") for n in range(count[m.group(1)])
+        ),
+        html,
+    )
     versions, standalone = {}, []
     for url, name in STANDALONE.items():
         path, tag = ui_dir / name, f'src="{url}"'
@@ -242,4 +251,4 @@ if __name__ == "__main__":
     out.mkdir(parents=True, exist_ok=True)
     (out / "index.html").write_bytes(bundle.page)
     for path, body in bundle.parts.items():
-        (out / path[len(PREFIX):]).write_bytes(body)
+        (out / path[len(PREFIX) :]).write_bytes(body)

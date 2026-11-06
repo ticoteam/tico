@@ -1,5 +1,6 @@
 """The message-to-task index (backend/message_links.py): a task's page reads only the messages that could be
 about it, and shows exactly what reading the whole room showed."""
+
 import json
 import random
 import sqlite3
@@ -36,14 +37,19 @@ class World:
             for i in range(5):
                 tid = f"task-{seed}-{i}"
                 requester, owner = self.rng.choice(READERS), self.rng.choice(READERS + ("bot:ops",))
-                c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
-                          "VALUES(?,?,?,?,'doing',?,'t','t')", (tid, tid, requester, owner, self.rng.random() < 0.5))
+                c.execute(
+                    "INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
+                    "VALUES(?,?,?,?,'doing',?,'t','t')",
+                    (tid, tid, requester, owner, self.rng.random() < 0.5),
+                )
                 self.tasks.append(tid)
             self.rooms = [self.room(c) for _ in range(3)]
             self.task_room = self.room(c, self.tasks[0])
             for tid in self.tasks:
-                c.execute("UPDATE tasks SET conversation_id=? WHERE id=?",
-                          (self.task_room if tid == self.tasks[0] else self.rng.choice(self.rooms), tid))
+                c.execute(
+                    "UPDATE tasks SET conversation_id=? WHERE id=?",
+                    (self.task_room if tid == self.tasks[0] else self.rng.choice(self.rooms), tid),
+                )
             self.messages, self.attempts = [], []
 
     def id(self, prefix):
@@ -52,31 +58,57 @@ class World:
 
     def room(self, c, task_id=None):
         cid = self.id("conv")
-        c.execute("INSERT INTO conversations(id,kind,task_id,participants,created_at,scope) VALUES(?,?,?,?,?,?)",
-                  (cid, "chat", task_id, json.dumps(["human:ana", "human:ben", "bot:ops"]), "t", "shared"))
+        c.execute(
+            "INSERT INTO conversations(id,kind,task_id,participants,created_at,scope) VALUES(?,?,?,?,?,?)",
+            (cid, "chat", task_id, json.dumps(["human:ana", "human:ben", "bot:ops"]), "t", "shared"),
+        )
         return cid
 
     def say(self, c, refs=None, reply=None, cid=None):
         mid = self.id("msg")
-        c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,created_at) "
-                  "VALUES(?,?,?,?,?,?,?,?,?)", (mid, cid or self.rng.choice(self.rooms), "human:ana", "human:ben",
-                                                self.rng.choice(("chat", "say", "ask", "answer")),
-                                                "body " + mid, json.dumps(refs or {}), reply, f"2026-01-01T{self.n:08d}"))
+        c.execute(
+            "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                mid,
+                cid or self.rng.choice(self.rooms),
+                "human:ana",
+                "human:ben",
+                self.rng.choice(("chat", "say", "ask", "answer")),
+                "body " + mid,
+                json.dumps(refs or {}),
+                reply,
+                f"2026-01-01T{self.n:08d}",
+            ),
+        )
         self.messages.append(mid)
         return mid
 
     def run(self, c, message):
         jid, aid = self.id("job"), self.id("attempt")
-        c.execute("INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,'ops','completed','t')", (jid, message))
-        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
-                  "VALUES(?,?,'ops','r1',1,?,'completed','t','t')", (aid, jid, aid))
+        c.execute(
+            "INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,'ops','completed','t')", (jid, message)
+        )
+        c.execute(
+            "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
+            "VALUES(?,?,'ops','r1',1,?,'completed','t','t')",
+            (aid, jid, aid),
+        )
         self.attempts.append(aid)
         return aid
 
     def reference(self, tid):
-        return self.rng.choice([{"task": tid}, {"task_id": [tid]}, {"ref": "task:" + tid},
-                                {"url": f"https://hub/#/task/{tid}"}, {"nested": [{"deep": tid}]},
-                                {"blob": json.dumps({"a": tid})}, {"task": " " + tid + " "}])
+        return self.rng.choice(
+            [
+                {"task": tid},
+                {"task_id": [tid]},
+                {"ref": "task:" + tid},
+                {"url": f"https://hub/#/task/{tid}"},
+                {"nested": [{"deep": tid}]},
+                {"blob": json.dumps({"a": tid})},
+                {"task": " " + tid + " "},
+            ]
+        )
 
     def step(self, c):
         kind, tid, earlier = self.rng.choice(self.kinds), self.rng.choice(self.tasks), self.messages[-12:]
@@ -101,8 +133,10 @@ class World:
             mid = self.say(c, report(aid))
         elif kind == "read":
             aid = self.run(c, self.say(c))
-            c.execute("INSERT OR IGNORE INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)",
-                      (aid, self.rng.choice(earlier)))
+            c.execute(
+                "INSERT OR IGNORE INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)",
+                (aid, self.rng.choice(earlier)),
+            )
             mid = self.say(c, report(aid))
         else:
             mid = self.say(c, cid=self.task_room)
@@ -111,33 +145,63 @@ class World:
     def change(self, c):
         """Edits, deletes, moves and re-links after the fact: every write path a link has to follow."""
         mid = self.rng.choice(self.messages)
-        what = self.rng.choice(("edit", "unlink", "delete", "comment-delete", "reparent", "move", "relink-room",
-                                "late-carry", "late-move", "purge"))
+        what = self.rng.choice(
+            (
+                "edit",
+                "unlink",
+                "delete",
+                "comment-delete",
+                "reparent",
+                "move",
+                "relink-room",
+                "late-carry",
+                "late-move",
+                "purge",
+            )
+        )
         if what == "edit":
-            c.execute("UPDATE messages SET refs=?, edited_at='t' WHERE id=?",
-                      (json.dumps(self.reference(self.rng.choice(self.tasks))), mid))
+            c.execute(
+                "UPDATE messages SET refs=?, edited_at='t' WHERE id=?",
+                (json.dumps(self.reference(self.rng.choice(self.tasks))), mid),
+            )
         elif what == "unlink":
             c.execute("UPDATE messages SET refs='{}' WHERE id=?", (mid,))
         elif what == "delete":
             c.execute("UPDATE messages SET deleted_at='t' WHERE id=?", (mid,))
         elif what == "comment-delete":
-            c.execute("UPDATE messages SET body='',refs=?,deleted_at='t' WHERE id=?",
-                      (json.dumps({"task": self.rng.choice(self.tasks), "comment": True}), mid))
+            c.execute(
+                "UPDATE messages SET body='',refs=?,deleted_at='t' WHERE id=?",
+                (json.dumps({"task": self.rng.choice(self.tasks), "comment": True}), mid),
+            )
         elif what == "reparent":
             c.execute("UPDATE messages SET in_reply_to=? WHERE id=?", (self.rng.choice(self.messages), mid))
         elif what == "move":
             c.execute("UPDATE messages SET conversation_id=? WHERE id=?", (self.rng.choice(self.rooms), mid))
         elif what == "relink-room":
-            c.execute("UPDATE conversations SET task_id=? WHERE id=?",
-                      (self.rng.choice(self.tasks + [None]), self.rng.choice(self.rooms[1:] + [self.task_room])))
+            c.execute(
+                "UPDATE conversations SET task_id=? WHERE id=?",
+                (self.rng.choice(self.tasks + [None]), self.rng.choice(self.rooms[1:] + [self.task_room])),
+            )
         elif what == "late-carry" and self.attempts:
-            c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (self.rng.choice(self.attempts), self.rng.choice(self.tasks)))
+            c.execute(
+                "UPDATE tasks SET carried_by=? WHERE id=?",
+                (self.rng.choice(self.attempts), self.rng.choice(self.tasks)),
+            )
         elif what == "late-move" and self.attempts:
-            H.event(c, H.KEEPER, task_privacy.INPUT_MOVED, self.rng.choice(self.attempts),
-                    {"tasks": [self.rng.choice(self.tasks)]})
-        elif what == "purge" and not c.execute(
+            H.event(
+                c,
+                H.KEEPER,
+                task_privacy.INPUT_MOVED,
+                self.rng.choice(self.attempts),
+                {"tasks": [self.rng.choice(self.tasks)]},
+            )
+        elif (
+            what == "purge"
+            and not c.execute(
                 "SELECT 1 FROM jobs WHERE message_id=? UNION SELECT 1 FROM attempt_inputs WHERE message_id=?",
-                (mid, mid)).fetchone():
+                (mid, mid),
+            ).fetchone()
+        ):
             c.execute("DELETE FROM messages WHERE id=?", (mid,))
             self.messages.remove(mid)
             # A reply to a purged message keeps its id; message_tasks then finds nothing there.
@@ -196,7 +260,7 @@ def build(s, seed, kinds=KINDS, steps=60, changes=25, unrefreshed=False):
     for _ in range(changes):
         # `unrefreshed`: writes that skip Store.transaction's refresh. The triggers mark them, and reads take
         # their links from their rows.
-        with (s.read_transaction() if unrefreshed else s.transaction()) as c:
+        with s.read_transaction() if unrefreshed else s.transaction() as c:
             world.change(c)
     if unrefreshed:
         with s.read() as c:
@@ -253,9 +317,15 @@ def test_an_edit_and_a_delete_move_a_message_on_and_off_a_task_page(tmp_path, mo
         assert not c.execute("SELECT 1 FROM message_links_dirty").fetchone()
         # Every task page asks for the run events naming the task: by their own index, covering their detail, so the
         # search reads no event rows.
-        plan = " ".join(r[3] for r in c.execute(
-            "EXPLAIN QUERY PLAN SELECT target FROM events WHERE action IN (" + task_privacy.RUN_TASK_EVENTS_SQL
-            + ") AND instr(detail, ?)>0", (first,)))
+        plan = " ".join(
+            r[3]
+            for r in c.execute(
+                "EXPLAIN QUERY PLAN SELECT target FROM events WHERE action IN ("
+                + task_privacy.RUN_TASK_EVENTS_SQL
+                + ") AND instr(detail, ?)>0",
+                (first,),
+            )
+        )
         assert "COVERING INDEX events_run_detail" in plan, plan
         # The task's own room, and an id the links never keep, are read whole.
         assert message_links.candidates(c, world.tasks[0], world.task_room) is None
@@ -284,6 +354,7 @@ def test_a_write_outside_store_transaction_is_read_from_its_row_until_the_next_t
     from backend.auth import Auth
     from backend.execution import Execution
     from backend.scheduler import Scheduler
+
     assert not Scheduler(s, Execution(s, Auth(s))).tick()["failures"]
     with s.read() as c:
         assert not c.execute("SELECT 1 FROM message_links_dirty").fetchone()
@@ -304,24 +375,32 @@ def test_backfill_is_batched_idempotent_and_catches_rows_an_older_server_wrote(t
     raw.row_factory = sqlite3.Row
     for name in ("message_links_insert", "message_links_update", "message_links_delete"):
         raw.execute("DROP TRIGGER " + name)
-    unlinked = [r[0] for r in raw.execute("SELECT id FROM messages WHERE id NOT IN (%s) ORDER BY rowid DESC LIMIT 5"
-                                          % ",".join("?" * len(tail)), tail)]
+    unlinked = [
+        r[0]
+        for r in raw.execute(
+            "SELECT id FROM messages WHERE id NOT IN (%s) ORDER BY rowid DESC LIMIT 5" % ",".join("?" * len(tail)), tail
+        )
+    ]
     for table in ("message_links", "message_links_seen"):
         raw.execute(f"DELETE FROM {table} WHERE message_id IN (%s)" % ",".join("?" * 5), unlinked)
     # It deletes the newest messages and writes one, which takes a rowid an earlier message had.
     raw.execute("DELETE FROM messages WHERE id IN (%s)" % ",".join("?" * len(tail)), tail)
     tid, old = world.tasks[1], "msg-older"
     raw.execute("UPDATE tasks SET private=0 WHERE id=?", (tid,))
-    raw.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
-                "VALUES(?,?,'human:ana','human:ben','chat','b',?,'z')", (old, world.rooms[0], json.dumps({"task": tid})))
+    raw.execute(
+        "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
+        "VALUES(?,?,'human:ana','human:ben','chat','b',?,'z')",
+        (old, world.rooms[0], json.dumps({"task": tid})),
+    )
     assert raw.execute("SELECT rowid FROM messages WHERE id=?", (old,)).fetchone()[0] < top
     raw.close()
     # The upgrade: migrations put the triggers back and the start backfills every message not seen.
     again = Store(Settings(db_path=tmp_path / "hub.sqlite"))
     again.initialize(seed_market=False)
     with again.read() as c:
-        assert c.execute("SELECT 1 FROM message_links WHERE message_id=? AND kind='task' AND target=?",
-                         (old, tid)).fetchone()
+        assert c.execute(
+            "SELECT 1 FROM message_links WHERE message_id=? AND kind='task' AND target=?", (old, tid)
+        ).fetchone()
         after = sorted(map(tuple, c.execute("SELECT * FROM message_links WHERE message_id<>?", (old,))))
     assert after == before
     assert old in [m for m, _ in pages(again, world.rooms[0], tid, "human:ana", 200)[0][:-1]]

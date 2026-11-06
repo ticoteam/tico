@@ -16,9 +16,11 @@ def page(api, bot_slug, title="Growth notes"):
     """A bot's page, straight into the database."""
     fid = "file-" + uuid.uuid4().hex[:24]
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,first_activity_at,"
-                  "last_activity_at) VALUES(?,?,?,?,?,'file','text/html','tico_blob',NULL,?,?)",
-                  (fid, bot_slug, "bot", fid, title, H.now(), H.now()))
+        c.execute(
+            "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,first_activity_at,"
+            "last_activity_at) VALUES(?,?,?,?,?,'file','text/html','tico_blob',NULL,?,?)",
+            (fid, bot_slug, "bot", fid, title, H.now(), H.now()),
+        )
         c.execute("INSERT INTO pages(file_id,created_at,updated_at) VALUES(?,?,?)", (fid, H.now(), H.now()))
     return fid
 
@@ -34,10 +36,25 @@ def seed(api):
     put(api, "growth/settings", {"revenue_month": 90, "margin_pct": 40})
     post(api, "growth/channels", {"slug": "google-search", "name": "Google Search", "sort": 1})
     post(api, "growth/channels", {"slug": "referrals", "name": "Referrals", "sort": 2})
-    put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-09", "spend": 3000, "new_customers": 50,
-                                "kept_d30": 75})
-    put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-10", "spend": 3400, "bot_cost": 260,
-                                "new_customers": 71, "kept_d30": 81, "kept_d90": 64, "kept_d180": 52})
+    put(
+        api,
+        "growth/cohorts",
+        {"channel": "google-search", "month": "2026-09", "spend": 3000, "new_customers": 50, "kept_d30": 75},
+    )
+    put(
+        api,
+        "growth/cohorts",
+        {
+            "channel": "google-search",
+            "month": "2026-10",
+            "spend": 3400,
+            "bot_cost": 260,
+            "new_customers": 71,
+            "kept_d30": 81,
+            "kept_d90": 64,
+            "kept_d180": 52,
+        },
+    )
     put(api, "growth/cohorts", {"channel": "referrals", "month": "2026-10", "spend": 500, "new_customers": 20})
     put(api, "growth/cohorts", {"channel": "unknown", "month": "2026-10", "new_customers": 18})
     north = post(api, "kpis", {"name": "Active customers"})["kpi"]
@@ -51,8 +68,11 @@ def seed(api):
 
 def marketing(api, title, channel, step="idea-open", owner="ops", **more):
     """A marketing idea tagged with its channel, moved to its step (Idea by default)."""
-    tid = post(api, "tasks", {"title": title, "body": "Try it.", "owner": owner, "type": "idea",
-                              "labels": [f"channel:{channel}"], **more})["id"]
+    tid = post(
+        api,
+        "tasks",
+        {"title": title, "body": "Try it.", "owner": owner, "type": "idea", "labels": [f"channel:{channel}"], **more},
+    )["id"]
     if step != "idea-open":
         version = get(api, "tasks/" + tid)["task"]["version"]
         post(api, "tasks/" + tid, {"version": version, "step": step})
@@ -63,10 +83,13 @@ def test_the_growth_page_starts_with_its_cards_and_admins_and_bots_arrange_it(ap
     view = growth(api)
     assert view["saved"] is False and view["can_edit"] is True and view["kind"] == "growth"
     assert [p["card"]["template"] for p in view["pins"]] == (
-        ["growth_funnel"] + ["growth_number"] * 6 + ["growth_channels", "growth_retention", "growth_board"])
+        ["growth_funnel"] + ["growth_number"] * 6 + ["growth_channels", "growth_retention", "growth_board"]
+    )
     assert [p["card"]["settings"]["metric"] for p in view["pins"][1:7]] == GROWTH_NUMBERS
-    assert view["months"] == [] and all(p["card"]["hidden"] for p in view["pins"] if p["card"]["template"] == "growth_number")
-    assert growth(api, token="cara-test")["can_edit"] is False          # a member reads it, arranges nothing
+    assert view["months"] == [] and all(
+        p["card"]["hidden"] for p in view["pins"] if p["card"]["template"] == "growth_number"
+    )
+    assert growth(api, token="cara-test")["can_edit"] is False  # a member reads it, arranges nothing
     put(api, "places/growth", {}, "cara-test", expected=403)
     fid = page(api, "ops")
     post(api, "pins", {"place": "growth", "item": "page:" + fid}, "cara-test", expected=403)
@@ -92,6 +115,7 @@ def test_growth_cards_read_the_month_picked_and_carry_a_figure_back_to_the_last_
     growth(api, "?month=October", expected=422)
     with api.app.state.store.read() as c:
         from backend import growth as G
+
         eco = {m: G.economics(c, m)["total"] for m in ("2026-09", "2026-10")}
     cac = next(p["card"] for p in view["pins"] if p["card"]["settings"].get("metric") == "cac")
     assert cac["data"]["value"] == eco["2026-10"]["cac"] and cac["data"]["prev"] == eco["2026-09"]["cac"] == 60.0
@@ -114,9 +138,14 @@ def test_the_growth_templates_read_the_seeded_install_for_what_the_reader_may_se
     building = marketing(api, "Referral reward copy", "referrals", step="idea-building")
     marketing(api, "Old banner", "google-search", step="idea-paused")
     marketing(api, "Inbox test", "google-search", step="idea-doing", owner="inbox", private=True)
-    cards = {p["card"]["template"]: p["card"]["data"] for p in growth(api)["pins"] if p["card"]["template"] != "growth_number"}
+    cards = {
+        p["card"]["template"]: p["card"]["data"]
+        for p in growth(api)["pins"]
+        if p["card"]["template"] != "growth_number"
+    }
     with api.app.state.store.read() as c:
         from backend import growth as G
+
         eco = G.economics(c, "2026-10")
     # Funnel: Visits, then Sign-ups at 20% of them; the North Star on its own.
     stages = cards["growth_funnel"]["stages"]
@@ -128,8 +157,11 @@ def test_the_growth_templates_read_the_seeded_install_for_what_the_reader_may_se
     # A September reading and September picked: the funnel and North Star read as of September's end.
     north_id = cards["growth_funnel"]["north_star"]["id"]
     post(api, f"kpis/{north_id}/readings", {"value": 30, "period_end": "2026-09-30T00:00:00Z"})
-    sept = {p["card"]["template"]: p["card"]["data"] for p in growth(api, "?month=2026-09")["pins"]
-            if p["card"]["template"] == "growth_funnel"}["growth_funnel"]
+    sept = {
+        p["card"]["template"]: p["card"]["data"]
+        for p in growth(api, "?month=2026-09")["pins"]
+        if p["card"]["template"] == "growth_funnel"
+    }["growth_funnel"]
     assert (sept["north_star"]["value"], sept["north_star"]["prev"]) == (30, None)
     assert sept["stages"][0]["value"] is None and sept["stages"][1]["conv"] is None
     # Channels: each live channel's own row, its open tests (Working, Live, In development, On deck; paused ones left
@@ -145,7 +177,9 @@ def test_the_growth_templates_read_the_seeded_install_for_what_the_reader_may_se
     assert google["tasks"][0]["title"] == "Referral scaling"
     assert {t["title"] for t in google["tasks"]} == {"Referral scaling", "Google ads test", "Inbox test"}
     assert [(t["id"], t["title"], t["stage"]) for t in referrals["tasks"]] == [
-        (building, "Referral reward copy", "building"), (flyers, "Flyers at the market", "idea")]
+        (building, "Referral reward copy", "building"),
+        (flyers, "Flyers at the market", "idea"),
+    ]
     assert rows["unknown"]["new_customers"] == 18 and rows["unknown"]["tasks"] == []
     # Retention: September then October, the newest last; a month with no 90 or 180 days is null.
     retention = cards["growth_retention"]
@@ -156,37 +190,59 @@ def test_the_growth_templates_read_the_seeded_install_for_what_the_reader_may_se
     # its newest one.
     lanes = {lane["stage"]: lane for lane in cards["growth_board"]["lanes"]}
     assert [lane["label"] for lane in cards["growth_board"]["lanes"]] == [
-        "Live", "Working", "In development", "On deck"]
+        "Live",
+        "Working",
+        "In development",
+        "On deck",
+    ]
     counts = {stage: lane["count"] for stage, lane in lanes.items()}
     assert counts == {"testing": 2, "scaling": 1, "building": 1, "idea": 1}
     assert shipped in {c["id"] for c in lanes["testing"]["cards"]}
     assert lanes["scaling"]["cards"][0]["channel"] == "Google Search"
     assert lanes["building"]["cards"][0]["id"] == building and lanes["building"]["cards"][0]["channel"] == "Referrals"
     # The private test is Ana's alone: Cara sees one test in Testing, not two.
-    cara = {p["card"]["template"]: p["card"]["data"] for p in growth(api, token="cara-test")["pins"]
-            if p["card"]["template"] == "growth_board"}
+    cara = {
+        p["card"]["template"]: p["card"]["data"]
+        for p in growth(api, token="cara-test")["pins"]
+        if p["card"]["template"] == "growth_board"
+    }
     assert cara["growth_board"]["lanes"][0]["count"] == 1
     # `count` keeps the first live channels (Unknown still comes last when it has a row); one channel's Number names it.
     one = post(api, "cards", {"template": "growth_channels", "place": "growth", "settings": {"count": 1}})["card"]
     assert [r["slug"] for r in one["data"]["rows"]] == ["google-search", "unknown"]
-    ads = post(api, "cards", {"template": "growth_number", "place": "growth",
-                              "settings": {"metric": "new_customers", "channel": "google-search"}})["card"]
-    assert (ads["data"]["value"], ads["data"]["channel"], ads["data"]["channel_name"]) == (71, "google-search",
-                                                                                           "Google Search")
+    ads = post(
+        api,
+        "cards",
+        {
+            "template": "growth_number",
+            "place": "growth",
+            "settings": {"metric": "new_customers", "channel": "google-search"},
+        },
+    )["card"]
+    assert (ads["data"]["value"], ads["data"]["channel"], ads["data"]["channel_name"]) == (
+        71,
+        "google-search",
+        "Google Search",
+    )
 
 
 def test_growth_cards_are_checked_and_kept_to_the_growth_page(api):
     put(api, "places/growth", {})
-    for body in ({"template": "growth_number", "settings": {"metric": "nope"}},
-                 {"template": "growth_number", "settings": {}},
-                 {"template": "growth_number", "settings": {"metric": "cac", "channel": "missing"}},
-                 {"template": "growth_number", "settings": {"metric": "cac", "count": 2}},
-                 {"template": "growth_channels", "settings": {"count": 21}},
-                 {"template": "growth_retention", "settings": {"months": 2}},
-                 {"template": "growth_board", "settings": {"count": 6}}):
+    for body in (
+        {"template": "growth_number", "settings": {"metric": "nope"}},
+        {"template": "growth_number", "settings": {}},
+        {"template": "growth_number", "settings": {"metric": "cac", "channel": "missing"}},
+        {"template": "growth_number", "settings": {"metric": "cac", "count": 2}},
+        {"template": "growth_channels", "settings": {"count": 21}},
+        {"template": "growth_retention", "settings": {"months": 2}},
+        {"template": "growth_board", "settings": {"count": 6}},
+    ):
         post(api, "cards", body, expected=422)
-    refused = api.post("/api/v2/cards", json={"template": "growth_number", "settings": {"metric": "cac"},
-                                              "place": "dashboard"}, headers=headers())
+    refused = api.post(
+        "/api/v2/cards",
+        json={"template": "growth_number", "settings": {"metric": "cac"}, "place": "dashboard"},
+        headers=headers(),
+    )
     assert refused.status_code == 422 and "Number goes on the Growth page" in refused.text
     card = post(api, "cards", {"template": "growth_funnel"})["card"]
     post(api, "pins", {"place": "dashboard", "item": "card:" + card["id"]}, expected=422)
@@ -197,6 +253,8 @@ def test_growth_cards_are_checked_and_kept_to_the_growth_page(api):
     elsewhere = get(api, "cards/choices")
     growth_ids = {"growth_number", "growth_funnel", "growth_channels", "growth_retention", "growth_board"}
     assert {t["id"] for t in choices["templates"]} == growth_ids | {"kpi", "latest_pages"}
-    assert not growth_ids & {t["id"] for t in elsewhere["templates"]} and "kpi" in {t["id"] for t in elsewhere["templates"]}
+    assert not growth_ids & {t["id"] for t in elsewhere["templates"]} and "kpi" in {
+        t["id"] for t in elsewhere["templates"]
+    }
     assert [m["id"] for m in choices["metrics"]][:3] == ["new_customers", "spend", "bot_cost"]
     assert choices["channels"] == []

@@ -16,6 +16,7 @@ the backlog is on its exceptions list (backend/pipeline_exceptions.py).
 Only tickets every member may read are counted: a private ticket, or one owned or asked for by a bot not every member
 may read (updates.restricted_bots), never counts toward `over`, never names an owner in the spread and never hosts the
 warning. Everyone who reads the room reads the warning, so such a ticket changes nothing a warning says."""
+
 from . import hubdb as H
 
 EVENT = "task.step_backlog"
@@ -66,6 +67,7 @@ def clean(c, actor, raw):
 def _targets(c, rule, row, owner):
     from .lifecycle import _manager_actor
     from .pipeline_exceptions import reads_list
+
     out = []
     for who in rule.get("notify") or ["manager"]:
         if who == "manager":
@@ -91,6 +93,7 @@ def warnings(c):
     every_hours, key (the step and the owner), text (the warning in words), first (the oldest ticket waiting there, which
     the line hangs on) and targets (the actors it names: bots and people; the roundup lists bots only)."""
     from . import step_flow, updates
+
     if not step_flow._ready(c):
         return []
     hidden = {H.bot_actor(slug) for slug in updates.restricted_bots(c)}
@@ -99,10 +102,16 @@ def warnings(c):
         rule = step_flow.of(step).get("backlog")
         if not rule:
             continue
-        rows = H._rows(c.execute(
-            f"SELECT * FROM {H.TASKS} tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
-            "ORDER BY created_at, id", (step["id"], *FINISHED)))
-        rows = [row for row in rows if not H.task_private(c, row) and not {row["owner_id"], row["requester_id"]} & hidden]
+        rows = H._rows(
+            c.execute(
+                f"SELECT * FROM {H.TASKS} tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
+                "ORDER BY created_at, id",
+                (step["id"], *FINISHED),
+            )
+        )
+        rows = [
+            row for row in rows if not H.task_private(c, row) and not {row["owner_id"], row["requester_id"]} & hidden
+        ]
         groups = {}
         for row in rows:
             groups.setdefault(row["owner_id"] if per_owner(rule) else None, []).append(row)
@@ -114,10 +123,23 @@ def warnings(c):
                 who = H.actor_id(row["owner_id"] or "") or "nobody"
                 by_owner[who] = by_owner.get(who, 0) + 1
             spread = ", ".join(f"{who} {n}" for who, n in sorted(by_owner.items(), key=lambda x: -x[1])[:6])
-            text = (f"Backlog: {len(waiting)} tickets wait at {step['name']}"
-                    + (f" for {H.actor_name(c, owner)}" if owner else "") + f" (over {rule['over']}; {spread}). "
-                    "Spread them to other owners, reprioritise or close some, or raise the step's backlog limit.")
-            out.append({"step": step["name"], "owner": owner, "count": len(waiting), "over": rule["over"],
-                        "every_hours": rule.get("every_hours", EVERY_HOURS), "key": step["id"] + ":" + (owner or ""),
-                        "text": text, "first": waiting[0], "targets": _targets(c, rule, waiting[0], owner or "")})
+            text = (
+                f"Backlog: {len(waiting)} tickets wait at {step['name']}"
+                + (f" for {H.actor_name(c, owner)}" if owner else "")
+                + f" (over {rule['over']}; {spread}). "
+                "Spread them to other owners, reprioritise or close some, or raise the step's backlog limit."
+            )
+            out.append(
+                {
+                    "step": step["name"],
+                    "owner": owner,
+                    "count": len(waiting),
+                    "over": rule["over"],
+                    "every_hours": rule.get("every_hours", EVERY_HOURS),
+                    "key": step["id"] + ":" + (owner or ""),
+                    "text": text,
+                    "first": waiting[0],
+                    "targets": _targets(c, rule, waiting[0], owner or ""),
+                }
+            )
     return out

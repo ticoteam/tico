@@ -76,6 +76,14 @@ a lane or login releases only the start reservation; continuing requires a fresh
 take the last start reservation together. Codex's shared ChatGPT login does not normally queue turns
 ([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
 
+### Builds at once
+
+A turn on a task that has a worktree on its computer is a build: its checkout and setup use a lot of disk. A computer
+runs at most one build per 15 GB of disk it reports, at least two and never more than its turn limit (51 GB gives 3,
+157 GB gives 10; 4 when it has not reported its disk). A build past that waits as **waiting: builds at once**, and
+starts by itself when one of the computer's builds ends. Turns with no repo work are not held by this, and nothing is
+set in the app. Worktrees are described in [Task worktrees](worktrees.md).
+
 A starting turn reserves a place for up to **3 minutes (180 seconds)**, including active Git and runtime preparation.
 Keeping that preparation active does not extend the deadline. If the turn has not started, its place is released and
 its work returns to the queue without changing the task. After 10 missed starts for one job within the last 24 hours,

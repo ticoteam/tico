@@ -4,6 +4,7 @@ It runs with only the mail script, and every calendar snapshot and health report
 time (ok_accounts), so the server clears their failures and no others. A hub from before that field gets the same body
 without it.
 """
+
 from clients.tico import APIError
 from runner_support.connectors import ConnectorPublisher
 
@@ -40,6 +41,7 @@ class Hub:
 def fake_mail(failing=()):
     """The local mail CLI. A backfill answers with a history id and an export has no rows, so a sync posts no messages.
     A mailbox in `failing` answers its sync with a Google refusal."""
+
     def run(args):
         address = args[args.index("--mailbox") + 1] if "--mailbox" in args else ""
         if address in failing:
@@ -47,6 +49,7 @@ def fake_mail(failing=()):
         if args[1:2] == ["export"]:
             return {"messages": []}
         return {"history_id": "1"}
+
     return run
 
 
@@ -62,9 +65,18 @@ def publisher(tmp_path, hub, fetch, mail):
     script.parent.mkdir(parents=True)
     script.write_text("#!/bin/sh\nexit 1\n")
     script.chmod(0o755)
-    made = ConnectorPublisher({"url": "https://tico.example", "token": "runner-token",
-                               "projects_dir": str(tmp_path), "mail_sync_seconds": 0, "owner_handle": "ana"},
-                              client=hub, fetch=fetch, mail=mail)
+    made = ConnectorPublisher(
+        {
+            "url": "https://tico.example",
+            "token": "runner-token",
+            "projects_dir": str(tmp_path),
+            "mail_sync_seconds": 0,
+            "owner_handle": "ana",
+        },
+        client=hub,
+        fetch=fetch,
+        mail=mail,
+    )
     made.script = script
     made.mail_interval = 0
     return made
@@ -75,16 +87,19 @@ def test_the_job_runs_on_a_computer_with_no_key_file(tmp_path, monkeypatch):
     monkeypatch.setenv("HUB_TOKEN", "runner-hub-token")
     hub = Hub(mailboxes=[ANA])
     made = publisher(tmp_path, hub, fetch=lambda email, hours: [], mail=fake_mail())
-    made.ready()                                    # only the mail script is needed
-    assert made.mail_secret() is None               # nothing to hand the mail CLI as a key file
+    made.ready()  # only the mail script is needed
+    assert made.mail_secret() is None  # nothing to hand the mail CLI as a key file
     env = made.mail_env()
     assert env["TICO_GOOGLE_BROKER_URL"] == "https://tico.example"
     assert env["TICO_GOOGLE_BROKER_AUTH"] == "runner-token"
     assert "HUB_TOKEN" not in env
     assert made.tick() == 2
     assert made.mail_tick() == 0
-    assert [path for path, _ in hub.posts] == ["connectors/calendar/snapshots", "connectors/health",
-                                               "connectors/health"]
+    assert [path for path, _ in hub.posts] == [
+        "connectors/calendar/snapshots",
+        "connectors/health",
+        "connectors/health",
+    ]
 
 
 def test_the_calendar_cli_reports_conference_preparation_as_a_definite_retryable_non_send(tmp_path, monkeypatch):
@@ -93,9 +108,12 @@ def test_the_calendar_cli_reports_conference_preparation_as_a_definite_retryable
     from types import SimpleNamespace
     import pytest
     from runner_support.connectors import CalendarInvitationPending
+
     no_key(monkeypatch, tmp_path)
     made = publisher(tmp_path, Hub(), fetch=lambda *args: [], mail=fake_mail())
-    result = SimpleNamespace(returncode=75, stdout=json.dumps({"kind": "conference_pending", "retryable": True, "event_id": "silent-hold"}))
+    result = SimpleNamespace(
+        returncode=75, stdout=json.dumps({"kind": "conference_pending", "retryable": True, "event_id": "silent-hold"})
+    )
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: result)
     with pytest.raises(CalendarInvitationPending) as pending:
         made.calendar_event({"id": "action"})
@@ -113,6 +131,7 @@ def test_calendar_snapshots_and_health_name_the_accounts_read(tmp_path, monkeypa
         if email == BEN:
             raise RuntimeError("provider detail must stay on this computer")
         return []
+
     made = publisher(tmp_path, hub, fetch=fetch, mail=fake_mail())
     assert made.tick() == 1
     (snapshot_path, snapshots), (health_path, health) = hub.posts
@@ -129,8 +148,8 @@ def test_a_mailbox_that_fails_is_left_out_of_ok_accounts(tmp_path, monkeypatch):
     no_key(monkeypatch, tmp_path)
     hub = Hub(mailboxes=[ANA, BEN])
     made = publisher(tmp_path, hub, fetch=lambda email, hours: [], mail=fake_mail(failing={BEN}))
-    made.mail_tick()                                # ana: read
-    made.mail_tick()                                # ben: Google refuses
+    made.mail_tick()  # ana: read
+    made.mail_tick()  # ben: Google refuses
     first, second = hub.health("mail")
     assert first["ok_accounts"] == [ANA] and first["failing"] == []
     assert second["ok_accounts"] == [] and [entry["account"] for entry in second["failing"]] == [BEN]
@@ -143,7 +162,7 @@ def test_a_hub_from_before_ok_accounts_gets_the_same_bodies_without_it(tmp_path,
     assert made.tick() == 2
     made.mail_tick()
     paths = ["connectors/calendar/snapshots", "connectors/health", "connectors/health"]
-    assert [path for path, _ in hub.refused] == paths           # each was first sent with the field
-    assert [path for path, _ in hub.posts] == paths              # and accepted once it was sent without it
+    assert [path for path, _ in hub.refused] == paths  # each was first sent with the field
+    assert [path for path, _ in hub.posts] == paths  # and accepted once it was sent without it
     assert all("ok_accounts" not in body for _, body in hub.posts)
     assert [body["service"] for _, body in hub.posts[1:]] == ["calendar", "mail"]

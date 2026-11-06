@@ -148,12 +148,16 @@ def tokens(usage):
             if _count(value):
                 return int(value)
         return 0
+
     details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
     cached = first("cache_read_input_tokens", "cachedContentTokenCount") or first("cached_tokens", within=details)
-    if "prompt_tokens" in usage:                    # OpenAI-style counts include the cached tokens
+    if "prompt_tokens" in usage:  # OpenAI-style counts include the cached tokens
         return max(0, first("prompt_tokens") - cached), cached, first("completion_tokens")
-    return (first("input_tokens", "promptTokenCount"), cached,
-            first("output_tokens", "completion_tokens", "candidatesTokenCount"))
+    return (
+        first("input_tokens", "promptTokenCount"),
+        cached,
+        first("output_tokens", "completion_tokens", "candidatesTokenCount"),
+    )
 
 
 # The dearest list price in `providers.PRICES` (USD per 1M input, output tokens): what a call to a model with no known
@@ -205,10 +209,13 @@ def cost_usd(settings, model, usage):
 # month is summed again. The `+` keeps SQLite on the rowid range: without it the planner takes events_action_ts and
 # reads the whole month again.
 _SPEND, _SPEND_LOCK = {}, threading.Lock()
-MONTH_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0), max(rowid) FROM events "
-                   "WHERE created_at>=? AND action=?")
-NEW_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0), max(rowid) FROM events "
-                 "WHERE rowid>? AND +created_at>=? AND +action=?")
+MONTH_SPEND_SQL = (
+    "SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0), max(rowid) FROM events WHERE created_at>=? AND action=?"
+)
+NEW_SPEND_SQL = (
+    "SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0), max(rowid) FROM events "
+    "WHERE rowid>? AND +created_at>=? AND +action=?"
+)
 # A budget is the settings field holding its monthly cap and the event action its spend rows are written as. Decide's
 # own is the default; org rule checks keep a separate one (backend/org_rule_check.py), so neither can spend the other's.
 DECIDE_BUDGET = ("decisions_monthly_usd", "judge.spend")
@@ -257,7 +264,7 @@ def spent_this_month(c, at=None, budget=DECIDE_BUDGET):
             last = newest
             last_id = c.execute("SELECT id FROM events WHERE rowid=?", (last,)).fetchone()[0]
         _SPEND[path, month, action] = (total, last, last_id)
-    return round(total, 6)                          # a float sum of cents can land a hair under the cap
+    return round(total, 6)  # a float sum of cents can land a hair under the cap
 
 
 def over_spend_cap(c, settings, at=None, budget=DECIDE_BUDGET):
@@ -274,7 +281,7 @@ def over_spend_cap(c, settings, at=None, budget=DECIDE_BUDGET):
 
 # Calls in flight in this process, as USD reserved for them: a request or batch thread that checks the cap counts
 # what the others have started and not yet written down.
-_METER, _RESERVED = threading.Lock(), {0: 0.0}       # keyed 0 for Decide's own budget, else by budget
+_METER, _RESERVED = threading.Lock(), {0: 0.0}  # keyed 0 for Decide's own budget, else by budget
 
 
 def _held(budget):
@@ -315,9 +322,14 @@ def metered(store, models, state, questions, label, call, budget=DECIDE_BUDGET):
             with store.read() as c:
                 spent = spent_this_month(c, None, budget)
             if spent + _in_flight(_held(budget)) + reserved > cap:
-                _skip("every caller", f"the month's decision spend ${spent:.2f} leaves no room under the ${cap:.2f} cap")
-                raise J.JudgeError("spend_cap", f"Decide has cost ${spent:.2f} this month; the team's cap is "
-                                   f"${cap:.2f} until the 1st (UTC)", 429)
+                _skip(
+                    "every caller", f"the month's decision spend ${spent:.2f} leaves no room under the ${cap:.2f} cap"
+                )
+                raise J.JudgeError(
+                    "spend_cap",
+                    f"Decide has cost ${spent:.2f} this month; the team's cap is ${cap:.2f} until the 1st (UTC)",
+                    429,
+                )
         _RESERVED[_held(budget)] = _in_flight(_held(budget)) + reserved
     try:
         try:
@@ -345,11 +357,20 @@ def _spend(store, label, attempts, state, questions, action="judge.spend"):
             known = _own_cost(attempt) or any(tokens(usage))
             cost = cost_usd(settings, model, usage) if known else reservation(settings, [model], state, questions)
             total += cost
-            H.event(c, H.KEEPER, action, label or "", {
-                "label": label, "model": model, "cost_usd": cost,
-                **({} if "answers" in attempt else {"unusable": True}),
-                **({} if known else {"usage": "unknown"}),
-                **({} if priced(settings, model) or _own_cost(attempt) else {"price": "ceiling"})})
+            H.event(
+                c,
+                H.KEEPER,
+                action,
+                label or "",
+                {
+                    "label": label,
+                    "model": model,
+                    "cost_usd": cost,
+                    **({} if "answers" in attempt else {"unusable": True}),
+                    **({} if known else {"usage": "unknown"}),
+                    **({} if priced(settings, model) or _own_cost(attempt) else {"price": "ceiling"}),
+                },
+            )
     return round(total, 6)
 
 
@@ -375,6 +396,7 @@ def gateway(settings, store=None, vault=None):
     def engine(state, questions, label=None, level=None):
         """`level` is a caller's own (an automation's Decide step); without one, the company's Decisions level."""
         from .credentials import Vault
+
         with store.read() as c:
             level = level or providers.load(c, settings)["decide_level"]
             if settings.gateway_key:
@@ -386,12 +408,14 @@ def gateway(settings, store=None, vault=None):
                 bot = gateway_connection.bot_header(c, keys, DECIDE_BOT)
         if not secret:
             raise J.JudgeError("unconfigured", "no Tico AI Gateway key is saved")
-        return J.gateway(secret, url, model=J.decide_model(level), timeout=J.decide_timeout(level),
-                         headers=bot)(state, questions, label)
+        return J.gateway(secret, url, model=J.decide_model(level), timeout=J.decide_timeout(level), headers=bot)(
+            state, questions, label
+        )
 
     def level():
         with store.read() as c:
             return providers.load(c, settings)["decide_level"]
+
     engine.model, engine.provider, engine.saved = J.GATEWAY_MODEL, J.GATEWAY_PROVIDER, not settings.gateway_key
     engine.level = level
     engine.current_model = lambda: J.decide_model(level())
@@ -421,6 +445,7 @@ def strict_engine(store, c, level=STRICT_LEVEL, timeout=STRICT_SECONDS, vault=No
         secret, url, bot = settings.gateway_key, settings.gateway_url, None
     else:
         from .credentials import Vault
+
         keys = vault or Vault(store)
         if not keys.configured:
             return None
@@ -433,21 +458,39 @@ def strict_engine(store, c, level=STRICT_LEVEL, timeout=STRICT_SECONDS, vault=No
     call = J.gateway(secret, url, model=model, timeout=timeout, headers=bot)
 
     def engine(state, questions, label=None, evidence=False):
-        detail = {"label": label or "", "questions": len(questions),
-                  "types": sorted({q["type"] for q in questions.values()})}
+        detail = {
+            "label": label or "",
+            "questions": len(questions),
+            "types": sorted({q["type"] for q in questions.values()}),
+        }
         try:
-            result = metered(store, [model], state, questions, label,
-                             lambda: call(state, questions, label, evidence=evidence))
+            result = metered(
+                store, [model], state, questions, label, lambda: call(state, questions, label, evidence=evidence)
+            )
         except J.JudgeError as exc:
             with store.transaction() as t:
-                H.event(t, H.KEEPER, "judge.call", label or "", {
-                    **detail, "error": J.error_code(exc),
-                    **({"cost_usd": exc.cost_usd} if getattr(exc, "cost_usd", None) else {})})
+                H.event(
+                    t,
+                    H.KEEPER,
+                    "judge.call",
+                    label or "",
+                    {
+                        **detail,
+                        "error": J.error_code(exc),
+                        **({"cost_usd": exc.cost_usd} if getattr(exc, "cost_usd", None) else {}),
+                    },
+                )
             raise
         with store.transaction() as t:
-            H.event(t, H.KEEPER, "judge.call", label or "", {
-                **detail, **audit_detail(result), "answers": J.summary(result["answers"])})
+            H.event(
+                t,
+                H.KEEPER,
+                "judge.call",
+                label or "",
+                {**detail, **audit_detail(result), "answers": J.summary(result["answers"])},
+            )
         return result
+
     engine.model, engine.provider = model, J.GATEWAY_PROVIDER
     return engine
 
@@ -498,6 +541,7 @@ def ordered(steps):
                 # `fallback_from` is the provider that failed first, for the System routines row's words.
                 result = {**result, "fallback": failed, "fallback_from": first} if failed else result
                 return {**result, "paid": paid} if paid else result
+
     engine.steps = steps
     engine.model, engine.provider = step_models(steps)[0], getattr(steps[0], "provider", "")
     return engine
@@ -507,6 +551,7 @@ def takes_level(engine):
     """Whether a decision engine takes a caller's `level` (the Gateway's steps and the chains around them do; Jev, a
     company's own model and older test fakes do not)."""
     import inspect
+
     try:
         params = inspect.signature(engine).parameters.values()
     except (TypeError, ValueError):
@@ -524,9 +569,13 @@ def ask(engine, state, questions, label=None, level=None):
 def step_models(steps, default=J.MODEL, level=None):
     """The model each of `steps` asks as (`default` for one that does not say: a test's fake). A step whose model follows
     the company's Decisions level says it now (`current_model`), so the spend reservation prices the model that will run."""
-    return [(J.decide_model(level) if level and hasattr(step, "current_model") else "")
-            or (getattr(step, "current_model", None) or (lambda: ""))() or getattr(step, "model", "") or default
-            for step in steps]
+    return [
+        (J.decide_model(level) if level and hasattr(step, "current_model") else "")
+        or (getattr(step, "current_model", None) or (lambda: ""))()
+        or getattr(step, "model", "")
+        or default
+        for step in steps
+    ]
 
 
 def primary_engine(settings, store=None, vault=None):
@@ -553,9 +602,11 @@ def server_engine(store, c, primary=None, budget=DECIDE_BUDGET):
     asks_as = step_models(steps) + ([getattr(backup, "model", "")] if backup is not None else [])
 
     def engine(state, questions, label=None, level=None):
-        models = (step_models(steps, level=level) + asks_as[len(steps):]) if level else asks_as
-        return metered(store, models, state, questions, label, lambda: ask(chain, state, questions, label, level),
-                       budget)
+        models = (step_models(steps, level=level) + asks_as[len(steps) :]) if level else asks_as
+        return metered(
+            store, models, state, questions, label, lambda: ask(chain, state, questions, label, level), budget
+        )
+
     engine.model, engine.provider = asks_as[0], getattr(chain, "provider", "")
     return engine
 
@@ -578,8 +629,12 @@ FAILED = {
 def audit_detail(result):
     """What a `judge.call` row keeps of one answer: provider, model, tokens, latency, cost and any fallback. Never the
     state."""
-    detail = {"ms": result.get("ms"), "model": result.get("model"), "usage": result.get("usage") or {},
-              "cost_usd": result.get("cost_usd")}
+    detail = {
+        "ms": result.get("ms"),
+        "model": result.get("model"),
+        "usage": result.get("usage") or {},
+        "cost_usd": result.get("cost_usd"),
+    }
     if result.get("provider"):
         detail["provider"] = result["provider"]
     if result.get("fallback"):
@@ -596,16 +651,21 @@ class Outcome(Contract):
 
 def record_outcome(c, actor, body):
     """The one `decision.outcome` for the caller's own `judge.call` `body.ref`: written once, the first returned after."""
-    call = c.execute("SELECT target FROM events WHERE id=? AND action='judge.call' AND actor=?",
-                     (body.ref, actor)).fetchone()
+    call = c.execute(
+        "SELECT target FROM events WHERE id=? AND action='judge.call' AND actor=?", (body.ref, actor)
+    ).fetchone()
     if not call:
         raise Problem("not_found", f"no decision call {body.ref} of yours to record an outcome for", 404)
-    done = c.execute("SELECT id, detail FROM events WHERE target=? AND action='decision.outcome' LIMIT 1",
-                     (body.ref,)).fetchone()
+    done = c.execute(
+        "SELECT id, detail FROM events WHERE target=? AND action='decision.outcome' LIMIT 1", (body.ref,)
+    ).fetchone()
     if done:
         return {"id": done[0], "ref": body.ref, **json.loads(done[1] or "{}"), "recorded": False}
-    detail = {"label": body.label or call[0] or "", "verdict": " ".join(body.verdict.split()),
-              "action": " ".join(body.action.split())}
+    detail = {
+        "label": body.label or call[0] or "",
+        "verdict": " ".join(body.verdict.split()),
+        "action": " ".join(body.action.split()),
+    }
     row = H.event(c, actor, "decision.outcome", body.ref, detail)
     return {"id": row["id"], "ref": body.ref, **detail, "recorded": True}
 
@@ -631,8 +691,11 @@ def used_today(c, actor, at=None, action="judge.call", target=None):
     elif actor == H.KEEPER and action == "judge.call":
         where, args = " AND target NOT LIKE ?", [*args, RULES_TARGET]
     # The actor's own rows, counted in the index (events_task_origin), not every actor's today (events_action_ts).
-    return c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND created_at>=?"
-                     + where, args).fetchone()[0]
+    return c.execute(
+        "SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND created_at>=?"
+        + where,
+        args,
+    ).fetchone()[0]
 
 
 def install_judge(app, store, auth):
@@ -649,17 +712,24 @@ def install_judge(app, store, auth):
             first = steps[0] if steps else None if settings.rehearsal else fallback_engine(providers.load(c, settings))
             spent = spent_this_month(c)
         engine = first
-        return {"configured": engine is not None, "model": step_models([first])[0] if first else "",
-                "provider": getattr(first, "provider", "") if first else "",
-                "daily_calls": daily_cap(settings, who.role), "used_today": used,
-                "monthly_usd": float(settings.decisions_monthly_usd or 0), "spent_this_month_usd": round(spent, 4),
-                "max_questions": J.MAX_QUESTIONS, "max_state_chars": J.MAX_STATE_CHARS}
+        return {
+            "configured": engine is not None,
+            "model": step_models([first])[0] if first else "",
+            "provider": getattr(first, "provider", "") if first else "",
+            "daily_calls": daily_cap(settings, who.role),
+            "used_today": used,
+            "monthly_usd": float(settings.decisions_monthly_usd or 0),
+            "spent_this_month_usd": round(spent, 4),
+            "max_questions": J.MAX_QUESTIONS,
+            "max_state_chars": J.MAX_STATE_CHARS,
+        }
 
     @app.get("/api/v2/judge/readout")
     def readout(request: Request, days: int = 7):
         """The Decide readout over the last `days` (backend/decide_readout.py): the same readers as the config above,
         since it names no caller, no state and no free-text label."""
         from .decide_readout import MAX_DAYS, readout as build
+
         who = request.state.identity
         auth.domain(who)
         if not 1 <= days <= MAX_DAYS:
@@ -677,11 +747,19 @@ def install_judge(app, store, auth):
             capped = over_spend_cap(c, settings)
             engine = None if capped else server_engine(store, c, app.state.judge)
         if capped:
-            raise Problem("spend_cap", f"Decide has cost ${capped[0]:.2f} this month; the team's cap is "
-                          f"${capped[1]:.2f} until the 1st (UTC). Carry on without it.", 429)
+            raise Problem(
+                "spend_cap",
+                f"Decide has cost ${capped[0]:.2f} this month; the team's cap is "
+                f"${capped[1]:.2f} until the 1st (UTC). Carry on without it.",
+                429,
+            )
         if engine is None:
-            raise Problem("judge_unconfigured", "No decision model is configured on this server: set a Tico AI Gateway "
-                          "key, your own TypeSafe key, or the API key of one of the team's AI providers", 503)
+            raise Problem(
+                "judge_unconfigured",
+                "No decision model is configured on this server: set a Tico AI Gateway "
+                "key, your own TypeSafe key, or the API key of one of the team's AI providers",
+                503,
+            )
         try:
             J.validate(body.state, body.questions, body.label)
         except J.JudgeError as exc:
@@ -690,18 +768,30 @@ def install_judge(app, store, auth):
         with store.read() as c:
             used = used_today(c, who.actor)
         if used >= cap:
-            raise Problem("budget", f"{who.actor} has made {used} decision calls today; the cap is {cap} "
-                          "until midnight UTC", 429)
+            raise Problem(
+                "budget", f"{who.actor} has made {used} decision calls today; the cap is {cap} until midnight UTC", 429
+            )
         label = body.label or ""
-        detail = {"label": label, "questions": len(body.questions),
-                  "types": sorted({q["type"] for q in body.questions.values()})}
+        detail = {
+            "label": label,
+            "questions": len(body.questions),
+            "types": sorted({q["type"] for q in body.questions.values()}),
+        }
         try:
             result = engine(body.state, body.questions, body.label)
         except J.JudgeError as exc:
             with store.transaction() as c:
-                H.event(c, who.actor, "judge.call", label, {
-                    **detail, "error": J.error_code(exc),
-                    **({"cost_usd": exc.cost_usd} if getattr(exc, "cost_usd", None) else {})})
+                H.event(
+                    c,
+                    who.actor,
+                    "judge.call",
+                    label,
+                    {
+                        **detail,
+                        "error": J.error_code(exc),
+                        **({"cost_usd": exc.cost_usd} if getattr(exc, "cost_usd", None) else {}),
+                    },
+                )
             code = J.error_code(exc)
             if code == "spend_cap":
                 raise Problem("spend_cap", FAILED[code], 429)
@@ -714,12 +804,25 @@ def install_judge(app, store, auth):
             # Any other failure is the providers' (a refused key, an error, an unreadable answer) and none after it
             # answered: Decide is off for this call, as when every provider is down, and the caller carries on. The
             # audit row above keeps the real code for an admin.
-            raise Problem("judge_unavailable", f"{FAILED[code]}. Decide is off for this call; carry on without it.", 503)
+            raise Problem(
+                "judge_unavailable", f"{FAILED[code]}. Decide is off for this call; carry on without it.", 503
+            )
         with store.transaction() as c:
-            call = H.event(c, who.actor, "judge.call", label, {
-                **detail, **audit_detail(result), "answers": J.summary(result["answers"])})
-        return {"model": result["model"], "answers": result["answers"], "usage": result.get("usage") or {},
-                "ms": result["ms"], "label": body.label, "ref": call["id"]}
+            call = H.event(
+                c,
+                who.actor,
+                "judge.call",
+                label,
+                {**detail, **audit_detail(result), "answers": J.summary(result["answers"])},
+            )
+        return {
+            "model": result["model"],
+            "answers": result["answers"],
+            "usage": result.get("usage") or {},
+            "ms": result["ms"],
+            "label": body.label,
+            "ref": call["id"],
+        }
 
     @app.post("/api/v2/judge/outcome")
     def outcome(request: Request, body: Outcome):

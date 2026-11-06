@@ -158,7 +158,8 @@ function qcardDetailsHTML(it, q, {link = true} = {}) {
 // takes one, else a comment). `labels` are the picks said yes to; the rest of several picks are "not this one".
 function qcardWrites(it, q, labels, note) {
   const ask = it.ask, id = encodeURIComponent(it.id), t = ask.refs?.target;
-  const target = t?.file ? {file: t.file, version: Number(t.version)} : {comment: ask.id};
+  // A question task (its ask is the task itself) answers with {task}; its answer closes it.
+  const target = t?.task ? {task: t.task} : t?.file ? {file: t.file, version: Number(t.version)} : {comment: ask.id};
   const other = note && q.other !== false;
   const writes = [{path: `/v2/tasks/${id}/answers`, body: {target, answers: {[q.id]: labels}, ...(other ? {other: note} : {})}}];
   if (note && !other) writes.push({path: `/v2/tasks/${id}/comments`, body: {text: note}});

@@ -32,12 +32,12 @@ VERSION_HEADER = "x-tico-recorder-version"
 INSTALL_HEADER = "x-tico-recorder-install"
 FEED_URL = "https://github.com/ticoteam/tico/releases/latest/download/recorder-latest.json"
 DOWNLOAD_URL = "https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg"
-WRITE_EVERY = 600          # seconds between writes for one install whose version has not changed
-RECENT_DAYS = 30           # a copy seen this recently means the person has the Recorder: no download link
-KEEP = 20                  # installs kept per person; the least recently seen go first
+WRITE_EVERY = 600  # seconds between writes for one install whose version has not changed
+RECENT_DAYS = 30  # a copy seen this recently means the person has the Recorder: no download link
+KEEP = 20  # installs kept per person; the least recently seen go first
 FETCH_EVERY = 3600
 RETRY = 15 * 60
-NOTED_MAX = 10_000         # throttle entries held in memory before they are forgotten all at once
+NOTED_MAX = 10_000  # throttle entries held in memory before they are forgotten all at once
 VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:-[0-9A-Za-z.]{1,32})?")
 INSTALL = re.compile(r"[0-9a-f]{32}")
 # Replaced in tests with an httpx.MockTransport so nothing reaches the network.
@@ -82,14 +82,18 @@ class Seen:
         try:
             with self.store.transaction() as c:
                 at = H.now()
-                c.execute("INSERT INTO recorder_installs(person_id,install_id,version,last_seen_at,created_at,updated_at) "
-                          "SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM humans WHERE id=?) "
-                          "ON CONFLICT(person_id,install_id) DO UPDATE SET version=excluded.version, "
-                          "last_seen_at=excluded.last_seen_at, updated_at=excluded.updated_at",
-                          (person, install, version, at, at, at, person))
-                c.execute("DELETE FROM recorder_installs WHERE person_id=? AND install_id NOT IN (SELECT install_id "
-                          "FROM recorder_installs WHERE person_id=? ORDER BY last_seen_at DESC LIMIT ?)",
-                          (person, person, KEEP))
+                c.execute(
+                    "INSERT INTO recorder_installs(person_id,install_id,version,last_seen_at,created_at,updated_at) "
+                    "SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM humans WHERE id=?) "
+                    "ON CONFLICT(person_id,install_id) DO UPDATE SET version=excluded.version, "
+                    "last_seen_at=excluded.last_seen_at, updated_at=excluded.updated_at",
+                    (person, install, version, at, at, at, person),
+                )
+                c.execute(
+                    "DELETE FROM recorder_installs WHERE person_id=? AND install_id NOT IN (SELECT install_id "
+                    "FROM recorder_installs WHERE person_id=? ORDER BY last_seen_at DESC LIMIT ?)",
+                    (person, person, KEEP),
+                )
         except (sqlite3.Error, OSError) as exc:
             # Telling versions apart is a convenience: a busy or read-only database never fails the request.
             log.debug("Could not note the Recorder version: %s", type(exc).__name__)
@@ -150,8 +154,9 @@ def _newest(c, person_ids=None):
             return {}
         where, args = " WHERE person_id IN (%s)" % ",".join("?" * len(ids)), tuple(ids)
     out = {}
-    for row in c.execute("SELECT person_id, version, last_seen_at FROM recorder_installs" + where
-                         + " ORDER BY last_seen_at", args):
+    for row in c.execute(
+        "SELECT person_id, version, last_seen_at FROM recorder_installs" + where + " ORDER BY last_seen_at", args
+    ):
         out[row[0]] = (row[1], row[2])
     return out
 
@@ -165,16 +170,23 @@ def mine(c, who):
     """The caller's own Recorder, for Meetings."""
     version, at = _newest(c, [H.actor_id(who.actor)]).get(H.actor_id(who.actor), ("", ""))
     latest = LATEST.get()
-    return {"version": version, "last_seen_at": at or None, "recent": _recent(at) if at else False,
-            "latest": latest, "update_available": bool(version) and releases.newer(latest, version),
-            "download_url": DOWNLOAD_URL}
+    return {
+        "version": version,
+        "last_seen_at": at or None,
+        "recent": _recent(at) if at else False,
+        "latest": latest,
+        "update_available": bool(version) and releases.newer(latest, version),
+        "download_url": DOWNLOAD_URL,
+    }
 
 
 def everyone(c):
     """{person: {version, last_seen_at, update_available}} for Settings > People."""
     latest = LATEST.get()
-    return {pid: {"version": version, "last_seen_at": at, "update_available": releases.newer(latest, version)}
-            for pid, (version, at) in _newest(c).items()}
+    return {
+        pid: {"version": version, "last_seen_at": at, "update_available": releases.newer(latest, version)}
+        for pid, (version, at) in _newest(c).items()
+    }
 
 
 def install(app, store):

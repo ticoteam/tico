@@ -26,11 +26,15 @@ def _bots(api):
     with api.app.state.store.transaction() as c:
         for slug in RECEIVERS:
             if not H.bot(c, slug):
-                c.execute("INSERT INTO bots (id, slug, display_name, effort, state, created_at) VALUES (?,?,?,?,?,?)",
-                          (slug, slug, slug, "low", "active", H.now()))
+                c.execute(
+                    "INSERT INTO bots (id, slug, display_name, effort, state, created_at) VALUES (?,?,?,?,?,?)",
+                    (slug, slug, slug, "low", "active", H.now()),
+                )
             if not c.execute("SELECT 1 FROM bot_config WHERE bot=?", (slug,)).fetchone():
-                c.execute("INSERT INTO bot_config (bot, team, owner_id, description, reports_to, repo) "
-                          "VALUES (?,?,?,?,?,?)", (slug, "marketing", "ana", slug, "cmo", "emp-" + slug))
+                c.execute(
+                    "INSERT INTO bot_config (bot, team, owner_id, description, reports_to, repo) VALUES (?,?,?,?,?,?)",
+                    (slug, "marketing", "ana", slug, "cmo", "emp-" + slug),
+                )
                 BS.write(c, slug, {"runtime": "fake", "model": "fake", "host": "keeper"})
 
 
@@ -39,9 +43,14 @@ def _token(api, slug):
 
 
 def _post(native_id, text, author="@host1"):
-    return {"native_id": native_id, "url": f"https://x.com/{author.strip('@')}/status/{native_id}",
-            "author": author, "author_url": f"https://x.com/{author.strip('@')}", "content": text,
-            "published_at": "2026-09-23T10:00:00Z"}
+    return {
+        "native_id": native_id,
+        "url": f"https://x.com/{author.strip('@')}/status/{native_id}",
+        "author": author,
+        "author_url": f"https://x.com/{author.strip('@')}",
+        "content": text,
+        "published_at": "2026-09-23T10:00:00Z",
+    }
 
 
 class FakeJudge:
@@ -66,18 +75,36 @@ def test_only_listening_and_the_owner_save_runs_and_judgments(api):
     post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok"}, token=coo, expected=403)
     post(api, "listening/runs", {"source": "X Bookmarks", "query": "q", "status": "ok"}, expected=422)
     saved = post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok", "items": [_post("9", "hi")]})
-    post(api, "listening/judgments", {"judgments": [{"item_id": saved["items"][0]["id"], "question_set": "x@1",
-                                                     "scores": {"lead": 0.9}}]}, token=coo, expected=403)
-    post(api, "listening/judgments", {"judgments": [{"item_id": saved["items"][0]["id"], "question_set": "x@1",
-                                                     "scores": {"lead": 1.5}}]}, expected=422)
+    post(
+        api,
+        "listening/judgments",
+        {"judgments": [{"item_id": saved["items"][0]["id"], "question_set": "x@1", "scores": {"lead": 0.9}}]},
+        token=coo,
+        expected=403,
+    )
+    post(
+        api,
+        "listening/judgments",
+        {"judgments": [{"item_id": saved["items"][0]["id"], "question_set": "x@1", "scores": {"lead": 1.5}}]},
+        expected=422,
+    )
 
 
 def test_a_receiver_sees_and_resolves_only_its_own_inbox(api):
     _bots(api)
     listening = _token(api, "listening")
     api.app.state.judge = FakeJudge()
-    saved = post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok", "items": [
-        _post("1", "Creator asks how teams handle standups [creator] [content]")]}, token=listening)
+    saved = post(
+        api,
+        "listening/runs",
+        {
+            "source": "x",
+            "query": "q",
+            "status": "ok",
+            "items": [_post("1", "Creator asks how teams handle standups [creator] [content]")],
+        },
+        token=listening,
+    )
     post(api, "listening/judge", {}, token=listening)
     sales = _token(api, "influencer")
     inbox = get(api, "intake", token=sales)["items"]
@@ -92,8 +119,12 @@ def test_a_receiver_sees_and_resolves_only_its_own_inbox(api):
     done = post(api, f"intake/{sid}/resolve", {"status": "accepted", "receiver_ref": "instagram:@host1"}, token=sales)
     assert done["intake"]["status"] == "accepted" and done["intake"]["decided_at"]
     # Saying it again is harmless; changing the verdict is refused.
-    assert post(api, f"intake/{sid}/resolve", {"status": "accepted", "receiver_ref": "instagram:@host1"},
-                token=sales)["intake"]["id"] == sid
+    assert (
+        post(api, f"intake/{sid}/resolve", {"status": "accepted", "receiver_ref": "instagram:@host1"}, token=sales)[
+            "intake"
+        ]["id"]
+        == sid
+    )
     post(api, f"intake/{sid}/resolve", {"status": "rejected", "reason": "a travel account"}, token=sales, expected=409)
     assert get(api, "intake", token=sales)["items"] == []
     assert get(api, "intake?status=accepted", token=sales)["items"][0]["receiver_ref"] == "instagram:@host1"
@@ -109,8 +140,17 @@ def test_hub_sql_shows_posts_only_to_listening_the_owner_and_their_receivers(api
     _bots(api)
     listening = _token(api, "listening")
     api.app.state.judge = FakeJudge()
-    post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok", "items": [
-        _post("1", "A creator for team leads [creator]"), _post("2", "Atlia news [market]")]}, token=listening)
+    post(
+        api,
+        "listening/runs",
+        {
+            "source": "x",
+            "query": "q",
+            "status": "ok",
+            "items": [_post("1", "A creator for team leads [creator]"), _post("2", "Atlia news [market]")],
+        },
+        token=listening,
+    )
     post(api, "listening/judge", {}, token=listening)
 
     def rows(sql, token):
@@ -168,10 +208,16 @@ def test_a_destination_saved_in_settings_wins_over_the_file_on_the_same_key_and_
     assert {d["key"]: d["source"] for d in listing["destinations"]}["market"] == "yaml"
     assert [d for d in listing["destinations"] if d["key"] == "leads"][0]["overrides_yaml"] is True
     listening = _token(api, "listening")
-    post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok", "items": [
-        _post("1", "A team lead asks for a tool [lead]")]}, token=listening)
+    post(
+        api,
+        "listening/runs",
+        {"source": "x", "query": "q", "status": "ok", "items": [_post("1", "A team lead asks for a tool [lead]")]},
+        token=listening,
+    )
     post(api, "listening/judge", {}, token=listening)
-    assert [i["destination"] for i in get(api, "intake?destination=leads", token=_token(api, "influencer"))["items"]] == ["leads"]
+    assert [
+        i["destination"] for i in get(api, "intake?destination=leads", token=_token(api, "influencer"))["items"]
+    ] == ["leads"]
 
 
 def test_saved_destinations_are_owner_only_validated_never_remove_the_files_and_show_to_the_owner_and_admins(api):
@@ -185,13 +231,25 @@ def test_saved_destinations_are_owner_only_validated_never_remove_the_files_and_
     get(api, "listening/destinations", token="cara-test", expected=403)
     get(api, "listening/destinations", token=_token(api, "listening"), expected=403)
     # A destination the file would refuse is refused when it is saved.
-    for bad in ({"category": "vendor_pitch_typo"}, {"category": "lead", "threshold": 0}, {"threshold": 1.5},
-                {"receiver": "bot:nobody"}, {"receiver": "human:ana"}, {"readers": ["bot:nobody"]},
-                {"unless": {"category": "nope", "threshold": 0.5}}, {"unless": {"category": "vendor_pitch", "threshold": 2}}):
+    for bad in (
+        {"category": "vendor_pitch_typo"},
+        {"category": "lead", "threshold": 0},
+        {"threshold": 1.5},
+        {"receiver": "bot:nobody"},
+        {"receiver": "human:ana"},
+        {"readers": ["bot:nobody"]},
+        {"unless": {"category": "nope", "threshold": 0.5}},
+        {"unless": {"category": "vendor_pitch", "threshold": 2}},
+    ):
         assert _save(api, "bad", expected=422, **bad)["error"]["code"] == "invalid", bad
     _save(api, "Not A Key", expected=422)
     assert "bad" not in _merged(api)
-    ok = _save(api, "good", readers=["bot:doc-updater", "bot:doc-updater"], unless={"category": "vendor_pitch", "threshold": 0.7})
+    ok = _save(
+        api,
+        "good",
+        readers=["bot:doc-updater", "bot:doc-updater"],
+        unless={"category": "vendor_pitch", "threshold": 0.7},
+    )
     assert ok["destination"]["readers"] == ["bot:doc-updater"] and ok["destination"]["unless"]["threshold"] == 0.7
     # A destination only the file has cannot be removed and a saved one can.
     assert post(api, "listening/destinations/market/remove", {}, expected=409)["error"]["code"] == "yaml"
@@ -202,11 +260,17 @@ def test_saved_destinations_are_owner_only_validated_never_remove_the_files_and_
     assert _merged(api)["market"]["threshold"] == 0.70, "removing the saved one brings the file's back"
     # Hub SQL shows saved destinations to the owner and admins only.
     assert post(api, "sql", {"sql": "SELECT key FROM listening_destinations"})["rows"] == [["good"]]
-    assert post(api, "sql", {"sql": "SELECT count(*) FROM listening_destinations"}, token=_token(api, "finance"))["rows"][0][0] == 0
+    assert (
+        post(api, "sql", {"sql": "SELECT count(*) FROM listening_destinations"}, token=_token(api, "finance"))["rows"][
+            0
+        ][0]
+        == 0
+    )
 
 
 def test_the_market_destination_is_offered_once_a_removal_sticks_and_health_reads_saved_destinations(api):
     from backend import health
+
     settings = _settings(api)
     with api.app.state.store.transaction() as c:
         assert L.seed_market(c, settings) is False, "no Librarian, nothing to offer"
@@ -214,8 +278,12 @@ def test_the_market_destination_is_offered_once_a_removal_sticks_and_health_read
     (settings.registry_dir / L.LISTENING_FILE).write_text("destinations: {}")
     with api.app.state.store.transaction() as c:
         assert L.seed_market(c, settings) is True
-    assert _merged(api)["market"] == {"category": "market", "threshold": 0.7, "receiver": "bot:librarian",
-                                      "what": "a post about the market: competitors, buyers, prices, regulation"}
+    assert _merged(api)["market"] == {
+        "category": "market",
+        "threshold": 0.7,
+        "receiver": "bot:librarian",
+        "what": "a post about the market: competitors, buyers, prices, regulation",
+    }
     with api.app.state.store.transaction() as c:
         assert L.seed_market(c, settings) is False
     post(api, "listening/destinations/market/remove", {})
@@ -224,8 +292,10 @@ def test_the_market_destination_is_offered_once_a_removal_sticks_and_health_read
     assert "market" not in _merged(api)
     # Health reads destinations saved in settings.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what) "
-                  "VALUES ('typo','no_such_category',0.7,'bot:librarian','[]','null','')")
+        c.execute(
+            "INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what) "
+            "VALUES ('typo','no_such_category',0.7,'bot:librarian','[]','null','')"
+        )
     with api.app.state.store.read() as c:
         check = health._listening(c, settings)
     assert check["status"] == "warn" and "typo" in check["summary"]
@@ -235,7 +305,7 @@ def test_the_market_destination_is_offered_once_a_removal_sticks_and_health_read
 
 
 def test_the_market_destination_is_not_offered_when_one_already_routes_market(api):
-    _bots(api)                                  # the file already sends category market to the Librarian
+    _bots(api)  # the file already sends category market to the Librarian
     with api.app.state.store.transaction() as c:
         assert L.seed_market(c, _settings(api)) is False
         assert c.execute("SELECT count(*) FROM listening_destinations").fetchone()[0] == 0
@@ -246,11 +316,31 @@ def test_stats_carry_a_daily_chart_and_the_callers_recent_posts(api):
     _bots(api)
     listening = _token(api, "listening")
     api.app.state.judge = FakeJudge()
-    post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok", "items": [
-        _post("1", "Creator asks how teams handle standups [creator] [content]"), _post("2", "Nothing to see")]},
-        token=listening)
-    post(api, "listening/runs", {"source": "reddit", "query": "q", "status": "ok", "items": [
-        _post("3", "A team lead asks for a hosted plan [lead]", author="@lead")]}, token=listening)
+    post(
+        api,
+        "listening/runs",
+        {
+            "source": "x",
+            "query": "q",
+            "status": "ok",
+            "items": [
+                _post("1", "Creator asks how teams handle standups [creator] [content]"),
+                _post("2", "Nothing to see"),
+            ],
+        },
+        token=listening,
+    )
+    post(
+        api,
+        "listening/runs",
+        {
+            "source": "reddit",
+            "query": "q",
+            "status": "ok",
+            "items": [_post("3", "A team lead asks for a hosted plan [lead]", author="@lead")],
+        },
+        token=listening,
+    )
     post(api, "listening/judge", {}, token=listening)
     stats = get(api, "listening/stats")
     assert [d["sources"] for d in stats["daily"]] == [{"x": 2, "reddit": 1}]

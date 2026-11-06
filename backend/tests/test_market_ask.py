@@ -1,4 +1,5 @@
 """Market ask acceptance, isolated fictional graph and stubbed provider transport."""
+
 import io
 import json
 
@@ -12,17 +13,20 @@ from clients import judge as J
 def seed(api):
     with api.app.state.store.transaction() as c:
         for name in ('Kylon', 'Birch', 'Cedar'):
-            ev, _ = M.create_evidence(c, M.SEED_ACTOR, quote=f'{name} offers self-hosting.',
-                                      our_read=f'{name} charges $20 monthly.')
-            M.create_entity(c, M.SEED_ACTOR, type='company', name=name, summary='A competitor.',
-                            evidence_ids=[ev['id']])
+            ev, _ = M.create_evidence(
+                c, M.SEED_ACTOR, quote=f'{name} offers self-hosting.', our_read=f'{name} charges $20 monthly.'
+            )
+            M.create_entity(
+                c, M.SEED_ACTOR, type='company', name=name, summary='A competitor.', evidence_ids=[ev['id']]
+            )
 
 
 def configure(monkeypatch, provider):
     for key in J.LLM_KEYS.values():
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(providers, 'load', lambda *a: {
-        'runtime': 'fake', 'model': '', 'enabled': [provider] if provider else []})
+    monkeypatch.setattr(
+        providers, 'load', lambda *a: {'runtime': 'fake', 'model': '', 'enabled': [provider] if provider else []}
+    )
     if provider:
         monkeypatch.setenv(J.LLM_KEYS[provider], 'synthetic-test-key')
 
@@ -36,9 +40,11 @@ def test_enabled_provider_writes_answer_and_audit(api, monkeypatch, provider):
     def opener(request, timeout=None):
         seen.append(json.loads(request.data))
         answer = json.dumps({'answer': 'Kylon charges $20 monthly.'})
-        payload = {'openai': {'choices': [{'message': {'content': answer}}]},
-                   'anthropic': {'content': [{'text': answer}]},
-                   'google': {'candidates': [{'content': {'parts': [{'text': answer}]}}]}}
+        payload = {
+            'openai': {'choices': [{'message': {'content': answer}}]},
+            'anthropic': {'content': [{'text': answer}]},
+            'google': {'candidates': [{'content': {'parts': [{'text': answer}]}}]},
+        }
         return io.BytesIO(json.dumps(payload.get(provider, payload['openai'])).encode())
 
     monkeypatch.setattr('urllib.request.urlopen', opener)
@@ -52,6 +58,7 @@ def test_enabled_provider_writes_answer_and_audit(api, monkeypatch, provider):
     model = (providers.recommended(provider) or {})['id']
     if provider == 'openrouter':
         from clients.openrouter import model_id
+
         model = model_id(model)
     assert detail['model'] == model
     assert 'Kylon' not in json.dumps(detail) and 'synthetic-test-key' not in json.dumps(detail)
@@ -66,6 +73,7 @@ def test_any_term_search_keeps_three_companies_and_ranks_before_limit(api, monke
         def write(system, user):
             seen.append(user)
             return {'answer': 'Kylon, Birch and Cedar offer self-hosting.'}
+
         write.model = 'stub-model'
         return write
 
@@ -94,21 +102,25 @@ def test_no_enabled_key_records_reason_and_returns_rows(api, monkeypatch):
 
 def test_tico_gateway_writes_answer_and_audit(api, monkeypatch):
     from backend import gateway_connection, models_preset
+
     seed(api)
     configure(monkeypatch, None)
     monkeypatch.setattr(models_preset, 'spends_gateway', lambda record: True)
     monkeypatch.setattr(gateway_connection, 'connected', lambda *a: True)
     monkeypatch.setattr(gateway_connection, 'url', lambda *a: 'https://gateway.example/v1')
     monkeypatch.setattr(gateway_connection, 'env_key', lambda *a: 'synthetic-gateway-key')
-    monkeypatch.setattr(gateway_connection, 'target', lambda *a: (
-        'synthetic-gateway-key', 'https://gateway.example/v1', None))
+    monkeypatch.setattr(
+        gateway_connection, 'target', lambda *a: ('synthetic-gateway-key', 'https://gateway.example/v1', None)
+    )
     seen = []
 
     def gateway_writer(key_of, base, model):
         assert key_of() == 'synthetic-gateway-key'
+
         def write(system, user):
             seen.append(user)
             return {'answer': 'Kylon charges $20 monthly.'}
+
         write.model = model
         return write
 
@@ -122,8 +134,10 @@ def test_tico_gateway_writes_answer_and_audit(api, monkeypatch):
 
 def test_failed_writer_is_audited_without_losing_rows(api, monkeypatch):
     seed(api)
+
     def writer(system, user):
         raise ValueError('synthetic private provider error')
+
     writer.model = 'stub-model'
     monkeypatch.setattr('backend.updates.writer_for', lambda *a, **kw: writer)
     out = post(api, 'market/ask', {'question': 'What does Kylon charge?'})

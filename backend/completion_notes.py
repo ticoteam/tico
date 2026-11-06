@@ -3,6 +3,7 @@
 Detailed notes remain on each task, with their original audience. The batch contains only a count, so it cannot
 carry one private task's words into another task's session. Awaited child results use their existing return path.
 """
+
 import json
 
 from . import hubdb as H
@@ -23,15 +24,21 @@ def record(c, target, task_id):
         return
     ids = (ids + [task_id])[-MAX_BATCH:]
     count += 1
-    body = (f"A person finished or closed {count} task{'s' if count != 1 else ''}. "
-            "Their notes remain on each task; read them when continuing your work.")
+    body = (
+        f"A person finished or closed {count} task{'s' if count != 1 else ''}. "
+        "Their notes remain on each task; read them when continuing your work."
+    )
     if pending:
         c.execute('UPDATE notes SET body=? WHERE id=?', (body, note['id']))
         note_id = note['id']
     else:
         note_id = H.new_id()
-        c.execute('INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)',
-                  (note_id, H.KEEPER, target, body, H.now()))
+        c.execute(
+            'INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)',
+            (note_id, H.KEEPER, target, body, H.now()),
+        )
         H.event(c, H.KEEPER, 'note.create', note_id, {'to': target, 'completion_batch': True})
-    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-              (key, json.dumps({'note_id': note_id, 'tasks': ids, 'count': count})))
+    c.execute(
+        'INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+        (key, json.dumps({'note_id': note_id, 'tasks': ids, 'count': count})),
+    )

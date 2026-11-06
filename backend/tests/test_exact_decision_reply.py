@@ -1,4 +1,5 @@
 """Exact text picks settle structured cards; notes keep their options open."""
+
 import pytest
 
 from backend import hubdb as H
@@ -8,10 +9,21 @@ from backend.tests.test_api import api, get, headers, post, setup_attempt, legac
 def question(api, *, questions=None, attempt=None, title='Choose a draft'):
     attempt = attempt or setup_attempt(api)[2]
     task = post(api, 'tasks', {'owner': 'bot:ops', 'title': title, 'body': 'Synthetic draft'})
-    ask = {'who': 'ana', 'questions': questions or [
-        {'id': 'decision', 'header': '', 'question': 'Which draft?',
-         'options': [{'label': 'Blue', 'then': 'Keep the blue draft'},
-                     {'label': 'Red', 'then': 'Keep the red draft'}]}]}
+    ask = {
+        'who': 'ana',
+        'questions': questions
+        or [
+            {
+                'id': 'decision',
+                'header': '',
+                'question': 'Which draft?',
+                'options': [
+                    {'label': 'Blue', 'then': 'Keep the blue draft'},
+                    {'label': 'Red', 'then': 'Keep the red draft'},
+                ],
+            }
+        ],
+    }
     out = post(api, f"tasks/{task['id']}/comments", {'text': 'Which draft?', 'ask': ask}, attempt['token'])
     return task['id'], out['comment']['id']
 
@@ -53,9 +65,15 @@ def nonmatching_reply_stays_as_note_and_options_remain_open(api, text, attempt):
 
 
 def test_multiple_questions_are_not_guessed_and_other_answerer_is_refused(api):
-    questions = [{'id': q, 'header': '', 'question': 'Which draft?',
-                  'options': [{'label': 'Blue', 'then': 'Keep blue'}, {'label': 'Red', 'then': 'Keep red'}]}
-                 for q in ('first', 'second')]
+    questions = [
+        {
+            'id': q,
+            'header': '',
+            'question': 'Which draft?',
+            'options': [{'label': 'Blue', 'then': 'Keep blue'}, {'label': 'Red', 'then': 'Keep red'}],
+        }
+        for q in ('first', 'second')
+    ]
     tid, mid = question(api, questions=questions)
     assert post(api, f'messages/{mid}/answer', {'text': 'Blue'})['decision_open']
     post(api, f'messages/{mid}/answer', {'text': 'Blue'}, 'ben-test', expected=403)
@@ -63,14 +81,32 @@ def test_multiple_questions_are_not_guessed_and_other_answerer_is_refused(api):
 
 
 def test_publish_label_settles_question_without_approving_a_send(api):
-    tid, mid = question(api, questions=[
-        {'id': 'decision', 'header': '', 'question': 'Publish the draft?',
-         'options': [{'label': 'Publish', 'then': 'Select the prepared draft'},
-                     {'label': 'Wait', 'then': 'Keep the draft'}]}])
+    tid, mid = question(
+        api,
+        questions=[
+            {
+                'id': 'decision',
+                'header': '',
+                'question': 'Publish the draft?',
+                'options': [
+                    {'label': 'Publish', 'then': 'Select the prepared draft'},
+                    {'label': 'Wait', 'then': 'Keep the draft'},
+                ],
+            }
+        ],
+    )
     setup_attempt(api, bot='cpo')
-    legacy_send_approval(api, {
-        'to': 'colleague@acme.example', 'cc': [], 'subject': 'Synthetic draft',
-        'body_sha256': 'a' * 64, 'mailbox': 'work'}, actor='bot:cpo')
+    legacy_send_approval(
+        api,
+        {
+            'to': 'colleague@acme.example',
+            'cc': [],
+            'subject': 'Synthetic draft',
+            'body_sha256': 'a' * 64,
+            'mailbox': 'work',
+        },
+        actor='bot:cpo',
+    )
     with api.app.state.store.read() as c:
         approvals = [tuple(r) for r in c.execute('SELECT * FROM approvals')]
     post(api, f'messages/{mid}/answer', {'text': 'Publish'})
@@ -80,8 +116,9 @@ def test_publish_label_settles_question_without_approving_a_send(api):
 
 
 def test_question_without_options_still_accepts_a_text_answer(api):
-    tid, mid = question(api, questions=[{'id': 'detail', 'header': '', 'question': 'Which month?',
-                                      'options': [], 'other': True}])
+    tid, mid = question(
+        api, questions=[{'id': 'detail', 'header': '', 'question': 'Which month?', 'options': [], 'other': True}]
+    )
     reply = post(api, f'messages/{mid}/answer', {'text': 'September'})
     assert reply['kind'] == 'answer'
     assert not reply.get('decision_open')

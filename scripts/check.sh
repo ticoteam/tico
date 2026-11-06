@@ -173,6 +173,13 @@ else
   skip "ui types (tsc, API types)" "no UI or API schema changed"
 fi
 
+# 7b. Every API path the UI calls is a route the backend serves (the app is imported, not run: seconds).
+if [ "$ALL" = 1 ] || changed_matches '^ui/|^backend/.*\.py$|^scripts/(check_ui_routes\.(py|sh)|ui_baseline\.py)$'; then
+  run "ui routes (API paths)" bash scripts/check_ui_routes.sh
+else
+  skip "ui routes (API paths)" "no UI or backend Python changed"
+fi
+
 # 8. Python types on the boundary modules in pyrightconfig.json's include list (files or folders).
 include_regex=$(python3 -c '
 import json, re

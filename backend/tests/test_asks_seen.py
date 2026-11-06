@@ -1,5 +1,6 @@
 """A question to a person is delivered once their Needs you holds it and read once they open it there, on its task or
 as the item an assistant reads them (POST /api/v2/needs-you/seen, /api/v2/tasks/{id}/seen, backend/batch.py)."""
+
 from backend import hubdb as H, task_holds
 from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
 
@@ -7,8 +8,15 @@ from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
 def asked(api, title="Pick the venue", question="Hall A or Hall B?"):
     with api.app.state.store.transaction() as c:
         tid = H.task_create(c, "human:ben", title, "x", "bot:ops")["id"]
-        ask = H.say(c, "bot:ops", "human:ana", question, kind="ask",
-                    conversation_id=H.task(c, tid)["conversation_id"], refs={"task": tid})
+        ask = H.say(
+            c,
+            "bot:ops",
+            "human:ana",
+            question,
+            kind="ask",
+            conversation_id=H.task(c, tid)["conversation_id"],
+            refs={"task": tid},
+        )
     return tid, ask["id"]
 
 
@@ -31,7 +39,7 @@ def test_a_question_on_needs_you_is_delivered_and_opening_its_task_reads_it(api)
     assert post(api, "needs-you/seen", {"asks": [mid]})["delivered"] == [mid]
     delivered, read = marks(api, mid)
     assert delivered and read is None
-    assert post(api, "needs-you/seen", {"asks": [mid]})["delivered"] == []      # once
+    assert post(api, "needs-you/seen", {"asks": [mid]})["delivered"] == []  # once
     assert post(api, f"tasks/{tid}/seen", {})["read"] == [mid]
     assert marks(api, mid)[0] == delivered and marks(api, mid)[1]
     assert post(api, f"tasks/{tid}/seen", {})["read"] == []
@@ -79,11 +87,19 @@ def test_the_item_an_assistant_reads_leaves_a_question_the_person_cannot_read_un
     they may not read; a later withdrawal then said they had seen it. The read follows the task page's readability."""
     from backend import batch
     from backend.tests.test_api import unrelated_task_managers
+
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
         tid = H.task_create(c, "human:ben", "Sensitive packet", "x", "bot:ops", private=True, lint=False)["id"]
-        ask = H.say(c, "bot:ops", "human:ana", "Which lawyer?", kind="ask",
-                    conversation_id=H.task(c, tid)["conversation_id"], refs={"task": tid})
+        ask = H.say(
+            c,
+            "bot:ops",
+            "human:ana",
+            "Which lawyer?",
+            kind="ask",
+            conversation_id=H.task(c, tid)["conversation_id"],
+            refs={"task": tid},
+        )
         assert ask["id"] not in [a["id"] for a in H.open_task_asks(c, H.task(c, tid), actor="human:ana")]
         batch._presented(c, "human:ana", {"item": {"key": "task:" + tid}})
         assert H.message(c, ask["id"])["read_at"] is None and H.message(c, ask["id"])["delivered_at"] is None

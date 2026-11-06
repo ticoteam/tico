@@ -39837,7 +39837,7 @@
         ]
       },
       "post": {
-        "summary": "Answer or dismiss a comment or file version question",
+        "summary": "Answer or dismiss a comment or file version question, or a question task ({task}: the answer closes it done, a dismiss declined)",
         "operationId": "answerTaskQuestion",
         "parameters": [
           {
@@ -61260,7 +61260,7 @@
                       "open"
                     ]
                   },
-                  "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
+                  "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; a question task is answered by its close (a pick: POST /api/v2/tasks/{task id}/answers with target {task}); `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
                 },
                 "goal_id": {
                   "type": "string"
@@ -67566,7 +67566,7 @@
                 "open"
               ]
             },
-            "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
+            "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; a question task is answered by its close (a pick: POST /api/v2/tasks/{task id}/answers with target {task}); `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
           }
         },
         "required": [
@@ -71356,6 +71356,19 @@
               }
             ],
             "title": "Version"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task"
           }
         },
         "additionalProperties": false,
@@ -75640,6 +75653,44 @@
             "type": "integer",
             "description": "Questions on this task with no answer or dismissal"
           },
+          "questions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object"
+            },
+            "description": "A question task's question (a bot's decision for the person who owns it): each {id, question, why, options [{label, then, description, recommended, file}], multi}; null on any other task. Answered with POST /tasks/{id}/answers and target {task}"
+          },
+          "if_no_answer": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A question task's default: {do, kind, by}"
+          },
+          "review": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A question task's files under review: {files, pick, attachments}"
+          },
+          "spend": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A question task's spend, approved by picking its label"
+          },
+          "answer": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A question task's answer once closed: {answers, other, dismiss, by, at, text}; null while open"
+          },
           "type_id": {
             "type": [
               "string",
@@ -75743,7 +75794,7 @@
               "string",
               "null"
             ],
-            "description": "The person a waiting task waits on; the task is in their Needs you"
+            "description": "Read only, derived: the person a waiting task waits on, the owner of its oldest open question task (a subtask or a blocker). Null when a private question task's words do not reach this task's readers"
           },
           "readers": {
             "type": "array",

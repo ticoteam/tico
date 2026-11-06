@@ -10,7 +10,14 @@ from backend.tests.test_connectors import mail_message
 from backend.tests.test_gmail_live import gmail_http  # noqa: F401
 from backend.tests.test_google_workspace import personal
 from backend.tests.test_google_workspace_authz import (  # noqa: F401
-    BOX, PERSONAL, health, place, publish, revoke, token, workspace_key,
+    BOX,
+    PERSONAL,
+    health,
+    place,
+    publish,
+    revoke,
+    token,
+    workspace_key,
 )
 from backend.tests.test_mail_api import ORG, seed_org
 from backend.tests.test_mail_targets import declare
@@ -28,8 +35,9 @@ def contact(api, machine, *, isolated=True):
         report = c.execute("SELECT readiness FROM runner_states WHERE runner_id=?", (machine["runner_id"],)).fetchone()
         readiness = readiness_document(report[0])
     readiness.update(schema_version=1, isolated=isolated)
-    return post(api, "runners/heartbeat", {"version": "test", "platform": "test",
-                "readiness": readiness}, machine["token"])
+    return post(
+        api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": readiness}, machine["token"]
+    )
 
 
 def computers(api, count=2, *, operator="ana", isolated=True, shared=False):
@@ -48,8 +56,10 @@ def owners(api, machines, address=PERSONAL):
 
 def offline(api, machine):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
-                  (H.shift(H.now(), seconds=-120), machine["runner_id"]))
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+            (H.shift(H.now(), seconds=-120), machine["runner_id"]),
+        )
 
 
 def addresses(api, machine):
@@ -68,7 +78,7 @@ def test_placement_order_of_a_mailbox_owner_across_servers_macs_assistants_and_m
     first, second, third = computers(api, 3)
     machines = [first, second, third]
     assert owners(api, machines) == [first["runner_id"]]
-    contact(api, third)                                        # contact order does not change the owner
+    contact(api, third)  # contact order does not change the owner
     assert owners(api, machines) == [first["runner_id"]]
     offline(api, first)
     assert owners(api, machines) == [second["runner_id"]]
@@ -124,9 +134,8 @@ def test_placement_order_of_a_mailbox_owner_across_servers_macs_assistants_and_m
 
 
 def test_other_peoples_macs_never_take_a_persons_mailbox(api, known_person):
-    machines = [computers(api, 1, operator=person, isolated=False, shared=True)[0]
-                for person in ("ana", "ben", "lena")]
-    ready(api, machines[0], [])                               # unknown isolation is not isolated either
+    machines = [computers(api, 1, operator=person, isolated=False, shared=True)[0] for person in ("ana", "ben", "lena")]
+    ready(api, machines[0], [])  # unknown isolation is not isolated either
     # Even an owner's, an admin's or an open-to-members Mac is not a company server.
     assert owners(api, machines) == []
     assert addresses(api, machines[0]) == set()
@@ -241,8 +250,10 @@ def test_a_shared_mailbox_without_a_bot_only_syncs_on_a_server(api, known_person
     assert owners(api, machines, "support@acme.example") == [server["runner_id"]]
     assert "support@acme.example" in addresses(api, server)
     publish(api, server["token"], "support@acme.example")
-    assert post(api, "automations/mail-actions/claim", {"mailbox": "support@acme.example"},
-                server["token"])["actions"] == []
+    assert (
+        post(api, "automations/mail-actions/claim", {"mailbox": "support@acme.example"}, server["token"])["actions"]
+        == []
+    )
     offline(api, server)
     assert owners(api, machines, "support@acme.example") == []
 
@@ -250,12 +261,17 @@ def test_a_shared_mailbox_without_a_bot_only_syncs_on_a_server(api, known_person
 def test_sync_does_not_give_a_colocated_bot_mail_api_cli_or_token_access(api, known_person, monkeypatch, capsys):
     from connectors.mail import Refused, access
     from connectors.mail import __main__ as cli
+
     machine, _, attempt = setup_attempt(api, "ops")
     contact(api, machine)
     assert attempt["mailbox_levels"] == {} and attempt["mailboxes"] == []
     assert owners(api, [machine]) == [machine["runner_id"]]
-    post(api, "connectors/mail/messages", {"mailbox": PERSONAL, "messages": [mail_message()],
-                                          "synced_at": H.now()}, machine["token"])
+    post(
+        api,
+        "connectors/mail/messages",
+        {"mailbox": PERSONAL, "messages": [mail_message()], "synced_at": H.now()},
+        machine["token"],
+    )
     turn = attempt["token"]
     answer = get(api, "mail/access?mailbox=" + PERSONAL, turn)
     assert answer["level"] == "none" and answer["mailboxes"] == []
@@ -278,20 +294,28 @@ def test_sync_does_not_give_a_colocated_bot_mail_api_cli_or_token_access(api, kn
 
 
 def test_the_owners_assistant_and_mail_page_read_live_mail_without_a_message_bot(
-        api, workspace_key, gmail_http, monkeypatch):
+    api, workspace_key, gmail_http, monkeypatch
+):
     from connectors.mail import access
+
     seed_org(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
-                  (encode({"people": [{k: v for k, v in p.items() if k != "inbox_bot"} for p in ORG]}),))
+        c.execute(
+            "UPDATE registry_metadata SET value=? WHERE key='people'",
+            (encode({"people": [{k: v for k, v in p.items() if k != "inbox_bot"} for p in ORG]}),),
+        )
         mailbox_access.ensure_mailbox(c, BOX)
     machine, attempt = assistant_turn(api, "ana-test", "Read my inbox")
     assert attempt["mailbox_levels"] == {BOX: "read_write"} and attempt["mailboxes"] == [BOX]
     with api.app.state.store.read() as c:
         assert routines.message_bot_mailboxes(c) == []
     assert addresses(api, machine) == {BOX}
-    post(api, "connectors/mail/messages", {"mailbox": BOX, "messages": [mail_message()],
-                                          "synced_at": H.now()}, machine["token"])
+    post(
+        api,
+        "connectors/mail/messages",
+        {"mailbox": BOX, "messages": [mail_message()], "synced_at": H.now()},
+        machine["token"],
+    )
     with api.app.state.store.read() as c:
         synced = c.execute("SELECT msg_id,body FROM mail_messages WHERE mailbox=?", (BOX,)).fetchone()
         assert synced["msg_id"] == "m-plain" and synced["body"] == "How does pricing work?"

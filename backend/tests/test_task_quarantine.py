@@ -1,4 +1,5 @@
 """A refusal loop holds its task/chat; unrelated work of the same bot keeps running."""
+
 import pytest
 
 from backend import hubdb as H
@@ -18,8 +19,9 @@ def started(api, machine):
 def refusals(api, attempt, task, count=H.QUARANTINE_AT + 1):
     for _ in range(count):
         row = get(api, "tasks/" + task["id"])["task"]
-        result = post(api, "tasks/" + task["id"], {"version": row["version"], "number": 993},
-                      attempt["token"], expected=403)
+        result = post(
+            api, "tasks/" + task["id"], {"version": row["version"], "number": 993}, attempt["token"], expected=403
+        )
         assert result["error"]["code"] == "identity"
 
 
@@ -49,9 +51,15 @@ def hold_external(api, task):
 @pytest.mark.parametrize("mutation", ["request", "consume", "supersede"])
 def test_external_approvals_fence_their_task_and_the_stored_task_of_a_replaced_approval(api, external_work, mutation):
     token, task, other = external_work
-    approvals = [post(api, "approvals", {"kind": "merge", "task_id": row["id"],
-                                       "payload": {"repo": "acme/widgets", "pr": number}}, token)
-                 for number, row in enumerate((task, other), 41)]
+    approvals = [
+        post(
+            api,
+            "approvals",
+            {"kind": "merge", "task_id": row["id"], "payload": {"repo": "acme/widgets", "pr": number}},
+            token,
+        )
+        for number, row in enumerate((task, other), 41)
+    ]
     if mutation == "consume":
         for approval in approvals:
             post(api, "approvals/" + approval["id"], {"decision": "approved"})
@@ -59,10 +67,18 @@ def test_external_approvals_fence_their_task_and_the_stored_task_of_a_replaced_a
 
     def write(row, approval, expected=200):
         if mutation == "consume":
-            return post(api, f"approvals/{approval['id']}/consume", {"payload_hash": approval["payload_hash"]},
-                        token, expected=expected)
-        body = {"kind": "merge", "task_id": row["id"],
-                "payload": {"repo": "acme/widgets", "pr": approval["payload"]["pr"] + 10}}
+            return post(
+                api,
+                f"approvals/{approval['id']}/consume",
+                {"payload_hash": approval["payload_hash"]},
+                token,
+                expected=expected,
+            )
+        body = {
+            "kind": "merge",
+            "task_id": row["id"],
+            "payload": {"repo": "acme/widgets", "pr": approval["payload"]["pr"] + 10},
+        }
         if mutation == "supersede":
             # An unheld request must not withdraw an approval whose own stored task is held.
             body.update(task_id=other["id"], supersedes_approval=approval["id"])
@@ -111,13 +127,26 @@ def _external_message_mutations_check_the_stored_message_and_native_task(api, ex
     token, task, other = external_work
     messages = []
     for row in (task, other):
-        sender, target = ("human:ana", task["owner_id"]) if mutation in ("ack", "answer") else (task["owner_id"], "human:ana")
+        sender, target = (
+            ("human:ana", task["owner_id"]) if mutation in ("ack", "answer") else (task["owner_id"], "human:ana")
+        )
         with api.app.state.store.transaction() as c:
-            messages.append(H.say(c, sender, target, "Which format?" if mutation == "answer" else "Checking the report.",
-                                  conversation_id=row["conversation_id"], kind="ask" if mutation == "answer" else "say",
-                                  refs={"task": other["id"]}))
+            messages.append(
+                H.say(
+                    c,
+                    sender,
+                    target,
+                    "Which format?" if mutation == "answer" else "Checking the report.",
+                    conversation_id=row["conversation_id"],
+                    kind="ask" if mutation == "answer" else "say",
+                    refs={"task": other["id"]},
+                )
+            )
         if mutation == "unreact":
-            assert api.put(f"/api/v2/messages/{messages[-1]['id']}/reactions/check", headers=headers(token)).status_code == 200
+            assert (
+                api.put(f"/api/v2/messages/{messages[-1]['id']}/reactions/check", headers=headers(token)).status_code
+                == 200
+            )
     hold_external(api, task)
 
     def write(msg):
@@ -152,12 +181,14 @@ def _external_message_mutations_check_the_stored_message_and_native_task(api, ex
 def test_a_bot_reads_feedback_on_its_held_task_without_recording_refusals(api, external_work):
     token, task, _ = external_work
     message = post(api, f"tasks/{task['id']}/comments", {"text": "The export is ready."}, token)["comment"]
-    rated = post(api, "feedback", {"subject_type": "message", "subject_id": message["id"],
-                                   "rating": "down", "reason": "Missing totals"})
+    rated = post(
+        api,
+        "feedback",
+        {"subject_type": "message", "subject_id": message["id"], "rating": "down", "reason": "Missing totals"},
+    )
     hold_external(api, task)
     with api.app.state.store.read() as c:
-        before = {table: c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
-                  for table in ("refusals", "events")}
+        before = {table: c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in ("refusals", "events")}
     markers = get(api, f"feedback?subject_type=message&subject_ids={message['id']}", token)
     assert markers["items"] == []
     assert markers["counts"] == [{"subject_id": message["id"], "up": 0, "down": 1}]
@@ -170,11 +201,15 @@ def test_a_bot_reads_feedback_on_its_held_task_without_recording_refusals(api, e
 def _external_thread_mutations_check_the_stored_thread_task(api, external_work, mutation):
     token, task, other = external_work
     # A bot may manage a thread it started, including one associated with a task.
-    rooms = [post(api, "threads", {"title": row["title"], "task_id": row["id"], "members": ["ana"]}, token)
-             for row in (task, other)]
+    rooms = [
+        post(api, "threads", {"title": row["title"], "task_id": row["id"], "members": ["ana"]}, token)
+        for row in (task, other)
+    ]
     task, other = ({**row, "conversation_id": room["id"]} for row, room in zip((task, other), rooms))
-    comments = [post(api, f"threads/{row['conversation_id']}/messages", {"text": "Review this report."})
-                for row in (task, other)]
+    comments = [
+        post(api, f"threads/{row['conversation_id']}/messages", {"text": "Review this report."})
+        for row in (task, other)
+    ]
     for row in (task, other):
         if mutation == "unpin":
             assert api.put(f"/api/v2/threads/{row['conversation_id']}/pin", headers=headers(token)).status_code == 200
@@ -184,7 +219,11 @@ def _external_thread_mutations_check_the_stored_thread_task(api, external_work, 
         path, body, method = f"/api/v2/threads/{row['conversation_id']}", {}, "post"
         if mutation in ("create", "subthread"):
             path = "/api/v2/threads"
-            body = {"audience": "task", "task_id": row["id"]} if mutation == "create" else {"parent_message_id": comment["id"]}
+            body = (
+                {"audience": "task", "task_id": row["id"]}
+                if mutation == "create"
+                else {"parent_message_id": comment["id"]}
+            )
         elif mutation == "rename":
             method, body = "patch", {"title": "Reviewed report"}
         else:
@@ -200,8 +239,10 @@ def _external_thread_mutations_check_the_stored_thread_task(api, external_work, 
         return api.request(method, path, json=body, headers=headers(token))
 
     with api.app.state.store.read() as c:
-        before = {table: [tuple(r) for r in c.execute(f"SELECT * FROM {table} ORDER BY id")]
-                  for table in ("conversations", "thread_followers", "thread_pins")}
+        before = {
+            table: [tuple(r) for r in c.execute(f"SELECT * FROM {table} ORDER BY id")]
+            for table in ("conversations", "thread_followers", "thread_pins")
+        }
     refused = write(task, comments[0])
     assert refused.status_code == 403, refused.text
     assert refused.json()["error"]["code"] == "quarantined"
@@ -225,7 +266,10 @@ def test_external_status_fences_the_task_it_keeps_without_blocking_a_switch_to_o
     for body in ({"focus": "Still trying"}, {"focus": "Still trying", "task_id": task["id"]}):
         assert post(api, path, body, token, expected=403)["error"]["code"] == "quarantined"
     with api.app.state.store.read() as c:
-        assert dict(c.execute("SELECT * FROM bot_status WHERE bot=?", (H.actor_id(task["owner_id"]),)).fetchone()) == before
+        assert (
+            dict(c.execute("SELECT * FROM bot_status WHERE bot=?", (H.actor_id(task["owner_id"]),)).fetchone())
+            == before
+        )
     post(api, path, {"state": "running", "task_id": other["id"]}, token)
     post(api, "bots/scout/quarantine/clear", {})
     post(api, path, {"state": "running", "task_id": task["id"]}, token)
@@ -237,14 +281,20 @@ def test_external_direct_file_reviews_check_both_the_review_task_and_the_files_s
     token, task, other = external_work
     hermes_bot(api, slug="publisher")
     publisher = credential(api, "publisher")["token"]
-    files = [post(api, "files/uploads", {"task": row["id"], "name": "report.txt", "text": "Checked."}, publisher)["file"]
-             for row in (task, other)]
+    files = [
+        post(api, "files/uploads", {"task": row["id"], "name": "report.txt", "text": "Checked."}, publisher)["file"]
+        for row in (task, other)
+    ]
     hold_external(api, task)
     with api.app.state.store.read() as c:
         before = c.execute("SELECT count(*) FROM bot_file_activity WHERE action='reviewed'").fetchone()[0]
     for row, file in ((task, files[1]), (other, files[0])):
-        assert post(api, "file-reviews", {"task": row["id"], "file": file["id"], "verdict": "approve"},
-                    token, expected=403)["error"]["code"] == "quarantined"
+        assert (
+            post(
+                api, "file-reviews", {"task": row["id"], "file": file["id"], "verdict": "approve"}, token, expected=403
+            )["error"]["code"]
+            == "quarantined"
+        )
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM bot_file_activity WHERE action='reviewed'").fetchone()[0] == before
     post(api, "file-reviews", {"task": other["id"], "file": files[1]["id"], "verdict": "approve"}, token)
@@ -261,18 +311,26 @@ def test_external_structured_review_answers_check_the_files_stored_task(api, ext
     publisher = credential(api, "publisher")["token"]
     questions = []
     for row in (task, other):
-        file = post(api, "files/uploads", {"task": row["id"], "name": "report.txt", "text": "Checked."}, publisher)["file"]
-        question = post(api, f"tasks/{other['id']}/comments", {"text": "Review this version.", "ask": ask("scout")})["comment"]
+        file = post(api, "files/uploads", {"task": row["id"], "name": "report.txt", "text": "Checked."}, publisher)[
+            "file"
+        ]
+        question = post(api, f"tasks/{other['id']}/comments", {"text": "Review this version.", "ask": ask("scout")})[
+            "comment"
+        ]
         with api.app.state.store.transaction() as c:
             version = c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (file["id"],)).fetchone()
-            refs = {**H.message(c, question["id"])["refs"], "review": {"files": [
-                {"file": file["id"], "version": version["version"], "digest": version["digest"]}]}}
+            refs = {
+                **H.message(c, question["id"])["refs"],
+                "review": {"files": [{"file": file["id"], "version": version["version"], "digest": version["digest"]}]},
+            }
             c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump(refs), question["id"]))
         questions.append(question)
     hold_external(api, task)
     body = lambda question: {"target": {"comment": question["id"]}, "answers": {"verdict": ["Approve"]}}
-    assert post(api, f"tasks/{other['id']}/answers", body(questions[0]), token,
-                expected=403)["error"]["code"] == "quarantined"
+    assert (
+        post(api, f"tasks/{other['id']}/answers", body(questions[0]), token, expected=403)["error"]["code"]
+        == "quarantined"
+    )
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM bot_file_activity WHERE action='reviewed'").fetchone()
         assert H.review_answers(c, questions[0]["id"], actor=task["owner_id"]) == []
@@ -284,16 +342,25 @@ def test_external_structured_review_answers_check_the_files_stored_task(api, ext
 @pytest.mark.parametrize("mutation", ["edit", "replace"])
 def test_external_page_changes_check_the_pages_stored_task(api, external_work, mutation):
     token, task, other = external_work
-    pages = [post(api, "pages", {"name": "report.html", "task": row["id"], "text": "<h1>Report</h1>"}, token)["page"]
-             for row in (task, other)]
+    pages = [
+        post(api, "pages", {"name": "report.html", "task": row["id"], "text": "<h1>Report</h1>"}, token)["page"]
+        for row in (task, other)
+    ]
     hold_external(api, task)
 
     def write(page, suffix):
         if mutation == "edit":
             return api.patch(f"/api/v2/pages/{page['file_id']}", json={"archived": True}, headers=headers(token))
-        return api.post("/api/v2/pages", json={"name": "replacement-" + suffix + ".html", "scope": "bot",
-                                              "replaces": page["file_id"], "text": "<h1>Updated report</h1>"},
-                        headers=headers(token))
+        return api.post(
+            "/api/v2/pages",
+            json={
+                "name": "replacement-" + suffix + ".html",
+                "scope": "bot",
+                "replaces": page["file_id"],
+                "text": "<h1>Updated report</h1>",
+            },
+            headers=headers(token),
+        )
 
     with api.app.state.store.read() as c:
         before = [tuple(r) for r in c.execute("SELECT * FROM pages ORDER BY file_id")]
@@ -313,11 +380,20 @@ def test_external_page_changes_check_the_pages_stored_task(api, external_work, m
 
 def _external_task_pins_and_cards_check_their_stored_place(api, external_work, mutation):
     token, task, other = external_work
-    cards = [post(api, "cards", {"template": "tasks_by_status",
-                                **({} if mutation == "add" else {"place": "task:" + row["id"]})}, token)
-             for row in (task, other)]
-    page = post(api, "pages", {"name": "report.html", "scope": "bot", "text": "<h1>Report</h1>"}, token)["page"] \
-        if mutation == "add_page" else None
+    cards = [
+        post(
+            api,
+            "cards",
+            {"template": "tasks_by_status", **({} if mutation == "add" else {"place": "task:" + row["id"]})},
+            token,
+        )
+        for row in (task, other)
+    ]
+    page = (
+        post(api, "pages", {"name": "report.html", "scope": "bot", "text": "<h1>Report</h1>"}, token)["page"]
+        if mutation == "add_page"
+        else None
+    )
     hold_external(api, task)
 
     def write(row, card):
@@ -327,17 +403,27 @@ def _external_task_pins_and_cards_check_their_stored_place(api, external_work, m
             item = "page:" + page["file_id"] if mutation == "add_page" else "card:" + cid
             path, body, method = "pins", {"place": place, "item": item}, "post"
         elif mutation in ("edit", "remove"):
-            path, body, method = "pins/" + pid, {"size": "large"} if mutation == "edit" else {}, "patch" if mutation == "edit" else "delete"
+            path, body, method = (
+                "pins/" + pid,
+                {"size": "large"} if mutation == "edit" else {},
+                "patch" if mutation == "edit" else "delete",
+            )
         elif mutation == "order":
             path, body, method = "places/" + place + "/order", {"ids": [pid]}, "post"
         elif mutation in ("card_edit", "card_delete"):
-            path, body, method = "cards/" + cid, {"title": "Updated"} if mutation == "card_edit" else {}, "patch" if mutation == "card_edit" else "delete"
+            path, body, method = (
+                "cards/" + cid,
+                {"title": "Updated"} if mutation == "card_edit" else {},
+                "patch" if mutation == "card_edit" else "delete",
+            )
         else:
             path, body, method = "cards", {"template": "done_per_week", "place": place}, "post"
         return api.request(method, "/api/v2/" + path, json=body, headers=headers(token))
 
     with api.app.state.store.read() as c:
-        before = {table: [tuple(r) for r in c.execute(f"SELECT * FROM {table} ORDER BY id")] for table in ("cards", "pins")}
+        before = {
+            table: [tuple(r) for r in c.execute(f"SELECT * FROM {table} ORDER BY id")] for table in ("cards", "pins")
+        }
     result = write(task, cards[0])
     assert result.status_code == 403, result.text
     assert result.json()["error"]["code"] == "quarantined"
@@ -361,13 +447,16 @@ def test_external_requester_add_and_message_backed_note_cancel_respect_the_task_
             c.execute("UPDATE notes SET message_id=? WHERE id=?", (msg["id"], note["id"]))
             notes.append(note)
     hold_external(api, task)
-    assert post(api, f"tasks/{task['id']}/requesters", {"actor": task["owner_id"]}, token,
-                expected=403)["error"]["code"] == "quarantined"
+    assert (
+        post(api, f"tasks/{task['id']}/requesters", {"actor": task["owner_id"]}, token, expected=403)["error"]["code"]
+        == "quarantined"
+    )
     assert post(api, f"notes/{notes[0]['id']}/cancel", {}, token, expected=403)["error"]["code"] == "quarantined"
     with api.app.state.store.read() as c:
         assert H.note(c, notes[0]["id"])["canceled_at"] is None
-        assert not c.execute("SELECT 1 FROM task_requesters WHERE task_id=? AND actor=?",
-                             (task["id"], task["owner_id"])).fetchone()
+        assert not c.execute(
+            "SELECT 1 FROM task_requesters WHERE task_id=? AND actor=?", (task["id"], task["owner_id"])
+        ).fetchone()
     post(api, f"tasks/{other['id']}/requesters", {"actor": task["owner_id"]}, token)
     post(api, f"notes/{notes[1]['id']}/cancel", {}, token)
     post(api, "bots/scout/quarantine/clear", {})
@@ -398,10 +487,24 @@ def test_external_rule_hold_mutations_check_the_stored_review_task(api, external
     ids = [H.new_id(), H.new_id()]
     with api.app.state.store.transaction() as c:
         for ident, row in zip(ids, (task, other)):
-            c.execute("INSERT INTO org_rule_holds(id,operation,payload,author,destinations,rule_ids,verdict,nonce,"
-                      "state,reviewer,task_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                      (ident, "message", H._dump({"text": "Review this report.", "replay": {}}), task["owner_id"],
-                       "[]", "[]", "{}", H.new_id(), "held", "human:ana", row["id"], H.now()))
+            c.execute(
+                "INSERT INTO org_rule_holds(id,operation,payload,author,destinations,rule_ids,verdict,nonce,"
+                "state,reviewer,task_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    ident,
+                    "message",
+                    H._dump({"text": "Review this report.", "replay": {}}),
+                    task["owner_id"],
+                    "[]",
+                    "[]",
+                    "{}",
+                    H.new_id(),
+                    "held",
+                    "human:ana",
+                    row["id"],
+                    H.now(),
+                ),
+            )
     hold_external(api, task)
     body = {"why": "Please review this report."} if mutation == "appeal" else {}
     with api.app.state.store.read() as c:
@@ -430,9 +533,13 @@ def test_external_comment_and_file_question_changes_check_the_stored_native_thre
             c.execute("UPDATE messages SET public=1 WHERE id=?", (msg["id"],))
         path, body, method = f"tasks/{other['id']}/comments/{msg['id']}/moderate", {"action": "hide"}, "post"
     else:
-        file = post(api, f"tasks/{other['id']}/files", {"name": "report.txt", "text": "Checked.", "ask": ask("ana")}, token)
+        file = post(
+            api, f"tasks/{other['id']}/files", {"name": "report.txt", "text": "Checked.", "ask": ask("ana")}, token
+        )
         with api.app.state.store.read() as c:
-            ident = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (file["file_id"],)).fetchone()[0]
+            ident = c.execute(
+                "SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (file["file_id"],)
+            ).fetchone()[0]
             msg = H.message(c, ident)
         updated = ask("ana")
         updated["questions"][0]["question"] = "Is the report ready?"
@@ -464,7 +571,9 @@ def test_one_tasks_refusals_stop_only_its_turn_and_other_work_claims_and_runs(ap
     with api.app.state.store.read() as c:
         assert H.bot(c, "ops")["state"] == "active"
         assert H.task(c, task["id"])["status"] == bad["task"]["status"]
-        assert c.execute("SELECT owner_id FROM tasks WHERE title=?", ("Review ops's refused writes",)).fetchone()[0] == H.bot_actor(H.FLEET_MAINTAINER)
+        assert c.execute("SELECT owner_id FROM tasks WHERE title=?", ("Review ops's refused writes",)).fetchone()[
+            0
+        ] == H.bot_actor(H.FLEET_MAINTAINER)
     stopped = post(api, f"attempts/{bad['id']}/renew", {}, machine["token"])
     assert stopped["stop"] and stopped["stop_reason"].startswith("Quarantined: 10 repeated refusals today")
     assert not post(api, f"attempts/{good['id']}/renew", {}, machine["token"]).get("stop")
@@ -477,7 +586,12 @@ def test_one_tasks_refusals_stop_only_its_turn_and_other_work_claims_and_runs(ap
     next_run = started(api, machine)
     assert next_run["task"]["id"] == waiting["id"]
     for attempt in (good, next_run):
-        post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Checked."}, machine["token"])
+        post(
+            api,
+            f"attempts/{attempt['id']}/complete",
+            {"outcome": "completed", "last_seq": 0, "text": "Checked."},
+            machine["token"],
+        )
     assert claim(api, machine) is None
     assert any("Held for" in m["body"] for m in get(api, f"conversations/{task['conversation_id']}/messages"))
     assert other["id"] != task["id"]
@@ -583,6 +697,7 @@ def test_unattributed_refusals_after_a_task_hold_still_quarantine_the_bot(api):
 def test_an_external_agent_cannot_write_a_held_task_but_can_write_another_over_mcp(api):
     from backend.tests.test_agents import credential, hermes_bot
     from backend.tests.test_mcp import call
+
     hermes_bot(api)
     token = credential(api)["token"]
     first = new_task(api, "Check the export", owner="scout")
@@ -642,16 +757,21 @@ def test_external_native_posts_and_file_publishing_fence_the_resolved_task(api, 
 
     def write(row, expected=200):
         if mutation == "thread":
-            return post(api, f"threads/{row['conversation_id']}/messages", {"text": "Checked the report."},
-                        token, expected=expected)
+            return post(
+                api,
+                f"threads/{row['conversation_id']}/messages",
+                {"text": "Checked the report."},
+                token,
+                expected=expected,
+            )
         if mutation == "link":
-            return post(api, "files/links", {"task": row["id"], "url": "https://acme.example/report"},
-                        token, expected=expected)
+            return post(
+                api, "files/links", {"task": row["id"], "url": "https://acme.example/report"}, token, expected=expected
+            )
         body = {"task": row["id"], "name": "report.txt", "text": "Checked the report."}
         if mutation == "import":
             body.update(source="s3://acme-reports/report.txt", etag="v1")
-        return post(api, "files/" + ("imports" if mutation == "import" else "uploads"), body,
-                    token, expected=expected)
+        return post(api, "files/" + ("imports" if mutation == "import" else "uploads"), body, token, expected=expected)
 
     with api.app.state.store.transaction() as c:
         Q.hold(c, bot, "task:" + task["id"], "Repeated refusals", {"rule": "identity"})
@@ -726,17 +846,23 @@ def test_runner_file_publishing_checks_the_supplied_attempt_hold(api, scope):
 
 def test_claim_fence_uses_both_partial_quarantine_indexes(api):
     from backend import execution
+
     machine = task_bot(api, lanes=True)
     new_task(api, "Check the export")
     post(api, "chat/ops", {"text": "Check the archive."})
     with api.app.state.store.read() as c:
         # The claim's candidate joins and fences, including task and chat probes, use both partial indexes.
-        plan = [row["detail"] for row in c.execute(
-            "EXPLAIN QUERY PLAN SELECT j.id FROM jobs j JOIN assignments a ON a.bot=j.bot_id "
-            "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-            f"LEFT JOIN tasks qt ON qt.id={H.MESSAGE_TASK_SQL} "
-            "WHERE j.state='queued' AND j.held=0 AND j.bot_id=? AND a.runner_id=? "
-            f"AND {execution.unfenced_sql()} AND {execution.scoped_sql()}", ("ops", machine["runner_id"]))]
+        plan = [
+            row["detail"]
+            for row in c.execute(
+                "EXPLAIN QUERY PLAN SELECT j.id FROM jobs j JOIN assignments a ON a.bot=j.bot_id "
+                "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
+                f"LEFT JOIN tasks qt ON qt.id={H.MESSAGE_TASK_SQL} "
+                "WHERE j.state='queued' AND j.held=0 AND j.bot_id=? AND a.runner_id=? "
+                f"AND {execution.unfenced_sql()} AND {execution.scoped_sql()}",
+                ("ops", machine["runner_id"]),
+            )
+        ]
     assert "SEARCH qh USING INDEX quarantine_holds_task (bot_id=? AND task_id=?)" in plan, plan
     assert "SEARCH qh USING INDEX quarantine_holds_chat (bot_id=? AND conversation_id=?)" in plan, plan
     assert not any("SCAN qh" in step for step in plan), plan
@@ -762,8 +888,12 @@ def test_an_escape_over_a_task_hold_stays_bot_wide_and_needs_a_person(api, time_
     two = started(api, machine)
     refusals(api, one, task)
     with api.app.state.store.transaction() as c:
-        H.quarantine(c, "ops", "escape: the task note reaches outside the hub: secrets/mail.env",
-                     context={"what": "task note", "found": "secrets/", "task": task["id"]})
+        H.quarantine(
+            c,
+            "ops",
+            "escape: the task note reaches outside the hub: secrets/mail.env",
+            context={"what": "task note", "found": "secrets/", "task": task["id"]},
+        )
     for attempt in (one, two):
         stop = post(api, f"attempts/{attempt['id']}/renew", {}, machine["token"])
         assert stop["stop"] and "until a person clears it" in stop["stop_reason"]
@@ -831,9 +961,21 @@ def test_a_scoped_stop_keeps_the_named_outside_action_for_review_after_clear(api
     machine = task_bot(api, lanes=True)
     task = new_task(api, "Check the export")
     attempt = started(api, machine)
-    post(api, f"attempts/{attempt['id']}/events", {"events": [
-        {"seq": 1, "kind": "status", "payload": {"state": "active", "tool_events": True}},
-        {"seq": 2, "kind": "tool", "payload": {"name": "Bash", "status": "started", "summary": "gh pr merge 42 --squash"}}]}, machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/events",
+        {
+            "events": [
+                {"seq": 1, "kind": "status", "payload": {"state": "active", "tool_events": True}},
+                {
+                    "seq": 2,
+                    "kind": "tool",
+                    "payload": {"name": "Bash", "status": "started", "summary": "gh pr merge 42 --squash"},
+                },
+            ]
+        },
+        machine["token"],
+    )
     refusals(api, attempt, task)
     post(api, f"attempts/{attempt['id']}/renew", {}, machine["token"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 2}, machine["token"])
@@ -849,6 +991,7 @@ def test_a_task_hold_keeps_other_task_holds_and_clear_does_not_resume_a_paused_b
     attempt = started(api, machine)
     with api.app.state.store.transaction() as c:
         from backend import task_holds
+
         task_holds.put(c, task["id"], "snoozed", H.now(), until_at=H.shift(H.now(), days=2), reason="Waiting for data")
     refusals(api, attempt, task)
     with api.app.state.store.transaction() as c:
@@ -875,7 +1018,9 @@ def test_a_held_task_cannot_ride_along_with_another_tasks_next_run(api):
 
 
 @pytest.mark.parametrize("failure", ["archived", "chat_notice", "task_notice", "release"])
-def test_a_bad_release_preserves_other_cooldowns_and_the_rest_of_the_scheduler_tick(api, time_machine, monkeypatch, failure):
+def test_a_bad_release_preserves_other_cooldowns_and_the_rest_of_the_scheduler_tick(
+    api, time_machine, monkeypatch, failure
+):
     from backend import task_quarantine as Q
     from backend.scheduler import Scheduler
 
@@ -932,7 +1077,10 @@ def _task_mutation(api, token, mutation, n):
     from backend import task_quarantine as Q
     from backend.tests.test_task_review import ask
 
-    tasks = [new_task(api, f"{title} {n}", owner="scout") for title in ("Check the export", "Check the archive", "Check the summary")]
+    tasks = [
+        new_task(api, f"{title} {n}", owner="scout")
+        for title in ("Check the export", "Check the archive", "Check the summary")
+    ]
     other = tasks[2]
     requests = []
     for task in tasks[:2]:
@@ -953,7 +1101,9 @@ def _task_mutation(api, token, mutation, n):
                 tid, body["task"] = other["id"], tid
         elif mutation in ("wait_task", "wait_pr"):
             suffix = "waits"
-            body = {"on": "task:" + other["id"] if mutation == "wait_task" else "pr:https://github.com/acme/widgets/pull/42"}
+            body = {
+                "on": "task:" + other["id"] if mutation == "wait_task" else "pr:https://github.com/acme/widgets/pull/42"
+            }
         elif mutation == "links":
             body = {"url": "https://acme.example/export"}
         elif mutation == "unlink":
@@ -969,7 +1119,9 @@ def _task_mutation(api, token, mutation, n):
             comment = post(api, f"tasks/{tid}/ask", {"text": "Which report should I check?"}, token)
             suffix = "comments/" + comment["id"] + "/resolve"
         elif mutation == "answers":
-            comment = post(api, f"tasks/{tid}/comments", {"text": "Is the report ready?", "ask": ask("scout")})["comment"]
+            comment = post(api, f"tasks/{tid}/comments", {"text": "Is the report ready?", "ask": ask("scout")})[
+                "comment"
+            ]
             body = {"target": {"comment": comment["id"]}, "answers": {"verdict": ["Approve"]}}
         elif mutation == "ask":
             body = {"text": "Which report should I check?"}
@@ -994,6 +1146,7 @@ def _task_mutation(api, token, mutation, n):
 
 def _held_notes(api, machine, source, n):
     from backend import bot_to_bot as B, task_quarantine as Q
+
     with api.app.state.store.transaction() as c:
         if source.startswith("chat"):
             message = H.say(c, "bot:finance", "bot:ops", "The export is ready to check.")
@@ -1026,7 +1179,9 @@ def _held_notes(api, machine, source, n):
         assert B.continue_backlog(c, "ops") is None, "a held note must not start a backlog loop"
     if not source.startswith("chat"):
         row = get(api, "tasks/" + task["id"])["task"]
-        result = post(api, "tasks/" + task["id"], {"version": row["version"], "status": "doing"}, attempt["token"], expected=403)
+        result = post(
+            api, "tasks/" + task["id"], {"version": row["version"], "status": "doing"}, attempt["token"], expected=403
+        )
         assert result["error"]["code"] == "quarantined"
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": attempt["lane"]}, machine["token"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
@@ -1042,6 +1197,7 @@ def _held_notes(api, machine, source, n):
 
 def test_a_held_task_does_not_use_the_bots_only_automatic_task_place(api):
     from backend.tests.test_auto_tasks import set_cap
+
     machine = task_bot(api, lanes=True)
     task = new_task(api, "Check the export")
     attempt = started(api, machine)
@@ -1057,8 +1213,11 @@ def test_a_held_task_does_not_use_the_bots_only_automatic_task_place(api):
 
 def fresh_work(api, token, n):
     """Another held-task pair for the same bot: a new task and its sibling, titled apart."""
-    return (token, new_task(api, f"Check the export {n}", owner="scout"),
-            new_task(api, f"Check the archive {n}", owner="scout"))
+    return (
+        token,
+        new_task(api, f"Check the export {n}", owner="scout"),
+        new_task(api, f"Check the archive {n}", owner="scout"),
+    )
 
 
 def _named(label, call, *args):
@@ -1076,17 +1235,32 @@ def _every(api, external_work, mutations, case):
 
 def test_external_message_mutations_check_the_stored_message_and_native_task(api, external_work):
     """Every message mutations route is fenced for a held task, one fresh task and hold per route."""
-    _every(api, external_work, ["ack", "answer", "edit", "delete", "react", "unreact"], _external_message_mutations_check_the_stored_message_and_native_task)
+    _every(
+        api,
+        external_work,
+        ["ack", "answer", "edit", "delete", "react", "unreact"],
+        _external_message_mutations_check_the_stored_message_and_native_task,
+    )
 
 
 def test_external_thread_mutations_check_the_stored_thread_task(api, external_work):
     """Every thread mutations route is fenced for a held task, one fresh task and hold per route."""
-    _every(api, external_work, ["create", "subthread", "rename", "read", "read-all", "follow", "unfollow", "pin", "unpin"], _external_thread_mutations_check_the_stored_thread_task)
+    _every(
+        api,
+        external_work,
+        ["create", "subthread", "rename", "read", "read-all", "follow", "unfollow", "pin", "unpin"],
+        _external_thread_mutations_check_the_stored_thread_task,
+    )
 
 
 def test_external_task_pins_and_cards_check_their_stored_place(api, external_work):
     """Every task pins and cards route is fenced for a held task, one fresh task and hold per route."""
-    _every(api, external_work, ["add", "add_page", "edit", "remove", "order", "card_edit", "card_delete", "card_add"], _external_task_pins_and_cards_check_their_stored_place)
+    _every(
+        api,
+        external_work,
+        ["add", "add_page", "edit", "remove", "order", "card_edit", "card_delete", "card_add"],
+        _external_task_pins_and_cards_check_their_stored_place,
+    )
 
 
 def test_external_task_mutations_fence_the_explicit_task_and_allow_an_unheld_task(api):
@@ -1095,9 +1269,28 @@ def test_external_task_mutations_fence_the_explicit_task_and_allow_an_unheld_tas
 
     hermes_bot(api)
     token = credential(api)["token"]
-    for n, mutation in enumerate(["snooze", "unsnooze", "check-back", "later", "defer", "relations",
-                                  "reverse_relation", "wait_task", "wait_pr", "links", "unlink", "files",
-                                  "edit", "delete_comment", "resolve", "answers", "ask", "update"]):
+    for n, mutation in enumerate(
+        [
+            "snooze",
+            "unsnooze",
+            "check-back",
+            "later",
+            "defer",
+            "relations",
+            "reverse_relation",
+            "wait_task",
+            "wait_pr",
+            "links",
+            "unlink",
+            "files",
+            "edit",
+            "delete_comment",
+            "resolve",
+            "answers",
+            "ask",
+            "update",
+        ]
+    ):
         _named(mutation, _task_mutation, api, token, mutation, n)
 
 

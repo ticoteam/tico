@@ -13,23 +13,38 @@ adds the fields every item has, whatever its kind, so a client lists, orders and
 # Each action, and the write it is (docs/openapi/v2.json has them all).
 ACTIONS = {
     "answer": "POST /api/v2/messages/{ask id}/answer: answer the question it carries",
-    "update": "POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task",
+    "update": "POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; a question task is "
+    "answered by its close (a pick: POST /api/v2/tasks/{task id}/answers with target {task})",
     "decide": "the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or "
-              "/api/v2/stale-review/{row id} for each row",
+    "/api/v2/stale-review/{row id} for each row",
     "add_reading": "POST /api/v2/kpis/{kpi id}/readings",
     "open": "nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)",
 }
 TASK_KINDS = ("task", "question", "waiting", "declined")
 # The Goals page's own asks (backend/goal_asks.py): what each is about, and what settles it.
-GOAL_SUBJECTS = {"vision": "strategy", "kpi_red": "kpi", "kpi_stale": "kpi", "recovery": "proposal",
-                 "proposal": "proposal", "why": None}
+GOAL_SUBJECTS = {
+    "vision": "strategy",
+    "kpi_red": "kpi",
+    "kpi_stale": "kpi",
+    "recovery": "proposal",
+    "proposal": "proposal",
+    "why": None,
+}
 
 
 def item(x, subject, actions, body=None):
     """`x` with the common fields set; its own fields stay as its card reads them."""
     assert all(a in ACTIONS for a in actions), actions
-    return {**x, "id": x["id"], "kind": x["kind"], "title": x.get("title") or "", "body": body,
-            "subject": subject, "created_at": x.get("created_at"), "actions": list(actions)}
+    return {
+        **x,
+        "id": x["id"],
+        "kind": x["kind"],
+        "title": x.get("title") or "",
+        "body": body,
+        "subject": subject,
+        "created_at": x.get("created_at"),
+        "actions": list(actions),
+    }
 
 
 def needs_item(x, reader):
@@ -37,7 +52,8 @@ def needs_item(x, reader):
     kind = x["kind"]
     if kind in TASK_KINDS:
         ask = x.get("ask") or {}
-        answer = ("answer",) if ask.get("recipient_id") == reader else ()
+        # A question task's answer is its close, an update (backend/question_tasks.py).
+        answer = ("answer",) if ask.get("recipient_id") == reader and not ask.get("question_task") else ()
         return item(x, {"type": "task", "id": x["id"]}, answer + ("update",), x.get("body"))
     if kind == "ask":
         return item(x, {"type": "message", "id": x["message_id"]}, ("answer",), x.get("body"))

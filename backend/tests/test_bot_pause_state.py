@@ -1,4 +1,5 @@
 """Pause banner projection over disposable synthetic fixtures only."""
+
 import pytest
 
 from backend import company_billing
@@ -58,9 +59,11 @@ def _billing_projection_excludes_money_and_record_only_is_not_a_pause(api, monke
 
 def _pause_bit_is_read_from_hq_once_per_minute(api, monkeypatch):
     calls = []
+
     def hq(*args):
         calls.append(args)
         return {'state': 'paused', 'record_only': False}
+
     monkeypatch.setattr(company_billing, 'read', hq)
     now = [1000.0]
     monkeypatch.setattr(company_billing, 'CLOCK', lambda: now[0])
@@ -79,19 +82,24 @@ def test_the_pause_banner_projection_one_bot_one_company_story(api, monkeypatch)
     def fresh():
         company_billing._pause.clear()
         monkeypatch.setattr(company_billing, 'CLOCK', lambda: 1000.0)
-    for step in (_billing_projection_excludes_money_and_record_only_is_not_a_pause,
-                 _pause_bit_is_read_from_hq_once_per_minute,
-                 _pause_record_and_legacy_fallback,
-                 _only_readable_open_tasks_count_and_no_new_control_permission):  # last: it restricts the bot
+
+    for step in (
+        _billing_projection_excludes_money_and_record_only_is_not_a_pause,
+        _pause_bit_is_read_from_hq_once_per_minute,
+        _pause_record_and_legacy_fallback,
+        _only_readable_open_tasks_count_and_no_new_control_permission,
+    ):  # last: it restricts the bot
         fresh()
         step(api, monkeypatch)
 
 
 def test_paused_cache_is_per_gateway_key_and_read_stays_uncached(monkeypatch):
     calls = []
+
     def hq(key, base, *rest):
         calls.append((key, base))
         return {'state': 'active'}
+
     monkeypatch.setattr(company_billing, 'read', hq)
     assert company_billing.paused('k1', 'https://gw.example') is False
     assert company_billing.paused('k1', 'https://gw.example') is False

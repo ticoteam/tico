@@ -43,8 +43,9 @@ _LOCK = Lock()
 def bundle_sha(files):
     """Hex sha256 of the canonical bundle: [{content, path}] sorted by path, compact JSON (the contract's rule)."""
     canonical = sorted(({"content": f["content"], "path": f["path"]} for f in files), key=lambda f: f["path"])
-    return hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":"),
-                                     ensure_ascii=False).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
 
 
 def _safe(path):
@@ -60,7 +61,9 @@ def resolved_installs(c, person_id):
         "JOIN skills s ON s.id=i.skill_id AND s.deleted_at IS NULL "
         "JOIN skill_versions v ON v.id = CASE WHEN i.version_policy='pinned' AND i.pinned_version_id IS NOT NULL "
         "THEN i.pinned_version_id ELSE s.latest_version_id END "
-        "WHERE i.target_type='Human' AND i.target_id=? ORDER BY s.name", (person_id,)).fetchall()
+        "WHERE i.target_type='Human' AND i.target_id=? ORDER BY s.name",
+        (person_id,),
+    ).fetchall()
     out = []
     for r in rows:
         version = _checked(r)
@@ -72,19 +75,39 @@ def resolved_installs(c, person_id):
 def _checked(row):
     try:
         files = json.loads(row["files"])
-        ok = (isinstance(files, list) and all(isinstance(f, dict) and isinstance(f.get("path"), str)
-                                              and isinstance(f.get("content"), str) and _safe(f["path"]) for f in files)
-              and bundle_sha(files) == row["sha256"] and NAME.fullmatch(row["name"]))
+        ok = (
+            isinstance(files, list)
+            and all(
+                isinstance(f, dict)
+                and isinstance(f.get("path"), str)
+                and isinstance(f.get("content"), str)
+                and _safe(f["path"])
+                for f in files
+            )
+            and bundle_sha(files) == row["sha256"]
+            and NAME.fullmatch(row["name"])
+        )
     except (TypeError, ValueError):
         ok = False
-    return {"name": row["name"], "description": row["description"] or "", "number": row["number"],
-            "sha256": row["sha256"], "files": files} if ok else None
+    return (
+        {
+            "name": row["name"],
+            "description": row["description"] or "",
+            "number": row["number"],
+            "sha256": row["sha256"],
+            "files": files,
+        }
+        if ok
+        else None
+    )
 
 
 def version_by_sha(c, name, sha):
-    row = c.execute("SELECT s.name, v.description, v.number, v.sha256, v.files FROM skill_versions v "
-                    "JOIN skills s ON s.id=v.skill_id AND s.deleted_at IS NULL WHERE s.name=? AND v.sha256=?",
-                    (name, sha)).fetchone()
+    row = c.execute(
+        "SELECT s.name, v.description, v.number, v.sha256, v.files FROM skill_versions v "
+        "JOIN skills s ON s.id=v.skill_id AND s.deleted_at IS NULL WHERE s.name=? AND v.sha256=?",
+        (name, sha),
+    ).fetchone()
     return _checked(row) if row else None
 
 
@@ -117,12 +140,14 @@ def _cached(key, build):
 
 def skill_zip(version):
     """(bytes, sha256) of one approved version as a plugin of the same name."""
+
     def build():
         manifest = {"name": version["name"], "description": version["description"]}
         entries = {".claude-plugin/plugin.json": json.dumps(manifest, indent=2, sort_keys=True) + "\n"}
         for f in version["files"]:
             entries["skills/" + version["name"] + "/" + f["path"]] = f["content"]
         return build_zip(entries)
+
     return _cached(("skill", version["name"], version["sha256"]), build)
 
 
@@ -131,8 +156,12 @@ def helper_source(public_url):
 
 
 def _hook(command, **extra):
-    return {"type": "command", "command": 'node "${CLAUDE_PLUGIN_ROOT}/scripts/skill_helper.mjs" ' + command,
-            "async": True, **extra}
+    return {
+        "type": "command",
+        "command": 'node "${CLAUDE_PLUGIN_ROOT}/scripts/skill_helper.mjs" ' + command,
+        "async": True,
+        **extra,
+    }
 
 
 HOOKS = {
@@ -148,11 +177,17 @@ HOOKS = {
 def hooks_zip(public_url):
     """(bytes, sha256) of the tico-skills plugin: the helper and its hooks, for this server."""
     source = helper_source(public_url)
+
     def build():
         manifest = {"name": HOOKS_PLUGIN, "description": "Keeps your company skills in sync with Tico"}
-        return build_zip({".claude-plugin/plugin.json": json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-                          "hooks/hooks.json": json.dumps(HOOKS, indent=2, sort_keys=True) + "\n",
-                          "scripts/skill_helper.mjs": source})
+        return build_zip(
+            {
+                ".claude-plugin/plugin.json": json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                "hooks/hooks.json": json.dumps(HOOKS, indent=2, sort_keys=True) + "\n",
+                "scripts/skill_helper.mjs": source,
+            }
+        )
+
     return _cached(("hooks", hashlib.sha256(source.encode()).hexdigest()), build)
 
 
@@ -167,18 +202,30 @@ def marketplace(c, settings, who):
     person = _person(who)
     base = settings.public_url + "/api/v2/skills/plugins/"
     _, hooks_sha = hooks_zip(settings.public_url)
-    plugins = [{"name": HOOKS_PLUGIN, "description": "Keeps your company skills in sync with Tico",
-                "source": {"source": "archive", "url": base + HOOKS_PLUGIN + "/" + hooks_sha + ".zip",
-                           "sha256": hooks_sha}}]
+    plugins = [
+        {
+            "name": HOOKS_PLUGIN,
+            "description": "Keeps your company skills in sync with Tico",
+            "source": {"source": "archive", "url": base + HOOKS_PLUGIN + "/" + hooks_sha + ".zip", "sha256": hooks_sha},
+        }
+    ]
     for v in resolved_installs(c, person):
         _, sha = skill_zip(v)
-        plugins.append({"name": v["name"], "description": v["description"],
-                        "source": {"source": "archive", "url": base + v["name"] + "/" + v["sha256"] + ".zip",
-                                   "sha256": sha},
-                        "metadata": {"tico": {"version": v["number"], "bundle_sha256": v["sha256"]}}})
-    return {"name": MARKETPLACE, "owner": {"name": settings.app_name},
-            "description": "Your company skills from " + settings.app_name,
-            "forceRemoveDeletedPlugins": True, "plugins": plugins}
+        plugins.append(
+            {
+                "name": v["name"],
+                "description": v["description"],
+                "source": {"source": "archive", "url": base + v["name"] + "/" + v["sha256"] + ".zip", "sha256": sha},
+                "metadata": {"tico": {"version": v["number"], "bundle_sha256": v["sha256"]}},
+            }
+        )
+    return {
+        "name": MARKETPLACE,
+        "owner": {"name": settings.app_name},
+        "description": "Your company skills from " + settings.app_name,
+        "forceRemoveDeletedPlugins": True,
+        "plugins": plugins,
+    }
 
 
 def install(app, store, auth, settings):
@@ -210,11 +257,15 @@ def install(app, store, auth, settings):
             if not version:
                 raise Problem("not_found", "No such skill version", 404)
             data, _ = skill_zip(version)
-        return Response(data, media_type="application/zip",
-                        headers={"Cache-Control": "private, max-age=31536000, immutable"})
+        return Response(
+            data, media_type="application/zip", headers={"Cache-Control": "private, max-age=31536000, immutable"}
+        )
 
     @app.get(HELPER_PATH)
     def skills_helper():
         """Source available and holds no secret: the first thing a person's computer downloads, before any token."""
-        return Response(helper_source(settings.public_url), media_type="text/javascript; charset=utf-8",
-                        headers={"Cache-Control": "no-cache"})
+        return Response(
+            helper_source(settings.public_url),
+            media_type="text/javascript; charset=utf-8",
+            headers={"Cache-Control": "no-cache"},
+        )
