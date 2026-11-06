@@ -3584,6 +3584,18 @@ def create_app(settings=None):
                                        suggestions_seen=body.suggestions_seen, delivery_batch_id=body.delivery_batch_id),
                 **org_rule_check.answer(rule)}
 
+    def update_skip(c, who, body):
+        """A bot's nothing-new answer for its request (`updates.skip`): nothing is posted and the request finishes skipped,
+        never retried. A person's draft is skipped by the server (`updates.write_draft`), not here."""
+        if who.role != "bot":
+            raise Problem("identity", "A bot skips its own update", 403)
+        bot = H.actor_id(who.actor)
+        day = body.day or updates.today()
+        updates.check_day(c, bot, day)
+        kind = updates.effective_kind(body.kind, None, day)
+        updates.skip(c, bot, kind, day)
+        return {"skipped": True, "kind": kind, "day": day, "reason": updates.NOTHING_NEW}
+
     def update_fixed(body):
         """The update a post means, its day and kind named, before anything is checked: a hold keeps them, so Send
         anyway posts that day's update of that kind, never today's or a week in review a Friday would make it."""
@@ -3598,6 +3610,8 @@ def create_app(settings=None):
     @app.post("/api/v2/updates")
     def update_post(request: Request, body: M.UpdatePost):
         who = request.state.identity
+        if body.skip:                 # nothing is posted, so there is nothing for the org rules to check
+            return mutate(request, body, lambda c: update_skip(c, who, body))
         fixed = update_fixed(body)
         rc = rule_check(who, "update", update_text(fixed), lambda c: org_rule_check.company(c))
         return mutate(request, body, lambda c: update_write(c, who, fixed, rc, named_day=body.day is not None))

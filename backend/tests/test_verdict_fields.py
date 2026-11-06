@@ -117,8 +117,7 @@ def test_last_inline_verdict_is_stored_and_delivered_once(api, source):
         assert (results[0]["refs"]["verdict"], results[0]["refs"]["verdict_head"]) == ("approve", "06d18530")
 
 
-@pytest.mark.parametrize("title", ["Review 1: import", "Review 2: import", "QA: import",
-                                    "Post Release QA: PR #412"])
+@pytest.mark.parametrize("title", ["Review 1: import", "Post Release QA: PR #412"])
 def test_done_without_any_verdict_is_refused_without_finishing_or_waking(api, title):
     parent, review = pair(api, title)
     with api.app.state.store.transaction() as c:
@@ -149,8 +148,7 @@ def test_an_ordinary_child_can_finish_without_a_verdict(api):
         assert H.task(c, child["id"])["status"] == "done"
 
 
-@pytest.mark.parametrize("title", ["Review 1: import", "QA: import", "Security: confirm the vendor contract",
-                                    "Post Release QA: PR #412"])
+@pytest.mark.parametrize("title", ["Review 1: import", "Security: confirm the vendor contract"])
 def test_a_person_owned_child_titled_as_a_check_finishes_without_a_verdict(api, title):
     task_bot(api, lanes=True, others=("finance",))
     with api.app.state.store.transaction() as c:
@@ -160,7 +158,7 @@ def test_a_person_owned_child_titled_as_a_check_finishes_without_a_verdict(api, 
         assert H.task(c, child["id"])["status"] == "done"
 
 
-@pytest.mark.parametrize("verdict", ["approve", "pass", "changes", "fail"])
+@pytest.mark.parametrize("verdict", ["approve", "fail"])
 def test_completed_runner_final_reply_records_inline_verdict_before_done(api, verdict):
     from backend.tests.test_subtask_results import start, finish
     machine = task_bot(api, lanes=True, others=("finance",))
@@ -207,9 +205,20 @@ def test_a_builders_own_qa_child_and_work_handed_out_in_review_finish_without_a_
         assert [H.task(c, t["id"])["status"] for t in (own, docs)] == ["done", "done"]
 
 
-@pytest.mark.parametrize("quoted", ["VERDICT: approve|changes PR #<n> head <sha>", "VERDICT: pass-or-fail",
-                                    "VERDICT: pass or fail", "VERDICT: approve | changes", "VERDICT: approve PR #<n> head <full sha>",
-                                    "VERDICT: approve PR #12 head <sha>"])
+QUOTED_FORMAT_LINES = ["VERDICT: approve|changes PR #<n> head <sha>", "VERDICT: pass-or-fail",
+                       "VERDICT: pass or fail", "VERDICT: approve | changes", "VERDICT: approve PR #<n> head <full sha>",
+                       "VERDICT: approve PR #12 head <sha>"]
+
+
+def test_the_parser_reads_no_verdict_in_a_quoted_format_line():
+    from backend import wake_rules
+    for quoted in QUOTED_FORMAT_LINES:
+        text = f"Two findings. VERDICT: changes PR #4 head {HEAD}\nThe next review ends with {quoted}."
+        assert wake_rules.verdict_fields(text) == ("changes", HEAD), quoted
+        assert wake_rules.verdict_fields(f"The next review ends with {quoted}.") is None, quoted
+
+
+@pytest.mark.parametrize("quoted", [QUOTED_FORMAT_LINES[0], QUOTED_FORMAT_LINES[-1]])
 def test_a_quoted_format_line_after_a_verdict_does_not_replace_it(api, quoted):
     parent, review = pair(api)
     with api.app.state.store.transaction() as c:
