@@ -8,7 +8,8 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 let mover = true;   // who may add or edit task Triggers and Actions
-const types = [{id: 'dev', name: 'Dev tickets', steps: [], roles: []}, {id: 'general', name: 'General', steps: [], roles: []}];
+const types = [{id: 'dev', name: 'Dev tickets', steps: [{id: 'st_review', name: 'Review 1'}, {id: 'st_qa', name: 'In QA'}], roles: []},
+  {id: 'general', name: 'General', steps: [], roles: []}];
 const taskRules = [
   {id: 'au_failed', name: 'Failed Action', enabled: true, trigger: {type: 'event', name: 'task.created', filters: [{field: 'event.data.type_id', value: 'dev'}]},
     last_run: {status: 'failed', started_at: '2026-11-03T10:00:00Z', finished_at: '2026-11-03T10:00:05Z', error: 'The note could not be saved'}},
@@ -136,6 +137,38 @@ const taskRules = [
     await page.waitForFunction(() => location.hash.startsWith('#/automations/draft-task-action-'), null, {timeout: 5000});
     assert.equal(posts.length, 1, 'opening another Trigger section still saves nothing');
     assert.match(await page.locator('.au-trig').innerText(), /Dev tickets/);
+    await page.locator('.au-trig[data-open="trigger"]').click();
+    await page.waitForSelector('.au-ed:not([hidden]) select[data-b="stepPick"]');
+    await page.selectOption('.au-ed select[data-b="stepPick"]', 'st_qa');
+    await page.locator('.au-save').click();
+    await page.waitForSelector('.toast:has-text("Saved to draft")');
+    assert.equal(posts.length, 1, 'saving the draft Trigger does not create an empty automation');
+    assert.equal(await page.locator('.au-hd [data-on-cur]').count(), 0, 'drafts have no on/off switch');
+    assert.equal(await page.locator('.au-ver').count(), 0, 'drafts have no Versions control');
+    assert.equal(await page.locator('.au-more').count(), 0, 'drafts have no Test run or Delete menu');
+    assert.equal(await page.locator('.au-hd [data-tab="runs"]').count(), 0, 'drafts have no Runs tab');
+    await page.locator('[data-spend]').click();
+    await page.fill('.au-ed input[data-b="value"]', '1.25');
+    await page.locator('.au-save').click();
+    await page.waitForSelector('.toast:has-text("Saved to draft")');
+    assert.equal(posts.length, 1, 'saving the draft spend limit does not create an empty automation');
+    await page.locator('.au-trig[data-open="trigger"]').click();
+    await page.waitForSelector('.au-ed:not([hidden]) select[data-b="stepPick"]');
+    assert.equal(await page.locator('.au-ed select[data-b="stepPick"]').inputValue(), 'st_qa',
+      'the selected step stays on the draft Trigger');
+    await page.locator('.au-edh .au-x').click();
+    await page.locator('[data-add="root|0"]').click();
+    await page.locator('.au-menu [data-ty="action"]').click();
+    await page.selectOption('.au-ed [data-b="step.do"]', 'create_task');
+    await page.fill('.au-ed [data-b="step.args.title"]', 'Step follow-up');
+    await page.selectOption('.au-ed [data-b="step.args.owner"]', 'bot:pr-reviewer');
+    await page.locator('.au-save').click();
+    await page.waitForFunction(() => document.querySelector('.au-ed')?.hidden && document.querySelector('.au-ver')?.textContent === 'v1');
+    assert.equal(posts.length, 2, 'the first Action creates the automation once');
+    assert.deepEqual(posts[1].trigger, {type: 'event', name: 'task.step_changed', filters: [
+      {field: 'event.data.type_id', op: 'is', value: 'dev'}, {field: 'event.data.step', op: 'is', value: 'st_qa'}
+    ]}, 'the chosen step and task type both reach the saved Trigger');
+    assert.deepEqual(posts[1].spend_cap, {per_30m: 1.25}, 'a draft spend limit is saved with its first Action');
     // Add action and edit controls follow the Settings permission check.
     mover = false;
     await page.goto('https://tico-ui.test/?no-cache=1#/settings/tasks');   // a new document, so the page opens on Settings

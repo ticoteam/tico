@@ -180,8 +180,7 @@ function taskTypesSettingsShow(tab) {
   if (tab === 'tasks' && S.me?.cloud) void renderTaskTypes();
 }
 // Add action on a type's row opens a draft for an off automation whose Trigger is a task created of this type.
-// People with Settings move rights may add it; type editing uses the same gate. The automation is created when its
-// first Action is saved in Automations.
+// canMove() gates both this Add action and type editing. The automation is created when its first Action is saved.
 async function taskTypeAddAction(type) {
   if (!type || !S.me || !canMove()) return;
   void taskAutomationAddAction({type: 'event', name: 'task.created',

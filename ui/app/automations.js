@@ -300,6 +300,7 @@ function auSwitch(on, label, attrs = '') {
 }
 // The header's on/off: the switch for whoever may pause it, else whether it is off.
 function auHeadSwitch(a, name) {
+  if (a.taskActionDraft) return '';
   if (auMayPause(a)) return auSwitch(a.enabled !== false, name + ' on', 'data-on-cur');
   return a.enabled === false ? `<span class="pill${a.paused ? ' waiting' : ''}">${a.paused ? esc(a.paused_reason || 'Paused') : 'Off'}</span>` : '';
 }
@@ -337,7 +338,7 @@ function auDrawHead() {
   if (AU.id === AU_HOOKS) { auHooksHead(hd); return; }
   const row = a && (AU.list || []).find(x => x.id === a.id);
   const name = a?.name || row?.name || '';
-  const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU.id, v)}" aria-selected="${AU.view === v}">${v === 'flow' ? 'Flow' : 'Runs'}</a>`).join('');
+  const seg = a?.taskActionDraft ? '' : ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU.id, v)}" aria-selected="${AU.view === v}">${v === 'flow' ? 'Flow' : 'Runs'}</a>`).join('');
   hd.innerHTML = `<h2 class="au-name">${esc(name)}</h2>
     ${a ? `<span class="au-own" title="${esc(auActorName(a.owner_id))}">${personCircle(auActorName(a.owner_id), 18)}<span class="au-own-n">${esc(auActorName(a.owner_id))}</span></span>
     <span class="au-sp"></span>
@@ -347,10 +348,10 @@ function auDrawHead() {
         : `<span class="au-chip"><span class="nav-icon" aria-hidden="true">payments</span>${esc(auSpendWords(a))}</span>`}
       <button class="au-help" type="button" aria-label="Spend limit help" data-help="Spend limit per 30 minutes. It resumes on its own.">?</button>`}
       <span class="au-sp au-sp-phone"></span>
-      <div class="au-seg" role="tablist" aria-label="View">${seg}</div>
+      ${seg ? `<div class="au-seg" role="tablist" aria-label="View">${seg}</div>` : ''}
     </div>
-    <button class="au-chip au-ver" type="button" data-versions aria-label="Versions, v${a.version}">v${esc(a.version)}${row?.pending ? ' · Proposed' : ''}</button>
-    <button class="au-icon au-more" type="button" aria-label="Options" aria-haspopup="menu" data-more><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
+    ${a.taskActionDraft ? '' : `<button class="au-chip au-ver" type="button" data-versions aria-label="Versions, v${a.version}">v${esc(a.version)}${row?.pending ? ' · Proposed' : ''}</button>`}
+    ${a.taskActionDraft ? '' : '<button class="au-icon au-more" type="button" aria-label="Options" aria-haspopup="menu" data-more><span class="nav-icon" aria-hidden="true">more_horiz</span></button>'}
     ${auHeadLock(a)}${auHoldLine(a)}${auWarn(a)}` : ''}`;
 }
 
@@ -388,9 +389,17 @@ async function auWrite(body, done) {
   const a = AU.cur, state = AU;
   try {
     const draft = a.taskActionDraft;
+    if (draft && !auDraftHasAction(body.steps || a.steps)) {
+      if (Object.hasOwn(body, 'trigger')) a.trigger = auClone(body.trigger);
+      if (Object.hasOwn(body, 'spend_cap')) a.spend_cap = auClone(body.spend_cap);
+      AU_TASK_ACTION_DRAFT = auClone(a);
+      auDrawHead(); auDrawPane();
+      toast('Saved to draft. Add an Action to create this automation.');
+      return a;
+    }
     const request = draft
       ? post('/v2/automations', {name: a.name, owner: a.owner_id, enabled: false, builtin: false,
-        trigger: a.trigger, steps: a.steps, ...body})
+        trigger: a.trigger, steps: a.steps, ...(a.spend_cap ? {spend_cap: a.spend_cap} : {}), ...body})
       : patch(auApi(a.id), body);
     const out = auNormal(await request);
     if (AU !== state) return null;
@@ -406,6 +415,10 @@ async function auWrite(body, done) {
     if (done) toast(done(out));
     return out;
   } catch (e) { toast(e.message, true); if (AU === state) { auDrawList(); auDrawHead(); auDrawPane(); } return null; }
+}
+function auDraftHasAction(steps) {
+  return (steps || []).some(step => step?.type === 'action' && AU_TASK_ACTION_KEYS.includes(step.do)
+    || step?.type === 'paths' && [...(step.paths || []).map(path => path.steps), step.otherwise?.steps].some(auDraftHasAction));
 }
 function auAdopt(a) {
   if (!AU) return;
@@ -464,6 +477,7 @@ function auOnClick(e) {
 // so it is shown off with why).
 function auMoreHTML() {
   const a = AU.cur;
+  if (a.taskActionDraft) return '';
   return `${a.can_edit && !a.readonly ? '<button type="button" role="menuitem" data-mi="run"><span class="nav-icon" aria-hidden="true">play_arrow</span>Test run</button>' : ''}
     ${auApplies(a) ? '<button type="button" role="menuitem" data-mi="apply"><span class="nav-icon" aria-hidden="true">dashboard_customize</span>Apply template</button>' : ''}
     <button type="button" role="menuitem" data-mi="versions"><span class="nav-icon" aria-hidden="true">history</span>Versions</button>
