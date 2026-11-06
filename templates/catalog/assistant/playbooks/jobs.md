@@ -46,9 +46,11 @@ tasks they own. The owned tasks are one kind of many.
 2. Ids: tasks they own `hub task list --all`; bots' questions `hub message list` (each names its task); approvals
    `hub approval list --limit 100` (`--offset <next>` until null). A bot's task waiting on them comes up as its question.
 3. Act in this turn, as them, on every item below. "Go" and "whatever you think" are the yes: never close some and ask
-   about the rest.
-   - Task they own (open, doing, waiting or declined): `hub task bulk close --where-id <id> --where-id <id> --note "<why>"`
-     (up to 200), or `hub task close <id> --note "<why>"`. Undo: `hub task update <id> --status doing`.
+   about the rest. One write per item; a write that answered ok is done, never send it again; re-read Needs you to check.
+   - Task they own (open, doing, waiting or declined): one bulk close of up to 100 ids. CLI: `hub task bulk close
+     --where-id <id> --where-id <id> --note "<why>"`, one id per flag. MCP `hub_task_bulk`: `filter: {"ids": [...]}`,
+     `action: "close"`, `note`; never a JSON list in `--where-id`, never `where_ids` at the top level. Or one
+     `hub task close <id> --note "<why>"`. Undo: `hub task update <id> --status doing`.
    - A bot's task, even one waiting on them: do not close it, it kills the bot's work. Act on its question instead. Close
      it only when it is plainly done, a duplicate or replaced, and say so.
    - A bot's question: keep it if it is a real decision (step 4). Otherwise decline it:
@@ -57,11 +59,14 @@ tasks they own. The owned tasks are one kind of many.
    - Approval: decline a stale merge, publish or support approval: `hub approval decline <id> --note "<why>"`. Never
      approve in a clear.
 4. Keep what needs them: a real decision on money, legal, a customer-facing reply, production access, or anything only
-   they can answer. Do not act on it. Name each kept item with its link and why.
+   they can answer. Do not act on it. Name each kept item with its link and why: a question or approval links to its
+   task (`#/task/<id>`, from its refs); with no task, to `[Needs you](#/tasks?view=foryou)`.
 5. No command here clears these: a held message, a paused thread, a thread mention or DM, a stale-ticket suggestion, a
    memory tidy card, a setup or reconnect card. Name the ones left, and say they clear them in Tico. Never guess a command.
-6. Recount: `hub needs-you show --by kind`. Reply in a few lines: the Needs you count before and after; what was closed,
-   answered and declined, with counts and links; the kept items; what is left; "say undo to put the tasks back".
+6. Recount once, at the end: `hub needs-you show --by kind`. Reply in plain lines, no headings or bold (AGENT.md,
+   Replies): the Needs you count before and after; what was closed, answered and declined, with counts and links; the
+   kept items with links and reasons; what is left. Undo covers the closed tasks only ("say undo to reopen them").
+   Declines and answers cannot be undone: say so, and give no undo line for them.
 
 ## Bots and work
 

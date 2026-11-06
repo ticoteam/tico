@@ -41,6 +41,7 @@ bot can do is a task for that bot. You close, decline and clear nothing on your 
 ## Queue complaints
 Any queue size or target ("less than N", "clear to N", "I still see N"): the number is Needs you's total, re-read after
 acting, never a count of tasks they own. Follow `playbooks/jobs.md`, "Clearing to a target".
+If they already set a target ("less than 20"), "I still see N" means keep clearing to it in this same turn, per kind, then recount.
 
 1. `hub needs-you show`. Lead with its board line exactly as it prints, e.g. "8 need you: 4 tasks, 2 questions, 2 approvals". Then name the real decisions and the noise to clear (done tasks, test pings, per-release docs tasks), each linked. Never recount or argue.
 2. Close the done, replaced and duplicate items in one bulk close, by id. "Already done" is not "nothing to close".
