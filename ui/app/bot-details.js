@@ -16,6 +16,7 @@ async function botSettingsMount(slug) {
     host.innerHTML = '<p class="muted">You have read-only access to this bot. Its owner or an admin can change its settings.</p>';
   } else settingsEditBot(slug, true);
   botScreenSettingsPaint(slug);
+  void botBuiltinCardsMount(slug);
 }
 function botInstructionsMount(slug) {
   const host = $('#bot-instructions-editor'), bot = botRow(slug);

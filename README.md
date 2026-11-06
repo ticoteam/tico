@@ -310,7 +310,7 @@ private GitHub repositories.
 
 ## Developer notes
 
-Run the suite locally; GitHub Actions also runs the default suite on every pull request to main and every push to main (PR checks). There is no budget on how many tests it has: write as many as a change needs, as long as each
+Run the suite locally; GitHub Actions also runs the default suite on every pull request to main that is not a draft (PR checks). There is no budget on how many tests it has: write as many as a change needs, as long as each
 guards a real failure: security and privacy boundaries, data safety (migrations, backup, restore),
 the updater and release path, core contracts (job claim and lease, task writes, chat, the API
 schema), regressions and edge cases that would lose or duplicate work. No tests of wording or docs. The default Python suite runs in about a minute on a laptop;

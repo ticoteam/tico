@@ -135,8 +135,8 @@ def test_a_worktree_refusal_says_who_can_give_the_access(api, botops):
     tried = api.post(path, json={"repo": "acme/site"}, headers=headers(attempt["token"]))
     assert tried.status_code == 403
     error = tried.json()["error"]
-    assert "owner or admin" in error["fix"] and "Settings > Repositories" in error["fix"]
-    assert error["link"].endswith("#/repositories")
+    assert "owner or admin" in error["fix"] and "Settings > General › Repositories" in error["fix"]
+    assert error["link"].endswith("#/settings/general/set-repos")
 
 
 def test_another_persons_comment_on_a_carried_request_lends_only_the_bots_rights(api, botops, monkeypatch):

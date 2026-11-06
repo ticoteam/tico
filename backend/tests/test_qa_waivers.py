@@ -249,18 +249,19 @@ def test_a_fresh_github_read_is_what_counts(api):
             qa_waivers.waive(c, 'human:ana', row['id'], HEAD, 'Urgent', snapshots=failed, manager=True)
 
 
-@pytest.mark.parametrize('runs', [[('Unit tests', 'skipped')],                          # a skip-only head
-                                  [('Unit tests', 'failure'), ('Unit tests', 'success')]])  # a failure hidden by a re-run
-def test_without_the_github_app_check_webhooks_alone_never_allow_a_waiver(api, runs):
-    """The webhook-built link reads a skip as passing and lets a re-run's pass replace a failure, so with no fresh
-    GitHub read to tell them apart, a waiver is refused rather than trusting it."""
+@pytest.mark.parametrize('runs, cached', [
+    ([('Unit tests', 'skipped')], 'pending'),                                  # a skip-only head reads pending
+    ([('Unit tests', 'failure'), ('Unit tests', 'success')], 'passing')])      # a failure hidden by a re-run
+def test_without_the_github_app_check_webhooks_alone_never_allow_a_waiver(api, runs, cached):
+    """The webhook-built link lets a re-run's pass replace a failure (and reads a neutral check as passing), so with no
+    fresh GitHub read to tell them apart, a waiver is refused rather than trusting it."""
     api.github.connected = False
     row = ticket(api)
     for name, conclusion in runs:
         hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
             'name': name, 'status': 'completed', 'conclusion': conclusion, 'head_sha': HEAD,
             'pull_requests': [{'number': 412}]}})
-    assert shown(api, row)['task']['links'][0]['checks'] == 'passing'   # what the cache would have trusted
+    assert shown(api, row)['task']['links'][0]['checks'] == cached   # what the cache would have trusted
     r = waive(api, row)
     assert r.status_code == 422 and 'GitHub App is not connected' in r.text, r.text
     assert shown(api, row)['task']['qa_waivers'] == []
