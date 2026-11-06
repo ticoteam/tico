@@ -152,8 +152,10 @@ def cron_time(cron):
 def window_starts_on(day):
     """The window starts on a Los Angeles calendar date, as UTC datetimes: the day type comes from that date."""
     windows = WEEKDAY_WINDOWS if day.weekday() < 5 else WEEKEND_WINDOWS
-    return [datetime(day.year, day.month, day.day, hour, minute, tzinfo=LOS_ANGELES).astimezone(timezone.utc)
-            for hour, minute in windows]
+    return [
+        datetime(day.year, day.month, day.day, hour, minute, tzinfo=LOS_ANGELES).astimezone(timezone.utc)
+        for hour, minute in windows
+    ]
 
 
 def window_start(now):
@@ -714,7 +716,8 @@ def cmd_guard(gh, env, now):
     # Only a window cron that started a real window (or a manual run) opens one. The backstop, an off-season twin of a
     # cron, and a cron this does not know, act like a push.
     opening = event == "workflow_dispatch" or (
-        event == "schedule" and schedule in CRONS and window_cron_opens(schedule, now))
+        event == "schedule" and schedule in CRONS and window_cron_opens(schedule, now)
+    )
     go = False
     if event != "workflow_dispatch" and env.get("RELEASE_TRAINS", "").strip() != "on":
         note("Release windows are off (repository variable RELEASE_TRAINS is not `on`)")
