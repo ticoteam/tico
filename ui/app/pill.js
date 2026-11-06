@@ -212,6 +212,10 @@ function composeFollowPaint(foot, kind, offer) {
   label.hidden = !offer;
   composeFootShow(foot);
   if (!offer) return;
+  // The label says what is followed: a bare "Follow" under a composer reads as following the bot.
+  const says = kind === 'task' ? 'Follow this task' : 'Follow this chat';
+  if (label.lastChild?.textContent !== says) label.lastChild.textContent = says;
+  label.title = 'Get every new message here, not only replies to yours';
   if (box.dataset.composeFollow !== kind) { box.dataset.composeFollow = kind; box.onchange = () => composeFollowPick(kind, box.checked); }
   if (COMPOSE_FOLLOW[kind] === null) void composeFollowRead(kind);
   box.checked = !!COMPOSE_FOLLOW[kind];
@@ -291,15 +295,25 @@ async function composeReachRead(R) {
   R.data = Array.isArray(data?.reaches) ? data : null;
   composeReachPaint(R);
 }
+// The reach line names who gets the message (spec: "lists the followers and addressed by name"): "To Omar and Builder 2",
+// "To Omar, Ana +3". The list opened from it adds each one's way.
+function composeReachSays(d) {
+  const names = d.reaches.map(r => r.actor_name || actorName(r.actor));
+  if (!names.length) return 'No one gets this';
+  if (names.length <= 2) return 'To ' + names.join(' and ');
+  return `To ${names.slice(0, 2).join(', ')} +${names.length - 2}`;
+}
 function composeReachRowHTML(actor, word) {
   return `<div class="p-reach-row" role="listitem">${actorAvatar(actor, 18)}<span class="p-reach-name">${esc(actorName(actor))}</span><span class="p-reach-mode">${esc(word)}</span></div>`;
 }
 function composeReachPaint(R) {
   const btn = R.foot.querySelector('.p-reach'), pop = R.foot.querySelector('.p-reach-pop'), d = R.data;
-  btn.hidden = !d;
+  // A bot's Home reaching only that bot says what the composer's "Message <bot>" already says: nothing to show.
+  const onlyHome = !!d && d.reaches.length === 1 && d.reaches[0].reason === 'home' && !(d.outside || []).length;
+  btn.hidden = !d || onlyHome;
   composeFootShow(R.foot);
-  if (!d) { composeReachOpen(R, false); return; }
-  const n = d.reaches.length, says = n ? `Reaches ${n}` : 'Reaches no one';
+  if (!d || onlyHome) { composeReachOpen(R, false); return; }
+  const says = composeReachSays(d);
   if (btn.textContent !== says) btn.textContent = says;
   const rows = [...d.reaches.map(r => composeReachRowHTML(r.actor, reachWord(r) + (r.adds_reader ? ', can now see it' : ''))),
     ...(d.outside || []).map(a => composeReachRowHTML(a, 'Not reached'))];
@@ -545,6 +559,8 @@ function pillLabel(P) {
   if (box) {
     box.dataset.placeholder ??= box.placeholder;
     box.placeholder = goal ? `Goal for ${botDisplayName(P.slug)}…` : box.dataset.placeholder;
+    // The placeholder names where the message goes; the accessible name says the same, so the two never disagree.
+    if (box.placeholder) box.setAttribute('aria-label', box.placeholder.replace(/…$/, ''));
   }
 }
 function pillMenu(P, open) {

@@ -154,10 +154,16 @@ async function applyAuthenticatedConfig(config, expected = nativeVisualVersion()
 void clearNativeVisualOrigin();
 // Whether a config was read yet: until then S.config holds only the defaults, which say nothing about this server.
 let CONFIG_READ = false;
+// The browser tab: the open page's subject first when it has one ("Builder 2 · Tico"), else the app's name.
+let PAGE_TITLE = '';
+function pageTitle(subject = '') {
+  PAGE_TITLE = subject;
+  document.title = (subject ? subject + ' · ' : '') + (S.config.demo ? 'Demo · ' : S.config.rehearsal ? 'Rehearsal · ' : '') + appName();
+}
 function applyConfig(config) {
   S.config = {...CONFIG_DEFAULTS, ...(config && typeof config === 'object' ? config : {})};
   CONFIG_READ = true;
-  document.title = (S.config.demo ? 'Demo · ' : S.config.rehearsal ? 'Rehearsal · ' : '') + appName();
+  pageTitle(PAGE_TITLE);
   // The strip is shown by the server's say-so alone: only a demo's config carries `demo`, a rehearsal's `rehearsal`.
   const strip = !!(S.config.demo || S.config.rehearsal);
   document.documentElement.classList.toggle('demo', strip);
@@ -201,7 +207,7 @@ function stateOf(slug) {
 }
 const openCount = slug => S.v2?.status?.[slug]?.open_tasks || 0;
 // What needs you from that bot, grouped the way the Needs you list groups it (companyNeedActor). The org tree's
-// number is a fixed attention count matching the default Needs You tab, independent of edits to that tab.
+// number is a fixed attention count matching the default Needs you tab, independent of edits to that tab.
 function botNeeds(slug) {
   return (S.v2?.needs || []).filter(it => (['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it)
     && companyNeedActor(it, it) === 'bot:' + slug)

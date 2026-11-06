@@ -295,8 +295,8 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
    composeFootHTML). Small and muted, at Send's end; the list opens upward. */
 .p-foot{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:2px 8px 0;font-size:var(--t-sm);color:var(--muted)}
 .p-foot[hidden],.p-follow[hidden],.p-reach[hidden]{display:none}
-.p-follow{display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none}
-.p-follow input{width:14px;height:14px;margin:0;accent-color:var(--ink)}
+.p-follow{display:inline-flex;align-items:center;gap:6px;min-height:24px;cursor:pointer;user-select:none}
+.p-follow input{width:16px;height:16px;margin:0;accent-color:var(--ink)}
 .p-reach-wrap{position:relative;display:inline-flex}
 .p-reach{padding:2px 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;line-height:20px;cursor:pointer}
 .p-reach:hover,.p-reach[aria-expanded="true"]{background:var(--surface2);color:var(--ink)}

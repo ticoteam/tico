@@ -360,13 +360,15 @@ async function pageBot(slug, tab) {
   const limited = botLimited(e);       // seen, not read: no activity anywhere on the page
   const work = botTabs(slug).filter(t => BOT_WORK_TABS.includes(t));
   const base = `#/bot/${encodeURIComponent(slug)}`;
-  const tabsShown = [...work, 'info'];
   const talkTabs = work.filter(t => t === 'home' || t === 'dm');
+  // One chat tab at every width: with both Home and DM, the Incognito toggle above the chat flips to the DM.
+  const tabsShown = [...work.filter(t => !(t === 'dm' && talkTabs.length > 1)), 'info'];
   // The goal leads the page; chat and tasks sit side by side under it on a
   // desktop. Narrower, the top line holds the bot and Chat · Tasks · Info; configuration has its own tabs.
   // On a phone the goal and the extra controls move into Info (placeBotHead). A status shows
   // only when it is an alert. Configuration opens on Info.
   BOT?.settingsCleanup?.();
+  pageTitle(botDisplayName(slug));
   $('#main').innerHTML = `
   <div class="bot-top" id="bot-top">
     <button class="bot-back-arrow" id="bot-back-arrow" type="button" aria-label="Back" title="Back">‹</button>
@@ -376,7 +378,7 @@ async function pageBot(slug, tab) {
         <div class="meta" id="bot-alert">${limited ? '' : botAlertHTML(slug)}</div></div></div>
     <div class="bot-switch" id="btabs" role="tablist" aria-label="${esc(e.display_name || e.slug)}">
       ${tabsShown.map(t => { const label = BOT_TAB_LABELS[t];
-        return `<button type="button" data-bt="${t}" role="tab">${label}</button>`; }).join('')}
+        return `<button type="button" data-bt="${t}" role="tab">${t === 'home' && talkTabs.length > 1 ? 'Chat' : label}</button>`; }).join('')}
     </div>
     ${limited ? '' : '<span class="bot-top-acts" id="bot-top-acts"></span>'}
     ${limited ? '' : '<section class="bot-goal" id="bot-goal" aria-label="Goal"><span class="muted">Loading the goal…</span></section>'}
@@ -651,7 +653,9 @@ function showBotTab(tab) {
   $('#main').classList.toggle('chat-layout', chat);
   $('#main').classList.toggle('bot-chat-layout', chat);
   $('#main').classList.toggle('bot-split-layout', split);
-  $('#btabs').querySelectorAll('[data-bt]').forEach(b => { const on = b.dataset.bt === (work ? view : 'info'); b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
+  // The DM has no tab of its own when Home has one: Chat stays current under Incognito.
+  const curTab = !work ? 'info' : view === 'dm' && !$('#btabs [data-bt="dm"]') ? 'home' : view;
+  $('#btabs').querySelectorAll('[data-bt]').forEach(b => { const on = b.dataset.bt === curTab; b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
   const more = $('#bot-more-btn');
   more.classList.toggle('cur', !work);
   if (!work) more.setAttribute('aria-current', 'page'); else more.removeAttribute('aria-current');

@@ -430,12 +430,14 @@ function thvMsgActsHTML(view, m) {
 function thvMsgHTML(view, m, cont = false) {
   const relay = rowSource(m).kind === 'assistant_for';
   const bot = thvBot(m.sender_id);
+  // In a bot's own Home or DM every bot line is that bot, so the BOT tag would only repeat the page.
+  const ownBot = bot && !!view.opts?.goals && m.sender_id === `bot:${view.opts.goals}`;
   // A bot's own words take a row of Copy, 👍 and 👎 under them, apart from the emoji reactions (ui/app/feedback.js).
   const fb = !m.deleted && m.id && bot ? fbKey('message', m.id) : '';
   const fresh = thvIsNew(view, m), quiet = fresh && !thvAddressed(m);
   const cls = ['th-msg', cont && 'th-cont', view.focus === m.id && 'th-focus', view.flash === m.id && 'th-flash', m.refs?.follow_up && 'th-followup',
     thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted'].filter(Boolean).join(' ');
-  const head = cont ? '' : `<div class="th-head">${relay ? `<span class="th-who">${esc(rowSource(m).name)}</span>` : thvWhoHTML(m.sender_id)}${bot || relay ? THV_BOT_TAG : ''}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
+  const head = cont ? '' : `<div class="th-head">${relay ? `<span class="th-who">${esc(rowSource(m).name)}</span>` : thvWhoHTML(m.sender_id)}${(bot && !ownBot) || relay ? THV_BOT_TAG : ''}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
     m.edited_at && !m.deleted ? '<span class="th-edited muted">edited</span>' : ''}</div>`;
   let body;
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';

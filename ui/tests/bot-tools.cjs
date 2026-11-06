@@ -159,7 +159,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert.equal((await page.locator('#bot-files [data-bf-all]').innerText()).trim(), '+2');
       // No routines on the rail: they are Automations now.
       assert.equal(await page.locator('#bot-recurring').count(), 0);
-      // Assigned to others is a tab now, not a folded section; Done Recently is a tab that stays closed.
+      // Assigned to others is a tab now, not a folded section; Done recently is a tab that stays closed.
       assert.equal(await page.locator('#bot-assigned').count(), 0);
       assert.equal(await page.locator('#pane-tasks .bot-done').isHidden(), true);
       // The top line keeps no tool icons; the Tools card under More lists them.
