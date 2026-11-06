@@ -287,7 +287,8 @@ and a run whose host reports its tool calls, that only read (files, searches, we
 that only read) and consumed no approval, is resumed once, each with a note in the job's recovery
 record (`job.auto_reconcile` in the event log). A run whose lease lapsed (its computer dropped) counts shell calls as
 reads too when it wrote nothing to Tico and each line, scanned whole by the computer, names no outside action and starts
-with a program that only reads (`cd`, `grep`, `cat`) or a `hub` read (`hub task list`, `hub needs-you show`). When such a
+with a program that only reads (`grep`, `cat`) or a `hub` read (`hub task list`, `hub needs-you show`), after any setup
+such as `cd`; a line that is only setup is held. When such a
 run that answered a person's message is held instead, that person gets one notice in the chat: it stopped, and when
 it will pick up again. A busy bot's runs are settled too: the scheduler waits only
 while a live run of the bot is on the same task (or the same thread, or the same task session). An operator can choose

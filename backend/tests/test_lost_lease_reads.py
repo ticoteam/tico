@@ -47,7 +47,8 @@ def notices(api, attempt):
             "AND json_extract(refs,'$.turn_id')=?", (attempt['id'],))]
 
 
-READS = [('cd', []), ('hub needs-you show', []), ('hub task list', []), ('hub', []), ('grep', [])]
+# As the runner summarizes `cd repo && hub needs-you show` and the like: the setup `cd` is skipped.
+READS = [('hub needs-you show', []), ('hub task list', []), ('hub', []), ('grep', [])]
 
 
 @pytest.mark.parametrize('capacity', [True, False])
@@ -69,10 +70,11 @@ def test_a_person_turn_that_only_read_goes_back_in_line_after_its_lease_is_lost(
 
 @pytest.mark.parametrize('shells,writes', [
     (READS, 1),                                     # a hub write: it acted
-    ([('cd', ['send email'])], 0),                  # a named outside action anywhere in the line
-    ([('git', [])], 0),                             # a program that can push
-    ([('cd', None)], 0),                            # an older runner that never scanned the line
-], ids=['wrote', 'outside-action', 'git', 'unscanned'])
+    ([('cat', ['send email'])], 0),                 # a named outside action anywhere in the line
+    ([('git', [])], 0),                             # a program that can push (`cd repo && git push`)
+    ([('cd', [])], 0),                              # setup only, a line the runner could not parse, or an older runner
+    ([('hub task list', None)], 0),                 # an older runner that never scanned the line
+], ids=['wrote', 'outside-action', 'git', 'cd', 'unscanned'])
 def test_a_person_turn_that_may_have_acted_is_held_and_the_person_is_told_once(api, shells, writes):
     machine, message, attempt = lost_mid_reply(api, shells, writes=writes)
     with api.app.state.store.read() as c:
@@ -81,7 +83,7 @@ def test_a_person_turn_that_may_have_acted_is_held_and_the_person_is_told_once(a
     assert sweep(api) == [] and sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     [notice] = notices(api, attempt)
     assert notice['sender_id'] == 'bot:ops' and notice['in_reply_to'] is None     # never read as the answer
-    assert 'computer dropped mid-reply' in notice['body'] and 'UTC' in notice['body']
+    assert 'computer dropped mid-reply' in notice['body'] and 'at the latest' in notice['body']
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM events WHERE action='job.held' AND target=?", (attempt['id'],)).fetchone()
         detail = json.loads(c.execute("SELECT detail FROM events WHERE action='attempt.expired' AND target=?",
@@ -90,13 +92,18 @@ def test_a_person_turn_that_may_have_acted_is_held_and_the_person_is_told_once(a
 
 
 def fixture_case(command, host):
-    """A shell call's start event exactly as the runner sends it (runner-rs tests produce the same fixture)."""
+    """A shell call's start event exactly as the runner sends it (runner-rs tests produce the same fixture).
+    `cd repo && hub task list` is built from `hub task show`'s event, as a runner that skips setup summarizes it."""
     from backend.tests.test_execution_review import runner_shell_cases
-    return {case['command']: case for case in runner_shell_cases()}[command][host]
+    cases = {case['command']: case for case in runner_shell_cases()}
+    if command == 'cd repo && hub task list':
+        return {**cases['hub task show 42'][host], 'summary': 'hub task list'}
+    return cases[command][host]
 
 
 @pytest.mark.parametrize('command,host,requeued', [
     ('hub task show 42', 'codex', True),
+    ('cd repo && hub task list', 'claude', True),
     ('cat note.txt', 'claude', True),
     ('/bin/bash -lc "cd /tmp;gh pr merge 42"', 'claude', False),    # summarized `cd`, but the line merges
     ('hub webhook send 1', 'claude', False),

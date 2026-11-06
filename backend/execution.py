@@ -933,9 +933,11 @@ READ_ONLY_TOOLS = frozenset({
 })
 # Shell tools, by Claude's and Codex's names.
 SHELL_CALLS = frozenset({"Bash", "bash", "shell", "exec_command"})
-# Programs a shell call only reads with, by the runner's summary of the call: the line's first program, or `hub` and its
-# command path (runner-rs command_program). `cd repo && hub task list` is summarized `hub task list` or just `cd`.
-READ_ONLY_PROGRAMS = frozenset({"cd", "ls", "pwd", "cat", "head", "tail", "grep", "rg", "wc", "jq", "stat", "which",
+# Programs a shell call only reads with, by the runner's summary of the call: the line's first program after any setup
+# (`cd`, `export`), or `hub` and its command path (runner-rs command_program), so `cd repo && hub task list` reads
+# `hub task list` and `cd repo && git push` reads `git`. No setup word is listed: a summary of bare `cd` is a line of
+# setup only, one the runner could not parse (`bash -lc "cd /tmp;gh pr merge 42"`), or an older runner's, and stays held.
+READ_ONLY_PROGRAMS = frozenset({"ls", "pwd", "cat", "head", "tail", "grep", "rg", "wc", "jq", "stat", "which",
                                 "date", "sort", "uniq", "diff", "tree", "du", "df"})
 # The last word of a hub command path that only reads (`hub task list`, `hub needs-you show`). A bare `hub` (flags came
 # before the command) passes too: any hub write shows on the run's `writes`, which must be 0.
@@ -3219,7 +3221,8 @@ class Execution:
 
     def tell_held(self, c, row, facts):
         """One notice to the person whose message a lapsed run was answering, when the run is held for review rather
-        than put back in line: without it they see the reply stop partway and then nothing for hours. Only a first
+        than put back in line: without it they see the reply stop partway and then nothing for hours. The time is
+        UTC (Tico keeps no general per-person time zone) and a latest time, since a reviewer may act sooner. Only a first
         start, which the sweep resumes on its own within HELD_REVIEW_HOURS when nobody reviews it sooner, and never a
         run Tico's own update cut, which resumes on the next sweep."""
         if facts['starts'] > 1 or facts['update'] or facts['timeout']:
@@ -3239,7 +3242,7 @@ class Execution:
         try:
             H.say(c, "bot:" + row["bot_id"], msg["sender_id"],
                   f"Your {name} stopped: its computer dropped mid-reply. It will check what it did and pick this up "
-                  f"again by {by} UTC.", kind="notice", conversation_id=msg["conversation_id"],
+                  f"again by {by} UTC at the latest.", kind="notice", conversation_id=msg["conversation_id"],
                   refs={"turn_id": row["id"]})
         except (H.Refused, Problem):
             c.execute("ROLLBACK TO held_notice")
