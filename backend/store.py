@@ -2372,7 +2372,7 @@ class Store:
                 # failure here is logged, never raised: the repair is tried again at the next start.
                 try:
                     Redesign.repair_inbox_prompts(c)
-                except Exception:  # noqa: BLE001 - startup goes on
+                except Exception:  # startup goes on
                     logging.getLogger(__name__).exception("inbox prompt repair failed; it is tried at the next start")
                 # The waits 20261106112609_derived_waiting staged become question tasks, blockers or note lines, once:
                 # a no-op when nothing is staged (backend/question_tasks.py move_waits).

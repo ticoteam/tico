@@ -54,17 +54,8 @@ from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from finance_books_rehearsal import (
-    COMPANY,
-    NO_PROXY,
-    OWNER_ACTOR,
-    XERO_OTHER_TENANT,
-    XERO_TENANT,  # noqa: E402
-    FakeHQ,
-    Results,
-    http,
-    wait_until,
-)
+from finance_books_rehearsal import (COMPANY, NO_PROXY, OWNER_ACTOR, XERO_OTHER_TENANT, XERO_TENANT,
+                                     FakeHQ, Results, http, wait_until)
 
 DEMO_PORT, FAKE_PORT = 18871, 18872
 API = f"http://127.0.0.1:{FAKE_PORT}/api.xro/2.0"

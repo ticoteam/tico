@@ -17,8 +17,8 @@ from pathlib import Path
 import yaml
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parents[1]))  # the repo root, for backend.automation_flow
-from backend import automation_flow as F  # noqa: E402
+sys.path.insert(0, str(HERE.parents[1]))   # the repo root, for backend.automation_flow
+from backend import automation_flow as F
 
 REQUESTS = HERE / "requests.yaml"
 SAVED = HERE / "saved"

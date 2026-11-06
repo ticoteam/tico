@@ -180,7 +180,7 @@ def _key(args, suffix=""):
 
 
 # ----------------------------------------------------------------------------- identity, messages
-from clients.tico import APIError  # noqa: E402
+from clients.tico import APIError
 
 
 @tool(
@@ -8134,8 +8134,8 @@ def computer_detail(row, section=None, offset=0):
     cut saying how to read the rest; with `section`, one page of that section from `offset`. A row still over
     COMPUTER_DETAIL_CHARS is paged smaller and cut shorter; one that cannot fit at all names the sections and how to
     read them instead."""
-    more = lambda name, at: f"hub_computer_list computer={row.get('id')} section={name} offset={at}"  # noqa: E731
-    fits = lambda result: len(json.dumps(result, default=str)) <= COMPUTER_DETAIL_CHARS  # noqa: E731
+    more = lambda name, at: f"hub_computer_list computer={row.get('id')} section={name} offset={at}"
+    fits = lambda result: len(json.dumps(result, default=str)) <= COMPUTER_DETAIL_CHARS
     offset = max(0, int(offset or 0))
     for cap, text in ((COMPUTER_PAGE, COMPUTER_TEXT), (10, COMPUTER_TEXT), (5, 200), (2, 100), (1, 50)):
         if section:

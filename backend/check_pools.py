@@ -707,7 +707,7 @@ def safely(c, work, *args):
         c.execute("ROLLBACK TO check_pool_route")
         c.execute("RELEASE check_pool_route")
         return None
-    except Exception:  # noqa: BLE001 - a step move or a finished check never fails for its routing
+    except Exception:  # a step move or a finished check never fails for its routing
         log.exception("check routing failed")
         c.execute("ROLLBACK TO check_pool_route")
         c.execute("RELEASE check_pool_route")

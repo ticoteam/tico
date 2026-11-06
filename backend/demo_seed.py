@@ -21,7 +21,7 @@ import yaml
 
 # Starlette prefers a different HTTP client for its test client; the seed needs only its own app.
 warnings.filterwarnings("ignore", message=".*starlette.testclient.*")
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient
 
 from . import demo_content as D
 from . import docs, goals as G, hubdb, market, onboarding, providers, routines, slack_app, updates

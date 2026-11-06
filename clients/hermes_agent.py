@@ -282,7 +282,7 @@ def upsert_mcp(directory, url):
     path = directory / "config.yaml"
     entry = {"url": url.rstrip("/") + "/api/v2/mcp", "headers": {"Authorization": "Bearer ${" + ENV_TOKEN + "}"}}
     try:
-        import yaml  # noqa: F401
+        import yaml
     except ImportError:
         yaml = None
     if yaml:

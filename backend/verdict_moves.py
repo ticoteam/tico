@@ -203,7 +203,7 @@ def move(c, row, target, why, *, sources=()):
 
             move_retry.remember(c, H.KEEPER, notice)
         return False
-    except Exception:  # noqa: BLE001 - a verdict or a merge is never lost to the move it causes
+    except Exception:  # a verdict or a merge is never lost to the move it causes
         c.execute("ROLLBACK TO verdict_move")
         c.execute("RELEASE verdict_move")
         log.exception("verdict move of %s to %s failed", row["id"], target["id"])

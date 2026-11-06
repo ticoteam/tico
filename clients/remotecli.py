@@ -14,8 +14,8 @@ from pathlib import Path
 
 if __package__ in (None, ""):  # imported by a script run from anywhere
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from clients import s3links  # noqa: E402
-from clients.tico import APIError, Client  # noqa: E402
+from clients import s3links
+from clients.tico import APIError, Client
 
 
 def tool_name(fn):
@@ -1595,7 +1595,7 @@ def integrations(client, args):
     return query_search(page["queries"], args.term)
 
 
-from clients.hubtools import query_search  # noqa: E402  (one search, shared with the hub_tool_query_search tool)
+from clients.hubtools import query_search  # (one search, shared with the hub_tool_query_search tool)
 
 
 # ----------------------------------------------------------------------------- decisions
@@ -1718,7 +1718,7 @@ def sql_params(pairs):
 def sql_table(result, width=60):
     """A compact aligned table, one value per cell, with a trailing count line."""
     columns, rows = result["columns"], result["rows"]
-    cell = lambda value: ("" if value is None else " ".join(str(value).split()))[:width]  # noqa: E731
+    cell = lambda value: ("" if value is None else " ".join(str(value).split()))[:width]
     grid = [[cell(v) for v in row] for row in rows]
     widths = [max([len(name)] + [len(row[i]) for row in grid]) for i, name in enumerate(columns)]
     lines = []

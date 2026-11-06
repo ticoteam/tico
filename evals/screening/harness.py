@@ -21,7 +21,7 @@ from pathlib import Path
 os.environ.pop("TICO_INBOUND_KEY", None)
 os.environ["TICO_INBOUND_URL"] = "https://hq.example.test"
 
-from backend import inbound as _inbound  # noqa: E402
+from backend import inbound as _inbound
 
 
 async def _no_sync(self, stop):
@@ -30,18 +30,9 @@ async def _no_sync(self, stop):
 
 _inbound.Inbound.loop = _no_sync
 
-from ..redesign.fakes import MissingRecording, ReplayJudge, hook  # noqa: E402
-from ..redesign.harness import (  # noqa: E402
-    CLAUDE_ID,
-    DANA,  # noqa: F401
-    DANA_ID,
-    LEAD,
-    LEAD_ID,
-    OMAR,  # noqa: F401
-    OPENAI_ID,
-    Org,  # noqa: F401
-    Reply,  # noqa: F401
-)
+from ..redesign.fakes import MissingRecording, ReplayJudge, hook
+from ..redesign.harness import (CLAUDE_ID, DANA, DANA_ID, LEAD, LEAD_ID, OMAR, OPENAI_ID, Org,  # noqa: F401
+                                Reply)
 
 HERE = Path(__file__).parent
 CORPUS = HERE / "corpus"

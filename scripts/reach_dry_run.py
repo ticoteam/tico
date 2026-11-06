@@ -29,10 +29,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend import reach as R  # noqa: E402
-from backend import groups as G  # noqa: E402
-from backend.store import H  # noqa: E402
-from backend.updates import ZONE  # noqa: E402
+from backend import reach as R
+from backend import groups as G
+from backend.store import H
+from backend.updates import ZONE
 
 CHECKED = ("dm", "mention", "ask", "assign", "addressed", "home")  # what threads.post's reach check covers
 TS = "%Y-%m-%dT%H:%M:%S.%fZ"

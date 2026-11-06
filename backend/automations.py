@@ -970,9 +970,9 @@ def _stands_down(c, aid, trigger):
     """A market built-in does not run while the team's own Librarian automation does its work: one on the same
     listening destination, or (the briefing) one that posts to Market. One turn per match, one briefing a day."""
     if aid == "auto_builtin_" + BRIEFING_KEY:
-        same = lambda flow: _posts_market(flow["steps"])  # noqa: E731
+        same = lambda flow: _posts_market(flow["steps"])
     elif aid.startswith("auto_builtin_" + LISTENING_KEY):
-        same = lambda flow: flow["trigger"].get("destination") == trigger.get("destination")  # noqa: E731
+        same = lambda flow: flow["trigger"].get("destination") == trigger.get("destination")
     else:
         return False
     return any(
@@ -1451,7 +1451,7 @@ def _no_input(c, row, settings, at, zone):
 
     try:
         return routines.no_input(c, settings, {**dict(schedule), "playbook": words}, at.astimezone(ZoneInfo(zone)))
-    except Exception:  # noqa: BLE001 - a check that fails lets the run go ahead
+    except Exception:  # a check that fails lets the run go ahead
         log.exception("no_input check failed for %s", row["id"])
         return None
 
@@ -3068,8 +3068,8 @@ def tick(store, at=None):
     from . import redesign_migration
 
     try:
-        redesign_migration.catch_up(store)  # a new install's first person: the built-ins they own
-    except Exception:  # noqa: BLE001 - the cutover's catch-up must not stop the automations
+        redesign_migration.catch_up(store)      # a new install's first person: the built-ins they own
+    except Exception:  # the cutover's catch-up must not stop the automations
         log.exception("redesign catch-up failed")
     at = at or datetime.now(timezone.utc)
     now = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"

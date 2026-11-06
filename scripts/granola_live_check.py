@@ -41,7 +41,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from backend.granola_mcp import MCP, GranolaError, GranolaMCP  # noqa: E402
+from backend.granola_mcp import MCP, GranolaError, GranolaMCP
 
 PUBLIC_API = "https://public-api.granola.ai/v1"
 KEPT_HEADERS = ("content-type", "content-encoding", "mcp-session-id", "retry-after")

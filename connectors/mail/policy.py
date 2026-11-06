@@ -221,8 +221,7 @@ def team_domains(slug="", env=None):
     if found:
         return found
     try:
-        from . import access  # noqa: PLC0415 - avoids a cycle
-
+        from . import access  # avoids a cycle
         for entry in access.entries(access.load(slug or access.employee(None, env))):
             if str(entry.get("service", "")).lower() == "gmail":
                 add(entry.get("identity"))
@@ -279,8 +278,7 @@ def company(slug):
 
     None for a server that answers without the fields (an older one). UNREAD when the setting could not be read: the
     run's writes are refused then, and its reads go on."""
-    from . import access  # noqa: PLC0415 - avoids a cycle
-
+    from . import access  # avoids a cycle
     slug = str(slug or "").strip().lower()
     if slug == access.CONNECTOR:
         return runner_company()
@@ -318,8 +316,7 @@ def runner_company():
         if RUNNER_GET is not None:
             answer = RUNNER_GET("connectors/mail/targets")
         else:
-            from . import oauth  # noqa: PLC0415
-
+            from . import oauth
             answer = oauth.broker().get("connectors/mail/targets")
     except Exception:
         answer = None

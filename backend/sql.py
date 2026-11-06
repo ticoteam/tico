@@ -219,18 +219,12 @@ def live_masks(unsettled):
     removed, so the rest of the result stays readable); every other column of the run reads as it is."""
     if not unsettled:
         return {}
-    hidden = lambda column: f"CASE WHEN source.id IN ({unsettled}) THEN NULL ELSE source.{column} END"  # noqa: E731
-    return {
-        "attempts": {
-            "final_text": hidden("final_text"),
-            "result": f"CASE WHEN source.id NOT IN ({unsettled}) THEN source.result "
-            "WHEN json_valid(source.result) THEN json_remove(source.result,'$.text') "
-            "ELSE NULL END",
-            "summary": hidden("summary"),
-        }
-    }
-
-
+    hidden = lambda column: f"CASE WHEN source.id IN ({unsettled}) THEN NULL ELSE source.{column} END"
+    return {"attempts": {"final_text": hidden("final_text"),
+                         "result": f"CASE WHEN source.id NOT IN ({unsettled}) THEN source.result "
+                                        "WHEN json_valid(source.result) THEN json_remove(source.result,'$.text') "
+                                        "ELSE NULL END",
+                         "summary": hidden("summary")}}
 # Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}`, the
 # caller's own filtered view of each, and `{all_table}`, its unfiltered inner view). A total adds up only rows the
 # caller may read: a bucket of one run would otherwise tell them that run exists, what it cost and whether it acted.
@@ -1011,9 +1005,9 @@ def connect(path, c, auth, who, trace=None, seconds=None):
     `seconds` bounds building this request's visibility sets as `run` bounds the query itself."""
     deadline = None if seconds is None else time.monotonic() + seconds
     prefix = "v" + secrets.token_hex(12) + "_"
-    inner = lambda table: f'"{prefix}{table}"'  # noqa: E731
-    function = lambda name: f'"{prefix}privacy_{name}"'  # noqa: E731
-    private = lambda name: prefix + name  # noqa: E731
+    inner = lambda table: f'"{prefix}{table}"'
+    function = lambda name: f'"{prefix}privacy_{name}"'
+    private = lambda name: prefix + name
     # Internal provenance SELECTs cannot leave authorized prepared statements for callers.
     conn = sqlite3.connect(
         f"file:{path}?mode=ro", uri=True, timeout=5, isolation_level=None, cached_statements=0, factory=ReadConnection

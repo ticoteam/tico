@@ -4,7 +4,6 @@
     "S608": 1
   },
   "backend/api_tools.py": {
-    "RUF100": 1,
     "S608": 4
   },
   "backend/app.py": {
@@ -21,7 +20,6 @@
     "S608": 2
   },
   "backend/ask_deadlines.py": {
-    "RUF100": 1,
     "S608": 2
   },
   "backend/ask_ingest.py": {
@@ -50,12 +48,10 @@
     "S608": 15
   },
   "backend/automation_overview.py": {
-    "RUF100": 2,
     "S608": 4
   },
   "backend/automations.py": {
     "B904": 2,
-    "RUF100": 4,
     "S608": 9
   },
   "backend/aws_identity.py": {
@@ -98,7 +94,6 @@
     "S608": 3
   },
   "backend/bot_home_merge.py": {
-    "RUF100": 1,
     "S608": 10
   },
   "backend/bot_hours.py": {
@@ -112,7 +107,6 @@
   },
   "backend/bot_task_tabs.py": {
     "B023": 1,
-    "RUF100": 1,
     "S608": 8
   },
   "backend/bot_to_bot.py": {
@@ -145,7 +139,6 @@
     "S608": 1
   },
   "backend/check_pools.py": {
-    "RUF100": 1,
     "S608": 3
   },
   "backend/claim_loads.py": {
@@ -154,14 +147,10 @@
   "backend/clarify_asks.py": {
     "S608": 1
   },
-  "backend/cloud_access.py": {
-    "RUF100": 1
-  },
   "backend/cloud_agents.py": {
     "S608": 2
   },
   "backend/cloud_machines.py": {
-    "RUF100": 9,
     "S608": 1
   },
   "backend/company_billing.py": {
@@ -219,24 +208,15 @@
   "backend/counsel.py": {
     "S608": 4
   },
-  "backend/credential_cards.py": {
-    "RUF100": 1
-  },
   "backend/credentials.py": {
     "BLE001": 5,
     "S608": 2
-  },
-  "backend/decide_readout.py": {
-    "RUF100": 1
   },
   "backend/delivery.py": {
     "S608": 12
   },
   "backend/demo.py": {
     "BLE001": 1
-  },
-  "backend/demo_sections/meeting_links.py": {
-    "RUF100": 1
   },
   "backend/demo_sections/schedules.py": {
     "S608": 1
@@ -247,7 +227,6 @@
   "backend/demo_seed.py": {
     "B007": 7,
     "B023": 21,
-    "RUF100": 1,
     "S608": 1
   },
   "backend/devcopy.py": {
@@ -448,7 +427,6 @@
     "S608": 27
   },
   "backend/history_log.py": {
-    "RUF100": 1,
     "S608": 8
   },
   "backend/hook_relay.py": {
@@ -702,9 +680,6 @@
   "backend/onboarding.py": {
     "S608": 4
   },
-  "backend/openapi_v2.py": {
-    "RUF100": 1
-  },
   "backend/operations.py": {
     "BLE001": 2,
     "PLW1510": 1,
@@ -804,7 +779,6 @@
   "backend/redesign_migration.py": {
     "B904": 1,
     "BLE001": 6,
-    "RUF100": 1,
     "S608": 4
   },
   "backend/release_flow.py": {
@@ -814,7 +788,6 @@
     "BLE001": 2
   },
   "backend/replay.py": {
-    "RUF100": 1,
     "S608": 6
   },
   "backend/replication.py": {
@@ -866,9 +839,6 @@
   },
   "backend/run_view.py": {
     "S608": 5
-  },
-  "backend/runner_versions.py": {
-    "RUF100": 1
   },
   "backend/runner_wire.py": {
     "S608": 1
@@ -929,7 +899,6 @@
   },
   "backend/sql.py": {
     "BLE001": 1,
-    "RUF100": 4,
     "S608": 47
   },
   "backend/stale_review.py": {
@@ -952,14 +921,12 @@
     "S608": 1
   },
   "backend/store.py": {
-    "RUF100": 1,
     "S608": 15
   },
   "backend/strategy.py": {
     "S608": 6
   },
   "backend/strategy_acts.py": {
-    "RUF100": 1,
     "S608": 3
   },
   "backend/strategy_market.py": {
@@ -1129,9 +1096,6 @@
     "F401": 1,
     "S608": 1
   },
-  "backend/tool_proxy.py": {
-    "RUF100": 1
-  },
   "backend/topic_change.py": {
     "BLE001": 3
   },
@@ -1172,12 +1136,10 @@
     "S608": 3
   },
   "backend/verdict_moves.py": {
-    "RUF100": 1,
     "S608": 1
   },
   "backend/views.py": {
     "F401": 2,
-    "RUF100": 3,
     "S608": 27
   },
   "backend/visual_config.py": {
@@ -1236,8 +1198,7 @@
     "BLE001": 1
   },
   "clients/environments.py": {
-    "PLW1510": 1,
-    "RUF100": 1
+    "PLW1510": 1
   },
   "clients/gateway.py": {
     "B018": 1,
@@ -1249,18 +1210,13 @@
   "clients/hermes_agent.py": {
     "B904": 8,
     "BLE001": 1,
-    "PLW1510": 15,
-    "RUF100": 1
+    "PLW1510": 15
   },
   "clients/hubcli.py": {
     "BLE001": 3
   },
-  "clients/hubmcp.py": {
-    "RUF100": 2
-  },
   "clients/hubtools.py": {
-    "BLE001": 1,
-    "RUF100": 3
+    "BLE001": 1
   },
   "clients/judge.py": {
     "B018": 1,
@@ -1269,15 +1225,13 @@
     "BLE001": 1
   },
   "clients/preflight.py": {
-    "PLW1510": 6,
-    "RUF100": 5
+    "PLW1510": 6
   },
   "clients/registry.py": {
     "BLE001": 1
   },
   "clients/remotecli.py": {
-    "B904": 4,
-    "RUF100": 4
+    "B904": 4
   },
   "clients/s3links.py": {
     "BLE001": 1
@@ -1303,13 +1257,11 @@
     "F541": 1
   },
   "connectors/mail/access.py": {
-    "BLE001": 3,
-    "RUF100": 2
+    "BLE001": 3
   },
   "connectors/mail/auth.py": {
     "B904": 13,
-    "BLE001": 1,
-    "RUF100": 9
+    "BLE001": 1
   },
   "connectors/mail/calendar.py": {
     "B904": 3,
@@ -1320,21 +1272,17 @@
   },
   "connectors/mail/gmail.py": {
     "B904": 2,
-    "BLE001": 2,
-    "RUF100": 1
+    "BLE001": 2
   },
   "connectors/mail/judge.py": {
-    "B905": 4,
-    "RUF100": 1
+    "B905": 4
   },
   "connectors/mail/oauth.py": {
     "B904": 12,
-    "BLE001": 1,
-    "RUF100": 3
+    "BLE001": 1
   },
   "connectors/mail/policy.py": {
     "BLE001": 8,
-    "RUF100": 3,
     "S110": 3
   },
   "connectors/mail/rules.py": {
@@ -1359,22 +1307,14 @@
     "PLW1510": 2
   },
   "docs-eval/run.py": {
-    "BLE001": 1,
-    "RUF100": 3
+    "BLE001": 1
   },
   "e2e/preserve.py": {
     "S608": 3
   },
-  "evals/botops/run.py": {
-    "RUF100": 1
-  },
   "evals/botops_automations/checker.py": {
     "B905": 2,
-    "BLE001": 1,
-    "RUF100": 1
-  },
-  "evals/botops_automations/run.py": {
-    "RUF100": 1
+    "BLE001": 1
   },
   "evals/factory/cases/freezes.py": {
     "DTZ007": 1,
@@ -1402,11 +1342,7 @@
   "evals/factory/world.py": {
     "B905": 1,
     "BLE001": 1,
-    "RUF100": 1,
     "S608": 1
-  },
-  "evals/redesign/cases/caps.py": {
-    "RUF100": 1
   },
   "evals/redesign/cases/migration.py": {
     "S608": 1
@@ -1423,18 +1359,10 @@
   "evals/redesign/workflows.py": {
     "B007": 1
   },
-  "evals/replay/capture.py": {
-    "RUF100": 1
-  },
   "evals/replay/replay.py": {
-    "B023": 2,
-    "RUF100": 2
-  },
-  "evals/replay/run.py": {
-    "RUF100": 1
+    "B023": 2
   },
   "evals/screening/harness.py": {
-    "RUF100": 3,
     "S608": 1
   },
   "runner_support/catalog_job.py": {
@@ -1448,7 +1376,6 @@
   "runner_support/connectors.py": {
     "BLE001": 11,
     "PLW1510": 5,
-    "RUF100": 2,
     "S110": 1
   },
   "runner_support/credential_socket.py": {
@@ -1493,21 +1420,12 @@
   "scripts/app_release.py": {
     "BLE001": 1
   },
-  "scripts/benchmark_screen_relay.py": {
-    "RUF100": 2
-  },
   "scripts/benchmark_sql_history.py": {
     "F811": 1,
     "S608": 3
   },
   "scripts/benchmark_test_setup.py": {
     "PLW1510": 1
-  },
-  "scripts/benchmark_threads.py": {
-    "RUF100": 4
-  },
-  "scripts/cleanup/check_goldens.py": {
-    "RUF100": 1
   },
   "scripts/company_app_publisher.py": {
     "F401": 1
@@ -1521,16 +1439,12 @@
   "scripts/finance_tools_rules_rehearsal.py": {
     "S608": 1
   },
-  "scripts/finance_xero_rehearsal.py": {
-    "RUF100": 1
-  },
   "scripts/freeze_guard.py": {
     "PLW1510": 4
   },
   "scripts/granola_live_check.py": {
     "B007": 1,
-    "BLE001": 2,
-    "RUF100": 1
+    "BLE001": 2
   },
   "scripts/journey-fake-codex.py": {
     "PLW1510": 1
@@ -1538,20 +1452,13 @@
   "scripts/lint_baseline.py": {
     "PLW1510": 3
   },
-  "scripts/litestream_restart_check.py": {
-    "RUF100": 1
-  },
   "scripts/make_upgrade_fixture.py": {
     "S608": 1
-  },
-  "scripts/market-graph-perf.py": {
-    "RUF100": 3
   },
   "scripts/pr_checks.py": {
     "PLW1510": 4
   },
   "scripts/reach_dry_run.py": {
-    "RUF100": 4,
     "S608": 2
   },
   "scripts/release_checklist.py": {
