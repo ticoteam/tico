@@ -360,6 +360,8 @@ def report(rows, title, prompt_note=""):
     for r in rows:
         b, a = r.get("before") or {}, r.get("after") or {}
         pair = lambda k: f"{b.get(k, '—')} → {a.get(k, '—')}"
-        lines.append(f"| {r['id']} | {r['verdict']} | {pair('status')} | {pair('done')} | {pair('person_steps')} | "
-                     f"{pair('jargon')} | {pair('duplicates')} | {pair('sent_elsewhere')} | {pair('runs')} | {pair('minutes')} |")
+        lines.append(
+            f"| {r['id']} | {r['verdict']} | {pair('status')} | {pair('done')} | {pair('person_steps')} | "
+            f"{pair('jargon')} | {pair('duplicates')} | {pair('sent_elsewhere')} | {pair('runs')} | {pair('minutes')} |"
+        )
     return "\n".join(line for line in lines if line is not None) + "\n"

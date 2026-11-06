@@ -1317,7 +1317,7 @@ class Manager:
                 return
         if self.synced is None or at - self.synced >= SYNC:
             try:
-                self.sync(hq, at)                           # also how this server learns HQ makes machines at all
+                self.sync(hq, at)  # also how this server learns HQ makes machines at all
             except Exception as exc:  # the looks still run; a create waiting on the list says why
                 log.exception("Reading HQ's cloud machine list failed")
                 self.list_refused = type(exc).__name__[:60]

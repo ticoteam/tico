@@ -104,6 +104,7 @@ def mint_token(mailbox, service):
     creds = credentials(mailbox, SERVICE_SCOPES[service], key_only=True)
     if not creds.token:
         from google.auth.transport.requests import Request
+
         creds.refresh(Request())
     return creds.token, creds.expiry.isoformat() if creds.expiry else "", getattr(creds, "_tico_granted", None)
 
@@ -123,6 +124,7 @@ def supervisor_token(mailbox, scopes):
     if not service:
         raise Failure("mail access through the runner covers one service at a time", "Ask for gmail or calendar.")
     from runner_support import credential_socket
+
     try:
         return credential_socket.request_mail(path, os.environ["HUB_TOKEN"], service, mailbox)
     except OSError as e:
@@ -193,6 +195,7 @@ def credentials(mailbox, scopes=None, path=None, key_only=False):
         granted = supervisor_token(mailbox, scopes)
         if granted:
             from google.oauth2.credentials import Credentials
+
             creds = Credentials(token=granted["token"])
             if isinstance(granted.get("scopes"), list):  # a connected account: what it granted
                 creds._tico_granted = [str(s) for s in granted["scopes"]]

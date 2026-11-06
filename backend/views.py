@@ -2019,7 +2019,9 @@ def approval_title(kind, payload, task_title=""):
     "Send: 'Rental owner referrals' to Jennie Ooten". "Approve this <kind>" only when neither names anything."""
     p = payload if isinstance(payload, dict) else {}
     text = lambda key: str(p.get(key) or "").strip() if isinstance(p.get(key), (str, int, float)) else ""
-    named = next((text(k) for k in ("title", "subject", "what", "action") if text(k)), "") or str(task_title or "").strip()
+    named = (
+        next((text(k) for k in ("title", "subject", "what", "action") if text(k)), "") or str(task_title or "").strip()
+    )
     if kind == "send":
         to = _who(p.get("to"))
         return "Send: " + (_quoted(named) or "an email") + (f" to {to}" if to else "")

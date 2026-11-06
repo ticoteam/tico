@@ -42,8 +42,13 @@ def seed(b):
         )
     # Settings > People shows each person's Tico Recorder (backend/recorder_installs.py); Ana and Cara use one.
     stamp = lambda at: at.strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
-    b.write(lambda c: c.executemany(
-        "INSERT OR REPLACE INTO recorder_installs(person_id,install_id,version,last_seen_at,created_at,updated_at) "
-        "VALUES(?,?,?,?,?,?)",
-        [(person, install, '0.2.0', stamp(b.ago(hours=hours)), stamp(b.ago(days=20)), stamp(b.ago(hours=hours)))
-         for person, install, hours in (('ana', 'a' * 32, 2), ('cara', 'c' * 32, 70))]))
+    b.write(
+        lambda c: c.executemany(
+            "INSERT OR REPLACE INTO recorder_installs(person_id,install_id,version,last_seen_at,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?)",
+            [
+                (person, install, '0.2.0', stamp(b.ago(hours=hours)), stamp(b.ago(days=20)), stamp(b.ago(hours=hours)))
+                for person, install, hours in (('ana', 'a' * 32, 2), ('cara', 'c' * 32, 70))
+            ],
+        )
+    )

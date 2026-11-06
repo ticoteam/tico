@@ -676,8 +676,16 @@ def install(app, store, auth):
     from fastapi import Request
 
     @app.get("/api/v2/automations/runs")
-    def automations_all_runs(request: Request, range: str = "1h", status: str = "", trigger: str = "",
-                             owner: str = "", ids: str = "", limit: int = 50, before: str = ""):
+    def automations_all_runs(
+        request: Request,
+        range: str = "1h",
+        status: str = "",
+        trigger: str = "",
+        owner: str = "",
+        ids: str = "",
+        limit: int = 50,
+        before: str = "",
+    ):
         """Runs across every automation you may see, newest first, in the last `range` (5m, 1h, 24h, 7d): what started
         each, its outcome or failing step, its step count, time and cost; no step detail. `status` (done, failed,
         waiting, running, held), `trigger` (kinds, comma-separated, `system` for Tico's own jobs), `owner` and `ids` narrow

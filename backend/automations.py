@@ -3068,7 +3068,7 @@ def tick(store, at=None):
     from . import redesign_migration
 
     try:
-        redesign_migration.catch_up(store)      # a new install's first person: the built-ins they own
+        redesign_migration.catch_up(store)  # a new install's first person: the built-ins they own
     except Exception:  # the cutover's catch-up must not stop the automations
         log.exception("redesign catch-up failed")
     at = at or datetime.now(timezone.utc)

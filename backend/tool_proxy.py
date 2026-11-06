@@ -413,8 +413,19 @@ def install(app, store):
         tool, credential, key = ready['tool'], ready['credential'], ready['key']
         secrets = secrets_of(key, credential.get('username') or '')
         log = lambda status, result, detail: loop().run_in_executor(
-            None, record, tool_id, credential['id'], ready['subject'], ready['level'], method, shown, status, result,
-            scrub_text(detail, secrets), began)
+            None,
+            record,
+            tool_id,
+            credential['id'],
+            ready['subject'],
+            ready['level'],
+            method,
+            shown,
+            status,
+            result,
+            scrub_text(detail, secrets),
+            began,
+        )
         size = request.headers.get('content-length', '')
         if size.isdigit() and int(size) > MAX_BODY:
             await log(413, 'refused', 'Request body over 25 MB')

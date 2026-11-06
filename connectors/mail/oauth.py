@@ -88,6 +88,7 @@ def grants_path(key_path=None):
         return Path(named).expanduser()
     if key_path is None:
         from .auth import key_path as default_key
+
         key_path = default_key()
     return Path(key_path).expanduser().with_name(FILE)
 
@@ -397,15 +398,19 @@ def broker(retries=1):
     """A client for the Tico server that refreshes Connect Google grants, from the runner's environment."""
     url, auth = os.environ.get(BROKER_URL_ENV), os.environ.get(BROKER_AUTH_ENV)
     if not url or not auth:
-        raise Failure("this Google account was connected through Tico's server, which refreshes its access, and "
-                      "this process was not started by the runner that can ask it",
-                      "Use mail through the runner: its connectors job, or a bot turn on this computer.")
+        raise Failure(
+            "this Google account was connected through Tico's server, which refreshes its access, and "
+            "this process was not started by the runner that can ask it",
+            "Use mail through the runner: its connectors job, or a bot turn on this computer.",
+        )
     from clients.tico import Client
+
     return Client(url, auth, timeout=35, retries=retries)
 
 
 def _broker_call(path, body, mailbox, retries=1):
     from clients.tico import APIError
+
     try:
         return broker(retries).post(path, body)
     except APIError as e:

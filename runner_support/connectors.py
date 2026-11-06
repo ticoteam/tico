@@ -50,6 +50,7 @@ def owner_handle(config=None):
     if named:
         return named
     from connectors.mail import owner_handle as roster_owner
+
     return roster_owner()
 
 
@@ -82,6 +83,7 @@ def mail_cli_env(config, key_path):
     without the hub token, the key at `key_path`, and the server and this computer's registration, which only the
     Connect Google refresh uses (connectors/mail/oauth.py broker): the client secret stays on the server."""
     from connectors.mail.oauth import BROKER_AUTH_ENV, BROKER_URL_ENV
+
     dropped = ("HUB_TOKEN", BROKER_URL_ENV, BROKER_AUTH_ENV)
     env = {key: value for key, value in os.environ.items() if key not in dropped}
     env.setdefault("GOOGLE_SA_KEY", str(key_path))

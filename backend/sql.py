@@ -220,11 +220,17 @@ def live_masks(unsettled):
     if not unsettled:
         return {}
     hidden = lambda column: f"CASE WHEN source.id IN ({unsettled}) THEN NULL ELSE source.{column} END"
-    return {"attempts": {"final_text": hidden("final_text"),
-                         "result": f"CASE WHEN source.id NOT IN ({unsettled}) THEN source.result "
-                                        "WHEN json_valid(source.result) THEN json_remove(source.result,'$.text') "
-                                        "ELSE NULL END",
-                         "summary": hidden("summary")}}
+    return {
+        "attempts": {
+            "final_text": hidden("final_text"),
+            "result": f"CASE WHEN source.id NOT IN ({unsettled}) THEN source.result "
+            "WHEN json_valid(source.result) THEN json_remove(source.result,'$.text') "
+            "ELSE NULL END",
+            "summary": hidden("summary"),
+        }
+    }
+
+
 # Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}`, the
 # caller's own filtered view of each, and `{all_table}`, its unfiltered inner view). A total adds up only rows the
 # caller may read: a bucket of one run would otherwise tell them that run exists, what it cost and whether it acted.

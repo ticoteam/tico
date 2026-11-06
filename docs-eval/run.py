@@ -397,10 +397,12 @@ def main(argv=None):
             print("Retained fixture IDs: " + ", ".join(id_by_path.values()), file=sys.stderr)
     totals = summary(results)
     pct = lambda x: "n/a" if x is None else f"{x:.0%}"
-    print(f"\nCitation hit rate  {totals['citation_hits'][0]}/{totals['citation_hits'][1]}  {pct(totals['citation_hit_rate'])}"
-          f"\nSaid unknown       {totals['unknown_hits'][0]}/{totals['unknown_hits'][1]}  {pct(totals['unknown_rate'])}"
-          f"\nFacts as expected  {pct(totals['fact_rate'])}"
-          f"\nMedian time        {'n/a' if totals['median_seconds'] is None else format(totals['median_seconds'], '.0f') + 's'}")
+    print(
+        f"\nCitation hit rate  {totals['citation_hits'][0]}/{totals['citation_hits'][1]}  {pct(totals['citation_hit_rate'])}"
+        f"\nSaid unknown       {totals['unknown_hits'][0]}/{totals['unknown_hits'][1]}  {pct(totals['unknown_rate'])}"
+        f"\nFacts as expected  {pct(totals['fact_rate'])}"
+        f"\nMedian time        {'n/a' if totals['median_seconds'] is None else format(totals['median_seconds'], '.0f') + 's'}"
+    )
     if args.json:
         Path(args.json).write_text(json.dumps({"summary": totals, "results": results}, indent=2) + "\n")
     rates = [r for r in (totals["citation_hit_rate"], totals["unknown_rate"], totals["fact_rate"]) if r is not None]

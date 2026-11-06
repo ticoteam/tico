@@ -62,8 +62,9 @@ def raw_findings():
     found = collections.defaultdict(list)
     for item in json.loads(done.stdout or "[]"):
         found[(relpath(item["filename"]), item["code"] or "syntax")].append((item["location"]["row"], item["message"]))
-    invalid = sorted({line.strip() for line in done.stderr.splitlines()
-                      if line.startswith("warning: Invalid") and "noqa" in line})
+    invalid = sorted(
+        {line.strip() for line in done.stderr.splitlines() if line.startswith("warning: Invalid") and "noqa" in line}
+    )
     return found, invalid
 
 
@@ -329,13 +330,17 @@ def check_growth(ref):
         old_counts = renamed(collections.Counter(old_counts), moves)
         for path, code in sorted(new_counts):
             if not introduced(code) and new_counts[(path, code)] > old_counts[(path, code)]:
-                problems.append(f"count grew: {path} {code} {old_counts[(path, code)]} -> {new_counts[(path, code)]} "
-                                "(fix the findings; a baseline may only shrink)")
+                problems.append(
+                    f"count grew: {path} {code} {old_counts[(path, code)]} -> {new_counts[(path, code)]} "
+                    "(fix the findings; a baseline may only shrink)"
+                )
     added = sorted(rule for rule in new_select if not selects(rule, old_select))
     if added:
         starting = sum(n for (_, code), n in new_counts.items() if any(code.startswith(r) for r in added))
-        print(f"lint: {ref} does not select {', '.join(added)} yet; their {starting} baselined findings are the start",
-              flush=True)
+        print(
+            f"lint: {ref} does not select {', '.join(added)} yet; their {starting} baselined findings are the start",
+            flush=True,
+        )
     return problems
 
 
@@ -351,15 +356,19 @@ def write():
         previous = load_counts(COUNTS.read_text(encoding="utf-8"))
         for path, code in sorted(counts):
             if counts[(path, code)] > previous.get((path, code), 0):
-                print(f"warning: {path} {code} rose {previous.get((path, code), 0)} -> {counts[(path, code)]}; "
-                      "`--check --base origin/main` refuses a count that grew")
+                print(
+                    f"warning: {path} {code} rose {previous.get((path, code), 0)} -> {counts[(path, code)]}; "
+                    "`--check --base origin/main` refuses a count that grew"
+                )
     COUNTS.write_text(render_counts(counts), encoding="utf-8")
     BASELINE.write_text(render_toml(counts), encoding="utf-8")
     per_rule = collections.Counter()
     for (_, code), n in counts.items():
         per_rule[code] += n
-    print(f"wrote {BASELINE_NAME} and {COUNTS_NAME}: {sum(counts.values())} findings in {len(counts)} (file, rule) "
-          f"pairs across {len({p for p, _ in counts})} files")
+    print(
+        f"wrote {BASELINE_NAME} and {COUNTS_NAME}: {sum(counts.values())} findings in {len(counts)} (file, rule) "
+        f"pairs across {len({p for p, _ in counts})} files"
+    )
     for code in sorted(per_rule, key=lambda c: (-per_rule[c], c)):
         print(f"  {code:<8} {per_rule[code]:>5}")
     return 0
@@ -381,11 +390,20 @@ def check(base_ref):
         now, allowed = actual.get(pair, 0), declared.get(pair, 0)
         if now > allowed:
             details = [f"    {path}:{line}: {code} {message}" for line, message in sorted(found[pair])]
-            problems.append("\n".join([f"new finding: {path} {code}: {now} found, the baseline allows {allowed} "
-                                       "(the new ones are among these)", *details]))
+            problems.append(
+                "\n".join(
+                    [
+                        f"new finding: {path} {code}: {now} found, the baseline allows {allowed} "
+                        "(the new ones are among these)",
+                        *details,
+                    ]
+                )
+            )
         elif now < allowed:
-            problems.append(f"count fell: {path} {code} {allowed} -> {now}; lower the baseline with "
-                            "`python3 scripts/lint_baseline.py --write`")
+            problems.append(
+                f"count fell: {path} {code} {allowed} -> {now}; lower the baseline with "
+                "`python3 scripts/lint_baseline.py --write`"
+            )
     for path, code in sorted(declared):
         if code in NEVER_BASELINED:
             problems.append(f"{code} may not be baselined: {path}")
@@ -400,8 +418,10 @@ def check(base_ref):
     if problems:
         print(f"lint: {len(problems)} problem(s); see scripts/lint_baseline.py for the rules")
         return 1
-    print(f"lint: ok ({sum(actual.values())} findings, all within their counts; {sum(declared.values())} baselined "
-          f"in {len(declared)} (file, rule) pairs)")
+    print(
+        f"lint: ok ({sum(actual.values())} findings, all within their counts; {sum(declared.values())} baselined "
+        f"in {len(declared)} (file, rule) pairs)"
+    )
     return 0
 
 

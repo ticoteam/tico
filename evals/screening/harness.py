@@ -31,8 +31,17 @@ async def _no_sync(self, stop):
 _inbound.Inbound.loop = _no_sync
 
 from ..redesign.fakes import MissingRecording, ReplayJudge, hook
-from ..redesign.harness import (CLAUDE_ID, DANA, DANA_ID, LEAD, LEAD_ID, OMAR, OPENAI_ID, Org,  # noqa: F401
-                                Reply)
+from ..redesign.harness import (
+    CLAUDE_ID,
+    DANA,
+    DANA_ID,
+    LEAD,
+    LEAD_ID,
+    OMAR,
+    OPENAI_ID,
+    Org,  # noqa: F401
+    Reply,
+)
 
 HERE = Path(__file__).parent
 CORPUS = HERE / "corpus"

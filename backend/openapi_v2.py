@@ -2229,8 +2229,11 @@ def items(schema):
 
 
 ref = lambda name: {"$ref": "#/components/schemas/" + name}
-ACTORS = {"type": "object", "additionalProperties": {"type": "string"},
-          "description": "On reads: display names for every actor id in the answer, {\"human:ana\": \"Ana Alvarez\"}"}
+ACTORS = {
+    "type": "object",
+    "additionalProperties": {"type": "string"},
+    "description": "On reads: display names for every actor id in the answer, {\"human:ana\": \"Ana Alvarez\"}",
+}
 
 # One item of a person's Needs you, whatever its kind (backend/needs_shape.py).
 NEEDS_ITEM = obj(
