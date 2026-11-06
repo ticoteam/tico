@@ -13041,13 +13041,18 @@ def offered_to(tool_):
     return (*kinds, COUNSEL) if name in COUNSEL_TOOLS else kinds
 
 
+# Tools no list shows, to anyone: a bot is never offered them, and a call by name still runs (internal code calls them
+# through BY_NAME). `hub_finance_card_fill` is a placeholder that only answers "not available yet".
+UNLISTED = frozenset({"hub_finance_card_fill"})
+
+
 def listing(local=False, kind=None):
     """`tools/list` payload: the public fields of every tool this server may offer this kind of caller (all of them
-    when the kind is not known)."""
+    when the kind is not known), never an UNLISTED one."""
     return [
         {"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
         for t in TOOLS
-        if (local or not t.get("local")) and (kind is None or kind in offered_to(t))
+        if t["name"] not in UNLISTED and (local or not t.get("local")) and (kind is None or kind in offered_to(t))
     ]
 
 

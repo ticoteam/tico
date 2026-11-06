@@ -649,7 +649,6 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            '{"kind":"bill_create"}'` one kind's fields. The key makes a retry land once
     hub finance action <action-id>         an action's status and result
     hub finance inbox [--kind K] [--cursor C] [--limit N]   your Finance work queue, with counts per kind; --kind pages one kind
-    hub finance card-fill                  fill your card into a checkout (not available yet)
     hub task-manager status                the Task Manager: bot, hourly report switch and schedule, last run, each department
     hub task-manager on|off                the hourly department report (the owner or an admin)
     hub task-manager schedule <business|hourly|4h|daily> [--at HH:MM]
@@ -5091,11 +5090,6 @@ def parser():
     s.add_argument("--cursor")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="finance inbox")
-    s = fin.add_parser("card-fill", help="fill your card into a checkout (not available yet)")
-    s.add_argument("card_id", nargs="?", help="your card")
-    s.add_argument("--merchant", help="the checkout's domain")
-    s.add_argument("--amount", type=int, help="minor units")
-    s.set_defaults(fn="finance card-fill")
     manager = sub.add_parser(
         "task-manager", help="the Task Manager's hourly department check (docs/task-manager.md)"
     ).add_subparsers(dest="sub")
