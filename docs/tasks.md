@@ -986,7 +986,9 @@ person or bot @mentioned in a comment (by id or slug, the part of their email be
 when no one else shares it) is reached and follows the task from then on; on a private task they are also added to
 **Who can see**, as a task event anyone on the task can undo. A bot's @mention adds only a teammate in its reach, and
 never a group. A bot's plain comment reaches a following bot on its next turn (the bot-to-bot hold); an @mention or
-`needs_action` wakes it by the comment's way (Steer by default), within the loop guard's bot-caused wakes per hour.
+`needs_action` wakes it by the comment's way (Steer by default), within the loop guard's bot-caused wakes per hour. The
+woken bot's work on the task answers the comment: its run's text is not posted back to the commenting bot. A
+needs-action DM gets that text as its reply.
 
 ## Numbers and the order within a step
 
