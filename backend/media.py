@@ -1217,6 +1217,33 @@ def install_media(
                 person, parent = question_checked(c, who, body)
                 # Checked here before anything is stored, and again in the write on the task as made.
                 question_readable_by(c, who, person, question_private(c, who, body, parent), parent)
+        # Two plain refusals before any check or write (backend/ask_refusals.py): a reversible, internal default is done,
+        # not asked; a question another open one to the same person already covers is waited on, not asked again.
+        from . import ask_refusals
+        from . import question_tasks as QT
+
+        with store.read() as c:
+            if not store.saved(c, who, request.url.path, request.headers.get("idempotency-key")):
+                person, parent = question_checked(c, who, body)
+                folds = QT.open_for(
+                    c,
+                    who.actor,
+                    person,
+                    parent=parent["id"] if parent else None,
+                    topic=H.question_topic(body.topic),
+                    private=question_private(c, who, body, parent),
+                )
+                ask_refusals.check(
+                    c,
+                    who,
+                    person,
+                    title=title,
+                    question=question,
+                    parent=parent,
+                    default=body.if_no_answer.model_dump() if body.if_no_answer else None,
+                    folds=folds,
+                    topic=body.topic,
+                )
         # The org rule check (backend/org_rule_check.py), outside the write as a new task's is: one output, to the
         # person asked. A held question skips ask ingest's call.
         review_text, review_seal = question_review_preflight(who, body) if rule_check else ("", None)
