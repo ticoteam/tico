@@ -445,7 +445,7 @@ def install(app, store, auth, mutate):
             return [_install_view(row) for row in _installs(c, "i.target_type=? AND i.target_id=?", (target_type, target_id))]
 
     @app.delete("/api/v2/skills/installs/{iid}")
-    def skill_uninstall(request: Request, iid: str, body: M.Empty):
+    def skill_uninstall(request: Request, iid: str):
         """Take a skill off a bot or person: the same rights as installing it."""
         who = reader(request)
 
@@ -457,7 +457,7 @@ def install(app, store, auth, mutate):
             c.execute("DELETE FROM skill_installs WHERE id=?", (iid,))
             H.event(c, who.actor, "skill.uninstalled", iid, {"target_type": row["target_type"], "target_id": row["target_id"]})
             return {"id": iid, "deleted": True}
-        return mutate(request, body, work)
+        return mutate(request, M.Empty(), work)
 
     @app.get("/api/v2/skills")
     def skills_list(request: Request):

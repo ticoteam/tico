@@ -35046,16 +35046,6 @@
             "description": "1-200 characters. Reusing a key with the same body replays the first answer."
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Empty"
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -72237,6 +72227,259 @@
         "title": "ServiceKeyCreate",
         "description": "A service key (backend/service_keys.py): the label names the system that holds it, on every\ntask it files. `tasks` files tasks; `update` checks for, starts and follows an update of this install."
       },
+      "SkillApprove": {
+        "properties": {
+          "acknowledged": {
+            "type": "boolean",
+            "title": "Acknowledged",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SkillApprove"
+      },
+      "SkillDecline": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "SkillDecline"
+      },
+      "SkillFile": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "path",
+          "content"
+        ],
+        "title": "SkillFile",
+        "description": "One text file of a skill folder. Its path and size are checked by the rules in clients/skills.py, not here."
+      },
+      "SkillInstall": {
+        "properties": {
+          "target_type": {
+            "type": "string",
+            "enum": [
+              "Bot",
+              "Human"
+            ],
+            "title": "Target Type"
+          },
+          "target_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Target Id"
+          },
+          "version_policy": {
+            "type": "string",
+            "enum": [
+              "latest",
+              "pinned"
+            ],
+            "title": "Version Policy",
+            "default": "latest"
+          },
+          "pinned_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pinned Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target_type",
+          "target_id"
+        ],
+        "title": "SkillInstall"
+      },
+      "SkillInstallBulk": {
+        "properties": {
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/SkillTarget"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Targets"
+          },
+          "version_policy": {
+            "type": "string",
+            "enum": [
+              "latest",
+              "pinned"
+            ],
+            "title": "Version Policy",
+            "default": "latest"
+          },
+          "pinned_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pinned Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "targets"
+        ],
+        "title": "SkillInstallBulk"
+      },
+      "SkillPropose": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/SkillFile"
+            },
+            "type": "array",
+            "title": "Files"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SkillSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Note",
+            "default": ""
+          },
+          "base_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Version"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "files"
+        ],
+        "title": "SkillPropose"
+      },
+      "SkillSource": {
+        "properties": {
+          "repo_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Path"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SkillSource",
+        "description": "Where a proposal came from, as the proposer names it; the server says who proposed it (backend/skills.py)."
+      },
+      "SkillTarget": {
+        "properties": {
+          "target_type": {
+            "type": "string",
+            "enum": [
+              "Bot",
+              "Human"
+            ],
+            "title": "Target Type"
+          },
+          "target_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Target Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target_type",
+          "target_id"
+        ],
+        "title": "SkillTarget"
+      },
       "SlackLink": {
         "type": "object",
         "properties": {
@@ -81581,182 +81824,6 @@
           "full_name"
         ],
         "title": "Grant"
-      },
-      "SkillApprove": {
-        "properties": {
-          "acknowledged": {
-            "type": "boolean",
-            "title": "Acknowledged",
-            "default": false
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "SkillApprove"
-      },
-      "SkillDecline": {
-        "properties": {
-          "reason": {
-            "type": "string",
-            "maxLength": 300,
-            "minLength": 1,
-            "title": "Reason"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "reason"
-        ],
-        "title": "SkillDecline"
-      },
-      "SkillInstall": {
-        "properties": {
-          "target_type": {
-            "type": "string",
-            "enum": [
-              "Bot",
-              "Human"
-            ],
-            "title": "Target Type"
-          },
-          "target_id": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Target Id"
-          },
-          "version_policy": {
-            "type": "string",
-            "enum": [
-              "latest",
-              "pinned"
-            ],
-            "title": "Version Policy",
-            "default": "latest"
-          },
-          "pinned_version": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Pinned Version"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "target_type",
-          "target_id"
-        ],
-        "title": "SkillInstall"
-      },
-      "SkillInstallBulk": {
-        "properties": {
-          "targets": {
-            "items": {
-              "$ref": "#/components/schemas/SkillTarget"
-            },
-            "type": "array",
-            "maxItems": 200,
-            "minItems": 1,
-            "title": "Targets"
-          },
-          "version_policy": {
-            "type": "string",
-            "enum": [
-              "latest",
-              "pinned"
-            ],
-            "title": "Version Policy",
-            "default": "latest"
-          },
-          "pinned_version": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Pinned Version"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "targets"
-        ],
-        "title": "SkillInstallBulk"
-      },
-      "SkillPropose": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "files": {
-            "items": {
-              "$ref": "#/components/schemas/SkillFile"
-            },
-            "type": "array",
-            "title": "Files"
-          },
-          "source": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SkillSource"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "note": {
-            "type": "string",
-            "maxLength": 200,
-            "title": "Note",
-            "default": ""
-          },
-          "base_version": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Base Version"
-          },
-          "task_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task Id"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "name",
-          "files"
-        ],
-        "title": "SkillPropose"
       }
     },
     "securitySchemes": {
