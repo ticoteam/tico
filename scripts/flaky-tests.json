@@ -36,13 +36,6 @@
       "expires": "2026-11-20"
     },
     {
-      "id": "backend/tests/test_screen_relay_contract.py::test_private_protocol_fences_replays_stale_grants_and_lease_loss",
-      "reason": "Relay start hit Address in use (os error 98) on Nov 4 and passed 12 minutes later: a port race.",
-      "owner": "BotOps",
-      "added": "2026-11-06",
-      "expires": "2026-11-20"
-    },
-    {
       "id": "scripts/tests/test_image_pins.py::test_every_pin_has_a_wheel_for_the_images_python",
       "reason": "PyPI connection reset while it checked the wheels (Nov 4): a network flake.",
       "owner": "DevOps Engineer",
