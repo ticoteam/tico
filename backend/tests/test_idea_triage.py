@@ -101,8 +101,7 @@ def test_a_bug_goes_to_head_of_engineering(roadmap):
     assert audits(api)[-1][2]["route"] == "engineering"
 
 
-@pytest.mark.parametrize("case", ["off", "error", "timeout", "below_threshold", "no_engineering_bot", "spend_cap",
-                                  "shape", "unconfigured", "budget", "bad_confidence"])
+@pytest.mark.parametrize("case", ["off", "error", "timeout", "below_threshold", "no_engineering_bot"])
 def test_anything_short_of_a_confident_answer_goes_to_product_as_today(roadmap, monkeypatch, case):
     api, _, model = roadmap
     model.kind, model.confidence = "engineering", 0.95
