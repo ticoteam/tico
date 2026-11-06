@@ -442,7 +442,9 @@ function settingsShow(tab) {
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
   const securityPane = $('#settings-security');
   if (securityPane) { securityPane.hidden = SETTINGS_TAB !== 'security'; if (SETTINGS_TAB === 'security') void renderScreeningCard(); }
-  settingsRevealSoon(SETTINGS_REVEAL);
+  // Once route() has put a newly opened page at its top, which would undo a scroll to a card already drawn.
+  const reveal = SETTINGS_REVEAL;
+  setTimeout(() => settingsRevealSoon(reveal));
 }
 // While Settings is the page, the address bar names the tab shown: #/settings/<tab>, with History's view and filters.
 // It replaces the entry: no hashchange, no new history step.
