@@ -107,9 +107,12 @@ def _row(topic, kind, subject, ref="NULL", conversation="NULL", bot="NULL", wher
             + (f" WHERE {where}" if where else "") + ";")
 
 
-def _needs(kind, *actors, where=None):
-    """A `needs` row for each person among `actors`: their Needs-you list may have moved."""
-    people = " UNION ".join(f"SELECT {actor} AS who" for actor in actors)
+def _needs(kind, *actors, where=None, lists=()):
+    """A `needs` row for each person among `actors` and the JSON actor `lists` (a task's readers):
+    their Needs-you list may have moved."""
+    people = " UNION ".join([f"SELECT {actor} AS who" for actor in actors]
+                            + [f"SELECT value AS who FROM json_each(CASE WHEN json_valid({each}) THEN {each} END)"
+                               for each in lists])
     return (f"INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'needs','{kind}',who,{_NOW} "
             f"FROM ({people}) WHERE who LIKE 'human:%'" + (f" AND {where}" if where else "") + ";")
 
@@ -167,7 +170,7 @@ _MEETING_ACCESS = ("OLD.review_state IS NOT NEW.review_state OR OLD.owner IS NOT
 
 # Who could read a task before this write: its parties and privacy, kept on the row when they
 # change (and on a delete), so a delta read says `gone` only to someone who could have seen it.
-_WAS = "json_array(OLD.owner_id,OLD.requester_id,OLD.private,OLD.guest)"   # task_reads._could_read
+_WAS = "json_array(OLD.owner_id,OLD.requester_id,OLD.private,OLD.readers)"   # task_reads._could_read
 _MEDIA = ("width", "height", "thumb_blob_id", "poster_blob_id")
 _MEDIA_TASKS = ("SELECT task_id AS id FROM task_assets WHERE blob_id=NEW.blob_id UNION SELECT f.task_id "
                 "FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE v.blob_id=NEW.blob_id")
@@ -177,7 +180,7 @@ _ASK_TASK = ("(SELECT " + H.MESSAGE_TASK_SQL + " FROM messages m LEFT JOIN conve
 
 _RUN_CONVERSATION = ("(SELECT m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
                      "JOIN messages m ON m.id=j.message_id WHERE a.id={aid})")
-_PARTIES = ("owner_id", "requester_id", "waiting_on", "guest")
+_PARTIES = ("owner_id", "requester_id", "waiting_on")
 
 
 def _letters_for_source(kind, *ids):
@@ -203,7 +206,7 @@ def _letters_for_thread(thread, root):
 TRIGGERS = [
     ("changes_letters_insert", "INSERT", "letters", None, _row("letters", "insert", "NEW.id")),
     ("changes_letters_update", "UPDATE", "letters", None, _row("letters", "update", "NEW.id")),
-    ("changes_task_letters_access", "UPDATE", "tasks", _changed("private", *_PARTIES), _letters_for_task("NEW.id")),
+    ("changes_task_letters_access", "UPDATE", "tasks", _changed("private", "readers", *_PARTIES), _letters_for_task("NEW.id")),
     ("changes_task_letters_delete", "DELETE", "tasks", None, _letters_for_task("OLD.id")),
     ("changes_roles_letters_insert", "INSERT", "task_roles", None, _letters_for_task("NEW.task_id")),
     ("changes_roles_letters_delete", "DELETE", "task_roles", None, _letters_for_task("OLD.task_id")),
@@ -230,15 +233,15 @@ TRIGGERS = [
      _row("tasks", "meetings", "NEW.task_id", ref="NEW.meeting_id") + _row("meeting_items", "links", "NEW.id", ref="NEW.meeting_id")),
     ("changes_meeting_task_links_delete", "DELETE", "meeting_task_links", None,
      _row("tasks", "meetings", "OLD.task_id", ref="OLD.meeting_id") + _row("meeting_items", "links", "OLD.id", ref="OLD.meeting_id")),
-    ("changes_task_meeting_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "guest"),
+    ("changes_task_meeting_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "readers"),
      _meeting_links("NEW.id")),
     ("changes_roles_meeting_insert", "INSERT", "task_roles", None, _meeting_links("NEW.task_id")),
     ("changes_roles_meeting_delete", "DELETE", "task_roles", None, _meeting_links("OLD.task_id")),
-    ("changes_item_task_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "guest"),
+    ("changes_item_task_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "readers"),
      _item_task_refs("NEW.id")),
     ("changes_item_roles_insert", "INSERT", "task_roles", None, _item_task_refs("NEW.task_id")),
     ("changes_item_roles_delete", "DELETE", "task_roles", None, _item_task_refs("OLD.task_id")),
-    ("changes_proposal_task_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "guest"),
+    ("changes_proposal_task_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "readers"),
      _item_task_refs("NEW.id", "proposed_task_id")),
     ("changes_proposal_roles_insert", "INSERT", "task_roles", None, _item_task_refs("NEW.task_id", "proposed_task_id")),
     ("changes_proposal_roles_delete", "DELETE", "task_roles", None, _item_task_refs("OLD.task_id", "proposed_task_id")),
@@ -248,13 +251,14 @@ TRIGGERS = [
      _row("presence", "changed", "OLD.place", ref="OLD.place")),
 
     ("changes_tasks_insert", "INSERT", "tasks", None,
-     _row("tasks", "insert", "NEW.id") + _needs("task", *("NEW." + p for p in _PARTIES))),
+     _row("tasks", "insert", "NEW.id") + _needs("task", *("NEW." + p for p in _PARTIES), lists=("NEW.readers",))),
     ("changes_tasks_update", "UPDATE", "tasks", None,
      _row("tasks", "update", "NEW.id",
-          ref=f"CASE WHEN {_changed('owner_id', 'requester_id', 'private', 'guest')} THEN {_WAS} END")
-     + _needs("task", *("OLD." + p for p in _PARTIES), *("NEW." + p for p in _PARTIES))),
+          ref=f"CASE WHEN {_changed('owner_id', 'requester_id', 'private', 'readers')} THEN {_WAS} END")
+     + _needs("task", *("OLD." + p for p in _PARTIES), *("NEW." + p for p in _PARTIES),
+              lists=("OLD.readers", "NEW.readers"))),
     ("changes_tasks_delete", "DELETE", "tasks", None,
-     _row("tasks", "delete", "OLD.id", ref=_WAS) + _needs("task", *("OLD." + p for p in _PARTIES))),
+     _row("tasks", "delete", "OLD.id", ref=_WAS) + _needs("task", *("OLD." + p for p in _PARTIES), lists=("OLD.readers",))),
     ("changes_task_links_insert", "INSERT", "task_links", None, _row("tasks", "link", "NEW.task_id")),
     # Only a write that changes a column: a rewrite with the same values wakes no stream (a worktree heartbeat did this
     # every few minutes per closed task).
@@ -1148,13 +1152,14 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
 def _trashed_visible(c, who, task_id):
     """A deleted task is reported gone only to someone who could have seen it."""
     try:
-        row = c.execute("SELECT owner, requester, private, guest FROM task_trash WHERE task_id=? AND purged_at IS NULL",
+        row = c.execute("SELECT owner, requester, private, readers FROM task_trash WHERE task_id=? AND purged_at IS NULL",
                         (task_id,)).fetchone()
     except sqlite3.OperationalError:
         return False
     if not row:
         return False
-    return who.actor in (row["owner"], row["requester"], row["guest"]) or not row["private"]
+    return (not row["private"] or who.actor in (row["owner"], row["requester"])
+            or H.task_reader(c, who.actor, {"readers": row["readers"]}))
 
 
 class _Viewer:

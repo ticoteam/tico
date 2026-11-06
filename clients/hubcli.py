@@ -76,6 +76,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub task create --owner <bot|human> --title "..." [--body "..."|--body-file f] [--due D] [--parent ID]
                     [--goal ID] [--model M [--effort E] [--harness H]] [--dry-run] the checks a create would fail,
                     nothing written
+                    [--private [--reader X ...]]  private: only its requester, owner and readers (people, bots,
+                                           group:<id>) see it
+    hub task readers list|add|remove <id> [X ...]   who can see a private task besides its requester and owner
     hub task model <id> [<model>] [--effort E] [--harness H] [--clear]
                                            the model this task's runs use; --clear puts it back on the bot's task model
                     [--defer [24h|2d|never]]  for a bot: a deferred task, no wake; its next run carries it, and
@@ -1713,7 +1716,10 @@ def parser():
     s.add_argument("--visibility", choices=["public", "private"])
     s.add_argument("--public-title", dest="public_title", help="public roadmap title (needed with --visibility public)")
     s.add_argument("--public-summary", dest="public_summary", help="public roadmap summary")
-    s.add_argument("--private", action="store_true", default=None, help="only requester and assignee may read")
+    s.add_argument("--private", action="store_true", default=None,
+                   help="only its requester, owner and readers see it")
+    s.add_argument("--reader", dest="readers", action="append",
+                   help="with --private: someone else who sees it, a person, bot or group:<id> (repeat for more)")
     s.add_argument("--from-private", dest="from_private", action="store_true",
                    help="from a run on your private task: a company-visible task for a bot, in your own words (no "
                         "12 words copied from the private work, no secret-shaped value, no file or link of it)")
@@ -1954,6 +1960,17 @@ def parser():
                         "--no-wake-once disarms it")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task link")
+    readers = task.add_parser("readers", help="who can see a private task: list, add, remove").add_subparsers(
+        dest="subsub")
+    s = readers.add_parser("list", help="its requester, owner and readers")
+    s.add_argument("id")
+    s.set_defaults(fn="task readers list")
+    for change, words in (("add", "let them see it: people, bots or group:<id>s"),
+                          ("remove", "take them off: they stop seeing it")):
+        s = readers.add_parser(change, help=words)
+        s.add_argument("id")
+        s.add_argument("readers", nargs="+", metavar="X", help="human:<id>, bot:<slug> or group:<id>")
+        s.set_defaults(fn="task readers " + change)
     s = task.add_parser("relate", help="relate another task to this one: <id> <kind> <task>")
     s.add_argument("id")
     s.add_argument("task")

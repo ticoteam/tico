@@ -73767,12 +73767,12 @@
             ],
             "description": "The person a waiting task waits on; the task is in their Needs you"
           },
-          "guest": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The one person a private task with no person on it reached: its owning bot's first subtask, question or wait for them made them its guest. They read the task as its requester and owner do, and nothing else of its tree"
+          "readers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Who else can see a private task besides its requester and owner: people, bots and group:<id>s (a group by its members now). Empty on a company task. GET/PUT /api/v2/tasks/{id}/readers reads and changes it"
           },
           "holds": {
             "type": "array",
@@ -74869,6 +74869,16 @@
               }
             ],
             "title": "Roles"
+          },
+          "readers": {
+            "items": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Readers"
           },
           "check_model": {
             "anyOf": [

@@ -700,7 +700,8 @@ def tag_update(api, args):
        "check_back_at": _s("When to inspect progress: ISO timestamp or duration such as 45m; defaults automatically"),
        "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
-       "private": {"type": "boolean", "description": "Only requester and assignee may read; bot defaults also apply"},
+       "private": {"type": "boolean", "description": "Only its requester, owner and readers see it; bot defaults also apply"},
+       "readers": {"type": "array", "items": {"type": "string"}, "description": "Private: who else sees it: human:<id>, bot:<slug> or group:<id>"},
        "from_private": {"type": "boolean", "default": False,
                         "description": "From a run on your own private task with no person on it: a company-visible "
                                        "task for a bot, carrying only its own words (no 12 words copied from the private "
@@ -754,7 +755,7 @@ def task_create(api, args):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model",
                   "check_role", "visibility", "public_title", "public_summary", "from_private", "model", "effort",
-                  "harness", "check_back_at", "check_back_note"):
+                  "harness", "check_back_at", "check_back_note", "readers"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
@@ -1390,6 +1391,28 @@ def task_link(api, args):
                                                                **({"kind": "session"} if args.get("kind") == "session" else {}),
                                                                **({"wake_once": args["wake_once"]} if args.get("wake_once") is not None else {})},
                                   key=_key(args))
+
+
+READERS = {"type": "array", "items": {"type": "string"}, "minItems": 1,
+           "description": "human:<id>, bot:<slug> or group:<id>"}
+
+
+@tool("hub_task_readers_list", "Who can see a task: its requester, owner and readers; everyone for a company task.",
+      {"id": TASK_ID}, required=("id",))
+def task_readers_list(api, args):
+    return api.get(f"tasks/{args['id']}/readers")
+
+
+@tool("hub_task_readers_add", "Let people, bots or groups see a private task (a group: whoever is in it now).",
+      {"id": TASK_ID, "readers": READERS}, required=("id", "readers"), writes=True)
+def task_readers_add(api, args):
+    return api.post(f"tasks/{args['id']}/readers", {"add": list(args["readers"])}, key=_key(args))
+
+
+@tool("hub_task_readers_remove", "Take readers off a private task.",
+      {"id": TASK_ID, "readers": READERS}, required=("id", "readers"), writes=True)
+def task_readers_remove(api, args):
+    return api.post(f"tasks/{args['id']}/readers", {"remove": list(args["readers"])}, key=_key(args))
 
 
 @tool("hub_task_relate", "Relate another task to this one, read as `id kind task`: parent (task is its "
@@ -8038,6 +8061,8 @@ ASSISTANT_HIDDEN = frozenset({
     "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_call_token",
     "hub_sql", "hub_support_file", "hub_support_report", "hub_support_send", "hub_trigger_sign", "hub_message_redact",
     "hub_tool_call",
+    "hub_task_readers_list",  # hub_task_show has the readers; the Assistant's listing is near its size cliff
+    "hub_tool_check",         # hub_tool_index has each tool's status; Check now is on the tool's page. Same cliff.
 })
 
 

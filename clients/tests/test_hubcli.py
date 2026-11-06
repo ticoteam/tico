@@ -912,6 +912,44 @@ def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(mo
     ]
 
 
+def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
+    """`hub task create --private --reader X` sends the readers; `hub task readers list|add|remove` run the
+    hub_task_readers_* tools against /tasks/{id}/readers."""
+    from clients import remotecli
+    calls = []
+
+    class Api:
+        def get(self, path, /, **query):
+            if path == "me":
+                return {"actor": "human:ana", "role": "owner", "kind": "owner"}
+            calls.append(("GET", path, None))
+            return {"private": True, "readers": []}
+
+        def post(self, path, body=None, key=None, **kw):
+            calls.append(("POST", path, body))
+            return {"id": "T1", "private": True, "readers": ["human:ben"]}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            calls.append((method, path, body))
+            return {"id": "T1"}
+
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: Api())
+    remotecli.run(hubcli.parser().parse_args(["task", "create", "--owner", "ops", "--title", "Draft the offer letter",
+                                              "--body", "For the new hire.", "--private", "--reader", "ben",
+                                              "--reader", "group:desk"]))
+    made = [body for method, path, body in calls if method == "POST" and path == "tasks"]
+    assert made and made[-1]["private"] is True and made[-1]["readers"] == ["ben", "group:desk"], calls
+    calls.clear()
+    for argv in (["task", "readers", "list", "T1"], ["task", "readers", "add", "T1", "ben", "bot:cmo"],
+                 ["task", "readers", "remove", "T1", "ben"]):
+        args = hubcli.parser().parse_args(argv)
+        assert remotecli.tool_name(args.fn) == "hub_task_readers_" + argv[2]
+        remotecli.run(args)
+    assert calls == [("GET", "tasks/T1/readers", None), ("POST", "tasks/T1/readers", {"add": ["ben", "bot:cmo"]}),
+                     ("POST", "tasks/T1/readers", {"remove": ["ben"]})], calls
+
+
 WEBHOOK_LEAVES = [  # every leaf of the command table in docs/webhooks.md, with the arguments it needs
     ["event-types", "--group", "webhook"],
     ["trigger", "list"], ["trigger", "create", "Orders"], ["trigger", "show", "orders"],

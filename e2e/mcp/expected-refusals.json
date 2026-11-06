@@ -228,6 +228,8 @@
  "hub_task_manager_set": "usage",
  "hub_task_model": "usage",
  "hub_task_question": "403 identity",
+ "hub_task_readers_add": "422 private",
+ "hub_task_readers_remove": "422 private",
  "hub_task_relate": "404 not_found",
  "hub_task_requester_remove": "404 not_found",
  "hub_task_run": "422 run-now",

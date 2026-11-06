@@ -5338,7 +5338,6 @@ export type Task = {
   created_at: string;
   due_at: string | null;
   external_requesters?: number;
-  guest?: string | null;
   holds: Array<TaskHold>;
   id: string;
   important_requesters?: number;
@@ -5353,6 +5352,7 @@ export type Task = {
   private?: boolean;
   public_summary?: string;
   public_title?: string;
+  readers?: Array<string>;
   relations?: Record<string, Array<{
   direction: string;
   id: string;
@@ -5551,6 +5551,7 @@ export type TaskCreate = {
   public_title?: string | null;
   qa?: boolean | null;
   qa_not_checkable_live?: boolean;
+  readers?: Array<string>;
   relations?: Array<TaskRelationRef>;
   request_id?: string | null;
   roles?: Record<string, Array<string>> | null;

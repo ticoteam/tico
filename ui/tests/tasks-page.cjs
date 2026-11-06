@@ -642,7 +642,7 @@ async function properties(browser) {
   await peek.locator('.task-subs .sub-bar').waitFor();
   const rows = await props.locator('.prop').evaluateAll(rs => rs.map(r => [r.querySelector('.prop-k').textContent,
     [...r.querySelectorAll('.prop-txt, .tlabel > [data-tag-key]')].map(x => x.textContent.trim()).join(' ')]));
-  assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', 'Everyone'], ['Due', 'Add due date'], ['Tags', 'checkout'],
+  assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', ''], ['Who can see', 'Public'], ['Due', 'Add due date'], ['Tags', 'checkout'],
     ['Part of', 'Add parent']]);
   assert.match(await props.locator('[data-prop="status"]').innerText(), /Waiting/);
   // Detail names the status; the status-grouped list uses its heading. "blocked" is a small chip.

@@ -93,7 +93,7 @@ backend/support_access.py:4
 backend/support_triage.py:2
 backend/system_routines.py:3
 backend/task_blocked.py:2
-backend/task_delete.py:4
+backend/task_delete.py:3
 backend/task_manager.py:2
 backend/task_relations.py:7
 backend/task_roles.py:2
