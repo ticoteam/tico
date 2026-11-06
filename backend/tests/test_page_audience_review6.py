@@ -51,7 +51,10 @@ def test_held_and_replayed_answers_revoke_question_option_labels(api, send):
             view = get(api, "rule-holds/" + hid, token="cara-test")
             sent = post(api, "rule-holds/" + hid + "/send", {"nonce": view["nonce"]}, token="cara-test")
             assert sent["hold"]["state"] == "sent"
-        assert label in json.dumps(get(api, f"tasks/{tid}/comments", token="cara-test"))
+        # A sent answer is recorded on the question task it answers (its answer), not as a comment on the page's task.
+        with api.app.state.store.read() as c:
+            pick = c.execute("SELECT id FROM tasks WHERE question_topic LIKE '%held-pick%'").fetchone()[0]
+        assert label in json.dumps(get(api, f"tasks/{pick}/answers", token="cara-test"))
     edit(api, fid, {"people": ["reader"]})
     for deleted in (False, True):
         if deleted:

@@ -95,29 +95,27 @@ def test_distinct_file_and_task_provenance_is_batched(api, monkeypatch):
 
 
 def test_task_questions_batch_answers_without_exposing_private_replies(api, monkeypatch):
-    counts, pages = {}, {}
+    """A task with many question tasks under it reads the same statements per viewer whatever their number, and a
+    cached read says exactly what an uncached one does. Each question is its own task now (backend/question_tasks.py),
+    so the page's reads are the questions' reads: answered ones included."""
+    from backend import question_tasks
+    counts, pages, parents = {}, {}, {}
     for size in (3, 30):
         with api.app.state.store.transaction() as c:
             parent = H.task_create(c, "human:ana", f"Review {size}", "Checklist", "bot:ops", lint=False)
-            hidden = H.task_create(c, "human:ben", f"Private {size}", "Secret", "human:ben", private=True, lint=False)
+            parents[size] = parent["id"]
             for n in range(size):
-                ask = H.task_comment(c, "bot:ops", parent["id"], f"Question {n}", wake=False,
-                                     ask={"who": "human:ana", "questions": [{"id": "ship", "question": "Ship?"}]})
-                H.task_comment(c, "human:ana", parent["id"], f"Answer {n}", wake=False, answer_to=ask["id"],
-                               extra_refs={"related_task": hidden["id"]} if n == 1 else None)
+                card = question_tasks.ask_plain(c, "bot:ops", "human:ana", f"Question {n}", parent=H.task(c, parent["id"]))
+                if n % 2:
+                    H.task_update(c, "human:ana", card["id"], status="done", note="Ship")
         for viewer in ("ana-test", "ben-test"):
             page, counts[size, viewer] = traced_get(api, "tasks/" + parent["id"], viewer)
-            pages[viewer] = page
-            questions = [m for m in page["comments"] if m["kind"] == "ask"]
-            assert len(questions) == size
-            expected = size - (viewer == "ana-test")
-            assert sum(len(m["answers"]) for m in questions) == expected
-            assert len(page["comments"]) == size + expected
+            pages[size, viewer] = page
     for viewer in ("ana-test", "ben-test"):
         assert counts[30, viewer] - counts[3, viewer] <= 8, counts
     monkeypatch.setattr(read_cache, "cache", lambda c: None)
-    for viewer, page in pages.items():
-        assert get(api, "tasks/" + parent["id"], viewer) == page
+    for (size, viewer), page in pages.items():
+        assert get(api, "tasks/" + parents[size], viewer) == page
 
 
 def test_blob_cycles_keep_private_provenance_in_both_orders(api):

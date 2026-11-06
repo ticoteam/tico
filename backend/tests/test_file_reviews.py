@@ -87,6 +87,23 @@ def test_a_pick_spend_is_approved_once_and_spent_once(api):
         spend={"label": "Neither", "amount": "5", "what": "Render"})
 
 
+def test_closing_a_spend_question_by_its_pick_records_the_approval(api):
+    """`hub task close <id> --note "teaser a"` (the Assistant's close for the person) names the pick: the question is
+    answered as it, so the spend is approved and the files under review get their verdicts, as an answer would."""
+    _, _, attempt = setup_attempt(api)
+    bot = attempt["token"]
+    a, b = publish(api, bot, "# A", "teaser-a.md"), publish(api, bot, "# B", "teaser-b.md")
+    made = ask(api, bot, [{"file": a["id"]}, {"file": b["id"]}], pick=True,
+               spend={"label": "teaser a", "amount": "12.50", "what": "Render the final cut"})
+    task = made["task"]
+    closed = post(api, f"tasks/{task['id']}", {"version": task["version"], "close": True, "note": "teaser a"})
+    assert closed["task"]["status"] == "done"
+    assert approved(api, bot, file=a["id"])["approved"] and not approved(api, bot, file=b["id"])["approved"]
+    with api.app.state.store.read() as c:
+        spend = c.execute("SELECT kind, decision FROM approvals WHERE kind='spend'").fetchall()
+        assert [tuple(row) for row in spend] == [("spend", "approved")]
+
+
 def test_the_person_asked_must_be_able_to_open_the_file(api):
     # The file sits in Ana's private chat with the bot: Ben cannot open it, so he cannot be asked to review it.
     _, _, attempt = setup_attempt(api)
