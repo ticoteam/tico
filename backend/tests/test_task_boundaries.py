@@ -27,7 +27,9 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
                                 extra_refs={'answer': {'text': 'Restricted answer'}})
         c.execute('UPDATE messages SET in_reply_to=? WHERE id=?', (first['id'], answer['id']))
         derived.append(answer['id'])
-    post(api, 'tasks/' + source['id'], {'version': source['version'], 'private': True})
+    # The comment above bumped the source's version, so the update names the version it reads now.
+    source_version = get(api, 'tasks/' + source['id'])['task']['version']
+    post(api, 'tasks/' + source['id'], {'version': source_version, 'private': True})
     for mid in derived:
         get(api, 'messages/' + mid, 'ben-test', expected=404)
     for path in ('', '/comments', '/answers'):
@@ -40,11 +42,11 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
     assert set(derived) <= {m['id'] for m in get(api, 'tasks/' + target['id'] + '/comments')['comments']}
     added = post(api, f"tasks/{target['id']}/comments", {'text': 'Ordinary follow-up'}, 'ben-test')
     mid = added['comment']['id']
-    # The question filed under the target above bumped its version, so the note names the version Ben reads now.
-    version = get(api, 'tasks/' + target['id'], 'ben-test')['task']['version']
     responses = [added, post(api, f"tasks/{target['id']}/comments/{mid}", {'text': 'Revised follow-up'}, 'ben-test'),
-                 post(api, f"tasks/{target['id']}/comments/{mid}/delete", {}, 'ben-test'),
-                 post(api, f"tasks/{target['id']}", {'version': version, 'note': 'Still reviewing'}, 'ben-test')]
+                 post(api, f"tasks/{target['id']}/comments/{mid}/delete", {}, 'ben-test')]
+    # Filing the question, then the edit and delete, bumped the target's version: name the one Ben reads now.
+    version = get(api, 'tasks/' + target['id'], 'ben-test')['task']['version']
+    responses.append(post(api, f"tasks/{target['id']}", {'version': version, 'note': 'Still reviewing'}, 'ben-test'))
     assert all('Restricted' not in json.dumps(value) for value in responses)
 
 
