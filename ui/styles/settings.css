@@ -550,38 +550,56 @@ dialog.access-editor .access-body{flex:1;min-height:0;overflow:auto}
 .theme-seg button{border:0;background:none;border-radius:999px;padding:4px 12px;font-size:var(--t-sm);font-weight:600;color:var(--muted);cursor:pointer}
 .theme-seg button:hover{color:var(--ink)}
 .theme-seg button[aria-checked=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.18)}
-/* Settings > Repositories (ui/app/settings-repositories.js): one 28px row per repository, thin dividers */
+/* Settings > Repositories (ui/app/settings-repositories.js): In use, one 30px line per repository that opens in place;
+   Not in use, one line with a search until searched or opened */
 .repos-card>header{align-items:center;gap:var(--s2);margin-bottom:var(--s2)}
 .repos-card .spacer{flex:1}
 .repos-bots{display:inline-flex;align-items:center;gap:2px;font-size:var(--t-sm);color:var(--muted);cursor:pointer;white-space:nowrap}
-button.repos-small{padding:3px 9px;font-size:var(--t-sm)}
+button.repos-small{padding:3px 9px;font-size:var(--t-sm);line-height:18px;flex:none}
 .repos-line{margin:0;font-size:var(--t-base);color:var(--muted)}
 .repos-line a{color:var(--ink)}
-.repos-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding:0 0 var(--s2);border-bottom:1px solid var(--line)}
+.repos-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding:0 0 var(--s2)}
+.repos-bar>[data-field-err]{flex-basis:100%;margin:0}
 .repos-k,.brepo-k{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
-input[type=search].repos-filter{flex:0 1 220px;margin-left:auto;padding:4px 10px 4px 30px;font-size:var(--t-base);background-position:9px center}
+.repos-newbot{display:inline-flex;align-items:center;gap:8px;margin:0;min-width:0}
+.repos-newbot select{width:auto;max-width:100%;height:28px;padding:2px 26px 2px 8px;font-size:var(--t-sm)}
+.repos-new{display:grid;gap:6px;justify-items:start;margin:0 0 var(--s2);padding:var(--s2);border:1px solid var(--line);border-radius:var(--r-ctl)}
+.repos-new[hidden]{display:none}
+.repos-new-row{display:flex;gap:8px;width:100%;max-width:420px}
+.repos-new-row input{flex:1;min-width:0;height:28px;padding:2px 8px;font-size:var(--t-base)}
+.repos-h{display:flex;align-items:center;gap:6px;margin:var(--s2) 0 0;padding:4px 0;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line)}
+.repos-n{font-weight:400;letter-spacing:0}
+button.repos-toggle{flex:none;margin:0;padding:4px 0;border:0;background:none;cursor:pointer;font-family:inherit}
+button.repos-toggle:hover{color:var(--ink)}
+.repos-off-head{display:flex;align-items:center;gap:10px;margin-top:var(--s2);border-bottom:1px solid var(--line)}
+.repos-off-head>.repos-h{border-bottom:0}
+input[type=search].repos-filter{flex:0 1 240px;width:auto;min-width:0;margin-left:auto;padding:3px 10px 3px 30px;font-size:var(--t-base);background-position:9px center}
+.repos-off-opts{display:flex;justify-content:flex-end;gap:12px;padding:4px 0;border-bottom:1px solid var(--line)}
 .repos-list,.brepo-list{list-style:none;margin:0;padding:0}
-.repos-list>.empty,.brepo-list>.empty{padding:var(--s2) 0}
-.repo-row{display:grid;grid-template-columns:minmax(0,1.1fr) 84px minmax(0,1.5fr) 92px;align-items:center;gap:10px;min-height:28px;padding:1px 0;border-bottom:1px solid var(--line);font-size:var(--t-base)}
+.repos-list>.empty,.brepo-list>.empty{padding:var(--s2) 0;color:var(--muted);font-size:var(--t-sm)}
+.repo-row{display:flex;flex-wrap:wrap;align-items:center;gap:0 8px;min-height:30px;border-bottom:1px solid var(--line);font-size:var(--t-base)}
 .repo-row:last-child{border-bottom:0}
+.repo-line{display:flex;flex:1;align-items:center;gap:6px;min-width:0;min-height:30px;margin:0;padding:0 2px;border:0;background:none;color:var(--ink);font:inherit;text-align:left}
+button.repo-line{cursor:pointer}
+button.repo-line:hover{background:var(--surface2)}
+.repo-nm{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.repo-row:not(.on) .repo-nm{color:var(--muted)}
+.repo-chev{flex:none;font-size:16px;width:16px;height:16px;color:var(--muted);transition:transform var(--dur-fast) var(--ease)}
+[aria-expanded=true]>.repo-chev{transform:rotate(90deg)}
 .repo-name{display:flex;align-items:center;gap:4px;min-width:0;color:var(--ink);cursor:pointer}
 .repo-name>span:not(.repo-tag){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .repo-name input:disabled+span{cursor:default}
 .repo-org{color:var(--muted)}
-.repo-row:not(.on) .repo-name>span:not(.repo-tag){color:var(--muted)}
-.repo-row:not(.on) .repo-org{opacity:.8}
-.repo-tag{flex:none;font-size:var(--t-xs);padding:0 5px;border-radius:8px;background:var(--surface2);color:var(--muted)}
-.repo-branch{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm);font-family:var(--mono)}
-.repo-setup{display:flex;align-items:center;gap:6px;min-width:0}
-.repo-setup input{flex:1;min-width:0;height:24px;padding:2px 6px;border-color:transparent;background:transparent;color:var(--muted);font-family:var(--mono);font-size:var(--t-sm)}
-.repo-setup input:hover:not([readonly]){border-color:var(--line)}
-.repo-setup input:focus{color:var(--ink);background:var(--surface)}
-.repo-setup input::placeholder{font-family:var(--sans);opacity:.45}
-.repo-setup input:hover::placeholder,.repo-setup input:focus::placeholder{opacity:.8}
-.repo-setup input[readonly]{background:transparent;cursor:default}
+.repo-tag{flex:none;font-size:var(--t-xs);padding:0 5px;border-radius:8px;background:var(--surface2);color:var(--muted);white-space:nowrap}
+.repo-tag.repo-warn{color:var(--wait-ink)}
+.repo-branch{flex:none;max-width:120px;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm);font-family:var(--mono)}
+.repo-more{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;flex-basis:100%;padding:2px 0 8px 20px}
+.repo-setup{display:flex;flex:1 1 280px;align-items:center;gap:6px;min-width:0}
+.repo-setup input{flex:1;min-width:0;height:28px;padding:2px 8px;font-family:var(--mono);font-size:var(--t-sm)}
+.repo-setup input::placeholder{font-family:var(--sans)}
 .repo-src{flex:none;font-size:var(--t-xs);color:var(--muted);opacity:.8;font-family:var(--mono)}
-.repo-state{display:flex;justify-content:flex-end;min-width:0}
-.repo-warn{font-size:var(--t-sm);color:var(--wait-ink);white-space:nowrap}
+.repo-used{font-size:var(--t-sm);color:var(--muted)}
+.repo-more>[data-field-err],.repo-row>[data-field-err]{flex-basis:100%;margin:0 0 6px}
 /* Two or three choices as one strip of radios (New bots get, a bot's mode, Read or Write) */
 .repo-seg{display:inline-flex;flex:none;background:var(--surface2);border-radius:7px;padding:2px;gap:2px}
 .repo-seg label{position:relative;display:inline-flex;margin:0;cursor:pointer}
@@ -619,11 +637,14 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .brepo-acc{font-family:var(--sans);opacity:.75}
 @media (max-width:760px){
   .repos-card>header{flex-wrap:wrap}
-  .repo-row{grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"name branch state" "setup setup setup";gap:0 8px;padding:4px 0}
-  .repo-name{grid-area:name}.repo-branch{grid-area:branch}.repo-state{grid-area:state}
-  .repo-setup{grid-area:setup;padding-left:20px}
-  .repo-setup input{height:30px}
-  input[type=search].repos-filter{flex:1 1 100%;margin-left:0}
+  .repo-row,.repo-line{min-height:40px}
+  .repo-branch{max-width:72px}
+  .repo-more{padding-left:4px}
+  .repo-setup{flex-basis:100%}
+  .repo-setup input,.repos-new-row input{height:40px;font-size:16px}
+  .repos-newbot select{height:40px;font-size:16px}
+  button.repos-small{min-height:36px}
+  input[type=search].repos-filter{flex:1 1 140px}
   .repo-seg span{padding:5px 10px}
   .brepo-mode{display:flex;justify-self:stretch;min-width:0}.brepo-mode label{flex:1 1 0;min-width:0;justify-content:center}.brepo-mode span{padding:5px 6px;text-align:center;white-space:normal}
   .repo-seg-sm span{padding:3px 9px}

@@ -1,6 +1,6 @@
 # Repositories
 
-Settings → Repositories lists repositories in the connected GitHub organization. An Owner or admin ticks the repositories the team works on. Every human teammate can read the list. BotOps uses the rights of whoever asked it.
+Settings → Repositories lists repositories in the connected GitHub organization in two groups. **In use** holds the repositories the team works on ("ticked" in the API and CLI), one line each with its default branch and a **Not reachable** mark when GitHub no longer lists it; tap a line to see its setup command, edit it, or **Remove** it. **Not in use** is one line with a search box: type to find a repository and **Add** it, or open the group to browse (bot and archived repositories show there on request). An Owner or admin adds and removes; every human teammate can read both lists. An Owner also creates product repositories from **New repository** ([GitHub App](github-app.md#creating-a-product-repository)). BotOps uses the rights of whoever asked it.
 
 Bot repositories are marked by `bot-<slug>` names or by their use as a bot's own repository. The list reads GitHub on connection, when you refresh, and daily. Apps created since v0.3.1 also refresh on installation webhooks; older Apps may have an inactive webhook. A repository that disappears stays listed as not reachable; its setting is kept. Missing product repositories are omitted from tokens for five minutes before retrying and reported in Health when ticked. Missing-repository probes are cached for five minutes, including a missing own repository, so other grants are not repeatedly probed. A bot’s own token is always retried; a missing Instructions repository is reported for that bot without turning team GitHub health red. Creating a repository or successfully minting its token clears its missing mark.
 
@@ -16,7 +16,7 @@ Each bot has one mode:
 
 The bot always keeps write access to its own repository. Read grants allow reading contents. Write grants also allow changing contents, issues and pull requests. Repositories must belong to the connected organization. Unticking a repository removes it from all and chosen effective access; its stored chosen grant stays available if it is ticked again. Bot settings can save these unticked choices without removing them. Tokens already issued expire within an hour.
 
-Settings → Repositories also sets **New bots get**: own only (the default), or all ticked repositories. This applies when a bot is created; existing bots keep their access. Existing extra repositories migrate once to chosen write access and are ticked automatically, including archived bots' grants.
+Settings → Repositories also sets **New bots get**: **Their own repo** (the default), or **All repos in use** (the bot starts in All ticked repos mode). This applies when a bot is created; existing bots keep their access. Existing extra repositories migrate once to chosen write access and are ticked automatically, including archived bots' grants.
 
 ## Tools and commands
 

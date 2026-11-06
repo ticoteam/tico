@@ -249,9 +249,9 @@ computer publishes its history into it on the bot's next run, as for any empty r
 
 ## Creating a product repository
 
-An Owner can create an exact product repository without the `bot-` prefix from **Settings → Repositories**.
-Enter one repository name, review the connected organization, exact name, and private/empty settings, then
-select **Create private empty repository**. The API also exposes this flow to the Hub CLI, for the Owner and
+An Owner can create an exact product repository without the `bot-` prefix from **Settings → Repositories**
+→ **New repository**. Enter one repository name, select **Preview** to review the connected organization, exact
+name, and private/empty settings, then select **Create repository**. The API also exposes this flow to the Hub CLI, for the Owner and
 for a bot with **Create product repositories** ([below](#bots-that-create-product-repositories)):
 
     hub repo product-create tico-recorder
