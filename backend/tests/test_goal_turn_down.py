@@ -2,6 +2,8 @@
 chat-first-goals.md, criterion 7): no read-back and no second yes. Tico stores it at once as a turned-down suggestion on
 the goal, with the owner's words as its reason, and changes nothing else."""
 
+import pytest
+
 from backend import goals as G
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
@@ -160,3 +162,39 @@ def test_with_autonomous_actions_off_a_reply_that_is_not_a_no_still_records_noth
     r, attempt = turn(api, "coo", "ana-test", "Yes, but make it 50")
     assert turn_down(api, attempt, suggestion(g["id"]), expected=403)["error"]["code"] == "not_a_no"
     assert proposals(api) == []
+
+
+def test_a_no_worded_differently_retires_the_waiting_card_it_refers_to(api):
+    """The card on screen is the one the "no" is about: its words differ from the owner's, yet it is rejected, not left
+    under Needs you beside a second rejected row. Another goal's card of the same kind is left alone."""
+    strategy_bot(api)
+    g = goal(api, "Get 100 companies to try Tico", owner="ops")
+    other = goal(api, "Ship the docs", owner="ops")
+    waiting = {**suggestion(g["id"])["payload"], "target": {"kind": "improve", "target": 50, "deadline": "2026-11-28"}}
+    with api.app.state.store.transaction() as c:
+        card = G.propose(c, G.AUTO_ACTOR, "goal_kpi", g["id"], payload=waiting)
+        elsewhere = G.propose(c, G.AUTO_ACTOR, "goal_kpi", other["id"], payload=waiting)
+    r, attempt = turn(api, "coo", "ana-test", "No, leave it without a number.")
+    out = turn_down(api, attempt, suggestion(g["id"]))["proposal"]
+    assert out["id"] == card["id"]
+    assert (out["status"], out["decision_note"]) == ("rejected", "No, leave it without a number.")
+    assert [p["id"] for p in proposals(api, "pending")] == [elsewhere["id"]]
+    assert [p["id"] for p in proposals(api, "rejected") if p["goal_id"] == g["id"]] == [card["id"]]
+
+
+@pytest.mark.parametrize("words", ["No problem, save it", "No worries, go ahead", "no prob, ok"])
+def test_a_yes_that_opens_with_no_is_not_a_no(api, words):
+    strategy_bot(api)
+    g = goal(api, "Get 100 companies to try Tico", owner="ops")
+    r, attempt = turn(api, "coo", "ana-test", words)
+    refused = turn_down(api, attempt, suggestion(g["id"]), expected=403)["error"]
+    assert refused["code"] == "not_a_no"
+    assert proposals(api) == []
+
+
+def test_a_no_that_opens_like_a_yes_word_is_still_a_no(api):
+    strategy_bot(api)
+    g = goal(api, "Get 100 companies to try Tico", owner="ops")
+    r, attempt = turn(api, "coo", "ana-test", "No problem, leave it.")
+    out = turn_down(api, attempt, suggestion(g["id"]))["proposal"]
+    assert (out["status"], out["decision_note"]) == ("rejected", "No problem, leave it.")

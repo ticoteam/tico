@@ -47,13 +47,13 @@ _SAVING = [
 
 # What stays the owner's click, in the one sentence the Strategy Bot passes on (criterion 12).
 CLICK = {
-    "colour": "A goal's colour stays your click on the Goals page, so I left it out.",
-    "status": "Marking a goal done or dropped stays your click on the Goals page, so I left it out.",
-    "archive": "Archiving stays your click on the Goals page, so I left it out.",
-    "reading": "A KPI reading is logged on the KPI itself, not agreed in chat, so I left it out.",
-    "vision": "The company Vision stays your click at the top of the Goals page, so I left it out.",
-    "strategy": "Strategy drafts and bets stay your click on the Strategy page, so I left it out.",
-    "recovery": "A recovery suggestion stays your click on its card, so I left it out.",
+    "colour": "Nothing was saved: a goal's colour is set by you on the Goals page.",
+    "status": "Nothing was saved: marking a goal done or dropped is done by you on the Goals page.",
+    "archive": "Nothing was saved: archiving is done by you on the Goals page.",
+    "reading": "Nothing was saved: a KPI reading is logged by you on the KPI itself.",
+    "vision": "Nothing was saved: the company Vision is set by you at the top of the Goals page.",
+    "strategy": "Nothing was saved: Strategy drafts and bets are changed by you on the Strategy page.",
+    "recovery": "Nothing was saved: a recovery suggestion is decided by you on its card.",
 }
 _CLICK_KINDS = {
     "colour": "colour",
@@ -76,6 +76,7 @@ _CLICK_KINDS = {
     "description": "vision",
     "strategy": "strategy",
     "bet": "strategy",
+    "recovery": "recovery",
 }
 _CLICK_FIELDS = {
     "colour": "colour",
@@ -244,8 +245,13 @@ def answered(c, who, cited):
 # yes. The cited message must open with a no; its words are the reason, unless they said only no.
 # A Why is left out: proposing one replaces the Strategy Bot's Why still waiting, which a "no" must not reject.
 TURN_DOWN_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag")
+# A yes that opens with "no" (no problem, no worries) is not a turn-down; "no problem, leave it" still is.
+_NO_YES = (
+    r"no\s+(?:problem|prob|worries|sweat|bother|stress|hurry|rush|trouble|biggie)\b"
+    r"(?![\s,.!]*(?:leave|skip|nope|nah|not|don'?t|do not)\b)"
+)
 _NO_OPENING = re.compile(
-    r"\s*(?:no|nope|nah|not (?:that|this|now|one)|leave (?:it|that|this)|skip (?:it|that|this)|"
+    rf"\s*(?!{_NO_YES})(?:no|nope|nah|not (?:that|this|now|one)|leave (?:it|that|this)|skip (?:it|that|this)|"
     r"don'?t|do not)\b",
     re.I,
 )

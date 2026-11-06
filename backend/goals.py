@@ -1135,6 +1135,21 @@ def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason="
     return proposal(conn, row["id"])
 
 
+def pending_like(conn, kind, goal_id=None, kpi_id=None):
+    """The pending suggestions of one kind on one goal (and KPI), newest first: the cards a "no" to that kind of
+    suggestion refers to, whatever its words. A "no" retires them, so none is left under Needs you."""
+    return [
+        _proposal_view(r, conn)
+        for r in H._rows(
+            conn.execute(
+                "SELECT * FROM goal_proposals WHERE status='pending' AND kind=? AND coalesce(goal_id,'')=? "
+                "AND coalesce(kpi_id,'')=? ORDER BY proposed_at DESC",
+                (kind, goal_id or "", kpi_id or ""),
+            )
+        )
+    ]
+
+
 def proposal(conn, proposal_id):
     return _proposal_view(H._one(conn, "SELECT * FROM goal_proposals WHERE id=?", (proposal_id,)), conn)
 
