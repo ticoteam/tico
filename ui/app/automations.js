@@ -15,9 +15,11 @@ const auClone = x => x == null ? x : JSON.parse(JSON.stringify(x));
 const auApi = id => '/v2/automations/' + encodeURIComponent(id);
 // One page visit's state; a route within the page keeps it (the list, the chat), leaving drops it.
 let AU = null;
+let AU_TASK_ACTION_DRAFT = null;
 // Leaving keeps the list, its teams and its counts for the next visit (S.lastRead), which draws them at once.
 function automationsStop() {
   if (!AU) return;
+  if (AU.cur?.taskActionDraft) AU_TASK_ACTION_DRAFT = null;
   if (AU.list && !AU.listError) S.lastRead.automations = {list: AU.list, groups: AU.groups, stats: AU.stats, range: AU.range};
   AU = null;
 }
@@ -157,7 +159,7 @@ async function pageAutomations() {
       auDrawHead(); auDrawPane();
       // A slow answer for an automation left behind must not land on the one now open.
       let cur;
-      try { cur = auNormal(await get(auApi(id))); }
+      try { cur = AU_TASK_ACTION_DRAFT?.id === id ? auNormal(auClone(AU_TASK_ACTION_DRAFT)) : auNormal(await get(auApi(id))); }
       catch (e) { if (AU === state && state.id === id) { state.cur = null; state.root.querySelector('.au-pane').innerHTML = [403, 404].includes(e.status)
         ? '<p class="muted au-pad">Not shared with you</p>' : `<p class="err">${esc(e.message)}</p>`; } return; }
       if (AU !== state || state.id !== id) return;
@@ -170,6 +172,13 @@ async function pageAutomations() {
 }
 // GET answers the automation itself; a wrapped {automation} is read the same.
 const auNormal = x => { const a = x?.automation || x || {}; a.steps ||= []; a.trigger ||= {}; return a; };
+
+function auOpenTaskActionDraft(trigger, typeName = '') {
+  const id = 'draft-task-action-' + Math.random().toString(36).slice(2, 9);
+  AU_TASK_ACTION_DRAFT = {id, name: `${typeName || 'Task'} action`, owner_id: 'person:' + S.me.id,
+    enabled: false, builtin: false, can_edit: true, version: 0, trigger: auClone(trigger), steps: [], taskActionDraft: true};
+  location.hash = auHref(id);
+}
 
 function auShell() {
   $('#main').innerHTML = `<div class="au" id="au-root">
@@ -343,9 +352,22 @@ function auDrawSide() {
 async function auWrite(body, done) {
   const a = AU.cur, state = AU;
   try {
-    const out = auNormal(await patch(auApi(a.id), body));
+    const draft = a.taskActionDraft;
+    const request = draft
+      ? post('/v2/automations', {name: a.name, owner: a.owner_id, enabled: false, builtin: false,
+        trigger: a.trigger, steps: a.steps, ...body})
+      : patch(auApi(a.id), body);
+    const out = auNormal(await request);
     if (AU !== state) return null;
-    auAdopt(out);
+    if (draft) {
+      delete out.taskActionDraft;
+      state.cur = out;
+      state.id = out.id;
+      if (state.list) state.list = [out, ...state.list.filter(x => x.id !== out.id)];
+      AU_TASK_ACTION_DRAFT = null;
+      location.hash = auHref(out.id);
+      auDrawList(); auDrawHead(); auDrawPane(); auDrawSide();
+    } else auAdopt(out);
     if (done) toast(done(out));
     return out;
   } catch (e) { toast(e.message, true); if (AU === state) { auDrawList(); auDrawHead(); auDrawPane(); } return null; }

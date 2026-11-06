@@ -87,11 +87,7 @@ function taskAutomationRuleRow(rule, mayEdit) {
 }
 async function taskAutomationAddAction(trigger, typeName = '') {
   if (!canMove()) return;
-  try {
-    const out = await post('/v2/automations', {name: `${typeName || 'Task'} action`, owner: 'person:' + S.me.id,
-      enabled: false, builtin: false, trigger, steps: []});
-    location.hash = auHref(out.id);
-  } catch (error) { toast(error.message, true); }
+  auOpenTaskActionDraft(trigger, typeName);
 }
 function askFilterSettingsPaint() {
   const el = $('#set-ask-filter'); if (!el || !ASK_FILTER) return;

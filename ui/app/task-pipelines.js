@@ -179,9 +179,9 @@ function taskTypesSettingsMount() {
 function taskTypesSettingsShow(tab) {
   if (tab === 'tasks' && S.me?.cloud) void renderTaskTypes();
 }
-// Add action on a type's row: a new automation of the viewer's, off and with no steps, whose Trigger is a task created
-// of this type (its filter names the type). Any person may make an automation they own; type editing stays mover-gated.
-// Automations opens on it; the Action is picked and saved there.
+// Add action on a type's row opens a draft for an off automation whose Trigger is a task created of this type.
+// People with Settings move rights may add it; type editing uses the same gate. The automation is created when its
+// first Action is saved in Automations.
 async function taskTypeAddAction(type) {
   if (!type || !S.me || !canMove()) return;
   void taskAutomationAddAction({type: 'event', name: 'task.created',

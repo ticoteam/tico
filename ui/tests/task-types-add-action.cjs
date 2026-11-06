@@ -1,5 +1,5 @@
-// Offline browser regression: Add action in the Task settings card's Trigger section makes an off, viewer-owned
-// automation with that Trigger and type, then its saved Action appears in that section. It also checks type copy,
+// Offline browser regression: Add action in the Task settings card's Trigger section drafts an off automation; Save
+// creates it with the selected Action. It also checks type copy,
 // permissions, failure details and paused reasons on the card.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -47,7 +47,7 @@ const taskRules = [
       if (p === '/api/v2/automations' && req.method() === 'POST') {
         const body = req.postDataJSON(); posts.push(body);
         made = {id: posts.length === 1 ? 'au_new' : 'au_new_step', name: body.name, owner_id: body.owner, enabled: false, builtin: false, can_edit: true,
-          version: 1, trigger: body.trigger, steps: []};
+          version: 1, trigger: body.trigger, steps: body.steps || []};
         taskRules.push(made);
         return json(made, 201);
       }
@@ -87,16 +87,22 @@ const taskRules = [
     assert.match(await card.innerText(), /Paused: too many runs/);
     assert.match(await card.innerText(), /Last Action failed.*2026.*The note could not be saved/);
     await card.locator('[data-task-add-action="task.created"]').click();
-    await page.waitForFunction(() => location.hash === '#/automations/au_new', null, {timeout: 5000});
+    await page.waitForFunction(() => location.hash.startsWith('#/automations/draft-task-action-'), null, {timeout: 5000});
+    assert.equal(posts.length, 0, 'opening Add action does not save an empty automation');
+    await page.evaluate(() => { location.hash = '#/settings/tasks'; });  // abandoning the draft creates no empty row
+    await page.waitForSelector('#set-task-automations');
+    assert.equal(posts.length, 0);
+    assert.equal(taskRules.length, 2);
+    await page.locator('.task-type-row [data-add-action="dev"]').click();
+    await page.waitForFunction(() => location.hash.startsWith('#/automations/draft-task-action-'), null, {timeout: 5000});
+    assert.equal(posts.length, 0, 'the Task types shortcut also opens a draft');
+    assert.match(await page.locator('.au-trig').innerText(), /Dev tickets/);
+    await page.evaluate(() => { location.hash = '#/settings/tasks'; });
+    await page.waitForSelector('#set-task-automations');
+    await card.locator('[data-task-add-action="task.created"]').click();
+    await page.waitForFunction(() => location.hash.startsWith('#/automations/draft-task-action-'), null, {timeout: 5000});
 
-    // One automation, off, owned by the viewer, whose trigger is a task created of the Dev tickets type, and no steps yet.
-    assert.equal(posts.length, 1);
-    assert.deepEqual(posts[0].trigger, {type: 'event', name: 'task.created',
-      filters: [{field: 'event.data.type_id', op: 'is', value: 'dev'}]});
-    assert.equal(posts[0].enabled, false);
-    assert.equal(posts[0].owner, 'person:ana');
-    assert.deepEqual(posts[0].steps, []);
-    // The created automation keeps its type Trigger when the Action is selected and saved.
+    // The draft keeps its Trigger and type until its Action is saved.
     await page.locator('[data-add="root|0"]').click();
     await page.locator('.au-menu [data-ty="action"]').click();
     const actionOptions = await page.locator('.au-ed [data-b="step.do"] option').allInnerTexts();
@@ -105,10 +111,15 @@ const taskRules = [
     await page.fill('.au-ed [data-b="step.args.title"]', 'Review the change');
     await page.selectOption('.au-ed [data-b="step.args.owner"]', 'bot:pr-reviewer');
     await page.locator('.au-save').click();
-    await page.waitForFunction(() => document.querySelector('.au-ed')?.hidden && document.querySelector('.au-ver')?.textContent === 'v2');
-    assert.equal(patches.length, 1);
-    assert.deepEqual(made.trigger, posts[0].trigger, 'the saved automation keeps the type Trigger');
-    assert.deepEqual(patches[0].steps[0], {id: patches[0].steps[0].id, type: 'action', do: 'create_task', enabled: true,
+    await page.waitForFunction(() => document.querySelector('.au-ed')?.hidden && document.querySelector('.au-ver')?.textContent === 'v1');
+    assert.equal(posts.length, 1, 'Save creates one automation');
+    assert.equal(patches.length, 0, 'a new automation is not first saved empty and then patched');
+    assert.deepEqual(posts[0].trigger, {type: 'event', name: 'task.created',
+      filters: [{field: 'event.data.type_id', op: 'is', value: 'dev'}]});
+    assert.equal(posts[0].enabled, false);
+    assert.equal(posts[0].owner, 'person:ana');
+    assert.deepEqual(made.trigger, posts[0].trigger, 'the saved automation keeps its type Trigger');
+    assert.deepEqual(posts[0].steps[0], {id: posts[0].steps[0].id, type: 'action', do: 'create_task', enabled: true,
       args: {title: 'Review the change', owner: 'bot:pr-reviewer'}});
     assert.match(await page.locator('.au-trig').innerText(), /Dev tickets/);
     assert.match(await page.locator('.au-card[data-open]').last().innerText(), /Create task[\s\S]*pr-reviewer/);
@@ -122,9 +133,8 @@ const taskRules = [
     assert.equal(await saved.locator('a').first().getAttribute('href'), '#/automations/au_new',
       'the saved Action stays in its Trigger section');
     await page.locator('#set-task-automations [data-task-add-action="task.step_changed"]').click();
-    await page.waitForFunction(() => location.hash === '#/automations/au_new_step', null, {timeout: 5000});
-    assert.deepEqual(posts[1].trigger, {type: 'event', name: 'task.step_changed',
-      filters: [{field: 'event.data.type_id', op: 'is', value: 'dev'}]}, 'the card Add action pre-fills its Trigger and type');
+    await page.waitForFunction(() => location.hash.startsWith('#/automations/draft-task-action-'), null, {timeout: 5000});
+    assert.equal(posts.length, 1, 'opening another Trigger section still saves nothing');
     assert.match(await page.locator('.au-trig').innerText(), /Dev tickets/);
     // Add action and edit controls follow the Settings permission check.
     mover = false;
