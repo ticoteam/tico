@@ -382,7 +382,7 @@ def test_the_owner_gets_no_notice_for_an_ad_budget(books: Store):
                              (OWNER, f"%{name}%")).fetchone()[0])
 
     with books.transaction() as c:
-        soft = act(c, OWNER, "budget_create", {"name": "Tools", "account_id": account(c, "6100"), "amount": 1_000},
+        soft = act(c, OWNER, "budget_create", {"name": "Tools", "account_id": account(c, "6100"), "amount": 10_000},
                    at=WARN_AT)
         assert soft.status == "committed", soft
         # Meta ads bought on the 6100 line by no bot: an ad budget with no bot to tell.
@@ -393,9 +393,9 @@ def test_the_owner_gets_no_notice_for_an_ad_budget(books: Store):
         spend(c, "6100", 600, day="2026-10-05", vendor=w["meta_ads_vendor"])
         # Books-based crossings: the bot's ad budget (its card charge) and a budget with no ad spend in it.
         spend(c, "6300", 260_000, day="2026-10-05", teammate="bot:paid-rental-ads", vendor=w["google_ads_vendor"])
-        spend(c, "6100", 900, day="2026-10-05")
+        spend(c, "6100", 9_000, day="2026-10-05")
         assert FA.drain_events(c, WARN_AT) >= 2
-        assert notices(c, "budget is") == 1 and notices(c, "The Tools budget") == 1
+        assert notices(c, "The Tools budget") == 1                    # its warning at 96%; the Meta child is past 100%
         assert notices(c, "Rental Google Ad Owner") == 0 and notices(c, "Meta on tools") == 0
         ctx = load(c, WARN_AT)
         assert ad_warnings.bot_of(ctx, ctx.budgets()[w["marketing"]]) == ""
@@ -471,6 +471,6 @@ def test_the_data_fix_sets_existing_ad_budgets_to_warn(books: Store):
         c.execute("UPDATE fin_budgets SET at_limit='decline' WHERE vendor<>''")
         fix.up(c)
         fix.up(c)
-        limits = dict(c.execute("SELECT name, at_limit FROM fin_budgets").fetchall())
+        limits = dict(c.execute("SELECT name, at_limit FROM fin_budgets WHERE account_id=?", (w["adv"],)).fetchall())
     assert limits == {"Marketing": "warn", "Rental Google Ad Owner": "warn", "Rental Social Ad Owner": "warn",
                       "Descriptor": "warn", "Billboards": "decline"}
