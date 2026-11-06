@@ -18,12 +18,24 @@ def waiters(api, n=37, running=3):
             c.execute("UPDATE attempts SET state='leased' WHERE id=?", (f'attempt-{i}',))
             c.execute("UPDATE jobs SET state='leased' WHERE attempt_id=?", (f'attempt-{i}',))
             from backend import start_places
+
             start_places.claim(c, f'attempt-{i}')
     for i in range(n):
         post(api, f'attempts/attempt-{i}/start-place', {'waiting': 'shared login'}, computer['token'])
-        post(api, f'attempts/attempt-{i}/events', {'events': [
-            {'seq': 1, 'kind': 'status', 'payload': {'waiting': 'Waiting for the shared ChatGPT login', 'login': 'ChatGPT'}}
-        ]}, computer['token'])
+        post(
+            api,
+            f'attempts/attempt-{i}/events',
+            {
+                'events': [
+                    {
+                        'seq': 1,
+                        'kind': 'status',
+                        'payload': {'waiting': 'Waiting for the shared ChatGPT login', 'login': 'ChatGPT'},
+                    }
+                ]
+            },
+            computer['token'],
+        )
     return computer
 
 
@@ -32,12 +44,17 @@ def sent_by(api, message_id, actor):
         c.execute('UPDATE messages SET sender_id=? WHERE id=?', (actor, message_id))
 
 
-def overload(api, computer, cpu=95, mem=.5):
+def overload(api, computer, cpu=95, mem=0.5):
     """Six one-minute samples over 90%: performance.load_status calls the computer overloaded."""
     import time
+
     now = int(time.time()) // 60 * 60
-    post(api, 'runners/performance', {'samples': [point(now - 300 + i * 60, cpu=cpu, mem=mem) for i in range(6)]},
-         computer['token'])
+    post(
+        api,
+        'runners/performance',
+        {'samples': [point(now - 300 + i * 60, cpu=cpu, mem=mem) for i in range(6)]},
+        computer['token'],
+    )
 
 
 def test_four_counts_separate_37_login_waiters(api):
@@ -46,7 +63,11 @@ def test_four_counts_separate_37_login_waiters(api):
     rid = computer['runner_id']
     machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == rid)
     assert {k: machine.get('turn_counts', {}).get(k) for k in ('running', 'starting', 'waiting', 'queued')} == {
-        'running': 3, 'starting': 0, 'waiting': 37, 'queued': 0}
+        'running': 3,
+        'starting': 0,
+        'waiting': 37,
+        'queued': 0,
+    }
     assert 'shared login' in machine['turn_summary'] and 'oldest' in machine['turn_summary']
     health = get(api, 'health')
     assert next(c for c in health['checks'] if c['id'] == 'turns:' + rid)['summary'].endswith(machine['turn_summary'])
@@ -57,6 +78,7 @@ def test_health_below_warning_counts_queued_work_without_asking_each_bot_why(api
     (its stuck and queue checks already say why). A paused bot's work still reads as waiting, not queued; at
     warning the line names each wait again."""
     from backend import execution
+
     computer = runner(api)
     for bot in ('finance', 'doc-updater'):
         assign(api, computer, bot)
@@ -74,8 +96,11 @@ def test_health_below_warning_counts_queued_work_without_asking_each_bot_why(api
     assert {k: line['turn_counts'][k] for k in ('waiting', 'queued')} == {'waiting': 1, 'queued': 1}
     assert [w['reason'] for w in line['turn_counts']['waits']] == ['bot paused']
     asked = []
-    monkeypatch.setattr(execution, 'claim_refusal', lambda *args, **kwargs: asked.append(args[3]) or real(*args, **kwargs))
+    monkeypatch.setattr(
+        execution, 'claim_refusal', lambda *args, **kwargs: asked.append(args[3]) or real(*args, **kwargs)
+    )
     from backend import org_turns
+
     with api.app.state.store.transaction() as c:
         org_turns.save(c, org_turns.LEVELS, {'warning_per_person': 0, 'stop_per_person': 100})
     line = next(m for m in get(api, 'health')['computers'] if m['id'] == computer['runner_id'])
@@ -89,6 +114,7 @@ def test_parked_logins_take_no_start_place_so_another_login_starts_and_claims_go
     another login starts at once (free_turn stays ''), and its claim goes through below twice the limit (80)."""
     from backend import start_places
     from backend.views import free_turn
+
     computer = waiters(api)
     rid = computer['runner_id']
     assign(api, computer, 'finance')
@@ -125,6 +151,7 @@ def test_two_ready_waiters_claim_last_start_place_atomically(api):
 def test_start_reservation_expires_despite_renewals_and_leaves_task_untouched(api, monkeypatch):
     """Spec 4: three minutes is a hard preparation deadline, not another renewable lease."""
     from backend.tests.test_task_lanes import task_bot, new_task
+
     computer = task_bot(api, lanes=True)
     task = new_task(api, "Work whose preparation times out")
     attempt = claim(api, computer)
@@ -142,21 +169,27 @@ def test_start_reservation_expires_despite_renewals_and_leaves_task_untouched(ap
         # Keep the delivery lease long: only the reservation has expired.
         c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(now, seconds=600), aid))
         from backend import start_places
+
         start_places.waiting(c, aid, 'shared login')
         assert aid in start_places.overdue(c)  # A late wait report cannot erase the deadline.
         api.app.state.execution.expire(c)
     with store.read() as c:
         assert c.execute('SELECT state FROM attempts WHERE id=?', (aid,)).fetchone()[0] == 'expired'
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
-        assert [tuple(r) for r in c.execute('SELECT id,status,version,note,updated_at FROM tasks ORDER BY id')] == before
-    denied = api.post(f'/api/v2/attempts/{aid}/started', json={'thread_id': 'too-late'}, headers=headers(computer['token']))
+        assert [
+            tuple(r) for r in c.execute('SELECT id,status,version,note,updated_at FROM tasks ORDER BY id')
+        ] == before
+    denied = api.post(
+        f'/api/v2/attempts/{aid}/started', json={'thread_id': 'too-late'}, headers=headers(computer['token'])
+    )
     assert denied.status_code == 409
 
 
-@pytest.mark.parametrize('cpu,mem', [(95, .5), (20, .95)])
+@pytest.mark.parametrize('cpu,mem', [(95, 0.5), (20, 0.95)])
 def test_overload_holds_only_new_starts_and_calm_load_resumes_them(api, cpu, mem):
     """Spec 14: the existing sampler's five-minute CPU/memory signal brakes this computer only."""
     import time
+
     computer = fleet(api, attempts=1, trees=0)
     assign(api, computer, 'finance')
     ready(api, computer, ['ops', 'finance'])
@@ -166,7 +199,10 @@ def test_overload_holds_only_new_starts_and_calm_load_resumes_them(api, cpu, mem
     machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == computer['runner_id'])
     assert any(w['reason'] == 'computer busy' for w in machine['turn_counts']['waits'])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state,stop_requested_at FROM attempts WHERE id='attempt-0'").fetchone()[:] == ('running', None)
+        assert c.execute("SELECT state,stop_requested_at FROM attempts WHERE id='attempt-0'").fetchone()[:] == (
+            'running',
+            None,
+        )
     post(api, 'runners/performance', {'samples': [point(int(time.time()) // 60 * 60 + 1, cpu=20)]}, computer['token'])
     assert claim(api, computer, 'finance') is not None
 
@@ -187,6 +223,7 @@ def test_stop_on_waiter_is_final_even_after_capacity_returns(api):
 
 def test_upgrade_preserves_legacy_waits_and_only_unstarted_places_expire(api, monkeypatch):
     from backend import login_waits, start_places
+
     monkeypatch.setattr(login_waits, 'harness_caps', lambda _: {'one_turn_per_login': True})
     computer = waiters(api, n=2, running=1)
     with api.app.state.store.transaction() as c:
@@ -194,8 +231,10 @@ def test_upgrade_preserves_legacy_waits_and_only_unstarted_places_expire(api, mo
         old = H.shift(H.now(), seconds=-7200)
         c.execute("UPDATE attempts SET created_at=?", (old,))
         # One legacy worker cleared its wait and really is preparing; the other still waits.
-        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) "
-                  "VALUES('attempt-1',2,'status',?,?)", ('{"waiting":""}', H.now()))
+        c.execute(
+            "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES('attempt-1',2,'status',?,?)",
+            ('{"waiting":""}', H.now()),
+        )
         start_places.restore_waits(c)
         assert start_places.overdue(c) == []  # An older worker never agreed to a hard preparation deadline.
         assert sum(start_places.held(c, computer['runner_id']).values()) == 3
@@ -207,14 +246,17 @@ def test_upgrade_preserves_legacy_waits_and_only_unstarted_places_expire(api, mo
 def test_repeated_overdue_starts_stop_at_the_pre_start_retry_limit(api, monkeypatch):
     from backend import execution
     from backend.tests.test_api import setup_attempt
+
     monkeypatch.setattr(execution, 'PRE_START_TRIES', 2)
     machine, message, first = setup_attempt(api)
     store = api.app.state.store
     attempt = first
     for i in range(2):
         with store.transaction() as c:
-            c.execute('UPDATE start_places SET start_until=? WHERE attempt_id=?',
-                      (H.shift(H.now(), seconds=-1), attempt['id']))
+            c.execute(
+                'UPDATE start_places SET start_until=? WHERE attempt_id=?',
+                (H.shift(H.now(), seconds=-1), attempt['id']),
+            )
             # Expiry is caused only by the hard start window, with a fresh delivery lease.
             c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=600), attempt['id']))
             api.app.state.execution.expire(c)
@@ -227,12 +269,14 @@ def test_repeated_overdue_starts_stop_at_the_pre_start_retry_limit(api, monkeypa
         assert c.execute('SELECT state FROM jobs WHERE id=?', (first['job_id'],)).fetchone()[0] == 'failed'
     replies = get(api, f"conversations/{message['conversation_id']}/messages")
     assert [m['body'] for m in replies if m['sender_id'] == 'bot:ops'] == [
-        "Your ops couldn't start on Test Mac; check that Computer"]
+        "Your ops couldn't start on Test Mac; check that Computer"
+    ]
 
 
 def test_legacy_runner_preparation_survives_upgrade_and_three_minutes(api, monkeypatch):
     from backend import start_places
     from backend.tests.test_api import runner
+
     computer = runner(api)
     assign(api, computer, 'ops')
     assert ready(api, computer, ['ops'])['start_places'] is True
@@ -253,6 +297,7 @@ def test_legacy_runner_preparation_survives_upgrade_and_three_minutes(api, monke
     post(api, 'chat/ops', {'text': 'The upgraded worker now opts in'})
     ready(api, computer, ['ops'])
     from backend.tests.test_api import settled
+
     settled(api, computer)  # The worker kept heartbeating throughout the simulated preparation.
     fresh = claim(api, computer)
     assert fresh['start_reservation_seconds'] == 180
@@ -264,6 +309,7 @@ def test_legacy_wait_takes_one_of_the_two_claims_the_limit_allows_until_its_unch
     """A worker without start-place support keeps its claim while it waits. Claims go on to twice the limit (2 here),
     so the wait leaves one claim for another bot and the start it has not confirmed releases nothing early."""
     from backend.tests.test_api import runner
+
     computer = runner(api)
     assign(api, computer, 'ops')
     assign(api, computer, 'finance')
@@ -272,9 +318,12 @@ def test_legacy_wait_takes_one_of_the_two_claims_the_limit_allows_until_its_unch
         c.execute('UPDATE runner_states SET capacity=1 WHERE runner_id=?', (computer['runner_id'],))
     post(api, 'chat/ops', {'text': 'Legacy work'})
     old = post(api, 'jobs/claim', {'bot': 'ops'}, computer['token'])['attempt']
-    post(api, f"attempts/{old['id']}/events", {'events': [
-        {'seq': 1, 'kind': 'status', 'payload': {'waiting': 'shared login', 'login': 'ChatGPT'}}
-    ]}, computer['token'])
+    post(
+        api,
+        f"attempts/{old['id']}/events",
+        {'events': [{'seq': 1, 'kind': 'status', 'payload': {'waiting': 'shared login', 'login': 'ChatGPT'}}]},
+        computer['token'],
+    )
     post(api, 'chat/finance', {'text': 'New protocol contender'})
     assert claim(api, computer, 'finance') is not None
     post(api, f"attempts/{old['id']}/started", {'thread_id': 'legacy'}, computer['token'])
@@ -285,6 +334,7 @@ def test_a_turn_waiting_for_a_docker_turn_user_gives_its_place_back(api):
     """A Gateway turn whose turn users are all busy waits like one at a busy login rather than failing at the server."""
     from backend import start_places
     from backend.tests.test_task_lanes import task_bot, new_task
+
     computer = task_bot(api, lanes=True)
     new_task(api, 'Work that waits for a turn user')
     aid = claim(api, computer)['id']
@@ -296,6 +346,7 @@ def test_a_turn_waiting_for_a_docker_turn_user_gives_its_place_back(api):
 
 def test_finished_task_stops_a_new_pre_start_wait_before_capacity_returns(api):
     from backend.tests.test_task_lanes import task_bot, new_task
+
     computer = task_bot(api, lanes=True)
     task = new_task(api, 'Work finished while its turn waits')
     attempt = claim(api, computer)
@@ -309,13 +360,17 @@ def test_finished_task_stops_a_new_pre_start_wait_before_capacity_returns(api):
     post(api, f'attempts/{aid}/started', {'thread_id': 'must-not-start'}, computer['token'], expected=409)
     post(api, f'attempts/{aid}/complete', {'outcome': 'interrupted', 'text': '', 'last_seq': 0}, computer['token'])
     with api.app.state.store.read() as c:
-        assert c.execute('SELECT state,started_at FROM attempts WHERE id=?', (aid,)).fetchone()[:] == ('interrupted', None)
+        assert c.execute('SELECT state,started_at FROM attempts WHERE id=?', (aid,)).fetchone()[:] == (
+            'interrupted',
+            None,
+        )
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'canceled'
         assert c.execute('SELECT status FROM tasks WHERE id=?', (task['id'],)).fetchone()[0] == 'done'
 
 
 def test_shared_computer_counts_are_neutral_when_a_members_bot_list_is_empty(api):
     from backend.tests.test_api import restrict
+
     computer = waiters(api)
     with api.app.state.store.transaction() as c:
         restrict(c, 'ops', people=['ana'])
@@ -331,6 +386,7 @@ def test_shared_computer_counts_are_neutral_when_a_members_bot_list_is_empty(api
 def test_live_legacy_login_clear_preserves_preparation_after_task_finishes(api, monkeypatch):
     from backend import login_waits, start_places
     from backend.tests.test_task_lanes import task_bot, new_task
+
     caps = {'one_turn_per_login': True}
     monkeypatch.setattr(login_waits, 'harness_caps', lambda _: caps)
     computer = task_bot(api, lanes=True)
@@ -339,9 +395,12 @@ def test_live_legacy_login_clear_preserves_preparation_after_task_finishes(api, 
     aid = attempt['id']
 
     def status(seq, waiting):
-        post(api, f'attempts/{aid}/events', {'events': [
-            {'seq': seq, 'kind': 'status', 'payload': {'waiting': waiting, 'login': 'ChatGPT'}}
-        ]}, computer['token'])
+        post(
+            api,
+            f'attempts/{aid}/events',
+            {'events': [{'seq': seq, 'kind': 'status', 'payload': {'waiting': waiting, 'login': 'ChatGPT'}}]},
+            computer['token'],
+        )
 
     status(1, 'shared login')
     with api.app.state.store.read() as c:
@@ -367,17 +426,22 @@ def test_live_legacy_login_clear_preserves_preparation_after_task_finishes(api, 
 
 def test_delayed_managed_login_events_cannot_release_a_new_start_grant(api, monkeypatch):
     from backend import login_waits
+
     monkeypatch.setattr(login_waits, 'harness_caps', lambda _: {'one_turn_per_login': True})
     computer = waiters(api, n=1, running=0)
     aid = 'attempt-0'
     grant = post(api, f'attempts/{aid}/start-place', {}, computer['token'])
     assert grant['reserved']
-    post(api, f'attempts/{aid}/events', {'events': [
-        {'seq': 2, 'kind': 'status', 'payload': {'waiting': 'late login wait', 'login': 'ChatGPT'}}
-    ]}, computer['token'])
+    post(
+        api,
+        f'attempts/{aid}/events',
+        {'events': [{'seq': 2, 'kind': 'status', 'payload': {'waiting': 'late login wait', 'login': 'ChatGPT'}}]},
+        computer['token'],
+    )
     with api.app.state.store.read() as c:
-        assert c.execute('SELECT start_until,wait_reason,waiting_since FROM start_places WHERE attempt_id=?',
-                         (aid,)).fetchone()[:] == (grant['start_until'], '', None)
+        assert c.execute(
+            'SELECT start_until,wait_reason,waiting_since FROM start_places WHERE attempt_id=?', (aid,)
+        ).fetchone()[:] == (grant['start_until'], '', None)
     assert post(api, f'attempts/{aid}/started', {'thread_id': 'managed-grant'}, computer['token'])['started']
 
 
@@ -389,7 +453,9 @@ def test_overload_rechecks_even_a_previously_granted_start(api):
     overload(api, computer)
     post(api, 'attempts/attempt-0/started', {'thread_id': 'braked'}, computer['token'], expected=409)
     assert post(api, 'attempts/attempt-0/start-place', {}, computer['token']) == {
-        'reserved': False, 'waiting': 'computer busy'}
+        'reserved': False,
+        'waiting': 'computer busy',
+    }
 
 
 def test_a_persons_own_message_starts_on_an_overloaded_computer_and_nothing_else_does(api):
@@ -402,7 +468,9 @@ def test_a_persons_own_message_starts_on_an_overloaded_computer_and_nothing_else
     overload(api, computer)
     for i in (0, 1):
         assert post(api, f'attempts/attempt-{i}/start-place', {}, computer['token']) == {
-            'reserved': False, 'waiting': 'computer busy'}
+            'reserved': False,
+            'waiting': 'computer busy',
+        }
     # attempt-2 answers a person and is claimed after the two now waiting "computer busy".
     assert post(api, 'attempts/attempt-2/start-place', {}, computer['token'])['reserved']
     assert post(api, 'attempts/attempt-2/started', {'thread_id': 'person'}, computer['token'])['started']
@@ -414,7 +482,9 @@ def test_a_persons_message_on_an_overloaded_computer_still_needs_a_free_turn(api
         c.execute('UPDATE runner_states SET capacity=1 WHERE runner_id=?', (computer['runner_id'],))
     overload(api, computer)
     assert post(api, 'attempts/attempt-0/start-place', {}, computer['token']) == {
-        'reserved': False, 'waiting': 'computer busy'}
+        'reserved': False,
+        'waiting': 'computer busy',
+    }
 
 
 def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(api):
@@ -434,8 +504,12 @@ def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(
     assert post(api, f"attempts/{attempt['id']}/start-place", {}, computer['token'])['reserved']
     assert claim(api, computer) is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "WHERE m.sender_id='bot:ops'").fetchone()[0] == 'queued'
+        assert (
+            c.execute(
+                "SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.sender_id='bot:ops'"
+            ).fetchone()[0]
+            == 'queued'
+        )
     # A person's @mention in a thread with product-design reaches it as a keeper carrier, which counts as the person's.
     assign(api, computer, 'product-design')
     ready(api, computer, ['ops', 'finance', 'cpo', 'product-design'])
@@ -511,6 +585,7 @@ def test_live_totals_match_each_computers_live_counts(api):
 def memory(api, computer, mem, at=None):
     """One synthetic sample at this minute (or at `at`), memory at `mem` of the computer's total."""
     import time
+
     at = at or int(time.time()) // 60 * 60
     post(api, 'runners/performance', {'samples': [point(at, cpu=20, mem=mem)]}, computer['token'])
 
@@ -531,12 +606,12 @@ def bot_waiting_for_finance(api, sender='bot:ops'):
 def test_memory_at_85_holds_new_starts_and_they_start_again_below_80(api):
     """Memory at 85% or more holds a bot's new start; between 80 and 85 the hold stays while a start waits on it."""
     computer = bot_waiting_for_finance(api)
-    memory(api, computer, .86)
+    memory(api, computer, 0.86)
     assert claim(api, computer, 'finance') is None
     assert any(w['reason'] == 'computer busy: memory' for w in waits_of(api, computer))
-    memory(api, computer, .82)
+    memory(api, computer, 0.82)
     assert claim(api, computer, 'finance') is None
-    memory(api, computer, .79)
+    memory(api, computer, 0.79)
     assert claim(api, computer, 'finance') is not None
 
 
@@ -545,14 +620,15 @@ def test_memory_pressure_holds_a_persons_message_even_when_the_computer_is_overl
     computer = bot_waiting_for_finance(api, sender='human:ana')
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET platform='linux' WHERE id=?", (computer['runner_id'],))
-    overload(api, computer, mem=.96)
+    overload(api, computer, mem=0.96)
     assert claim(api, computer, 'finance') is None
     from backend.start_places import computer_hold
+
     with api.app.state.store.read() as c:
         assert computer_hold(c, computer['runner_id'], person=True)[0] == 'computer busy: memory'
-    memory(api, computer, .82)
+    memory(api, computer, 0.82)
     assert claim(api, computer, 'finance') is None
-    memory(api, computer, .79)
+    memory(api, computer, 0.79)
     assert claim(api, computer, 'finance') is not None
 
 
@@ -565,13 +641,16 @@ def test_memory_pressure_revokes_only_a_persons_unallocated_start_place(api, all
         c.execute("UPDATE runners SET platform='linux' WHERE id=?", (computer['runner_id'],))
     attempt = claim(api, computer, 'finance')
     aid = attempt['id']
-    memory(api, computer, .86)
+    memory(api, computer, 0.86)
     allocation = {'harness_allocated': True} if allocated else {}
     if allocated:
         # The Codex app-server now exists; the next sample includes that allocation's memory.
         assert post(api, f'attempts/{aid}/start-place', allocation, computer['token'])['reserved']
-    response = api.post(f'/api/v2/attempts/{aid}/started', json={'thread_id': 'synthetic-thread', **allocation},
-                        headers=headers(computer['token']))
+    response = api.post(
+        f'/api/v2/attempts/{aid}/started',
+        json={'thread_id': 'synthetic-thread', **allocation},
+        headers=headers(computer['token']),
+    )
     if allocated:
         assert response.status_code == 200 and response.json()['started']
         with api.app.state.store.read() as c:
@@ -584,7 +663,7 @@ def test_memory_pressure_revokes_only_a_persons_unallocated_start_place(api, all
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM attempts WHERE id=?', (aid,)).fetchone()[0] == 'leased'
         assert c.execute('SELECT start_until FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0] is None
-    memory(api, computer, .79)
+    memory(api, computer, 0.79)
     assert post(api, f'attempts/{aid}/start-place', {}, computer['token'])['reserved']
     assert post(api, f'attempts/{aid}/started', {'thread_id': 'synthetic-thread'}, computer['token'])['started']
 
@@ -600,19 +679,22 @@ def test_memory_cannot_revoke_a_grant_without_negotiated_allocation_reporting(ap
     aid = attempt['id']
     grant = post(api, f'attempts/{aid}/start-place', {}, computer['token'])
     assert grant['reserved']
-    overload(api, computer, cpu=20, mem=.96)
+    overload(api, computer, cpu=20, mem=0.96)
     assert post(api, f'attempts/{aid}/start-place', {}, computer['token']) == grant
     assert post(api, f'attempts/{aid}/started', {'thread_id': 'older-runner-thread'}, computer['token'])['started']
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM attempts WHERE id=?', (aid,)).fetchone()[0] == 'running'
-        assert c.execute('SELECT start_until FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0] == grant['start_until']
+        assert (
+            c.execute('SELECT start_until FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0]
+            == grant['start_until']
+        )
 
 
 @pytest.mark.parametrize('cpu,held', [(0, False), (95, True)])
 def test_an_allocated_bot_bypasses_sustained_memory_but_retains_the_cpu_brake(api, cpu, held):
     computer = bot_waiting_for_finance(api, sender='bot:ops')
     attempt = claim(api, computer, 'finance')
-    overload(api, computer, cpu=cpu, mem=.96)
+    overload(api, computer, cpu=cpu, mem=0.96)
     place = post(api, f"attempts/{attempt['id']}/start-place", {'harness_allocated': True}, computer['token'])
     assert place['reserved'] is not held
     if held:
@@ -624,31 +706,36 @@ def test_a_person_at_90_percent_memory_waits_only_on_linux(api, platform, held):
     computer = bot_waiting_for_finance(api, sender='human:ana')
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE runners SET platform=? WHERE id=?', (platform, computer['runner_id']))
-    memory(api, computer, .90)
+    memory(api, computer, 0.90)
     attempt = claim(api, computer, 'finance')
     if held:
         assert attempt is None
         assert any(w['reason'] == 'computer busy: memory' for w in waits_of(api, computer))
     else:
         assert attempt is not None
-        assert post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'human-answer'}, computer['token'])['started']
+        assert post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'human-answer'}, computer['token'])[
+            'started'
+        ]
 
 
 def test_memory_between_80_and_85_admits_a_start_when_none_waits(api):
     computer = bot_waiting_for_finance(api)
-    memory(api, computer, .82)
+    memory(api, computer, 0.82)
     assert claim(api, computer, 'finance') is not None
 
 
 def test_hold_words_name_the_memory_percent_and_the_stale_sample(api):
     computer = bot_waiting_for_finance(api)
-    memory(api, computer, .86)
+    memory(api, computer, 0.86)
     from backend.start_places import computer_hold
+
     with api.app.state.store.read() as c:
         assert computer_hold(c, computer['runner_id']) == ('computer busy: memory', 'computer busy: memory 86%')
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runner_load_samples SET created_at=created_at-300,sampled_at=sampled_at-300 WHERE runner_id=?',
-                  (computer['runner_id'],))
+        c.execute(
+            'UPDATE runner_load_samples SET created_at=created_at-300,sampled_at=sampled_at-300 WHERE runner_id=?',
+            (computer['runner_id'],),
+        )
     with api.app.state.store.read() as c:
         assert computer_hold(c, computer['runner_id']) == ('computer not reporting', 'computer not reporting')
 
@@ -656,8 +743,9 @@ def test_hold_words_name_the_memory_percent_and_the_stale_sample(api):
 def test_a_computer_whose_sample_is_stale_refuses_bot_starts_and_admits_a_persons_message(api):
     """A frozen computer stops sampling; with diagnostics on its last sample is old and it admits no bot's start."""
     import time
+
     computer = bot_waiting_for_finance(api)
-    memory(api, computer, .3, at=int(time.time()) // 60 * 60 - 300)
+    memory(api, computer, 0.3, at=int(time.time()) // 60 * 60 - 300)
     assert claim(api, computer, 'finance') is None
     machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == computer['runner_id'])
     assert any(w['reason'] == 'computer not reporting' for w in machine['turn_counts']['waits'])
@@ -669,8 +757,9 @@ def test_a_computer_whose_sample_is_stale_refuses_bot_starts_and_admits_a_person
 def test_stale_sample_admits_again_once_diagnostics_are_off(api):
     """Diagnostics off keeps the start rules as they were: a stale sample holds nothing."""
     import time
+
     computer = bot_waiting_for_finance(api)
-    memory(api, computer, .3, at=int(time.time()) // 60 * 60 - 300)
+    memory(api, computer, 0.3, at=int(time.time()) // 60 * 60 - 300)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET performance='off' WHERE id=?", (computer['runner_id'],))
     assert claim(api, computer, 'finance') is not None
@@ -685,32 +774,38 @@ def test_a_computer_that_never_reported_is_not_held(api):
 def batch(api, computer, readings):
     """One delivery of samples [(minute offset in seconds from now, memory fraction)], as the runner posts them."""
     import time
+
     now = int(time.time()) // 60 * 60
-    post(api, 'runners/performance', {'samples': [point(now + off, cpu=20, mem=mem) for off, mem in readings]},
-         computer['token'])
+    post(
+        api,
+        'runners/performance',
+        {'samples': [point(now + off, cpu=20, mem=mem) for off, mem in readings]},
+        computer['token'],
+    )
 
 
 def test_a_batch_that_climbs_through_85_then_82_holds_from_clear(api):
     """A recovered delivery of readings is replayed in order: 86% then 82% holds, though the last one is in the band."""
     computer = bot_waiting_for_finance(api)
-    batch(api, computer, [(-60, .86), (0, .82)])
+    batch(api, computer, [(-60, 0.86), (0, 0.82)])
     assert claim(api, computer, 'finance') is None
 
 
 def test_a_batch_that_falls_to_79_then_rises_to_82_releases_a_held_computer(api):
     computer = bot_waiting_for_finance(api)
     import time
+
     now = int(time.time()) // 60 * 60
-    memory(api, computer, .86, at=now - 120)
-    batch(api, computer, [(-60, .79), (0, .82)])
+    memory(api, computer, 0.86, at=now - 120)
+    batch(api, computer, [(-60, 0.79), (0, 0.82)])
     assert claim(api, computer, 'finance') is not None
 
 
 def test_an_older_delivery_cannot_move_a_hold_set_by_a_newer_reading(api):
     """A late batch from before the newest stored reading is ignored, as the per-minute upsert already ignores it."""
     computer = bot_waiting_for_finance(api)
-    memory(api, computer, .3)
-    batch(api, computer, [(-300, .9)])
+    memory(api, computer, 0.3)
+    batch(api, computer, [(-300, 0.9)])
     assert claim(api, computer, 'finance') is not None
 
 
@@ -718,16 +813,22 @@ def test_a_computer_that_reported_then_went_silent_past_retention_is_not_reporti
     """Samples past the 48-hour window are pruned, but the computer still reported before: it stays held until it
     sends a fresh sample, and a computer that never reported is not held (above)."""
     import time
+
     computer = bot_waiting_for_finance(api)
-    memory(api, computer, .3)
+    memory(api, computer, 0.3)
     with api.app.state.store.read() as c:
-        marked = c.execute('SELECT last_sampled_at FROM runners_with_state WHERE id=?', (computer['runner_id'],)).fetchone()[0]
+        marked = c.execute(
+            'SELECT last_sampled_at FROM runners_with_state WHERE id=?', (computer['runner_id'],)
+        ).fetchone()[0]
     assert marked == int(time.time()) // 60 * 60
     with api.app.state.store.transaction() as c:
         c.execute('DELETE FROM runner_load_samples WHERE runner_id=?', (computer['runner_id'],))
-        c.execute('UPDATE runner_states SET last_sampled_at=last_sampled_at-200000 WHERE runner_id=?', (computer['runner_id'],))
+        c.execute(
+            'UPDATE runner_states SET last_sampled_at=last_sampled_at-200000 WHERE runner_id=?',
+            (computer['runner_id'],),
+        )
     assert claim(api, computer, 'finance') is None
-    memory(api, computer, .3)
+    memory(api, computer, 0.3)
     assert claim(api, computer, 'finance') is not None
 
 
@@ -737,10 +838,11 @@ def test_an_upgraded_computer_stays_held_after_its_samples_are_pruned_and_startu
     not reporting until a fresh sample arrives."""
     import time
     from backend import performance as P
+
     store = api.app.state.store
     computer = bot_waiting_for_finance(api)
     rid = computer['runner_id']
-    memory(api, computer, .3)
+    memory(api, computer, 0.3)
     now = int(time.time()) // 60 * 60
     with store.transaction() as c:
         # Migration 0062 gives such a computer a state row with no mark.
@@ -755,7 +857,7 @@ def test_an_upgraded_computer_stays_held_after_its_samples_are_pruned_and_startu
     with store.read() as c:
         assert c.execute('SELECT last_sampled_at FROM runners_with_state WHERE id=?', (rid,)).fetchone()[0] == now
     assert claim(api, computer, 'finance') is None
-    memory(api, computer, .3)
+    memory(api, computer, 0.3)
     assert claim(api, computer, 'finance') is not None
 
 
@@ -783,10 +885,14 @@ def build_computer(api, disk=51 * 10**9):
     from backend import runner_states
     from backend.store import encode, readiness_document
     from backend.tests.test_task_lanes import task_bot
+
     computer = task_bot(api, lanes=True)
     with api.app.state.store.transaction() as c:
-        doc = readiness_document(c.execute('SELECT readiness FROM runners_with_state WHERE id=?',
-                                           (computer['runner_id'],)).fetchone()['readiness'])
+        doc = readiness_document(
+            c.execute('SELECT readiness FROM runners_with_state WHERE id=?', (computer['runner_id'],)).fetchone()[
+                'readiness'
+            ]
+        )
         doc['disk'] = {'total_bytes': disk, 'free_bytes': disk // 2}
         runner_states.save(c, computer['runner_id'], readiness=encode(doc))
     return computer
@@ -795,17 +901,27 @@ def build_computer(api, disk=51 * 10**9):
 def build_task(api, computer, title):
     """A task on this computer with a worktree link that is present: the signal that its turns are builds."""
     from backend.tests.test_task_lanes import new_task
+
     task = new_task(api, title)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,computer_id,path,detail) "
-                  "VALUES(?,?,'worktree',?,'present','bot:ops',?,?,?,'{}')",
-                  ('tree-' + task['id'], task['id'], 'worktree:' + task['id'], H.now(), computer['runner_id'],
-                   'tasks/' + task['id'] + '/Acme__product'))
+        c.execute(
+            "INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,computer_id,path,detail) "
+            "VALUES(?,?,'worktree',?,'present','bot:ops',?,?,?,'{}')",
+            (
+                'tree-' + task['id'],
+                task['id'],
+                'worktree:' + task['id'],
+                H.now(),
+                computer['runner_id'],
+                'tasks/' + task['id'] + '/Acme__product',
+            ),
+        )
     return task
 
 
 def test_the_fourth_build_waits_on_a_three_build_computer_while_a_repo_free_turn_starts(api):
     from backend import start_places
+
     computer = build_computer(api)
     rid = computer['runner_id']
     for i in range(4):
@@ -813,12 +929,16 @@ def test_the_fourth_build_waits_on_a_three_build_computer_while_a_repo_free_turn
     builds = [claim(api, computer) for _ in range(4)]
     assert all(builds)
     with api.app.state.store.read() as c:
-        assert start_places.build_limit(c.execute('SELECT * FROM runners_with_state WHERE id=?', (rid,)).fetchone()) == 3
+        assert (
+            start_places.build_limit(c.execute('SELECT * FROM runners_with_state WHERE id=?', (rid,)).fetchone()) == 3
+        )
         assert start_places.builds_held(c, rid) == 3
         assert start_places.is_build(c, builds[3]['id'])
     fourth = builds[3]['id']
     assert post(api, f'attempts/{fourth}/start-place', {}, computer['token']) == {
-        'reserved': False, 'waiting': 'builds at once'}
+        'reserved': False,
+        'waiting': 'builds at once',
+    }
     machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == rid)
     assert any(w['reason'] == 'builds at once' for w in machine['turn_counts']['waits'])
     assert 'waiting: builds at once' in machine['turn_summary']
@@ -837,7 +957,9 @@ def test_a_build_waiting_for_a_slot_starts_once_a_running_build_ends(api):
     assert all(builds)
     fourth = builds[3]['id']
     assert post(api, f'attempts/{fourth}/start-place', {}, computer['token']) == {
-        'reserved': False, 'waiting': 'builds at once'}
+        'reserved': False,
+        'waiting': 'builds at once',
+    }
     first = builds[0]['id']
     post(api, f'attempts/{first}/started', {'thread_id': 'build-1'}, computer['token'])
     post(api, f'attempts/{first}/complete', {'outcome': 'completed', 'text': '', 'last_seq': 0}, computer['token'])

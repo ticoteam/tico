@@ -67,9 +67,14 @@ def test_default_month_has_this_months_numbers_and_last_month_is_complete(book):
     prev_start, this_start = months(now)
     with signed_in(settings) as api:
         default = api.get("/api/v2/finance/pnl").json()
-        last_month = api.get("/api/v2/finance/pnl", params={
-            "start": prev_start.isoformat(), "end": (this_start - timedelta(days=1)).isoformat(),
-            "basis": "accrual"}).json()
+        last_month = api.get(
+            "/api/v2/finance/pnl",
+            params={
+                "start": prev_start.isoformat(),
+                "end": (this_start - timedelta(days=1)).isoformat(),
+                "basis": "accrual",
+            },
+        ).json()
         sheet = api.get("/api/v2/finance/balance-sheet").json()
     current = {row["code"]: abs(row["total"]) for row in default["rows"]}
     for code, amount in this_month_by_account().items():
@@ -113,10 +118,16 @@ def test_bills_are_drafted_by_accounts_payable_and_approved_by_ana(book):
     assert set(bills) == {bill["number"] for bill in C["bills"]}
     manufacturer = bills["LA-20417"]
     assert (manufacturer["created_by"], manufacturer["approved_by"], manufacturer["status"]) == (
-        "bot:accounts-payable", "human:ana", "paid")
+        "bot:accounts-payable",
+        "human:ana",
+        "paid",
+    )
     freight = bills["KF-88213"]
     assert (freight["created_by"], freight["approved_by"], freight["status"]) == (
-        "bot:accounts-payable", "human:ana", "open")
+        "bot:accounts-payable",
+        "human:ana",
+        "open",
+    )
 
 
 def test_rules_are_in_force_and_the_bookkeepers_proposal_was_approved_two_days_ago(book):
@@ -128,10 +139,12 @@ def test_rules_are_in_force_and_the_bookkeepers_proposal_was_approved_two_days_a
         assert rules[name]["active"], name
     with sqlite3.connect(settings.db_path) as db:
         [(status, approval_id)] = db.execute(
-            "SELECT status, approval_id FROM fin_actions WHERE kind = 'rule_create' AND actor = ?", (BOOKKEEPER,)).fetchall()
+            "SELECT status, approval_id FROM fin_actions WHERE kind = 'rule_create' AND actor = ?", (BOOKKEEPER,)
+        ).fetchall()
         waiting = db.execute("SELECT COUNT(*) FROM fin_actions WHERE status = 'needs_approval'").fetchone()[0]
         decision, decided_by, decided_at = db.execute(
-            "SELECT decision, decided_by_id, decided_at FROM approvals WHERE id = ?", (approval_id,)).fetchone()
+            "SELECT decision, decided_by_id, decided_at FROM approvals WHERE id = ?", (approval_id,)
+        ).fetchone()
     assert status == "committed"
     assert waiting == 0
     assert (decision, decided_by) == ("approved", "human:ana")
@@ -149,7 +162,7 @@ def test_the_bookkeepers_view_was_granted_six_days_ago_and_a_start_does_not_ask_
         tasks = db.execute("SELECT owner_id, status, created_at FROM tasks WHERE title = ?", (VIEW_TITLE,)).fetchall()
     assert [(owner, status) for owner, status, _ in tasks] == [("human:ana", "done")]
     assert tasks[0][2][:10] == (now - timedelta(days=6)).date().isoformat()
-    with TestClient(create_app(settings)):      # a start of the app, as the demo is opened
+    with TestClient(create_app(settings)):  # a start of the app, as the demo is opened
         pass
     with sqlite3.connect(settings.db_path) as db:
         assert db.execute("SELECT COUNT(*) FROM tasks WHERE title = ?", (VIEW_TITLE,)).fetchone()[0] == 1

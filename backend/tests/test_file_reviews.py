@@ -8,22 +8,37 @@ from backend.tests.test_api import api, headers, post, setup_attempt  # noqa: F4
 
 
 def publish(api, token, text, name="cut.md", path=None):
-    r = api.post("/api/v2/files/uploads", json={"name": name, "text": text, **({"path": path} if path else {})},
-                 headers=headers(token))
+    r = api.post(
+        "/api/v2/files/uploads",
+        json={"name": name, "text": text, **({"path": path} if path else {})},
+        headers=headers(token),
+    )
     assert r.status_code == 200, r.text
     return r.json()["file"]
 
 
 def ask(api, token, review, on="ana", expected=200, question="Is this cut ready?", **body):
-    r = api.post("/api/v2/task-questions", json={"on": on, "question": question, "review": review, **body},
-                 headers=headers(token))
+    r = api.post(
+        "/api/v2/task-questions",
+        json={"on": on, "question": question, "review": review, **body},
+        headers=headers(token),
+    )
     assert r.status_code == expected, r.text
     return r.json()
 
 
 def answer(api, made, labels, other="", token="ana-test", expected=200):
-    return post(api, f"tasks/{made['task']['id']}/answers", {"target": {"task": made["task"]["id"]},
-                "answers": {"decision": labels}, **({"other": other} if other else {})}, token, expected=expected)
+    return post(
+        api,
+        f"tasks/{made['task']['id']}/answers",
+        {
+            "target": {"task": made["task"]["id"]},
+            "answers": {"decision": labels},
+            **({"other": other} if other else {}),
+        },
+        token,
+        expected=expected,
+    )
 
 
 def approved(api, token, **query):
@@ -43,8 +58,14 @@ def test_approve_binds_to_the_version_and_request_changes_supersedes_it(api):
     # The asking bot never answers its own review.
     answer(api, made, ["Approve"], token=bot, expected=403)
     out = answer(api, made, ["Approve"])
-    assert out["answer"]["reviewed"] == [{"file": v1["id"], "version": v1["version"],
-                                         "digest": refs["review"]["files"][0]["digest"], "verdict": "approve"}]
+    assert out["answer"]["reviewed"] == [
+        {
+            "file": v1["id"],
+            "version": v1["version"],
+            "digest": refs["review"]["files"][0]["digest"],
+            "verdict": "approve",
+        }
+    ]
     got = approved(api, bot, file=v1["id"])
     assert got["approved"] and got["by"] == "human:ana" and got["task"] == made["task"]["id"]
     # A new version is a new review: it never inherits the old one's approval.
@@ -53,8 +74,13 @@ def test_approve_binds_to_the_version_and_request_changes_supersedes_it(api):
     assert not approved(api, bot, file=v1["id"])["approved"]
     assert approved(api, bot, file=v1["id"], version=v1["version"])["approved"]
     # Request changes on the same version later wins over the earlier approval.
-    again = ask(api, bot, [{"file": v1["id"], "version": v1["version"]}], topic="cut-1-again",
-                question="Is the first cut ready after all?")
+    again = ask(
+        api,
+        bot,
+        [{"file": v1["id"], "version": v1["version"]}],
+        topic="cut-1-again",
+        question="Is the first cut ready after all?",
+    )
     answer(api, again, ["Request changes"], other="Tighten the intro.")
     got = approved(api, bot, file=v1["id"], version=v1["version"])
     assert not got["approved"] and got["verdict"] == "changes"
@@ -64,8 +90,13 @@ def test_a_pick_spend_is_approved_once_and_spent_once(api):
     _, _, attempt = setup_attempt(api)
     bot = attempt["token"]
     a, b = publish(api, bot, "# A", "teaser-a.md"), publish(api, bot, "# B", "teaser-b.md")
-    made = ask(api, bot, [{"file": a["id"]}, {"file": b["id"]}], pick=True,
-               spend={"label": "teaser a", "amount": "12.50", "what": "Render the final cut"})
+    made = ask(
+        api,
+        bot,
+        [{"file": a["id"]}, {"file": b["id"]}],
+        pick=True,
+        spend={"label": "teaser a", "amount": "12.50", "what": "Render the final cut"},
+    )
     labels = [o["label"] for o in made["question"]["refs"]["questions"][0]["options"]]
     assert labels == ["teaser a", "teaser b", "Request changes"]
     out = answer(api, made, ["teaser a"])
@@ -83,16 +114,26 @@ def test_a_pick_spend_is_approved_once_and_spent_once(api):
         with api.app.state.store.transaction() as c:
             H.approval_consume(c, "bot:ops", aid)
     # A spend on a label that is not an option is refused at ask time.
-    ask(api, bot, [{"file": a["id"]}, {"file": b["id"]}], pick=True, topic="other", expected=422,
-        spend={"label": "Neither", "amount": "5", "what": "Render"})
+    ask(
+        api,
+        bot,
+        [{"file": a["id"]}, {"file": b["id"]}],
+        pick=True,
+        topic="other",
+        expected=422,
+        spend={"label": "Neither", "amount": "5", "what": "Render"},
+    )
 
 
 def test_the_person_asked_must_be_able_to_open_the_file(api):
     # The file sits in Ana's private chat with the bot: Ben cannot open it, so he cannot be asked to review it.
     _, _, attempt = setup_attempt(api)
     v1 = publish(api, attempt["token"], "# Private cut")
-    r = api.post("/api/v2/task-questions", json={"on": "ben", "question": "Is this cut ready?",
-                                                 "review": [{"file": v1["id"]}]}, headers=headers(attempt["token"]))
+    r = api.post(
+        "/api/v2/task-questions",
+        json={"on": "ben", "question": "Is this cut ready?", "review": [{"file": v1["id"]}]},
+        headers=headers(attempt["token"]),
+    )
     assert r.status_code == 403 and r.json()["error"]["code"] == "privacy", r.text
     r = api.get("/api/v2/file-approvals", params={"file": v1["id"]}, headers=headers("ben-test"))
     assert r.status_code == 404
@@ -100,10 +141,12 @@ def test_the_person_asked_must_be_able_to_open_the_file(api):
 
 def test_a_bot_checks_its_checkout_file_by_the_digest_of_its_bytes(api):
     import hashlib
+
     _, _, attempt = setup_attempt(api)
     bot = attempt["token"]
-    r = api.post("/api/v2/files/uploads", json={"name": "cut.md", "text": "# Cut", "path": "cuts/cut.md"},
-                 headers=headers(bot))
+    r = api.post(
+        "/api/v2/files/uploads", json={"name": "cut.md", "text": "# Cut", "path": "cuts/cut.md"}, headers=headers(bot)
+    )
     assert r.status_code == 200, r.text
     answer(api, ask(api, bot, [{"file": r.json()["file"]["id"]}]), ["Approve"])
     same, edited = (hashlib.sha256(text.encode()).hexdigest() for text in ("# Cut", "# Cut, edited"))
@@ -113,6 +156,7 @@ def test_a_bot_checks_its_checkout_file_by_the_digest_of_its_bytes(api):
 
 def test_a_later_verdict_on_a_newer_version_with_the_same_bytes_decides_by_path(api):
     import hashlib
+
     _, _, attempt = setup_attempt(api)
     bot = attempt["token"]
     same = hashlib.sha256(b"# Cut").hexdigest()
@@ -125,8 +169,9 @@ def test_a_later_verdict_on_a_newer_version_with_the_same_bytes_decides_by_path(
     answer(api, changes, ["Request changes"], other="Tighten the intro.")
     got = approved(api, bot, path="cuts/cut.md", digest=same)
     assert not got["approved"] and got["version"] == 3 and got["verdict"] == "changes"
-    fixed = ask(api, bot, [{"file": v3["id"], "version": 3}], topic="cut-v3-fixed",
-                question="Is the cut ready after the fix?")
+    fixed = ask(
+        api, bot, [{"file": v3["id"], "version": 3}], topic="cut-v3-fixed", question="Is the cut ready after the fix?"
+    )
     answer(api, fixed, ["Approve"])
     got = approved(api, bot, path="cuts/cut.md", digest=same)
     assert got["approved"] and got["version"] == 3 and got["verdict"] == "approve"
@@ -142,8 +187,11 @@ def test_a_bot_reviews_another_bots_file_and_only_by_names_whose_verdicts_count(
     _, _, ops = setup_attempt(api)
     _, _, finance = setup_attempt(api, bot="finance")
     task = post(api, "tasks", {"owner": "bot:ops", "title": "Cut the launch video", "body": "For the launch."})
-    r = api.post("/api/v2/files/uploads", json={"name": "cut.md", "text": "# Cut", "task": task["id"]},
-                 headers=headers(ops["token"]))
+    r = api.post(
+        "/api/v2/files/uploads",
+        json={"name": "cut.md", "text": "# Cut", "task": task["id"]},
+        headers=headers(ops["token"]),
+    )
     assert r.status_code == 200, r.text
     fid = r.json()["file"]["id"]
     # A bot never reviews its own bot's file.
@@ -155,8 +203,12 @@ def test_a_bot_reviews_another_bots_file_and_only_by_names_whose_verdicts_count(
     assert approved(api, ops["token"], file=fid, by="bot:finance")["approved"]
     assert approved(api, ops["token"], file=fid, by="any")["approved"]
     assert not approved(api, ops["token"], file=fid, by="bot:writer")["approved"]
-    assert api.get("/api/v2/file-approvals", params={"file": fid, "by": "everyone"},
-                   headers=headers(ops["token"])).status_code == 422
+    assert (
+        api.get(
+            "/api/v2/file-approvals", params={"file": fid, "by": "everyone"}, headers=headers(ops["token"])
+        ).status_code
+        == 422
+    )
     # Each --by reads its own newest verdict.
     review(api, finance["token"], {"file": fid, "task": task["id"], "verdict": "changes", "note": "Trim the end."})
     review(api, "ana-test", {"file": fid, "task": task["id"], "verdict": "approve"})
@@ -186,6 +238,7 @@ def test_deleting_a_review_question_is_allowed_and_its_verdicts_stop_counting(ap
     assert approved(api, bot, file=v1["id"])["approved"]
     # A verdict is not work done on the task (backend/task_delete.py FILE_WORK); the bot's wake by the answer is.
     from backend.task_delete import delete_tasks
+
     with api.app.state.store.read() as c:
         assert "bot_file_activity.task_id" not in delete_tasks(c, [made["task"]["id"]])["refused"]
     assert post(api, f"tasks/{made['task']['id']}/delete", {}) == {"deleted": made["task"]["id"]}
@@ -202,10 +255,18 @@ def test_a_reader_who_cannot_open_a_reviewed_file_sees_none_of_its_details_whate
         shown = api.get(f"/api/v2/tasks/{made['task']['id']}", headers=headers(who))
         assert shown.status_code == 200, shown.text
         task = shown.json()["task"]
-        assert "attachments" not in (task["review"] or {})      # only the card's ask carries them, per reader
+        assert "attachments" not in (task["review"] or {})  # only the card's ask carries them, per reader
         return task["ask"]["refs"]["attachments"]
+
     [mine] = attachments("ana-test")
     assert mine["title"] and mine["name"] == "launch-cut.md" and mine["size"]
     [theirs] = attachments("cara-test")
-    assert theirs == {"id": v1["id"], "file_id": v1["id"], "version": 1, "ref": f"{v1['id']}@1", "kind": mine["kind"],
-                      "removed": True, "current_version": None}
+    assert theirs == {
+        "id": v1["id"],
+        "file_id": v1["id"],
+        "version": 1,
+        "ref": f"{v1['id']}@1",
+        "kind": mine["kind"],
+        "removed": True,
+        "current_version": None,
+    }

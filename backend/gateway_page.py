@@ -3,6 +3,7 @@
 The catalog is backend/gateway_tiers.py's (HQ's, refreshed while the Gateway is connected, else this release's). The
 picks in use are counted from the bots' own settings: a bot counts once for each pick it uses, as its model, its
 fallback or its task model."""
+
 import json
 
 from . import gateway_connection, gateway_tiers, providers
@@ -20,17 +21,25 @@ def catalog(c, settings=None):
 def pick_row(found, bots):
     """One row of the picks table from `gateway_tiers.resolve`: no "Tico" in the name, the version or `auto`."""
     old = found["old"]
-    return {"id": found["id"], "name": found["label"], "model": found["model"],
-            "version": "auto" if found["auto"] else found["version"] + (" (old lineup)" if old else ""),
-            "bots": bots, "price": gateway_tiers.money(found["price"]), "old": old}
+    return {
+        "id": found["id"],
+        "name": found["label"],
+        "model": found["model"],
+        "version": "auto" if found["auto"] else found["version"] + (" (old lineup)" if old else ""),
+        "bots": bots,
+        "price": gateway_tiers.money(found["price"]),
+        "old": old,
+    }
 
 
 def picks(c, settings=None):
     """The Gateway picks the active bots use, most used first."""
     record = providers.load(c, settings)
     counts = {}
-    for row in c.execute(f"SELECT b.slug, {BS.CONFIG} AS config FROM bots b JOIN bot_config bc ON bc.bot=b.id {BS.JOIN} "
-                         "WHERE b.state<>'archived'"):
+    for row in c.execute(
+        f"SELECT b.slug, {BS.CONFIG} AS config FROM bots b JOIN bot_config bc ON bc.bot=b.id {BS.JOIN} "
+        "WHERE b.state<>'archived'"
+    ):
         try:
             config = json.loads(row["config"] or "{}")
         except ValueError:
@@ -67,9 +76,13 @@ def _now(tier):
     and inputs. A version that names no inputs reads text only, as `gateway_tiers.resolve` reads it."""
     now = next((v for v in tier["versions"] if v["version"] == tier["current"]), tier["versions"][-1])
     long = now.get("long_prompt")
-    return {"model": now["model"], "price": _price(now["price"]),
-            "long": f"{_price(long)} past {_tokens(long['from'])}" if long else "",
-            "context": now.get("context") or 0, "inputs": list(now.get("inputs") or ["text"])}
+    return {
+        "model": now["model"],
+        "price": _price(now["price"]),
+        "long": f"{_price(long)} past {_tokens(long['from'])}" if long else "",
+        "context": now.get("context") or 0,
+        "inputs": list(now.get("inputs") or ["text"]),
+    }
 
 
 def models(cat):
@@ -81,17 +94,36 @@ def models(cat):
     tiers = {(row["department"], row["level"], bool(row["fast"])): _now(row) for row in live if row.get("department")}
     departments = [ident for ident in names if any(key[0] == ident for key in tiers)]
     levels = [(row["id"], row["name"]) for row in cat["levels"]]
-    same = bool(departments) and all(tiers.get((d, level, fast)) == tiers.get((departments[0], level, fast))
-                                     for d in departments for level, _ in levels for fast in (False, True))
+    same = bool(departments) and all(
+        tiers.get((d, level, fast)) == tiers.get((departments[0], level, fast))
+        for d in departments
+        for level, _ in levels
+        for fast in (False, True)
+    )
     groups = [("", departments[0])] if same else [(names[d] + " · ", d) for d in departments]
-    rows = [{"id": level if same else f"{department}-{level}", "name": prefix + name,
-             "model": tiers[(department, level, False)], "fast": tiers.get((department, level, True))}
-            for prefix, department in groups for level, name in levels if (department, level, False) in tiers]
+    rows = [
+        {
+            "id": level if same else f"{department}-{level}",
+            "name": prefix + name,
+            "model": tiers[(department, level, False)],
+            "fast": tiers.get((department, level, True)),
+        }
+        for prefix, department in groups
+        for level, name in levels
+        if (department, level, False) in tiers
+    ]
     meeting = next((row for row in live if row["id"] == gateway_tiers.MEETING_TIER), None)
-    return {"same": same, "departments": [names[d] for d in departments], "levels": rows,
-            "meeting": {"name": meeting["name"], **_now(meeting)} if meeting else None,
-            "decisions": [{"id": row["id"], "name": row["name"], **_now(row)}
-                          for row in map(gateway_tiers.live_row, cat["decisions"]) if row is not None and row["versions"]]}
+    return {
+        "same": same,
+        "departments": [names[d] for d in departments],
+        "levels": rows,
+        "meeting": {"name": meeting["name"], **_now(meeting)} if meeting else None,
+        "decisions": [
+            {"id": row["id"], "name": row["name"], **_now(row)}
+            for row in map(gateway_tiers.live_row, cat["decisions"])
+            if row is not None and row["versions"]
+        ],
+    }
 
 
 def overview(c, settings=None, *, owner=False):
@@ -99,7 +131,14 @@ def overview(c, settings=None, *, owner=False):
     and the services."""
     cat = catalog(c, settings)
     rows, decide = picks(c, settings)
-    return {"connection": gateway_connection.view(c, settings, manage=owner), "as_of": cat.get("as_of", ""),
-            "picks": rows, "decide_level": decide, "models": models(cat),
-            "services": [{**row, "for": row.get("for") or "", "tools": row["tools"], "details": row.get("details") or []}
-                         for row in cat["services"]]}
+    return {
+        "connection": gateway_connection.view(c, settings, manage=owner),
+        "as_of": cat.get("as_of", ""),
+        "picks": rows,
+        "decide_level": decide,
+        "models": models(cat),
+        "services": [
+            {**row, "for": row.get("for") or "", "tools": row["tools"], "details": row.get("details") or []}
+            for row in cat["services"]
+        ],
+    }

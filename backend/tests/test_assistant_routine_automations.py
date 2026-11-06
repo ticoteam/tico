@@ -40,7 +40,7 @@ def test_the_sweep_is_listed_edited_paused_run_by_the_owner_and_hidden_from_quin
     assert shown["can_edit"] is True and shown["can_pause"] is True
 
     # A person who is not above the Assistant does not see the sweep, and changes nothing about it.
-    as_person(api, "quinn")                    # registers the identity; its token is "quinn"
+    as_person(api, "quinn")  # registers the identity; its token is "quinn"
     quinn = "quinn"
     assert aid not in _listed_ids(api, quinn)
     assert _call(api, "GET", f"automations/{aid}", quinn, expected=403)
@@ -51,11 +51,12 @@ def test_the_sweep_is_listed_edited_paused_run_by_the_owner_and_hidden_from_quin
     assert still["enabled"] is True and still["version"] == 1
 
     # The owner changes its schedule and switch.
-    edited = _call(api, "PATCH", f"automations/{aid}",
-                   body={"trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}})
+    edited = _call(
+        api, "PATCH", f"automations/{aid}", body={"trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}}
+    )
     assert edited["version"] == 2 and edited["trigger"]["cron"] == "0 9 * * *"
     paused = _call(api, "PATCH", f"automations/{aid}", body={"enabled": False})
-    assert paused["enabled"] is False and paused["version"] == 2     # a pause is not a new version
+    assert paused["enabled"] is False and paused["version"] == 2  # a pause is not a new version
     resumed = _call(api, "PATCH", f"automations/{aid}", body={"enabled": True})
     assert resumed["enabled"] is True
 

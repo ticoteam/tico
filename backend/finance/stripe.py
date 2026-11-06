@@ -2,6 +2,7 @@
 never logged. Only the sync worker (finance/stripe_sync.py) and the connect probe call it, outside any transaction.
 Every call returns (status, JSON); it never raises for an HTTP answer. A 429 waits out Retry-After a few times, and a
 redirect is never followed (the key stays with the host it was meant for)."""
+
 import http.client
 import json
 import logging
@@ -16,15 +17,15 @@ from typing import Any, Protocol, cast
 from .mercury import Answer, Opener
 
 BASE = "https://api.stripe.com/v1"
-BASE_ENV = "TICO_STRIPE_BASE"          # a developer's override: a local fake (scripts/fake_stripe.py)
+BASE_ENV = "TICO_STRIPE_BASE"  # a developer's override: a local fake (scripts/fake_stripe.py)
 OVERRIDE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})  # the only hosts it may name
 log = logging.getLogger(__name__)
 _warned = [False]
 TIMEOUT = 15
 MAX_WAIT = 30.0
 TRIES_429 = 3
-PAGE = 100                             # Stripe's list limit per page
-EXPAND = ("data.source",)              # each balance transaction's charge, refund or payout, for who paid
+PAGE = 100  # Stripe's list limit per page
+EXPAND = ("data.source",)  # each balance transaction's charge, refund or payout, for who paid
 
 
 class Provider(Protocol):
@@ -53,8 +54,9 @@ def base_url() -> str:
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Never follow a redirect: urllib would resend the Authorization header to wherever Location points."""
 
-    def redirect_request(self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any,
-                         newurl: str) -> urllib.request.Request | None:
+    def redirect_request(
+        self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> urllib.request.Request | None:
         return None
 
 
@@ -62,8 +64,9 @@ _OPENER = urllib.request.build_opener(_NoRedirect())
 
 
 class Stripe:
-    def __init__(self, key: str, base: str = BASE, opener: Opener | None = None,
-                 sleep: Callable[[float], None] = time.sleep) -> None:
+    def __init__(
+        self, key: str, base: str = BASE, opener: Opener | None = None, sleep: Callable[[float], None] = time.sleep
+    ) -> None:
         self._key, self._base, self._opener, self._sleep = key, base.rstrip("/"), opener, sleep
 
     def _get(self, path: str, params: Sequence[tuple[str, str]]) -> Answer:
@@ -117,7 +120,7 @@ def _retry_after(value: object, attempt: int) -> float:
     try:
         wait = float(str(value))
     except (TypeError, ValueError):
-        wait = 2.0 ** attempt
+        wait = 2.0**attempt
     return max(0.0, min(wait, MAX_WAIT))
 
 

@@ -4,6 +4,7 @@ Prefers a Google Workspace Directory thumbnail when the mail service-account key
 and domain-wide delegation includes `admin.directory.user.readonly`. Otherwise the roster
 `photo` URL (the Slack profile image) is used by the photo endpoint as a redirect.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -41,14 +42,16 @@ def google_photo(email, subject=None):
         return None
     subject = subject or email
     try:
-        creds = service_account.Credentials.from_service_account_file(
-            str(path), scopes=[DIRECTORY_SCOPE]).with_subject(subject)
+        creds = service_account.Credentials.from_service_account_file(str(path), scopes=[DIRECTORY_SCOPE]).with_subject(
+            subject
+        )
         service = build("admin", "directory_v1", credentials=creds, cache_discovery=False)
         photo = service.users().photos().get(userKey=email).execute()
         data = photo.get("photoData") or ""
         if not data:
             return None
         import base64
+
         raw = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
         mime = str(photo.get("mimeType") or "image/jpeg")
         return raw, mime
@@ -133,6 +136,7 @@ REMOTE_MAX_BYTES = 2_000_000
 
 def _slack_url(url):
     from urllib.parse import urlsplit
+
     try:
         parts = urlsplit(str(url or ""))
     except ValueError:
@@ -168,6 +172,7 @@ def remote_photo(settings, url, fetch=None):
 
 def _fetch(url):
     import urllib.request
+
     request = urllib.request.Request(url, headers={"User-Agent": "Tico/1.0 (+https://tico.team)"})
     with urllib.request.urlopen(request, timeout=5) as response:
         data = response.read(REMOTE_MAX_BYTES + 1)

@@ -19,6 +19,7 @@ HQ's answer also carries short messages for given versions and the known issues 
 install keeps them with the release and shows its own version's: a message once in the app, and the known issues in
 Help. Nothing more is sent for them; an answer from GitHub has none, and then Help says it could not check.
 """
+
 import logging
 import json
 import os
@@ -37,12 +38,12 @@ log = logging.getLogger("tico.releases")
 ROOT = Path(__file__).resolve().parents[1]
 LATEST_URL = "https://api.github.com/repos/ticoteam/tico/releases/latest"
 TTL = 6 * 3600
-CHECK_WAIT = 10          # the owner's "Check for updates" waits this long for the fresh answer
-FORCE_GAP = 60           # the owner's "Check for updates" may reach GitHub at most this often
-RETRY = 15 * 60          # after a failed check; a rate-limited or offline box should not hammer GitHub
+CHECK_WAIT = 10  # the owner's "Check for updates" waits this long for the fresh answer
+FORCE_GAP = 60  # the owner's "Check for updates" may reach GitHub at most this often
+RETRY = 15 * 60  # after a failed check; a rate-limited or offline box should not hammer GitHub
 MANUAL_COMMAND = "docker compose pull && docker compose up -d"
 SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
-HQ_WAIT = 3              # HQ is a convenience: when it is slow the check goes to GitHub instead
+HQ_WAIT = 3  # HQ is a convenience: when it is slow the check goes to GitHub instead
 MAX_LISTED = 50
 VERSIONS = re.compile(r"^[0-9]{1,4}\.[0-9]{1,4}(?:\.[0-9]{1,4})?$")
 # Replaced in tests with an httpx.MockTransport so nothing reaches the network.
@@ -100,7 +101,7 @@ def covers(versions, current):
     """Whether HQ's message for `versions` ("0.2", or one release "0.3.50") is for `current`."""
     have = parse(current)
     want = [int(p) for p in versions.split(".")]
-    return bool(have) and list(have[:len(want)]) == want
+    return bool(have) and list(have[: len(want)]) == want
 
 
 def affected(issue, current):
@@ -118,15 +119,34 @@ def extras(body):
     """HQ's messages and known issues from its answer, checked field by field; anything malformed is left out."""
     notices, issues = [], []
     for n in (body.get("notices") or [])[:MAX_LISTED] if isinstance(body.get("notices"), list) else []:
-        if isinstance(n, dict) and isinstance(n.get("id"), int) and VERSIONS.match(str(n.get("versions") or "")) \
-                and isinstance(n.get("body"), str) and 0 < len(n["body"].strip()) <= 280:
-            notices.append({"id": n["id"], "versions": n["versions"], "body": n["body"].strip(), "url": _https(n.get("url"))})
+        if (
+            isinstance(n, dict)
+            and isinstance(n.get("id"), int)
+            and VERSIONS.match(str(n.get("versions") or ""))
+            and isinstance(n.get("body"), str)
+            and 0 < len(n["body"].strip()) <= 280
+        ):
+            notices.append(
+                {"id": n["id"], "versions": n["versions"], "body": n["body"].strip(), "url": _https(n.get("url"))}
+            )
     for i in (body.get("known_issues") or [])[:MAX_LISTED] if isinstance(body.get("known_issues"), list) else []:
-        if isinstance(i, dict) and isinstance(i.get("id"), int) and isinstance(i.get("title"), str) \
-                and 0 < len(i["title"].strip()) <= 200 and parse(i.get("since")):
+        if (
+            isinstance(i, dict)
+            and isinstance(i.get("id"), int)
+            and isinstance(i.get("title"), str)
+            and 0 < len(i["title"].strip()) <= 200
+            and parse(i.get("since"))
+        ):
             fixed = str(i.get("fixed_in") or "")
-            issues.append({"id": i["id"], "title": i["title"].strip(), "since": i["since"],
-                           "fixed_in": fixed if parse(fixed) else "", "url": _https(i.get("url"))})
+            issues.append(
+                {
+                    "id": i["id"],
+                    "title": i["title"].strip(),
+                    "since": i["since"],
+                    "fixed_in": fixed if parse(fixed) else "",
+                    "url": _https(i.get("url")),
+                }
+            )
     return {"notices": notices, "known_issues": issues}
 
 
@@ -140,20 +160,24 @@ class Checker:
         self.lock = threading.Lock()
         self.etag = ""
         self.release = None
-        self.extras = None   # HQ's messages and known issues, or None when the last answer was GitHub's
+        self.extras = None  # HQ's messages and known issues, or None when the last answer was GitHub's
         self.checked = 0.0
         self.retry_at = 0.0
         self.running = False
         self.forced = 0.0
-        self.census = None   # set by create_app: the counting policy and this install's payload
+        self.census = None  # set by create_app: the counting policy and this install's payload
 
     def bind(self, census):
         self.census = census
 
     @staticmethod
     def enabled():
-        return (not rehearsal_on()
-                and os.environ.get("TICO_UPDATE_CHECK", "").strip().lower() not in ("off", "0", "false", "no"))
+        return not rehearsal_on() and os.environ.get("TICO_UPDATE_CHECK", "").strip().lower() not in (
+            "off",
+            "0",
+            "false",
+            "no",
+        )
 
     def refresh(self, force=False):
         """One request, conditional unless `force`. Runs in a background thread; tests call it directly."""
@@ -161,7 +185,7 @@ class Checker:
         url = mirror or LATEST_URL
         headers = {"Accept": "application/vnd.github+json", "User-Agent": "tico-update-check"}
         if force:
-            headers["Cache-Control"] = "no-cache"   # the owner asked because a release just went out
+            headers["Cache-Control"] = "no-cache"  # the owner asked because a release just went out
         elif self.etag and self.release:
             headers["If-None-Match"] = self.etag
         try:
@@ -174,9 +198,12 @@ class Checker:
                 pass
             elif r.status_code == 200:
                 body = r.json()
-                self.release = {"tag": str(body.get("tag_name") or ""), "url": str(body.get("html_url") or ""),
-                                "published_at": str(body.get("published_at") or ""),
-                                "name": str(body.get("name") or body.get("tag_name") or "")}
+                self.release = {
+                    "tag": str(body.get("tag_name") or ""),
+                    "url": str(body.get("html_url") or ""),
+                    "published_at": str(body.get("published_at") or ""),
+                    "name": str(body.get("name") or body.get("tag_name") or ""),
+                }
                 self.extras = extras(body) if from_hq else None
                 self.etag = r.headers.get("etag", "")
             else:
@@ -196,8 +223,12 @@ class Checker:
             query = self.census.query(version())
             if query is None:
                 return None
-            r = http.get(hq_url() + "/v1/latest", params=query, timeout=HQ_WAIT,
-                         headers={"Accept": "application/json", "User-Agent": "tico-update-check"})
+            r = http.get(
+                hq_url() + "/v1/latest",
+                params=query,
+                timeout=HQ_WAIT,
+                headers={"Accept": "application/json", "User-Agent": "tico-update-check"},
+            )
             if r.status_code == 200 and isinstance(r.json(), dict) and r.json().get("tag_name"):
                 return r
         except Exception as exc:
@@ -214,8 +245,13 @@ class Checker:
         with self.lock:
             wait = FORCE_GAP - (self.clock() - self.forced)
             if wait > 0:
-                raise Problem("rate_limited", "Checked a moment ago. Try again in %d seconds." % (int(wait) + 1), 429,
-                              retryable=True, extra={"retry_after": int(wait) + 1})
+                raise Problem(
+                    "rate_limited",
+                    "Checked a moment ago. Try again in %d seconds." % (int(wait) + 1),
+                    429,
+                    retryable=True,
+                    extra={"retry_after": int(wait) + 1},
+                )
             self.forced = self.clock()
         with self.lock:
             self.running = True
@@ -226,8 +262,12 @@ class Checker:
             return False
         # refresh() swallows failures and schedules a retry; that is how a failed check shows here.
         if self.retry_at > self.clock():
-            raise Problem("check_failed", "Could not reach GitHub to look for a new release. Try again later.", 502,
-                          retryable=True)
+            raise Problem(
+                "check_failed",
+                "Could not reach GitHub to look for a new release. Try again later.",
+                502,
+                retryable=True,
+            )
         return True
 
     def _refresh_if_stale(self):
@@ -243,16 +283,30 @@ class Checker:
     def view(self, current):
         """The notice payload. Returns at once with whatever is cached. `message` is HQ's newest message for this
         version (or None), `known_issues` the issues HQ lists for it, and `known_issues_checked` whether HQ answered."""
-        out = {"current": current, "latest": "", "available": False, "url": "", "published_at": "", "name": "",
-               "message": None, "known_issues": [], "known_issues_checked": False}
+        out = {
+            "current": current,
+            "latest": "",
+            "available": False,
+            "url": "",
+            "published_at": "",
+            "name": "",
+            "message": None,
+            "known_issues": [],
+            "known_issues_checked": False,
+        }
         if not self.enabled() or parse(current) is None:
             return out
         self._refresh_if_stale()
         release, more = self.release, self.extras
         if release:
             latest = release["tag"].lstrip("v")
-            out.update(latest=latest, url=release["url"], published_at=release["published_at"], name=release["name"],
-                       available=newer(latest, current))
+            out.update(
+                latest=latest,
+                url=release["url"],
+                published_at=release["published_at"],
+                name=release["name"],
+                available=newer(latest, current),
+            )
         if more is not None:
             out["message"] = next((n for n in more["notices"] if covers(n["versions"], current)), None)
             out["known_issues"] = [i for i in more["known_issues"] if affected(i, current)]
@@ -292,8 +346,13 @@ def _call(method, path, body=None):
         return r.json()
     except (httpx.HTTPError, ValueError) as exc:
         log.warning("Updater call %s %s failed: %s", method, path, type(exc).__name__)
-        raise Problem("updater_unreachable", "The updater did not answer. Try again, or update by hand.", 502,
-                      retryable=True, extra={"command": MANUAL_COMMAND}) from None
+        raise Problem(
+            "updater_unreachable",
+            "The updater did not answer. Try again, or update by hand.",
+            502,
+            retryable=True,
+            extra={"command": MANUAL_COMMAND},
+        ) from None
 
 
 def updater_answer(method, path, body=None):
@@ -320,9 +379,15 @@ def status():
     if not _updater()[0]:
         return {"configured": False, "state": "unavailable", "command": MANUAL_COMMAND}
     data = _call("GET", "/status")
-    return {"configured": True, "state": str(data.get("state") or ""), "from": str(data.get("from") or ""),
-            "to": str(data.get("to") or ""), "message": str(data.get("message") or ""),
-            "snapshot": str(data.get("snapshot") or ""), "restored": bool(data.get("restored"))}
+    return {
+        "configured": True,
+        "state": str(data.get("state") or ""),
+        "from": str(data.get("from") or ""),
+        "to": str(data.get("to") or ""),
+        "message": str(data.get("message") or ""),
+        "snapshot": str(data.get("snapshot") or ""),
+        "restored": bool(data.get("restored")),
+    }
 
 
 def start(target):
@@ -331,8 +396,12 @@ def start(target):
     if managed():
         raise Problem("managed_update", "Tico updates this server. There is nothing to run here.", 409)
     if not _updater()[0]:
-        raise Problem("manual_update", "This installation has no updater. Run this on the server: " + MANUAL_COMMAND,
-                      409, extra={"command": MANUAL_COMMAND})
+        raise Problem(
+            "manual_update",
+            "This installation has no updater. Run this on the server: " + MANUAL_COMMAND,
+            409,
+            extra={"command": MANUAL_COMMAND},
+        )
     # "from" is the release this server is running, not whatever an earlier update left in the updater's status.
     _call("POST", "/update", {"version": str(target).lstrip("v"), "from": version()})
     log.info("Update to %s requested", target)

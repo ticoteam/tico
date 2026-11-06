@@ -31,7 +31,7 @@ PAGE_MAX = 100
 WORDS = 200
 TASK_ACTIONS = ("task.create", "task.update", "task.close")
 RESTORE_ACTION = "assistant.change.restore"
-TASK_FIELD_KEY = {"status": "status", "owner": "owner_id"}     # a task history field (kind) -> the tasks column it sets
+TASK_FIELD_KEY = {"status": "status", "owner": "owner_id"}  # a task history field (kind) -> the tasks column it sets
 
 
 def install(app, store, auth, mutate, settings):
@@ -55,6 +55,7 @@ def install(app, store, auth, mutate, settings):
 
         def work(c):
             return restore(c, auth, who, cid, settings)
+
         return mutate(request, body, work)
 
 
@@ -70,16 +71,31 @@ def listing(c, auth, who, days, limit, before, settings):
         cut, cut_args = "created_at <= ?", (H.now(),)
     fetch = limit + 1
     sources = (
-        ("event", "SELECT * FROM events WHERE actor=? AND created_at>=? AND " + cut + " AND action IN (?,?,?,?) "
-                  "AND json_extract(detail,'$.via')='assistant' ORDER BY created_at DESC, id DESC LIMIT ?",
-         (who.actor, since, *cut_args, *TASK_ACTIONS, "approval.decide", fetch)),
-        ("audit", "SELECT * FROM audit_log WHERE actor=? AND created_at>=? AND " + cut + " AND via='assistant' "
-                  "ORDER BY created_at DESC, id DESC LIMIT ?", (who.actor, since, *cut_args, fetch)),
-        ("message", "SELECT * FROM messages WHERE sender_id=? AND created_at>=? AND " + cut + " "
-                    "AND refs LIKE '%assistant%' AND json_extract(refs,'$.via')='assistant' "
-                    "ORDER BY created_at DESC, id DESC LIMIT ?", (who.actor, since, *cut_args, fetch)),
-        ("setting", "SELECT * FROM settings_changes WHERE actor=? AND created_at>=? AND " + cut + " AND via='assistant' "
-                    "ORDER BY created_at DESC, id DESC LIMIT ?", (who.actor, since, *cut_args, fetch)),
+        (
+            "event",
+            "SELECT * FROM events WHERE actor=? AND created_at>=? AND " + cut + " AND action IN (?,?,?,?) "
+            "AND json_extract(detail,'$.via')='assistant' ORDER BY created_at DESC, id DESC LIMIT ?",
+            (who.actor, since, *cut_args, *TASK_ACTIONS, "approval.decide", fetch),
+        ),
+        (
+            "audit",
+            "SELECT * FROM audit_log WHERE actor=? AND created_at>=? AND " + cut + " AND via='assistant' "
+            "ORDER BY created_at DESC, id DESC LIMIT ?",
+            (who.actor, since, *cut_args, fetch),
+        ),
+        (
+            "message",
+            "SELECT * FROM messages WHERE sender_id=? AND created_at>=? AND " + cut + " "
+            "AND refs LIKE '%assistant%' AND json_extract(refs,'$.via')='assistant' "
+            "ORDER BY created_at DESC, id DESC LIMIT ?",
+            (who.actor, since, *cut_args, fetch),
+        ),
+        (
+            "setting",
+            "SELECT * FROM settings_changes WHERE actor=? AND created_at>=? AND " + cut + " AND via='assistant' "
+            "ORDER BY created_at DESC, id DESC LIMIT ?",
+            (who.actor, since, *cut_args, fetch),
+        ),
     )
     rows = []
     for kind, sql, args in sources:
@@ -87,8 +103,7 @@ def listing(c, auth, who, days, limit, before, settings):
     rows.sort(key=lambda x: (x[1]["created_at"], x[1]["id"]), reverse=True)
     shown = [describe(c, auth, who, kind, row, settings) for kind, row in rows[:limit]]
     last = shown[-1] if len(rows) > limit and shown else None
-    return {"actor": who.actor, "days": days, "changes": shown,
-            "next": f"{last['at']}|{last['id']}" if last else None}
+    return {"actor": who.actor, "days": days, "changes": shown, "next": f"{last['at']}|{last['id']}" if last else None}
 
 
 def describe(c, auth, who, kind, row, settings):
@@ -97,8 +112,17 @@ def describe(c, auth, who, kind, row, settings):
     if kind == "event":
         detail = json.loads(row["detail"] or "{}") or {}
         target = row["target"] or ""
-        obj = target if ":" in target else (f"task:{target}" if row["action"].startswith("task.") else
-                                            f"approval:{target}" if row["action"].startswith("approval.") else target)
+        obj = (
+            target
+            if ":" in target
+            else (
+                f"task:{target}"
+                if row["action"].startswith("task.")
+                else f"approval:{target}"
+                if row["action"].startswith("approval.")
+                else target
+            )
+        )
         what = event_line(c, auth, who, row, detail, obj)
         words = cited_words(c, detail.get("delegation"))
         undo, why = undoable(c, auth, who, kind, row, detail, settings)
@@ -119,8 +143,14 @@ def describe(c, auth, who, kind, row, settings):
         what = "Answered a question" if row["kind"] == "answer" else "Sent a message"
         words = (row["body"] or "")[:WORDS]
         undo, why = False, "a message sent stays sent"
-    out = {"id": cid, "at": row["created_at"], "what": what[:200], "words": words[:WORDS], "object": obj,
-           "undoable": bool(undo)}
+    out = {
+        "id": cid,
+        "at": row["created_at"],
+        "what": what[:200],
+        "words": words[:WORDS],
+        "object": obj,
+        "undoable": bool(undo),
+    }
     if not undo:
         out["why_not"] = why
     return out
@@ -156,13 +186,22 @@ def audit_line(obj, before, after):
     kind, _, _ = obj.partition(":")
     if kind == "automation":
         name = (after or before or {}).get("name") or "an automation"
-        return f"Created automation '{name}'" if before is None else (
-            f"Deleted automation '{name}'" if after is None else f"Changed automation '{name}'")
+        return (
+            f"Created automation '{name}'"
+            if before is None
+            else (f"Deleted automation '{name}'" if after is None else f"Changed automation '{name}'")
+        )
     if kind == "org_rule":
         text = ((after or before or {}).get("text") or "a rule")[:120]
-        return f"Added the rule: {text}" if before is None else (
-            f"Retired the rule: {text}" if after is None or (after or {}).get("status") == "retired"
-            else f"Changed the rule: {text}")
+        return (
+            f"Added the rule: {text}"
+            if before is None
+            else (
+                f"Retired the rule: {text}"
+                if after is None or (after or {}).get("status") == "retired"
+                else f"Changed the rule: {text}"
+            )
+        )
     return f"Changed {obj}"
 
 
@@ -191,12 +230,21 @@ def task_field_rows(c, who, row, detail):
     close's rows. A status row must carry the value the event set; an owner row is the event's when it is the only owner
     change in its window."""
     at, task = row["created_at"], row["target"]
-    previous = c.execute("SELECT MAX(created_at) FROM events WHERE target=? AND action IN (?,?,?) AND created_at<?",
-                         (task, *TASK_ACTIONS, at)).fetchone()[0] or ""
-    rows = [dict(r) for r in c.execute(
-        f"SELECT {H.TASK_EVENT_COLUMNS} FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? "
-        "AND via='assistant' AND kind IN ('status','owner') AND created_at<=? AND created_at>? ORDER BY created_at DESC",
-        (task, who.actor, at, previous))]
+    previous = (
+        c.execute(
+            "SELECT MAX(created_at) FROM events WHERE target=? AND action IN (?,?,?) AND created_at<?",
+            (task, *TASK_ACTIONS, at),
+        ).fetchone()[0]
+        or ""
+    )
+    rows = [
+        dict(r)
+        for r in c.execute(
+            f"SELECT {H.TASK_EVENT_COLUMNS} FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? "
+            "AND via='assistant' AND kind IN ('status','owner') AND created_at<=? AND created_at>? ORDER BY created_at DESC",
+            (task, who.actor, at, previous),
+        )
+    ]
     want = "closed" if row["action"] == "task.close" else detail.get("status")
     out = [r for r in rows if r["field"] == "status" and want is not None and r["new"] == want][:1]
     out += [r for r in rows if r["field"] == "owner"][:1]
@@ -210,8 +258,10 @@ def approval_undoable(c, auth, who, row):
         return False, "the decision is no longer your Assistant's"
     if ask.get("consumed_at"):
         return False, "it already ran"
-    latest = c.execute("SELECT id FROM events WHERE action='approval.decide' AND target=? "
-                       "ORDER BY created_at DESC, id DESC LIMIT 1", (row["target"],)).fetchone()
+    latest = c.execute(
+        "SELECT id FROM events WHERE action='approval.decide' AND target=? ORDER BY created_at DESC, id DESC LIMIT 1",
+        (row["target"],),
+    ).fetchone()
     if latest and latest["id"] != row["id"]:
         return False, "it changed again since"
     return True, ""
@@ -272,9 +322,14 @@ def restore(c, auth, who, cid, settings):
         return {"id": cid, "restored": True, "already": True}
     if kind == "message":
         raise Problem("not_undoable", "a message sent stays sent", 409)
-    detail = json.loads(row["detail"] or "{}") if kind == "event" else {
-        "before": json.loads(row["before"]) if row["before"] else None,
-        "after": json.loads(row["after"]) if row["after"] else None}
+    detail = (
+        json.loads(row["detail"] or "{}")
+        if kind == "event"
+        else {
+            "before": json.loads(row["before"]) if row["before"] else None,
+            "after": json.loads(row["after"]) if row["after"] else None,
+        }
+    )
     if kind == "setting":
         undo, why = undoable(c, auth, who, kind, row, {}, settings)
         if not undo:
@@ -311,18 +366,24 @@ def restore(c, auth, who, cid, settings):
 
 def find(c, who, cid):
     """(row, kind) of the caller's own change `cid`, or (None, None): another person's or none."""
-    row = c.execute("SELECT * FROM settings_changes WHERE id=? AND actor=? AND via='assistant'", (cid, who.actor)).fetchone()
+    row = c.execute(
+        "SELECT * FROM settings_changes WHERE id=? AND actor=? AND via='assistant'", (cid, who.actor)
+    ).fetchone()
     if row:
         return dict(row), "setting"
-    row = c.execute("SELECT * FROM events WHERE id=? AND actor=? AND json_extract(detail,'$.via')='assistant'",
-                    (cid, who.actor)).fetchone()
+    row = c.execute(
+        "SELECT * FROM events WHERE id=? AND actor=? AND json_extract(detail,'$.via')='assistant'", (cid, who.actor)
+    ).fetchone()
     if row:
         return dict(row), "event"
     row = c.execute("SELECT * FROM audit_log WHERE id=? AND actor=? AND via='assistant'", (cid, who.actor)).fetchone()
     if row:
         return dict(row), "audit"
-    row = c.execute("SELECT * FROM messages WHERE id=? AND sender_id=? AND refs LIKE '%assistant%' "
-                    "AND json_extract(refs,'$.via')='assistant'", (cid, who.actor)).fetchone()
+    row = c.execute(
+        "SELECT * FROM messages WHERE id=? AND sender_id=? AND refs LIKE '%assistant%' "
+        "AND json_extract(refs,'$.via')='assistant'",
+        (cid, who.actor),
+    ).fetchone()
     if row:
         return dict(row), "message"
     return None, None
@@ -348,10 +409,19 @@ def restore_automation(c, who, aid, before):
         raise Problem("not_found", "that automation no longer exists", 404)
     now_flow = json.loads(current["flow"])
     from . import assistant_routines
-    if (who.via == "assistant" and not who.confirmed and before.get("enabled")
-            and (assistant_routines.message(before) or assistant_routines.message(now_flow))):
-        raise Problem("confirm_required", "Restoring an active inbox routine needs a Confirm card; propose its "
-                      "earlier flow with PATCH /api/v2/automations/" + aid, 403)
+
+    if (
+        who.via == "assistant"
+        and not who.confirmed
+        and before.get("enabled")
+        and (assistant_routines.message(before) or assistant_routines.message(now_flow))
+    ):
+        raise Problem(
+            "confirm_required",
+            "Restoring an active inbox routine needs a Confirm card; propose its "
+            "earlier flow with PATCH /api/v2/automations/" + aid,
+            403,
+        )
     if not (automations.may_change(c, who, now_flow) and automations.may_change(c, who, before)):
         raise Problem("forbidden", "you may not change this automation", 403)
     automations._save(c, who.actor, aid, before, now_flow, new_version=True)

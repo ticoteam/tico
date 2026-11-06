@@ -11,6 +11,7 @@ and keeps the gate itself in place:
 A base without the gate is the pull request that introduces it: there is no list to compare with yet, so the growth
 check is skipped and says so (lint_baseline.py does the same for the ruff baseline).
 """
+
 import argparse
 import subprocess
 import sys
@@ -54,13 +55,15 @@ def problems(head, base=None):
         return found
     base_values = filter_values(base)
     if not base_values or base_values[0] != GATE:
-        return found   # the pull request that introduces the gate: its list is the first one
+        return found  # the pull request that introduces the gate: its list is the first one
     new, old = ignore_lines(values), ignore_lines(base_values)
     if len(new) > len(old):
         added = [line for line in new if line not in old]
-        found.append(f"pytest.ini has {len(new)} `ignore:` lines, {len(old)} on the base; the list may only shrink. "
-                     f"Added: {'; '.join(added)}. Fix the warning, or name the test or module in a narrow, commented line "
-                     "and get it reviewed.")
+        found.append(
+            f"pytest.ini has {len(new)} `ignore:` lines, {len(old)} on the base; the list may only shrink. "
+            f"Added: {'; '.join(added)}. Fix the warning, or name the test or module in a narrow, commented line "
+            "and get it reviewed."
+        )
     return found
 
 
@@ -76,8 +79,12 @@ def main(argv=None):
     head = (ROOT / INI).read_text(encoding="utf-8")
     base = None
     if args.base:
-        verified = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{args.base}^{{commit}}"], cwd=ROOT,
-                                  capture_output=True, check=False)
+        verified = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{args.base}^{{commit}}"],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+        )
         if verified.returncode:
             sys.exit(f"pytest_warning_ignores: base ref {args.base} is not available; fetch it or pass a reachable ref")
         base = git_show(args.base, INI) or ""

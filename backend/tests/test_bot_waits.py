@@ -1,6 +1,7 @@
 """A task waits on a bot's work through a blocker (`hub task wait <task> --on task:<its task>`), which holds the work
 while it is open and wakes the owner once with the outcome when it resolves. `--status waiting --on bot:<slug>` is
 refused (spec D9): a task waits on a person, and a bot asks a bot in a DM. Nothing about the task changes."""
+
 import json
 
 import pytest
@@ -28,8 +29,12 @@ def parked(c, prerequisite_owner="bot:ops", tag=""):
 
 
 def jobs(c, slug):
-    return [dict(r) for r in c.execute(
-        "SELECT m.body, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=?", (slug,))]
+    return [
+        dict(r)
+        for r in c.execute(
+            "SELECT m.body, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=?", (slug,)
+        )
+    ]
 
 
 def test_a_blocker_owned_by_another_bot_holds_the_task_and_names_that_bot(c):
@@ -38,9 +43,9 @@ def test_a_blocker_owned_by_another_bot_holds_the_task_and_names_that_bot(c):
     H.task_update(c, "bot:cpo", task["id"], status="waiting", note="Needs the review of the receipt gate fix first.")
     after = H.task(c, task["id"])
     assert after["status"] == "waiting" and after["note"] == "Needs the review of the receipt gate fix first."
-    assert "waiting_on" not in after                    # nothing stored: who it waits on is derived
+    assert "waiting_on" not in after  # nothing stored: who it waits on is derived
     assert H.wait_detail(c, after) == {"why": "an open blocker", "on": "bot:ops"}
-    assert jobs(c, "cpo") == []                          # held while it is open: nothing starts the builder on it
+    assert jobs(c, "cpo") == []  # held while it is open: nothing starts the builder on it
 
 
 def test_the_prerequisite_resolving_wakes_the_owner_once_with_the_outcome(c):
@@ -53,7 +58,7 @@ def test_the_prerequisite_resolving_wakes_the_owner_once_with_the_outcome(c):
         assert len(woke) == 1 and woke[0]["body"].startswith("Unblocked: Ship the receipt gate")
         assert words in woke[0]["body"]
         assert json.loads(woke[0]["refs"])["blocker_status"] == outcome
-        assert H.wait_detail(c, H.task(c, task["id"])) is None   # eligible again: nothing holds it
+        assert H.wait_detail(c, H.task(c, task["id"])) is None  # eligible again: nothing holds it
 
 
 def test_waiting_on_a_bot_is_refused_with_a_dm_and_changes_nothing(c):
@@ -67,7 +72,9 @@ def test_waiting_on_a_bot_is_refused_with_a_dm_and_changes_nothing(c):
         assert "waits on a person, not a bot" in said and "hub message send" in said and "--needs-action" in said
         assert f"hub task wait {task['id']} --on task:" in said
         after = dict(H.task(c, task["id"]))
-        assert {k: after[k] for k in ("status", "note", "version")} == {k: before[k] for k in ("status", "note", "version")}
+        assert {k: after[k] for k in ("status", "note", "version")} == {
+            k: before[k] for k in ("status", "note", "version")
+        }
         assert TR.child_ids(c, task["id"]) == []
 
 
@@ -82,8 +89,16 @@ def test_api_bot_wait_is_refused_and_preserves_the_task(api):
     post(api, "tasks/" + task["id"] + "/relations", {"task": pre["id"], "kind": "blocked_by"})
     with api.app.state.store.read() as c:
         before = dict(H.task(c, task["id"]))
-    response = api.post("/api/v2/tasks/" + task["id"], headers=headers(token), json={
-        "version": before["version"], "status": "waiting", "note": "Needs prerequisite first.", "waiting_on": "bot:ops"})
+    response = api.post(
+        "/api/v2/tasks/" + task["id"],
+        headers=headers(token),
+        json={
+            "version": before["version"],
+            "status": "waiting",
+            "note": "Needs prerequisite first.",
+            "waiting_on": "bot:ops",
+        },
+    )
     assert response.status_code == 422, response.text
     assert response.json()["error"]["code"] == "waiting_on", response.text
     assert "hub message send ops" in response.text and pre["id"] not in response.text

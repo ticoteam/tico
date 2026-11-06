@@ -72,7 +72,8 @@ def test_the_cloud_agent_request_is_in_flight_with_its_first_task(built):
         assert request["agent"]["id"] == "devin"
         assert request["seat"]["request_state"] == "requested"
         assert [task["title"] for task in request["tasks"]] == [
-            "Write a replay test for the scene that landed on the wrong window"]
+            "Write a replay test for the scene that landed on the wrong window"
+        ]
 
 
 def test_the_hire_last_week_closed_its_seat_and_kept_the_bot(built):

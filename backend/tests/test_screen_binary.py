@@ -1,4 +1,5 @@
 """Only a checksummed native relay built from this checkout may start."""
+
 import gzip
 import hashlib
 
@@ -18,8 +19,10 @@ def test_native_download_checks_checksum_and_refuses_a_stale_source_fingerprint(
     data = gzip.compress(binary)
     asset = engine.asset().replace("tico-runner-", "tico-screen-relay-")
     checksum = "incorrect"
+
     def fetch(url, limit):
-        return (f"{checksum}  {asset}\n".encode() if url.endswith("SHA256SUMS") else data)
+        return f"{checksum}  {asset}\n".encode() if url.endswith("SHA256SUMS") else data
+
     monkeypatch.setattr(engine, "_get", fetch)
     monkeypatch.setattr(release_update, "checkout_release", lambda root: "9.9.9")
     env = {"PATH": "", "CARGO_TARGET_DIR": str(tmp_path / "target")}

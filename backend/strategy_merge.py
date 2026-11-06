@@ -71,11 +71,15 @@ def _asked_again(c, link, row):
         "SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE m.conversation_id=? AND "
         "m.recipient_id=? AND m.sender_id<>? AND m.sender_id LIKE 'bot:%' AND m.created_at>? "
         f"AND {H.MESSAGE_TASK_SQL}=? LIMIT 1",
-        (row["conversation_id"], link["person"], STRATEGY_BOT, link["settled_at"], row["id"])).fetchone()
-    return bool(said) or bool(c.execute(
-        "SELECT 1 FROM task_relations r JOIN tasks q ON q.id=r.from_task WHERE r.to_task=? AND r.kind IN "
-        "('parent','blocks') AND q.owner_id=? AND q.questions IS NOT NULL AND q.created_at>? LIMIT 1",
-        (row["id"], link["person"], link["settled_at"])).fetchone())
+        (row["conversation_id"], link["person"], STRATEGY_BOT, link["settled_at"], row["id"]),
+    ).fetchone()
+    return bool(said) or bool(
+        c.execute(
+            "SELECT 1 FROM task_relations r JOIN tasks q ON q.id=r.from_task WHERE r.to_task=? AND r.kind IN "
+            "('parent','blocks') AND q.owner_id=? AND q.questions IS NOT NULL AND q.created_at>? LIMIT 1",
+            (row["id"], link["person"], link["settled_at"]),
+        ).fetchone()
+    )
 
 
 def hidden(c, person):
@@ -109,14 +113,21 @@ def _hidden_ids(c, link):
 def _hidden_links(c, person):
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     out = []
-    for link in H._rows(c.execute(
+    for link in H._rows(
+        c.execute(
             "SELECT m.* FROM strategy_merges m JOIN tasks t ON t.id=m.merged_into JOIN tasks o ON o.id=m.original "
             f"WHERE m.person=? AND o.status IN ({marks}) AND "
             f"(m.state='answered' OR (m.state='merged' AND t.status IN ({marks})))",
-            (person, *H.ACTIVE_STATUSES, *H.ACTIVE_STATUSES))):
+            (person, *H.ACTIVE_STATUSES, *H.ACTIVE_STATUSES),
+        )
+    ):
         row = H.task(c, link["original"])
-        if link["state"] == "merged" and _current(c, link, row) or \
-                link["state"] == "answered" and not _asked_again(c, link, row):
+        if (
+            link["state"] == "merged"
+            and _current(c, link, row)
+            or link["state"] == "answered"
+            and not _asked_again(c, link, row)
+        ):
             out.append(link)
     return out
 
@@ -124,11 +135,18 @@ def _hidden_links(c, person):
 def originals(c, merged_into):
     """[{task_id, title, asker, asker_name, state, note}] for one merged item."""
     out = []
-    for r in H._rows(c.execute("SELECT * FROM strategy_merges WHERE merged_into=? ORDER BY rowid",
-                               (merged_into,))):
+    for r in H._rows(c.execute("SELECT * FROM strategy_merges WHERE merged_into=? ORDER BY rowid", (merged_into,))):
         row = H.task(c, r["original"]) or {}
-        out.append({"task_id": r["original"], "title": row.get("title") or "", "asker": r["asker"],
-                    "asker_name": _name(c, r["asker"]), "state": r["state"], "note": r["note"]})
+        out.append(
+            {
+                "task_id": r["original"],
+                "title": row.get("title") or "",
+                "asker": r["asker"],
+                "asker_name": _name(c, r["asker"]),
+                "state": r["state"],
+                "note": r["note"],
+            }
+        )
     return out
 
 
@@ -136,11 +154,14 @@ def merge(c, actor, person, title, question, task_ids):
     """File one item for `person` standing for the tasks in `task_ids`, each waiting on them for a bot. Only the
     Strategy Bot, only at level 2 or 3, and only within its 5 a day for that person."""
     from . import strategy_suggest
+
     if actor != STRATEGY_BOT:
         raise H.Refused("identity", f"Only the {strategy_bot.name(c)} merges the asks waiting on a person")
     if not strategy_suggest.suggests(c):
-        raise H.Refused("state", f"The {strategy_bot.name(c)} merges asks at level 2 or 3; it is at level "
-                                 f"{strategy_bot.level(c)} here")
+        raise H.Refused(
+            "state",
+            f"The {strategy_bot.name(c)} merges asks at level 2 or 3; it is at level {strategy_bot.level(c)} here",
+        )
     if not H.is_human(person) or not H.human(c, H.actor_id(person)):
         raise H.Refused("reach", "merge asks waiting on a person on the roster")
     ids = list(dict.fromkeys(str(t or "").strip() for t in task_ids or [] if str(t or "").strip()))
@@ -159,28 +180,53 @@ def merge(c, actor, person, title, question, task_ids):
         if not how:
             raise H.Refused("state", f'"{row["title"]}" is not waiting on {_name(c, person)} now')
         if how[1] == STRATEGY_BOT:
-            raise H.Refused("kind",
-                            f'"{row["title"]}" is the {strategy_bot.name(c)}\'s own ask; merge other bots\' asks')
+            raise H.Refused(
+                "kind", f'"{row["title"]}" is the {strategy_bot.name(c)}\'s own ask; merge other bots\' asks'
+            )
         if task_id in taken:
             raise H.Refused("duplicate", f'"{row["title"]}" is already merged into another item')
         found.append((row, how))
     who = "\n".join(f'- {_name(c, how[1])}: "{row["title"]}"' for row, how in found)
-    body = (f"{question}\n\n{len(found)} bots asked you this; it is one item instead of {len(found)}:\n{who}\n"
-            f"Answer it once and the {strategy_bot.name(c)} passes your answer to each of them.")
+    body = (
+        f"{question}\n\n{len(found)} bots asked you this; it is one item instead of {len(found)}:\n{who}\n"
+        f"Answer it once and the {strategy_bot.name(c)} passes your answer to each of them."
+    )
     # A question task for the person with no options, as `hub task question` files one: every way they answer it
     # ("answer" in Needs you, Done with a note) closes it and reaches `on_close`.
     from . import question_tasks
+
     item = H.task_create(c, STRATEGY_BOT, title, body, person, lane="company", lint=False)
-    question_tasks.store(c, item["id"], {"questions": [{"id": question_tasks.FIRST_ID, "header": "",
-                                                        "question": question, "why": "", "options": [],
-                                                        "multi": False}]})
+    question_tasks.store(
+        c,
+        item["id"],
+        {
+            "questions": [
+                {
+                    "id": question_tasks.FIRST_ID,
+                    "header": "",
+                    "question": question,
+                    "why": "",
+                    "options": [],
+                    "multi": False,
+                }
+            ]
+        },
+    )
     at = H.now()
     for row, how in found:
-        c.execute("INSERT INTO strategy_merges (merged_into, original, person, asker, how, ask_id, created_at) "
-                  "VALUES (?,?,?,?,?,?,?)", (item["id"], row["id"], person, how[1], how[0], how[2], at))
-        H.task_comment(c, STRATEGY_BOT, row["id"],
-                       f'Merged with {len(found) - 1} similar ask(s) into one item for {_name(c, person)}: "{title}". '
-                       "Their answer comes back to this task; nothing to do until then.", wake=False)
+        c.execute(
+            "INSERT INTO strategy_merges (merged_into, original, person, asker, how, ask_id, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (item["id"], row["id"], person, how[1], how[0], how[2], at),
+        )
+        H.task_comment(
+            c,
+            STRATEGY_BOT,
+            row["id"],
+            f'Merged with {len(found) - 1} similar ask(s) into one item for {_name(c, person)}: "{title}". '
+            "Their answer comes back to this task; nothing to do until then.",
+            wake=False,
+        )
     H.event(c, actor, "strategy_bot.merged", item["id"], {"person": person, "originals": [r["id"] for r, _ in found]})
     H.recount(c, [how[1] for _, how in found])
     made = H.task(c, item["id"])
@@ -189,8 +235,10 @@ def merge(c, actor, person, title, question, task_ids):
 
 
 def _settle(c, merged_into, original, state, note):
-    c.execute("UPDATE strategy_merges SET state=?, settled_at=?, note=? WHERE merged_into=? AND original=?",
-              (state, H.now(), note[:500], merged_into, original))
+    c.execute(
+        "UPDATE strategy_merges SET state=?, settled_at=?, note=? WHERE merged_into=? AND original=?",
+        (state, H.now(), note[:500], merged_into, original),
+    )
 
 
 def _pass_on(c, person, link, item, text, text_sources=()):
@@ -200,11 +248,16 @@ def _pass_on(c, person, link, item, text, text_sources=()):
         # Answered there already, or asked something else since: this answer was for what was merged, not that.
         return "it no longer waits on them for what was merged"
     said, refs = H.sourced_text(
-        f'{_name(c, person)} answered this in the {strategy_bot.name(c)}\'s merged item "{item["title"]}": "{text}"', text_sources)
+        f'{_name(c, person)} answered this in the {strategy_bot.name(c)}\'s merged item "{item["title"]}": "{text}"',
+        text_sources,
+    )
     if link["how"] == "asked":
-        H.task_ask_resolve(c, STRATEGY_BOT, row["id"], link["ask_id"], quote=text, relay=True, text_sources=text_sources)
+        H.task_ask_resolve(
+            c, STRATEGY_BOT, row["id"], link["ask_id"], quote=text, relay=True, text_sources=text_sources
+        )
         return None
     from . import question_tasks
+
     card = None
     if link["how"] == "owned" and question_tasks.is_open(row):
         card = row
@@ -218,17 +271,21 @@ def _pass_on(c, person, link, item, text, text_sources=()):
             return "the answer quotes a page; answer it on the task itself"
         H.task_update(c, person, card["id"], status="done", note=text[:1000])
         return None
-    H.task_comment(c, STRATEGY_BOT, row["id"], said, extra_refs=refs, to=link["asker"] if H.is_bot(link["asker"]) else None)
+    H.task_comment(
+        c, STRATEGY_BOT, row["id"], said, extra_refs=refs, to=link["asker"] if H.is_bot(link["asker"]) else None
+    )
     return None
 
 
 def _question_of(c, row, person):
     """The person's open question task that `row` waits on (question_tasks.waits_sql), oldest first, or None."""
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
-    found = c.execute("SELECT q.id FROM task_relations r JOIN tasks q ON q.id=r.from_task WHERE r.to_task=? AND "
-                      "r.kind IN ('parent','blocks') AND q.owner_id=? AND q.questions IS NOT NULL AND q.answer IS NULL "
-                      f"AND q.status IN ({marks}) ORDER BY q.created_at, q.rowid LIMIT 1",
-                      (row["id"], person, *H.ACTIVE_STATUSES)).fetchone()
+    found = c.execute(
+        "SELECT q.id FROM task_relations r JOIN tasks q ON q.id=r.from_task WHERE r.to_task=? AND "
+        "r.kind IN ('parent','blocks') AND q.owner_id=? AND q.questions IS NOT NULL AND q.answer IS NULL "
+        f"AND q.status IN ({marks}) ORDER BY q.created_at, q.rowid LIMIT 1",
+        (row["id"], person, *H.ACTIVE_STATUSES),
+    ).fetchone()
     return H.task(c, found[0]) if found else None
 
 
@@ -236,8 +293,13 @@ def on_close(c, actor, row, status, text, *, text_sources=()):
     """The person closing the merged question task they were asked, done (hubdb.task_update, as every answer to a
     question task does): their answer is passed to every original. Declined, or closed by anyone else, the originals
     are back in their Needs you (`hidden`)."""
-    if not row or row.get("requester_id") != STRATEGY_BOT or status != "done" or not H.is_human(actor) \
-            or row["owner_id"] != actor:
+    if (
+        not row
+        or row.get("requester_id") != STRATEGY_BOT
+        or status != "done"
+        or not H.is_human(actor)
+        or row["owner_id"] != actor
+    ):
         return
     note = _pass_all(c, actor, row, text, text_sources)
     if note:
@@ -259,8 +321,11 @@ def on_reply(c, actor, row, text, *, text_sources=()):
 def _pass_all(c, actor, row, text, text_sources):
     """Pass the person's answer to each original still merged into `row`. Returns the item's note, or None when
     nothing was left to pass on."""
-    links = H._rows(c.execute("SELECT * FROM strategy_merges WHERE merged_into=? AND person=? AND state='merged'",
-                              (row["id"], actor)))
+    links = H._rows(
+        c.execute(
+            "SELECT * FROM strategy_merges WHERE merged_into=? AND person=? AND state='merged'", (row["id"], actor)
+        )
+    )
     if not links:
         return None
     passed, back = 0, []

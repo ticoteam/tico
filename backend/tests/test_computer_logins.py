@@ -1,4 +1,5 @@
 """One computer login keeps its physical hold identity and crosses mixed versions without changing accounts."""
+
 from backend import execution, login_holds
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401
@@ -10,12 +11,19 @@ from backend import bot_settings as BS
 
 def heartbeat(api, machine, *, current, signed=True):
     state = {'installed': True, 'authenticated': 'ready' if signed else 'missing'}
-    body = {'version': 'test', 'platform': 'test', 'capabilities': ['model_sign_out_v1'],
-            'readiness': {'schema_version': 1,
-                          'runtimes': {rt: state for rt in ('claude', 'codex')},
-                          'bots': {bot: {'ready': signed, 'runtime': rt, 'profile': 'work',
-                                         'sign_in': state['authenticated']}
-                                   for bot, rt in (('ops', 'claude'), ('finance', 'codex'))}}}
+    body = {
+        'version': 'test',
+        'platform': 'test',
+        'capabilities': ['model_sign_out_v1'],
+        'readiness': {
+            'schema_version': 1,
+            'runtimes': {rt: state for rt in ('claude', 'codex')},
+            'bots': {
+                bot: {'ready': signed, 'runtime': rt, 'profile': 'work', 'sign_in': state['authenticated']}
+                for bot, rt in (('ops', 'claude'), ('finance', 'codex'))
+            },
+        },
+    }
     if current:
         body['capabilities'].append('computer_logins_v1')
         body['readiness']['computer_profile'] = 'work'
@@ -44,7 +52,10 @@ def test_a_retained_default_home_shares_old_primary_and_new_fallback_holds(api, 
         before = c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='ops'").fetchone()[0]
         H._apply(c, H.ONE_LOGIN_PER_COMPUTER_SCHEMA)
         assert not c.execute("SELECT 1 FROM subscription_assignments WHERE scope='bot'").fetchone()
-        assert c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='ops'").fetchone()[0] == before
+        assert (
+            c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='ops'").fetchone()[0]
+            == before
+        )
         login_holds.record(c, rid, 'work', 'codex', H.now(), bot='finance')
     assert get(api, 'config', machine['token'])['computer_logins_v1'] is True
     heartbeat(api, machine, current=True)
@@ -58,17 +69,22 @@ def test_a_retained_default_home_shares_old_primary_and_new_fallback_holds(api, 
     assert turn['computer_logins_v1'] is True
     assert not turn.get('profile')
     assert all(row['computer_logins_v1'] for row in get(api, 'runners/assignments', machine['token']))
-    limit(api, machine, turn, errors=('Quota exceeded.',), fallback='codex',
-          primary_limited=True, profile_used='work')
+    limit(api, machine, turn, errors=('Quota exceeded.',), fallback='codex', primary_limited=True, profile_used='work')
     assert claim(api, machine, 'finance') is None
     with api.app.state.store.read() as c:
-        assert execution.login_key(c, api.app.state.store.settings, rid, 'finance', {'runtime': 'codex'}) == (rid, 'work', 'codex')
+        assert execution.login_key(c, api.app.state.store.settings, rid, 'finance', {'runtime': 'codex'}) == (
+            rid,
+            'work',
+            'codex',
+        )
         assert login_holds.get(c, rid, 'work', 'codex')['streak'] == 2
         assert login_holds.get(c, rid, 'work', 'claude')
         assert not login_holds.get(c, rid, '', 'codex')
     # These keys are also what a restarted Rust runner reads for its fallback cache.
     assert {(h['profile'], h['runtime']) for h in get(api, 'config', machine['token'])['login_holds']} == {
-        ('work', 'claude'), ('work', 'codex')}
+        ('work', 'claude'),
+        ('work', 'codex'),
+    }
 
 
 def test_a_legacy_named_login_waits_for_acknowledgement_and_sign_out_is_reversible(api):

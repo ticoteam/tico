@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from backend import demo
 from backend.app import create_app
 
-NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)      # a Friday, so the Monday runs of the window are all past
+NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)  # a Friday, so the Monday runs of the window are all past
 CHANNELS = ["creator-videos", "online-store", "marketplace", "retail-partners", "paid-ads", "unknown"]
 
 
@@ -49,8 +49,13 @@ def test_numbers_page_has_the_five_channels_and_unknown_with_their_stages(number
     assert [channel["slug"] for channel in numbers["channels"]] == CHANNELS
     assert numbers["months"] == ["2026-07", "2026-08", "2026-09"]
     assert {channel["slug"]: channel["stage"] for channel in numbers["channels"]} == {
-        "creator-videos": "scaling", "online-store": "scaling", "marketplace": "scaling",
-        "retail-partners": "testing", "paid-ads": "paused", "unknown": None}
+        "creator-videos": "scaling",
+        "online-store": "scaling",
+        "marketplace": "scaling",
+        "retail-partners": "testing",
+        "paid-ads": "paused",
+        "unknown": None,
+    }
 
 
 def test_units_are_about_six_thousand_over_the_window(numbers):
@@ -65,7 +70,10 @@ def test_units_ramp_into_the_holiday_and_the_inputs_and_guardrails_are_named(num
     assert len(series) == 8 and series[-1] > series[0]
     assert north["latest"] == series[-1]
     assert {kpi["name"] for kpi in numbers["kpis"]["inputs"]} == {
-        "Scene Library subscribers", "Business pipeline", "Business installs won"}
+        "Scene Library subscribers",
+        "Business pipeline",
+        "Business installs won",
+    }
     assert {kpi["name"] for kpi in numbers["kpis"]["guardrails"]} == {"First-try calibration rate", "Returns"}
 
 
@@ -94,7 +102,9 @@ def test_markers_show_the_started_tests_and_the_paid_test_closing_as_lost(number
 def test_the_channel_pages_hold_their_ideas(built):
     with signed_in(built) as api:
         assert "Twelve creators film their own holiday show" in api.get("/api/v2/growth/channels/creator-videos").text
-        assert "End-cap display at two homeworks.example stores" in api.get("/api/v2/growth/channels/retail-partners").text
+        assert (
+            "End-cap display at two homeworks.example stores" in api.get("/api/v2/growth/channels/retail-partners").text
+        )
 
 
 def test_weekly_numbers_routine_is_an_automation_next_due_on_a_monday_with_eight_ok_runs(built):

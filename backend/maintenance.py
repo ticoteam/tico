@@ -19,6 +19,7 @@ A step is a module in backend/maintenance_steps/ exposing run(c, ctx) -> dict. T
 - A step that returns after its run was abandoned has its result dropped; its cost still counts on the run.
 A step-only Run now does not hold its schedule bucket: the bucket's full run still starts.
 """
+
 import json
 import logging
 import threading
@@ -32,21 +33,41 @@ from .updates import START_HOUR, ZONE
 from . import sources as SRC
 
 LOG = logging.getLogger("tico.maintenance")
-REGISTRY_KEY = "maintenance"      # registry_metadata: the run's schedule, pause and monthly cap
-STEP_SOURCES = {"find_stuck": "stuck-check", "check_health": "check-health"}   # what a step's keeper lines are
+REGISTRY_KEY = "maintenance"  # registry_metadata: the run's schedule, pause and monthly cap
+STEP_SOURCES = {"find_stuck": "stuck-check", "check_health": "check-health"}  # what a step's keeper lines are
 # Find stuck gets the shared BotOps wake first; Check health keeps a refused wake for the next run.
 ORDER = ("collect", "clean_up", "find_stuck", "check_health", "learn", "suggest", "update", "dream")
-NAMES = {"collect": "Collect", "clean_up": "Clean up", "check_health": "Check health", "find_stuck": "Find stuck",
-         "learn": "Learn", "suggest": "Suggest", "update": "Update", "dream": "Dream"}
-EVERY_RUN = ("collect", "clean_up", "check_health")   # "How often" is every run, and fixed (Find stuck is custom: every 6 hours)
-LIVE = {"collect": collect.run, "clean_up": clean_up.run, "check_health": check_health.run, "find_stuck": find_stuck.run,
-        "learn": learn.run, "suggest": suggest.run, "update": update.run, "dream": dream.run}
+NAMES = {
+    "collect": "Collect",
+    "clean_up": "Clean up",
+    "check_health": "Check health",
+    "find_stuck": "Find stuck",
+    "learn": "Learn",
+    "suggest": "Suggest",
+    "update": "Update",
+    "dream": "Dream",
+}
+EVERY_RUN = (
+    "collect",
+    "clean_up",
+    "check_health",
+)  # "How often" is every run, and fixed (Find stuck is custom: every 6 hours)
+LIVE = {
+    "collect": collect.run,
+    "clean_up": clean_up.run,
+    "check_health": check_health.run,
+    "find_stuck": find_stuck.run,
+    "learn": learn.run,
+    "suggest": suggest.run,
+    "update": update.run,
+    "dream": dream.run,
+}
 SCHEDULES = {"hourly": 1, "2h": 2, "3h": 3, "6h": 6, "12h": 12, "daily": 0}
-MAX_BOTS_STEPS = ("find_stuck", "dream")          # the steps that take "Most bots per run"
+MAX_BOTS_STEPS = ("find_stuck", "dream")  # the steps that take "Most bots per run"
 STATUSES = ("ran", "skipped", "failed", "pending")
-ABANDONED_MINUTES = 30          # a live run with no heartbeat this long is abandoned
+ABANDONED_MINUTES = 30  # a live run with no heartbeat this long is abandoned
 HEARTBEAT_SECONDS = 60
-WINDOW_BACK = timedelta(days=1)    # a step that has never moved its cursor looks back this far
+WINDOW_BACK = timedelta(days=1)  # a step that has never moved its cursor looks back this far
 DETAILS_MAX = 20000
 
 
@@ -78,9 +99,11 @@ def run_settings(c):
     (None when none is saved, so the environment's TICO_DECISIONS_MONTHLY_USD holds)."""
     stored = _stored(c)
     cap = stored.get("monthly_cap_usd")
-    return {"schedule": stored.get("schedule") if stored.get("schedule") in SCHEDULES else "hourly",
-            "paused": stored.get("paused") is True,
-            "monthly_cap_usd": float(cap) if isinstance(cap, (int, float)) and not isinstance(cap, bool) else None}
+    return {
+        "schedule": stored.get("schedule") if stored.get("schedule") in SCHEDULES else "hourly",
+        "paused": stored.get("paused") is True,
+        "monthly_cap_usd": float(cap) if isinstance(cap, (int, float)) and not isinstance(cap, bool) else None,
+    }
 
 
 def steps_of(c):
@@ -126,42 +149,61 @@ def next_bucket(schedule, at):
 def live_run(c, now):
     """The live run: not finished, and its heartbeat fresh. A stale one is for recover() to end."""
     cutoff = H.shift(now, minutes=-ABANDONED_MINUTES)
-    return c.execute("SELECT id, started_at FROM maintenance_runs WHERE finished_at IS NULL AND heartbeat_at>=? "
-                     "ORDER BY started_at DESC LIMIT 1", (cutoff,)).fetchone()
+    return c.execute(
+        "SELECT id, started_at FROM maintenance_runs WHERE finished_at IS NULL AND heartbeat_at>=? "
+        "ORDER BY started_at DESC LIMIT 1",
+        (cutoff,),
+    ).fetchone()
 
 
 def recover(c, now):
     """Abandoned runs: live with no heartbeat for ABANDONED_AFTER. Marked failed with their pending steps, and the key
     renamed so the occurrence it claimed can run again."""
     cutoff = H.shift(now, minutes=-ABANDONED_MINUTES)
-    for (run_id,) in c.execute("SELECT id FROM maintenance_runs WHERE finished_at IS NULL AND heartbeat_at<?",
-                               (cutoff,)).fetchall():
-        c.execute("UPDATE maintenance_run_steps SET status='failed', reason='abandoned', finished_at=? "
-                  "WHERE maintenance_run_id=? AND status='pending'", (now, run_id))
-        c.execute("UPDATE maintenance_runs SET finished_at=?, ok=0, result='abandoned', "
-                  "occurrence_key=occurrence_key||':abandoned:'||id WHERE id=?", (now, run_id))
+    for (run_id,) in c.execute(
+        "SELECT id FROM maintenance_runs WHERE finished_at IS NULL AND heartbeat_at<?", (cutoff,)
+    ).fetchall():
+        c.execute(
+            "UPDATE maintenance_run_steps SET status='failed', reason='abandoned', finished_at=? "
+            "WHERE maintenance_run_id=? AND status='pending'",
+            (now, run_id),
+        )
+        c.execute(
+            "UPDATE maintenance_runs SET finished_at=?, ok=0, result='abandoned', "
+            "occurrence_key=occurrence_key||':abandoned:'||id WHERE id=?",
+            (now, run_id),
+        )
 
 
 def _insert(c, key, trigger, step, now):
     run_id = H.new_id()
-    c.execute("INSERT INTO maintenance_runs(id,occurrence_key,trigger,step,started_at,heartbeat_at,result) "
-              "VALUES(?,?,?,?,?,?,'')", (run_id, key, trigger, step, now, now))
+    c.execute(
+        "INSERT INTO maintenance_runs(id,occurrence_key,trigger,step,started_at,heartbeat_at,result) "
+        "VALUES(?,?,?,?,?,?,'')",
+        (run_id, key, trigger, step, now, now),
+    )
     return run_id
 
 
 def _stale(c, now):
     """A run whose heartbeat has gone quiet but which nothing has ended yet. recover() ends it, before any guard reads."""
-    return c.execute("SELECT 1 FROM maintenance_runs WHERE finished_at IS NULL AND heartbeat_at<? LIMIT 1",
-                     (H.shift(now, minutes=-ABANDONED_MINUTES),)).fetchone()
+    return c.execute(
+        "SELECT 1 FROM maintenance_runs WHERE finished_at IS NULL AND heartbeat_at<? LIMIT 1",
+        (H.shift(now, minutes=-ABANDONED_MINUTES),),
+    ).fetchone()
 
 
 def _held(c, now, start):
     """Whether a schedule run may not start in this bucket: a run is live, or a run already claimed the bucket. A step-only
     Run now claims nothing, so it does not hold the bucket for the schedule. A stale run is for recover() to release."""
-    return live_run(c, now) or c.execute(
-        "SELECT 1 FROM maintenance_runs WHERE started_at>=? AND result<>'abandoned' AND step IS NULL "
-        "AND (finished_at IS NOT NULL OR heartbeat_at>=?) LIMIT 1",
-        (start, H.shift(now, minutes=-ABANDONED_MINUTES))).fetchone()
+    return (
+        live_run(c, now)
+        or c.execute(
+            "SELECT 1 FROM maintenance_runs WHERE started_at>=? AND result<>'abandoned' AND step IS NULL "
+            "AND (finished_at IS NOT NULL OR heartbeat_at>=?) LIMIT 1",
+            (start, H.shift(now, minutes=-ABANDONED_MINUTES)),
+        ).fetchone()
+    )
 
 
 def next_due(c, at):
@@ -176,7 +218,7 @@ def next_due(c, at):
     if not steps:
         return None
     when = next_bucket(cfg["schedule"], at) if _held(c, now, _stamp(bucket(cfg["schedule"], at))) else at
-    for _ in range(24 * 8):          # at most eight days of hourly buckets: a cadence never due wakes no one
+    for _ in range(24 * 8):  # at most eight days of hourly buckets: a cadence never due wakes no one
         if any(due(row, when) for row in steps):
             return when
         when = next_bucket(cfg["schedule"], when)
@@ -212,7 +254,9 @@ def tick(store, auth, at, failures=None):
 
 def _receipt(c, actor, key):
     """The run this actor's Idempotency-Key was given (the run its first request started or joined), or None."""
-    row = c.execute("SELECT maintenance_run_id FROM maintenance_requests WHERE actor=? AND request_key=?", (actor, key)).fetchone()
+    row = c.execute(
+        "SELECT maintenance_run_id FROM maintenance_requests WHERE actor=? AND request_key=?", (actor, key)
+    ).fetchone()
     return row[0] if row else None
 
 
@@ -238,8 +282,10 @@ def run_now(store, auth, actor, step=None, wait=False, key=None):
                 H.event(c, actor, "maintenance.run_now", run_id, {"step": step})
                 started = True
             if key:
-                c.execute("INSERT INTO maintenance_requests(actor,request_key,maintenance_run_id,created_at) VALUES(?,?,?,?)",
-                          (actor, key, run_id, now))
+                c.execute(
+                    "INSERT INTO maintenance_requests(actor,request_key,maintenance_run_id,created_at) VALUES(?,?,?,?)",
+                    (actor, key, run_id, now),
+                )
     if started:
         _start(store, auth, run_id, step, wait)
     return get_run(store, run_id), started
@@ -264,6 +310,7 @@ def _execute(store, auth, run_id, only=None):
 
 def _steps(store, auth, run_id, only, tally):
     from .judge import budget_cap
+
     now = H.now()
     at = H.parse_ts(now)
     with store.read() as c:
@@ -283,7 +330,9 @@ def _steps(store, auth, run_id, only, tally):
         else:
             plan[key] = ("run", None)
     # Each step reads from its own cursor. Collect reads from the oldest cursor among the steps about to run.
-    windows = {key: steps[key]["cursor_at"] or H.shift(now, days=-WINDOW_BACK.days) for key in names if plan[key][0] == "run"}
+    windows = {
+        key: steps[key]["cursor_at"] or H.shift(now, days=-WINDOW_BACK.days) for key in names if plan[key][0] == "run"
+    }
     for key in names:
         if not _claimed(store, run_id):
             LOG.warning("maintenance run %s was recovered; its remaining steps do not start", run_id)
@@ -299,8 +348,11 @@ def _steps(store, auth, run_id, only, tally):
 def _log(store, run_id, key, status, reason, now, tally):
     """One step's log row for a step that did not run this time (off, skipped), written finished."""
     with store.transaction() as c:
-        c.execute("INSERT INTO maintenance_run_steps(id,maintenance_run_id,step,status,reason,started_at,finished_at,details) "
-                  "VALUES(?,?,?,?,?,?,?,'{}')", (H.new_id(), run_id, key, status, reason, now, now))
+        c.execute(
+            "INSERT INTO maintenance_run_steps(id,maintenance_run_id,step,status,reason,started_at,finished_at,details) "
+            "VALUES(?,?,?,?,?,?,?,'{}')",
+            (H.new_id(), run_id, key, status, reason, now, now),
+        )
         c.execute("UPDATE maintenance_runs SET heartbeat_at=? WHERE id=?", (H.now(), run_id))
     tally[status] = tally.get(status, 0) + 1
 
@@ -309,15 +361,23 @@ def _claimed(store, run_id):
     """Whether the run is still this worker's. recover() ends a run whose heartbeat went quiet, and an ended run starts no
     more steps: its old worker must not run beside the run that replaced it."""
     with store.read() as c:
-        return c.execute("SELECT 1 FROM maintenance_runs WHERE id=? AND finished_at IS NULL", (run_id,)).fetchone() is not None
+        return (
+            c.execute("SELECT 1 FROM maintenance_runs WHERE id=? AND finished_at IS NULL", (run_id,)).fetchone()
+            is not None
+        )
 
 
 def _still_pending(c, row_id):
     """Whether a step's row is still pending in a run that is still live. A step that returns after recover() has ended
     its run finds neither, and its late result must not write over the abandoned row or move the cursor."""
-    return c.execute("SELECT 1 FROM maintenance_run_steps s JOIN maintenance_runs r ON r.id=s.maintenance_run_id "
-                     "WHERE s.id=? AND s.status='pending' AND s.finished_at IS NULL AND r.finished_at IS NULL",
-                     (row_id,)).fetchone() is not None
+    return (
+        c.execute(
+            "SELECT 1 FROM maintenance_run_steps s JOIN maintenance_runs r ON r.id=s.maintenance_run_id "
+            "WHERE s.id=? AND s.status='pending' AND s.finished_at IS NULL AND r.finished_at IS NULL",
+            (row_id,),
+        ).fetchone()
+        is not None
+    )
 
 
 @contextmanager
@@ -343,20 +403,35 @@ def heartbeat(store, run_id, row_id):
 
 def _move_cursor(c, key, window_end, ran_at):
     """A step's cursor moves forward only: a late `ran` for an older window does not move it back."""
-    c.execute("UPDATE maintenance_steps SET cursor_at=CASE WHEN cursor_at IS NULL OR cursor_at<? THEN ? ELSE cursor_at END, "
-              "last_ran_at=? WHERE key=?", (window_end, window_end, ran_at, key))
+    c.execute(
+        "UPDATE maintenance_steps SET cursor_at=CASE WHEN cursor_at IS NULL OR cursor_at<? THEN ? ELSE cursor_at END, "
+        "last_ran_at=? WHERE key=?",
+        (window_end, window_end, ran_at, key),
+    )
 
 
 def _run_step(store, auth, run_id, key, row, window_start, now, cap, tally):
     row_id = H.new_id()
     window = {"window_start": window_start, "window_end": now}
     with store.transaction() as c:
-        c.execute("INSERT INTO maintenance_run_steps(id,maintenance_run_id,step,status,reason,started_at,window_end,details) "
-                  "VALUES(?,?,?,'pending','',?,?,?)", (row_id, run_id, key, now, now, _dump(window)))
+        c.execute(
+            "INSERT INTO maintenance_run_steps(id,maintenance_run_id,step,status,reason,started_at,window_end,details) "
+            "VALUES(?,?,?,'pending','',?,?,?)",
+            (row_id, run_id, key, now, now, _dump(window)),
+        )
         c.execute("UPDATE maintenance_steps SET last_started_at=? WHERE key=?", (now, key))
         c.execute("UPDATE maintenance_runs SET heartbeat_at=? WHERE id=?", (H.now(), run_id))
-    ctx = {"run_id": run_id, "step_id": row_id, "window_start": window_start, "window_end": now, "settings": row, "now": now,
-           "cap": cap, "store": store, "auth": auth}
+    ctx = {
+        "run_id": run_id,
+        "step_id": row_id,
+        "window_start": window_start,
+        "window_end": now,
+        "settings": row,
+        "now": now,
+        "cap": cap,
+        "store": store,
+        "auth": auth,
+    }
     try:
         with SRC.writing_as(STEP_SOURCES.get(key, "maintenance")), store.read() as c:
             result = _normal(LIVE[key](c, ctx))
@@ -372,12 +447,16 @@ def _run_step(store, auth, run_id, key, row, window_start, now, cap, tally):
         _finish_row(c, row_id, result)
         if result["status"] == "skipped" and result["details"].get("limited"):
             # A limited skip defers the attempt, leaving the step due on a later run.
-            c.execute("UPDATE maintenance_steps SET last_started_at=? WHERE key=? AND last_started_at=?",
-                      (row["last_started_at"], key, now))
+            c.execute(
+                "UPDATE maintenance_steps SET last_started_at=? WHERE key=? AND last_started_at=?",
+                (row["last_started_at"], key, now),
+            )
         if result["status"] == "ran":
             _move_cursor(c, key, now, H.now())
-        c.execute("UPDATE maintenance_runs SET cost_usd=cost_usd+?, heartbeat_at=? WHERE id=?",
-                  (result["cost_usd"], H.now(), run_id))
+        c.execute(
+            "UPDATE maintenance_runs SET cost_usd=cost_usd+?, heartbeat_at=? WHERE id=?",
+            (result["cost_usd"], H.now(), run_id),
+        )
     tally[result["status"]] = tally.get(result["status"], 0) + 1
 
 
@@ -392,11 +471,15 @@ def _normal(result):
     if result.get("status") not in STATUSES:
         return _result("failed", f"returned status {result.get('status')!r}")
     cost = result.get("cost_usd")
-    return {"status": result["status"], "reason": str(result.get("reason") or "")[:300],
-            "checked": _count(result.get("checked")), "found": _count(result.get("found")),
-            "woke": _count(result.get("woke")),
-            "cost_usd": float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0 else 0.0,
-            "details": result["details"] if isinstance(result.get("details"), dict) else {}}
+    return {
+        "status": result["status"],
+        "reason": str(result.get("reason") or "")[:300],
+        "checked": _count(result.get("checked")),
+        "found": _count(result.get("found")),
+        "woke": _count(result.get("woke")),
+        "cost_usd": float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0 else 0.0,
+        "details": result["details"] if isinstance(result.get("details"), dict) else {},
+    }
 
 
 def _result(status, reason):
@@ -412,10 +495,21 @@ def _finish_row(c, row_id, result):
     prior = c.execute("SELECT details FROM maintenance_run_steps WHERE id=?", (row_id,)).fetchone()
     details = {**_loads(prior[0] if prior else None), **result["details"]}
     finished = None if result["status"] == "pending" else H.now()
-    c.execute("UPDATE maintenance_run_steps SET status=?, reason=?, checked=?, found=?, woke=?, cost_usd=?, "
-              "finished_at=?, details=? WHERE id=?",
-              (result["status"], result["reason"], result["checked"], result["found"], result["woke"],
-               result["cost_usd"], finished, _dump(details), row_id))
+    c.execute(
+        "UPDATE maintenance_run_steps SET status=?, reason=?, checked=?, found=?, woke=?, cost_usd=?, "
+        "finished_at=?, details=? WHERE id=?",
+        (
+            result["status"],
+            result["reason"],
+            result["checked"],
+            result["found"],
+            result["woke"],
+            result["cost_usd"],
+            finished,
+            _dump(details),
+            row_id,
+        ),
+    )
 
 
 def complete_pending(store, row_id, result):
@@ -424,15 +518,19 @@ def complete_pending(store, row_id, result):
     step has failed. Returns False when the row is not pending."""
     result = _normal(result)
     with store.transaction() as c:
-        row = c.execute("SELECT maintenance_run_id, step, window_end FROM maintenance_run_steps WHERE id=? AND status='pending'",
-                        (row_id,)).fetchone()
+        row = c.execute(
+            "SELECT maintenance_run_id, step, window_end FROM maintenance_run_steps WHERE id=? AND status='pending'",
+            (row_id,),
+        ).fetchone()
         if row is None:
             return False
         _finish_row(c, row_id, result)
         if result["status"] == "ran" and row["window_end"]:
             _move_cursor(c, row["step"], row["window_end"], H.now())
-        c.execute("UPDATE maintenance_runs SET cost_usd=cost_usd+?, ok=CASE WHEN ?='failed' THEN 0 ELSE ok END WHERE id=?",
-                  (result["cost_usd"], result["status"], row["maintenance_run_id"]))
+        c.execute(
+            "UPDATE maintenance_runs SET cost_usd=cost_usd+?, ok=CASE WHEN ?='failed' THEN 0 ELSE ok END WHERE id=?",
+            (result["cost_usd"], result["status"], row["maintenance_run_id"]),
+        )
     return True
 
 
@@ -441,13 +539,25 @@ def _complete_updates(store):
     even while Maintenance is paused or the step is not due. An idle pass takes no write lock."""
     ready = []
     with store.read() as c:
-        for row in c.execute("SELECT id, checked, found, woke, details FROM maintenance_run_steps "
-                              "WHERE step='update' AND status='pending'").fetchall():
+        for row in c.execute(
+            "SELECT id, checked, found, woke, details FROM maintenance_run_steps "
+            "WHERE step='update' AND status='pending'"
+        ).fetchall():
             details = _loads(row["details"])
             day = details.get("day")
             if day and updates.cycle_done(c, day):
-                ready.append((row["id"], {**dict(row), "status": "ran", "reason": f"Update cycle for {day} complete",
-                                          "cost_usd": 0.0, "details": {**details, "open": 0}}))
+                ready.append(
+                    (
+                        row["id"],
+                        {
+                            **dict(row),
+                            "status": "ran",
+                            "reason": f"Update cycle for {day} complete",
+                            "cost_usd": 0.0,
+                            "details": {**details, "open": 0},
+                        },
+                    )
+                )
     for row_id, result in ready:
         complete_pending(store, row_id, result)
 
@@ -459,11 +569,15 @@ def _finish(store, run_id, tally, error):
         _complete_updates(store)
         with store.transaction() as c:
             # ok reads the stored rows, not the tally: a pending step that failed later may already have been recorded.
-            failed = c.execute("SELECT 1 FROM maintenance_run_steps WHERE maintenance_run_id=? AND status='failed' LIMIT 1",
-                               (run_id,)).fetchone()
+            failed = c.execute(
+                "SELECT 1 FROM maintenance_run_steps WHERE maintenance_run_id=? AND status='failed' LIMIT 1", (run_id,)
+            ).fetchone()
             ok = error is None and failed is None
-            c.execute("UPDATE maintenance_runs SET finished_at=?, ok=?, result=?, heartbeat_at=? "
-                      "WHERE id=? AND finished_at IS NULL", (now, int(bool(ok)), text[:300], now, run_id))
+            c.execute(
+                "UPDATE maintenance_runs SET finished_at=?, ok=?, result=?, heartbeat_at=? "
+                "WHERE id=? AND finished_at IS NULL",
+                (now, int(bool(ok)), text[:300], now, run_id),
+            )
     except Exception:
         LOG.exception("could not finish maintenance run %s; recovery will end it", run_id)
 
@@ -479,8 +593,10 @@ def save_settings(c, actor, schedule=None, paused=None, monthly_cap_usd=None):
         stored["paused"] = bool(paused)
     if monthly_cap_usd is not None:
         stored["monthly_cap_usd"] = round(float(monthly_cap_usd), 2)
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (REGISTRY_KEY, json.dumps(stored, sort_keys=True)))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (REGISTRY_KEY, json.dumps(stored, sort_keys=True)),
+    )
     after = run_settings(c)
     if after != before:
         H.event(c, actor, "maintenance.updated", "", {"before": before, "after": after})
@@ -512,10 +628,20 @@ def save_step(c, actor, change):
         after["custom_every"] = after["custom_unit"] = None
     if change.get("max_bots") is not None and key not in MAX_BOTS_STEPS:
         raise Problem("invalid", f"{NAMES[key]} takes no number of bots", 422)
-    c.execute("UPDATE maintenance_steps SET enabled=?, frequency=?, custom_every=?, custom_unit=?, max_bots=?, "
-              "updated_at=?, updated_by_id=? WHERE key=?",
-              (int(after["enabled"]), after["frequency"], after["custom_every"], after["custom_unit"],
-               after["max_bots"], H.now(), str(actor), key))
+    c.execute(
+        "UPDATE maintenance_steps SET enabled=?, frequency=?, custom_every=?, custom_unit=?, max_bots=?, "
+        "updated_at=?, updated_by_id=? WHERE key=?",
+        (
+            int(after["enabled"]),
+            after["frequency"],
+            after["custom_every"],
+            after["custom_unit"],
+            after["max_bots"],
+            H.now(),
+            str(actor),
+            key,
+        ),
+    )
     changed = {field: after[field] for field in STEP_FIELDS if after[field] != before[field]}
     if changed:
         H.event(c, actor, "maintenance.step_updated", key, {"changed": changed})
@@ -532,8 +658,10 @@ def _run_view(c, row, details=True):
     view = dict(row)
     view["steps"] = []
     columns = "step,status,reason,checked,found,woke,cost_usd,started_at,finished_at" + (",details" if details else "")
-    for step in c.execute(f"SELECT {columns} FROM maintenance_run_steps WHERE maintenance_run_id=? "
-                          "ORDER BY started_at, rowid", (row["id"],)).fetchall():
+    for step in c.execute(
+        f"SELECT {columns} FROM maintenance_run_steps WHERE maintenance_run_id=? ORDER BY started_at, rowid",
+        (row["id"],),
+    ).fetchall():
         item = dict(step)
         if details:
             item["details"] = _loads(item["details"])
@@ -545,8 +673,9 @@ def runs(c, limit=25, before=None):
     """One page of runs, newest first, each with its step rows. `next` is the cursor for the page after, or None."""
     limit = max(1, min(int(limit), 100))
     if before:
-        rows = c.execute("SELECT * FROM maintenance_runs WHERE started_at<? ORDER BY started_at DESC LIMIT ?",
-                         (before, limit)).fetchall()
+        rows = c.execute(
+            "SELECT * FROM maintenance_runs WHERE started_at<? ORDER BY started_at DESC LIMIT ?", (before, limit)
+        ).fetchall()
     else:
         rows = c.execute("SELECT * FROM maintenance_runs ORDER BY started_at DESC LIMIT ?", (limit,)).fetchall()
     out = [_run_view(c, row, details=False) for row in rows]
@@ -556,33 +685,47 @@ def runs(c, limit=25, before=None):
 def listing(c, settings, auth, who):
     """What GET /api/v2/maintenance returns: the run's settings, every step, the last and the live run, and the next run."""
     from .judge import budget_cap
+
     cfg, steps, now = run_settings(c), steps_of(c), H.parse_ts(H.now())
     rows = []
     for key in ORDER:
         step = steps[key]
-        rows.append({"key": key, "name": NAMES[key], "enabled": bool(step["enabled"]), "frequency": step["frequency"],
-                     "custom_every": step["custom_every"], "custom_unit": step["custom_unit"],
-                     "max_bots": step["max_bots"], "fixed": key in EVERY_RUN,
-                     "last_started_at": step["last_started_at"], "last_ran_at": step["last_ran_at"],
-                     "cursor_at": step["cursor_at"]})
+        rows.append(
+            {
+                "key": key,
+                "name": NAMES[key],
+                "enabled": bool(step["enabled"]),
+                "frequency": step["frequency"],
+                "custom_every": step["custom_every"],
+                "custom_unit": step["custom_unit"],
+                "max_bots": step["max_bots"],
+                "fixed": key in EVERY_RUN,
+                "last_started_at": step["last_started_at"],
+                "last_ran_at": step["last_ran_at"],
+                "cursor_at": step["cursor_at"],
+            }
+        )
         if key == "learn":
             rows[-1]["stats"] = learnings.beta_stats(c)
         if key == "suggest":
             rows[-1]["consent"] = suggestions.privacy(c, settings)["share_stats_for_suggestions"]
     last = c.execute("SELECT id FROM maintenance_runs ORDER BY started_at DESC LIMIT 1").fetchone()
     live = live_run(c, H.now())
-    return {"settings": {**cfg, "monthly_cap_usd_in_effect": budget_cap(c, settings)},
-            "steps": rows,
-            "last_run": _run_view(c, c.execute("SELECT * FROM maintenance_runs WHERE id=?", (last[0],)).fetchone())
-            if last else None,
-            "live_run_id": live["id"] if live else None,
-            "next_run_at": None if cfg["paused"] else _stamp(next_bucket(cfg["schedule"], now)),
-            "can_change": can_change(auth, who)}
+    return {
+        "settings": {**cfg, "monthly_cap_usd_in_effect": budget_cap(c, settings)},
+        "steps": rows,
+        "last_run": _run_view(c, c.execute("SELECT * FROM maintenance_runs WHERE id=?", (last[0],)).fetchone())
+        if last
+        else None,
+        "live_run_id": live["id"] if live else None,
+        "next_run_at": None if cfg["paused"] else _stamp(next_bucket(cfg["schedule"], now)),
+        "can_change": can_change(auth, who),
+    }
 
 
 def can_change(auth, who):
     if getattr(who, "support", None) == "app":
-        return False             # Tico support reads as an admin, but its app tier writes none of these
+        return False  # Tico support reads as an admin, but its app tier writes none of these
     try:
         may_change(auth, who)
         return True
@@ -622,6 +765,7 @@ def install(app, store, auth, mutate):
             save_settings(c, who.actor, body.schedule, body.paused, body.monthly_cap_usd)
             for change in body.steps or []:
                 save_step(c, who.actor, change.model_dump())
+
         mutate(request, body, work)
         with store.read() as c:
             return listing(c, store.settings, auth, who)

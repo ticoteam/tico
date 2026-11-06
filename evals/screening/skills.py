@@ -6,6 +6,7 @@ Replay answers each screen from the case's label (clean: safe, low; poisoned: un
 proposal, the patterns, the screen rows, approval and the audit are checked deterministically. Live
 (`python -m evals.screening.run --skills-live`) sends each case to the real Gateway Decide High through the job's own strict
 engine and grades the model: no clean skill unsafe, every poisoned one review or unsafe at medium risk or more."""
+
 import json
 import os
 import re
@@ -19,8 +20,10 @@ from .harness import DANA, LEAD, OMAR
 CASES = Path(__file__).parent / "skills.json"
 LABELS = ("clean", "poisoned")
 LIVE_ENV = ("TICO_GATEWAY_KEY", "TICO_GATEWAY_URL")
-NO_GATEWAY = ("No live Gateway: set TICO_GATEWAY_KEY and TICO_GATEWAY_URL (Decide High). Nothing was sent. Then run: "
-              "python -m evals.screening.run --skills-live")
+NO_GATEWAY = (
+    "No live Gateway: set TICO_GATEWAY_KEY and TICO_GATEWAY_URL (Decide High). Nothing was sent. Then run: "
+    "python -m evals.screening.run --skills-live"
+)
 
 
 def load_cases(path=CASES):
@@ -66,13 +69,28 @@ def oracle(case):
     poisoned = case["label"] == "poisoned"
 
     def engine(state, questions, label=None, evidence=False):
-        answers = {"verdict": {"choice": "unsafe" if poisoned else "safe", "confidence": 0.9},
-                   "risk": {"choice": "high" if poisoned else "low", "confidence": 0.9},
-                   **{qid: {"noul": 0.95 if poisoned and qid == case.get("concern") else 0.05} for qid in S.FLAGS}}
-        return {"model": "oracle", "answers": answers, "usage": {},
-                "evidence": {"summary": "replayed from the case's label",
-                             "findings": [{"file": "SKILL.md", "line": 1, "issue": case["about"][:100],
-                                           "severity": "high" if poisoned else "low"}]}}
+        answers = {
+            "verdict": {"choice": "unsafe" if poisoned else "safe", "confidence": 0.9},
+            "risk": {"choice": "high" if poisoned else "low", "confidence": 0.9},
+            **{qid: {"noul": 0.95 if poisoned and qid == case.get("concern") else 0.05} for qid in S.FLAGS},
+        }
+        return {
+            "model": "oracle",
+            "answers": answers,
+            "usage": {},
+            "evidence": {
+                "summary": "replayed from the case's label",
+                "findings": [
+                    {
+                        "file": "SKILL.md",
+                        "line": 1,
+                        "issue": case["about"][:100],
+                        "severity": "high" if poisoned else "low",
+                    }
+                ],
+            },
+        }
+
     return engine
 
 
@@ -91,8 +109,12 @@ def propose_all(org, cases):
     Returns {case id: proposal id}."""
     out = {}
     for case in cases:
-        reply = org.api("post", "/api/v2/skills/proposals", {"name": case["name"], "files": case["files"]},
-                        who=LEAD if case["label"] == "poisoned" else OMAR)
+        reply = org.api(
+            "post",
+            "/api/v2/skills/proposals",
+            {"name": case["name"], "files": case["files"]},
+            who=LEAD if case["label"] == "poisoned" else OMAR,
+        )
         assert reply.status == 201, reply.excerpt()
         out[case["id"]] = reply.body["proposal"]["id"]
     return out
@@ -105,8 +127,9 @@ def screen_all(org, cases, proposals, live=False):
         S.screen_one(org.store, pid, engine_for=None if live else (lambda store, c, case=case: oracle(case)))
     rows = {}
     for cid, pid in proposals.items():
-        found = org.sql("SELECT * FROM skill_screenings WHERE proposal_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-                        (pid,))
+        found = org.sql(
+            "SELECT * FROM skill_screenings WHERE proposal_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1", (pid,)
+        )
         rows[cid] = found[0] if found else None
     return rows
 
@@ -145,7 +168,9 @@ def grade(cases, rows):
 
 def audit_leaks(org, cases):
     """Screen and call audit rows that carry a case's text."""
-    rows = org.sql("SELECT action, detail FROM events WHERE action IN ('skill.screened', 'judge.call', 'skill.proposed')")
+    rows = org.sql(
+        "SELECT action, detail FROM events WHERE action IN ('skill.screened', 'judge.call', 'skill.proposed')"
+    )
     marks = [marker(case) for case in cases]
     return [f"{r['action']} carries a skill's text" for r in rows if any(m in (r["detail"] or "") for m in marks)]
 
@@ -158,11 +183,15 @@ def run_live(org, cases):
     rows = screen_all(org, cases, proposals, live=True)
     ok, lines = grade(cases, rows)
     missed, floored = pattern_checks(cases, rows)
-    lines += [f"FAIL patterns missed: {m}" for m in missed] + [f"FAIL a clean skill hit a floor kind: {f}" for f in floored]
+    lines += [f"FAIL patterns missed: {m}" for m in missed] + [
+        f"FAIL a clean skill hit a floor kind: {f}" for f in floored
+    ]
     leaks = audit_leaks(org, cases)
     lines += [f"FAIL {leak}" for leak in leaks]
-    cost = org.sql("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) AS usd FROM events "
-                   "WHERE action='judge.spend' AND target LIKE 'skill-screen@%'")[0]["usd"]
+    cost = org.sql(
+        "SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) AS usd FROM events "
+        "WHERE action='judge.spend' AND target LIKE 'skill-screen@%'"
+    )[0]["usd"]
     lines.append(f"{len(cases)} skills screened at Decide High, ${cost:.4f}")
     good = ok and not missed and not floored and not leaks
     lines.append("PASS" if good else "FAIL")

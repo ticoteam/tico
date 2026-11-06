@@ -13,8 +13,12 @@ from backend.tests.hold_rows import set_holds
 
 
 def finish(api, machine, attempt, text="Done."):
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": text, "last_seq": 0},
-         machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": text, "last_seq": 0},
+        machine["token"],
+    )
 
 
 def park(c, tid, wait):
@@ -49,8 +53,11 @@ def waiting_task(api, machine, wait, requester="human:ana"):
     return tid
 
 
-@pytest.mark.parametrize("wait,requester", [(w, "human:ana") for w in ["nothing", "child", "blocked_by", "person", "milestone", "snooze"]]
-                         + [("nothing", "bot:ops")])
+@pytest.mark.parametrize(
+    "wait,requester",
+    [(w, "human:ana") for w in ["nothing", "child", "blocked_by", "person", "milestone", "snooze"]]
+    + [("nothing", "bot:ops")],
+)
 def test_a_persons_comment_on_a_waiting_task_starts_the_bots_turn(api, wait, requester):
     machine = task_bot(api, lanes=True, others=("cpo",))
     tid = waiting_task(api, machine, wait, requester)

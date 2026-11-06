@@ -80,6 +80,7 @@ flight file, not the database.
 - Create persistent schema changes with `python3 scripts/new_migration.py name` (`--py` for `up(conn)`):
   `YYYYMMDDHHMMSS_name.sql|py`, UTC. Keep existing `NNNN_` files and applied checksums unchanged. Each migration
   stands alone and must not depend on another unmerged migration's schema; pending files run even below applied ones.
+- Format the Python files you change with `uvx ruff@0.15.9 format <files>` before committing; `scripts/lint.sh` fails on unformatted code. Branches older than the format commit: `scripts/format_rebase.sh`.
 - Keep real team names, human names, domains, buckets and credentials out of the repository. Examples use
   the fictional team Acme (`acme.example`).
 - The UI loads nothing from the network: vendored libraries live in `ui/vendor/` with their licenses. Write a new

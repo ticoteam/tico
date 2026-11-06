@@ -6,6 +6,7 @@ told him nobody but he could do it.
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture). Everything here is synthetic: the test
 database, made-up bots and repositories, and no request leaves the test server.
 """
+
 import json
 import sqlite3
 from contextlib import closing
@@ -42,7 +43,7 @@ SAMPLES = {
     "sleep.hours": 2,
     "bot.fallback": "",
     "bot.task_model": "",
-    "bot.browser_exit": {"runner_id": None},       # back to its own internet; a computer must first share with the bot
+    "bot.browser_exit": {"runner_id": None},  # back to its own internet; a computer must first share with the bot
     "bot.change": {"kind": "model", "target": {}},
     "bot.restore": {},
     "bots.create": {"slug": "parity-bot", "display_name": "Parity Bot"},
@@ -51,15 +52,24 @@ SAMPLES = {
     "bot.owners": "ben",
     "bot.co_owners": {"add": ["ben"]},
     "bot.archive": lambda o: {"expected_revision": o.get("bot-revision", 1)},
-    "bot.access": lambda o: {"see": {"everyone": True}, "read": {"everyone": True},
-                             "write": {"everyone": False, "people": ["ana"]}, "revision": o.get("bot-revision", 1)},
+    "bot.access": lambda o: {
+        "see": {"everyone": True},
+        "read": {"everyone": True},
+        "write": {"everyone": False, "people": ["ana"]},
+        "revision": o.get("bot-revision", 1),
+    },
     "team.budget": {"turns_per_hour": 10},
     # Both providers stay on (saving the subscription in _objects turned Anthropic on, and turning it off would be
     # refused), at the revision _objects read.
-    "models.providers": lambda o: {"enabled": ["openai", "anthropic"], "expected_revision": o.get("providers-revision", 0)},
+    "models.providers": lambda o: {
+        "enabled": ["openai", "anthropic"],
+        "expected_revision": o.get("providers-revision", 0),
+    },
     "bot.profile": {"description": "Keeps the books."},
-    "bot.repositories": {"mode": "chosen", "chosen": [{"full_name": "Acme/product", "access": "write",
-                                                        "run_workflows": True}]},
+    "bot.repositories": {
+        "mode": "chosen",
+        "chosen": [{"full_name": "Acme/product", "access": "write", "run_workflows": True}],
+    },
     "repo.setup_command": "make setup",
     "repos.new_bot_default": "own",
     "release.times": "09:30",
@@ -81,26 +91,37 @@ SAMPLES = {
     "bot.budget": lambda o: {"turns_per_hour": 10, "expected_revision": o.get("bot-revision", 1)},
     "storage.move": {"expect_bytes": 0},
     # A computer given the subscription `_objects` made for it (a real computer and a real subscription, no run to stop).
-    "models.computer_subscription": lambda o: {"runner_id": o.get("computers", ""), "runtime": "claude",
-                                              "subscription": o.get("model-subscriptions", ""), "confirm": False},
+    "models.computer_subscription": lambda o: {
+        "runner_id": o.get("computers", ""),
+        "runtime": "claude",
+        "subscription": o.get("model-subscriptions", ""),
+        "confirm": False,
+    },
 }
 # Routes whose request body this synthetic fixture can't yet satisfy: the rights a direct entry claims are not proven
 # for them here. The test fails when one of these runs after all (take it out) or a new one turns up (fix the sample).
 NOT_PROVEN = {
     "computer.harness": "422: harness choices need a computer that reported harnesses",
     "computer.harness.action": "404: no harness action on a synthetic computer",
-    "computer.performance": "422: the mode sample", "sleep.hours": "409: needs a Gateway",
-    "bot.fallback": "422: needs a model id", "bot.task_model": "422: needs a model id",
-    "bot.change": "422: a transition body", "bot.restore": "409: finance is not archived",
+    "computer.performance": "422: the mode sample",
+    "sleep.hours": "409: needs a Gateway",
+    "bot.fallback": "422: needs a model id",
+    "bot.task_model": "422: needs a model id",
+    "bot.change": "422: a transition body",
+    "bot.restore": "409: finance is not archived",
     "bot.compact_at": "422: the value's bounds",
-    "bot.keep_tasks_going": "422: the body shape", "bot.definition": "422: needs expected_revision",
+    "bot.keep_tasks_going": "422: the body shape",
+    "bot.definition": "422: needs expected_revision",
     "bot.turns_at_once": "422: the body needs expected_revision",
     "bot.manages_reports": "422: the body needs expected_revision",
     "bot.owners": "422: the entry sends owners without expected_revision",
-    "bot.profile": "422: the body shape", "rules.system": "422: the body shape",
-    "rules.task_rule": "404: no synthetic task rule yet", "rules.task_rule.create": "422: the body shape",
-"tasks.tag": "422: the body shape",
-    "inbound.inbox.create": "422: the body shape", "inbound.inbox": "422: no synthetic inbox yet",
+    "bot.profile": "422: the body shape",
+    "rules.system": "422: the body shape",
+    "rules.task_rule": "404: no synthetic task rule yet",
+    "rules.task_rule.create": "422: the body shape",
+    "tasks.tag": "422: the body shape",
+    "inbound.inbox.create": "422: the body shape",
+    "inbound.inbox": "422: no synthetic inbox yet",
     "inbound.phone_request.cancel": "409: inbound is not configured",
     "inbound.inbox.audience": "503: inbound is not configured",
     # Confirm entries: the card is made, but the tap can't run on this fixture.
@@ -109,9 +130,11 @@ NOT_PROVEN = {
     "me.tokens.revoke": "tap 404: no synthetic API token",
     "storage.s3.remove": "tap 409: no company storage is set",
     "people.person.delete": "tap 409: the fixture person can't be removed for good",
-    "repos.product.create": "422: the body shape (and no GitHub App here)", "listening.destination": "422: the body shape",
+    "repos.product.create": "422: the body shape (and no GitHub App here)",
+    "listening.destination": "422: the body shape",
     "listening.destination.remove": "tap 404: no synthetic listening destination",
-    "roadmap.public": "tap 422: the route takes no empty settings", "inbound.inbox.release": "tap 404: no synthetic inbox",
+    "roadmap.public": "tap 422: the route takes no empty settings",
+    "inbound.inbox.release": "tap 404: no synthetic inbox",
     "inbound.phone_request": "tap 409: inbound is not configured",
     "inbound.phone_request.accept": "422: needs the price shown (and inbound is not configured)",
     "bot.cloud_machine": "tap 409: the fixture company is not on Tico Cloud",
@@ -130,7 +153,8 @@ def _sample(e, objects=None):
         value = SAMPLES[e.key]
         return value(objects or {}) if callable(value) else value
     return {"bool": True, "int": 1, "number": 1, "text": "x", "list": "x", "json": {}}.get(
-        e.value.split(":")[0], e.value.split(":", 1)[-1].split("|")[0])
+        e.value.split(":")[0], e.value.split(":", 1)[-1].split("|")[0]
+    )
 
 
 def _objects(api, machine):
@@ -140,21 +164,32 @@ def _objects(api, machine):
     ids["task-types"] = post(api, "task-types", {"name": "Parity type"}, "ana-test")
     ids["tags"] = post(api, "tags", {"key": "parity", "label": "parity"}, "ana-test")
     ids["triggers"] = post(api, "triggers", {"name": "Parity trigger"}, "ana-test")
-    ids["webhooks"] = post(api, "webhooks", {"name": "Parity hook", "url": "https://hooks.acme.example/parity",
-                                             "events": ["custom.*"]}, "ana-test")["webhook"]
+    ids["webhooks"] = post(
+        api,
+        "webhooks",
+        {"name": "Parity hook", "url": "https://hooks.acme.example/parity", "events": ["custom.*"]},
+        "ana-test",
+    )["webhook"]
     found = {}
     for key, made in ids.items():
         made = made.get(next(iter(made))) if isinstance(made, dict) and len(made) == 1 else made
         found[key] = (made or {}).get("id") or (made or {}).get("key")
     now = H.now()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)",
-                  (H.new_id(), "Acme/product", now))
-        c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created_at,"
-                  "updated_at) VALUES('tr-parity','finance','model',?,'human:ana',1,'prepared',?,?)",
-                  ('{"model": "fake-model", "runtime": "fake", "effort": ""}', now, now))
-        system = c.execute("SELECT id FROM system_routines LIMIT 1").fetchone() if c.execute(
-            "SELECT 1 FROM sqlite_master WHERE name='system_routines'").fetchone() else None
+        c.execute(
+            "INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)",
+            (H.new_id(), "Acme/product", now),
+        )
+        c.execute(
+            "INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created_at,"
+            "updated_at) VALUES('tr-parity','finance','model',?,'human:ana',1,'prepared',?,?)",
+            ('{"model": "fake-model", "runtime": "fake", "effort": ""}', now, now),
+        )
+        system = (
+            c.execute("SELECT id FROM system_routines LIMIT 1").fetchone()
+            if c.execute("SELECT 1 FROM sqlite_master WHERE name='system_routines'").fetchone()
+            else None
+        )
     found["repositories"] = "Acme/product"
     found["usage/pools"] = "company"
     found["settings/transitions"] = "tr-parity"
@@ -170,8 +205,12 @@ def _saved_subscription(api, objects):
     when the first such entry is asked, not in `_objects`: a saved login makes the Assistant's turn place the helper
     bots on the computer, and the entries before it are asked with the fixture as it was."""
     if "model-subscriptions" not in objects:
-        made = post(api, "model-subscriptions", {"kind": "anthropic_key", "name": "Parity key",
-                                                 "secret": "sk-ant-parity-synthetic-0000"}, "ana-test")
+        made = post(
+            api,
+            "model-subscriptions",
+            {"kind": "anthropic_key", "name": "Parity key", "secret": "sk-ant-parity-synthetic-0000"},
+            "ana-test",
+        )
         objects["model-subscriptions"] = made["id"]
     return objects["model-subscriptions"]
 
@@ -179,8 +218,11 @@ def _saved_subscription(api, objects):
 def _target(e, objects, person):
     target = {"bot": "finance", "computer": objects["computers"], "person": "cara"}
     if "{id}" in e.route:
-        target["id"] = ("all" if e.route.startswith("postal/addresses/") else
-                        next((v for k, v in objects.items() if e.route.startswith(k + "/")), "parity-missing"))
+        target["id"] = (
+            "all"
+            if e.route.startswith("postal/addresses/")
+            else next((v for k, v in objects.items() if e.route.startswith(k + "/")), "parity-missing")
+        )
     if e.who == "self" and e.target == "person":
         target["person"] = person
     return {k: v for k, v in target.items() if v and "{" + k + "}" in e.route}
@@ -193,14 +235,13 @@ def _allowed(c, e, role, person):
         return role in ("owner", "admin")
     if e.who == "mover":
         return role == "owner" or H.can_move(c, "human:" + person)
-    return True                                    # anyone, self
+    return True  # anyone, self
 
 
 def expected(c, e, role, person):
     if not _allowed(c, e, role, person):
         return "refused"
-    kind = settings_catalog.kind_for(e, settings_catalog.parse(e, _sample(e))
-                                     if e.value == "json" else {})
+    kind = settings_catalog.kind_for(e, settings_catalog.parse(e, _sample(e)) if e.value == "json" else {})
     return {"direct": "ran", "confirm": "card", "person": "refused"}[kind]
 
 
@@ -251,8 +292,10 @@ def ask(api, attempt, e, objects, person, token):
     if e.route.startswith("settings/transitions/"):
         # The fixture change is prepared at the bot's revision now, and an apply consumes it, so each entry gets it fresh.
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_transitions SET state='prepared', expected_revision=? WHERE id=?",
-                      (objects["bot-revision"], objects["settings/transitions"]))
+            c.execute(
+                "UPDATE bot_transitions SET state='prepared', expected_revision=? WHERE id=?",
+                (objects["bot-revision"], objects["settings/transitions"]),
+            )
     if "{computer}" in e.route or e.route == "computer-subscriptions":
         # A computer an earlier entry revoked (computer.revoke) is not found by the next one: each gets its own.
         objects["computers"] = runner(api)["runner_id"]
@@ -269,8 +312,10 @@ def ask(api, attempt, e, objects, person, token):
         # This switch exists only on cloud companies. Give its tap an available company and a synthetic HQ, so
         # the shared sweep proves the owner's confirmation as well as refusing everyone else.
         hq = SimpleNamespace(support=lambda on=None, **_: {"on": on is not False, "machines": []})
-        with patch.object(cloud_machines, "cloud_company", return_value=True), \
-                patch.object(api.app.state.cloud_machines, "client", hq):
+        with (
+            patch.object(cloud_machines, "cloud_company", return_value=True),
+            patch.object(api.app.state.cloud_machines, "client", hq),
+        ):
             tap = tapped(api, planned.json(), token)
     else:
         tap = tapped(api, planned.json(), token)
@@ -321,14 +366,18 @@ def test_the_sweep_names_an_entry_whose_route_refuses_a_level_the_catalogue_allo
     Confirm entry, said "anyone" too (Review 2 of PR #1700: the card is made by the catalogue, so only the tap reaches
     the route's admin check); and Bot repositories without its Run workflows rule (as on Oct 27). The sweep names each."""
     from dataclasses import replace
-    entries = [replace(settings_catalog.entry("release.times"), who="anyone"),
-               replace(settings_catalog.entry("computer.member_bots"), who="anyone"),
-               replace(settings_catalog.entry("bot.repositories"), confirm_when=(), why="")]
+
+    entries = [
+        replace(settings_catalog.entry("release.times"), who="anyone"),
+        replace(settings_catalog.entry("computer.member_bots"), who="anyone"),
+        replace(settings_catalog.entry("bot.repositories"), confirm_when=(), why=""),
+    ]
     monkeypatch.setattr(settings_catalog, "_entries", lambda: entries)
     objects = _objects(api, runner(api))
     wrong, _, _ = sweep(api, botops, "member", entries[:2], objects)
-    assert wrong == ["release.times: catalogue says ran for the member (direct, anyone), the route refused",
-                     "computer.member_bots: catalogue says card for the member (confirm, anyone), the route card, then "
-                     "refused"], wrong
+    assert wrong == [
+        "release.times: catalogue says ran for the member (direct, anyone), the route refused",
+        "computer.member_bots: catalogue says card for the member (confirm, anyone), the route card, then refused",
+    ], wrong
     wrong, _, _ = sweep(api, botops, "owner", entries[2:], objects)
     assert wrong == ["bot.repositories: catalogue says ran for the owner (direct, admin), the route card"], wrong

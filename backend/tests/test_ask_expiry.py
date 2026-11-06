@@ -1,5 +1,6 @@
 """An unanswered ask leaves a person's queue when a newer ask or the task's end replaces it; an old one stays, stale,
 until the weekday batch sends it back to its bot (backend/still_needed.py)."""
+
 from backend.tests.test_api import api, headers, post  # noqa: F401
 from backend.store import H
 
@@ -12,8 +13,9 @@ def needs(api, who="ana-test"):
 
 def bot_ask(c, tid, text, refs=None, to="human:ana"):
     task = H.task(c, tid)
-    return H.say(c, "bot:ops", to, text, kind="ask", conversation_id=task["conversation_id"],
-                 refs={"task": tid, **(refs or {})})
+    return H.say(
+        c, "bot:ops", to, text, kind="ask", conversation_id=task["conversation_id"], refs={"task": tid, **(refs or {})}
+    )
 
 
 def test_a_newer_ask_or_the_tasks_end_supersedes_and_old_asks_fold_out(api):

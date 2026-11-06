@@ -1,4 +1,5 @@
 """Shared, side-effect-free validation for routine snapshots from Git or a runner."""
+
 import hashlib
 import re
 from datetime import datetime
@@ -12,11 +13,20 @@ MAX_CONTENT = 100_000
 MAX_SNAPSHOT = 1_000_000
 # An event a routine may run `on:` instead of a cron. Tico emits these (docs/routines.md).
 # `recording.ready` is the old name of `meeting.ready`; Tico still emits both.
-EVENTS = ('meeting.ready', 'recording.ready', 'market.insight.urgent', 'inbound.received', 'release_published',
-          'strategy.published', 'market.briefing', 'finance.bill.due_soon', 'finance.invoice.overdue',
-          'finance.period.ready')
+EVENTS = (
+    'meeting.ready',
+    'recording.ready',
+    'market.insight.urgent',
+    'inbound.received',
+    'release_published',
+    'strategy.published',
+    'market.briefing',
+    'finance.bill.due_soon',
+    'finance.invoice.overdue',
+    'finance.period.ready',
+)
 # A webhook trigger's event (backend/triggers.py); the server checks that the trigger exists.
-WEBHOOK_EVENT = re.compile(r'webhook\.(?:_tico|[a-z0-9][a-z0-9-]{0,39})')   # _tico: Tico Team's notices
+WEBHOOK_EVENT = re.compile(r'webhook\.(?:_tico|[a-z0-9][a-z0-9-]{0,39})')  # _tico: Tico Team's notices
 
 
 def known_event(name):
@@ -32,7 +42,7 @@ def known_event(name):
     except ImportError:
         return False
     found = canonical(name)
-    return bool(found) and not found.startswith('custom.')     # nothing sends a custom event to routines
+    return bool(found) and not found.startswith('custom.')  # nothing sends a custom event to routines
 
 
 def routine_path(value):
@@ -64,9 +74,11 @@ def validate_schedules(entries, read_file=None):
             raise ValueError(f'Routine {index} needs exactly one of cron (a time) or on (an event)')
         if on is not None:
             if not known_event(on):
-                raise ValueError(f'Routine {index} has an unknown event; Tico emits {", ".join(EVENTS)} '
-                                 'and webhook.<trigger id> for a trigger in Automations › Incoming webhooks '
-                                 '(hub event-types lists every event)')
+                raise ValueError(
+                    f'Routine {index} has an unknown event; Tico emits {", ".join(EVENTS)} '
+                    'and webhook.<trigger id> for a trigger in Automations › Incoming webhooks '
+                    '(hub event-types lists every event)'
+                )
             cron = ''
         elif not isinstance(cron, str) or len(cron) > 100 or len(cron.split()) != 5 or not croniter.is_valid(cron):
             raise ValueError(f'Routine {title}: cron must use five fields, for example 0 9 * * 1-5')
@@ -81,7 +93,9 @@ def validate_schedules(entries, read_file=None):
             try:
                 croniter(cron, datetime(2026, 1, 1, tzinfo=tz), day_or=False).get_next(datetime)
             except ValueError as exc:
-                raise ValueError(f'Routine {title}: cron has no practical occurrence; use five fields, for example 0 9 * * 1-5') from exc
+                raise ValueError(
+                    f'Routine {title}: cron has no practical occurrence; use five fields, for example 0 9 * * 1-5'
+                ) from exc
         # Setup turns on the first routine; later changes use the owner's requested schedule.
         enabled = entry.get('enabled', True)
         if not isinstance(enabled, bool):
@@ -96,7 +110,11 @@ def validate_schedules(entries, read_file=None):
         keys.add(key)
         template = routine_path(entry.get('template', ''))
         labels = entry.get('labels', [])
-        if not isinstance(labels, list) or len(labels) > 20 or any(not isinstance(x, str) or not 1 <= len(x) <= 100 for x in labels):
+        if (
+            not isinstance(labels, list)
+            or len(labels) > 20
+            or any(not isinstance(x, str) or not 1 <= len(x) <= 100 for x in labels)
+        ):
             raise ValueError(f'Routine {index} needs at most 20 string labels of 1–100 characters')
         instructions = read_file(template) if template and read_file else entry.get('instructions', '')
         if not isinstance(instructions, str) or len(instructions.encode()) > MAX_CONTENT:
@@ -106,6 +124,17 @@ def validate_schedules(entries, read_file=None):
         total += len(instructions.encode())
         if total > MAX_SNAPSHOT:
             raise ValueError('Routine instructions exceed the 1 MB snapshot limit')
-        result.append(dict(id=key, title=title, cron=cron.strip(), on=on or '', timezone=zone,
-                           template=template, labels=labels, instructions=instructions, enabled=enabled))
+        result.append(
+            dict(
+                id=key,
+                title=title,
+                cron=cron.strip(),
+                on=on or '',
+                timezone=zone,
+                template=template,
+                labels=labels,
+                instructions=instructions,
+                enabled=enabled,
+            )
+        )
     return result

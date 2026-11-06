@@ -13,6 +13,7 @@ from typing import TypedDict
 
 class PageIdentityRow(TypedDict):
     """An alias keeps its page's read provenance after the bytes are purged."""
+
     identity: str
     file_id: str
 
@@ -91,6 +92,7 @@ class PostalMailSettingsRow(TypedDict):
 
 class MeetingTaskLinkRow(TypedDict):
     """A meeting/task pair; its references keep their independent read checks."""
+
     id: str
     meeting_id: str
     task_id: str
@@ -121,6 +123,7 @@ class SuggestionRow(TypedDict):
 
 class TaskRow(TypedDict):
     """One `tasks` row (SELECT *)."""
+
     id: str
     title: str | None
     body: str | None
@@ -184,6 +187,7 @@ class TaskRow(TypedDict):
 
 class PresenceRow(TypedDict):
     """One open window at a task or meeting; expires without heartbeats."""
+
     id: str
     place: str
     actor: str
@@ -193,13 +197,17 @@ class PresenceRow(TypedDict):
 
 class TaskCheckBackWakeRow(TypedDict):
     """A reminder occurrence; jobs and attempts retain all execution state."""
+
     task_id: str
     check_back_at: str
     sent_at: str
     message_id: str | None
+
+
 class TaskHoldRow(TypedDict):
     """One `task_holds` row (SELECT *): a task's move to Blocked or its snooze (migration 0075). At most one of each
     kind per task is open (released_at NULL); a released one stays as history."""
+
     id: int
     task_id: str
     kind: str
@@ -217,6 +225,7 @@ class TaskHoldRow(TypedDict):
 
 class QuarantineHoldRow(TypedDict):
     """One bot's refusal-count hold on a task or chat (migration 0094)."""
+
     id: int
     bot_id: str
     task_id: str | None
@@ -230,6 +239,7 @@ class QuarantineHoldRow(TypedDict):
 class AttemptRow(TypedDict):
     """One `attempts` row (SELECT *): a run, its lease and its record. The lease columns are NULL together on a run
     recorded with no lease (migration 0072); the record's columns are NULL on one that failed before it had one."""
+
     id: str
     job_id: str | None
     bot_id: str
@@ -282,6 +292,7 @@ class AttemptRow(TypedDict):
 
 class CloudMachineDeletionRow(TypedDict):
     """Deletion intent stays tied to the live HQ machine id across replacements."""
+
     machine_id: str
     bot: str
     runner_id: str | None
@@ -293,12 +304,14 @@ class CloudMachineDeletionRow(TypedDict):
 
 class CloudMachineEnrollmentFailureRow(TypedDict):
     """Each live HQ machine id spends the enrollment retry budget at most once."""
+
     machine_id: str
     bot: str
 
 
 class RunnerRow(TypedDict):
     """One `runners` row (SELECT *): the computer's identity and its owner's settings."""
+
     id: str
     label: str
     owner_id: str
@@ -317,6 +330,7 @@ class RunnerRow(TypedDict):
 
 class RunnerStateRow(TypedDict):
     """One `runner_states` row (SELECT *): what the computer's heartbeats and samples report."""
+
     runner_id: str
     last_seen_at: str | None
     awake_since: str | None
@@ -333,6 +347,7 @@ class RunnerStateRow(TypedDict):
 
 class ApprovalRow(TypedDict):
     """One `approvals` row (SELECT *)."""
+
     id: str
     kind: str | None
     task_id: str | None
@@ -353,6 +368,7 @@ class ApprovalRow(TypedDict):
 
 class AttemptEventRow(TypedDict):
     """One `attempt_events` row (SELECT *)."""
+
     id: int
     attempt_id: str
     seq: int
@@ -364,6 +380,7 @@ class AttemptEventRow(TypedDict):
 class PrincipalRow(TypedDict):
     """One `principals` row (SELECT *): an actor string's identity (`human:<id>`, `bot:<bot id>`, a system actor).
     A deleted human or bot keeps its row with `deleted_at` set (backend/migrations/0012_bot_ids.py)."""
+
     id: str
     kind: str
     deleted_at: str | None
@@ -371,6 +388,7 @@ class PrincipalRow(TypedDict):
 
 class MemoryTidyPassRow(TypedDict):
     """One admission and its reconciled pilot cost."""
+
     id: str
     night: str
     bot: str
@@ -387,6 +405,7 @@ class MemoryTidyPassRow(TypedDict):
 
 class FeedbackRow(TypedDict):
     """One person's 👍 or 👎 on something a bot made (backend/feedback.py); the run fields are None where it had none."""
+
     id: str
     person_id: str
     subject_type: str
@@ -408,6 +427,7 @@ class FeedbackRow(TypedDict):
 
 class ThreadRankingRow(TypedDict):
     """A root thread's Important level (backend/thread_rank.py); `score` is None until a call answers."""
+
     thread_id: str
     score: int | None
     ranked_seq: int
@@ -418,6 +438,7 @@ class ThreadRankingRow(TypedDict):
 
 class ThreadPinRow(TypedDict):
     """One actor's pin on a root thread (backend/thread_rail.py): `pinned` 0 unpins it for them over a pin for everyone."""
+
     id: str
     thread_id: str
     actor: str
@@ -429,6 +450,7 @@ class ThreadPinRow(TypedDict):
 class MessageRouteRow(TypedDict):
     """Who routing asked for one person's message, kept as history (routing was retired: backend/threads.py `plan`):
     `bot_ids` is a JSON list of bot actors, `[]` when it asked none."""
+
     message_id: str
     thread_id: str
     bot_ids: str
@@ -438,6 +460,7 @@ class MessageRouteRow(TypedDict):
 
 class MemoryTidyPacketRow(TypedDict):
     """Trusted runner custody for one editing and verification attempt."""
+
     attempt_id: str
     pass_id: str
     memory_commit: str
@@ -454,6 +477,7 @@ class MemoryTidyPacketRow(TypedDict):
 
 class UsageFactRow(TypedDict):
     """One `usage_facts` row (SELECT *): a metered segment, append-only (backend/usage_facts.py)."""
+
     id: int
     source: str
     run_id: str | None
@@ -484,6 +508,7 @@ class UsageFactRow(TypedDict):
 class UsageMeterReadRow(TypedDict):
     """One `usage_meter_reads` row (SELECT *): the newest read of the Gateway's meter taken for a month
     (backend/usage_facts.py `record_meter`)."""
+
     id: int
     month: str
     as_of: str
@@ -493,6 +518,7 @@ class UsageMeterReadRow(TypedDict):
 
 class BudgetNodeRow(TypedDict):
     """One `budget_nodes` row (SELECT *): a money limit, its amount, period and scope (backend/usage_limits.py)."""
+
     id: str
     scope: str
     team_id: str | None
@@ -508,6 +534,7 @@ class BudgetNodeRow(TypedDict):
 class HomeMergeRow(TypedDict):
     """One `home_merges` row (SELECT *): the old personal chat with a bot that moved into that bot's Home, and the Home
     it went to (backend/bot_home_merge.py)."""
+
     conversation_id: str
     home_id: str
     bot_id: str
@@ -519,6 +546,7 @@ class HomeMergeRow(TypedDict):
 
 class HomeMergeMessageRow(TypedDict):
     """One `home_merge_messages` row (SELECT *): a message that a merged chat carried into the Home."""
+
     message_id: str
     conversation_id: str
 
@@ -527,6 +555,7 @@ class HistoryEventRow(TypedDict):
     """One `history_events` row (SELECT *): one change to a task, a goal, the company profile, the strategy or the
     market graph (backend/migrations/0064_history_events.py). `kind` is the field that changed or what happened, `data`
     a JSON object of the subject type's extras."""
+
     id: str
     subject_type: str
     subject_id: str
@@ -543,6 +572,7 @@ class HistoryEventRow(TypedDict):
 
 class BotSettingsRow(TypedDict):
     """One `bot_settings` row (SELECT *): a bot's declared settings (backend/bot_settings.py)."""
+
     bot_id: str
     harness: str | None
     runtime: str | None
@@ -661,6 +691,7 @@ class LetterProofRow(TypedDict):
 class MaintenanceStepRow(TypedDict):
     """One `maintenance_steps` row (SELECT *): a Maintenance step's switch, "How often", custom interval, "Most bots per
     run" and cursors (migration 0090, backend/maintenance.py)."""
+
     key: str
     enabled: int
     frequency: str
@@ -676,6 +707,7 @@ class MaintenanceStepRow(TypedDict):
 
 class MaintenanceRunRow(TypedDict):
     """One `maintenance_runs` row (SELECT *): one Maintenance run, claimed by its occurrence key (migration 0090)."""
+
     id: str
     occurrence_key: str
     trigger: str
@@ -690,6 +722,7 @@ class MaintenanceRunRow(TypedDict):
 
 class MaintenanceRunStepRow(TypedDict):
     """One `maintenance_run_steps` row (SELECT *): one step of one Maintenance run, with its status and counts."""
+
     id: str
     maintenance_run_id: str
     step: str
@@ -707,6 +740,7 @@ class MaintenanceRunStepRow(TypedDict):
 
 class MaintenanceListingRow(TypedDict):
     """One `maintenance_listings` row (SELECT *): a task Find stuck listed for one reason at one appointment."""
+
     task_id: str
     kind: str
     appointment: str
@@ -716,6 +750,7 @@ class MaintenanceListingRow(TypedDict):
 
 class MaintenanceHandoffRow(TypedDict):
     """One `maintenance_handoffs` row (SELECT *): a quiet task waiting to ride along in its bot's Update turn."""
+
     id: str
     bot_id: str
     task_id: str
@@ -726,6 +761,7 @@ class MaintenanceHandoffRow(TypedDict):
 
 class MaintenanceRequestRow(TypedDict):
     """One `maintenance_requests` row (SELECT *): the run an actor's Idempotency-Key was given to."""
+
     actor: str
     request_key: str
     maintenance_run_id: str
@@ -802,6 +838,7 @@ class EmailSendOperationRow(TypedDict):
 
 class ToolRow(TypedDict):
     """An API tool (backend/api_tools.py): a service bots call with a key, through the proxy or on computers."""
+
     id: str
     name: str
     service: str
@@ -817,6 +854,7 @@ class ToolRow(TypedDict):
 
 class ToolCheckRow(TypedDict):
     """One key's check of its tool: the status the Tools page shows until the next."""
+
     id: str
     tool_id: str
     credential_id: str | None
@@ -828,6 +866,7 @@ class ToolCheckRow(TypedDict):
 
 class ToolCallRow(TypedDict):
     """One proxied call (track B's proxy writes it): the tool's activity, never the key or the body."""
+
     id: str
     tool_id: str
     credential_id: str | None
@@ -845,6 +884,7 @@ class ToolCallRow(TypedDict):
 
 class SkillRow(TypedDict):
     """A company skill: the approved name; `latest_version_id` stays None until its first approval."""
+
     id: str
     name: str
     description: str
@@ -858,6 +898,7 @@ class SkillRow(TypedDict):
 
 class SkillVersionRow(TypedDict):
     """One approved, immutable bundle: `files` is the JSON [{path, content}]."""
+
     id: str
     skill_id: str
     number: int
@@ -925,6 +966,7 @@ class SkillInstallRow(TypedDict):
 
 class SkillReceiptRow(TypedDict):
     """What a runner or helper actually staged for a target."""
+
     target_type: str
     target_id: str
     skill_id: str
@@ -935,6 +977,7 @@ class SkillReceiptRow(TypedDict):
 
 class SkillUsageRow(TypedDict):
     """One use: skill, who, where, when. Never prompt text or arguments."""
+
     id: int
     skill_id: str
     sha256: str | None
@@ -962,6 +1005,7 @@ class SkillUsageDailyRow(TypedDict):
 
 class UnlistedSkillUsageDailyRow(TypedDict):
     """A bot's uses in a day of a skill the directory does not have: the name, the bot, the day and a count only."""
+
     used_on: str
     name: str
     bot_id: str
@@ -970,6 +1014,7 @@ class UnlistedSkillUsageDailyRow(TypedDict):
 
 class SkillSuggestionRow(TypedDict):
     """A remove or promote suggestion for Library › Skills (backend/skill_suggestions.py)."""
+
     id: str
     kind: str
     subject: str
@@ -987,6 +1032,7 @@ class SkillSuggestionRow(TypedDict):
 
 class SkillDeviceRow(TypedDict):
     """A person's skills helper; the token is stored only as `token_hash`."""
+
     id: str
     person_id: str
     label: str

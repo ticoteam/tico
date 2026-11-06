@@ -30,6 +30,7 @@ read back per question set.
 Pure stdlib on purpose: the runner venv, the mail venv, the cloud venv and the `hub` CLI all
 import it.
 """
+
 import contextlib
 import contextvars
 import hashlib
@@ -59,7 +60,8 @@ GATEWAY_MODEL = "tico-decide-1.0"
 # take longer (the lineup's `tico-decide-{level}-1.0`, backend/gateway_tiers.py).
 DECIDE_LEVELS = ("low", "medium", "high")
 GATEWAY_MODELS = ("tico-decide-1.0", "tico-classify-1.0", "tico-classify-low", "tico-classify-low-1.0") + tuple(
-    name for level in DECIDE_LEVELS for name in (f"tico-decide-{level}", f"tico-decide-{level}-1.0"))
+    name for level in DECIDE_LEVELS for name in (f"tico-decide-{level}", f"tico-decide-{level}-1.0")
+)
 GATEWAY_PATH = "/v1/gateway/decisions"
 GATEWAY_TIMEOUT = 8
 GATEWAY_SLOW_TIMEOUT = 30
@@ -87,9 +89,16 @@ def decide_model(level):
 def decide_timeout(level):
     """The most one Gateway try takes at `level`: Jev's 8 seconds, or 30 for the language models."""
     return GATEWAY_TIMEOUT if normalize_level(level) == "low" else GATEWAY_SLOW_TIMEOUT
+
+
 TYPESAFE_PROVIDER = "TypeSafe"
-LLM_PROVIDERS = {"anthropic": "Anthropic", "openai": "OpenAI", "google": "Google", "xai": "xAI",
-                 "openrouter": "OpenRouter"}
+LLM_PROVIDERS = {
+    "anthropic": "Anthropic",
+    "openai": "OpenAI",
+    "google": "Google",
+    "xai": "xAI",
+    "openrouter": "OpenRouter",
+}
 TYPES = ("choice", "score", "noul")
 QUESTIONS_DIR = Path(__file__).resolve().parents[1] / "questions"
 _REGISTRY_DIR_FD = os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
@@ -161,7 +170,7 @@ def _paid(exc, model, usage):
 # what is left, and the whole chain answers before its callers stop waiting. `clock` is the seam the tests use.
 clock = time.monotonic
 _DEADLINE = contextvars.ContextVar("tico_judge_deadline", default=None)
-MIN_ATTEMPT = 1.0                           # seconds: with less left, a provider is not asked at all
+MIN_ATTEMPT = 1.0  # seconds: with less left, a provider is not asked at all
 
 
 @contextlib.contextmanager
@@ -175,7 +184,7 @@ def within(seconds):
         _DEADLINE.reset(token)
 
 
-MAX_ANSWER_BYTES = 4_000_000               # a decision answer is a few KB; more than this is not one
+MAX_ANSWER_BYTES = 4_000_000  # a decision answer is a few KB; more than this is not one
 
 
 def read_json(response):
@@ -191,7 +200,7 @@ def read_json(response):
                 raise JudgeError("unavailable", "the answer did not finish arriving in time", retryable=True)
             sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
             if hasattr(sock, "settimeout"):
-                sock.settimeout(left)       # no single wait for bytes outlasts the deadline either
+                sock.settimeout(left)  # no single wait for bytes outlasts the deadline either
         chunk = read(65536)
         if not chunk:
             break
@@ -238,7 +247,7 @@ class _Watch:
 
     def _shut(self):
         try:
-            self._sock.shutdown(socket.SHUT_RDWR)   # a blocked read returns at once; the attempt fails `unavailable`
+            self._sock.shutdown(socket.SHUT_RDWR)  # a blocked read returns at once; the attempt fails `unavailable`
         except OSError:
             pass
         self._sock.close()
@@ -331,7 +340,7 @@ def gateway_open(request, timeout):
     handlers = [_HTTPHandler, _HTTPSHandler, _Unredirected]
     if urllib.parse.urlsplit(request.full_url).scheme == "http":
         handlers.append(urllib.request.ProxyHandler({}))
-    return G.branded_opener(*handlers).open(request, timeout=timeout)   # Tico's user agent: Cloudflare refuses urllib's
+    return G.branded_opener(*handlers).open(request, timeout=timeout)  # Tico's user agent: Cloudflare refuses urllib's
 
 
 def time_left(timeout):
@@ -385,7 +394,9 @@ def validate(state, questions, label=None):
                 raise JudgeError("invalid", f"{qid}: a level is a string, structure, or null")
         elif criteria is not None:
             if not isinstance(criteria, dict) or set(criteria) - {"true", "false"}:
-                raise JudgeError("invalid", f"{qid}: a noul's criteria, if given, is a map of `true` and `false` descriptions")
+                raise JudgeError(
+                    "invalid", f"{qid}: a noul's criteria, if given, is a map of `true` and `false` descriptions"
+                )
             if not all(v is None or isinstance(v, ENTRY_TYPES) for v in criteria.values()):
                 raise JudgeError("invalid", f"{qid}: a noul's true/false description is a string, structure, or null")
     try:
@@ -408,16 +419,31 @@ def check_evidence(value):
     summary cut to EVIDENCE_SUMMARY characters, at most EVIDENCE_FINDINGS findings, each file and issue cut to its limit
     and each line at least 0. Never trusted: a missing or malformed one (a finding without a file, a severity that is not
     one of SEVERITIES) is `JudgeError("shape")`."""
-    if not isinstance(value, dict) or not isinstance(value.get("summary"), str) or not isinstance(value.get("findings"), list):
+    if (
+        not isinstance(value, dict)
+        or not isinstance(value.get("summary"), str)
+        or not isinstance(value.get("findings"), list)
+    ):
         raise JudgeError("shape", "the evidence is not a summary and a list of findings")
     findings = []
     for item in value["findings"][:EVIDENCE_FINDINGS]:
-        if (not isinstance(item, dict) or not isinstance(item.get("file"), str) or not isinstance(item.get("issue"), str)
-                or item.get("severity") not in SEVERITIES or not isinstance(item.get("line"), int)
-                or isinstance(item.get("line"), bool)):
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("file"), str)
+            or not isinstance(item.get("issue"), str)
+            or item.get("severity") not in SEVERITIES
+            or not isinstance(item.get("line"), int)
+            or isinstance(item.get("line"), bool)
+        ):
             raise JudgeError("shape", "a finding is not a file, line, issue and severity")
-        findings.append({"file": item["file"][:EVIDENCE_FILE], "line": max(0, item["line"]),
-                         "issue": item["issue"][:EVIDENCE_ISSUE], "severity": item["severity"]})
+        findings.append(
+            {
+                "file": item["file"][:EVIDENCE_FILE],
+                "line": max(0, item["line"]),
+                "issue": item["issue"][:EVIDENCE_ISSUE],
+                "severity": item["severity"],
+            }
+        )
     return {"summary": value["summary"][:EVIDENCE_SUMMARY], "findings": findings}
 
 
@@ -457,22 +483,30 @@ def _project(answer, question):
     out = {kind: answer[kind] if kind == "choice" else float(answer[kind]), "confidence": float(answer["confidence"])}
     given = answer.get("probabilities")
     if kind == "choice" and isinstance(given, dict):
-        out["probabilities"] = {name: float(given[name]) for name in criteria
-                                if name in given and _bounded(given[name], 0, 1)}
+        out["probabilities"] = {
+            name: float(given[name]) for name in criteria if name in given and _bounded(given[name], 0, 1)
+        }
     if kind == "score":
         levels = range(len(criteria))
         if isinstance(given, list) and len(given) == len(criteria):
             given = dict(enumerate(given))
         if isinstance(given, dict):
-            out["probabilities"] = {i: float(given.get(i, given.get(str(i)))) for i in levels
-                                    if _bounded(given.get(i, given.get(str(i))), 0, 1)}
+            out["probabilities"] = {
+                i: float(given.get(i, given.get(str(i))))
+                for i in levels
+                if _bounded(given.get(i, given.get(str(i))), 0, 1)
+            }
         out["legend"] = list(criteria)
     return out
 
 
 def _bounded(value, low, high):
-    return (isinstance(value, (int, float)) and not isinstance(value, bool)
-            and math.isfinite(value) and low <= value <= high)
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and low <= value <= high
+    )
 
 
 # ----------------------------------------------------------------------------- transports
@@ -485,13 +519,19 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
 
     def engine(state, questions, label=None):
         validate(state, questions, label)
-        body = json.dumps({"state": state, "model": model, "questions": clean(questions)},
-                          default=str).encode()
+        body = json.dumps({"state": state, "model": model, "questions": clean(questions)}, default=str).encode()
         started = time.monotonic()
         for attempt in range(retries + 1):
-            request = urllib.request.Request(URL, data=body, method="POST", headers={
-                "Authorization": "Bearer " + api_key, "Content-Type": "application/json",
-                "Accept": "application/json"})
+            request = urllib.request.Request(
+                URL,
+                data=body,
+                method="POST",
+                headers={
+                    "Authorization": "Bearer " + api_key,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+            )
             try:
                 with one_try(timeout) as seconds, opener(request, timeout=seconds) as response:
                     payload = read_json(response)
@@ -506,7 +546,9 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
                     if status in (401, 403):
                         raise JudgeError("auth", f"TypeSafe refused the key ({status})", status)
                     if status == 422:
-                        raise JudgeError("invalid", str(detail.get("detail") or detail or "TypeSafe refused the request"), 422)
+                        raise JudgeError(
+                            "invalid", str(detail.get("detail") or detail or "TypeSafe refused the request"), 422
+                        )
                     if status in (429, 529) or status >= 500:
                         if attempt < retries:
                             sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
@@ -525,8 +567,14 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
             answers = check_answers(payload.get("answers"), questions)
         except JudgeError as exc:
             raise _paid(exc, str(payload.get("model") or model), payload.get("usage"))
-        return {"model": str(payload.get("model") or model), "answers": answers,
-                "usage": clean_usage(payload.get("usage")), "ms": ms, "provider": TYPESAFE_PROVIDER}
+        return {
+            "model": str(payload.get("model") or model),
+            "answers": answers,
+            "usage": clean_usage(payload.get("usage")),
+            "ms": ms,
+            "provider": TYPESAFE_PROVIDER,
+        }
+
     engine.model, engine.provider = model, TYPESAFE_PROVIDER
     return engine
 
@@ -546,16 +594,24 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
         """`evidence` asks a language-model level for its evidence beside the answers: the result then keeps it (checked),
         and a level that answers none (Jev's Low) keeps no `evidence` key."""
         validate(state, questions, label)
-        if not safe_gateway_url(url):                   # checked at use, so the next provider is asked instead
+        if not safe_gateway_url(url):  # checked at use, so the next provider is asked instead
             raise JudgeError("unconfigured", "the Tico AI Gateway URL is neither https nor this computer")
         body = {"state": state, "model": model, "questions": clean(questions)}
         if label:
             body["label"] = label
         if evidence:
             body["evidence"] = True
-        request = urllib.request.Request(url, data=json.dumps(body, default=str).encode(), method="POST", headers={
-            **extra, "Authorization": "Bearer " + api_key, "Content-Type": "application/json",
-            "Accept": "application/json"})
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(body, default=str).encode(),
+            method="POST",
+            headers={
+                **extra,
+                "Authorization": "Bearer " + api_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+        )
         started = time.monotonic()
         try:
             with one_try(timeout) as seconds, opener(request, timeout=seconds) as response:
@@ -563,9 +619,9 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
         except urllib.error.HTTPError as exc:
             with exc:
                 status = exc.code
-                if 300 <= status < 400:                     # not the Gateway's own answer: its key went no further
+                if 300 <= status < 400:  # not the Gateway's own answer: its key went no further
                     raise JudgeError("http", f"the Tico AI Gateway answered with a redirect ({status})", status)
-                if status in (401, 403):                    # unknown or revoked key
+                if status in (401, 403):  # unknown or revoked key
                     raise JudgeError("auth", f"the Tico AI Gateway refused the key ({status})", status)
                 if status in (402, 429, 529) or status >= 500:  # the Gateway's cap, a rate limit, or down
                     raise JudgeError("unavailable", f"the Tico AI Gateway answered {status}", status, retryable=True)
@@ -573,8 +629,7 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
                 # caller's, and the next provider is asked.
                 raise JudgeError("http", f"the Tico AI Gateway answered {status}", status)
         except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
-            raise JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}",
-                             retryable=True)
+            raise JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}", retryable=True)
         ms = round((time.monotonic() - started) * 1000)
         if not isinstance(payload, dict):
             raise JudgeError("shape", "the Tico AI Gateway answered with something other than an object")
@@ -586,26 +641,41 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
             checked = check_evidence(payload.get("evidence")) if wants_evidence else None
         except JudgeError as exc:
             raise _paid(exc, answered, usage)
-        return {"model": answered, "answers": answers, "usage": usage, "ms": ms, "provider": GATEWAY_PROVIDER,
-                **({"evidence": checked} if wants_evidence else {})}
+        return {
+            "model": answered,
+            "answers": answers,
+            "usage": usage,
+            "ms": ms,
+            "provider": GATEWAY_PROVIDER,
+            **({"evidence": checked} if wants_evidence else {}),
+        }
+
     engine.model, engine.provider = model, GATEWAY_PROVIDER
     return engine
 
 
 # The provider-neutral decision model: when there is no TypeSafe key, one call to the company's own model
 # provider answers the same questions. Keys are the providers' usual environment variables.
-LLM_KEYS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "google": "GEMINI_API_KEY",
-            "xai": "XAI_API_KEY", "openrouter": "OPENROUTER_API_KEY"}
-LLM_URLS = {"anthropic": "https://api.anthropic.com/v1/messages",
-            "openai": "https://api.openai.com/v1/chat/completions",
-            "xai": "https://api.x.ai/v1/chat/completions",
-            "openrouter": "https://openrouter.ai/api/v1/chat/completions",
-            "google": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"}
+LLM_KEYS = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "google": "GEMINI_API_KEY",
+    "xai": "XAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+}
+LLM_URLS = {
+    "anthropic": "https://api.anthropic.com/v1/messages",
+    "openai": "https://api.openai.com/v1/chat/completions",
+    "xai": "https://api.x.ai/v1/chat/completions",
+    "openrouter": "https://openrouter.ai/api/v1/chat/completions",
+    "google": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+}
 LLM_INSTRUCTIONS = (
     "You judge a JSON state against typed questions. Reply with one JSON object and nothing else: "
     "a key per question id. For `choice`, {\"probabilities\": {option: p}} over every option; for "
     "`score`, {\"probabilities\": [p per level, in order]}; for `noul`, {\"noul\": probability the "
-    "statement is true}. Probabilities are numbers in [0,1] that sum to 1 within a question.")
+    "statement is true}. Probabilities are numbers in [0,1] that sum to 1 within a question."
+)
 
 
 # The longest answer a decision call may give, on every transport. The server's spend cap reserves a call's most with
@@ -621,21 +691,33 @@ def llm_request(provider, api_key, model, system, user, max_output=None):
     headers = {"Content-Type": "application/json"}
     if provider == "anthropic":
         headers.update({"x-api-key": api_key, "anthropic-version": "2023-06-01"})
-        body = {"model": model, "max_tokens": max_output or MAX_OUTPUT_TOKENS, "system": system,
-                "messages": [{"role": "user", "content": user}]}
+        body = {
+            "model": model,
+            "max_tokens": max_output or MAX_OUTPUT_TOKENS,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
     elif provider == "google":
         headers["x-goog-api-key"] = api_key
-        body = {"systemInstruction": {"parts": [{"text": system}]},
-                "contents": [{"role": "user", "parts": [{"text": user}]}],
-                "generationConfig": {"responseMimeType": "application/json",
-                                     **({"maxOutputTokens": max_output} if max_output else {})}}
+        body = {
+            "systemInstruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": [{"text": user}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                **({"maxOutputTokens": max_output} if max_output else {}),
+            },
+        }
     else:
         headers["Authorization"] = "Bearer " + api_key
-        body = {"model": model, "response_format": {"type": "json_object"},
-                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                **({LLM_OUTPUT_LIMIT[provider]: max_output} if max_output else {})}
-    return urllib.request.Request(LLM_URLS[provider].format(model=model), data=json.dumps(body).encode(),
-                                  method="POST", headers=headers)
+        body = {
+            "model": model,
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            **({LLM_OUTPUT_LIMIT[provider]: max_output} if max_output else {}),
+        }
+    return urllib.request.Request(
+        LLM_URLS[provider].format(model=model), data=json.dumps(body).encode(), method="POST", headers=headers
+    )
 
 
 def llm_text(provider, payload):
@@ -671,8 +753,7 @@ def llm_answers(raw, questions):
         raw_p = got.get("probabilities")
         names = list(q["criteria"]) if q["type"] == "choice" else list(range(len(q["criteria"])))
         try:
-            values = ([float(raw_p[name]) for name in names] if q["type"] == "choice"
-                      else [float(v) for v in raw_p])
+            values = [float(raw_p[name]) for name in names] if q["type"] == "choice" else [float(v) for v in raw_p]
         except (TypeError, KeyError, ValueError):
             raise JudgeError("shape", f"{qid}: probabilities do not cover every option")
         if len(values) != len(names) or any(v < 0 for v in values) or not sum(values):
@@ -681,12 +762,17 @@ def llm_answers(raw, questions):
         probabilities = [v / total for v in values]
         best = max(range(len(names)), key=probabilities.__getitem__)
         if q["type"] == "choice":
-            answers[qid] = {"choice": names[best], "confidence": probabilities[best],
-                            "probabilities": dict(zip(names, probabilities))}
+            answers[qid] = {
+                "choice": names[best],
+                "confidence": probabilities[best],
+                "probabilities": dict(zip(names, probabilities)),
+            }
         else:
-            answers[qid] = {"score": sum(i * p for i, p in enumerate(probabilities)),
-                            "confidence": probabilities[best],
-                            "probabilities": dict(enumerate(probabilities))}
+            answers[qid] = {
+                "score": sum(i * p for i, p in enumerate(probabilities)),
+                "confidence": probabilities[best],
+                "probabilities": dict(enumerate(probabilities)),
+            }
     return check_answers(answers, questions)
 
 
@@ -702,30 +788,47 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
         user = json.dumps({"state": state, "questions": clean(questions)}, default=str)
         started = time.monotonic()
         try:
-            with one_try(timeout) as seconds, opener(
-                    llm_request(provider, api_key, model, LLM_INSTRUCTIONS, user, MAX_OUTPUT_TOKENS),
-                    timeout=seconds) as response:
+            with (
+                one_try(timeout) as seconds,
+                opener(
+                    llm_request(provider, api_key, model, LLM_INSTRUCTIONS, user, MAX_OUTPUT_TOKENS), timeout=seconds
+                ) as response,
+            ):
                 payload = read_json(response)
         except urllib.error.HTTPError as exc:
             with exc:
-                raise JudgeError("unavailable" if exc.code in (429, 529) or exc.code >= 500 else "http",
-                                 f"{provider} answered {exc.code}", exc.code,
-                                 retryable=exc.code in (429, 529) or exc.code >= 500)
+                raise JudgeError(
+                    "unavailable" if exc.code in (429, 529) or exc.code >= 500 else "http",
+                    f"{provider} answered {exc.code}",
+                    exc.code,
+                    retryable=exc.code in (429, 529) or exc.code >= 500,
+                )
         except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
             raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True)
         # An answer came back, so it was paid for, even when it cannot be used.
-        usage = clean_usage((payload.get("usage") or payload.get("usageMetadata")) if isinstance(payload, dict) else None)
+        usage = clean_usage(
+            (payload.get("usage") or payload.get("usageMetadata")) if isinstance(payload, dict) else None
+        )
         try:
             text = llm_text(provider, payload)
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
-            raise _paid(JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True),
-                        model, usage)
+            raise _paid(
+                JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True),
+                model,
+                usage,
+            )
         try:
             answers = llm_answers(text, questions)
         except JudgeError as exc:
             raise _paid(exc, model, usage)
-        return {"model": model, "answers": answers, "usage": usage,
-                "ms": round((time.monotonic() - started) * 1000), "provider": LLM_PROVIDERS[provider]}
+        return {
+            "model": model,
+            "answers": answers,
+            "usage": usage,
+            "ms": round((time.monotonic() - started) * 1000),
+            "provider": LLM_PROVIDERS[provider],
+        }
+
     engine.model, engine.provider = model, LLM_PROVIDERS[provider]
     return engine
 
@@ -761,27 +864,45 @@ def gateway_writer(key_of, url, model, timeout=TIMEOUT, opener=None):
             raise JudgeError("unconfigured", "no Tico AI Gateway key or model to write with")
         if not safe_gateway_url(url):
             raise JudgeError("unconfigured", "the Tico AI Gateway URL is neither https nor this computer")
-        body = {"model": model, LLM_OUTPUT_LIMIT["openai"]: MAX_OUTPUT_TOKENS,
-                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
-        request = urllib.request.Request(url.rstrip("/") + "/chat/completions", data=json.dumps(body).encode(),
-                                         method="POST", headers={"Authorization": "Bearer " + api_key,
-                                                                 "Content-Type": "application/json"})
+        body = {
+            "model": model,
+            LLM_OUTPUT_LIMIT["openai"]: MAX_OUTPUT_TOKENS,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        }
+        request = urllib.request.Request(
+            url.rstrip("/") + "/chat/completions",
+            data=json.dumps(body).encode(),
+            method="POST",
+            headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
+        )
         try:
             with opener(request, timeout=timeout) as response:
                 payload = json.load(response)
         except urllib.error.HTTPError as exc:
             with exc:
                 raise JudgeError("unavailable", f"the Tico AI Gateway answered {exc.code}", exc.code, retryable=True)
-        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError, KeyError,
-                IndexError, TypeError) as exc:
+        except (
+            urllib.error.URLError,
+            http.client.HTTPException,
+            TimeoutError,
+            OSError,
+            ValueError,
+            KeyError,
+            IndexError,
+            TypeError,
+        ) as exc:
             raise JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}", retryable=True)
         usage = _usage(payload)
         try:
             text = llm_text("openai", payload).strip()
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
-            raise _paid(JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}",
-                                   retryable=True), model, usage)
+            raise _paid(
+                JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}", retryable=True),
+                model,
+                usage,
+            )
         return _written(text, model, usage)
+
     write.model = model
     return write
 
@@ -795,7 +916,9 @@ def llm_writer(provider, api_key, model, timeout=TIMEOUT, opener=None):
 
     def write(system, user):
         try:
-            with opener(llm_request(provider, api_key, model, system, user, MAX_OUTPUT_TOKENS), timeout=timeout) as response:
+            with opener(
+                llm_request(provider, api_key, model, system, user, MAX_OUTPUT_TOKENS), timeout=timeout
+            ) as response:
                 payload = json.load(response)
         except urllib.error.HTTPError as exc:
             with exc:
@@ -806,31 +929,45 @@ def llm_writer(provider, api_key, model, timeout=TIMEOUT, opener=None):
         try:
             text = llm_text(provider, payload).strip()
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
-            raise _paid(JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True),
-                        model, usage)
+            raise _paid(
+                JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True),
+                model,
+                usage,
+            )
         return _written(text, model, usage)
+
     write.model = model
     return write
 
 
 def through_hub(client):
     """The hub's `POST /api/v2/decisions` with a turn's credential (`clients.tico.Client`)."""
+
     def engine(state, questions, label=None):
         validate(state, questions, label)
         body = {"state": state, "questions": questions}
         if label:
             body["label"] = label
         try:
-            result = client.post("decisions", body)         # `Client.post` puts /api/v2/ in front
-        except Exception as exc:                        # APIError, without importing clients.tico
+            result = client.post("decisions", body)  # `Client.post` puts /api/v2/ in front
+        except Exception as exc:  # APIError, without importing clients.tico
             code = getattr(exc, "code", "unavailable")
-            raise JudgeError(str(code), getattr(exc, "detail", str(exc)), getattr(exc, "status", 0),
-                             bool(getattr(exc, "retryable", False)))
+            raise JudgeError(
+                str(code),
+                getattr(exc, "detail", str(exc)),
+                getattr(exc, "status", 0),
+                bool(getattr(exc, "retryable", False)),
+            )
         answers = check_answers(result.get("answers") if isinstance(result, dict) else None, questions)
         # `ref` names the call for `hub decision outcome`; an older server sends none.
-        return {"model": str(result.get("model") or MODEL), "answers": answers,
-                "usage": result.get("usage") or {}, "ms": int(result.get("ms") or 0),
-                **({"ref": result["ref"]} if result.get("ref") else {})}
+        return {
+            "model": str(result.get("model") or MODEL),
+            "answers": answers,
+            "usage": result.get("usage") or {},
+            "ms": int(result.get("ms") or 0),
+            **({"ref": result["ref"]} if result.get("ref") else {}),
+        }
+
     return engine
 
 
@@ -841,6 +978,7 @@ def from_env(env=None):
     url, token = env.get("HUB_API_URL"), env.get("HUB_TOKEN")
     if url and token:
         from clients.tico import Client
+
         return through_hub(Client(url, token, timeout=HUB_WAIT))
     key = (env.get(KEY_ENV) or "").strip()
     if key:
@@ -854,13 +992,18 @@ def question_dirs(env=None, cwd=None):
     folder in the bot's own repository (a message bot's template ships `questions/mail-triage.json`), which a computer
     without this checkout's folder layout still has."""
     env = os.environ if env is None else env
-    found = [env.get("TICO_QUESTIONS_DIR"), Path(env["HUB_DIR"]) / "questions" if env.get("HUB_DIR") else None,
-             Path(cwd or os.getcwd()) / "questions"]
+    found = [
+        env.get("TICO_QUESTIONS_DIR"),
+        Path(env["HUB_DIR"]) / "questions" if env.get("HUB_DIR") else None,
+        Path(cwd or os.getcwd()) / "questions",
+    ]
     return [Path(d) for d in found if d]
 
 
 def _registry_error(revision):
-    error = JudgeError("invalid", "Invalid registry question set. Use a regular, valid JSON file in registry/questions.")
+    error = JudgeError(
+        "invalid", "Invalid registry question set. Use a regular, valid JSON file in registry/questions."
+    )
     error.config_revision = revision
     return error
 
@@ -885,8 +1028,11 @@ def _registry_text(registry, name):
                     info = location.lstat()
             except FileNotFoundError:
                 return None
-            revision.update(repr((info.st_dev, info.st_ino, info.st_mode, info.st_size,
-                                  info.st_mtime_ns, info.st_ctime_ns)).encode())
+            revision.update(
+                repr(
+                    (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+                ).encode()
+            )
             expected = stat.S_ISDIR if directory else stat.S_ISREG
             if not expected(info.st_mode):
                 raise _registry_error(revision.hexdigest())
@@ -920,7 +1066,7 @@ def load_set(name, root=None, *, registry_dir=None):
     An invalid override is refused rather than silently using different questions. The installed
     runner's existing question-directory fallbacks still apply when neither copy is present.
     """
-    if not isinstance(name, str) or not name or any(ch in name for ch in "/\\.") :
+    if not isinstance(name, str) or not name or any(ch in name for ch in "/\\."):
         raise JudgeError("invalid", f"{name!r} is not a question set name")
     path = Path(root or QUESTIONS_DIR) / (name + ".json")
     if not root:
@@ -974,16 +1120,17 @@ def check_set(data, name):
         state = list(data.get("state") or [])
     except TypeError:
         raise JudgeError("invalid", f"{name}: state must list the expected fields") from None
-    return {**data, "label": f"{data['id']}@{data['version']}", "thresholds": thresholds,
-            "state": state}
+    return {**data, "label": f"{data['id']}@{data['version']}", "thresholds": thresholds, "state": state}
 
 
 def with_options(question, options):
     """A dynamic choice completed: the caller's options first, then the set's fixed ones
     (`new`, `unassigned`, `other`)."""
     fixed = question.get("criteria") or {}
-    merged = {**{str(k): (v if v is None or isinstance(v, ENTRY_TYPES) else str(v)) for k, v in options.items()},
-              **fixed}
+    merged = {
+        **{str(k): (v if v is None or isinstance(v, ENTRY_TYPES) else str(v)) for k, v in options.items()},
+        **fixed,
+    }
     return {**{k: v for k, v in question.items() if k != "dynamic"}, "criteria": merged}
 
 
@@ -995,9 +1142,17 @@ def list_sets(root=None):
         except JudgeError as exc:
             out.append({"id": path.stem, "error": exc.detail})
             continue
-        out.append({"id": data["id"], "version": data["version"], "label": data["label"],
-                    "summary": data["summary"], "questions": list(data["questions"]),
-                    "state": data["state"], "thresholds": data["thresholds"]})
+        out.append(
+            {
+                "id": data["id"],
+                "version": data["version"],
+                "label": data["label"],
+                "summary": data["summary"],
+                "questions": list(data["questions"]),
+                "state": data["state"],
+                "thresholds": data["thresholds"],
+            }
+        )
     return out
 
 
@@ -1033,6 +1188,9 @@ def summary(answers):
         if not isinstance(a, dict):
             continue
         value, confidence = top(a)
-        out[qid] = {"type": a.get("type") or ("choice" if "choice" in a else "score" if "score" in a else "noul"),
-                    "value": value, "confidence": round(confidence, 3)}
+        out[qid] = {
+            "type": a.get("type") or ("choice" if "choice" in a else "score" if "score" in a else "noul"),
+            "value": value,
+            "confidence": round(confidence, 3),
+        }
     return out

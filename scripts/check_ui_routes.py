@@ -47,9 +47,17 @@ MAX_DEPTH = 24
 HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 # Helpers that take a path relative to /api (ui/app/api.js), and the method they send.
 RELATIVE_HELPERS = {
-    "get": "GET", "v2Get": "GET", "getRaw": "GET", "getPrefetch": "GET",
-    "post": "POST", "postRequest": "POST", "put": "PUT", "putRequest": "PUT",
-    "patch": "PATCH", "patchRequest": "PATCH", "cloudCompose": "POST",
+    "get": "GET",
+    "v2Get": "GET",
+    "getRaw": "GET",
+    "getPrefetch": "GET",
+    "post": "POST",
+    "postRequest": "POST",
+    "put": "PUT",
+    "putRequest": "PUT",
+    "patch": "PATCH",
+    "patchRequest": "PATCH",
+    "cloudCompose": "POST",
 }
 # Helpers that take a full URL. `fetch` takes its method from its options.
 ABSOLUTE_HELPERS = {"formFetch": "POST", "EventSource": "GET", "WebSocket": "WS"}
@@ -80,7 +88,7 @@ def route_segment(text):
         return ("lit", text)
     out, last = [], 0
     for m in PARAM.finditer(text):
-        out.append(re.escape(text[last:m.start()]))
+        out.append(re.escape(text[last : m.start()]))
         out.append(".+" if m.group(2) == "path" else "[^/]+")
         last = m.end()
     out.append(re.escape(text[last:]))
@@ -163,6 +171,7 @@ class RouteIndex:
 
 # --- a path the UI writes: segments, each literal, a run-time value, or text around one ---------------------------
 
+
 def ui_segment(pieces):
     if all(p is not WILD for p in pieces):
         return ("lit", "".join(pieces))
@@ -218,6 +227,7 @@ def route_matches(ui, tail, route):
         if route[j][0] == "path":
             return j == len(route) - 1 or any(go(k, j + 1) for k in range(i, len(ui) + 1))
         return segment_matches(ui[i], route[j]) and go(i + 1, j + 1)
+
     return go(0, 0)
 
 
@@ -225,7 +235,7 @@ def static_file_served(route, path):
     prefix = route.template.rstrip("/")
     if path != prefix and not path.startswith(prefix + "/"):
         return False
-    target = (route.directory / path[len(prefix) + 1:]).resolve()
+    target = (route.directory / path[len(prefix) + 1 :]).resolve()
     return target.is_file() and route.directory.resolve() in target.parents
 
 
@@ -265,7 +275,7 @@ def normalize(parts):
             continue
         cut = [p.index(c) for c in "?#" if c in p]
         if cut:
-            out.append(p[:min(cut)])
+            out.append(p[: min(cut)])
             break
         if out and out[-1] is WILD and ("=" in p or "&" in p):
             out.pop()  # a run-time separator before `key=value` starts the query string
@@ -282,8 +292,13 @@ def checkable(parts):
     that is only run-time text after the name, such as a helper's own path parameter, or a string that only mentions
     /api/, has nothing to check."""
     segs, _ = ui_path(parts)
-    return (len(segs) >= 3 and segs[0] == ("lit", "") and segs[1][0] == "lit" and segs[1][1] != ""
-            and any(s[0] == "glob" or (s[0] == "lit" and s[1]) for s in segs[2:]))
+    return (
+        len(segs) >= 3
+        and segs[0] == ("lit", "")
+        and segs[1][0] == "lit"
+        and segs[1][1] != ""
+        and any(s[0] == "glob" or (s[0] == "lit" and s[1]) for s in segs[2:])
+    )
 
 
 def finalize(alts, prefix=""):
@@ -307,13 +322,63 @@ def shown(parts):
 
 # --- the UI's JavaScript: a lexer for the subset the UI uses ----------------------------------------------------
 
-PUNCT = sorted([">>>=", "...", "===", "!==", "**=", "<<=", ">>=", ">>>", "&&=", "||=", "??=", "=>", "==", "!=", "<=",
-                ">=", "&&", "||", "??", "?.", "++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "**", "<<",
-                ">>"], key=len, reverse=True)
+PUNCT = sorted(
+    [
+        ">>>=",
+        "...",
+        "===",
+        "!==",
+        "**=",
+        "<<=",
+        ">>=",
+        ">>>",
+        "&&=",
+        "||=",
+        "??=",
+        "=>",
+        "==",
+        "!=",
+        "<=",
+        ">=",
+        "&&",
+        "||",
+        "??",
+        "?.",
+        "++",
+        "--",
+        "+=",
+        "-=",
+        "*=",
+        "/=",
+        "%=",
+        "&=",
+        "|=",
+        "^=",
+        "**",
+        "<<",
+        ">>",
+    ],
+    key=len,
+    reverse=True,
+)
 IDENT = re.compile(r"(?:[^\W\d]|\$)[\w$]*")
 NUMBER = re.compile(r"\d[\w.]*")
-REGEX_AFTER_WORDS = {"return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do",
-                     "else", "yield", "await"}
+REGEX_AFTER_WORDS = {
+    "return",
+    "typeof",
+    "instanceof",
+    "in",
+    "of",
+    "new",
+    "delete",
+    "void",
+    "throw",
+    "case",
+    "do",
+    "else",
+    "yield",
+    "await",
+}
 ESCAPES = {"n": "\n", "t": "\t", "r": "\r"}
 
 
@@ -365,7 +430,7 @@ def lex(src, i, in_expr=False):
             elif c == "{":
                 depth += 1
             op = next((p for p in PUNCT if src.startswith(p, i)), c)
-            if op == "?." and src[i + 2:i + 3].isdigit():
+            if op == "?." and src[i + 2 : i + 3].isdigit():
                 op = "?"  # `a?.5:b` is a ternary
             toks.append(Tok("p", op, i))
             i += len(op)
@@ -445,8 +510,31 @@ def read_regex(src, i):
 
 WILD_NODE = ("wild",)
 UNKNOWN = [(WILD,)]
-BINARY = {"??", "||", "&&", "|", "^", "&", "==", "!=", "===", "!==", "<", ">", "<=", ">=", "<<", ">>", ">>>", "+",
-          "-", "*", "/", "%", "**"}
+BINARY = {
+    "??",
+    "||",
+    "&&",
+    "|",
+    "^",
+    "&",
+    "==",
+    "!=",
+    "===",
+    "!==",
+    "<",
+    ">",
+    "<=",
+    ">=",
+    "<<",
+    ">>",
+    ">>>",
+    "+",
+    "-",
+    "*",
+    "/",
+    "%",
+    "**",
+}
 OPEN = {"(": ")", "[": "]", "{": "}"}
 
 
@@ -654,13 +742,14 @@ def classify_value(toks, start):
 
 # --- what the UI declares --------------------------------------------------------------------------------------
 
+
 class Scope:
     """Declarations across the UI. A name is read only when it has one entry and is not a parameter or a
     let/var/destructured binding anywhere."""
 
     def __init__(self):
         self.entries = collections.defaultdict(list)  # name -> [(kind, params, node)]
-        self.opaque = set()                           # names that are parameters or have no single known value
+        self.opaque = set()  # names that are parameters or have no single known value
 
 
 def identifiers(toks, start, end):
@@ -792,6 +881,7 @@ def token_lists(toks):
 
 
 # --- the call sites ---------------------------------------------------------------------------------------------
+
 
 class Call:
     def __init__(self, file, line, method, parts_list):
@@ -950,14 +1040,19 @@ def helper_calls(scan, scope, calls, skipped, consumed):
                 continue
             calls.append(Call(scan.rel, scan.line(t), method, parts_list))
             if name == "cloudCompose":  # with files, it posts to the uploads route instead
-                uploads = [("/v2/uploads/" + alt[0][len("/v2/"):],) + alt[1:]
-                           for alt in spellings if alt and isinstance(alt[0], str) and alt[0].startswith("/v2/")]
+                uploads = [
+                    ("/v2/uploads/" + alt[0][len("/v2/") :],) + alt[1:]
+                    for alt in spellings
+                    if alt and isinstance(alt[0], str) and alt[0].startswith("/v2/")
+                ]
                 up = finalize(uploads, "/api") if uploads else None
                 if up:
                     calls.append(Call(scan.rel, scan.line(t), "POST", up))
 
 
-FLAT_API = re.compile(r"(?<=[\"'`(=<>\x00])/api/")  # a path written inside a string, after a quote, = or a run-time value
+FLAT_API = re.compile(
+    r"(?<=[\"'`(=<>\x00])/api/"
+)  # a path written inside a string, after a quote, = or a run-time value
 PATH_END = re.compile(r"[\"'\s<>)`,;]")
 
 
@@ -976,9 +1071,9 @@ def literal_calls(scan, scope, calls, consumed):
                             calls.append(Call(scan.rel, scan.line(t), None, parts_list))
             text = flatten(t)
             for m in FLAT_API.finditer(text):
-                rest = text[m.start():]
+                rest = text[m.start() :]
                 end = PATH_END.search(rest)
-                found = (rest[:end.start()] if end else rest).rstrip(".")
+                found = (rest[: end.start()] if end else rest).rstrip(".")
                 parts = []
                 for index, piece in enumerate(found.split("\x00")):
                     if index:
@@ -1004,6 +1099,7 @@ def collect_calls(files):
 
 
 # --- the check --------------------------------------------------------------------------------------------------
+
 
 def build_report():
     served = served_routes()
@@ -1042,8 +1138,7 @@ def main(argv=None):
         print(f"ui routes: {len(skipped)} calls skipped")
         return 0
 
-    found = sorted({(call.file, call.line, describe(call, parts, served_as))
-                    for call, parts, served_as in unmatched})
+    found = sorted({(call.file, call.line, describe(call, parts, served_as)) for call, parts, served_as in unmatched})
     counts = collections.Counter(file for file, _, _ in found)
     for _, _, text in found:
         print(text)
@@ -1071,8 +1166,10 @@ def main(argv=None):
             print(f"NEW {file}: {now} unmatched calls, the baseline allows {was}")
         elif now < was:
             problems += 1
-            print(f"STALE {file}: the baseline allows {was}, now {now}; remove from baseline: "
-                  f"python3 scripts/check_ui_routes.py --write")
+            print(
+                f"STALE {file}: the baseline allows {was}, now {now}; remove from baseline: "
+                f"python3 scripts/check_ui_routes.py --write"
+            )
     if args.base:
         old = ui_baseline.baseline_at(args.base, BASELINE_REL)
         if old is None:
@@ -1081,11 +1178,15 @@ def main(argv=None):
             for file in sorted(baseline):
                 if baseline[file] > old.get(file, 0):
                     problems += 1
-                    print(f"GREW {file}: {old.get(file, 0)} at {args.base}, now {baseline[file]}; "
-                          "baselines only shrink, so fix the calls instead")
-    print(f"ui routes: {len(calls)} calls checked against {len(served)} served routes; {len(found)} unmatched in "
-          f"{len(counts)} files; {len(skipped)} calls skipped (path or name cannot be read); baseline {sum(baseline.values())} in "
-          f"{len(baseline)} files; {'ok' if not problems else f'{problems} problem(s)'}")
+                    print(
+                        f"GREW {file}: {old.get(file, 0)} at {args.base}, now {baseline[file]}; "
+                        "baselines only shrink, so fix the calls instead"
+                    )
+    print(
+        f"ui routes: {len(calls)} calls checked against {len(served)} served routes; {len(found)} unmatched in "
+        f"{len(counts)} files; {len(skipped)} calls skipped (path or name cannot be read); baseline {sum(baseline.values())} in "
+        f"{len(baseline)} files; {'ok' if not problems else f'{problems} problem(s)'}"
+    )
     return 1 if problems else 0
 
 

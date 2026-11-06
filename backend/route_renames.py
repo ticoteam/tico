@@ -14,6 +14,7 @@ for the Assistant, what is wrong for everyone else), `GET /messages?unread=1` (t
 only `/runners/{id}/...`, what a person does to one computer, moves to `/computers/{id}/...`. The runner-facing
 `/connectors/*` routes stay as they are.
 """
+
 import inspect
 import re
 
@@ -27,7 +28,7 @@ V2 = "/api/v2"
 # (old prefix, new prefix, only for the sub-paths that start with this, or None). The first rule that matches a
 # path wins, so an exact sub-path goes before its parent's prefix.
 RENAMES = [
-    (V2 + "/runners", V2 + "/computers", "/{"),                 # /runners/{rid}/..., not /runners/enroll
+    (V2 + "/runners", V2 + "/computers", "/{"),  # /runners/{rid}/..., not /runners/enroll
     (V2 + "/integrations", V2 + "/tools", None),
     (V2 + "/ops/timing", V2 + "/operations/timing", None),
     (V2 + "/judge", V2 + "/decisions", None),
@@ -39,7 +40,7 @@ RENAMES = [
     (V2 + "/catalog", V2 + "/templates", None),
     (V2 + "/access/people", V2 + "/access/humans", None),
     (V2 + "/people", V2 + "/humans", None),
-    ("/api/people", "/api/humans", None),                        # the roster and photos, outside v2
+    ("/api/people", "/api/humans", None),  # the roster and photos, outside v2
 ]
 
 
@@ -48,7 +49,7 @@ def _swap(path, old, new, only, forward=True):
     src, dst = (old, new) if forward else (new, old)
     if path != src and not path.startswith(src + "/"):
         return None
-    rest = path[len(src):]
+    rest = path[len(src) :]
     if only is not None and not (rest.startswith(only) or (only == "/{" and _has_id(rest))):
         return None
     return dst + rest
@@ -80,8 +81,9 @@ def old_paths(path):
 
 
 # The options a route is built with, besides its path and endpoint: what _copy carries to the other spelling.
-COPIED_OPTIONS = tuple(name for name in inspect.signature(APIRoute.__init__).parameters
-                       if name not in ("self", "path", "endpoint"))
+COPIED_OPTIONS = tuple(
+    name for name in inspect.signature(APIRoute.__init__).parameters if name not in ("self", "path", "endpoint")
+)
 
 
 def _copy(route, path, route_class):
@@ -116,34 +118,44 @@ def install(app):
     # /health/issues: the Assistant's live snapshot, or what /fleet/check says for everyone else.
     check, snapshot = _find(routes, V2 + "/fleet/check", "GET"), _find(routes, V2 + "/tico/fleet", "GET")
     if check and snapshot:
+
         def health_issues(request: Request):
             """Health checks and fixes over the bots the caller may see, plus the team snapshot for the Assistant."""
             who = request.state.identity
             checked = check.endpoint(request)
             if getattr(who, "via", None) == "assistant":
-                return {**snapshot.endpoint(request), **{key: checked[key] for key in ("checks", "issues", "services", "counts")}}
+                return {
+                    **snapshot.endpoint(request),
+                    **{key: checked[key] for key in ("checks", "issues", "services", "counts")},
+                }
             return checked
+
         _put_before(routes, check, route_class(V2 + "/health/issues", health_issues, methods=["GET"]))
         check.deprecated = snapshot.deprecated = True
 
     # /messages?unread=1: the inbox.
     inbox = _find(routes, V2 + "/inbox", "GET")
     if inbox:
+
         def messages_unread(request: Request, unread: bool = True):
             """The caller's unread messages (`unread=1`, the default: the only list there is), with any notices."""
             if not unread:
                 raise Problem("unread_only", "Only unread messages are listed: pass unread=1", 422)
             return inbox.endpoint(request)
-        _put_before(routes, inbox, route_class(V2 + "/messages", messages_unread, methods=["GET"],
-                                             name="messages_unread"))
+
+        _put_before(
+            routes, inbox, route_class(V2 + "/messages", messages_unread, methods=["GET"], name="messages_unread")
+        )
         inbox.deprecated = True
 
     # /archives?source=: one archive; /archives alone lists them. /archive stays, deprecated.
     listing, read = _find(routes, V2 + "/archives", "GET"), _find(routes, V2 + "/archive", "GET")
     if listing and read:
+
         def archives(request: Request, source: str | None = None):
             """The archives this account may read, or with `source` that one archive's content."""
             return read.endpoint(request, source) if source else listing.endpoint(request)
+
         _put_before(routes, listing, route_class(V2 + "/archives", archives, methods=["GET"], name="archives"))
         routes.remove(listing)
         read.deprecated = True

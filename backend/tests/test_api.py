@@ -21,15 +21,20 @@ from backend import bot_settings as BS
 def api_settings(tmp_path):
     registry = tmp_path / "hub-registry"
     registry.mkdir()
-    (registry / "hub-access.yaml").write_text(yaml.safe_dump({
-        "owner": "ana@acme.example", "bot_admins": ["ben@acme.example"]}))
-    return Settings(db_path=tmp_path / "hub.db", registry_dir=registry, test_identities={
-        "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
-        "ben-test": Identity("human:ben", "human", "ben@acme.example"),
-        "cara-test": Identity("human:cara", "human", "cara@acme.example"),
-        "eve-test": Identity("human:eve", "human", "eve@acme.example"),
-        "fay-test": Identity("human:fay", "human", "fay@acme.example"),
-    })
+    (registry / "hub-access.yaml").write_text(
+        yaml.safe_dump({"owner": "ana@acme.example", "bot_admins": ["ben@acme.example"]})
+    )
+    return Settings(
+        db_path=tmp_path / "hub.db",
+        registry_dir=registry,
+        test_identities={
+            "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
+            "ben-test": Identity("human:ben", "human", "ben@acme.example"),
+            "cara-test": Identity("human:cara", "human", "cara@acme.example"),
+            "eve-test": Identity("human:eve", "human", "eve@acme.example"),
+            "fay-test": Identity("human:fay", "human", "fay@acme.example"),
+        },
+    )
 
 
 @pytest.fixture
@@ -42,36 +47,59 @@ def api(tmp_path, api_database):
     app = create_app(settings)
     with TestClient(app) as client:
         with app.state.store.transaction() as c:
-            bots = {slug: {"name": slug, "runtime": "fake", "status": "active"}
-                    for slug in ("coo", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater")}
-            H.sync_registry(c, bots, {"people": [{"id": p, "email": p + "@acme.example"}
-                                               for p in ("ana", "ben", "cara")]})
-            c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": [
-                {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
-                {"id": "ben", "email": "ben@acme.example", "primary_for": ["cpo", "product-design", "ops"]},
-                {"id": "cara", "email": "cara@acme.example"}]}),))
+            bots = {
+                slug: {"name": slug, "runtime": "fake", "status": "active"}
+                for slug in ("coo", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater")
+            }
+            H.sync_registry(
+                c, bots, {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]}
+            )
+            c.execute(
+                "INSERT INTO registry_metadata VALUES('people',?)",
+                (
+                    encode(
+                        {
+                            "people": [
+                                {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
+                                {
+                                    "id": "ben",
+                                    "email": "ben@acme.example",
+                                    "primary_for": ["cpo", "product-design", "ops"],
+                                },
+                                {"id": "cara", "email": "cara@acme.example"},
+                            ]
+                        }
+                    ),
+                ),
+            )
             for slug, config in bots.items():
                 product = slug in ("cpo", "product-design")
-                c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product' if product else None, 'ben' if product else 'ana'))
+                c.execute(
+                    'INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)',
+                    (slug, 'product' if product else None, 'ben' if product else 'ana'),
+                )
                 BS.write(c, slug, config)
             # The company's mail bot is Ana's alone: nobody else sees it, reads it or writes to it.
             restrict(c, "inbox", people=["ana"])
             # A company with a fleet this size is long past first run; the wizard belongs to
             # backend/tests/test_onboarding.py, not to every other test's front page.
-            c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)",
-                      (encode({"completed": "2026-01-01T00:00:00Z"}),))
+            c.execute(
+                "INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),)
+            )
         yield client
-
 
 
 def unrelated_task_managers(c, *slugs):
     """Keep privacy negatives outside the parties' org chains, without changing bot access grants."""
     import json
+
     roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
     if not any(p['id'] == 'privacy-lead' for p in roster['people']):
         roster['people'].append({'id': 'privacy-lead', 'email': 'privacy-lead@acme.example'})
-    c.execute("INSERT OR IGNORE INTO humans(id,name,email) VALUES(?,?,?)",
-              ('privacy-lead', 'Privacy Lead', 'privacy-lead@acme.example'))
+    c.execute(
+        "INSERT OR IGNORE INTO humans(id,name,email) VALUES(?,?,?)",
+        ('privacy-lead', 'Privacy Lead', 'privacy-lead@acme.example'),
+    )
     c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
     targets = slugs or tuple(row[0] for row in c.execute('SELECT bot FROM bot_config'))
     for slug in targets:
@@ -83,20 +111,31 @@ def restrict(c, bot, **audience):
     (people, teams, bots), or per level with see=, read=, write= each an audience dict."""
     from backend import bot_access as BA
     from backend.store import H
+
     levels = {level: audience.pop(level) for level in BA.LEVELS if level in audience}
     every = {level: levels.get(level, audience) for level in BA.LEVELS}
-    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)              # a bot by its id or its slug
-    c.execute("UPDATE bot_config SET access=? WHERE bot=?",
-              (BA.stored(BA.document({level: BA.audience(value) for level, value in every.items()})), bot))
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)  # a bot by its id or its slug
+    c.execute(
+        "UPDATE bot_config SET access=? WHERE bot=?",
+        (BA.stored(BA.document({level: BA.audience(value) for level, value in every.items()})), bot),
+    )
 
 
 def as_member(api, email):
     """Take an Admin back to a plain member (the fixture makes Ben an admin: an admin manages every bot, so
     a test about what a member may not see needs him to be one)."""
     from backend import access as Access
+
     with api.app.state.store.transaction() as c:
         stored = Access._load_json(c, Access.ACCESS) or {}
-        Access._store(c, Access.ACCESS, {**stored, "admins": [e for e in Access.load_access(c, api.app.state.store.settings)["admins"] if e != email]})
+        Access._store(
+            c,
+            Access.ACCESS,
+            {
+                **stored,
+                "admins": [e for e in Access.load_access(c, api.app.state.store.settings)["admins"] if e != email],
+            },
+        )
     with api.app.state.store.read() as c:
         api.app.state.auth.sync_access(c)
 
@@ -109,7 +148,9 @@ def legacy_send_approval(api, payload, *, actor="bot:ops", task_id=None):
     """An existing pre-cutover card for compatibility reads; new email asks use the frozen queue."""
     with api.app.state.store.transaction() as c:
         row = H.approval_request(c, actor, "send", payload, task_id=task_id)
-        cutover = c.execute("SELECT applied_at FROM schema_migrations WHERE version='20261105040656_email_sending_queue'").fetchone()[0]
+        cutover = c.execute(
+            "SELECT applied_at FROM schema_migrations WHERE version='20261105040656_email_sending_queue'"
+        ).fetchone()[0]
         c.execute("UPDATE approvals SET created_at=? WHERE id=?", (H.shift(cutover, seconds=-1), row["id"]))
         return H.approval(c, row["id"])
 
@@ -121,7 +162,11 @@ def post(api, path, body, token="ana-test", key=None, expected=200):
     if expected == 200 and isinstance(data, dict):
         if path.startswith("chat/"):
             return data["message"]
-        if "task" in data and set(data) <= {"task", "readback", "sent_as"}:   # a relation write reads back what it stored
+        if "task" in data and set(data) <= {
+            "task",
+            "readback",
+            "sent_as",
+        }:  # a relation write reads back what it stored
             return data["task"]
     return data
 
@@ -202,8 +247,12 @@ def test_the_installers_enrollment_request_needs_an_idempotency_key(api):
 
 
 def assign(api, r, bot, generation=0, operator="ana-test"):
-    return post(api, "bots/" + bot + "/assignment", {"runner_id": r["runner_id"],
-                "expected_generation": generation}, token=operator)
+    return post(
+        api,
+        "bots/" + bot + "/assignment",
+        {"runner_id": r["runner_id"], "expected_generation": generation},
+        token=operator,
+    )
 
 
 def ready(api, r, bots, capabilities=()):
@@ -243,16 +292,27 @@ def test_no_local_owner_or_header_spoofing(api):
     assert api.get("/", headers={"Cf-Access-Authenticated-User-Email": "ana@acme.example"}).status_code == 401
     assert api.get("/runtime/hub.db", headers=headers()).status_code == 404
     assert api.get("/../registry/employees.yaml", headers=headers()).status_code == 404
-    cross_site = api.post("/api/v2/chat/ops", json={"text": "Cross-site request"},
-                          headers={**headers(), "Origin": "https://untrusted.example"})
+    cross_site = api.post(
+        "/api/v2/chat/ops",
+        json={"text": "Cross-site request"},
+        headers={**headers(), "Origin": "https://untrusted.example"},
+    )
     assert cross_site.status_code == 403
 
 
 def test_schema_rejects_forged_actor_and_missing_fields(api):
-    post(api, "tasks", {"owner": "coo", "title": "Create something", "body": "Do it", "requester": "human:ben"}, expected=422)
+    post(
+        api,
+        "tasks",
+        {"owner": "coo", "title": "Create something", "body": "Do it", "requester": "human:ben"},
+        expected=422,
+    )
     post(api, "tasks", {"owner": "coo", "title": "Missing body"}, expected=422)
-    r = api.post("/api/v2/tasks", json={"owner": "coo", "title": "Create report", "body": "A report"},
-                 headers={"Authorization": "Bearer ana-test"})
+    r = api.post(
+        "/api/v2/tasks",
+        json={"owner": "coo", "title": "Create report", "body": "A report"},
+        headers={"Authorization": "Bearer ana-test"},
+    )
     assert r.status_code == 422
 
 
@@ -283,12 +343,18 @@ def test_the_assistant_chats_only_in_its_own_room_and_people_still_hand_it_work(
     post(api, "chat/coo", {"text": "Hello"}, expected=403)
     post(api, "messages", {"to": "coo", "text": "Hello"}, token="ben-test", expected=403)
     ana = post(api, "tasks", {"owner": "coo", "title": "Ana's review", "body": "Private context."})
-    ben = post(api, "tasks", {"owner": "coo", "title": "Ben's review", "body": "Private context."},
-                  token="ben-test")
+    ben = post(api, "tasks", {"owner": "coo", "title": "Ben's review", "body": "Private context."}, token="ben-test")
     assert ana["conversation_id"] != ben["conversation_id"]
-    get(api, "conversations/" + ana["conversation_id"] + "/messages", "ben-test", expected=404)   # unreadable looks missing
-    post(api, "messages", {"to": "coo", "text": "Injected", "conversation_id": ana["conversation_id"]},
-         token="ben-test", expected=403)
+    get(
+        api, "conversations/" + ana["conversation_id"] + "/messages", "ben-test", expected=404
+    )  # unreadable looks missing
+    post(
+        api,
+        "messages",
+        {"to": "coo", "text": "Injected", "conversation_id": ana["conversation_id"]},
+        token="ben-test",
+        expected=403,
+    )
 
 
 def test_shared_room_membership_updates_and_revokes_history_access(api):
@@ -339,20 +405,26 @@ def test_turn_output_and_completion_are_durable_and_idempotent(api):
 def slept(api, r, seconds=3600, awake_since=None):
     """Age a machine's last contact the way an hour of sleep does."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runner_states SET last_seen_at=?,awake_since=? WHERE runner_id=?",
-                  (H.shift(H.now(), seconds=-seconds), awake_since, r["runner_id"]))
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=?,awake_since=? WHERE runner_id=?",
+            (H.shift(H.now(), seconds=-seconds), awake_since, r["runner_id"]),
+        )
 
 
 def settled(api, r):
     """A machine that came back and has been reporting in ever since."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runner_states SET awake_since=? WHERE runner_id=?",
-                  (H.shift(H.now(), seconds=-AWAKE_SETTLE - 1), r["runner_id"]))
+        c.execute(
+            "UPDATE runner_states SET awake_since=? WHERE runner_id=?",
+            (H.shift(H.now(), seconds=-AWAKE_SETTLE - 1), r["runner_id"]),
+        )
 
 
 def awake_since(api, r):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT awake_since FROM runners_with_state WHERE id=?", (r["runner_id"],)).fetchone()["awake_since"]
+        return c.execute("SELECT awake_since FROM runners_with_state WHERE id=?", (r["runner_id"],)).fetchone()[
+            "awake_since"
+        ]
 
 
 def test_approval_decision_and_consumption_have_separate_authority(api):
@@ -365,7 +437,10 @@ def test_approval_decision_and_consumption_have_separate_authority(api):
     post(api, path + "/consume", {"payload_hash": "b" * 64}, token=a["token"], expected=403)
     result = post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=a["token"], key="send-op")
     assert result["consumed_at"]
-    assert post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=a["token"], key="send-op") == result
+    assert (
+        post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=a["token"], key="send-op")
+        == result
+    )
     post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=a["token"], expected=422)
 
 
@@ -373,10 +448,16 @@ def test_a_files_metadata_follows_the_same_access_as_the_file(api):
     """Name, size and type without the bytes, for the viewer's thumbnails."""
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
-                  ("blob-meta-0001", "human:ana", "d" * 64, 2048, "storyboard.png", "image/png", H.now()))
-    assert get(api, "files/blob-meta-0001/meta") == {"id": "blob-meta-0001", "name": "storyboard.png", "size": 2048,
-                                                     "content_type": "image/png"}
+        c.execute(
+            "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
+            ("blob-meta-0001", "human:ana", "d" * 64, 2048, "storyboard.png", "image/png", H.now()),
+        )
+    assert get(api, "files/blob-meta-0001/meta") == {
+        "id": "blob-meta-0001",
+        "name": "storyboard.png",
+        "size": 2048,
+        "content_type": "image/png",
+    }
     get(api, "files/blob-meta-0001/meta", token="ben-test", expected=403)
     get(api, "files/nope-nope-nope/meta", expected=404)
 
@@ -386,8 +467,11 @@ def test_run_windows_include_failed_runs_and_hide_private_rooms(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), attempt["id"]))
         # No run record: the lease ended before one was written.
-        c.execute("UPDATE attempts SET trigger=NULL,trigger_kind=NULL,trigger_source=NULL,purpose=NULL,settled_at=NULL,"
-                  "exit=NULL,summary=NULL WHERE id=?", (attempt["id"],))
+        c.execute(
+            "UPDATE attempts SET trigger=NULL,trigger_kind=NULL,trigger_source=NULL,purpose=NULL,settled_at=NULL,"
+            "exit=NULL,summary=NULL WHERE id=?",
+            (attempt["id"],),
+        )
         H.status_set(c, "bot:ops", "ops", "running")
         H.status_set(c, "bot:ops", "ops", "idle")
     rows = get(api, "bots/ops/turns?since=24h")
@@ -459,8 +543,10 @@ def test_a_second_start_over_a_store_still_owing_the_redesign_cutover_finishes(t
     with closing(sqlite3.connect(settings.db_path)) as c:
         record = record_of(settings.db_path)
         record["state"] = "running"
-        c.execute("UPDATE registry_metadata SET value=? WHERE key=?",
-                  (json.dumps(record, sort_keys=True), redesign_migration.CUTOVER))
+        c.execute(
+            "UPDATE registry_metadata SET value=? WHERE key=?",
+            (json.dumps(record, sort_keys=True), redesign_migration.CUTOVER),
+        )
         c.commit()
 
     outcome = []
@@ -470,7 +556,7 @@ def test_a_second_start_over_a_store_still_owing_the_redesign_cutover_finishes(t
             with TestClient(create_app(settings)):
                 pass
             outcome.append("started")
-        except BaseException as exc:    # reported to the test thread below
+        except BaseException as exc:  # reported to the test thread below
             outcome.append(exc)
 
     worker = threading.Thread(target=start_again, daemon=True)

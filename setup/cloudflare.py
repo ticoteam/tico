@@ -1,5 +1,6 @@
 """Cloudflare API: a named tunnel, its hostname route, and the DNS record. Needs a token scoped to
 Account > Cloudflare Tunnel: Edit and Zone > DNS: Edit on the one zone."""
+
 from __future__ import annotations
 
 import json
@@ -94,8 +95,21 @@ class Cloudflare:
         made = self.call("POST", f"/accounts/{account_id}/cfd_tunnel", {"name": name, "config_src": "cloudflare"})
         return made["id"], made["token"]
 
-    def configure_tunnel(self, account_id: str, tunnel_id: str, hostname: str, runner_host: str = "", *, aliases=(), visual_origin: str = "") -> None:
-        self.call("PUT", f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations", {"config": ingress_config(hostname, runner_host, aliases=aliases, visual_origin=visual_origin)})
+    def configure_tunnel(
+        self,
+        account_id: str,
+        tunnel_id: str,
+        hostname: str,
+        runner_host: str = "",
+        *,
+        aliases=(),
+        visual_origin: str = "",
+    ) -> None:
+        self.call(
+            "PUT",
+            f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations",
+            {"config": ingress_config(hostname, runner_host, aliases=aliases, visual_origin=visual_origin)},
+        )
 
     def find_record(self, zone_id: str, name: str) -> dict | None:
         existing = self.call("GET", f"/zones/{zone_id}/dns_records?name={name}")
@@ -133,7 +147,13 @@ class Cloudflare:
 DASHBOARD_STEPS = [
     "In Cloudflare, open Zero Trust > Networks > Tunnels > Create a tunnel > Cloudflared.",
     "Name it, then copy the token from the install command (the long string after `--token`).",
-    "In the tunnel's Public Hostname tab add: hostname {domain}, service type HTTP, URL " + contract.TUNNEL_ORIGIN + ".",
+    "In the tunnel's Public Hostname tab add: hostname {domain}, service type HTTP, URL "
+    + contract.TUNNEL_ORIGIN
+    + ".",
 ]
-RUNNER_DASHBOARD_STEP = ("Add a second Public Hostname: hostname {runner}, path {path}, service type HTTP, URL " + contract.TUNNEL_ORIGIN + ". "
-                         "Leave it out of the Access application: Tico checks the computers' and agents' tokens itself.")
+RUNNER_DASHBOARD_STEP = (
+    "Add a second Public Hostname: hostname {runner}, path {path}, service type HTTP, URL "
+    + contract.TUNNEL_ORIGIN
+    + ". "
+    "Leave it out of the Access application: Tico checks the computers' and agents' tokens itself."
+)

@@ -3,6 +3,7 @@
 Nothing is created without the CLI being installed and signed in. The user-data (which holds the sign-in secret) goes
 to the CLI as a 0600 temp file, never on a command line, and CLI output is scrubbed before it is shown.
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -51,19 +52,41 @@ class Provider:
 
 
 HETZNER = Provider(
-    "hetzner", "Hetzner Cloud", "hcloud", "https://github.com/hetznercloud/cli#installation",
+    "hetzner",
+    "Hetzner Cloud",
+    "hcloud",
+    "https://github.com/hetznercloud/cli#installation",
     "hcloud context create tico   (paste a read/write API token from the project's Security > API tokens)",
-    {"cax11": "2 vCPU Arm, 4 GB, 40 GB: about EUR 5.99/month", "cx23": "2 vCPU x86, 4 GB, 40 GB: about EUR 5.49/month",
-     "cax21": "4 vCPU Arm, 8 GB, 80 GB: about EUR 10.49/month", "cx33": "4 vCPU x86, 8 GB, 80 GB: about EUR 8.49/month"},
-    "cax11", {"nbg1": "Nuremberg", "fsn1": "Falkenstein", "hel1": "Helsinki"}, "nbg1",
-    "List prices for Germany/Finland as of 2026-09, before VAT; the public IPv4 is priced separately. The Arm sizes (cax*) exist only in the EU locations.")
+    {
+        "cax11": "2 vCPU Arm, 4 GB, 40 GB: about EUR 5.99/month",
+        "cx23": "2 vCPU x86, 4 GB, 40 GB: about EUR 5.49/month",
+        "cax21": "4 vCPU Arm, 8 GB, 80 GB: about EUR 10.49/month",
+        "cx33": "4 vCPU x86, 8 GB, 80 GB: about EUR 8.49/month",
+    },
+    "cax11",
+    {"nbg1": "Nuremberg", "fsn1": "Falkenstein", "hel1": "Helsinki"},
+    "nbg1",
+    "List prices for Germany/Finland as of 2026-09, before VAT; the public IPv4 is priced separately. The Arm sizes (cax*) exist only in the EU locations.",
+)
 DIGITALOCEAN = Provider(
-    "digitalocean", "DigitalOcean", "doctl", "https://docs.digitalocean.com/reference/doctl/how-to/install/",
+    "digitalocean",
+    "DigitalOcean",
+    "doctl",
+    "https://docs.digitalocean.com/reference/doctl/how-to/install/",
     "doctl auth init   (paste a read/write API token)",
     {"s-1vcpu-2gb": "1 vCPU, 2 GB, 50 GB: $12/month", "s-2vcpu-2gb": "2 vCPU, 2 GB, 60 GB: $18/month"},
-    "s-1vcpu-2gb", {"nyc3": "New York 3", "sfo3": "San Francisco 3", "ams3": "Amsterdam 3", "fra1": "Frankfurt 1",
-                    "lon1": "London 1", "sgp1": "Singapore 1"}, "nyc3",
-    "List prices as of 2026-09. The reserved IP costs nothing while it is assigned to the Droplet ($5/month if left unassigned).")
+    "s-1vcpu-2gb",
+    {
+        "nyc3": "New York 3",
+        "sfo3": "San Francisco 3",
+        "ams3": "Amsterdam 3",
+        "fra1": "Frankfurt 1",
+        "lon1": "London 1",
+        "sgp1": "Singapore 1",
+    },
+    "nyc3",
+    "List prices as of 2026-09. The reserved IP costs nothing while it is assigned to the Droplet ($5/month if left unassigned).",
+)
 PROVIDERS = {"hetzner": HETZNER, "digitalocean": DIGITALOCEAN}
 
 
@@ -110,6 +133,7 @@ class Created:
 @dataclass
 class Cloud:
     """One provider run. `cli` is the subprocess runner, replaced in tests."""
+
     provider: Provider
     name: str
     location: str
@@ -133,8 +157,11 @@ class Cloud:
     # -- shared -------------------------------------------------------------------------------------
 
     def check_auth(self) -> None:
-        argv = (["hcloud", "location", "list", "-o", "noheader"] if self.provider.key == "hetzner"
-                else ["doctl", "account", "get", "--format", "Status", "--no-header"])
+        argv = (
+            ["hcloud", "location", "list", "-o", "noheader"]
+            if self.provider.key == "hetzner"
+            else ["doctl", "account", "get", "--format", "Status", "--no-header"]
+        )
         res = self.cli(argv)
         if res.returncode:
             raise CloudError(f"{self.provider.cli} is installed but not signed in. Run: {self.provider.login_hint}")
@@ -187,22 +214,64 @@ class Cloud:
             pip = self._probe(["hcloud", "primary-ip", "describe", n, "-o", "json"])
             if pip.returncode != 0:
                 say(f"  Creating the public IPv4 {n} (kept if the server is deleted)")
-                pip = self._run(["hcloud", "primary-ip", "create", "--name", n, "--type", "ipv4", "--location", self.location,
-                                 "--auto-delete=false", *labels, "-o", "json"], "Creating the IPv4 address")
+                pip = self._run(
+                    [
+                        "hcloud",
+                        "primary-ip",
+                        "create",
+                        "--name",
+                        n,
+                        "--type",
+                        "ipv4",
+                        "--location",
+                        self.location,
+                        "--auto-delete=false",
+                        *labels,
+                        "-o",
+                        "json",
+                    ],
+                    "Creating the IPv4 address",
+                )
             ip = find_ip(_json(pip, "primary-ip"))
             if not ip:
                 raise CloudError("Could not read the new IPv4 address from hcloud's answer.")
         if self._probe(["hcloud", "firewall", "describe", n]).returncode != 0:
-            rules = [{"direction": "in", "protocol": p, "port": port, "source_ips": ["0.0.0.0/0", "::/0"]}
-                     for p, port in self.inbound_ports(ssh)]
+            rules = [
+                {"direction": "in", "protocol": p, "port": port, "source_ips": ["0.0.0.0/0", "::/0"]}
+                for p, port in self.inbound_ports(ssh)
+            ]
             rules_path = os.path.join(tmp, "rules.json")
             with open(rules_path, "w") as f:
                 json.dump(rules, f)
-            say(f"  Creating the firewall {n}: " + (", ".join(f"{p}/{x}" for p, x in self.inbound_ports(ssh)) or "no inbound rules"))
-            self._run(["hcloud", "firewall", "create", "--name", n, "--rules-file", rules_path, *labels], "Creating the firewall")
+            say(
+                f"  Creating the firewall {n}: "
+                + (", ".join(f"{p}/{x}" for p, x in self.inbound_ports(ssh)) or "no inbound rules")
+            )
+            self._run(
+                ["hcloud", "firewall", "create", "--name", n, "--rules-file", rules_path, *labels],
+                "Creating the firewall",
+            )
         path = self._write(tmp, render(ip))
-        argv = ["hcloud", "server", "create", "--name", n, "--type", self.size, "--image", IMAGE["hetzner"],
-                "--location", self.location, "--firewall", n, "--user-data-from-file", path, *labels, "-o", "json"]
+        argv = [
+            "hcloud",
+            "server",
+            "create",
+            "--name",
+            n,
+            "--type",
+            self.size,
+            "--image",
+            IMAGE["hetzner"],
+            "--location",
+            self.location,
+            "--firewall",
+            n,
+            "--user-data-from-file",
+            path,
+            *labels,
+            "-o",
+            "json",
+        ]
         if self.front_door == "caddy":
             argv += ["--primary-ipv4", n]
         for k in keys:
@@ -217,7 +286,9 @@ class Cloud:
 
     def _digitalocean(self, tmp: str, render: Callable[[str], str], ssh: bool, keys: list[str]) -> Created:
         n, say = self.name, self.say
-        found = self._probe(["doctl", "compute", "droplet", "list", "--tag-name", n, "--format", "ID,PublicIPv4", "--no-header"])
+        found = self._probe(
+            ["doctl", "compute", "droplet", "list", "--tag-name", n, "--format", "ID,PublicIPv4", "--no-header"]
+        )
         rows = [l.split() for l in found.stdout.splitlines() if l.strip()] if found.returncode == 0 else []
         if rows:
             say(f"  Droplet {n} already exists; not creating a second one.")
@@ -226,8 +297,20 @@ class Cloud:
         ip = ""
         if self.front_door == "caddy":
             say("  Reserving a stable IP (free while it is assigned to the Droplet)")
-            r = self._run(["doctl", "compute", "reserved-ip", "create", "--region", self.location, "--format", "IP", "--no-header"],
-                          "Reserving the IP address")
+            r = self._run(
+                [
+                    "doctl",
+                    "compute",
+                    "reserved-ip",
+                    "create",
+                    "--region",
+                    self.location,
+                    "--format",
+                    "IP",
+                    "--no-header",
+                ],
+                "Reserving the IP address",
+            )
             ip = (r.stdout.split() or [""])[0]
             if not _is_v4(ip):
                 raise CloudError("Could not read the reserved IP from doctl's answer.")
@@ -235,8 +318,10 @@ class Cloud:
             return self._do_create(tmp, render, ssh, keys, ip)
         except CloudError as e:
             if ip:
-                raise CloudError(f"{e}\n  The reserved IP {ip} is not assigned to anything and bills $5/month until it is used: "
-                                 f"release it with `doctl compute reserved-ip delete {ip}`.") from None
+                raise CloudError(
+                    f"{e}\n  The reserved IP {ip} is not assigned to anything and bills $5/month until it is used: "
+                    f"release it with `doctl compute reserved-ip delete {ip}`."
+                ) from None
             raise
 
     def _do_create(self, tmp: str, render: Callable[[str], str], ssh: bool, keys: list[str], ip: str) -> Created:
@@ -245,16 +330,43 @@ class Cloud:
         if n not in listed.stdout.split():
             everyone = "address:0.0.0.0/0,address:::/0"
             inbound = " ".join(f"protocol:{p},ports:{port},{everyone}" for p, port in self.inbound_ports(ssh))
-            out = " ".join([f"protocol:tcp,ports:all,{everyone}", f"protocol:udp,ports:all,{everyone}", f"protocol:icmp,{everyone}"])
-            say(f"  Creating the firewall {n}: " + (", ".join(f"{p}/{x}" for p, x in self.inbound_ports(ssh)) or "no inbound rules"))
+            out = " ".join(
+                [
+                    f"protocol:tcp,ports:all,{everyone}",
+                    f"protocol:udp,ports:all,{everyone}",
+                    f"protocol:icmp,{everyone}",
+                ]
+            )
+            say(
+                f"  Creating the firewall {n}: "
+                + (", ".join(f"{p}/{x}" for p, x in self.inbound_ports(ssh)) or "no inbound rules")
+            )
             argv = ["doctl", "compute", "firewall", "create", "--name", n, "--tag-names", n, "--outbound-rules", out]
             if inbound:
                 argv += ["--inbound-rules", inbound]
             self._run(argv, "Creating the firewall")
         path = self._write(tmp, render(ip))
-        argv = ["doctl", "compute", "droplet", "create", n, "--region", self.location, "--size", self.size,
-                "--image", IMAGE["digitalocean"], "--user-data-file", path, "--tag-names", f"{MANAGED},{n}",
-                "--wait", "--format", "ID,PublicIPv4", "--no-header"]
+        argv = [
+            "doctl",
+            "compute",
+            "droplet",
+            "create",
+            n,
+            "--region",
+            self.location,
+            "--size",
+            self.size,
+            "--image",
+            IMAGE["digitalocean"],
+            "--user-data-file",
+            path,
+            "--tag-names",
+            f"{MANAGED},{n}",
+            "--wait",
+            "--format",
+            "ID,PublicIPv4",
+            "--no-header",
+        ]
         if keys:
             argv += ["--ssh-keys", ",".join(keys)]
         say(f"  Creating the Droplet {n} ({self.size}, {self.location})")
@@ -276,8 +388,9 @@ class Cloud:
         return ""
 
 
-def manual_steps(provider: Provider, *, name: str, size: str, location: str, front_door: str, user_data_path: str,
-                 ssh: bool = True) -> list[str]:
+def manual_steps(
+    provider: Provider, *, name: str, size: str, location: str, front_door: str, user_data_path: str, ssh: bool = True
+) -> list[str]:
     """Copy-paste steps for someone without the CLI (or not signed in): dashboard first, CLI as the alternative."""
     ports = "80, 443" + (", 22" if ssh else "") if front_door == "caddy" else ("22" if ssh else "none")
     if provider.key == "hetzner":

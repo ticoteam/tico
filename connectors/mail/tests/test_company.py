@@ -14,18 +14,23 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import fake, harness                                                 # noqa: E402
-import test_workspace as tw                                          # noqa: E402
-from harness import MANIFESTS, Stage2                                # noqa: E402
+import fake, harness  # noqa: E402
+import test_workspace as tw  # noqa: E402
+from harness import MANIFESTS, Stage2  # noqa: E402
 
-from connectors.mail import access, auth, oauth, policy as pl        # noqa: E402
-from connectors.mail import __main__ as cli                          # noqa: E402
+from connectors.mail import access, auth, oauth, policy as pl  # noqa: E402
+from connectors.mail import __main__ as cli  # noqa: E402
 
 BOX = "ana@acme.example"
 AVA = "ava@creator.example"
 THREAD = "t-ava"
-INCOMING = {"From": "Ava Reyes <ava@creator.example>", "To": BOX, "Subject": "Support question",
-            "Message-ID": "<ava-1@creator.example>", "Date": "Tue, 02 Sep 2026 09:00:00 -0700"}
+INCOMING = {
+    "From": "Ava Reyes <ava@creator.example>",
+    "To": BOX,
+    "Subject": "Support question",
+    "Message-ID": "<ava-1@creator.example>",
+    "Date": "Tue, 02 Sep 2026 09:00:00 -0700",
+}
 BODY = "Hi Ava,\n\nThanks for writing in. Support has it and will answer within a day.\n\nAna\nFounder, Acme\n"
 INBOX = """
 name: inbox
@@ -43,11 +48,19 @@ ALL_ON = {"company_organize": True, "company_send": True, "company_calendar": Tr
 
 class Base(Stage2):
     """A bot (inbox) that may read, draft and send as ana@acme.example and schedule on her calendar."""
+
     manifests = dict(MANIFESTS, inbox=INBOX)
 
     def setUp(self):
         super().setUp()
-        for name in ("HUB_BOT", "HUB_EMPLOYEE", "HUB_API_URL", "HUB_TOKEN", oauth.BROKER_URL_ENV, oauth.BROKER_AUTH_ENV):
+        for name in (
+            "HUB_BOT",
+            "HUB_EMPLOYEE",
+            "HUB_API_URL",
+            "HUB_TOKEN",
+            oauth.BROKER_URL_ENV,
+            oauth.BROKER_AUTH_ENV,
+        ):
             os.environ.pop(name, None)
 
     def corpus(self):
@@ -55,6 +68,7 @@ class Base(Stage2):
 
     def company(self, **changes):
         """The bot's mail setting with What Tico may do as the test says; None leaves the fields out."""
+
         def get(slug):
             row = dict(self.confirmed_setting(slug), **ALL_ON)
             for field, value in changes.items():
@@ -63,18 +77,40 @@ class Base(Stage2):
                 else:
                     row[field] = value
             return row
+
         pl.SERVER_GET = get
 
     def archive(self):
         return self.run_cli("archive", "--as", "inbox", "--mailbox", BOX, "m-ava", "--json")
 
     def reply(self, *who):
-        return self.run_cli("reply", *(who or ("--as", "inbox")), "--thread", THREAD,
-                            "--body-file", self.body_file(BODY), "--issue", "1", "--json")
+        return self.run_cli(
+            "reply",
+            *(who or ("--as", "inbox")),
+            "--thread",
+            THREAD,
+            "--body-file",
+            self.body_file(BODY),
+            "--issue",
+            "1",
+            "--json",
+        )
 
     def hold(self):
-        return self.run_cli("hold", "--as", "inbox", "--for", BOX, "--start", "2026-09-22T09:00:00-07:00",
-                            "--minutes", "30", "--summary", "Planning hold", "--json")
+        return self.run_cli(
+            "hold",
+            "--as",
+            "inbox",
+            "--for",
+            BOX,
+            "--start",
+            "2026-09-22T09:00:00-07:00",
+            "--minutes",
+            "30",
+            "--summary",
+            "Planning hold",
+            "--json",
+        )
 
     def in_inbox(self):
         return "INBOX" in self.service.store["m-ava"]["labelIds"]
@@ -100,8 +136,18 @@ class CompanyGates(Base):
 
     def test_organize_and_send_off_refuse_a_draft_before_gmail_is_asked(self):
         self.company(company_organize=False, company_send=False)
-        rc, out, _ = self.run_cli("draft", "--as", "inbox", "--reply-to", THREAD, "--body-file", self.body_file(BODY),
-                                  "--issue", "1", "--json")
+        rc, out, _ = self.run_cli(
+            "draft",
+            "--as",
+            "inbox",
+            "--reply-to",
+            THREAD,
+            "--body-file",
+            self.body_file(BODY),
+            "--issue",
+            "1",
+            "--json",
+        )
         self.assertEqual(rc, 2, out)
         self.assertIn("Organize mail or Send mail", out)
         self.assertEqual(self.service.drafts_by_id, {})
@@ -125,6 +171,7 @@ class CompanyGates(Base):
     def test_a_setting_tico_cannot_read_refuses_a_bot_s_writes_and_still_lets_it_read(self):
         def down(slug):
             raise OSError("Tico is unreachable")
+
         for get in (down, lambda slug: None):
             pl.SERVER_GET = get
             rc, out, _ = self.archive()
@@ -139,23 +186,35 @@ class CompanyGates(Base):
     def test_a_runner_s_calendar_action_reads_change_calendar_as_the_runner_and_an_unread_one_is_refused(self):
         """connector-event runs as the connector, so What Tico may do comes from the runner's own registration
         (connectors/mail/targets), as a mail action's does; nothing on its stdin decides it."""
-        action = json.dumps({"id": "ca-1", "calendar": BOX, "title": "Planning", "attendees": [],
-                             "start": "2026-09-22T09:00:00-07:00", "end": "2026-09-22T09:30:00-07:00",
-                             "company": ALL_ON})
+        action = json.dumps(
+            {
+                "id": "ca-1",
+                "calendar": BOX,
+                "title": "Planning",
+                "attendees": [],
+                "start": "2026-09-22T09:00:00-07:00",
+                "end": "2026-09-22T09:30:00-07:00",
+                "company": ALL_ON,
+            }
+        )
 
         def event(answer):
             def get(path):
                 if isinstance(answer, Exception):
                     raise answer
                 return answer
+
             pl.RUNNER_GET = get
             with mock.patch.object(sys, "stdin", io.StringIO(action)):
                 return self.run_cli("connector-event", "--as", access.CONNECTOR, "--json")
+
         off = {"organize_mail": True, "send_mail": True, "change_calendar": False}
-        for answer, says in (({"company": off}, "Create and change calendar events"),
-                             (OSError("Tico is unreachable"), "Tico couldn't check")):
+        for answer, says in (
+            ({"company": off}, "Create and change calendar events"),
+            (OSError("Tico is unreachable"), "Tico couldn't check"),
+        ):
             rc, out, _ = event(answer)
-            self.assertEqual(rc, 2, out)            # exit 2: the runner reports it failed, not unknown
+            self.assertEqual(rc, 2, out)  # exit 2: the runner reports it failed, not unknown
             self.assertIn(says, out)
             self.assertEqual(self.calendar.created_events, {})
         rc, out, err = event({"company": dict(off, change_calendar=True)})
@@ -178,22 +237,42 @@ class CompanyGates(Base):
         self.company(company_organize=False)
         with mock.patch.dict(sys.modules, modules):
             # This computer's service-account key: Google would take gmail.modify, so only Tico can refuse.
-            key.write_text(json.dumps({"type": "service_account", "project_id": "acme-hub", "private_key_id": "k1",
-                                       "private_key": "-----BEGIN PRIVATE KEY-----\ntest-only\n-----END PRIVATE KEY-----\n",
-                                       "client_email": "tico-mail@acme-hub.example.iam.gserviceaccount.com",
-                                       "client_id": "100000000000000000001", "token_uri": oauth.TOKEN_URI}))
+            key.write_text(
+                json.dumps(
+                    {
+                        "type": "service_account",
+                        "project_id": "acme-hub",
+                        "private_key_id": "k1",
+                        "private_key": "-----BEGIN PRIVATE KEY-----\ntest-only\n-----END PRIVATE KEY-----\n",
+                        "client_email": "tico-mail@acme-hub.example.iam.gserviceaccount.com",
+                        "client_id": "100000000000000000001",
+                        "token_uri": oauth.TOKEN_URI,
+                    }
+                )
+            )
             key.chmod(0o600)
             rc, out, _ = self.archive()
             self.assertEqual(rc, 2, out)
             self.assertIn("Organize mail", out)
             self.assertEqual(getattr(built[-1], "token", ""), "ya29.key-" + BOX)
             # A person's own grant, refreshed on this computer with the write scope it holds.
-            oauth.save({"grants": {BOX: {"refresh_token": "1//refresh-test", "client_id": "123.apps.example",
-                                         "client_secret": "test-only", "token_uri": oauth.TOKEN_URI,
-                                         "scopes": tw.GRANTED}}}, grants)
+            oauth.save(
+                {
+                    "grants": {
+                        BOX: {
+                            "refresh_token": "1//refresh-test",
+                            "client_id": "123.apps.example",
+                            "client_secret": "test-only",
+                            "token_uri": oauth.TOKEN_URI,
+                            "scopes": tw.GRANTED,
+                        }
+                    }
+                },
+                grants,
+            )
             rc, out, _ = self.archive()
             self.assertEqual(rc, 2, out)
-            self.assertIn("Organize mail", out)                 # Google's scopes allow it; the company does not
+            self.assertIn("Organize mail", out)  # Google's scopes allow it; the company does not
             self.assertEqual(getattr(built[-1], "_tico_granted", None), oauth.SERVICE_SCOPES["gmail"])
             self.assertTrue(self.in_inbox())
             self.company()
@@ -212,10 +291,11 @@ class TheConnectorIsHeldToo(Base):
             if isinstance(answer, Exception):
                 raise answer
             return answer
+
         pl.RUNNER_GET = get
 
     def leased(self, *argv):
-        access.LEASED = True                            # as mail-action / connector-event set it (main() clears it)
+        access.LEASED = True  # as mail-action / connector-event set it (main() clears it)
         return self.run_cli(*argv)
 
     def connector_archive(self):
@@ -252,7 +332,7 @@ class TheConnectorIsHeldToo(Base):
         bot's."""
         for answer in (OSError("Tico is unreachable"), None):
             if answer is None:
-                pl.RUNNER_GET = None                        # the real read: no broker URL or registration here
+                pl.RUNNER_GET = None  # the real read: no broker URL or registration here
                 for name in (oauth.BROKER_URL_ENV, oauth.BROKER_AUTH_ENV):
                     os.environ.pop(name, None)
             else:

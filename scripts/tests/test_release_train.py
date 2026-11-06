@@ -1,5 +1,6 @@
 """Release windows: when a window is open, which candidate ships, when stable may take the canary's release, and that
 a failure reaches the release-train issue (scripts/release_train.py)."""
+
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -7,13 +8,20 @@ import pytest
 from scripts import release_train as rt
 
 A, B, C, D = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
-NOW = datetime(2026, 11, 5, 18, 0, tzinfo=timezone.utc)          # the 14:30 UTC window is the latest start
+NOW = datetime(2026, 11, 5, 18, 0, tzinfo=timezone.utc)  # the 14:30 UTC window is the latest start
 OPENED = datetime(2026, 11, 5, 14, 30, tzinfo=timezone.utc)
 
 
 def run(sha, version="v0.5.201", previous="v0.5.200", *, status="completed", conclusion="success", at=NOW, id=1):
-    return {"id": id, "display_title": rt.title(sha, version, previous), "status": status, "conclusion": conclusion,
-            "html_url": "https://github.example/run/%d" % id, "created_at": at.isoformat(), "updated_at": at.isoformat()}
+    return {
+        "id": id,
+        "display_title": rt.title(sha, version, previous),
+        "status": status,
+        "conclusion": conclusion,
+        "html_url": "https://github.example/run/%d" % id,
+        "created_at": at.isoformat(),
+        "updated_at": at.isoformat(),
+    }
 
 
 class FakeGitHub:
@@ -24,12 +32,12 @@ class FakeGitHub:
         self.order = [A, B, C]
         self.head_ = head
         self.runs = list(runs)
-        self.others = {"ci.yml": [], "hotfix.yml": []}     # runs on other branches/events (recent_runs only)
+        self.others = {"ci.yml": [], "hotfix.yml": []}  # runs on other branches/events (recent_runs only)
         self.release_runs = []
         self.releases = {"v0.5.200": {"draft": False, "published_at": published.isoformat()}} if published else {}
         self.dispatched, self.tagged, self.comments, self.closed = [], [], [], []
         self.open_issues, self.blockers, self.created, self.latest = [], [], [], []
-        self.latest_ = "v0.5.200"      # GitHub's latest release before this run
+        self.latest_ = "v0.5.200"  # GitHub's latest release before this run
         self.on_dispatch = None
 
     def _sha(self, ref):
@@ -112,17 +120,35 @@ class FakeGitHub:
 
 
 def released(tag):
-    return {"id": 1, "tag_name": tag, "draft": False, "published_at": NOW.isoformat(), "html_url": "https://github.example/r"}
+    return {
+        "id": 1,
+        "tag_name": tag,
+        "draft": False,
+        "published_at": NOW.isoformat(),
+        "html_url": "https://github.example/r",
+    }
 
 
 def publishes(gh):
     """release.yml, dispatched on the tag, publishes the release at once."""
+
     def on_dispatch(workflow, ref, inputs):
         if workflow == "release.yml":
             gh.releases[ref] = released(ref)
         elif workflow == "ci.yml":
-            gh.runs.insert(0, run(inputs["candidate_sha"], inputs["version"], inputs["previous_release"],
-                                  status="queued", conclusion=None, at=datetime.now(timezone.utc), id=50))
+            gh.runs.insert(
+                0,
+                run(
+                    inputs["candidate_sha"],
+                    inputs["version"],
+                    inputs["previous_release"],
+                    status="queued",
+                    conclusion=None,
+                    at=datetime.now(timezone.utc),
+                    id=50,
+                ),
+            )
+
     gh.on_dispatch = on_dispatch
     return gh
 
@@ -140,12 +166,18 @@ def clean_log(monkeypatch):
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
 
 
-ENV = {"CANARY_URL": "https://canary.acme.example", "CANARY_UPDATE_KEY": "k1",
-       "STABLE_URL": "https://stable.acme.example", "STABLE_UPDATE_KEY": "k2", "BAKE_HOURS": "4",
-       "RELEASE_TRAINS": "on"}
+ENV = {
+    "CANARY_URL": "https://canary.acme.example",
+    "CANARY_UPDATE_KEY": "k1",
+    "STABLE_URL": "https://stable.acme.example",
+    "STABLE_UPDATE_KEY": "k2",
+    "BAKE_HOURS": "4",
+    "RELEASE_TRAINS": "on",
+}
 
 
 # ---- versions and the clock ----
+
 
 def test_versions_order_numerically_and_skip_prereleases():
     tags = {"v0.5.9", "v0.5.10", "v0.6.0-rc.1", "latest", "v1.0"}
@@ -159,13 +191,16 @@ def test_validation_title_round_trips_for_release_yml():
     assert rt.parse_title("Release window opens") is None
 
 
-@pytest.mark.parametrize("now, start", [
-    (datetime(2026, 11, 5, 14, 29, tzinfo=timezone.utc), datetime(2026, 11, 4, 22, 0, tzinfo=timezone.utc)),
-    (datetime(2026, 11, 5, 14, 30, tzinfo=timezone.utc), datetime(2026, 11, 5, 14, 30, tzinfo=timezone.utc)),
-    (datetime(2026, 11, 5, 21, 59, tzinfo=timezone.utc), datetime(2026, 11, 5, 14, 30, tzinfo=timezone.utc)),
-    (datetime(2026, 11, 6, 3, 0, tzinfo=timezone.utc), datetime(2026, 11, 5, 22, 0, tzinfo=timezone.utc)),
-    (datetime(2027, 1, 1, 1, 0, tzinfo=timezone.utc), datetime(2026, 12, 31, 22, 0, tzinfo=timezone.utc)),
-])
+@pytest.mark.parametrize(
+    "now, start",
+    [
+        (datetime(2026, 11, 5, 14, 29, tzinfo=timezone.utc), datetime(2026, 11, 4, 22, 0, tzinfo=timezone.utc)),
+        (datetime(2026, 11, 5, 14, 30, tzinfo=timezone.utc), datetime(2026, 11, 5, 14, 30, tzinfo=timezone.utc)),
+        (datetime(2026, 11, 5, 21, 59, tzinfo=timezone.utc), datetime(2026, 11, 5, 14, 30, tzinfo=timezone.utc)),
+        (datetime(2026, 11, 6, 3, 0, tzinfo=timezone.utc), datetime(2026, 11, 5, 22, 0, tzinfo=timezone.utc)),
+        (datetime(2027, 1, 1, 1, 0, tzinfo=timezone.utc), datetime(2026, 12, 31, 22, 0, tzinfo=timezone.utc)),
+    ],
+)
 def test_window_start_is_the_latest_utc_open(now, start):
     assert rt.window_start(now) == start
     assert rt.window_start(now) <= now < rt.next_window(now)
@@ -176,6 +211,7 @@ def test_crons_are_the_window_starts():
 
 
 # ---- what an open window does ----
+
 
 def plan(gh, now=NOW, finished=None, manual=False):
     return rt.plan_step(gh, now, finished, manual)
@@ -189,8 +225,12 @@ def test_window_closes_once_a_release_is_published_after_it_opened():
 
 
 def release_run(status="completed", conclusion="failure", at=NOW - timedelta(minutes=40), id=70):
-    return {"status": status, "conclusion": conclusion, "html_url": "https://github.example/release/%d" % id,
-            "created_at": at.isoformat()}
+    return {
+        "status": status,
+        "conclusion": conclusion,
+        "html_url": "https://github.example/release/%d" % id,
+        "created_at": at.isoformat(),
+    }
 
 
 def test_an_unpublished_tag_waits_for_its_release_run_then_runs_it_once_more_then_asks_for_a_person():
@@ -220,12 +260,16 @@ def test_the_first_green_candidate_of_the_window_ships():
     assert plan(FakeGitHub([run(B, at=OPENED - timedelta(hours=2))]))["action"] == "dispatch"
 
 
-@pytest.mark.parametrize("runs", [
-    [run(D)],                                     # not on main
-    [run(C, "v0.5.201", "v0.5.199")],             # validated as an upgrade from another release
-    [run(C, "v0.5.202", "v0.5.201")],             # another version
-    [run(B, conclusion="cancelled")],             # an older commit cancelled: main's head is validated
-], ids=["off-main", "other-previous", "other-version", "older-cancelled"])
+@pytest.mark.parametrize(
+    "runs",
+    [
+        [run(D)],  # not on main
+        [run(C, "v0.5.201", "v0.5.199")],  # validated as an upgrade from another release
+        [run(C, "v0.5.202", "v0.5.201")],  # another version
+        [run(B, conclusion="cancelled")],  # an older commit cancelled: main's head is validated
+    ],
+    ids=["off-main", "other-previous", "other-version", "older-cancelled"],
+)
 def test_only_a_green_run_of_this_version_on_main_counts(runs):
     assert plan(FakeGitHub(runs))["action"] == "dispatch"
 
@@ -241,8 +285,9 @@ def test_one_validation_at_a_time():
 def test_a_red_or_cancelled_head_waits_for_a_push_is_reported_and_a_manual_run_validates_it_again(conclusion):
     waiting = plan(FakeGitHub([run(C, conclusion=conclusion, id=4)]))
     assert waiting["action"] == "wait"
-    assert rt.problems(waiting) == ["Candidate v0.5.201 at %s ended %s: https://github.example/run/4" % (
-        C[:12], conclusion)]
+    assert rt.problems(waiting) == [
+        "Candidate v0.5.201 at %s ended %s: https://github.example/run/4" % (C[:12], conclusion)
+    ]
     forced = plan(FakeGitHub([run(C, conclusion=conclusion, id=4)]), manual=True)
     assert forced["action"] == "dispatch" and rt.problems(forced) == []
 
@@ -266,6 +311,7 @@ def test_a_finished_red_candidate_of_this_window_is_reported():
 
 # ---- the guard ----
 
+
 def guard(gh, env, tmp_path, monkeypatch):
     out = tmp_path / "out"
     out.write_text("")
@@ -276,19 +322,28 @@ def guard(gh, env, tmp_path, monkeypatch):
 
 def test_guard_runs_the_window_job_only_when_it_has_work(tmp_path, monkeypatch):
     on = {"RELEASE_TRAINS": "on"}
-    assert guard(FakeGitHub(), dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.CRONS[0]), tmp_path,
-                 monkeypatch) == {"go": "true", "open": "true"}
+    assert guard(FakeGitHub(), dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.CRONS[0]), tmp_path, monkeypatch) == {
+        "go": "true",
+        "open": "true",
+    }
     # The backstop takes a step in an open window like a push, never opens one (no promotion), and idles otherwise.
     backstop = dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON)
     assert guard(FakeGitHub(), backstop, tmp_path, monkeypatch) == {"go": "true", "open": "false"}
     closed = FakeGitHub([run(C)], published=OPENED + timedelta(minutes=40))
     assert guard(closed, backstop, tmp_path, monkeypatch) == {"go": "false", "open": "false"}
     assert guard(FakeGitHub(), dict(on, GITHUB_EVENT_NAME="push"), tmp_path, monkeypatch) == {
-        "go": "true", "open": "false"}
+        "go": "true",
+        "open": "false",
+    }
     busy = FakeGitHub([run(C, status="in_progress", conclusion=None)])
     assert guard(busy, dict(on, GITHUB_EVENT_NAME="push"), tmp_path, monkeypatch)["go"] == "false"
-    red = {"GITHUB_EVENT_NAME": "workflow_run", "RUN_EVENT": "workflow_dispatch", "RUN_CONCLUSION": "failure",
-           "RUN_TITLE": rt.title(C, "v0.5.201", "v0.5.200"), "RUN_URL": "u"}
+    red = {
+        "GITHUB_EVENT_NAME": "workflow_run",
+        "RUN_EVENT": "workflow_dispatch",
+        "RUN_CONCLUSION": "failure",
+        "RUN_TITLE": rt.title(C, "v0.5.201", "v0.5.200"),
+        "RUN_URL": "u",
+    }
     assert guard(FakeGitHub([run(C, conclusion="failure")]), dict(on, **red), tmp_path, monkeypatch)["go"] == "true"
 
 
@@ -316,15 +371,28 @@ def test_guard_respects_the_switch_and_a_running_hotfix(tmp_path, monkeypatch):
 
 # ---- installs, through the update key's routes only ----
 
+
 @pytest.fixture
 def installs(monkeypatch):
     """Two fake installs answering GET/POST /api/v2/system/update; an update finishes healthy at once."""
     state = {
-        "canary": {"state": "healthy", "running": "0.5.200", "to": "0.5.200",
-                   "history": [{"version": "0.5.200", "since": (NOW - timedelta(hours=5)).isoformat()}]},
-        "stable": {"state": "healthy", "running": "0.5.199", "to": "0.5.199",
-                   "history": [{"version": "0.5.199", "since": (NOW - timedelta(days=1)).isoformat()}]},
-        "updated": [], "paths": [], "outcome": "healthy", "down": set()}
+        "canary": {
+            "state": "healthy",
+            "running": "0.5.200",
+            "to": "0.5.200",
+            "history": [{"version": "0.5.200", "since": (NOW - timedelta(hours=5)).isoformat()}],
+        },
+        "stable": {
+            "state": "healthy",
+            "running": "0.5.199",
+            "to": "0.5.199",
+            "history": [{"version": "0.5.199", "since": (NOW - timedelta(days=1)).isoformat()}],
+        },
+        "updated": [],
+        "paths": [],
+        "outcome": "healthy",
+        "down": set(),
+    }
 
     def call(target, method, path, body=None, key=True):
         name = target["name"]
@@ -335,10 +403,13 @@ def installs(monkeypatch):
             version = body["version"]
             state["updated"].append((name, version))
             ok = state["outcome"] == "healthy"
-            state[name] = dict(state[name], to=version, state=state["outcome"],
-                               running=version if ok else state[name]["running"],
-                               history=state[name]["history"] + ([{"version": version, "since": NOW.isoformat()}]
-                                                                 if ok else []))
+            state[name] = dict(
+                state[name],
+                to=version,
+                state=state["outcome"],
+                running=version if ok else state[name]["running"],
+                history=state[name]["history"] + ([{"version": version, "since": NOW.isoformat()}] if ok else []),
+            )
             return 200, {"state": "pulling", "to": version, "running": state[name]["running"]}
         return 200, dict(state[name])
 
@@ -364,8 +435,12 @@ def test_a_rolled_back_or_unreadable_update_fails(installs):
 
 def test_a_near_instant_failure_is_judged_at_once(monkeypatch):
     polls = []
-    answers = iter([{"state": "healthy", "running": "0.5.200", "to": "0.5.200", "message": ""},
-                    {"state": "failed", "running": "0.5.200", "to": "0.5.201", "message": "pull: manifest unknown"}])
+    answers = iter(
+        [
+            {"state": "healthy", "running": "0.5.200", "to": "0.5.200", "message": ""},
+            {"state": "failed", "running": "0.5.200", "to": "0.5.201", "message": "pull: manifest unknown"},
+        ]
+    )
 
     def call(target, method, path, body=None):
         if method == "POST":
@@ -376,18 +451,25 @@ def test_a_near_instant_failure_is_judged_at_once(monkeypatch):
     monkeypatch.setattr(rt.rollout, "call", call)
     with pytest.raises(rt.Fail, match="manifest unknown"):
         rt.update_install(rt.install("CANARY", ENV), "v0.5.201")
-    assert len(polls) == 2          # the snapshot, then the first poll
+    assert len(polls) == 2  # the snapshot, then the first poll
 
 
 def test_an_earlier_updates_outcome_is_not_judged(monkeypatch):
     """A rollback to the same version left from before this request, still shown until the updater picks it up."""
     stale = {"state": "rolled_back", "running": "0.5.200", "to": "0.5.201", "message": "earlier"}
-    answers = iter([stale, stale, {"state": "pulling", "running": "0.5.200", "to": "0.5.201"}, None,
-                    {"state": "healthy", "running": "0.5.201", "to": "0.5.201"}])
+    answers = iter(
+        [
+            stale,
+            stale,
+            {"state": "pulling", "running": "0.5.200", "to": "0.5.201"},
+            None,
+            {"state": "healthy", "running": "0.5.201", "to": "0.5.201"},
+        ]
+    )
 
     def call(target, method, path, body=None):
         if method == "POST":
-            return 200, {"ok": True}           # a hub that does not echo the updater's status
+            return 200, {"ok": True}  # a hub that does not echo the updater's status
         answer = next(answers)
         return (200, answer) if answer else (502, {})
 
@@ -402,10 +484,20 @@ def test_an_earlier_updates_outcome_is_not_judged(monkeypatch):
 
 # ---- the bake gate ----
 
+
 def gate(**overrides):
-    args = dict(version="0.5.201", canary_status={"state": "healthy", "running": "0.5.201", "history": [
-        {"version": "0.5.201", "since": (NOW - timedelta(hours=5)).isoformat()}]}, now=NOW, bake_hours=4, hold="",
-        blockers=[])
+    args = dict(
+        version="0.5.201",
+        canary_status={
+            "state": "healthy",
+            "running": "0.5.201",
+            "history": [{"version": "0.5.201", "since": (NOW - timedelta(hours=5)).isoformat()}],
+        },
+        now=NOW,
+        bake_hours=4,
+        hold="",
+        blockers=[],
+    )
     args.update(overrides)
     return rt.bake_gate(**args)
 
@@ -414,26 +506,47 @@ def test_bake_gate_passes_a_healthy_baked_release():
     assert gate() == ([], [])
 
 
-@pytest.mark.parametrize("overrides, why", [
-    ({"now": NOW - timedelta(hours=1, minutes=10)}, "3.8 h of 4 h"),
-    ({"hold": "waiting on the billing fix"}, "RELEASE_HOLD"),
-    ({"blockers": [{"number": 7, "title": "Tasks vanish"}]}, "release-blocker #7"),
-])
+@pytest.mark.parametrize(
+    "overrides, why",
+    [
+        ({"now": NOW - timedelta(hours=1, minutes=10)}, "3.8 h of 4 h"),
+        ({"hold": "waiting on the billing fix"}, "RELEASE_HOLD"),
+        ({"blockers": [{"number": 7, "title": "Tasks vanish"}]}, "release-blocker #7"),
+    ],
+)
 def test_bake_gate_holds_quietly(overrides, why):
     waits, faults = gate(**overrides)
     assert faults == [] and any(why in w for w in waits)
 
 
-@pytest.mark.parametrize("status, why", [
-    (None, "cannot be read"),
-    ({"state": "rolled_back", "running": "0.5.201", "message": "health check",
-      "history": [{"version": "0.5.201", "since": "2026-11-05T10:00:00Z"}]}, "rolled_back"),
-    ({"state": "", "running": "0.5.201", "history": [{"version": "0.5.201", "since": "2026-11-05T10:00:00Z"}]},
-     "unknown"),
-    ({"state": "healthy", "running": "0.5.200", "history": []}, "runs 0.5.200"),
-    ({"state": "healthy", "running": "0.5.201", "history": [{"version": "0.5.200", "since": "2026-11-05T10:00:00Z"}]},
-     "since when"),
-])
+@pytest.mark.parametrize(
+    "status, why",
+    [
+        (None, "cannot be read"),
+        (
+            {
+                "state": "rolled_back",
+                "running": "0.5.201",
+                "message": "health check",
+                "history": [{"version": "0.5.201", "since": "2026-11-05T10:00:00Z"}],
+            },
+            "rolled_back",
+        ),
+        (
+            {"state": "", "running": "0.5.201", "history": [{"version": "0.5.201", "since": "2026-11-05T10:00:00Z"}]},
+            "unknown",
+        ),
+        ({"state": "healthy", "running": "0.5.200", "history": []}, "runs 0.5.200"),
+        (
+            {
+                "state": "healthy",
+                "running": "0.5.201",
+                "history": [{"version": "0.5.200", "since": "2026-11-05T10:00:00Z"}],
+            },
+            "since when",
+        ),
+    ],
+)
 def test_bake_gate_holds_and_reports_what_it_cannot_tell(status, why):
     _, faults = gate(canary_status=status)
     assert any(why in f for f in faults)
@@ -464,6 +577,7 @@ def test_promote_skips_without_keys(installs):
 
 # ---- the window job ----
 
+
 def test_window_open_promotes_then_ships_the_green_candidate_and_closes_the_issue(installs, tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
     gh = publishes(FakeGitHub([run(C)]))
@@ -474,8 +588,18 @@ def test_window_open_promotes_then_ships_the_green_candidate_and_closes_the_issu
     assert gh.dispatched == [("release.yml", "v0.5.201", {"desktop": "false", "latest": "false"})]
     # Latest only once the canary is healthy: the GitHub release and each image's latest tag.
     assert gh.latest == ["v0.5.201"]
-    assert COMMANDS == [["docker", "buildx", "imagetools", "create", "-t", "ghcr.io/ticoteam/%s:latest" % image,
-                         "ghcr.io/ticoteam/%s:v0.5.201" % image] for image in rt.IMAGES]
+    assert COMMANDS == [
+        [
+            "docker",
+            "buildx",
+            "imagetools",
+            "create",
+            "-t",
+            "ghcr.io/ticoteam/%s:latest" % image,
+            "ghcr.io/ticoteam/%s:v0.5.201" % image,
+        ]
+        for image in rt.IMAGES
+    ]
     assert gh.closed == [7]
     # Published: the window is closed, and the next event does nothing.
     assert rt.plan_step(gh, NOW + timedelta(minutes=5))["action"] == "none"
@@ -504,7 +628,7 @@ def test_a_failed_image_move_is_reported_and_the_release_stays_not_latest(instal
 
 def test_latest_never_moves_backwards(installs):
     gh = publishes(FakeGitHub([run(C)]))
-    gh.latest_ = "v0.5.202"              # pushed by a person while the canary was updating
+    gh.latest_ = "v0.5.202"  # pushed by a person while the canary was updating
     assert rt.mark_latest(gh, "v0.5.201") is False and COMMANDS == [] and gh.latest == []
     assert rt.cmd_window(gh, ENV, False, NOW) == 0
     assert ("canary", "0.5.201") in installs["updated"] and gh.latest == [] and COMMANDS == []
@@ -513,8 +637,13 @@ def test_latest_never_moves_backwards(installs):
 
 
 def test_the_github_release_is_marked_only_after_every_image_moved(installs, monkeypatch):
-    monkeypatch.setattr(rt, "run_command", lambda argv, timeout=180: (
-        COMMANDS.append(argv) or ((1, "manifest blob unknown") if "tico-runner" in argv[-1] else (0, ""))))
+    monkeypatch.setattr(
+        rt,
+        "run_command",
+        lambda argv, timeout=180: (
+            COMMANDS.append(argv) or ((1, "manifest blob unknown") if "tico-runner" in argv[-1] else (0, ""))
+        ),
+    )
     with pytest.raises(rt.Fail, match="tico-runner"):
         rt.mark_latest(publishes(FakeGitHub()), "v0.5.200")
     assert not any("tico-updater" in argv[-1] for argv in COMMANDS)
@@ -532,7 +661,10 @@ def test_a_missed_latest_is_caught_up_once_the_canary_runs_it_healthy(installs, 
     assert rt.lagging_latest(gh) == "v0.5.201"
     # The guard cannot read the canary: the backstop runs the job, a push with nothing else to do does not.
     on = {"RELEASE_TRAINS": "on"}
-    assert guard(gh, dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON), tmp_path, monkeypatch)["go"] == "true"
+    assert (
+        guard(gh, dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON), tmp_path, monkeypatch)["go"]
+        == "true"
+    )
     assert guard(gh, dict(on, GITHUB_EVENT_NAME="push"), tmp_path, monkeypatch)["go"] == "false"
     # The canary still runs the older release (rolled back): it stays not latest, quietly.
     assert rt.cmd_window(gh, ENV, False, NOW) == 0 and gh.latest == [] and gh.created == []
@@ -555,8 +687,9 @@ def test_an_unpublished_tag_is_released_again_once_and_recorded(installs):
 def test_window_validates_main_and_waits_until_the_run_is_listed(installs):
     gh = publishes(FakeGitHub())
     assert rt.cmd_window(gh, ENV, False, NOW) == 0
-    assert gh.dispatched == [("ci.yml", "main", {"candidate_sha": C, "previous_release": "v0.5.200",
-                                                  "version": "v0.5.201"})]
+    assert gh.dispatched == [
+        ("ci.yml", "main", {"candidate_sha": C, "previous_release": "v0.5.200", "version": "v0.5.201"})
+    ]
     assert any("run/50" in line for line in rt.LOG)
     assert gh.tagged == [] and installs["updated"] == [] and gh.created == []
     # The next event sees the run and waits.
@@ -565,8 +698,14 @@ def test_window_validates_main_and_waits_until_the_run_is_listed(installs):
 
 def test_a_red_candidate_goes_on_the_issue_and_main_moving_validates_again(installs):
     gh = publishes(FakeGitHub([run(B, conclusion="failure")]))
-    env = dict(ENV, GITHUB_EVENT_NAME="workflow_run", RUN_EVENT="workflow_dispatch", RUN_CONCLUSION="failure",
-               RUN_TITLE=rt.title(B, "v0.5.201", "v0.5.200"), RUN_URL="https://github.example/run/red")
+    env = dict(
+        ENV,
+        GITHUB_EVENT_NAME="workflow_run",
+        RUN_EVENT="workflow_dispatch",
+        RUN_CONCLUSION="failure",
+        RUN_TITLE=rt.title(B, "v0.5.201", "v0.5.200"),
+        RUN_URL="https://github.example/run/red",
+    )
     assert rt.cmd_window(gh, env, False, NOW) == 1
     assert len(gh.created) == 1 and "run/red" in gh.created[0]["body"]
     assert [d[0] for d in gh.dispatched] == ["ci.yml"] and gh.tagged == []
@@ -580,21 +719,34 @@ def test_missing_canary_key_fails_without_tagging(installs):
 
 def test_a_failed_release_workflow_is_reported(installs):
     gh = FakeGitHub([run(C)])
-    gh.release_runs = [{"status": "completed", "conclusion": "failure", "html_url": "release-run",
-                        "created_at": datetime.now(timezone.utc).isoformat()}]
+    gh.release_runs = [
+        {
+            "status": "completed",
+            "conclusion": "failure",
+            "html_url": "release-run",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ]
     assert rt.cmd_window(gh, ENV, False, NOW) == 1
     assert "release-run" in gh.created[0]["body"] and ("canary", "0.5.201") not in installs["updated"]
 
 
 def test_wait_release_fails_on_this_release_run_only():
     gh = FakeGitHub()
-    gh.release_runs = [{"status": "completed", "conclusion": "failure", "html_url": "old",
-                        "created_at": (NOW - timedelta(hours=1)).isoformat()}]
+    gh.release_runs = [
+        {
+            "status": "completed",
+            "conclusion": "failure",
+            "html_url": "old",
+            "created_at": (NOW - timedelta(hours=1)).isoformat(),
+        }
+    ]
     with pytest.raises(rt.Fail, match="no GitHub release"):
         rt.wait_release(gh, "v0.5.201", NOW, timeout=0)
 
 
 # ---- the release-train issue ----
+
 
 def test_the_same_failure_is_posted_once_and_a_new_one_again():
     gh = FakeGitHub()
@@ -635,7 +787,7 @@ def test_an_existing_tag_at_another_commit_or_a_refused_tag_says_so():
     gh = rt.GitHub("acme/tico", "token")
     gh.call = call.__get__(gh)
     assert gh.create_tag("v0.5.201", B) is False
-    assert gh.create_tag("v0.5.202", C) is False                  # annotated, at the same commit
+    assert gh.create_tag("v0.5.202", C) is False  # annotated, at the same commit
     with pytest.raises(rt.Fail, match="already exists at another commit"):
         gh.create_tag("v0.5.201", C)
     with pytest.raises(rt.Fail, match="creating tag v0.5.203: 422 Reference already exists"):
@@ -645,13 +797,22 @@ def test_an_existing_tag_at_another_commit_or_a_refused_tag_says_so():
 
 # ---- hotfix ----
 
+
 def hotfix_github():
     gh = FakeGitHub()
 
     def on_dispatch(workflow, ref, inputs):
         if workflow == "ci.yml":
-            gh.runs.insert(0, run(inputs["candidate_sha"], inputs["version"], inputs["previous_release"],
-                                  at=datetime.now(timezone.utc), id=9))
+            gh.runs.insert(
+                0,
+                run(
+                    inputs["candidate_sha"],
+                    inputs["version"],
+                    inputs["previous_release"],
+                    at=datetime.now(timezone.utc),
+                    id=9,
+                ),
+            )
         else:
             gh.releases[ref] = released(ref)
 
@@ -671,8 +832,11 @@ def test_hotfix_needs_a_real_reason_and_a_commit_on_main(installs):
 def test_hotfix_validates_publishes_and_updates_canary_then_stable(installs):
     gh = hotfix_github()
     assert rt.hotfix(gh, ENV, "", "Tasks vanish from the board after an update", True) == "v0.5.201"
-    assert gh.dispatched[0] == ("ci.yml", "main", {"candidate_sha": C, "previous_release": "v0.5.200",
-                                                    "version": "v0.5.201"})
+    assert gh.dispatched[0] == (
+        "ci.yml",
+        "main",
+        {"candidate_sha": C, "previous_release": "v0.5.200", "version": "v0.5.201"},
+    )
     assert gh.tagged == [("v0.5.201", C)]
     assert installs["updated"] == [("canary", "0.5.201"), ("stable", "0.5.201")]
     assert gh.latest == ["v0.5.201"]
@@ -716,8 +880,9 @@ def test_each_failed_hotfix_run_gets_its_own_comment(installs, tmp_path, monkeyp
 def test_failed_hotfix_validation_stops_before_tagging(installs, tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
     gh = FakeGitHub()
-    gh.on_dispatch = lambda workflow, ref, inputs: gh.runs.insert(0, run(
-        inputs["candidate_sha"], inputs["version"], conclusion="failure", at=datetime.now(timezone.utc)))
+    gh.on_dispatch = lambda workflow, ref, inputs: gh.runs.insert(
+        0, run(inputs["candidate_sha"], inputs["version"], conclusion="failure", at=datetime.now(timezone.utc))
+    )
     assert rt.cmd_hotfix(gh, ENV, "", "Tasks vanish from the board after an update", True) == 1
     assert gh.tagged == [] and installs["updated"] == []
     assert gh.open_issues and "Release validation ended failure" in gh.created[0]["body"]

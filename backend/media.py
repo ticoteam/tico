@@ -49,6 +49,7 @@ class Send(M.Contract):
 
 class TaskFile(M.Contract):
     """A deliverable a bot (or person) attaches to a task: text as-is, or bytes base64-encoded."""
+
     model_config = {**M.Contract.model_config, "str_strip_whitespace": False}
     name: str = Field(min_length=1, max_length=200)
     text: str | None = Field(default=None, min_length=1, max_length=2_000_000)
@@ -71,20 +72,37 @@ def task_file_contract():
         return node
 
     schema = inline(schema)
-    multipart = {**schema, "required": ["file"], "properties": {
-        key: value for key, value in schema["properties"].items() if key not in ("text", "content_base64", "ask")}}
-    multipart["properties"].update({
-        "file": {"type": "string", "format": "binary", "description": "At most TICO_UPLOAD_MAX_BYTES (2 GiB by default)."},
-        "poster": {"type": "string", "format": "binary", "description": "Optional PNG or JPEG poster."},
-        "ask": {"type": "string", "description": "JSON-encoded structured ask, with questions and optional who."}})
-    return {"requestBody": {"required": True, "content": {
-        "application/json": {"schema": schema}, "multipart/form-data": {"schema": multipart}}}}
+    multipart = {
+        **schema,
+        "required": ["file"],
+        "properties": {
+            key: value for key, value in schema["properties"].items() if key not in ("text", "content_base64", "ask")
+        },
+    }
+    multipart["properties"].update(
+        {
+            "file": {
+                "type": "string",
+                "format": "binary",
+                "description": "At most TICO_UPLOAD_MAX_BYTES (2 GiB by default).",
+            },
+            "poster": {"type": "string", "format": "binary", "description": "Optional PNG or JPEG poster."},
+            "ask": {"type": "string", "description": "JSON-encoded structured ask, with questions and optional who."},
+        }
+    )
+    return {
+        "requestBody": {
+            "required": True,
+            "content": {"application/json": {"schema": schema}, "multipart/form-data": {"schema": multipart}},
+        }
+    }
 
 
 def upload_contract(model):
     """Document the same strict fields the bounded multipart parser validates."""
     schema = model.model_json_schema()
     definitions = schema.pop("$defs", {})
+
     def inline(value):
         if isinstance(value, dict):
             if value.get("$ref", "").startswith("#/$defs/"):
@@ -93,19 +111,32 @@ def upload_contract(model):
         if isinstance(value, list):
             return [inline(item) for item in value]
         return value
+
     schema = inline(schema)
     json_schema = json.loads(json.dumps(schema))
     for name in ("refs", "acceptance_criteria"):
         if name in schema["properties"]:
             schema["properties"][name] = {"type": "string", "description": "JSON-encoded " + name}
-    schema["properties"]["files"] = {"type": "array", "maxItems": 10,
+    schema["properties"]["files"] = {
+        "type": "array",
+        "maxItems": 10,
         "items": {"type": "string", "format": "binary"},
-        "description": "At most 10 MB per file; entire request at most 20 MB. Files are untrusted, private source material."}
-    return {"parameters": [{"name": "Idempotency-Key", "in": "header", "required": True,
-                            "schema": {"type": "string", "minLength": 1, "maxLength": 200}}],
-            "requestBody": {"required": True, "content": {
-                "multipart/form-data": {"schema": schema},
-                "application/json": {"schema": json_schema}}}}
+        "description": "At most 10 MB per file; entire request at most 20 MB. Files are untrusted, private source material.",
+    }
+    return {
+        "parameters": [
+            {
+                "name": "Idempotency-Key",
+                "in": "header",
+                "required": True,
+                "schema": {"type": "string", "minLength": 1, "maxLength": 200},
+            }
+        ],
+        "requestBody": {
+            "required": True,
+            "content": {"multipart/form-data": {"schema": schema}, "application/json": {"schema": json_schema}},
+        },
+    }
 
 
 def calendar(value):
@@ -133,13 +164,16 @@ def replay_upload(store, request, payload):
     The final mutation checks again under its write lock to handle concurrent retries.
     """
     from .auth import validate_identity
+
     who = request.state.identity
     principal = who.actor + (":" + who.attempt_id if who.role == "bot" else "")
     key = upload_key(request)
     with store.read() as c:
         validate_identity(c, who)
-        row = c.execute("SELECT request_hash,response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
-                        (principal, request.url.path, key)).fetchone()
+        row = c.execute(
+            "SELECT request_hash,response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
+            (principal, request.url.path, key),
+        ).fetchone()
     if row is None:
         return None
     if row["request_hash"] != request_digest(encode(payload)):
@@ -162,11 +196,14 @@ async def form(request, model, blobs, store, admit=None):
     upload_key(request)
     raw = await request.body()
     content_type = request.headers.get("content-type", "application/json")
+
     def decode():
         uploads = []
         try:
             if content_type.startswith("multipart/form-data"):
-                message = BytesParser(policy=HTTP).parsebytes(b"Content-Type: " + content_type.encode() + b"\r\n\r\n" + raw)
+                message = BytesParser(policy=HTTP).parsebytes(
+                    b"Content-Type: " + content_type.encode() + b"\r\n\r\n" + raw
+                )
                 if not message.is_multipart() or message.defects:
                     raise ValueError("Malformed multipart body")
                 fields = {}
@@ -184,8 +221,17 @@ async def form(request, model, blobs, store, admit=None):
                         raise ValueError("Duplicate or unnamed form field")
                     else:
                         fields[name] = data.decode("utf-8")
-                for field in ("calendar", "refs", "acceptance_criteria", "participants", "context", "titles",
-                              "labels", "links", "page"):
+                for field in (
+                    "calendar",
+                    "refs",
+                    "acceptance_criteria",
+                    "participants",
+                    "context",
+                    "titles",
+                    "labels",
+                    "links",
+                    "page",
+                ):
                     if field in fields:
                         fields[field] = json.loads(fields[field])
             else:
@@ -194,13 +240,22 @@ async def form(request, model, blobs, store, admit=None):
         except ValidationError as exc:
             first = exc.errors()[0]
             where = ".".join(str(part) for part in first["loc"])
-            raise Problem("validation", f"Invalid request fields or attachments ({where}: {first['msg']})", 422) from exc
+            raise Problem(
+                "validation", f"Invalid request fields or attachments ({where}: {first['msg']})", 422
+            ) from exc
         except (ValueError, UnicodeError) as exc:
             raise Problem("validation", "Invalid request fields or attachments", 422) from exc
-        prepared = [{"name": upload["name"], "size": len(upload["data"]),
-                     "content_type": upload["content_type"], "digest": hashlib.sha256(upload["data"]).hexdigest()}
-                    for upload in uploads]
+        prepared = [
+            {
+                "name": upload["name"],
+                "size": len(upload["data"]),
+                "content_type": upload["content_type"],
+                "digest": hashlib.sha256(upload["data"]).hexdigest(),
+            }
+            for upload in uploads
+        ]
         return body, uploads, prepared
+
     body, uploads, prepared = await asyncio.to_thread(decode)
     if await asyncio.to_thread(replay_upload, store, request, {**body.model_dump(), "uploads": prepared}) is None:
         if admit is not None:
@@ -217,16 +272,25 @@ def control(c, rid):
 
 def save(c, meta, *, transcript=None, notes=None, readable=None):
     old = MS.get(meta["id"], c)
-    MS.snapshot(meta, transcript if transcript is not None else (old or {}).get("transcript_original", ""),
-                notes if notes is not None else (old or {}).get("notes", ""), conn=c, readable=readable)
+    MS.snapshot(
+        meta,
+        transcript if transcript is not None else (old or {}).get("transcript_original", ""),
+        notes if notes is not None else (old or {}).get("notes", ""),
+        conn=c,
+        readable=readable,
+    )
     control(c, meta["id"])
     from . import meeting_audience
+
     meeting_audience.revoke_saved(c, meta["id"])
     # Typed notes need version history too, including intentionally empty edits.
-    c.execute("INSERT OR IGNORE INTO meeting_versions(meeting_id,content_hash,metadata,"
-              "transcript_original,transcript_readable,notes,created_at) "
-              "SELECT id,content_hash,metadata,transcript_original,transcript_readable,notes,updated_at "
-              "FROM meetings WHERE id=?", (meta["id"],))
+    c.execute(
+        "INSERT OR IGNORE INTO meeting_versions(meeting_id,content_hash,metadata,"
+        "transcript_original,transcript_readable,notes,created_at) "
+        "SELECT id,content_hash,metadata,transcript_original,transcript_readable,notes,updated_at "
+        "FROM meetings WHERE id=?",
+        (meta["id"],),
+    )
 
 
 def may_write(who, record):
@@ -235,8 +299,9 @@ def may_write(who, record):
         return MS.filed_for(record, who)
     # A meeting saved for its participants only is the recorder's, not the company owner's too.
     owner = who.role == "owner" and effective_audience(record["metadata"]) != "participants"
-    return owner or (who.role in ("human", "owner") and bool(who.email)
-                     and record["owner"].lower() == who.email.lower())
+    return owner or (
+        who.role in ("human", "owner") and bool(who.email) and record["owner"].lower() == who.email.lower()
+    )
 
 
 def effective_audience(meta):
@@ -264,14 +329,17 @@ def shared_meeting(record, who):
         return bool(email) and email in {str(a).strip().lower() for a in meta.get("audience_emails") or []}
     if audience == "team":
         return True
-    attendees = [*((meta.get("calendar") or {}).get("attendees") or []),
-                 *(p.get("email", "") for p in meta.get("participants") or [] if isinstance(p, dict))]
+    attendees = [
+        *((meta.get("calendar") or {}).get("attendees") or []),
+        *(p.get("email", "") for p in meta.get("participants") or [] if isinstance(p, dict)),
+    ]
     return bool(email) and any(str(a).strip().lower() == email for a in attendees)
 
 
 def authorized(c, who, rid, *, include_deleted=False, write=False):
     if who.role == "bot" and not write:
         from .context_search import readable
+
         return readable(c, who, rid)
     record = MS.get(rid, c)
     if not record:
@@ -294,28 +362,50 @@ def view(c, who, rid, *, auth, include_transcripts=False):
     state = c.execute("SELECT * FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
     delivery = record["delivery"]
     if delivery and delivery["task_id"]:
-        meta["sent"] = {"task": delivery["task_id"], "bot": delivery["destination"], "sent_by": delivery["requested_by"]}
-    result = {**meta, "notes": record["notes"], "transcript_readable": record["transcript_readable"],
-              "meeting_context": MS.context(record), "delivery": delivery,
-              "version": state["version"] if state else 1, "turns": meta.get("turns", []),
-              "can_edit": may_write(who, record)}
+        meta["sent"] = {
+            "task": delivery["task_id"],
+            "bot": delivery["destination"],
+            "sent_by": delivery["requested_by"],
+        }
+    result = {
+        **meta,
+        "notes": record["notes"],
+        "transcript_readable": record["transcript_readable"],
+        "meeting_context": MS.context(record),
+        "delivery": delivery,
+        "version": state["version"] if state else 1,
+        "turns": meta.get("turns", []),
+        "can_edit": may_write(who, record),
+    }
     result["outcome"] = note_outcomes.outcome(c, result, who.actor, who.role == "owner")
     result["outbox"] = outbox(c, rid, who, auth)
     # The live meeting it was filed from holds its chat and attached bots; that read keeps the live meeting's own rules.
-    live = c.execute("SELECT id FROM live_meetings WHERE imported_meeting_id=? AND discarded_at IS NULL", (rid,)).fetchone()
+    live = c.execute(
+        "SELECT id FROM live_meetings WHERE imported_meeting_id=? AND discarded_at IS NULL", (rid,)
+    ).fetchone()
     result["live_meeting_id"] = live["id"] if live else None
     if include_transcripts:
-        result["transcript_sources"] = [{"id": row["id"], "source": row["source"],
-            "resource_type": row["resource_type"], "transcript_index": row["transcript_index"],
-            "source_updated_at": row["source_updated_at"], "text": row["transcript_text"],
-            "turns": json.loads(row["turns"]),
-            "summary": row["summary_text"],
-            "primary": row["content_hash"] == meta.get("transcript_import_hash")}
-            for row in c.execute("SELECT t.* FROM recording_transcripts t WHERE t.meeting_id=? "
-                                 "AND NOT EXISTS(SELECT 1 FROM recording_transcripts newer "
-                                 "WHERE newer.source=t.source AND newer.resource_type=t.resource_type "
-                                 "AND newer.external_id=t.external_id AND newer.transcript_index=t.transcript_index "
-                                 "AND newer.id>t.id) ORDER BY t.id", (rid,))]
+        result["transcript_sources"] = [
+            {
+                "id": row["id"],
+                "source": row["source"],
+                "resource_type": row["resource_type"],
+                "transcript_index": row["transcript_index"],
+                "source_updated_at": row["source_updated_at"],
+                "text": row["transcript_text"],
+                "turns": json.loads(row["turns"]),
+                "summary": row["summary_text"],
+                "primary": row["content_hash"] == meta.get("transcript_import_hash"),
+            }
+            for row in c.execute(
+                "SELECT t.* FROM recording_transcripts t WHERE t.meeting_id=? "
+                "AND NOT EXISTS(SELECT 1 FROM recording_transcripts newer "
+                "WHERE newer.source=t.source AND newer.resource_type=t.resource_type "
+                "AND newer.external_id=t.external_id AND newer.transcript_index=t.transcript_index "
+                "AND newer.id>t.id) ORDER BY t.id",
+                (rid,),
+            )
+        ]
     return result
 
 
@@ -323,16 +413,26 @@ def outbox(c, rid, who, auth):
     """Doc updates, tasks and feature requests still on this meeting — the structured outcomes."""
     groups = {"doc": [], "task": [], "feature": []}
     try:
-        rows = c.execute("SELECT * FROM meeting_items WHERE meeting_id=? "
-                         "AND status!='dismissed' AND section IN ('doc','task','feature') "
-                         "ORDER BY created_at", (rid,)).fetchall()
+        rows = c.execute(
+            "SELECT * FROM meeting_items WHERE meeting_id=? "
+            "AND status!='dismissed' AND section IN ('doc','task','feature') "
+            "ORDER BY created_at",
+            (rid,),
+        ).fetchall()
     except Exception:
         return groups
     for row in rows:
-        groups[row["section"]].append({"id": row["id"], "text": row["text"], "status": row["status"],
-                                       "result_ref": row["result_ref"],
-                                       **({"proposed_task_id": row["proposed_task_id"]} if "proposed_task_id" in row.keys() else {})})
+        groups[row["section"]].append(
+            {
+                "id": row["id"],
+                "text": row["text"],
+                "status": row["status"],
+                "result_ref": row["result_ref"],
+                **({"proposed_task_id": row["proposed_task_id"]} if "proposed_task_id" in row.keys() else {}),
+            }
+        )
     from .meeting_items import redact
+
     return redact(c, who, auth, groups)
 
 
@@ -351,11 +451,26 @@ def new_note(c, who, body, uploads):
     rid = H.parse_ts(H.now()).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
     while c.execute("SELECT 1 FROM meetings WHERE id=?", (rid,)).fetchone():
         rid = H.parse_ts(H.now()).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
-    meta = {"id": rid, "kind": "note", "title": body.title or body.text.splitlines()[0][:200],
-            "owner": who.email, "uploaded_by": who.email, "started": H.now(), "ended": H.now(),
-            "duration_ms": 0, "note": body.text, "preview": body.text[:160], "status": "done",
-            "sent": None, "speakers": [], "attachments": [], "calendar": calendar(body.calendar),
-            "private": False, "warning": None, "error": None}
+    meta = {
+        "id": rid,
+        "kind": "note",
+        "title": body.title or body.text.splitlines()[0][:200],
+        "owner": who.email,
+        "uploaded_by": who.email,
+        "started": H.now(),
+        "ended": H.now(),
+        "duration_ms": 0,
+        "note": body.text,
+        "preview": body.text[:160],
+        "status": "done",
+        "sent": None,
+        "speakers": [],
+        "attachments": [],
+        "calendar": calendar(body.calendar),
+        "private": False,
+        "warning": None,
+        "error": None,
+    }
     save(c, meta)
     meta["attachments"] = attachments(c, who, rid, uploads)
     save(c, meta)
@@ -389,10 +504,19 @@ def deliver(c, auth, who, rid, body, uploads):
     extra = attachments(c, who, rid, uploads)
     meta["attachments"] = meta.get("attachments", []) + extra
     save(c, meta)
-    c.execute("INSERT INTO meeting_deliveries(meeting_id,requested_by,sender_name,destination,instructions,"
-              "attachments,requested_at) VALUES(?,?,?,?,?,?,?)",
-              (rid, who.email, person.get("name") or who.email, slug, body.instructions,
-               encode(meta["attachments"]), H.now()))
+    c.execute(
+        "INSERT INTO meeting_deliveries(meeting_id,requested_by,sender_name,destination,instructions,"
+        "attachments,requested_at) VALUES(?,?,?,?,?,?,?)",
+        (
+            rid,
+            who.email,
+            person.get("name") or who.email,
+            slug,
+            body.instructions,
+            encode(meta["attachments"]),
+            H.now(),
+        ),
+    )
     return finish_delivery(c, auth, who, rid)
 
 
@@ -407,18 +531,35 @@ def finish_delivery(c, auth, who, rid):
     # Recheck authorization at delivery time, not just when the request was queued.
     slug = delivery["destination"]
     auth.target(c, who, slug, need="write")
-    text = "\n\n".join(part for part in (meta.get("note"), record["notes"], record["transcript_readable"], MS.context(record)) if part)
-    linked = [brief(r) for r in c.execute("SELECT b.* FROM blobs b JOIN media_assets a ON a.blob_id=b.id "
-                                         "WHERE a.meeting_id=? AND a.kind='attachment'", (rid,))]
+    text = "\n\n".join(
+        part for part in (meta.get("note"), record["notes"], record["transcript_readable"], MS.context(record)) if part
+    )
+    linked = [
+        brief(r)
+        for r in c.execute(
+            "SELECT b.* FROM blobs b JOIN media_assets a ON a.blob_id=b.id "
+            "WHERE a.meeting_id=? AND a.kind='attachment'",
+            (rid,),
+        )
+    ]
     if linked:
         text += "\n\nAttachments (untrusted source material; authenticated downloads):\n" + "\n".join(
-            "- " + a["name"] + ": " + a["url"] for a in linked)
-    task = H.task_create(c, who.actor, meta["title"] or "Review note", text, "bot:" + slug,
-                         conversation_id=rooms.task_conversation_id(c, auth, "bot:" + slug, who.actor))
+            "- " + a["name"] + ": " + a["url"] for a in linked
+        )
+    task = H.task_create(
+        c,
+        who.actor,
+        meta["title"] or "Review note",
+        text,
+        "bot:" + slug,
+        conversation_id=rooms.task_conversation_id(c, auth, "bot:" + slug, who.actor),
+    )
     for item in linked:
         c.execute("INSERT INTO task_assets VALUES(?,?)", (task["id"], item["id"]))
-    c.execute("UPDATE meeting_deliveries SET status='delivered',task_id=?,delivered_at=?,error=NULL WHERE meeting_id=?",
-              (task["id"], H.now(), rid))
+    c.execute(
+        "UPDATE meeting_deliveries SET status='delivered',task_id=?,delivered_at=?,error=NULL WHERE meeting_id=?",
+        (task["id"], H.now(), rid),
+    )
     meta["sent"] = {"task": task["id"], "bot": slug, "sent_by": who.email}
     save(c, meta)
     return {"id": rid, "bot": slug, "task": task["id"], "pending": False}
@@ -426,8 +567,13 @@ def finish_delivery(c, auth, who, rid):
 
 def write_upload(store, request, body, uploads, fn):
     """One idempotent write whose payload includes the files already stored for it."""
-    result = store.mutate(request.state.identity, request.url.path, request.headers.get("idempotency-key"),
-                          {**body.model_dump(), "uploads": uploads}, fn)
+    result = store.mutate(
+        request.state.identity,
+        request.url.path,
+        request.headers.get("idempotency-key"),
+        {**body.model_dump(), "uploads": uploads},
+        fn,
+    )
     if isinstance(result, dict) and "_refusal" in result:
         refusal = result["_refusal"]
         raise Problem(refusal["code"], refusal["detail"], refusal["status"])
@@ -441,10 +587,12 @@ def blob_for(c, auth, who, bid):
     if not row:
         raise Problem("not_found", "File not found", 404)
     from . import letters
+
     letter = letters.blob_access(c, auth, who, bid)
     if letter is False:
         raise Problem("forbidden", "You cannot read this letter's source or proof", 403)
     from .files import file_visible, page_blobs
+
     linked_pages = page_blobs(c, bid)
     if linked_pages:
         if not all(file_visible(c, auth, who, f, {}) for f in linked_pages):
@@ -452,10 +600,12 @@ def blob_for(c, auth, who, bid):
     if letter is not None or linked_pages:
         return row
     from . import task_privacy as privacy
+
     if not privacy.blob_readable(c, privacy.actor(who), bid):
         raise Problem("not_found", "File not found", 404)
     # Scan grants are checked for the represented person and the actual bot independently.
     from . import postal_mail
+
     scan = postal_mail.scan_access(c, auth, who, bid)
     if scan is not None:
         if not scan:
@@ -473,7 +623,9 @@ def blob_for(c, auth, who, bid):
                 break
             except Problem:
                 pass
-        for linked in c.execute("SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id WHERE a.blob_id=?", (bid,)):
+        for linked in c.execute(
+            "SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id WHERE a.blob_id=?", (bid,)
+        ):
             try:
                 auth.conversation(c, who, linked["conversation_id"])
                 privacy.require_message(c, who, dict(linked))
@@ -493,16 +645,29 @@ def blob_for(c, auth, who, bid):
     return row
 
 
-def install_media(app, store, auth, mutate, send_message, task_create, review_preflight, rule_check=None,
-                  chat_checks=None, chat_write=None):
+def install_media(
+    app,
+    store,
+    auth,
+    mutate,
+    send_message,
+    task_create,
+    review_preflight,
+    rule_check=None,
+    chat_checks=None,
+    chat_write=None,
+):
     from . import task_privacy as privacy
+
     blobs = Blobs(store.settings)
     app.state.blobs = blobs
-    store.blobs = blobs                 # what connections carry for the company page's logo (store.Store._take)
+    store.blobs = blobs  # what connections carry for the company page's logo (store.Store._take)
     from .file_metadata import Metadata
+
     app.state.file_metadata = Metadata(store, blobs)
 
     from .files import install_files
+
     files = install_files(app, store, auth, blobs, mutate)
 
     def write(request, body, uploads, fn):
@@ -519,38 +684,64 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         for index, (item, upload) in enumerate(zip(items, uploads)):
             cid = message["conversation_id"]
             row, _, _ = files.add_version(
-                c, bot=bot, actor=who.actor, scope="conversation:" + cid, task=None, conversation=cid, attempt="",
-                identity="chat-file:" + item["id"], title=item["name"], name=item["name"],
-                mime=item["content_type"], blob_id=item["id"], digest=upload["digest"], size=item["size"])
+                c,
+                bot=bot,
+                actor=who.actor,
+                scope="conversation:" + cid,
+                task=None,
+                conversation=cid,
+                attempt="",
+                identity="chat-file:" + item["id"],
+                title=item["name"],
+                name=item["name"],
+                mime=item["content_type"],
+                blob_id=item["id"],
+                digest=upload["digest"],
+                size=item["size"],
+            )
             title = titles[index] if index < len(titles) else ""
-            item.update(file_id=row["id"], version=row["current_version"], title=title or item["name"],
-                        kind=visuals.kind_of(item["content_type"], item["size"], visuals._head(blobs, upload["digest"])))
+            item.update(
+                file_id=row["id"],
+                version=row["current_version"],
+                title=title or item["name"],
+                kind=visuals.kind_of(item["content_type"], item["size"], visuals._head(blobs, upload["digest"])),
+            )
         if items:
             refs = {**message["refs"], "attachments": items}
             c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
         return visuals.for_reader(app, store.settings, c, who, [H.message(c, message["id"])])[0]
 
     # POST /api/v2/uploads/assistant/messages uses this too (a person's own Assistant chat).
-    app.state.uploads = SimpleNamespace(form=lambda request, model, admit=None: form(request, model, blobs, store, admit),
-                                        attach=chat_uploads,
-                                        write=write)
+    app.state.uploads = SimpleNamespace(
+        form=lambda request, model, admit=None: form(request, model, blobs, store, admit),
+        attach=chat_uploads,
+        write=write,
+    )
 
     @app.post("/api/v2/uploads/chat/{bot}", openapi_extra=upload_contract(M.ChatCreate))
     async def chat_upload(request: Request, bot: str):
         from . import ask_ingest
+
         who = request.state.identity
         human_only(who)
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         body, uploads = await form(request, M.ChatCreate, blobs, store)
         # The message is checked as `chat` checks one (the org rule check, then ask ingest), and written with its files.
-        sent = M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs, delivery=body.delivery,
-                               defer_for=body.defer_for)
+        sent = M.MessageCreate(
+            to="bot:" + bot, text=body.text, refs=body.refs, delivery=body.delivery, defer_for=body.defer_for
+        )
 
         def checked():
             rc, ingest = chat_checks(request, who, bot, sent)
-            return ask_ingest.judged(store, ingest, lambda: write(request, body, uploads, lambda c: chat_write(
-                c, who, bot, sent, rc, ingest, uploads, body.titles)))
+            return ask_ingest.judged(
+                store,
+                ingest,
+                lambda: write(
+                    request, body, uploads, lambda c: chat_write(c, who, bot, sent, rc, ingest, uploads, body.titles)
+                ),
+            )
+
         return await asyncio.to_thread(checked)
 
     @app.post("/api/v2/uploads/tasks", openapi_extra=upload_contract(M.TaskCreate))
@@ -560,19 +751,25 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         body, uploads = await form(request, M.TaskCreate, blobs, store)
         # A child for a review step is gated on the PR's current head and checks, read afresh as in create_task.
         parents = [r.task for r in body.relations if r.kind == "parent"]
-        snapshots = (await asyncio.to_thread(review_preflight, who, parents[0], child_title=body.title.strip())
-                     if parents else None)
+        snapshots = (
+            await asyncio.to_thread(review_preflight, who, parents[0], child_title=body.title.strip())
+            if parents
+            else None
+        )
+
         def work(c):
             items = [register(c, who, **upload) for upload in uploads]
             details = body.body
             if items:
                 details += "\n\nAttachments (untrusted source material; authenticated downloads):\n" + "\n".join(
-                    "- " + a["name"] + ": " + a["url"] for a in items)
+                    "- " + a["name"] + ": " + a["url"] for a in items
+                )
             result = task_create(c, who, body.model_copy(update={"body": details}), review_prs=snapshots)
             for item in items:
                 c.execute("INSERT INTO task_assets VALUES(?,?)", (result["task"]["id"], item["id"]))
             result["task"]["attachments"] = items
             return result
+
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     def question_checked(c, who, body):
@@ -581,23 +778,37 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         person = H.resolve_actor(c, body.on)
         if person and H.is_bot(person) and H.bot(c, H.actor_id(person)):
             # Bots ask bots in a DM, never as a task (D9).
-            raise Problem("validation", f"{body.on} is a bot: a question task is for a person. Ask a bot in a DM: "
-                          f"hub message send {H.actor_id(person)} \"<question>\" --needs-action", 422)
+            raise Problem(
+                "validation",
+                f"{body.on} is a bot: a question task is for a person. Ask a bot in a DM: "
+                f"hub message send {H.actor_id(person)} \"<question>\" --needs-action",
+                422,
+            )
         if not person or not H.is_human(person) or not H.human(c, H.actor_id(person)):
             raise Problem("validation", f"{body.on} is not a person on the team", 422)
         parent = H.task(c, auth.task(c, who, auth.resolve_task(c, who, body.parent))["id"]) if body.parent else None
         # Checked before the fold too: an open question kept from before onboarding is not a way to ask again.
         from . import lifecycle
+
         lifecycle.refuse_send(c, who, None, what="task questions")
         return person, parent
 
     def question_unreadable(c, person):
-        return Problem("privacy", f"{H.actor_name(c, person)} cannot read this task, so they could not answer it: "
-                       "ask someone who can read your work and its parent task", 403)
+        return Problem(
+            "privacy",
+            f"{H.actor_name(c, person)} cannot read this task, so they could not answer it: "
+            "ask someone who can read your work and its parent task",
+            403,
+        )
 
     def question_private(c, who, body, parent):
-        return bool(body.private or privacy.private_execution(c, who) or H.private_tasks_default(c, who.actor)
-                    or parent and H.task_private(c, parent))
+        return bool(
+            body.private
+            or privacy.private_execution(c, who)
+            or H.private_tasks_default(c, who.actor)
+            or parent
+            and H.task_private(c, parent)
+        )
 
     def question_readable_by(c, who, person, private, parent):
         """The person reads the task a question makes, by every rule a read checks: a company-visible one by the bot's
@@ -609,9 +820,16 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         if private and not privacy.question_party(c, who, person, parent, reach):
             raise question_unreadable(c, person)
         try:
-            auth.task_row(c, auth.identity_for_actor(c, person),
-                          {"id": "", "owner_id": who.actor, "requester_id": person if private else who.actor,
-                           "private": int(private)})
+            auth.task_row(
+                c,
+                auth.identity_for_actor(c, person),
+                {
+                    "id": "",
+                    "owner_id": who.actor,
+                    "requester_id": person if private else who.actor,
+                    "private": int(private),
+                },
+            )
         except Problem as exc:
             raise question_unreadable(c, person) from exc
         return reach
@@ -622,14 +840,23 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         happens with no answer; the files under review and the picks they make, `review_text`), never a file's
         bytes. The hold keeps this same text for a later recheck."""
         question = body.question.strip()
-        parts = [("Title", body.title or question), ("Body", body.body), ("Question", question),
-                 ("Why", body.why.strip())]
+        parts = [
+            ("Title", body.title or question),
+            ("Body", body.body),
+            ("Question", question),
+            ("Why", body.why.strip()),
+        ]
         for option in body.options:
-            parts += [("Option", option.label), ("Description", option.description), ("Then", option.then),
-                      ("File", option.file.name if option.file else "")]
+            parts += [
+                ("Option", option.label),
+                ("Description", option.description),
+                ("Then", option.then),
+                ("File", option.file.name if option.file else ""),
+            ]
         if body.spend:
-            parts.append(("Spend", f"{body.spend.label}: {body.spend.amount} for {body.spend.what} "
-                                   f"({body.spend.account})"))
+            parts.append(
+                ("Spend", f"{body.spend.label}: {body.spend.amount} for {body.spend.what} ({body.spend.account})")
+            )
         if body.if_no_answer:
             parts.append(("If no answer", body.if_no_answer.do))
         return "\n\n".join([*(f"{label}: {value}" for label, value in parts if value), *filter(None, [review_text])])
@@ -638,10 +865,13 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         """What a review question's card adds, as the org rule check reads it: each file's title and name (its chip),
         and in a pick the options the files make (file_reviews.options: a label from each title, what happens)."""
         from . import file_reviews
+
         if not review:
             return ""
-        lines = [f"File: {a['title'] or a['name']}" + (f" ({a['name']})" if a["title"] and a["name"] != a["title"]
-                                                        else "") for a in attachments]
+        lines = [
+            f"File: {a['title'] or a['name']}" + (f" ({a['name']})" if a["title"] and a["name"] != a["title"] else "")
+            for a in attachments
+        ]
         if body.pick:
             picks = file_reviews.options([dict(e) for e in review], attachments, True, body.options)
             lines += [f"Option: {o.label}\n\nThen: {o.then}" for o in picks]
@@ -658,6 +888,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         files as the write resolves them), else the bot's, else Yes / No. A review the write would refuse keeps the
         bot's options: the write refuses it as it resolves."""
         from . import file_reviews
+
         if body.review:
             with store.read() as c:
                 try:
@@ -672,12 +903,26 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         """Ask ingest's preflight of a task question (backend/ask_ingest.py), outside the write: the question as the
         person sees it, with the options it shows and the body the task is filed with."""
         from . import ask_ingest
+
         question = body.question.strip()
         options = question_shown_options(who, body)
-        asked = [{"question": question, "why": body.why,
-                  "options": [o.model_dump(include={"label", "description", "then", "recommended"}) for o in options]}]
-        return ask_ingest.preflight(store, app.state.judge, who, body.on, body.title or question, body.body or "",
-                                    kind="task_question", asked=asked)
+        asked = [
+            {
+                "question": question,
+                "why": body.why,
+                "options": [o.model_dump(include={"label", "description", "then", "recommended"}) for o in options],
+            }
+        ]
+        return ask_ingest.preflight(
+            store,
+            app.state.judge,
+            who,
+            body.on,
+            body.title or question,
+            body.body or "",
+            kind="task_question",
+            asked=asked,
+        )
 
     def question_replay(body, option_files, stored, review_seal=None):
         """What Send anyway needs to ask a held question again: the request without its option files' bytes (they are
@@ -687,8 +932,12 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         for option in data.get("options") or []:
             if option.get("file"):
                 option["file"]["content_base64"] = "-"
-        return {"body": data, "files": [list(f) if f else None for f in option_files], "stored": list(stored),
-                **({"review": review_seal} if body.review else {})}
+        return {
+            "body": data,
+            "files": [list(f) if f else None for f in option_files],
+            "stored": list(stored),
+            **({"review": review_seal} if body.review else {}),
+        }
 
     def question_write(c, who, body, option_files, stored, ingest=None, snapshots=None, rc=None, review_checked=None):
         """One task question, in its write, as the route asks it and Send anyway replays it: a question task the person
@@ -699,10 +948,15 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         (a file renamed, a new current version), the question is refused as `changed`, never asked unchecked."""
         from . import ask_ingest, file_reviews, org_rule_check
         from . import question_tasks as QT
+
         options = body.options or [M.QuestionChoice(label="Yes"), M.QuestionChoice(label="No")]
         question = body.question.strip()
-        asked = {"question": question, "why": body.why, "multi": body.multi,
-                 "options": [o.model_dump(include={"label", "description", "then", "recommended"}) for o in body.options]}
+        asked = {
+            "question": question,
+            "why": body.why,
+            "multi": body.multi,
+            "options": [o.model_dump(include={"label", "description", "then", "recommended"}) for o in body.options],
+        }
         title = body.title or question
         person, parent = question_checked(c, who, body)
         private = question_private(c, who, body, parent)
@@ -715,10 +969,10 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         review_text = question_review_text(review, attachments, body)
         review_seal = question_review_digest(review_text, review) if body.review else None
         if review_checked is not None and review_seal != review_checked:
-            raise Problem("changed", "The files under review changed since the question was checked; ask it again",
-                          409)
-        rule = org_rule_check.apply(c, rc, question_text(body, review_text),
-                                    question_replay(body, option_files, stored, review_seal))
+            raise Problem("changed", "The files under review changed since the question was checked; ask it again", 409)
+        rule = org_rule_check.apply(
+            c, rc, question_text(body, review_text), question_replay(body, option_files, stored, review_seal)
+        )
         if rule and rule.get("held"):
             if ingest:
                 ask_ingest.skipped(c, ingest, "held")
@@ -726,28 +980,43 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         said_text = org_rule_check.warned_text(rule, question) if rule else question
         topic = H.question_topic(body.topic)
         # One open question task per topic: asked again while the first waits, it joins that one (question_tasks.fold).
-        found = QT.open_for(c, who.actor, person, parent=parent["id"] if parent else None, topic=topic,
-                            private=private)
+        found = QT.open_for(c, who.actor, person, parent=parent["id"] if parent else None, topic=topic, private=private)
         made = None
         if found:
             tid = found["id"]
             if ingest:
-                ask_ingest.skipped(c, ingest, "folded")     # the question repeats one open on the person: it joins it
+                ask_ingest.skipped(c, ingest, "folded")  # the question repeats one open on the person: it joins it
         else:
             # The person's own task, under the bot's task when there is one. It counts toward task caps and meets ask
             # ingest as any task for a person does (D11): merged into an open item, it stays the bot's, with no
             # question on it. The verdict, already applied, rides into the create: a warning line goes on its body.
-            made = task_create(c, who, M.TaskCreate(
-                title=title, body=body.body or question, owner=person, private=body.private,
-                relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []), lint=False,
-                review_prs=snapshots, ingest=ingest if ask_ingest.matches(ingest, person) else None,
-                same=file_reviews.same_versions(review) if review else None, rule=org_rule_check.decided(rule))
+            made = task_create(
+                c,
+                who,
+                M.TaskCreate(
+                    title=title,
+                    body=body.body or question,
+                    owner=person,
+                    private=body.private,
+                    relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else [],
+                ),
+                lint=False,
+                review_prs=snapshots,
+                ingest=ingest if ask_ingest.matches(ingest, person) else None,
+                same=file_reviews.same_versions(review) if review else None,
+                rule=org_rule_check.decided(rule),
+            )
             if ingest and not ask_ingest.matches(ingest, person):
                 ask_ingest.skipped(c, ingest, "target")
             tid = made["task"]["id"]
             if H.task(c, tid)["owner_id"] != person:
-                return {"task": H.task(c, tid), "folded": False, "question": None,
-                        **({"ingest": made["ingest"]} if made.get("ingest") else {}), **org_rule_check.answer(rule)}
+                return {
+                    "task": H.task(c, tid),
+                    "folded": False,
+                    "question": None,
+                    **({"ingest": made["ingest"]} if made.get("ingest") else {}),
+                    **org_rule_check.answer(rule),
+                }
         # The person must be able to read the task by every rule a read checks, or the question would reach
         # them (Slack, mail) while the task stays hidden from them.
         try:
@@ -757,17 +1026,23 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         picks, shown = options, asked
         if review:
             picks = file_reviews.options(review, attachments, body.pick, body.options)
-            shown = {**asked, "options": [o.model_dump(include={"label", "description", "then", "recommended"})
-                                          for o in picks]}
+            shown = {
+                **asked,
+                "options": [o.model_dump(include={"label", "description", "then", "recommended"}) for o in picks],
+            }
         spend = file_reviews.check_spend(body.spend, [o.label for o in picks])
         # The asking rules (hubdb.lint_question) on the question as the bot wrote it: no options is a Yes / No.
         H.require_plain_question(c, who.actor, person, [shown])
         choices, pad = [], [None] * len(picks)
-        for option, item, digest in zip(picks, (list(option_files) + pad)[:len(picks)],
-                                        (list(stored) + pad)[:len(picks)]):
-            choice = {"label": option.label, **({"description": option.description} if option.description else {}),
-                      **({"then": option.then} if option.then else {}),
-                      **({"recommended": True} if option.recommended else {})}
+        for option, item, digest in zip(
+            picks, (list(option_files) + pad)[: len(picks)], (list(stored) + pad)[: len(picks)]
+        ):
+            choice = {
+                "label": option.label,
+                **({"description": option.description} if option.description else {}),
+                **({"then": option.then} if option.then else {}),
+                **({"recommended": True} if option.recommended else {}),
+            }
             if item:
                 size, name, kind = item
                 blob = register(c, who, digest, size, name, kind)
@@ -779,9 +1054,28 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 choice["file"] = f"{fid}@{number}"
             choices.append(choice)
         from .task_review import check_ask
-        ask = check_ask(c, tid, M.ReviewAsk(questions=[M.ReviewQuestion(
-            id=QT.FIRST_ID, header="", question=question, why=body.why.strip(), options=choices,
-            multi=body.multi)], who=person, if_no_answer=body.if_no_answer), auth, who, lint=False)
+
+        ask = check_ask(
+            c,
+            tid,
+            M.ReviewAsk(
+                questions=[
+                    M.ReviewQuestion(
+                        id=QT.FIRST_ID,
+                        header="",
+                        question=question,
+                        why=body.why.strip(),
+                        options=choices,
+                        multi=body.multi,
+                    )
+                ],
+                who=person,
+                if_no_answer=body.if_no_answer,
+            ),
+            auth,
+            who,
+            lint=False,
+        )
         if rule and rule.get("warn"):
             # Every card (Needs you, Decide, the Ask panel, the task page) reads the structured question: the line
             # leads it there too. Set on the stored question, past the model's length cap, which the question as the
@@ -796,12 +1090,17 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                         if option["label"] in sources:
                             option["source"] = sources[option["label"]]
                 from .task_review import default_source
+
                 default_source(ask)
             ask["review"] = {"files": review, **({"pick": True} if body.pick else {})}
             ask["attachments"] = attachments
         if spend:
-            sources = [o["source"] for q in ask["questions"] for o in q["options"]
-                       if o["label"] == spend["label"] and o.get("source")]
+            sources = [
+                o["source"]
+                for q in ask["questions"]
+                for o in q["options"]
+                if o["label"] == spend["label"] and o.get("source")
+            ]
             if sources:
                 spend["source"] = sources
             ask["spend"] = spend
@@ -812,11 +1111,17 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             QT.store(c, tid, ask, topic)
             QT.file(c, who.actor, H.task(c, tid), parent)
         # An old ask to them on the same topic (before question tasks) gives way to this one: Needs you counts it once.
-        QT.supersede_legacy(c, who.actor, person, tid, parent=parent["id"] if parent else None, topic=topic,
-                            private=private)
+        QT.supersede_legacy(
+            c, who.actor, person, tid, parent=parent["id"] if parent else None, topic=topic, private=private
+        )
         card = H.task(c, tid)
-        return {"task": {**card, **QT.fields(card)}, "folded": bool(found), "question": QT.as_ask(card),
-                **({"ingest": made["ingest"]} if made and made.get("ingest") else {}), **org_rule_check.answer(rule)}
+        return {
+            "task": {**card, **QT.fields(card)},
+            "folded": bool(found),
+            "question": QT.as_ask(card),
+            **({"ingest": made["ingest"]} if made and made.get("ingest") else {}),
+            **org_rule_check.answer(rule),
+        }
 
     @app.post("/api/v2/task-questions")
     def task_question(request: Request, body: M.TaskQuestion):
@@ -831,6 +1136,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         first still waits on the person, it is folded into that one (`folded: true`) rather than filed again.
         The question is checked against the org rules before the write, as one output to the person asked."""
         from . import org_rule_check
+
         who = request.state.identity
         if who.role != "bot":
             raise Problem("identity", "A bot puts a question to a person this way; a person asks in a comment", 403)
@@ -852,8 +1158,12 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 raise Problem("validation", "Option files are at least one byte and at most 10 MB together", 422)
             decoded.append((data, option.file.name, guessed_type(option.file.name) or "application/octet-stream"))
         question = body.question.strip()
-        asked = {"question": question, "why": body.why, "multi": body.multi,
-                 "options": [o.model_dump(include={"label", "description", "then", "recommended"}) for o in body.options]}
+        asked = {
+            "question": question,
+            "why": body.why,
+            "multi": body.multi,
+            "options": [o.model_dump(include={"label", "description", "then", "recommended"}) for o in body.options],
+        }
         if body.topic is not None and not H.question_topic(body.topic):
             # A key given but empty once compared would silently mean "no topic" and join the task's unkeyed question.
             raise Problem("validation", "A question's topic needs at least one letter or digit", 422)
@@ -861,8 +1171,11 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             # One question, one card: asked from a run on one of the bot's own tasks, it is filed under that task,
             # which is blocked on it, rather than as a task on its own.
             with store.read() as c:
-                own = {t["id"] for t in (H.task(c, tid) for tid in privacy.attempt_tasks(c, who.attempt_id))
-                       if t and t["owner_id"] == who.actor and t["status"] in H.ACTIVE_STATUSES}
+                own = {
+                    t["id"]
+                    for t in (H.task(c, tid) for tid in privacy.attempt_tasks(c, who.attempt_id))
+                    if t and t["owner_id"] == who.actor and t["status"] in H.ACTIVE_STATUSES
+                }
             if len(own) == 1:
                 body = body.model_copy(update={"parent": own.pop()})
 
@@ -887,8 +1200,11 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         # The org rule check (backend/org_rule_check.py), outside the write as a new task's is: one output, to the
         # person asked. A held question skips ask ingest's call.
         review_text, review_seal = question_review_preflight(who, body) if rule_check else ("", None)
-        rc = rule_check(who, "task_question", question_text(body, review_text),
-                        lambda c: [H.resolve_actor(c, body.on)]) if rule_check else None
+        rc = (
+            rule_check(who, "task_question", question_text(body, review_text), lambda c: [H.resolve_actor(c, body.on)])
+            if rule_check
+            else None
+        )
         # Ask ingest (backend/ask_ingest.py): judged before the write. A refused question is
         # rolled back with its task, attachments and wait.
         with store.read() as c:
@@ -900,8 +1216,16 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         option_files = [(len(item[0]), item[1], item[2]) if item else None for item in decoded]
         checked = review_seal if rc and body.review else None
         from . import ask_ingest
-        result = ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: question_write(
-            c, who, body, option_files, stored, ingest, snapshots, rc, checked)))
+
+        result = ask_ingest.judged(
+            store,
+            ingest,
+            lambda: mutate(
+                request,
+                body,
+                lambda c: question_write(c, who, body, option_files, stored, ingest, snapshots, rc, checked),
+            ),
+        )
         app.state.file_metadata.wake.set()
         return result
 
@@ -910,6 +1234,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         its seal (question_review_digest); ("", None) when it has none. Files it cannot read seal as "", which no
         digest equals: the write refuses them as it resolves them, or as `changed` once they resolve unchecked."""
         from . import file_reviews
+
         if not body.review:
             return "", None
         with store.read() as c:
@@ -931,10 +1256,11 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         out = {"ingest": question_ingest(bot, body), "snapshots": None}
         if body.parent:
             try:
-                out["snapshots"] = review_preflight(bot, body.parent, child_title=(body.title or body.question.strip())
-                                                    .strip())
+                out["snapshots"] = review_preflight(
+                    bot, body.parent, child_title=(body.title or body.question.strip()).strip()
+                )
             except Problem:
-                pass                    # the write's own review gate refuses it, the hold kept
+                pass  # the write's own review gate refuses it, the hold kept
         return out
 
     from . import org_rule_check as rule_checks
@@ -947,12 +1273,18 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         body = M.TaskQuestion.model_validate(replay["body"])
         if body.review and not replay.get("review"):
             # Held without a seal of what its files showed: asking it would show files no check read.
-            raise Problem("changed", "The files under review changed since the question was checked; ask it again",
-                          409)
-        return question_write(c, bot, body,
-                              [tuple(f) if f else None for f in replay.get("files") or []], replay.get("stored") or [],
-                              prepared.get("ingest"), prepared.get("snapshots"), rule_checks.decided(gate),
-                              replay.get("review"))
+            raise Problem("changed", "The files under review changed since the question was checked; ask it again", 409)
+        return question_write(
+            c,
+            bot,
+            body,
+            [tuple(f) if f else None for f in replay.get("files") or []],
+            replay.get("stored") or [],
+            prepared.get("ingest"),
+            prepared.get("snapshots"),
+            rule_checks.decided(gate),
+            replay.get("review"),
+        )
 
     @app.get("/api/v2/tasks/{tid}/files")
     def task_files(request: Request, tid: str):
@@ -964,16 +1296,19 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     async def task_attach(request: Request, tid: str):
         who = request.state.identity
         from .task_review import comment_rights, edit_version, file_added
+
         def allowed():
             with store.read() as c:
                 found = auth.resolve_task(c, who, tid)
                 comment_rights(c, auth, who, found)
                 return found
+
         tid = await asyncio.to_thread(allowed)
         upload_key(request)
         poster = None
         if request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
             from .file_upload import parse
+
             fields, uploads, stack = await parse(request, store.settings.upload_max_bytes, blobs.directory)
             try:
                 upload = uploads["file"]
@@ -982,7 +1317,11 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                     fields["ask"] = json.loads(fields["ask"])
                 body = TaskFile.model_validate(fields)
                 supplied_type = upload["mime"].lower().split(";", 1)[0].strip()
-                content_type = guessed_type(body.name) or (supplied_type if re.fullmatch(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+", supplied_type) else "application/octet-stream")
+                content_type = guessed_type(body.name) or (
+                    supplied_type
+                    if re.fullmatch(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+", supplied_type)
+                    else "application/octet-stream"
+                )
                 size = upload["size"]
                 if who.role == "bot":
                     try:
@@ -993,15 +1332,25 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 if "poster" in uploads:
                     supplied = uploads["poster"]
                     from .file_metadata import validate_poster
+
                     poster_type = await asyncio.to_thread(validate_poster, supplied["stream"])
-                    poster = {"digest": supplied["digest"], "size": supplied["size"], "name": "poster", "content_type": poster_type}
+                    poster = {
+                        "digest": supplied["digest"],
+                        "size": supplied["size"],
+                        "name": "poster",
+                        "content_type": poster_type,
+                    }
                 receipt = {**body.model_dump(), "digest": digest, "size": size, "poster": poster}
-                replay = await asyncio.to_thread(replay_upload, store, request, {**body.model_dump(), "uploads": [receipt]})
+                replay = await asyncio.to_thread(
+                    replay_upload, store, request, {**body.model_dump(), "uploads": [receipt]}
+                )
                 if replay is not None:
                     return replay
                 await asyncio.to_thread(blobs.put_staged, upload["stream"], digest, size, content_type)
                 if poster:
-                    await asyncio.to_thread(blobs.put_staged, supplied["stream"], poster["digest"], supplied["size"], poster_type)
+                    await asyncio.to_thread(
+                        blobs.put_staged, supplied["stream"], poster["digest"], supplied["size"], poster_type
+                    )
             except (ValueError, ValidationError) as exc:
                 raise Problem("validation", "Invalid upload name, note or ask JSON", 422) from exc
             finally:
@@ -1023,7 +1372,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             size = len(data)
             if not data or size > 10_000_000:
                 raise Problem("validation", "A file is at least one byte and at most 10 MB", 422)
-            content_type = guessed_type(body.name) or ("text/plain" if body.text is not None else "application/octet-stream")
+            content_type = guessed_type(body.name) or (
+                "text/plain" if body.text is not None else "application/octet-stream"
+            )
             if who.role == "bot":
                 try:
                     BF.check_name(body.name)
@@ -1037,34 +1388,43 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             if replay is not None:
                 return replay
             digest = await asyncio.to_thread(blobs.put, data, content_type)
+
         def work(c):
             task = comment_rights(c, auth, who, tid)
             H._writer(c, who.actor, task_id=tid)
             item = register(c, who, digest, size, body.name, content_type)
             bot_actor = next((a for a in (who.actor, task["owner_id"], task["requester_id"]) if H.is_bot(a)), None)
-            fid, number = files.attach_task(c, who, tid, item, digest,
-                                           H.actor_id(bot_actor) if bot_actor else default_bot(c, store.settings))
+            fid, number = files.attach_task(
+                c, who, tid, item, digest, H.actor_id(bot_actor) if bot_actor else default_bot(c, store.settings)
+            )
             c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, item["id"]))
             if body.note is not None or body.ask is not None:
-                edit_version(c, auth, who, tid, fid, number,
-                             M.FileVersionEdit(note=body.note, ask=body.ask))
+                edit_version(c, auth, who, tid, fid, number, M.FileVersionEdit(note=body.note, ask=body.ask))
             c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), tid))
             # The task's own activity says a file was added, as it says a link was.
             preview = register(c, who, **poster)["id"] if poster else None
             file_added(c, who, tid, item, number, preview)
             if preview:
-                c.execute("UPDATE bot_file_versions SET poster_blob_id=? WHERE file_id=? AND version=?",
-                          (preview, fid, number))
-            return {"file": {**item, "file_id": fid, "version": number}, "file_id": fid, "version": number,
-                    "link": store.settings.public_url + f"/api/v2/files/{fid}?v={number}"}
+                c.execute(
+                    "UPDATE bot_file_versions SET poster_blob_id=? WHERE file_id=? AND version=?",
+                    (preview, fid, number),
+                )
+            return {
+                "file": {**item, "file_id": fid, "version": number},
+                "file_id": fid,
+                "version": number,
+                "link": store.settings.public_url + f"/api/v2/files/{fid}?v={number}",
+            }
+
         # Include byte identity in the receipt without storing multipart bytes.
         receipt = {**body.model_dump(), "digest": digest, "size": size, "poster": poster}
         if request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
             result = await asyncio.to_thread(write_upload, store, request, body, [receipt], work)
         else:
             # Preserve the pre-upgrade hash when an older runner replays its JSON receipt.
-            result = await asyncio.to_thread(store.mutate, who, request.url.path,
-                                             request.headers.get("idempotency-key"), payload, work)
+            result = await asyncio.to_thread(
+                store.mutate, who, request.url.path, request.headers.get("idempotency-key"), payload, work
+            )
             if isinstance(result, dict) and "_refusal" in result:
                 refusal = result["_refusal"]
                 raise Problem(refusal["code"], refusal["detail"], refusal["status"])
@@ -1075,8 +1435,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     def sources(request: Request):
         human_only(request.state.identity)
         with store.read() as c:
-            row = c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health "
-                            "WHERE service='recording:close'").fetchone()
+            row = c.execute(
+                "SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service='recording:close'"
+            ).fetchone()
             detail = json.loads(row["detail"] or "{}") if row else {}
             if not row:
                 status = "needs_setup"
@@ -1088,30 +1449,50 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 status = "delayed"
             extra = []
             from .meeting_importers import ERROR_TEXT, IMPORTERS, status_of
+
             for r in c.execute("SELECT source FROM meeting_importers WHERE enabled=1"):
                 if r["source"] not in IMPORTERS:
                     continue
-                health = c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?",
-                                   ("recording:" + r["source"],)).fetchone()
+                health = c.execute(
+                    "SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?",
+                    ("recording:" + r["source"],),
+                ).fetchone()
                 detail = json.loads(health["detail"] or "{}") if health else {}
                 state = status_of(True, health, IMPORTERS[r["source"]]["interval"], H.now())
-                extra.append({"id": r["source"], "name": IMPORTERS[r["source"]]["name"],
-                              "status": "needs_setup" if state == "waiting" else state,
-                              "last_succeeded_at": health["last_succeeded_at"] if health else None,
-                              "last_attempt": detail.get("last_attempt"), "last_import": detail.get("last_import"),
-                              "pending": 0, "imported": detail.get("imported_total", 0),
-                              "error_code": detail.get("error_code", ""),
-                              # Why it fails, in words, so the Sources panel can say it to anyone who opens it.
-                              "error": (detail.get("message") or ERROR_TEXT.get(detail.get("error_code") or "", ""))
-                              if detail.get("error_code") else ""})
-            return {"sources": [
-                {"id": "import", "name": "Import", "status": "available", "last_succeeded_at": None},
-                {"id": "close", "name": "Close", "status": status,
-                 "last_succeeded_at": row["last_succeeded_at"] if row else None,
-                 "last_attempt": detail.get("last_attempt"), "last_import": detail.get("last_import"),
-                 "pending": detail.get("pending", 0),
-                 "imported": detail.get("imported", 0), "error_code": detail.get("error_code", "")},
-            ] + extra}
+                extra.append(
+                    {
+                        "id": r["source"],
+                        "name": IMPORTERS[r["source"]]["name"],
+                        "status": "needs_setup" if state == "waiting" else state,
+                        "last_succeeded_at": health["last_succeeded_at"] if health else None,
+                        "last_attempt": detail.get("last_attempt"),
+                        "last_import": detail.get("last_import"),
+                        "pending": 0,
+                        "imported": detail.get("imported_total", 0),
+                        "error_code": detail.get("error_code", ""),
+                        # Why it fails, in words, so the Sources panel can say it to anyone who opens it.
+                        "error": (detail.get("message") or ERROR_TEXT.get(detail.get("error_code") or "", ""))
+                        if detail.get("error_code")
+                        else "",
+                    }
+                )
+            return {
+                "sources": [
+                    {"id": "import", "name": "Import", "status": "available", "last_succeeded_at": None},
+                    {
+                        "id": "close",
+                        "name": "Close",
+                        "status": status,
+                        "last_succeeded_at": row["last_succeeded_at"] if row else None,
+                        "last_attempt": detail.get("last_attempt"),
+                        "last_import": detail.get("last_import"),
+                        "pending": detail.get("pending", 0),
+                        "imported": detail.get("imported", 0),
+                        "error_code": detail.get("error_code", ""),
+                    },
+                ]
+                + extra
+            }
 
     @app.get("/api/meetings")
     def listing(request: Request, q: str = "", review: str = "live"):
@@ -1142,19 +1523,25 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     def versions(request: Request, rid: str):
         with store.read() as c:
             authorized(c, request.state.identity, rid)
-            return {"versions": [{**dict(row), "metadata": json.loads(row["metadata"])}
-                                 for row in c.execute("SELECT * FROM meeting_versions WHERE meeting_id=? ORDER BY id DESC", (rid,))]}
+            return {
+                "versions": [
+                    {**dict(row), "metadata": json.loads(row["metadata"])}
+                    for row in c.execute("SELECT * FROM meeting_versions WHERE meeting_id=? ORDER BY id DESC", (rid,))
+                ]
+            }
 
     @app.post("/api/notes")
     @app.post("/api/send")
     async def note(request: Request):
         human_only(request.state.identity)
         body, uploads = await form(request, Note, blobs, store)
+
         def work(c):
             meta = new_note(c, request.state.identity, body, uploads)
             if request.url.path == "/api/send":
                 return deliver(c, auth, request.state.identity, meta["id"], Send(bot_id=body.bot_id), [])
             return view(c, request.state.identity, meta["id"], auth=auth)
+
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     def writable(who, rid):
@@ -1168,12 +1555,13 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         body, uploads = await form(request, M.Empty, blobs, store)
         if not uploads:
             raise Problem("attachments", "Attach at least one file", 422)
+
         def work(c):
             meta = authorized(c, request.state.identity, rid, write=True)["metadata"]
-            meta["attachments"] = meta.get("attachments", []) + attachments(
-                c, request.state.identity, rid, uploads)
+            meta["attachments"] = meta.get("attachments", []) + attachments(c, request.state.identity, rid, uploads)
             save(c, meta)
             return view(c, request.state.identity, rid, auth=auth)
+
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     @app.post("/api/v2/meetings/{rid}/edit")
@@ -1198,6 +1586,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             save(c, meta)
             c.execute("UPDATE media_control SET version=version+1 WHERE meeting_id=?", (rid,))
             return view(c, request.state.identity, rid, auth=auth)
+
         return mutate(request, body, work)
 
     @app.post("/api/meetings/{rid}/send")
@@ -1205,8 +1594,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         human_only(request.state.identity)
         await asyncio.to_thread(writable, request.state.identity, rid)
         body, uploads = await form(request, Send, blobs, store)
-        return await asyncio.to_thread(write, request, body, uploads,
-                                       lambda c: deliver(c, auth, request.state.identity, rid, body, uploads))
+        return await asyncio.to_thread(
+            write, request, body, uploads, lambda c: deliver(c, auth, request.state.identity, rid, body, uploads)
+        )
 
     @app.post("/api/v2/meetings/{rid}/delete")
     @app.post("/api/meetings/{rid}/delete")
@@ -1214,12 +1604,17 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         def work(c):
             authorized(c, request.state.identity, rid, include_deleted=True, write=True)
             control(c, rid)
-            c.execute("UPDATE media_control SET deleted_at=coalesce(deleted_at,?),version=version+1 WHERE meeting_id=?", (H.now(), rid))
+            c.execute(
+                "UPDATE media_control SET deleted_at=coalesce(deleted_at,?),version=version+1 WHERE meeting_id=?",
+                (H.now(), rid),
+            )
             from . import meeting_audience
+
             meeting_audience.revoke_saved(c, rid)
             c.execute("DELETE FROM presences WHERE place=?", ("meeting:" + rid,))
             H.event(c, request.state.identity.actor, "note.deleted", rid, {"recoverable": True})
             return {"ok": True, "recoverable": True}
+
         return mutate(request, body, work)
 
     @app.get("/api/v2/files/{bid}/meta")
@@ -1239,12 +1634,26 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         with store.read() as c:
             row = blob_for(c, auth, request.state.identity, bid)
             media = c.execute("SELECT * FROM blob_media WHERE blob_id=?", (bid,)).fetchone()
-            return {"id": row["id"], "name": row["name"], "size": row["size"], "content_type": row["content_type"],
-                    **({k: media[k] for k in ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "media_state")} if media else {})}
+            return {
+                "id": row["id"],
+                "name": row["name"],
+                "size": row["size"],
+                "content_type": row["content_type"],
+                **(
+                    {
+                        k: media[k]
+                        for k in ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "media_state")
+                    }
+                    if media
+                    else {}
+                ),
+            }
 
     def resolve_blob(c, who, bid, v=None, derivative=None):
         row = blob_for(c, auth, who, bid)
-        version = c.execute("SELECT * FROM bot_file_versions WHERE blob_id=? AND (? IS NULL OR version=?)", (bid, v, v)).fetchone()
+        version = c.execute(
+            "SELECT * FROM bot_file_versions WHERE blob_id=? AND (? IS NULL OR version=?)", (bid, v, v)
+        ).fetchone()
         if v is not None and not version and v != 1:
             raise Problem("not_found", "File version not found", 404)
         if derivative:
@@ -1285,4 +1694,5 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         with store.read() as c:
             row = resolve_blob(c, who, bid, v, derivative)
         from .file_delivery import serve
+
         return serve(request, blobs, row, v is not None)

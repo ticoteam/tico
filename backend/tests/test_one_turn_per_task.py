@@ -2,6 +2,7 @@
 task (a person's comment, a keeper notice) goes into that turn or waits for the next one on the task. It never starts
 a second turn there, even when the task's lane changed under the turn. The bot's own comment wakes only the other side,
 whose turn on the task is its own. The same bot's other tasks still run beside it."""
+
 from backend.store import H
 from backend.tests.test_api import api, claim, post  # noqa: F401  (api is a fixture)
 from backend.tests.test_task_lanes import new_task, task_bot
@@ -14,8 +15,12 @@ def ops_turns(api, task_id):
 
 def queued(api, bot="ops"):
     with api.app.state.store.read() as c:
-        return [m for (m,) in c.execute("SELECT message_id FROM jobs WHERE bot_id=? AND state='queued' ORDER BY created_at",
-                                        (bot,))]
+        return [
+            m
+            for (m,) in c.execute(
+                "SELECT message_id FROM jobs WHERE bot_id=? AND state='queued' ORDER BY created_at", (bot,)
+            )
+        ]
 
 
 def inputs(api, machine, attempt):
@@ -37,8 +42,12 @@ def test_wakes_on_a_task_with_a_live_turn_join_it_and_only_the_other_side_starts
     active = busy_on(api, machine, task["id"])
     # The owner's status comment @mentioning its requester wakes that bot, whose turn on the task is its own; never the
     # owner. (Filing a task follows nothing, so only an @mention reaches the filer: threads.plan.)
-    status = post(api, f"tasks/{task['id']}/comments", {"text": "@finance Install started; receipt follows.",
-                                                        "needs_action": True}, token=active["token"])["comment"]
+    status = post(
+        api,
+        f"tasks/{task['id']}/comments",
+        {"text": "@finance Install started; receipt follows.", "needs_action": True},
+        token=active["token"],
+    )["comment"]
     assert queued(api) == [] and queued(api, "finance") == [status["id"]]
     assert (claim(api, machine) or {}).get("bot") == "finance"
     # A person's comment and Tico's own notice wake the owner; while its turn runs, each waits for that turn.
@@ -55,12 +64,26 @@ def test_wakes_on_a_task_with_a_live_turn_join_it_and_only_the_other_side_starts
 
 def test_a_task_moved_under_another_mid_turn_still_gets_no_second_turn(api):
     machine = task_bot(api, lanes=True)
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capacity": 8, "readiness": {"ops": True},
-                                    "capabilities": ["task_lanes_v2", "session_roots_v1"]}, token=machine["token"])
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capacity": 8,
+            "readiness": {"ops": True},
+            "capabilities": ["task_lanes_v2", "session_roots_v1"],
+        },
+        token=machine["token"],
+    )
     parent = new_task(api, "launch")
     first = busy_on(api, machine, parent["id"])
-    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Planned."},
-         machine["token"])
+    post(
+        api,
+        f"attempts/{first['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "Planned."},
+        machine["token"],
+    )
     step = new_task(api, "install")
     active = busy_on(api, machine, step["id"])
     assert active["lane"] == "task:" + step["id"]
@@ -71,8 +94,12 @@ def test_a_task_moved_under_another_mid_turn_still_gets_no_second_turn(api):
     assert claim(api, machine) is None
     assert ops_turns(api, step["id"]) == 1
     # Held, not dropped: the next turn on the task starts once this one ends.
-    post(api, f"attempts/{active['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
-         machine["token"])
+    post(
+        api,
+        f"attempts/{active['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "Done."},
+        machine["token"],
+    )
     after = claim(api, machine)
     assert (after["lane"], H.message_task_id(after["message"])) == ("task:" + parent["id"], step["id"])
 
@@ -84,8 +111,12 @@ def test_a_wake_the_live_turn_never_took_is_the_next_turn_on_the_task(api):
     person = post(api, f"tasks/{task['id']}/comments", {"text": "Use the owner-only transport."})["comment"]
     assert claim(api, machine) is None
     # The turn ends before it asked for inputs (a runtime that cannot steer): the comment is not lost.
-    post(api, f"attempts/{active['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
-         machine["token"])
+    post(
+        api,
+        f"attempts/{active['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "Done."},
+        machine["token"],
+    )
     after = claim(api, machine)
     assert (after["lane"], after["message"]["id"]) == ("task:" + task["id"], person["id"])
     assert ops_turns(api, task["id"]) == 2

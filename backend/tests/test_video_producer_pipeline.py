@@ -3,6 +3,7 @@ stage waits for its mover's approval of each file, the owner is found from pipel
 stage runs until its project budget (plus any raise the owner approved) and is done on its `.done` file, a file is
 used only when it is approved or its stage is self-moved, and a failed `hub file approved` stops the pipeline instead of
 reading as pending."""
+
 import importlib.machinery
 import importlib.util
 import json
@@ -15,7 +16,7 @@ TEMPLATE = Path(__file__).resolve().parents[2] / "templates/catalog/video-produc
 loader = importlib.machinery.SourceFileLoader("pipeline", str(TEMPLATE / "software/pipeline.py"))
 pipeline = importlib.util.module_from_spec(importlib.util.spec_from_loader("pipeline", loader))
 loader.exec_module(pipeline)
-REAL_APPROVAL = pipeline.approval           # the fixture swaps it for a fake; the --by test calls the real one
+REAL_APPROVAL = pipeline.approval  # the fixture swaps it for a fake; the --by test calls the real one
 
 
 @pytest.fixture
@@ -27,7 +28,7 @@ def repo(tmp_path, monkeypatch):
     (root / "pipeline.yaml").write_text((TEMPLATE / "pipeline.yaml").read_text())
     approved = set()
 
-    def hub_approved(asset, mover="owner"):   # stands in for `hub file approved --by`: (approved, detail)
+    def hub_approved(asset, mover="owner"):  # stands in for `hub file approved --by`: (approved, detail)
         rel = asset.relative_to(root).as_posix()
         return rel in approved, ({"by": "Ana"} if rel in approved else {})
 
@@ -45,7 +46,9 @@ def put(repo, stage, name, cost=None, approve=False):
     path = folder / name
     path.write_text("x")
     if cost is not None:
-        (folder / (name + ".json")).write_text(json.dumps({"stage": stage, "cost_usd": cost, "tool": "test", "at": "now"}))
+        (folder / (name + ".json")).write_text(
+            json.dumps({"stage": stage, "cost_usd": cost, "tool": "test", "at": "now"})
+        )
     if approve:
         repo.approved.add(path.relative_to(repo.root).as_posix())
     return path
@@ -83,16 +86,21 @@ def test_the_owner_comes_from_the_pipeline_or_the_command_and_is_asked_for_when_
     assert "--review projects/launch/script/intro.md" in step
     repo.approved.add(script.relative_to(repo.root).as_posix())
     assert pipeline.next_step(repo.project, stages, owner="Ana Lee").startswith("waiting: make the storyboard files")
-    put(repo, "storyboard", "sheet.html")                 # now the storyboard waits for the owner
-    (repo.root / "pipeline.yaml").write_text((repo.root / "pipeline.yaml").read_text().replace('owner: ""', "owner: Ana Lee"))
-    step = pipeline.next_step(repo.project, cfg(repo), task="T-1")                 # the owner comes from pipeline.yaml
+    put(repo, "storyboard", "sheet.html")  # now the storyboard waits for the owner
+    (repo.root / "pipeline.yaml").write_text(
+        (repo.root / "pipeline.yaml").read_text().replace('owner: ""', "owner: Ana Lee")
+    )
+    step = pipeline.next_step(repo.project, cfg(repo), task="T-1")  # the owner comes from pipeline.yaml
     assert "--on 'Ana Lee' --parent T-1" in step and "--review projects/launch/storyboard/sheet.html" in step
 
 
 def test_a_bot_mover_gets_a_hand_off_task_not_a_question(repo):
     cfg(repo)
-    (repo.root / "pipeline.yaml").write_text((repo.root / "pipeline.yaml").read_text().replace(
-        "  - id: script\n    mover: owner", "  - id: script\n    mover: bot:reviewer"))
+    (repo.root / "pipeline.yaml").write_text(
+        (repo.root / "pipeline.yaml")
+        .read_text()
+        .replace("  - id: script\n    mover: owner", "  - id: script\n    mover: bot:reviewer")
+    )
     put(repo, "brief", "brief.md", approve=True)
     put(repo, "script", "intro.md")
     step = pipeline.next_step(repo.project, cfg(repo), task="T-1")
@@ -105,7 +113,7 @@ def test_a_self_stage_is_done_on_its_done_file_and_the_budget_gates_it(repo):
     finished_up_to_shots(repo)
     assert pipeline.next_step(repo.project, stages).startswith("self: proceed with shots (0.00 of 10.00 USD used)")
     put(repo, "shots", "clip.mp4", cost=4.0)
-    assert [p.name for p in pipeline.assets(repo.project / "shots")] == ["clip.mp4"]      # its sidecar is not an asset
+    assert [p.name for p in pipeline.assets(repo.project / "shots")] == ["clip.mp4"]  # its sidecar is not an asset
     assert pipeline.next_step(repo.project, stages).startswith("self: proceed with shots")  # one shot is not done
     (repo.project / "shots" / ".done").write_text("")
     assert pipeline.next_step(repo.project, stages).startswith("self: proceed with cut (4.00 of 10.00 USD used)")
@@ -126,7 +134,9 @@ def test_going_over_budget_asks_the_owner_for_a_raise_and_an_approved_raise_lets
     assert "Raise budget=10:launch self-moved stages" in ask
     assert pipeline.next_step(repo.project, stages, owner="").startswith("waiting: no owner")
     pipeline.main(["raise", str(repo.project), "--usd", "10", "--approval", "spend-42"])
-    pipeline.main(["raise", str(repo.project), "--usd", "10", "--approval", "spend-42"])   # the same approval counts once
+    pipeline.main(
+        ["raise", str(repo.project), "--usd", "10", "--approval", "spend-42"]
+    )  # the same approval counts once
     assert json.loads((repo.project / "budget.json").read_text())["extra_usd"] == 10.0
     assert pipeline.next_step(repo.project, stages, task="T-1", owner="Ana Lee").startswith("self: proceed with cut")
 
@@ -152,9 +162,11 @@ def test_a_bot_mover_is_approved_by_that_bot_and_the_hand_off_says_how_to_review
 
 APPROVED = (0, json.dumps({"approved": True, "by": "Ana"}), "")
 NOT_APPROVED = (1, json.dumps({"approved": False, "by": None, "verdict": None}), "")
-TRACEBACK = ("Traceback (most recent call last):\n  File \"clients/hubcli.py\", line 3383, in <module>\n"
-             "    sys.exit(main(sys.argv[1:]))\n"
-             "TypeError: Client.get() got multiple values for argument 'path'\n")
+TRACEBACK = (
+    "Traceback (most recent call last):\n  File \"clients/hubcli.py\", line 3383, in <module>\n"
+    "    sys.exit(main(sys.argv[1:]))\n"
+    "TypeError: Client.get() got multiple values for argument 'path'\n"
+)
 
 
 def hub_file_approved(monkeypatch, answers):
@@ -174,7 +186,9 @@ def hub_file_approved(monkeypatch, answers):
 def test_exit_0_is_approved_and_the_pipeline_moves_on(repo, monkeypatch):
     brief = put(repo, "brief", "brief.md")
     script = put(repo, "script", "intro.md")
-    hub_file_approved(monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": APPROVED})
+    hub_file_approved(
+        monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": APPROVED}
+    )
     assert REAL_APPROVAL(brief) == (True, {"approved": True, "by": "Ana"})
     assert pipeline.next_step(repo.project, cfg(repo), owner="Ana Lee").startswith("waiting: make the storyboard files")
     assert pipeline.gate(script) == 0
@@ -183,7 +197,9 @@ def test_exit_0_is_approved_and_the_pipeline_moves_on(repo, monkeypatch):
 def test_the_hubs_not_approved_answer_is_pending_and_asks_for_review(repo, monkeypatch):
     put(repo, "brief", "brief.md")
     script = put(repo, "script", "intro.md")
-    hub_file_approved(monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": NOT_APPROVED})
+    hub_file_approved(
+        monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": NOT_APPROVED}
+    )
     assert REAL_APPROVAL(script) == (False, {})
     step = pipeline.next_step(repo.project, cfg(repo), task="T-1", owner="Ana Lee")
     assert step.startswith("hub task question 'Approve the script files for launch?' --on 'Ana Lee' --parent T-1")
@@ -191,19 +207,35 @@ def test_the_hubs_not_approved_answer_is_pending_and_asks_for_review(repo, monke
     assert pipeline.gate(script) == 1
 
 
-@pytest.mark.parametrize("code, stdout, stderr", [
-    (1, "", TRACEBACK),                                                                        # a crash: traceback only
-    (1, json.dumps({"error": "TypeError: Client.get() got multiple values"}), ""),            # an unexpected exception
-    (1, json.dumps({"error": "unavailable", "retryable": True, "operation_id": "op-1",         # Tico unreachable
-                    "detail": "Tico could not confirm this request"}), ""),
-    (2, json.dumps({"error": "validation", "retryable": False, "detail": "--by is human"}), ""),  # bad input
-    (2, "", "usage: hub file approved TARGET"),
-    (7, "", "something unexpected"),
-])
+@pytest.mark.parametrize(
+    "code, stdout, stderr",
+    [
+        (1, "", TRACEBACK),  # a crash: traceback only
+        (1, json.dumps({"error": "TypeError: Client.get() got multiple values"}), ""),  # an unexpected exception
+        (
+            1,
+            json.dumps(
+                {
+                    "error": "unavailable",
+                    "retryable": True,
+                    "operation_id": "op-1",  # Tico unreachable
+                    "detail": "Tico could not confirm this request",
+                }
+            ),
+            "",
+        ),
+        (2, json.dumps({"error": "validation", "retryable": False, "detail": "--by is human"}), ""),  # bad input
+        (2, "", "usage: hub file approved TARGET"),
+        (7, "", "something unexpected"),
+    ],
+)
 def test_a_failed_hub_call_is_an_error_not_a_pending_file(repo, monkeypatch, code, stdout, stderr):
     put(repo, "brief", "brief.md")
     script = put(repo, "script", "intro.md")
-    hub_file_approved(monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": (code, stdout, stderr)})
+    hub_file_approved(
+        monkeypatch,
+        {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": (code, stdout, stderr)},
+    )
     with pytest.raises(pipeline.Problem) as caught:
         pipeline.next_step(repo.project, cfg(repo), task="T-1", owner="Ana Lee")
     assert f"hub file approved exited {code}" in str(caught.value)
@@ -215,7 +247,9 @@ def test_a_failed_hub_call_is_an_error_not_a_pending_file(repo, monkeypatch, cod
 def test_a_crash_shows_the_stderr_tail_in_the_error_and_stops_the_command(repo, monkeypatch, capsys):
     put(repo, "brief", "brief.md")
     put(repo, "script", "intro.md")
-    hub_file_approved(monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": (1, "", TRACEBACK)})
+    hub_file_approved(
+        monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": (1, "", TRACEBACK)}
+    )
     assert pipeline.main(["next", str(repo.project), "--task", "T-1", "--owner", "Ana Lee"]) == 2
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -229,6 +263,6 @@ def test_gate_lets_a_file_through_only_when_approved_or_self_moved(repo):
     assert pipeline.gate(script) == 1
     repo.approved.add(script.relative_to(repo.root).as_posix())
     assert pipeline.gate(script) == 0
-    assert pipeline.gate(shots) == 0                      # self-moved: no approval asked
-    with pytest.raises(pipeline.Problem):                 # a stage the pipeline does not have
+    assert pipeline.gate(shots) == 0  # self-moved: no approval asked
+    with pytest.raises(pipeline.Problem):  # a stage the pipeline does not have
         pipeline.gate(repo.project / "unknown-stage" / "x.md")

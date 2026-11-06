@@ -40,22 +40,28 @@ log = logging.getLogger(__name__)
 KEY = "cloud-access"
 ACCESS = ("open", "frozen", "locked")
 REASONS = (None, "out_of_credit", "trial_over", "unpaid")
-SYNC = timedelta(seconds=60)          # how often HQ is asked while the company is a cloud one
-UNKNOWN = timedelta(hours=1)          # and while it is not (or HQ has not said yet, off a Tico Cloud cell)
+SYNC = timedelta(seconds=60)  # how often HQ is asked while the company is a cloud one
+UNKNOWN = timedelta(hours=1)  # and while it is not (or HQ has not said yet, off a Tico Cloud cell)
 OPEN_PATHS = ("/api/me", "/api/v2/me", "/api/status", "/api/v2/cloud-access", "/api/v2/system/storage/export")
 OPEN_PREFIXES = ("/api/v2/billing",)
 LOCKED = "Pay to continue: this company's Tico Cloud plan is locked"
 ROUTINES_PAUSED = {"frozen": "out of credit", "locked": "Tico Cloud is locked"}
 _MISSING = object()
 _guard = threading.Lock()
-_busy = False                         # a sync thread is running
-_again = False                        # asked while one ran: one more sync after it (the key may have changed meanwhile)
+_busy = False  # a sync thread is running
+_again = False  # asked while one ran: one more sync after it (the key may have changed meanwhile)
 
 
 def _url(value):
     """HQ's billing page: https only, or None."""
-    return value if isinstance(value, str) and value.startswith("https://") and len(value) <= 500 \
-        and not any(ch.isspace() for ch in value) else None
+    return (
+        value
+        if isinstance(value, str)
+        and value.startswith("https://")
+        and len(value) <= 500
+        and not any(ch.isspace() for ch in value)
+        else None
+    )
 
 
 def _int(value):
@@ -74,15 +80,21 @@ def parse(value):
     if not isinstance(value, dict) or value.get("access") not in ACCESS or value.get("reason") not in REASONS:
         raise ValueError("not a cloud access answer")
     trial_ends = value.get("trial_ends")
-    return {"access": value["access"], "reason": value["reason"], "plan": str(value.get("plan") or "")[:20],
-            "balance_micros": _int(value.get("balance_micros")) or 0,
-            "trial_ends": trial_ends if isinstance(trial_ends, str) and len(trial_ends) <= 40 else None,
-            "trial_days_left": _int(value.get("trial_days_left")), "billing_url": _url(value.get("billing_url"))}
+    return {
+        "access": value["access"],
+        "reason": value["reason"],
+        "plan": str(value.get("plan") or "")[:20],
+        "balance_micros": _int(value.get("balance_micros")) or 0,
+        "trial_ends": trial_ends if isinstance(trial_ends, str) and len(trial_ends) <= 40 else None,
+        "trial_days_left": _int(value.get("trial_days_left")),
+        "billing_url": _url(value.get("billing_url")),
+    }
 
 
 def state(c):
     """The kept state, or None (not a cloud company, or HQ has not said)."""
     from .read_cache import metadata
+
     row = metadata(c, KEY)
     try:
         found = json.loads(row[0]) if row else None
@@ -119,6 +131,7 @@ def cell():
     """Whether this install is a Tico Cloud cell company: TICO_CELL=1, which `setup cell` writes (docs/cell.md). A .env
     an older core wrote has only TICO_UPDATES=tico, until that company's next `cell update`; it still counts."""
     from . import releases
+
     return strict_cell() or releases.managed()
 
 
@@ -145,12 +158,15 @@ def apply(store, cloud):
         if cloud is None:
             c.execute("DELETE FROM registry_metadata WHERE key=?", (KEY,))
         else:
-            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
-                      "value=excluded.value", (KEY, json.dumps({**cloud, "checked": H.now()})))
+            c.execute(
+                "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (KEY, json.dumps({**cloud, "checked": H.now()})),
+            )
         was, now = (before or {}).get("access"), (cloud or {}).get("access")
         if was != now:
-            H.event(c, H.KEEPER, "cloud.access", "company",
-                    {"from": was, "to": now, "reason": (cloud or {}).get("reason")})
+            H.event(
+                c, H.KEEPER, "cloud.access", "company", {"from": was, "to": now, "reason": (cloud or {}).get("reason")}
+            )
     store._cloud_access = {**cloud, "checked": H.now()} if cloud is not None else None
     return store._cloud_access
 
@@ -166,6 +182,7 @@ def sync(store, vault, settings):
     """Ask HQ and keep its answer. 404 (`not_cloud`, or an HQ without the route) is not a cloud company; HQ refusing
     the key or not answering keeps the last word."""
     from . import company_billing, gateway_connection
+
     with store.read() as c:
         key, base = gateway_connection.target(c, vault, settings)[:2]
     status, payload = company_billing.cloud(key, base)

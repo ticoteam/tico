@@ -1,4 +1,5 @@
 """scripts/pytest_warning_ignores.py: the ignore list only shrinks, and the warnings gate stays in pytest.ini."""
+
 import sys
 from pathlib import Path
 
@@ -32,6 +33,7 @@ def test_no_warnings_plugin_never_comes_back():
 
 
 def test_comment_lines_inside_the_value_are_not_entries():
-    values = ratchet.filter_values("[pytest]\nfilterwarnings =\n    error\n    # why\n    ignore:x:DeprecationWarning:a\n"
-                                   "markers =\n    slow: x\n")
+    values = ratchet.filter_values(
+        "[pytest]\nfilterwarnings =\n    error\n    # why\n    ignore:x:DeprecationWarning:a\nmarkers =\n    slow: x\n"
+    )
     assert values == ["error", "ignore:x:DeprecationWarning:a"]
