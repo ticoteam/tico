@@ -270,10 +270,16 @@ def test_a_dst_change_day_uses_the_offset_of_each_window():
                  id="fri-2030-opens"),
     pytest.param("30 3 * * *", pt(2026, 7, 11, 20, 35), False, "Saturday 20:30 PDT is no window",
                  id="sat-2030-does-not-open"),
-    pytest.param("30 14 * * *", pt(2026, 7, 9, 8, 50), True, "80 minutes late is inside SCHEDULE_LATE",
+    pytest.param("30 14 * * *", pt(2026, 7, 9, 8, 50), True, "80 minutes late: still the current window",
                  id="late-80-minutes"),
-    pytest.param("30 14 * * *", pt(2026, 7, 9, 9, 5), False, "95 minutes late is too late to open",
+    pytest.param("30 14 * * *", pt(2026, 7, 9, 9, 5), True, "95 minutes late: still the current window",
                  id="late-95-minutes"),
+    pytest.param("30 14 * * *", pt(2026, 7, 9, 10, 30), True, "3 hours late: still the current window",
+                 id="late-3-hours-opens"),
+    pytest.param("30 14 * * *", pt(2026, 7, 9, 14, 5), False, "superseded: the 14:00 PDT window has started since",
+                 id="superseded-does-not-open"),
+    pytest.param("30 15 * * *", pt(2026, 7, 7, 11, 30), False, "3 hours late, but 08:30 PDT is no window",
+                 id="late-3-hours-twin-does-not-open"),
 ])
 def test_a_window_cron_opens_only_at_its_own_real_window_start(cron, now, opens, why):
     assert rt.window_cron_opens(cron, now) is opens, why

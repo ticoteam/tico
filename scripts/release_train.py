@@ -58,9 +58,6 @@ WEEKDAY_WINDOWS = ((7, 30), (14, 0), (20, 30))
 WEEKEND_WINDOWS = ((7, 30), (15, 0))
 # GitHub's crons are UTC only: every UTC time a window can start at, under PDT or PST (train.yml lists the same ones).
 CRONS = ["30 3 * * *", "30 4 * * *", "30 14 * * *", "30 15 * * *", "0 21 * * *", "0 22 * * *", "0 23 * * *"]
-# GitHub's schedule fires late, sometimes by many minutes. A window cron opens its window only if the window started
-# this recently. A late cron only delays the promotion: a push or a finished run inside the window acts on its own.
-SCHEDULE_LATE = timedelta(minutes=90)
 # A backstop for a missed event (a workflow_run that does not fire, say): it takes a step in an open window like a push
 # does, and never opens one, so it never promotes. Minutes 5, 25 and 45: never a window's minute (00 or 30).
 BACKSTOP_CRON = "5-59/20 * * * *"
@@ -175,15 +172,16 @@ def next_window(now):
 
 
 def window_cron_opens(cron, now):
-    """Whether a window cron that fired at now opens a window: the window must start at the cron's own UTC time, which
-    must be a real window start in Los Angeles time, and no more than SCHEDULE_LATE ago. So the off-season twin of a
-    cron (15:30 UTC is 08:30 PDT, not a window) opens nothing, and does what a push does."""
-    now = now.astimezone(timezone.utc)
+    """Whether a window cron that fired at now opens a window: its own UTC time must be the latest window start at or
+    before now. So a late cron still opens the window that is current, however late, and a superseded window opens
+    nothing. The off-season twin of a cron (15:30 UTC is 08:30 PDT) is never a window start, so it opens nothing and
+    does what a push does."""
+    now = now.astimezone(timezone.utc) + SKEW
     hour, minute = cron_time(cron)
-    fired = (now + SKEW).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if fired > now + SKEW:
+    fired = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if fired > now:
         fired -= timedelta(days=1)
-    return now - fired <= SCHEDULE_LATE and fired in window_starts_on(fired.astimezone(LOS_ANGELES).date())
+    return window_start(now) == fired
 
 
 def hhmm(when):
