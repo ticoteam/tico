@@ -11,6 +11,7 @@ let REPOS = null;                 // the last GET: {repositories, new_bot_defaul
 let REPOS_SHOW_BOTS = false;      // bot repositories stay out of Not in use until asked for
 let REPOS_SHOW_ARCHIVED = false;  // archived ones too
 let REPOS_OFF_OPEN = false;       // Not in use opened without a search
+let REPOS_SEARCH_REVEALED = false; // a search result opened Not in use from its closed state
 const REPOS_OPEN = new Set();     // In use rows opened to their setup command
 const REPOS_OFF_MAX = 100;        // Not in use draws this many rows at most; a search narrows the rest
 const REPO_SOURCES = ['tico.json', 'conductor.json'];
@@ -69,11 +70,12 @@ function reposDrawList() {
   host.querySelector('[data-repos-off-toggle]').setAttribute('aria-expanded', String(show));
   host.querySelector('[data-repos-off-body]').hidden = !show;
   const offList = host.querySelector('[data-repos-off]');
-  if (!show) { offList.innerHTML = ''; return; }
+  if (!show) { offList.innerHTML = ''; settingsSearchRevealRepo(); return; }
   const rows = off.filter(r => !q || r.full_name.toLowerCase().includes(q)), more = rows.length - REPOS_OFF_MAX;
   offList.innerHTML = rows.length ? rows.slice(0, REPOS_OFF_MAX).map(r => reposOffRowHTML(r, admin)).join('')
     + (more > 0 ? `<li class="empty">${more} more · search to narrow</li>` : '')
     : `<li class="empty">${q ? 'No match.' : 'None.'}</li>`;
+  settingsSearchRevealRepo();
 }
 async function renderSettingsRepos(fresh) {
   const host = $('#set-repos');
@@ -186,7 +188,11 @@ document.addEventListener('input', event => {
 });
 document.addEventListener('keydown', event => {
   const filter = event.target.closest?.('#set-repos [data-repos-filter]');
-  if (filter && event.key === 'Escape' && filter.value) { event.preventDefault(); filter.value = ''; reposDrawList(); return; }
+  if (filter && event.key === 'Escape' && filter.value) {
+    event.preventDefault(); filter.value = '';
+    if (REPOS_SEARCH_REVEALED) { REPOS_OFF_OPEN = false; REPOS_SEARCH_REVEALED = false; }
+    reposDrawList(); return;
+  }
   const input = event.target.closest?.('#set-repos [data-repo-setup]');
   if (!input) return;
   if (event.key === 'Enter') { event.preventDefault(); input.blur(); }
@@ -214,6 +220,7 @@ document.addEventListener('click', async event => {
   if (event.target.closest('[data-repos-off-toggle]')) {
     const filter = host.querySelector('[data-repos-filter]');
     const shown = REPOS_OFF_OPEN || !!filter?.value.trim();
+    REPOS_SEARCH_REVEALED = false;
     REPOS_OFF_OPEN = !shown;
     if (shown && filter) filter.value = '';
     reposDrawList();

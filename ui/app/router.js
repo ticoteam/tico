@@ -129,13 +129,16 @@ function route(hash = location.hash) {
   // Settings > Inboxes and the tabs it replaced are Tools pages now: ui/app/tools.js toolsRoute redirects them first.
   else if (S.route === '#/settings/roadmap') { SETTINGS_TAB = 'tasks'; ROADMAP_SETTINGS_REVEAL = true; location.replace(SETTINGS); return; }   // Health's roadmap suggestions fix
   else if (S.route === '#/settings/storage') { SETTINGS_TAB = 'storage'; location.replace(SETTINGS); return; }   // Health's Set up S3
-  // Settings > System (it was Rules, before that Routines): Tico's own jobs are Automations' System jobs now.
-  else if (['#/settings/rules', '#/settings/routines'].includes(S.route.split('?')[0])) { location.replace(settingsMovedOut('system')); return; }
+  // The old Rules and Routines links open Automations without carrying their retired filters.
+  else if (/^#\/settings\/(?:rules|routines)(?:\/[^?]*)?(?:\?.*)?$/.test(S.route)) {
+    try { sessionStorage.setItem('tico.automations.legacy-filter-note', '1'); } catch { /* the redirect still works */ }
+    location.replace('#/automations'); return;
+  }
+  else if (S.route.split('?')[0] === '#/settings/listening') { location.replace('#/strategy/market/listening'); return; }
   else if (S.route === '#/settings/people') { SETTINGS_TAB = 'people'; location.replace(SETTINGS); return; }   // setup's people to invite
   else if (S.route === '#/settings/computers') { SETTINGS_TAB = 'devices'; location.replace(SETTINGS); return; }
   else if (['#/settings/subscriptions', '#/subscriptions'].includes(S.route)) { SETTINGS_TAB = 'models'; location.replace(SETTINGS); return; }   // Subscriptions are on Models
-  // Old links and bookmarks to the Strategy Bot's settings address still open its card (its bot page's Settings).
-  else if (S.route === '#/settings/ceo') { location.replace(SETTINGS + '/strategy-bot'); return; }
+  // Old links and bookmarks to the Strategy Bot's Settings address resolve through SETTINGS_PLACES in settings.js.
   // Every other #/settings/<tab>[/<card>] opens that tab, and the card when named (the settings catalogue's links,
   // backend/settings_entries.py). settingsShow maps old names and sections and puts the tab's own address back in
   // the bar, so a tab can be bookmarked and shared: #/settings/people, #/settings/models, …

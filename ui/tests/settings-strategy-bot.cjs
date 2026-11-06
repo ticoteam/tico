@@ -1,4 +1,4 @@
-// The Strategy Bot's own Settings tab (#/bot/goal-manager/settings, ui/app/settings-strategy-bot.js): the owner sees the regular checks, on, and the three levels with
+// Settings > Bots > Strategy Bot (ui/app/settings-strategy-bot.js), pinned above the bot list: the owner sees regular checks, on, and the three levels with
 // their sentences, Suggests actions current (the level every install starts at); picking another shows its sentence
 // again and changes nothing until Confirm, and Cancel leaves it as it was. Turning the regular checks off saves at
 // once. Only the owner has the card: an admin or a member has none, and nobody has a tab or a chat for it. The card and
@@ -81,20 +81,18 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot', hash = SETT
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
     {
-      // Old settings addresses (#/settings/ceo, #/settings/strategy-bot, in links and bookmarks) open its bot's Settings.
-      for (const old of ['#/settings/ceo', '#/settings/strategy-bot', '#/settings/system/set-strategy-bot-card']) {
-        const {page, errors} = await open(browser, {hash: '#/settings'});
-        await page.locator('#settings-tabs').waitFor();
-        await page.evaluate(h => { location.hash = h; }, old);
-        await page.locator('#set-strategy-bot [data-strategy-level]').first().waitFor();
-        assert.equal(await page.evaluate(() => location.hash), SETTINGS, old);
-        assert.equal(await page.locator('[data-settings-tab="strategy-bot"]').count(), 0, 'no tab of its own');
-        assert.deepEqual(errors, []);
-        await page.close();
-      }
+      // Old settings addresses (#/settings/ceo, #/settings/strategy-bot, in links and bookmarks) open its card in Bots.
+      const {page, errors} = await open(browser);
+      await page.evaluate(() => { location.hash = '#/settings/ceo'; });
+      await page.locator('#set-strategy-bot [data-strategy-level]').first().waitFor();
+      assert.match(await page.evaluate(() => location.hash), /^#\/settings\/bots/);
+      assert.equal(await page.locator('[data-settings-tab="strategy-bot"]').count(), 0, 'no tab of its own');
+      assert.deepEqual(errors, []);
+      await page.close();
     }
     {
       const {page, errors, posted} = await open(browser);
+      await page.evaluate(() => { location.hash = '#/settings/bots'; });
       const levels = page.locator('#set-strategy-bot [data-strategy-level]');
       await levels.first().waitFor();
       assert.equal(await levels.count(), 3);
@@ -143,6 +141,7 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot', hash = SETT
     {
       // Named by the owner: the card and the heading use that name.
       const {page, errors} = await open(browser, {name: 'Atlas'});
+      await page.evaluate(() => { location.hash = '#/settings/bots'; });
       await page.locator('#set-strategy-bot [data-strategy-level]').first().waitFor();
       assert.equal((await page.locator('#set-strategy-bot-card h2').innerText()).trim(), 'Atlas');
       assert.match(await page.locator('#set-strategy-bot').innerText(), /How much your Atlas does/);
@@ -166,9 +165,7 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot', hash = SETT
     }
     for (const opts of [{role: 'admin'}, {role: 'viewer'}]) {
       const {page, errors} = await open(browser, opts);
-      // Its bot's Settings has no card for them, and its old address leads there too.
-      await page.waitForFunction(() => document.querySelector('#bot-editor') && !/Loading settings/.test(document.querySelector('#bot-editor').textContent));
-      assert.equal(await page.locator('#set-strategy-bot-card, [data-settings-tab="strategy-bot"]').count(), 0, JSON.stringify(opts));
+      // Even its old address shows no card for them (a member may not see the Bots group at all).
       await page.evaluate(() => { location.hash = '#/settings/strategy-bot'; });
       await page.waitForFunction(() => !location.hash.endsWith('/strategy-bot'));
       await page.waitForTimeout(200);

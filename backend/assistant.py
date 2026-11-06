@@ -1584,9 +1584,21 @@ def create_proposal(
     routine_route = (method == "POST" and path == assistant_routines.CREATE) or (
         method == "PATCH" and assistant_routines.EDIT.fullmatch(path)
     )
+    message_routine = routine_route and assistant_routines.request_is_message(c, method, path, body)
+    if proposer == "assistant" and method == "PATCH" and routine_route and not message_routine:
+        match = assistant_routines.EDIT.fullmatch(path or "")
+        if match:
+            row = c.execute(
+                "SELECT flow FROM automations WHERE id=? AND deleted_at IS NULL", (match.group(1),)
+            ).fetchone()
+            if (row and _sends(row["flow"])) or _body_sends(body or {}):
+                raise Problem(
+                    "operation",
+                    "An automation that sends outside needs the person's own click, not an Assistant card",
+                    422,
+                )
     if proposer == "assistant" and (
-        not any(m == method and p.fullmatch(path) for m, p in _PROPOSABLE)
-        or (routine_route and not assistant_routines.request_is_message(c, method, path, body))
+        not any(m == method and p.fullmatch(path) for m, p in _PROPOSABLE) or (routine_route and not message_routine)
     ):
         # A setting the Assistant puts on a card is one catalogue entry's body, and never a person-only one.
         from . import settings_catalog

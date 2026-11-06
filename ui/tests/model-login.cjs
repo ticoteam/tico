@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile, harnesses} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {selectSettingsGroup} = require('./support/settings.cjs');
 
 // ---- model-login-hosted
 // Sign in on a hosted Tico (config `hosted`, TICO_HOSTED; ui/model-login.js). The person has no terminal on the
@@ -79,7 +80,7 @@ async function loginHosted(browser) {
         return json(unrouted(p));
       });
       await page.goto('https://tico-ui.test/#/settings');
-      await page.locator('[data-settings-tab=devices]').click();
+      await selectSettingsGroup(page, 'computers');
       // A tool it is not signed in to is signed in from Add connection in the computer's pop-up.
       await page.locator('#set-machines .machine-name[data-computer-open=box]').click();
       const add = page.locator('#set-machines dialog[open] [data-add-connection]');
@@ -300,7 +301,7 @@ async function toKey(browser) {
         return json(unrouted(p));
       });
       await page.goto('https://tico-ui.test/#/settings');
-      await page.locator('[data-settings-tab=devices]').click();
+      await selectSettingsGroup(page, 'computers');
       await page.locator('#set-machines .machine-name[data-computer-open=box]').click();
       await page.locator('#set-machines dialog.computer-detail[open] [data-connection]').first().waitFor();
       return {page, box, writes, errors};

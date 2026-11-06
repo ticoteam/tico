@@ -1,9 +1,9 @@
-// Health has no tab: General opens with one Health line (ui/health.js hlSummaryDraw). It counts Health's checks by
+// You opens with one Health line (ui/health.js hlSummaryDraw). It counts Health's checks by
 // severity with Settings' own issues (one a person must act on is urgent, the rest FYI), says "All good" when nothing
 // needs work, carries the alert dot, and shows a newer release with the owner's one Update (none for a member or when
-// Tico runs updates). Details opens #/settings/health: no tab highlighted, a way back to General, and the issues a
+// Tico runs updates). Details opens the Health & history group, with a way back to You, and the issues a
 // person must act on (with Restart) at its top instead of above the tabs. Fixtures only. With TICO_SHOTS set, it saves
-// General's top and the Health page at desktop and phone width, dark theme.
+// You's top and the Health page at desktop and phone width, dark theme.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -68,12 +68,10 @@ const NOTE = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for lat
 
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('#settings-tabs').waitFor();
-    // The tab row: Health, Gateway and Repositories are not tabs, Security is an admin's; More keeps Billing.
-    const tabs = await page.locator('#settings-tabs > [data-settings-tab]').evaluateAll(b => b.map(x => x.dataset.settingsTab));
-    assert.deepEqual(tabs.filter(t => t !== 'security'), ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'history']);
-    if (tabs.includes('security')) assert.equal(tabs.indexOf('security'), tabs.indexOf('history') - 1, 'Security sits before History');
-    assert.deepEqual(await page.locator('#settings-more [data-settings-tab]').evaluateAll(b => b.map(x => x.dataset.settingsTab)),
-      ['billing']);
+    // You is above the divider; each of the ten company groups is directly reachable.
+    assert.deepEqual(await page.locator('#settings-tabs [data-settings-tab]').evaluateAll(b => b.map(x => x.dataset.settingsTab)),
+      ['you', 'people', 'bots', 'models', 'computers', 'limits', 'automation', 'tasks', 'connections', 'policies', 'health']);
+    assert.equal(await page.locator('#settings-more').count(), 0, 'no More menu');
     // Bad checks and a person's issue are urgent, warn checks to fix, info checks and the rest of the issues FYI.
     await page.waitForFunction(() => document.querySelector('#settings-health-line [data-hl-count=urgent]'));
     await redraw();
@@ -84,17 +82,18 @@ const NOTE = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for lat
     assert.equal(await page.locator('.settings-issue:visible').count(), 0, 'no issues card above the tabs');
     await shot('desktop-general-health-line.png');
 
-    // Details opens the full page: no tab highlighted, the person's issue with its Restart at the top, a way back.
+    // Details opens the Health & history group, the person's issue with its Restart at the top, and a way back.
     await line.locator('[data-hl-details]').click();
     await page.waitForFunction(() => location.hash === '#/settings/health' && SETTINGS_TAB === 'health');
     await page.locator('#hl-page .hl-list').waitFor();
-    assert.equal(await page.locator('#settings-tabs [aria-selected=true]').count(), 0, 'no tab is highlighted');
+    assert.equal(await page.locator('#settings-tabs [aria-selected=true]').getAttribute('data-settings-tab'), 'health');
     assert.equal(await page.locator('#settings-health #settings-issues .settings-issue').count(), 1);
+    await page.locator('#settings-health #settings-issues summary').click();
     assert.equal(await page.locator('#settings-health #settings-issues [data-runner-restart=r1]').isVisible(), true);
     assert.equal(await page.locator('#hl-page .hl-notes li').count(), 1, 'the note that needs nobody stays under Not urgent');
     await shot('desktop-health-details.png');
     await page.locator('#settings-health [data-settings-back]').click();
-    await page.waitForFunction(() => location.hash === '#/settings/general' && SETTINGS_TAB === 'general');
+    await page.waitForFunction(() => location.hash === '#/settings/you' && SETTINGS_TAB === 'you');
     assert.equal(await line.isVisible(), true);
 
     // Nothing to fix: All good, the FYI count kept, no dot.

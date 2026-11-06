@@ -99,6 +99,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal((await page.locator('#set-google').innerText()).includes(upgrade), false);
     assert.equal((await page.locator('#set-google').innerText()).includes(calendarUpgrade), false);
     await page.locator('#set-google [data-google-disconnect]').click();
+    await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
     await page.waitForFunction(() => /Disconnecting/.test(document.querySelector('#set-google')?.textContent || ''));
     assert.deepEqual(writes, ['/api/v2/mail/google/connect', '/api/v2/mail/google/connect', '/api/v2/mail/google/disconnect']);
 

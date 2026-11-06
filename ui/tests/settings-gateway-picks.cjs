@@ -172,7 +172,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
 
     // 4. The Tico Gateway card on Models (the Gateway page's place now): one line with the spend, its bar and the switch;
     // our prices by level and mode; the picks in use; the API keys row; the services folded. No model name anywhere.
-    await page.evaluate(() => settingsShow('models'));
+    await page.locator('#settings-tabs [data-settings-tab="models"]').click();
     const card = page.locator('#settings-gateway-card');
     await card.locator('[data-gateway-prices]').waitFor();
     assert.equal(await card.locator('[data-gateway-line]').innerText(), 'Connected · $12.40 of $100.00 this month');
@@ -238,7 +238,6 @@ const shotsDir = process.env.TICO_SHOTS || '';
     connected = true;
 
     // 5. Decisions: a company level in Settings > Models > Defaults, saved with the rest.
-    await page.evaluate(() => settingsShow('models'));
     const level = page.locator('#set-prov [data-provider-decide]');
     await level.waitFor();
     assert.equal(await level.inputValue(), 'low');
@@ -261,7 +260,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
     await shot('phone-bots-gateway-bot.png');
     await page.evaluate(() => { location.hash = '#/settings'; });
     await page.waitForFunction(() => S.route === SETTINGS && !!document.querySelector('#settings-tabs'));
-    await page.evaluate(() => settingsShow('models'));
+    await page.locator('#settings-group-pick').selectOption('models');
     const phoneCard = page.locator('#settings-gateway-card');
     await phoneCard.locator('[data-gateway-prices]').waitFor();
     await phoneCard.locator('[data-gateway-services-row] > summary').click();

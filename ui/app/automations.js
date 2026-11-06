@@ -187,10 +187,16 @@ async function pageAutomations() {
 const auNormal = x => { const a = x?.automation || x || {}; a.steps ||= []; a.trigger ||= {}; return a; };
 
 function auShell() {
+  let legacyFilterNote = false;
+  try {
+    legacyFilterNote = sessionStorage.getItem('tico.automations.legacy-filter-note') === '1';
+    sessionStorage.removeItem('tico.automations.legacy-filter-note');
+  } catch { /* the legacy address still opens Automations */ }
   $('#main').innerHTML = `<div class="au" id="au-root">
     <header class="au-ph"><div class="au-hrow"><h1>Automations</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div></div><span class="au-sp"></span><button class="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button>
       <div class="au-hrow"><button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${auIcon('filter_alt')}<span class="au-fbn" hidden></span></button><span class="au-newbox"><button class="primary au-new" type="button" aria-label="New automation" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">add</span><span class="au-new-w">+ New</span></button>
       <div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span></div></header>
+    ${legacyFilterNote ? '<p class="settings-legacy-filter-note" role="status">The filter from the old Rules link did not carry over. Search or pick below.</p>' : ''}
     <div class="au-body">
       <aside class="au-rail" aria-label="Filters">
         <div class="au-s"><input class="au-q" type="search" placeholder="Search" aria-label="Search automations"></div>

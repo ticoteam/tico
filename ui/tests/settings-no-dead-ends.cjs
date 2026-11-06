@@ -1,13 +1,11 @@
 // Settings has no dead ends (settings stage 1). Fixtures only.
 //  - every #/settings/<name> link the app draws opens a real tab: a name Settings doesn't know would land on General
 //    with nothing said, which is how "Picks and services" once opened Updates;
-//  - Gateway is no tab: #/settings/gateway (and a card under it) opens Models with the Tico Gateway card in view; Health
-//    is no tab either: #/settings/health opens its page with no tab highlighted; nor is Repositories: its addresses open
-//    General with the Repositories card in view;
+//  - #/settings/gateway keeps opening its new home, the Tico Gateway card in AI models;
 //  - while a tab is shown the address bar names it (#/settings/<tab>), so it can be copied or shared: opening an address
 //    shows its tab's own, picking another tab follows without a history step, a reload reopens it, and a redraw
-//    (route() called again, as a status change does) keeps Settings and the tab; System is gone: its old addresses
-//    (and Rules and Routines before it) open Automations' System jobs, and its cards' addresses their new homes;
+//    (route() called again, as a status change does) keeps Settings and the tab; old System links reach Automations' System jobs,
+//    while retired Rules and Routines open Automations and their cards' addresses reach their new homes;
 //  - Inboxes moved to Tools: the old Google and Inbox addresses (Google's sign-in returns to #/settings/inbox) open
 //    Tools › Settings at Email, the old Mailboxes one Tools' mail, and an old inbox address its page under Tools,
 //    which a redraw and a reload keep;
@@ -24,12 +22,10 @@ const {unrouted} = require('./support/routes.cjs');
 const SPECIAL = ['models', 'providers', 'tags', 'types', 'runs', 'roadmap', 'subscriptions',
   'storage', 'team', 'company', 'assistant', 'privacy'];
 // Old names that leave Settings: Listening moved to Strategy › Market (ui/app/redesign.js; redesign-shell.cjs checks it),
-// the old Strategy Bot address only redirects to its tab (ui/app/router.js), so no link is drawn to it, and Inboxes'
-// old addresses redirect to Tools (ui/app/tools.js toolsRoute; checked below), System's (Rules and Routines before it)
-// leave for Automations (ui/app/settings.js settingsMovedOut; checked below), and Webhooks (once Triggers) went to
-// Automations, Tools and Models (ui/app/settings-webhooks.js whOldAddress; settings-webhooks.cjs checks them).
-const MOVED = ['listening', 'ceo', 'inboxes', 'rules', 'routines', 'webhooks', 'triggers'];
-
+// the old Strategy Bot address opens its card in Bots, and Inboxes'
+// old addresses redirect to Tools (ui/app/tools.js toolsRoute; checked below).
+const MOVED = ['listening', 'inboxes', 'inbox', 'google', 'mailboxes', 'inbound', 'company-inbox', 'email-phone', 'mail',
+  'triggers', 'webhooks'];
 // Every #/settings/<name> address written in the UI's sources.
 function settingsLinks() {
   const ui = path.join(__dirname, '..');
@@ -69,6 +65,9 @@ async function open(browser, {role = 'owner', hash = '#/settings'} = {}) {
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: [{bot: 'ops', state: 'idle'}]});
     if (p === '/api/v2/billing') return json({state: 'no_gateway'});
+    if (p === '/api/v2/settings/catalog') return json({settings: [{key: 'team.rules.admin_sql', name: 'Admins see SQL',
+      where: 'Settings > Company & policies > Team policies', class: 'confirm', who: 'owner', target: '',
+      card: '#/settings/policies/settings-policies', words: 'team rule', parts: []}]});
     if (p === '/api/v2/mailboxes') return json({admin, domain: 'acme.example', may: MAY, mine: null, shared: [], mailboxes: [MAILBOX]});
     if (p === '/api/v2/mailboxes/mb1') return json({mailbox: MAILBOX, can_manage: true, can_stop: true, may: MAY, routines: [],
       candidates: [], accesses: [{id: null, grantee_type: 'admins', grantee_id: '', name: 'Admins', level: 'read_write', implicit: true}]});
@@ -93,50 +92,41 @@ const address = page => page.evaluate(() => location.hash);
     {
       // A first visit opens General.
       const {page, context, errors} = await open(browser);
-      assert.equal(await selected(page), 'general', 'Settings opens on General');
+      assert.equal(await selected(page), 'you', 'Settings opens on General');
       assert.equal(await page.locator('#settings-denied').isVisible(), false);
 
       // Every link the app draws to a Settings address opens a tab Settings knows, for the owner, with no "admins" line.
-      const known = await page.evaluate(() => ({tabs: SETTINGS_TABS, alias: Object.keys(SETTINGS_ALIAS)}));
+      const known = await page.evaluate(() => ({tabs: SETTINGS_TABS, alias: Object.keys(SETTINGS_PLACES)}));
       for (const name of settingsLinks()) {
         assert.ok(known.tabs.includes(name) || known.alias.includes(name) || SPECIAL.includes(name),
           `#/settings/${name} is linked in the app but Settings has no such tab`);
         await go(page, `#/settings/${name}`);
         assert.equal(await page.locator('#settings-denied').isVisible(), false, `#/settings/${name} opens for the owner`);
-        if (name === 'health') assert.equal(await page.locator('#settings-tabs [aria-selected=true]').count(), 0, 'Health highlights no tab');
-        else if (known.tabs.includes(name)) assert.equal(await selected(page), name, `#/settings/${name} opens that tab`);
+        if (known.tabs.includes(name)) assert.equal(await selected(page), await page.evaluate(n => settingsPlace(n).group, name), `#/settings/${name} opens that tab`);
       }
 
-      // The old Gateway page, and a card under it, open Models scrolled to the Tico Gateway card once it is drawn.
-      for (const old of ['#/settings/gateway', '#/settings/gateway/set-gateway-page']) {
-        await go(page, '#/settings/general');
-        await go(page, old);
-        assert.equal(await selected(page), 'models', old);
-        assert.equal(await address(page), '#/settings/models', old);
-        await page.waitForFunction(() => { const r = document.querySelector('#settings-gateway-card[data-drawn]')?.getBoundingClientRect(); return r && !SETTINGS_REVEAL && r.top < innerHeight && r.bottom > 0; });
-      }
-      // The old Repositories tab's addresses open General scrolled to its card once it is drawn.
-      for (const old of ['#/settings/repos', '#/settings/repositories', '#/settings/repos/set-repos', '#/repositories']) {
-        await go(page, '#/settings/models');
-        await go(page, old);
-        assert.equal(await selected(page), 'general', old);
-        assert.equal(await address(page), '#/settings/general', old);
-        await page.waitForFunction(() => { const r = document.querySelector('#set-repos[data-drawn]')?.getBoundingClientRect(); return r && !SETTINGS_REVEAL && r.top < innerHeight && r.bottom > 0; });
-      }
-      assert.equal(await page.locator('#settings-tabs [data-settings-tab=gateway], #settings-tabs [data-settings-tab=health], #settings-tabs [data-settings-tab=repos], #settings-tabs [data-settings-tab=webhooks]').count(), 0,
-        'no Gateway, Health, Repositories or Webhooks tab');
+      // The old Gateway address opens the card's new home on AI models.
+      await go(page, '#/settings/gateway');
+      assert.equal(await selected(page), 'models');
+      await page.waitForFunction(() => {
+        const card = document.querySelector('#settings-gateway-card[data-drawn]'), r = card?.getBoundingClientRect();
+        return card && r && r.top < innerHeight && r.bottom > 0;
+      });
+      await go(page, '#/settings/models');
+      assert.equal(await selected(page), 'models');
+      assert.equal(await page.locator('#settings-gateway-card').isVisible(), true, 'the Gateway controls live on Models');
 
       // A Settings address survives a refresh in a new tab: the address, not the last tab, decides.
       const fresh = await context.newPage();
-      await fresh.goto('https://tico-ui.test/#/settings/security');
-      await fresh.waitForFunction(() => typeof SETTINGS_TAB !== 'undefined' && SETTINGS_TAB === 'security' && location.hash === '#/settings/security');
+      await fresh.goto('https://tico-ui.test/#/settings/system');
+      await fresh.waitForFunction(() => typeof SETTINGS_TAB !== 'undefined' && SETTINGS_TAB === 'automation' && location.hash === '#/settings/automation');
       await fresh.close();
       assert.deepEqual(errors, []);
       await context.close();
     }
     {
       // The address bar names the tab shown, so it can be copied, bookmarked or shared.
-      const {page, context, errors} = await open(browser, {hash: '#/settings/models'});
+      const {page, context, errors} = await open(browser, {hash: '#/settings/gateway'});
       await page.waitForFunction(() => SETTINGS_TAB === 'models');
       assert.equal(await address(page), '#/settings/models', 'an opened tab keeps its address');
       const steps = await page.evaluate(() => history.length);
@@ -153,25 +143,18 @@ const address = page => page.evaluate(() => location.hash);
       await go(page, '#/settings/devices/settings-models');
       assert.equal(await address(page), '#/settings/models', 'the old Models card on Computers opens Models');
       await go(page, '#/settings/computers');
-      assert.equal(await address(page), '#/settings/devices');
-      // System's old addresses (Rules and Routines before it) open Automations' System jobs, and its cards their new homes.
-      for (const [old, want] of [['#/settings/system', '#/automations/system-jobs'], ['#/settings/rules', '#/automations/system-jobs'],
-        ['#/settings/rules?task=t1', '#/automations/system-jobs'], ['#/settings/routines', '#/automations/system-jobs'],
-        ['#/settings/recurring', '#/automations/system-jobs'], ['#/settings/system/set-system-card', '#/automations/system-jobs'],
-        ['#/settings/system/set-task-manager-card', '#/bot/task-manager/settings'], ['#/settings/strategy-bot', '#/bot/goal-manager/settings'],
-        ['#/settings/system/set-strategy-bot-card', '#/bot/goal-manager/settings'], ['#/settings/ceo', '#/bot/goal-manager/settings'],
-        ['#/settings/system/set-release-card', '#/settings/bots'], ['#/settings/releases', '#/settings/bots']]) {
-        await page.evaluate(h => { location.hash = h; }, '#/settings/general');
-        await page.waitForFunction(() => location.hash === '#/settings/general');
+      assert.equal(await address(page), '#/settings/computers');
+      // Rules and Routines open Automations without carrying their retired filters. Recurring stays in Settings.
+      for (const old of ['#/settings/rules', '#/settings/rules?task=t1', '#/settings/routines', '#/settings/routines?bot=b1']) {
         await page.evaluate(h => { location.hash = h; }, old);
-        await page.waitForFunction(w => location.hash === w, want).catch(() => assert.fail(`${old} leads to ${want}`));
+        await page.waitForFunction(() => S.route === '#/automations' && location.hash === '#/automations');
+        await page.locator('.settings-legacy-filter-note').waitFor();
+        assert.ok(await page.locator('.settings-legacy-filter-note').isVisible());
       }
-      await go(page, '#/settings/system/set-screening-card');
-      assert.equal(await selected(page), 'security', 'Screening is on Security');
-      assert.equal(await address(page), '#/settings/security');
-      // A redraw keeps Settings and the tab.
+      await go(page, '#/settings/recurring');
+      assert.equal(await address(page), '#/settings/automation');
       await page.evaluate(() => route());
-      assert.deepEqual(await page.evaluate(() => [S.route, SETTINGS_TAB, location.hash]), ['#/settings', 'security', '#/settings/security']);
+      assert.deepEqual(await page.evaluate(() => [S.route, SETTINGS_TAB, location.hash]), ['#/settings', 'automation', '#/settings/automation']);
       // Leaving Settings and coming back by Back reopens the tab the address names.
       await page.evaluate(() => { location.hash = '#/settings/health'; });
       await page.waitForFunction(() => location.hash === '#/settings/health' && SETTINGS_TAB === 'health');
@@ -179,6 +162,24 @@ const address = page => page.evaluate(() => location.hash);
       await page.waitForFunction(() => S.route === '#/updates');
       await page.goBack();
       await page.waitForFunction(() => S.route === SETTINGS && SETTINGS_TAB === 'health' && location.hash === '#/settings/health');
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+    {
+      // Search reads the shared catalogue and opens the current group and card from its result.
+      const {page, context, errors} = await open(browser);
+      await page.locator('[data-settings-search-open]').click();
+      await page.locator('#settings-search-input').fill('SQL');
+      const result = page.locator('[data-settings-search-result]');
+      await result.waitFor();
+      assert.match(await result.innerText(), /Admins see SQL[\s\S]*Company & policies/);
+      await result.click();
+      await page.waitForFunction(() => SETTINGS_TAB === 'policies' && location.hash === '#/settings/policies');
+      assert.equal(await page.locator('#settings-policies').evaluate(el => el.classList.contains('settings-search-highlight')), true);
+      await page.locator('[data-settings-search-open]').click();
+      await page.locator('#settings-search-input').fill('no-such-setting');
+      await page.getByText(/No setting matches/).waitFor();
+      assert.equal(await page.locator('[data-settings-search-ask]').innerText(), 'Ask BotOps');
       assert.deepEqual(errors, []);
       await context.close();
     }
@@ -205,16 +206,13 @@ const address = page => page.evaluate(() => location.hash);
     {
       // A tab this person can't see opens General and says why; one that doesn't exist opens General quietly.
       const {page, context, errors} = await open(browser, {role: 'member', hash: '#/settings/people'});
-      await page.waitForFunction(() => SETTINGS_TAB === 'general');
-      assert.equal(await selected(page), 'general');
+      await page.waitForFunction(() => SETTINGS_TAB === 'you');
+      assert.equal(await selected(page), 'you');
       assert.equal(await page.locator('#settings-denied').isVisible(), true);
       assert.match(await page.locator('#settings-denied').innerText(), /That page is for admins/);
-      assert.equal(await address(page), '#/settings/general', 'the address names the tab shown, not the one refused');
-      await go(page, '#/settings/security');
-      assert.equal(await page.locator('#settings-denied').isVisible(), true, 'Security is for admins');
-      assert.equal(await page.locator('#settings-tabs [data-settings-tab=security]').count(), 0);
+      assert.equal(await address(page), '#/settings/you', 'the address names the tab shown, not the one refused');
       await go(page, '#/settings/nothing-here');
-      assert.equal(await selected(page), 'general');
+      assert.equal(await selected(page), 'you');
       assert.equal(await page.locator('#settings-denied').isVisible(), false, 'an unknown address says nothing about admins');
       assert.deepEqual(errors, []);
       await context.close();

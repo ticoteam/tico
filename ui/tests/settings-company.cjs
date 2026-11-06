@@ -55,7 +55,7 @@ const shots = process.env.TICO_SHOTS || '';
     const shot = async name => { if (shots) await card.screenshot({path: path.join(shots, name + '.png')}); };
 
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('[data-settings-tab=general]').click();
+    await page.locator('[data-settings-tab=policies]').click();
     await card.locator('[data-company-form]').waitFor();
     assert.equal(await page.locator('#account-administration').getAttribute('href'), null);
     assert.equal(await card.locator('h2').innerText(), 'Tico company');
@@ -77,8 +77,8 @@ const shots = process.env.TICO_SHOTS || '';
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll on a phone');
     await page.setViewportSize({width: 1280, height: 800});
 
-    page.once('dialog', dialog => dialog.accept());
     await card.locator('[data-company-disconnect]').click();
+    await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
     await card.locator('[data-company-form]').waitFor();
     assert.ok(asked.includes('DELETE'));
     assert.equal(await page.locator('#account-administration').getAttribute('href'), null);
@@ -87,7 +87,8 @@ const shots = process.env.TICO_SHOTS || '';
     const before = asked.length;
     await page.goto('about:blank');
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('[data-settings-tab=general]').click();
+    assert.equal(await page.locator('[data-settings-tab=policies]').count(), 0);
+    await page.locator('[data-settings-tab=you]').click();
     await page.locator('#settings-assistant-pane').waitFor();
     await page.waitForTimeout(400);
     assert.equal(await card.count(), 0);

@@ -155,7 +155,7 @@ async function inboxesAlerts(host, ctx) {
   });
 }
 
-// Settings › Notifications: drawn when General is shown, with a ctx that lives while its host is on the page.
+// Settings › Notifications: drawn when You is shown, with a ctx that lives while its host is on the page.
 function settingsNotificationsRender() {
   const host = $('#settings-notifications');
   if (!host) return;

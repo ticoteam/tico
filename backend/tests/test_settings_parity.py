@@ -65,6 +65,7 @@ SAMPLES = {
         "enabled": ["openai", "anthropic"],
         "expected_revision": o.get("providers-revision", 0),
     },
+    "alerts.company.cap": {"monthly_cap": 3},
     "bot.profile": {"description": "Keeps the books."},
     "bot.repositories": {
         "mode": "chosen",
@@ -88,6 +89,30 @@ SAMPLES = {
     "inbound.inbox.create": {"bot": "finance"},
     "inbound.inbox": {"enabled": True},
     "inbound.phone_request.cancel": {},
+    "letters.outbox.settings": {
+        "return_address": {
+            "name": "Acme Inc",
+            "line1": "1 Main Street",
+            "line2": "",
+            "city": "Dover",
+            "state": "DE",
+            "postal_code": "19901",
+        },
+        "mode": "ask_first",
+        "monthly_cap_micros": 1000000,
+    },
+    "letters.outbox.grant.bot": "send",
+    "letters.outbox.grant.person": "send",
+    "letters.bot.settings": {"mode": "ask_first", "monthly_cap_micros": 1000000},
+    "email.sending.company": {
+        "mode": "ask_first",
+        "what": "replies_only",
+        "to": "internal",
+        "daily_cap": 10,
+        "ask_new_address": True,
+        "who_can_ok": "bot_managers",
+    },
+    "email.sending.bot": {"mode": "ask_first", "what": "replies_only", "to": "internal", "daily_cap": 5},
     "bot.budget": lambda o: {"turns_per_hour": 10, "expected_revision": o.get("bot-revision", 1)},
     "storage.move": {"expect_bytes": 0},
     # A computer given the subscription `_objects` made for it (a real computer and a real subscription, no run to stop).

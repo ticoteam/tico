@@ -386,6 +386,21 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       await go(page, '#/settings');
       await page.locator('#settings-tabs').waitFor();
       assert.equal(await page.locator('[data-settings-tab="webhooks"], [data-settings-tab="triggers"]').count(), 0);
+      await go(page, '#/settings/connections');
+      const shortcut = page.locator('#settings-webhooks');
+      assert.equal((await shortcut.locator('.settings-card-line').innerText()).trim(),
+        'Incoming webhooks start work here, outgoing webhooks send events to other services, and Tico Gateway can relay an incoming webhook.');
+      assert.deepEqual(await shortcut.locator('a').evaluateAll(links => links.map(a => [a.innerText, a.getAttribute('href')])), [
+        ['Open incoming webhooks', '#/automations/webhooks'], ['Open outgoing webhooks', '#/tools/webhooks'], ['Open Tico Gateway', '#/settings/webhooks/gateway'],
+      ]);
+      await shortcut.getByRole('link', {name: 'Open incoming webhooks'}).click();
+      await page.waitForFunction(() => location.hash === '#/automations/webhooks');
+      await go(page, '#/settings/connections');
+      await page.locator('#settings-webhooks').getByRole('link', {name: 'Open outgoing webhooks'}).click();
+      await page.waitForFunction(() => location.hash === '#/tools/webhooks');
+      await go(page, '#/settings/connections');
+      await page.locator('#settings-webhooks').getByRole('link', {name: 'Open Tico Gateway'}).click();
+      await page.waitForFunction(() => location.hash === '#/settings/models');
       // Old addresses, each at its part's new home.
       for (const [from, to] of [['#/webhooks', '#/automations/webhooks'], ['#/settings/triggers', '#/automations/webhooks'],
         ['#/settings/webhooks', '#/automations/webhooks'], ['#/settings/webhooks/incoming', '#/automations/webhooks'],

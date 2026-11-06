@@ -47,7 +47,7 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('[data-settings-tab=general]').click();
+    await page.locator('[data-settings-tab=policies]').click();
     const input = page.locator('#settings-team-icon-file'), status = page.locator('#settings-team-icon-status');
     // A toast lasts a few seconds, so an earlier save's Saved is still up during the next one: each wait counts only
     // toasts that appeared after this mark.
@@ -100,7 +100,7 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     // live in Settings > System (ui/app/settings-recurring.js): no switch here, and no note saying they moved.
     role = 'owner'; cloud = false;
     await page.reload();
-    await page.locator('[data-settings-tab=general]').click();
+    await page.locator('[data-settings-tab=policies]').click();
     assert.equal(await page.locator('#settings-team-icon-change').count(),0);
     assert.equal(await page.locator('#settings-stale-review, #settings-topic-fresh').count(),0);
     assert.equal(await page.locator('#settings-team [data-settings-moved], #settings-team-moved').count(),0);

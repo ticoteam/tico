@@ -58,7 +58,7 @@ const {unrouted} = require('./support/routes.cjs');
     await v.ctx.close();
 
     v = await visit({notice: false, hash: '#/settings'});
-    await v.page.locator('[data-settings-tab="general"]').click();
+    await v.page.locator('[data-settings-tab="policies"]').click();
     await v.page.locator('#privacy-count').waitFor();
     assert.equal(await v.page.locator('#privacy-count').isChecked(), true);
     await v.page.locator('#privacy-count').uncheck();

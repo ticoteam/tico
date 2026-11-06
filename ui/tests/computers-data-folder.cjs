@@ -51,7 +51,7 @@ const {unrouted} = require('./support/routes.cjs');
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('[data-settings-tab=devices]').click();
+    await page.locator('[data-settings-tab=computers]').click();
     const row = page.locator('#set-machines tr[data-computer-row="box"]');
     await row.waitFor();
 

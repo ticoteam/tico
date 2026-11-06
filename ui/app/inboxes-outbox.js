@@ -87,7 +87,9 @@ async function lettersOutAccess(host, ctx, config, grants) {
   for (const item of host.querySelectorAll('[data-lo-grant]')) {
     const [type, id] = item.dataset.loGrant.split(':'), path = `/v2/letters/outboxes/company/grants/${encodeURIComponent(type)}/${encodeURIComponent(id)}`;
     item.querySelector('[data-lo-revoke]').onclick = async event => {
-      const button = event.currentTarget; button.disabled = true;
+      const button = event.currentTarget;
+      if (!await settingsConfirm({title: 'Remove send access?', text: 'This person or bot will no longer be able to send letters for this team.', ok: 'Remove access'})) return;
+      button.disabled = true;
       try { await writeRequest('DELETE', path, {}); if (ctx.live()) ctx.refresh(); }
       catch (e) { if (ctx.live()) { toast(e.message, true); button.disabled = false; } }
     };

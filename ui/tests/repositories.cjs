@@ -1,12 +1,11 @@
-// Offline regression for Settings > General › Repositories and a bot's Repositories (docs: PLAN sections 1 and 2). Fixtures only.
+// Offline regression for Settings > Repositories and a bot's Repositories (docs: PLAN sections 1 and 2). Fixtures only.
 //  - In use lists the ticked repositories one line each, a tap opening the setup command and Remove; Not in use stays one
 //    line until searched or opened, hides bot repos until asked, draws at most 100 rows; a setup command read from
 //    tico.json or conductor.json and a repository GitHub no longer lists are marked; Add, Remove, a setup command,
 //    New bots get and Refresh each send their request;
 //  - the bot editor's Repositories: Their own repo, All repos in use with Read or Write, Chosen repos with Read or Write
 //    per repository, each change a PUT with the whole choice; Effective lists what the bot reaches;
-//  - the card is for owners and admins (a member's link says so; a bot's owner reads the bot's choice, read only);
-//    with GitHub not connected the card is one line.
+//  - a member sees the same, read only; with GitHub not connected the page is one line.
 // REPO_SHOTS=<dir> also saves the screenshots the owner approves.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -14,6 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {selectSettingsGroup} = require('./support/settings.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const SHOTS = process.env.REPO_SHOTS || '';
 
@@ -146,8 +146,7 @@ async function open(browser, {role = 'owner', admin = false, connected = true, v
   });
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('https://tico-ui.test/#/repositories');
-  // Repositories is a card on General now; its old address opens General.
-  await page.waitForFunction(() => S.route === '#/settings' && SETTINGS_TAB === 'general');
+  await page.waitForFunction(() => S.route === '#/settings' && SETTINGS_TAB === 'connections');
   return {page, errors, writes, data};
 }
 const shot = async (page, name) => { if (SHOTS) await page.screenshot({path: path.join(SHOTS, name), fullPage: false}); };
@@ -165,10 +164,6 @@ async function owner(browser) {
   const on = page.locator('#set-repos [data-repos-on] > .repo-row'), off = page.locator('#set-repos [data-repos-off] > .repo-row');
   const row = name => page.locator(`#set-repos [data-repo="${name}"]`);
   await on.first().waitFor();
-  // The old tab's address opens General, scrolled to the card once it is drawn; no Repositories tab is left.
-  assert.equal(await page.locator('#set-repos').evaluate(el => el.closest('.settings-pane').id), 'settings-general');
-  assert.equal(await page.locator('[data-settings-tab="repos"]').count(), 0);
-  await page.waitForFunction(() => { const r = document.querySelector('#set-repos').getBoundingClientRect(); return r.top < innerHeight && r.bottom > 0; });
   // In use: the seven ticked repositories, one line each, no setup inputs until a row opens; Not in use: one closed line.
   assert.deepEqual(await on.evaluateAll(els => els.map(el => el.dataset.repo)),
     ['acme/api', 'acme/bot-release-captain', 'acme/data-pipeline', 'acme/design-system', 'acme/mobile', 'acme/sdk-js', 'acme/web']);
@@ -206,14 +201,15 @@ async function owner(browser) {
   assert.match(await page.locator('#set-repos [data-repos-off] > .empty').innerText(), /^55 more/);
   assert.match(await row('acme/legacy-billing').innerText(), /Not reachable/);
   assert.equal(await row('acme/legacy-billing').locator('[data-repo-add]').count(), 1);
-  await page.evaluate(() => document.querySelector('#set-repos').scrollIntoView({block: 'start'}));
   await settled(page);
   await shot(page, 'settings-repositories-desktop-dark.png');
+  await selectSettingsGroup(page, 'you');
   await page.locator('[data-theme-choice=light]').click();
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
   await settled(page);
   await shot(page, 'settings-repositories-desktop-light.png');
   await page.locator('[data-theme-choice=dark]').click();
+  await selectSettingsGroup(page, 'connections');
   // Bot repos join Not in use when asked for.
   await page.locator('#set-repos [data-repos-bots]').check();
   assert.match(await row('acme/bot-support').innerText(), /bot/);
@@ -221,6 +217,20 @@ async function owner(browser) {
   assert.equal(await row('acme/bot-support').count(), 0);
   await page.locator('#set-repos [data-repos-off-toggle]').click();
   assert.equal(await off.count(), 0);
+
+   // Settings search opens the right repository row, including an off row hidden under Not in use.
+   await page.evaluate(() => {
+     sessionStorage.setItem('tico.settings.search.repo-target', JSON.stringify({repo: 'acme/web', target: 'repo.setup_command'}));
+     settingsSearchRevealRepo();
+   });
+   assert.equal(await row('acme/web').locator('[data-repo-setup]').evaluate(el => el === document.activeElement), true);
+   await page.evaluate(() => {
+     sessionStorage.setItem('tico.settings.search.repo-target', JSON.stringify({repo: 'acme/docs-site', target: 'repo.enabled'}));
+     reposDrawList();
+   });
+   assert.equal(await row('acme/docs-site').locator('[data-repo-add]').evaluate(el => el === document.activeElement), true);
+   assert.equal(await page.locator('#set-repos [data-repos-off-body]').isVisible(), true);
+   assert.equal(await page.locator('#set-repos [data-repos-filter]').inputValue(), 'acme/docs-site');
 
   // A setup command (Enter saves) sends its request; set here, the file hint goes.
   const webSetup = row('acme/web').locator('[data-repo-setup]');
@@ -520,9 +530,18 @@ async function saves(browser) {
 
 async function member(browser) {
   const {page, errors, writes} = await open(browser, {role: 'member'});
-  // The Repositories card on General is for owners and admins: a member's link to it says so.
-  await page.locator('#settings-denied').waitFor();
-  assert.equal(await page.locator('#set-repos').count(), 0);
+  await page.locator('#set-repos .repo-row').first().waitFor();
+  assert.equal(await page.locator('#set-repos [data-product-repo]').count(), 0, 'product creation is Owner-only');
+  assert.equal(await page.locator('#set-repos [data-product-repo-open]').count(), 0);
+  await page.locator('#set-repos [data-repo="acme/web"] [data-repo-open]').click();
+  assert.equal(await page.locator('#set-repos [data-repo="acme/web"] [data-repo-setup]').inputValue(), 'pnpm install', 'read only, still readable');
+  assert.equal(await page.locator('#set-repos [data-repo-setup]:not([readonly])').count(), 0);
+  await page.locator('#set-repos [data-repos-off-toggle]').click();
+  assert.ok(await page.locator('#set-repos [data-repos-off] > .repo-row').count() > 0);
+  assert.equal(await page.locator('#set-repos :is([data-repo-add], [data-repo-remove])').count(), 0);
+  assert.equal(await page.locator('#set-repos select[name=repos_new_bot]').isDisabled(), true);
+  assert.equal(await page.locator('#set-repos [data-repos-refresh]').isDisabled(), true);
+  assert.equal(await page.locator('#set-repos [data-repos-bots]').isDisabled(), false, 'showing bot repos is only a view');
   // One of the bot's owners opens its settings: the same choice, read only.
   await page.evaluate(() => settingsEditBot('release-captain'));
   const box = page.locator('#bot-editor [data-bot-repos]');
@@ -539,7 +558,7 @@ async function member(browser) {
 async function notConnected(browser) {
   const {page, errors} = await open(browser, {connected: false});
   await page.locator('#set-repos .repos-line').waitFor();
-  assert.equal((await page.locator('#set-repos').innerText()).replace(/\s+/g, ' '), "Repositories The GitHub App is not connected; bots use their computers' own GitHub sign-in. Connect GitHub");
+  assert.equal((await page.locator('#set-repos').innerText()).replace(/\s+/g, ' '), "Repositories Ask BotOps The code repositories bots may work in, and what each bot may do there. The GitHub App is not connected; bots use their computers' own GitHub sign-in. Connect GitHub");
   assert.equal(await page.locator('#set-repos a[data-repos-connect]').getAttribute('href'), '#/tools/github');
   // The bot editor has no Repositories section then.
   await page.evaluate(() => {         // note when the Repositories section has finished deciding whether to show
@@ -563,7 +582,8 @@ async function phone(browser) {
   await page.locator('#set-repos [data-repo="acme/legacy-billing"]').waitFor();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(overflow <= 0, `no sideways scroll on a phone (${overflow}px)`);
-  await page.evaluate(() => document.querySelector('#set-repos').scrollIntoView({block: 'start'}));
+  await page.locator('#settings-repos').scrollIntoViewIfNeeded();
+  await page.evaluate(() => document.querySelector('#settings-tabs').scrollIntoView({block: 'start'}));
   await shot(page, 'settings-repositories-phone-dark.png');
   await page.evaluate(() => document.querySelector('#set-repos .repos-off-head').scrollIntoView({block: 'start'}));
   await shot(page, 'settings-repositories-phone-not-in-use-dark.png');

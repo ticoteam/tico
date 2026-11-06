@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile, harnesses} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {selectSettingsGroup} = require('./support/settings.cjs');
 
 // ---- model-sign-out
 // Sign out and Switch account from the app (ui/model-login.js, backend/model_login.py). In a computer's pop-up on
@@ -130,7 +131,7 @@ async function signOut(browser) {
         return json(unrouted(p));
       });
       await page.goto('https://tico-ui.test/#/settings');
-      await page.locator('[data-settings-tab=devices]').click();
+      await selectSettingsGroup(page, 'computers');
       await page.locator('#set-machines .machine-name[data-computer-open=box]').click();
       await page.locator('#set-machines dialog.computer-detail[open] [data-connection]').first().waitFor();
       return {page, box, writes, errors, rows, finish, hold, last: () => `${['in', 'out'].find(k => rows[`${k}${seq}`])}${seq}`};
@@ -400,7 +401,7 @@ async function keys(browser) {
         return json(unrouted(p));
       });
       await page.goto('https://tico-ui.test/#/settings');
-      await page.locator('[data-settings-tab=devices]').click();
+      await selectSettingsGroup(page, 'computers');
       await page.locator('#set-machines .machine-name[data-computer-open=box]').click();
       await page.locator('#set-machines dialog.computer-detail[open] [data-connection]').first().waitFor();
       return {page, box, writes, errors};

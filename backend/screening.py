@@ -1,8 +1,7 @@
 """Screening: outside text checked for prompt injection at the doors it comes in by, before a bot reads it
 (questions/injection-screen.json, docs/permissions.md "Screening").
 
-Six doors, each with its own mode (off, warn or hold; Settings > Security > Screening):
-
+Six doors, each with its own mode (off, warn or hold; Settings > Company & policies > What bots may do alone > Screening):
   webhook  a call whose automation opens a task or starts a bot's turn, and a `create_task` rule on `webhook.received`
   mail     an inbound message (backend/inbound.py) a bot reads
   idea     the public roadmap's suggestion form (backend/public_roadmaps.py)
@@ -870,6 +869,7 @@ class ScreeningModes(Contract):
     idea: Optional[Literal["off", "warn", "hold"]] = None
     watcher: Optional[Literal["off", "warn", "hold"]] = None
     document: Optional[Literal["off", "warn", "hold"]] = None
+    slack: Optional[Literal["off", "warn", "hold"]] = None
     patterns: Optional[bool] = None
     model: Optional[bool] = None
 

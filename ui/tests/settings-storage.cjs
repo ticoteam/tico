@@ -64,7 +64,7 @@ const shots = process.env.TICO_SHOTS || '';
     const redraw = () => page.evaluate(() => hlRefresh());
 
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('#settings-health-line [data-hl-details]').click();   // Health has no tab: General's Health line opens it
+    await page.locator('[data-settings-tab=health]').click();
     const row = page.locator('#hl-page .hl-storage');
     await row.waitFor();
     // S3 while copying: bucket, files and size, progress, failures in red; no Set up S3

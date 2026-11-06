@@ -4,6 +4,7 @@
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
 
+import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -136,6 +137,47 @@ def test_find_lists_admins_see_sql_with_its_place_and_class(api):
     assert sql["card"].endswith(ENTRY("team.rules.admin_sql").card)
 
 
+def test_settings_search_finds_a_control_inside_an_entry_by_its_own_name(api):
+    """Settings search and BotOps share one catalogue, including controls nested inside a card."""
+    assert settings_catalog.find("run workflows")[0].key == "bot.repositories"
+    found = get(api, "settings/catalog")["settings"]
+    repos = next(setting for setting in found if setting["key"] == "bot.repositories")
+    assert {"name": "Run workflows", "help": "Start, rerun and cancel workflow runs (GitHub Actions: write)"} in repos[
+        "parts"
+    ]
+    assert repos["target"] == "bot" and "workflows" in repos["words"]
+    assert all(isinstance(setting["parts"], list) and "words" in setting for setting in found)
+
+
+def test_a_setting_added_to_the_catalogue_reaches_settings_search_with_no_other_list(api, monkeypatch):
+    """The catalogue is the only Settings search source, so a new entry is found without a second list."""
+    from backend import settings_entries
+
+    added = settings_catalog.Setting(
+        "team.search_probe",
+        "Probe the search",
+        "Settings > Company & policies",
+        "owner",
+        "direct",
+        "PUT",
+        "access/rules",
+        "search_probe",
+        card="#/settings/general",
+        words="synthetic needle",
+        parts=(("Haystack lever", "A part's help line"),),
+    )
+    monkeypatch.setattr(settings_entries, "ENTRIES", [*settings_entries.ENTRIES, added])
+    every = get(api, "settings/catalog")["settings"]
+    assert len(every) == len(settings_entries.ENTRIES) > 20
+    probe = next(setting for setting in every if setting["key"] == "team.search_probe")
+    assert probe["where"] == "Settings > Company & policies" and probe["card"].endswith("#/settings/general")
+    assert probe["words"] == "synthetic needle"
+    assert probe["parts"] == [{"name": "Haystack lever", "help": "A part's help line"}]
+    assert [setting["key"] for setting in get(api, "settings/catalog?q=haystack lever")["settings"]] == [
+        "team.search_probe"
+    ]
+
+
 def ENTRY(key):  # noqa: N802
     return settings_catalog.entry(key)
 
@@ -179,6 +221,47 @@ def test_a_person_only_setting_gets_the_reason_and_the_cards_link(api, botops):
     err, refused = mcp(api, "hub_settings_set", {"key": person_only.key, "value": "x"}, ana["token"])
     assert err and person_only.card in str(refused), refused
     finish(api, botops, ana)
+
+
+def test_mailbox_routine_is_catalogued_but_not_offered_as_a_botops_card(api, botops):
+    routine = settings_catalog.entry("mailbox.routine")
+    ana = turn(api, botops, person="ana-test", text="Disable the mailbox routine")
+    err, refused = mcp(
+        api, "hub_settings_set", {"key": routine.key, "id": "routine-test", "value": {"enabled": False}}, ana["token"]
+    )
+    assert err and "person_only" in str(refused) and routine.card in str(refused), refused
+    finish(api, botops, ana)
+
+
+def test_mailbox_routine_class_does_not_override_other_automation_routes(api):
+    now = H.now()
+    with api.app.state.store.transaction() as c:
+        ids = {}
+        for name, trigger, steps in (
+            ("mail", {"type": "message", "inbox": "ana@acme.example"}, []),
+            ("event", {"type": "event", "name": "task.created"}, []),
+            (
+                "outbound",
+                {"type": "event", "name": "task.created"},
+                [{"action": "call_webhook", "url": "https://acme.example/hook"}],
+            ),
+        ):
+            ident = H.new_id()
+            flow = {"name": name, "owner": "person:ana", "trigger": trigger, "steps": steps}
+            c.execute(
+                "INSERT INTO automations(id,name,owner_id,trigger_type,enabled,builtin,flow,version,created_at,"
+                "created_by_id,updated_at) VALUES(?,?,?,?,1,0,?,1,?,?,?)",
+                (ident, name, "person:ana", trigger["type"], json.dumps(flow), now, "human:ana", now),
+            )
+            ids[name] = ident
+
+        classes = {
+            name: settings_catalog.stored_class(c, "PATCH", "/api/v2/automations/" + ident, {"name": "renamed"})
+            for name, ident in ids.items()
+        }
+    assert classes["mail"][2] == "confirm"  # The route keeps its existing Assistant confirmation behavior.
+    assert classes["event"][2] == "direct"  # A safe event edit keeps the route's direct behavior.
+    assert classes["outbound"][2] == "confirm"  # An external send keeps the route's confirmation gate.
 
 
 def test_someone_without_the_rights_is_told_who_can(api, botops):

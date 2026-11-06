@@ -8,10 +8,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS = "#/settings"
-# Names settingsShow takes besides the tabs: old ones it maps (tags, types, providers; team, assistant, privacy and
-# storage, now sections of General; gateway, now a card on Models), the Models section of Computers (models), History's
-# Runs view (runs), ones it sends to the Tools page (credentials, cloud), or Health, a page with no tab that General's
-# Health line opens.
+# Names settingsShow takes besides the groups: old ones it maps (tags, types, providers; team, assistant, privacy and
+# storage, now sections of Company & policies; gateway, now on AI models; models, History's Runs view (runs), and ones
+# it sends to the Tools page (credentials, cloud). Health has its own group and old links keep working.
 ALIASES = {
     "tags",
     "types",
@@ -30,10 +29,12 @@ ALIASES = {
 
 
 def settings_tabs():
-    tabs = set(re.findall(r'data-settings-tab="([a-z]+)"', (ROOT / "ui/app/settings.js").read_text()))
-    assert {"devices", "bots"} <= tabs
-    assert 'id="settings-health"' in (ROOT / "ui/app/settings.js").read_text()
-    return tabs | ALIASES
+    source = (ROOT / "ui/app/settings.js").read_text()
+    groups = set(re.findall(r"key: '([a-z-]+)'", source))
+    places = source.split("const SETTINGS_PLACES = {", 1)[1].split("};", 1)[0]
+    aliases = set(re.findall(r"(?:^|[,\n])\s*(?:'([a-z-]+)'|([a-z-]+)):", places))
+    assert {"computers", "bots", "health"} <= groups
+    return groups | {a or b for a, b in aliases} | ALIASES | {"devices"}
 
 
 def ui_links():
@@ -78,9 +79,10 @@ def server_links():
 
 def test_ui_links_name_a_settings_tab_that_exists():
     tabs, links = settings_tabs(), list(ui_links())
-    # The links people hit most: chat's waiting line, the heartbeat banner, first run.
+    # The links people hit most: chat's waiting line, the health banner, first run; both computer aliases keep working.
     assert {
         ("ui/app/chat.js", "models"),
+        ("ui/app/chat.js", "computers"),
         ("ui/app/chat.js", "devices"),
         ("ui/app/heartbeat.js", "health"),
         ("ui/first-run.js", "models"),

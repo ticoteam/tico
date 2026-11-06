@@ -112,7 +112,7 @@
     "ui/app/settings-strategy-bot.js": 2,
     "ui/app/settings-tasks.js": 1,
     "ui/app/settings-webhooks.js": 51,
-    "ui/app/settings.js": 67,
+    "ui/app/settings.js": 66,
     "ui/app/shared-edit.js": 10,
     "ui/app/sidebar.js": 142,
     "ui/app/skills.js": 24,

@@ -42,6 +42,7 @@ WHO = {
     "creator": "the person who made it, an admin or the owner",
     "operator": "the computer's operator, an admin or the owner",
     "scope": "the people who manage the rule's scope (for a team rule, the owner or an admin)",
+    "automation": "the automation's owner, people above its owner, or its group's lead",
     "anyone": "anyone on the team",
 }
 TARGETS = ("bot", "computer", "person", "id")
@@ -67,6 +68,7 @@ class Setting:
     why: str = ""  # person-only: the one-line reason
     confirm_when: tuple = ()  # ((dotted body place, values), ...): a direct entry whose body holds one is `when_held`
     when_held: str = "confirm"
+    parts: tuple = ()  # ((name, help line), ...): controls one entry's card holds
 
     @property
     def target(self):
@@ -97,7 +99,8 @@ def find(words, limit=20):
     wanted = _tokens(words)
     rows = []
     for e in _entries():
-        name, rest = _tokens(e.name), _tokens(" ".join((e.where, e.key.replace(".", " ").replace("_", " "), e.words)))
+        name = _tokens(" ".join((e.name, *(part for part, _ in e.parts))))
+        rest = _tokens(" ".join((e.where, e.key.replace(".", " ").replace("_", " "), e.words)))
         hits = len(wanted & (name | rest))
         if wanted and not hits:
             continue
@@ -147,6 +150,8 @@ def public(e, base=""):
         "route": "/api/v2/" + e.route,
         "body": body_shape(e),
         "card": (base.rstrip("/") + "/" + e.card) if base else e.card,
+        "words": e.words,
+        "parts": [{"name": part, "help": help_line} for part, help_line in e.parts],
         **({"why": e.why} if e.why else {}),
         **(
             {"class_when": {"class": e.when_held, "body": {place: list(values) for place, values in e.confirm_when}}}
@@ -333,6 +338,16 @@ def may(c, auth, who, e, target=None):
         return who.role == "human" and (
             e.target != "person" or who.actor == "human:" + str((target or {}).get("person"))
         )
+    # Match the automation route's manager check when rewriting its refusal; the `person` class in `plan` still keeps
+    # BotOps and the Assistant from changing this Settings control through a chat card.
+    target_id = (target or {}).get("id")
+    if e.who == "automation" and e.kind == "person" and e.route.startswith("automations/") and target_id:
+        if who.role not in ("owner", "human"):
+            return False
+        from . import automations
+
+        row = automations._row(c, str(target_id))
+        return bool(row) and automations.may_change(c, who, automations.flow_of(row))
     return False
 
 
@@ -542,11 +557,29 @@ def matched(method, path, body):
 def stored_class(c, method, path, body, trial=None):
     """`matched`, with a change classed by what it does to stored state, as `plan` classes it: a repository change is a
     card when `trial(e, target, body)` (the change tried as the person's own click, `repositories.card_words`) says
-    the route would make one; with no trial, always."""
+    the route would make one; automation changes keep their existing send and confirmation boundaries."""
     found = matched(method, path, body)
-    if not found or found[2] != "stored":
+    if not found:
         return found
     e, target, _ = found
+    if e.key == "mailbox.routine":
+        # The mailbox Settings entry shares an API route with other automations. Preserve ordinary edits, while an
+        # email routine or any outside send keeps the route's confirmation boundary.
+        from . import automations
+
+        row = automations._row(c, str(target.get("id") or ""))
+        trigger = (automations.flow_of(row).get("trigger") or {}) if row else {}
+        inbox = str(trigger.get("inbox") or "")
+        from . import assistant
+
+        flow = automations.flow_of(row) if row else {}
+        if assistant._sends(flow) or assistant._body_sends(body or {}):
+            return e, target, "confirm"
+        if trigger.get("type") == "message" and "@" in inbox:
+            return e, target, "confirm"
+        return e, target, "direct"
+    if found[2] != "stored":
+        return found
     return e, target, "direct" if trial and not trial(e, target, body) else e.when_held
 
 

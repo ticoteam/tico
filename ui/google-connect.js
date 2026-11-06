@@ -569,7 +569,7 @@
 
   async function disconnectPersonal(host, button) {
     const personal = host._googleState.personal;
-    if (!confirm(`Disconnect ${personal.mailbox}? Tico's access is revoked at Google, and your message bot stops reading this inbox.`)) return;
+    if (!await settingsConfirm({title: `Disconnect ${personal.mailbox}?`, ok: 'Disconnect', text: "Tico's access is revoked at Google, and your message bot stops reading this inbox."})) return;
     const status = host.querySelector('[data-google-status]');
     button.disabled = true;
     try {

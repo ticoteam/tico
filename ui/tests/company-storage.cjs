@@ -19,7 +19,8 @@ const {unrouted} = require('./support/routes.cjs');
       const estimate = () => move ? {to: 'tico-files-us/c/acme', files: 0, bytes: 0, gb: 0}
         : {to: 'tico-files-us/c/acme', files: 3, bytes: 2500000000, gb: 2.5};
       page.on('pageerror', e => errors.push(e.message));
-      page.on('dialog', d => d.accept());
+      let browserDialogs = 0;
+      page.on('dialog', async d => { browserDialogs += 1; await d.dismiss(); });
       await page.route('**/*', route => {
         const req = route.request(), p = new URL(req.url()).pathname;
         const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -60,7 +61,7 @@ const {unrouted} = require('./support/routes.cjs');
       });
       await page.goto('https://tico-ui.test/' + hash);
       await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
-      return {page, ctx, errors, calls};
+      return {page, ctx, errors, calls, browserDialogs: () => browserDialogs};
     };
 
     let v = await visit();
@@ -82,8 +83,13 @@ const {unrouted} = require('./support/routes.cjs');
       {bucket: 'acme-files', region: 'us-west-2', prefix: 'tico', access_key_id: 'AKIAEXAMPLEGOOD0001', secret_access_key: 'example-secret'});
     assert.equal(await v.page.locator('[data-storage-form] [name=secret_access_key]').inputValue(), '', 'the secret is not kept on screen');
     await v.page.locator('[data-storage-off]').click();
+    const offConfirm = v.page.locator('dialog.settings-confirm[open]');
+    await offConfirm.waitFor();
+    assert.equal(v.calls.some(c => c.startsWith('DELETE')), false, 'switching back waits for in-app confirmation');
+    await offConfirm.locator('[data-confirm-ok]').click();
     await v.page.waitForFunction(() => /Still read from \(1\)/.test(document.querySelector('#set-storage')?.textContent));
     assert.ok(v.calls.some(c => c.startsWith('DELETE')));
+    assert.equal(v.browserDialogs(), 0, 'Settings never uses the browser confirmation');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
@@ -97,6 +103,10 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await hosting.locator('[data-move]').innerText(), 'Move existing files');
     assert.equal(await hosting.locator('[data-export]').getAttribute('href'), '/api/v2/system/storage/export');
     await hosting.locator('[data-move]').click();
+    const moveConfirm = v.page.locator('dialog.settings-confirm[open]');
+    await moveConfirm.waitFor();
+    assert.equal(v.calls.some(c => c.startsWith('POST move')), false, 'moving files waits for in-app confirmation');
+    await moveConfirm.locator('[data-confirm-ok]').click();
     await v.page.waitForFunction(() => /Moved 3 files, 2\.50 GB, as estimated/.test(document.querySelector('[data-move-line]')?.textContent));
     assert.deepEqual(JSON.parse(v.calls.find(c => c.startsWith('POST move')).slice(10)), {expect_bytes: 2500000000});
     assert.equal(await hosting.locator('[data-move]').isHidden(), true, 'nothing left to move');
@@ -104,6 +114,7 @@ const {unrouted} = require('./support/routes.cjs');
     await v.page.waitForFunction(() => document.querySelector('[data-storage-tico]'));
     assert.ok(v.calls.includes('POST check'));
     assert.deepEqual(v.errors, []);
+    assert.equal(v.browserDialogs(), 0, 'Settings never uses the browser confirmation');
     await v.ctx.close();
 
     // Stopped: the same move goes the other way.
