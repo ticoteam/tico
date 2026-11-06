@@ -60,7 +60,7 @@ def test_the_owner_follows_and_filing_does_not(api):
     assert mine["following"] is False and mine["notify"] is None
     assert [(f["actor"], f["notify"], f["reason"]) for f in get(api, "tasks/" + row["id"])["task"]["followers"]] == [
         ("bot:ops", "live", "owner")]
-    chosen = made(api, follow=True)
+    chosen = made(api, follow=True, title="Ops monthly sweep", body="Check the month and close what is done.")
     assert who(api, chosen["id"]) == {"bot:ops": ("live", "owner"), "human:ana": ("live", "manual")}
     assert followers(api, chosen["id"])["following"] is True
     # A bot that files a task follows it only when it says so.
