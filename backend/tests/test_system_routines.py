@@ -37,52 +37,58 @@ def test_the_jobs_list_and_each_run_record(api):
     assert {k for k, j in jobs.items() if j["controllable"]} == {
         "stale_review",
         "kpi_asks",
-        "ask_deadlines",
         "task_manager_report",
         "bookkeeper_check",
-    } - hidden
+    } - hidden, "Ask go-ahead's switch is on its Heartbeat step (test_heartbeat.py)"
     assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "thread_rank"}
     assert "learnings" not in jobs, "Learn runs in Maintenance"
     # Housekeeping has no switch; Task roundup and Learn run in Maintenance.
     assert all(j["needed"] == (j["group"] == "housekeeping" and not j["controllable"]) for j in jobs.values())
     assert "task_roundup" not in jobs
     assert jobs["stale_review"]["schedule"] == "Hourly"
-    for key in ("due_reminders", "ask_deadlines", "approval_expiry"):
-        assert jobs[key]["group"] == "reminders"
-    for key in ("stall_checks", "snooze_ends", "gateway_check", "billing_check", "directory_sync"):
+    assert jobs["still_needed"]["group"] == "reminders"
+    for key in ("heartbeat", "waiting_checks", "gateway_check", "billing_check", "directory_sync"):
         assert SR.BY_KEY[key].group == "housekeeping"
+    for key in ("due_reminders", "ask_deadlines", "approval_expiry", "stall_checks", "snooze_ends"):
+        assert key not in jobs, "a Heartbeat step, listed on the Heartbeat (backend/heartbeat.py)"
     assert all(j.get("records", True) for j in jobs.values()), "every job writes its runs"
     # a scheduler tick records each run with its result and next run
     store = api.app.state.store
     at = datetime.now(timezone.utc)
     Scheduler(store, api.app.state.execution).tick(at)
     jobs, _ = rows(api)
-    for key in ("ask_deadlines", "approval_expiry", "stall_checks", "kpi_asks", "due_reminders", "snooze_ends"):
+    for key in ("heartbeat", "kpi_asks"):
         assert jobs[key]["last"] and jobs[key]["last"]["ok"], key
         assert jobs[key]["last"]["result"], key
-    nxt = H.parse_ts(jobs["ask_deadlines"]["next"])
+    nxt = H.parse_ts(jobs["kpi_asks"]["next"])
     assert timedelta(minutes=59) < nxt - at <= timedelta(hours=1, seconds=5), "hourly: an hour after its last run"
     assert "learnings" not in jobs
+    # The steps that were jobs of their own: each one's last run and result on its Heartbeat row.
+    steps = {s["key"]: s for s in get(api, "heartbeat")["steps"]}
+    for key in ("ask_deadlines", "approval_expiry", "stall_checks", "due_reminders", "snooze_ends"):
+        assert steps[key]["last_run_at"] and steps[key]["last_result"] and not steps[key]["last_error"], key
     # a quiet job every tick keeps one row not one per tick
     scheduler = Scheduler(store, api.app.state.execution)
     for n in range(4):
         scheduler.tick(at + timedelta(seconds=10 * n))
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM system_runs WHERE job='snooze_ends'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM system_runs WHERE job='screening'").fetchone()[0] == 1
+        beats = [r["result"] for r in c.execute("SELECT result FROM system_runs WHERE job='heartbeat'")]
+    assert beats.count("All quiet") == 1, beats  # the first beat may do something; the quiet ones after it fold
     with store.transaction() as c:
-        c.execute("DELETE FROM system_runs WHERE job='snooze_ends'")
+        c.execute("DELETE FROM system_runs WHERE job='screening'")
     # a quiet repeat moves its row after the write interval and a busy run starts a new one
     long_ago = H.shift(H.now(), seconds=-(SR.QUIET_WRITE_SECONDS + 60))
-    first = SR.Run("snooze_ends", started=long_ago).did("Nothing due", quiet=True)
+    first = SR.Run("screening", started=long_ago).did("Nothing due", quiet=True)
     with store.transaction() as c:
         rid = SR.save(c, first, finished=first.started)
-        moved = SR.Run("snooze_ends").did("Nothing due", quiet=True)
+        moved = SR.Run("screening").did("Nothing due", quiet=True)
         assert SR.save(c, moved) == rid
         row = c.execute("SELECT runs,started_at FROM system_runs WHERE id=?", (rid,)).fetchone()
         assert row["runs"] == 2 and row["started_at"] == moved.started, "folded and moved forward"
-        busy = SR.Run("snooze_ends").did("1 snooze ended")
+        busy = SR.Run("screening").did("1 task screened")
         assert SR.save(c, busy) != rid
-        assert c.execute("SELECT count(*) FROM system_runs WHERE job='snooze_ends'").fetchone()[0] == 2
+        assert c.execute("SELECT count(*) FROM system_runs WHERE job='screening'").fetchone()[0] == 2
     # old runs are pruned to the last ones per job
     with store.transaction() as c:
         for n in range(SR.KEEP + 5):
@@ -102,8 +108,9 @@ def test_the_jobs_list_and_each_run_record(api):
             ),
         )
     Scheduler(store, api.app.state.execution).tick()
-    jobs, _ = rows(api)
-    assert jobs["go_live_expiry"]["last"]["result"] == "1 go-live ended"
+    steps = {s["key"]: s for s in get(api, "heartbeat")["steps"]}
+    assert steps["go_live_expiry"]["last_result"] == "1 go-live ended"
+    assert steps["go_live_expiry"]["last_did"] == "1 go-live ended"
 
 
 def test_a_failed_run_shows_a_plain_reason_and_each_wrapped_block_reports_its_old_failure_name(api, monkeypatch):
@@ -116,10 +123,12 @@ def test_a_failed_run_shows_a_plain_reason_and_each_wrapped_block_reports_its_ol
     monkeypatch.setattr(ask_deadlines, "sweep", broken)
     result = Scheduler(store, api.app.state.execution).tick()
     assert {"ask_deadlines": "RuntimeError"} in result["failures"]
+    steps = {s["key"]: s for s in get(api, "heartbeat")["steps"]}
+    assert steps["ask_deadlines"]["last_error"] == "Failed: unexpected error (RuntimeError)"
+    assert steps["ask_deadlines"]["failed_24h"] == 1
     jobs, _ = rows(api)
-    last = jobs["ask_deadlines"]["last"]
-    assert last["ok"] is False and last["result"] == "Failed: unexpected error (RuntimeError)"
-    assert "private" not in str(jobs), "an exception's own text never shows"
+    assert jobs["heartbeat"]["last"]["ok"] is False and jobs["heartbeat"]["last"]["result"] == "Failed: Ask go-ahead"
+    assert "private" not in str(jobs) + str(steps), "an exception's own text never shows"
     # each wrapped block still reports its old failure name
     from backend import approval_expiry, billing_check, go_live, goal_asks, still_needed
     from backend import goals as G

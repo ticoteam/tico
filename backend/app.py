@@ -361,31 +361,10 @@ def create_app(settings=None):
             install_signals(recorder_thread.folder, recorder_thread.file)
 
         async def schedule_loop():
+            from . import heartbeat
             from .scheduler import Scheduler
 
             scheduler = Scheduler(store, execution, onboarding=onboarding, auth=auth, github_app=app.state.github_app)
-
-            def github_wakes():
-                from .github import flush_wakes, reconcile_worktree_prs, refresh_deployed_tasks, refresh_pending_checks
-
-                with store.transaction() as c:
-                    flush_wakes(c)
-                refresh_deployed_tasks(app.state.github_app)
-                # Checks pending with no word from GitHub are read afresh: a suite that never starts sends none (Dev 646).
-                refresh_pending_checks(app.state.github_app)
-                # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
-                reconcile_worktree_prs(app.state.github_app)
-                # A merge or release a task waits for whose webhook never came is asked of GitHub (Dev 256).
-                milestone_waits.recover(app.state.github_app)
-                # A review move refused for pending checks or a missing receipt, retried once that clears (Dev 534 C).
-                from . import move_retry
-
-                move_retry.tick(app.state.github_app)
-                # A gate hold whose current head has every hosted check passing clears on a fresh GitHub read.
-                from . import task_blocked
-
-                task_blocked.fresh(app.state.github_app)
-
             from . import system_routines
 
             def recorded(key, work):
@@ -394,23 +373,6 @@ def create_app(settings=None):
                     work()
                     run.did("Done", quiet=True)
 
-            def repository_waits():
-                from .repositories import daily
-
-                daily(app.state.github_app)
-                # A bot waiting for its GitHub repository finishes once a person has made it or granted the permission.
-                from . import repo_waits
-
-                repo_waits.tick(app.state.github_app)
-                # A task waiting for room for a worktree whose freeing event was lost (backend/worktree_waits.py).
-                from . import worktree_waits
-
-                worktree_waits.tick(store, settings.github_owner)
-                # A bot left in setup for a day: its person hears once (backend/setup_stuck.py).
-                from . import setup_stuck
-
-                setup_stuck.tick(store)
-
             def release_check():
                 # The release check (and the anonymous count that rides on it) runs even when nobody has the
                 # page open; it is a no-op until its six hours are up.
@@ -418,60 +380,46 @@ def create_app(settings=None):
                 # Subscribed updates for bots, as quiet notes; nothing is fetched while no bot subscribes.
                 update_feeds.tick(store)
 
+            rest = heartbeat.Rest()
             while not stop.is_set():
+                # The Heartbeat (backend/heartbeat.py): GitHub sync, personal alerts, the tick's due-time and recovery
+                # steps, repository waits and call sweeps, in that order, each on its own (one failing never stops
+                # the next; each goes to telemetry as before).
+                ctx = heartbeat.Context(scheduler, app=app, telemetry=telemetry)
                 try:
-                    await asyncio.to_thread(recorded, "github_sync", github_wakes)
+                    await asyncio.to_thread(heartbeat.beat, ctx)
                 except Exception as exc:
-                    telemetry.capture("github_wakes", exc)
-                try:
-                    app.state.personal_alerts.tick()  # its pass records on its own thread (personal_alerts)
-                    await asyncio.to_thread(scheduler.tick)
-                    await asyncio.to_thread(recorded, "release_check", release_check)
-                    await asyncio.to_thread(recorded, "repository_waits", repository_waits)
-                except Exception as exc:
-                    telemetry.capture("scheduler", exc)
-                    import logging
+                    telemetry.capture("heartbeat", exc)
+                # The rest of the pass, at most every 10 s however short the beat (heartbeat.REST_FLOOR). A skipped
+                # pass's beat failures ride on the next one, so they still reach the scheduler's health row.
+                if rest.due(ctx):
+                    try:
+                        await asyncio.to_thread(scheduler.tick, ctx.at, ctx)
+                        await asyncio.to_thread(recorded, "release_check", release_check)
+                    except Exception as exc:
+                        telemetry.capture("scheduler", exc)
+                        import logging
 
-                    logging.getLogger("tico.scheduler").error("Scheduler tick failed: %s", type(exc).__name__)
+                        logging.getLogger("tico.scheduler").error("Scheduler tick failed: %s", type(exc).__name__)
+                    try:
+                        # Tools > Settings > Email's pending and failing Workspace key is checked again (backend/google_workspace.py).
+                        from . import google_workspace as workspace_checks
 
-                def call_sweeps():
-                    # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py), and
-                    # calls kept to their threads: people and bots whose access ended, and a LiveKit that restarted.
-                    failed = None
-                    for name, sweep in (
-                        ("live_meeting_sweep", app.state.live_meeting_routing.sweep),
-                        ("calls_sweep", app.state.calls.sweep),
-                    ):
-                        try:
-                            sweep()
-                        except Exception as exc:
-                            telemetry.capture(name, exc)
-                            failed = failed or exc
-                    if failed:
-                        raise failed
+                        await asyncio.to_thread(
+                            system_routines.pass_of, store, "workspace_check", workspace_checks.tick, store
+                        )
+                    except Exception as exc:
+                        telemetry.capture("google_workspace", exc)
+                    try:
+                        # Workspace inboxes' queued email, sent by the server itself after its undo window and pacing.
+                        from . import email_sending
 
+                        await asyncio.to_thread(email_sending.drain, store, auth)
+                    except Exception as exc:
+                        telemetry.capture("email_drain", exc)
                 try:
-                    await asyncio.to_thread(system_routines.pass_of, store, "call_sweeps", call_sweeps)
-                except Exception:  # noqa: S110 - captured above, and the run says it failed
-                    pass
-                try:
-                    # Tools > Settings > Email's pending and failing Workspace key is checked again (backend/google_workspace.py).
-                    from . import google_workspace as workspace_checks
-
-                    await asyncio.to_thread(
-                        system_routines.pass_of, store, "workspace_check", workspace_checks.tick, store
-                    )
-                except Exception as exc:
-                    telemetry.capture("google_workspace", exc)
-                try:
-                    # Workspace inboxes' queued email, sent by the server itself after its undo window and pacing.
-                    from . import email_sending
-
-                    await asyncio.to_thread(email_sending.drain, store, auth)
-                except Exception as exc:
-                    telemetry.capture("email_drain", exc)
-                try:
-                    await asyncio.wait_for(stop.wait(), timeout=10)
+                    # Seconds between beats (Automations > Heartbeat), read each pass: 10 by default, 5 to 60.
+                    await asyncio.wait_for(stop.wait(), timeout=await asyncio.to_thread(heartbeat.interval, store))
                 except TimeoutError:
                     pass
 
@@ -11800,6 +11748,9 @@ def create_app(settings=None):
 
     system_routines.install(app, store, auth, mutate)
     maintenance.install(app, store, auth, mutate)
+    from . import heartbeat as heartbeat_screen
+
+    heartbeat_screen.install(app, store, auth, mutate)
     from . import task_rules
 
     task_rules.install(app, store, auth, mutate)

@@ -2917,6 +2917,68 @@ export type Health = {
   stuck?: Array<Record<string, unknown>>;
 };
 
+export type HeartbeatBeat = {
+  did: number;
+  failed: number;
+  id: string;
+  last_repeated_at: string | null;
+  repeats: number;
+  started_at: string;
+  steps: Array<{
+  error?: string | null;
+  key: string;
+  ms: number;
+  name?: string;
+  text?: string | null;
+}>;
+  total_ms: number;
+};
+
+export type HeartbeatStep = {
+  can_change: boolean;
+  did_24h: number;
+  every: string;
+  every_s: number | null;
+  failed_24h: number;
+  failing: boolean;
+  key: string;
+  kind: "due" | "recovery" | "poll";
+  kind_name: string;
+  last_did: string | null;
+  last_did_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  last_ms: number | null;
+  last_result: string | null;
+  last_run_at: string | null;
+  name: string;
+  on: boolean;
+  runs_24h: number;
+  switch: boolean;
+};
+
+export type HeartbeatUpdate = {
+  interval_s: number;
+};
+
+export type HeartbeatView = {
+  beats: Array<HeartbeatBeat>;
+  beats_24h: number;
+  can_change: boolean;
+  interval_max: number;
+  interval_min: number;
+  interval_s: number;
+  kinds: Array<{
+  key: string;
+  name: string;
+}>;
+  last_beat_at: string | null;
+  next: string | null;
+  quiet_beats: number;
+  quiet_since_at: string | null;
+  steps: Array<HeartbeatStep>;
+};
+
 export type HeldAction = {
   action: string;
 };
@@ -5361,6 +5423,13 @@ export type Suggestion = {
   phone?: string;
   summary?: string;
   title: string;
+};
+
+export type SystemRoutineSaved = {
+  job: HeartbeatStep | {
+  key: string;
+  name: string;
+};
 };
 
 export type SystemRoutineUpdate = {
@@ -8319,6 +8388,14 @@ export type GetHealthFindingsParams = Record<string, never>;
 export type GetHealthFindingsBody = never;
 export type GetHealthFindingsResponse = unknown;
 
+/** GET /api/v2/heartbeat */
+export type GetHeartbeatParams = {
+  before?: string | null;
+  limit?: number;
+};
+export type GetHeartbeatBody = never;
+export type GetHeartbeatResponse = HeartbeatView;
+
 /** GET /api/v2/inbound/cursor */
 export type GetInboundCursorParams = {
   inbox_ids?: string | null;
@@ -11158,6 +11235,11 @@ export type SaveFinanceAdImportParams = {
 export type SaveFinanceAdImportBody = FinanceAdImportRequest;
 export type SaveFinanceAdImportResponse = FinanceAdAccounts;
 
+/** PUT /api/v2/heartbeat */
+export type SaveHeartbeatParams = Record<string, never>;
+export type SaveHeartbeatBody = HeartbeatUpdate;
+export type SaveHeartbeatResponse = HeartbeatView;
+
 /** PATCH /api/v2/maintenance */
 export type SaveMaintenanceParams = {
   "Idempotency-Key": string;
@@ -11177,7 +11259,7 @@ export type SaveSystemRoutineParams = {
   key: string;
 };
 export type SaveSystemRoutineBody = SystemRoutineUpdate;
-export type SaveSystemRoutineResponse = SystemRoutineUpdate;
+export type SaveSystemRoutineResponse = SystemRoutineSaved;
 
 /** GET /api/v2/context/search */
 export type SearchDocsParams = {

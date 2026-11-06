@@ -738,6 +738,59 @@ class MaintenanceRunStepRow(TypedDict):
     details: str
 
 
+class HeartbeatStepRow(TypedDict):
+    """One `heartbeat_steps` row (SELECT *): one Heartbeat step's last run, result and error, and its day counts in two
+    12-hour windows (migration 20261106094503_heartbeat)."""
+
+    key: str
+    last_run_at: str | None
+    last_ms: int | None
+    last_result: str | None
+    last_did_at: str | None
+    last_did: str | None
+    last_error: str | None
+    last_error_at: str | None
+    window_started_at: str | None
+    runs_count: int
+    did_count: int
+    failed_count: int
+    previous_runs_count: int
+    previous_did_count: int
+    previous_failed_count: int
+    created_at: str
+    updated_at: str
+
+
+class HeartbeatBeatRow(TypedDict):
+    """One `heartbeat_beats` row (SELECT *): a beat where a step did something or failed; `steps` is those steps' lines
+    as JSON ({key, text, ms, error}); a beat repeating only its failures folds into it (`repeat_count`)."""
+
+    id: str
+    started_at: str
+    total_ms: int
+    did_count: int
+    failed_count: int
+    steps: str
+    repeat_count: int
+    last_repeated_at: str | None
+    created_at: str
+
+
+class HeartbeatStateRow(TypedDict):
+    """The one `heartbeat_states` row (id 1): the last beat, beats in the day windows, quiet beats counted."""
+
+    id: int
+    last_beat_at: str | None
+    window_started_at: str | None
+    beats_count: int
+    previous_beats_count: int
+    quiet_beats_count: int
+    quiet_since_at: str | None
+    last_pruned_at: str | None
+    created_at: str
+    updated_at: str
+
+
 class MaintenanceListingRow(TypedDict):
     """One `maintenance_listings` row (SELECT *): a task Find stuck listed for one reason at one appointment."""
 

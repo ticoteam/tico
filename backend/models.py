@@ -2957,6 +2957,12 @@ class MaintenanceUpdate(Contract):
     steps: list[MaintenanceStepChange] | None = Field(default=None, max_length=8)
 
 
+class HeartbeatUpdate(Contract):
+    """The seconds between Heartbeat beats (backend/heartbeat.py), 5 to 60."""
+
+    interval_s: int = Field(ge=5, le=60)
+
+
 class MaintenanceRunRequest(Contract):
     """Run now: every step, or the one named (backend/maintenance.py run_now)."""
 
