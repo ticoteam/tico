@@ -133,7 +133,7 @@ const newContext = (browser, phone) => browser.newContext({viewport: phone ? PHO
         const v = await visit(context, {phone, finance: 'no'});
         same(v, tag + ', no Finance');
         const keys = v.painted.rows.filter(r => r.on).map(r => r.key);
-        assert.deepEqual(keys.slice(0, 13), ['overview', 'Company pages', 'strategy', 'growth', 'updates', 'tasks', 'automations', 'tools',
+        assert.deepEqual(keys.slice(0, 14), ['overview', 'Company pages', 'strategy', 'growth', 'updates', 'tasks', 'automations', 'tools',
           'library', 'Library pages', 'docs', 'files', 'skills', 'meetings'], tag + ': the order, from the first paint');
         assert.equal(await v.page.locator('#side a[data-nav="overview"]').evaluate(a => a.textContent.trim()), 'Company', tag + ': Overview is Company');
         assert.ok(!keys.includes('connections'), tag + ': Connections is part of Tools');
