@@ -32,7 +32,11 @@ def test_the_core_set_is_the_default_suggestions_and_botops():
 @pytest.mark.slow
 def test_a_company_from_each_template_has_its_bot_and_a_first_task_queues_a_job(api, tmp_path):
     for template in CORE:
-        check_template(api, tmp_path, template)
+        try:
+            check_template(api, tmp_path, template)
+        except Exception as exc:
+            exc.add_note(f"in the core template {template!r}")      # one test loops them all: say which one failed
+            raise
 
 
 def check_template(api, tmp_path, template):

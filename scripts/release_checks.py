@@ -641,7 +641,7 @@ def release(args):
     commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
     logs = Path(tempfile.mkdtemp(prefix='tico-release-check-'))
     ready = logs / 'images-ready'
-    base_env = {**os.environ, 'DOCKER_BUILDKIT': '1'}
+    base_env = {**os.environ, 'DOCKER_BUILDKIT': '1', 'TICO_E2E_CLI_ALL': '1'}   # a release runs every hub command live
     # Alone on its VM the Python slice can use every core; beside builds and browsers, half of them.
     default_workers = (os.cpu_count() or 2) if part == 'python' else max(1, (os.cpu_count() or 2) // 2)
     workers = str(max(1, int(os.environ.get('TICO_PYTHON_WORKERS', default_workers))))

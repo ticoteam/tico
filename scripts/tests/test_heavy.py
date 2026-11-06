@@ -180,8 +180,9 @@ def test_the_heavy_entry_points_take_one_slot_wait_for_it_and_stop_whole(tmp_pat
         got, out, err = entry(wrapped, run_env, timeout=30)
         assert (got, says in out + err, 'waiting for heavy-job slot' in err) == (code, True, False), (how, out, err)
 
-    if entry_point[0] != 'scripts/full-suite.sh':
-        return          # the hold-and-terminate part is the same slot wrapper for every entry point: run it once
+    if entry_point[0] == 'python':
+        return          # release_checks.py goes through the same exec wrapper as full-suite.sh; ui-tests.cjs spawns its
+                        # work and forwards signals instead, so it keeps its own hold-and-terminate run
     holders = [job(tmp_path, f'h{n}', 30) for n in range(2)]
     time.sleep(0.5)
     try:

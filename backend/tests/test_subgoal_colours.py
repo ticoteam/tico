@@ -60,13 +60,14 @@ def test_new_subgoal_gets_its_measure_colour_on_the_next_pass(api, clock):
     result = post(api, "goals/refresh", {})
     assert {r["goal"] for r in result["changed"]} == {g["id"] for child, unlinked, _ in pairs for g in (child, unlinked)}
     with api.app.state.store.read() as c:
-        for child, unlinked, expected in pairs:
+        for (child, unlinked, expected), (value, _) in zip(pairs, cases):
             coloured = G.goal(c, child["id"])
             peer = G.goal(c, unlinked["id"])
-            assert coloured["status"] == peer["status"] == expected
-            assert coloured["status_note"] == peer["status_note"]
-            assert coloured["status_source"] == "auto"
-            assert coloured["parent_id"] == parent["id"]
+            case = f"measure {value} should be {expected}"
+            assert coloured["status"] == peer["status"] == expected, (case, coloured["status"], peer["status"])
+            assert coloured["status_note"] == peer["status_note"], case
+            assert coloured["status_source"] == "auto", case
+            assert coloured["parent_id"] == parent["id"], case
 
 
 def test_subgoal_uses_a_recent_at_risk_checkin_without_a_measure(api, clock):
@@ -81,15 +82,16 @@ def test_subgoal_uses_a_recent_at_risk_checkin_without_a_measure(api, clock):
 
     post(api, "goals/refresh", {})
     with api.app.state.store.read() as c:
-        for child, expected in children:
+        for (child, expected), (days, _) in zip(children, cases):
             row = G.goal(c, child["id"])
-            assert row["status"] == expected
+            case = f"check-in {days} days old should be {expected}"
+            assert row["status"] == expected, (case, row["status"])
             if expected:
-                assert row["status_note"].startswith("Check-in ")
-                assert row["status_note"].endswith(" ago: at risk")
-                assert row["status_source"] == "auto"
+                assert row["status_note"].startswith("Check-in "), case
+                assert row["status_note"].endswith(" ago: at risk"), case
+                assert row["status_source"] == "auto", case
             else:
-                assert status_events(c, child) == []
+                assert status_events(c, child) == [], case
 
 
 def test_subgoal_with_no_data_stays_uncoloured_like_an_unlinked_goal(api, clock):

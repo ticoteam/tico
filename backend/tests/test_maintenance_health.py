@@ -1559,6 +1559,7 @@ def _part_github(api, runner, monkeypatch, hq=None, comments=None, clock=None):
 
 
 def _part_quota(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    # The first case on the install: nothing earlier leaves a finding, so these read every computer's findings, unfiltered.
     _readers(monkeypatch)
     rid = runner["runner_id"]
     key = f"default_login_limited:{rid}:codex"
@@ -1566,7 +1567,7 @@ def _part_quota(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     # once with no reset time. A hop's usage names only the primary that spent tokens.
     turn(api, rid, {**QUOTA, "fallback": "codex", "primary_limited": True,
                     "usage": {"runtime": "claude", "segments": [{"runtime": "claude"}]}}, 50)
-    assert key not in login_findings(api, runner['runner_id'])                       # one limit is not yet a pattern
+    assert key not in login_findings(api)                       # one limit is not yet a pattern
     turn(api, rid, {**QUOTA, "check": "codex"}, 40)
     turn(api, rid, {"outcome": "failed", "fallback": "codex", "profile_used": None}, 35)   # another failure: says nothing
     turn(api, rid, {**QUOTA, "fallback": "codex"}, 30)
@@ -1574,7 +1575,7 @@ def _part_quota(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     turn(api, rid, {"outcome": "completed", "fallback": "codex", "profile_used": "work"}, 20)
     # Claude on the default login works: only Codex is out.
     turn(api, rid, {"outcome": "completed", "profile_used": None, "usage": {"runtime": "claude"}}, 10)
-    found = login_findings(api, runner['runner_id'])
+    found = login_findings(api)
     assert list(found) == [key], found
     row_item = found[key]
     assert row_item["kind"] == "setup" and row_item["title"] == f"{CANARY}'s default Codex login is out of quota", row_item
@@ -1586,7 +1587,7 @@ def _part_quota(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     run(api)
     assert finding(api, key)["present"] == 1
     turn(api, rid, {"outcome": "completed", "check": "codex", "profile_used": None}, 5)
-    assert login_findings(api, runner['runner_id']) == {}
+    assert login_findings(api) == {}
     run(api)
     assert finding(api, key)["present"] == 0
 

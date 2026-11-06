@@ -108,7 +108,11 @@ def changed_files():
 
 
 def rotation():
-    """The fixed rotation counter: the number of commits, 0 where git cannot say."""
+    """The rotation counter: `TICO_E2E_CLI_ROTATION` when set (to reproduce a failure), else the number of commits, 0
+    where git cannot say. A merge commit makes the count skip indices, so each group's slot is not guaranteed on
+    every consecutive commit; the release gate runs every command (`TICO_E2E_CLI_ALL`), and this is the cheap check."""
+    if os.environ.get("TICO_E2E_CLI_ROTATION", "").isdigit():
+        return int(os.environ["TICO_E2E_CLI_ROTATION"])
     try:
         return int(subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=ROOT, capture_output=True, text=True,
                                   timeout=20).stdout.strip() or 0)
@@ -116,15 +120,23 @@ def rotation():
         return 0
 
 
+CLI_CODE = ("clients/hub", "clients/remotecli.py", "e2e/cli/")
+
+
 def live_sample(used):
-    """The command paths to run live: all of them when asked, else the changed-file commands plus one per group."""
+    """The command paths to run live: all of them when asked or when the CLI itself changed (clients/hub*.py,
+    clients/remotecli.py, clients/hubtools.py, e2e/cli/), else the commands of changed templates and skills plus one
+    per group, picked by the rotation among the commands this test runs (not the SKIPPED ones)."""
     if RECORD or os.environ.get("TICO_E2E_CLI_ALL"):
         return set(used)
     changed = changed_files()
+    if any(f.startswith(CLI_CODE) for f in changed):
+        return set(used)
     chosen = {path for path in used if any(f in changed for f in used_in(path))}
     groups = {}
     for path in sorted(used):
-        groups.setdefault(path.split(" ")[0], []).append(path)
+        if path not in SKIPPED:
+            groups.setdefault(path.split(" ")[0], []).append(path)
     count = rotation()
     chosen.update(paths[count % len(paths)] for paths in groups.values())
     return chosen

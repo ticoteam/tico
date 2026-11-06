@@ -215,7 +215,7 @@ def test_a_merge_wakes_each_waiter_once_with_its_note_and_a_removed_or_later_wai
     result = merge(api)
     assert sorted(result["milestone_woken"]) == sorted([waiter["id"], noted["id"], changed["id"]])
     assert len(wakes(api, waiter)) == 1 and "PR #412 merged" in wakes(api, waiter)[0]
-    assert wakes(api, noted)[0].endswith("\nYour note: Check the migration, then QA")
+    assert len(wakes(api, noted)) == 1 and wakes(api, noted)[0].endswith("\nYour note: Check the migration, then QA")
     assert wakes(api, changed)[-1].endswith("\nYour note: Check the migration, then QA")
     after = shown(api, upstream)
     assert (after["status"], after["step_id"]) == (upstream["status"], upstream["step_id"]), "upstream never moves"
