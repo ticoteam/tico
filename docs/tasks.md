@@ -1367,7 +1367,7 @@ here (Steer becomes Queue; otherwise Defer). Set as goal is for one comment. A c
 or MCP) is a Steer, as the paragraph on comments above says. `GET /api/v2/threads/{thread_id}/reach` (with `text`,
 `delivery`, `defer_for`, `in_reply_to`) answers who it would reach, each with its mode, before it is sent: **Reaches
 N** under the box opens that list by name (Now, After its turn, Next turn, Notified), as the chosen way and the
-@mentions you type change. With no bot on the task (everyone on it is a person) the send is a plain arrow, and the box says no bot gets the
+@mentions you type change. After sending, the box says so if the server sent it another way (a defer that rode along). With no bot on the task (everyone on it is a person) the send is a plain arrow, and the box says no bot gets the
 message. `GET /v2/tasks/{id}` carries
 this view: each bot reply in `comments` has its `run`; `execution` is the owning bot's newest run in the task's own
 thread, or a newer one for a person's message there, shaped as in a conversation snapshot with `from_person`; `comment_to`
