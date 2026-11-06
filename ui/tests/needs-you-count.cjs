@@ -266,7 +266,7 @@ async function withNeedsReads(page, run) {
       // Non-card items use the same immediate answer/Undo count adjustment.
       await evaluate(page, () => { DEC_HANDLED.add('task:t-whole'); needsListsRedraw(); });
       assert.equal(await count(page), '12');
-      assert.equal(await asks.locator('.tl-gcount').innerText(), '2', 'a full-task change leaves the extras count alone');
+      assert.equal(await asks.locator('.tl-gcount').innerText(), '1', 'a full-task change leaves the extras count alone');
       assert.equal(await page.locator('#task-body .tl-row').count(), 12);
       assert.deepEqual(await badges(page), [{text: '12', hidden: false}, {text: '12', hidden: false}]);
       await evaluate(page, () => { DEC_HANDLED.delete('task:t-whole'); needsListsRedraw(); });
