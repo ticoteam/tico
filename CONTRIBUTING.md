@@ -35,6 +35,31 @@ them too when you change what they cover. To run less while you work: `python -m
 for one file, `node scripts/ui-tests.cjs <name>` for one browser script. If you touch `app/`, also run `cargo check`
 there.
 
+## Before you push
+
+`scripts/check.sh` is the fast local gate. It runs each static check that applies to what you changed (the Python
+lint baseline, shellcheck, actionlint, cargo fmt, the migration order, the UI API types and the pyright boundary
+modules), one line per check with its time, and exits non-zero if one fails. It compares against the merge-base
+with origin/main, so committed, uncommitted and new files are all checked. `scripts/check.sh --all` runs every check
+on every tracked file; CI runs the same checks. Turn on the pre-push hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+After that, each `git push` runs `scripts/check.sh` first. To push without it once, use `git push --no-verify`.
+shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
+`scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
+
+The UI's JavaScript has a type check and a Biome lint, both seconds long: `bash scripts/check_ui_types.sh` and
+`bash scripts/check_ui_lint.sh`. Each counts findings per file against `ui/types-baseline.json` or
+`ui/lint-baseline.json`. The counts only shrink: after you fix findings, lower the baseline with
+`python3 scripts/ui_baseline.py tsc --write` (or `biome`).
+The UI's API calls are checked against the backend's routes by `bash scripts/check_ui_routes.sh`: it imports the app and
+walks its routes (no server), and counts the calls that match no route per file in `ui/routes-baseline.json`, which
+only shrinks the same way. Fix a call by pointing it at the route it should reach; the baseline is written with
+`python3 scripts/check_ui_routes.py --write`.
+
 ## Profiling API test setup
 
 Each API test creates a fresh app, store, authentication state, registry and database. For targeted
@@ -96,6 +121,9 @@ company already owns, so their commits need no sign-off, and their pull requests
   wording or docs prose, trivial getters or exhaustive parametrizations of one path. Mark a test
   `@pytest.mark.slow` if it needs real git, Docker or a server.
 - Added or changed an icon in `ui/`? Run `python3 scripts/build-icon-font.py` to rebuild the icon font subset (a test fails until you do).
+- New UI files are TypeScript (`ui/app/name.ts`, strict types, no `any`). After `npm ci`, `npm run build:ui` compiles
+  them to `build/ui/` (`npm run watch:ui` while editing); the server will not serve a stale build.
+  `bash scripts/check_ui_types.sh` type-checks them.
 - Keep the tests green, and do not add a dependency, a network call in the UI or a build step
   without saying why.
 - Comments explain why, in the present tense. They do not name who asked or when.

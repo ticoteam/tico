@@ -5,13 +5,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-fn server(
-    steps: Vec<Option<Value>>,
-) -> (
-    Tico,
-    Arc<Mutex<Vec<(String, Value, String)>>>,
-    std::thread::JoinHandle<()>,
-) {
+// Requests a fake Tico server recorded: request line, JSON body, and Idempotency-Key header.
+type Seen = Arc<Mutex<Vec<(String, Value, String)>>>;
+
+fn server(steps: Vec<Option<Value>>) -> (Tico, Seen, std::thread::JoinHandle<()>) {
     server_gated(steps, None)
 }
 /// As `server`, but the request at `gate.0` is answered only after `gate.1` receives a value, so a
@@ -19,11 +16,7 @@ fn server(
 fn server_gated(
     steps: Vec<Option<Value>>,
     gate: Option<(usize, std::sync::mpsc::Receiver<()>)>,
-) -> (
-    Tico,
-    Arc<Mutex<Vec<(String, Value, String)>>>,
-    std::thread::JoinHandle<()>,
-) {
+) -> (Tico, Seen, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let seen = Arc::new(Mutex::new(vec![]));
@@ -1079,7 +1072,10 @@ fn finished_words_go_to_the_streamed_turn_they_fall_in_or_the_nearest() {
     // One shared greeting is insufficient evidence to delete a genuine local reply.
     let greeting = word(1000, 1200, "Hello", "");
     assert_eq!(
-        crate::transcript::without_echo(&[greeting.clone()], &[word(1100, 1300, "hello,", "S1")]),
+        crate::transcript::without_echo(
+            std::slice::from_ref(&greeting),
+            &[word(1100, 1300, "hello,", "S1")]
+        ),
         [greeting]
     );
     // A turn the finished transcript has no words for is emptied.
@@ -4915,7 +4911,7 @@ fn an_unfixable_chunk_422_repairs_once_per_outbox_state() {
     let id = record.id.as_str();
     let refused = || Some(json!({"status":422,"error":{"code":"validation"}}));
     let view = || Some(json!({"state":"live","seq":0,"chunks":[]}));
-    let methods = |seen: &Arc<Mutex<Vec<(String, Value, String)>>>| -> Vec<String> {
+    let methods = |seen: &Seen| -> Vec<String> {
         seen.lock()
             .unwrap()
             .iter()

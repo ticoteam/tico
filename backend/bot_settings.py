@@ -12,19 +12,33 @@ path into `extra`.
 The org-chart fields that live beside the declaration (owner, team, reports_to, description, repo, access...) stay on
 `bot_config`; a row there without a settings row reads as an empty declaration.
 """
+
 import json
 from typing import Any
 
 # (key, type): the settings with a column. The column has the key's name.
 FIELDS = (
-    ("harness", "text"), ("runtime", "text"), ("model", "text"), ("reasoning_effort", "text"), ("host", "text"),
-    ("template", "text"), ("profile", "text"), ("session", "text"), ("wake_preset", "text"),
-    ("shared_from", "text"), ("bot_contact", "text"), ("repo_access_mode", "text"), ("folder", "text"),
+    ("harness", "text"),
+    ("runtime", "text"),
+    ("model", "text"),
+    ("reasoning_effort", "text"),
+    ("host", "text"),
+    ("template", "text"),
+    ("profile", "text"),
+    ("session", "text"),
+    ("wake_preset", "text"),
+    ("shared_from", "text"),
+    ("bot_contact", "text"),
+    ("repo_access_mode", "text"),
+    ("folder", "text"),
     ("github_login", "text"),
-    ("compact_at", "integer"), ("turns_per_hour", "integer"), ("turns_per_day", "integer"),
+    ("compact_at", "integer"),
+    ("turns_per_hour", "integer"),
+    ("turns_per_day", "integer"),
     ("max_run_minutes", "integer"),
     ("stateless", "boolean"),
-    ("fallback", "json"), ("app_delivery", "json"),
+    ("fallback", "json"),
+    ("app_delivery", "json"),
 )
 TYPES = dict(FIELDS)
 COLUMNS = tuple(key for key, _ in FIELDS)
@@ -49,8 +63,9 @@ def config_sql(alias="s"):
     # The inner json_patch drops the absent (null) columns, so the outer one only adds; a key kept in `extra` because
     # its value did not fit its column stays.
     base = f"json_patch(coalesce({p}extra,'{{}}'), json_patch('{{}}', json_object({', '.join(scalars)})))"
-    setting = ", ".join(f"CASE WHEN {p}{key} IS NULL THEN '{_NOTHING}' ELSE '$.{key}' END, json({p}{key})"
-                        for key in structured)
+    setting = ", ".join(
+        f"CASE WHEN {p}{key} IS NULL THEN '{_NOTHING}' ELSE '$.{key}' END, json({p}{key})" for key in structured
+    )
     return f"json_remove(json_set({base}, {setting}), '{_NOTHING}')"
 
 
@@ -70,7 +85,7 @@ def _fits(kind, value):
     if kind == "text":
         return isinstance(value, str)
     if kind == "integer":
-        return isinstance(value, int) and not isinstance(value, bool) and -2**63 <= value <= 2**63 - 1
+        return isinstance(value, int) and not isinstance(value, bool) and -(2**63) <= value <= 2**63 - 1
     if kind == "boolean":
         return isinstance(value, bool)
     return True
@@ -139,6 +154,7 @@ def read_in_snapshot(c: Any, bot: str) -> dict[str, Any]:
     """`read`, read once per snapshot: a page that checks every bot (the status page's readiness check) asks for
     the same declaration again per bot, and prime_machines seeds it for all of them in one query."""
     from . import read_cache
+
     return join(read_cache.one(c, ROW_SQL_ONE, (bot,)))
 
 
@@ -148,7 +164,7 @@ def read_many(c, bots=None):
         return {row["bot_id"]: join(row) for row in c.execute("SELECT * FROM bot_settings")}
     found, ordered = {}, sorted(set(bots))
     for start in range(0, len(ordered), 500):
-        part = ordered[start:start + 500]
+        part = ordered[start : start + 500]
         for row in c.execute(f"SELECT * FROM bot_settings WHERE bot_id IN ({','.join('?' * len(part))})", part):
             found[row["bot_id"]] = join(row)
     return found
@@ -158,13 +174,17 @@ def write(c, bot, config, at=None):
     """Store `config` as the bot's whole declaration, replacing the one before. A new row gets the company's default
     repository access when the declaration names none (the repository_new_bot_default trigger)."""
     from . import hubdb as H
+
     columns, extra = split(config)
     names = list(COLUMNS)
     values = [columns[key] for key in names] + [_encode(extra), at or H.now()]
-    c.execute(f"INSERT INTO bot_settings(bot_id,{','.join(names)},extra,updated_at) "
-              f"VALUES(?,{','.join('?' * len(names))},?,?) ON CONFLICT(bot_id) DO UPDATE SET "
-              + ",".join(f"{key}=excluded.{key}" for key in names) + ",extra=excluded.extra,updated_at=excluded.updated_at",
-              [bot, *values])
+    c.execute(
+        f"INSERT INTO bot_settings(bot_id,{','.join(names)},extra,updated_at) "
+        f"VALUES(?,{','.join('?' * len(names))},?,?) ON CONFLICT(bot_id) DO UPDATE SET "
+        + ",".join(f"{key}=excluded.{key}" for key in names)
+        + ",extra=excluded.extra,updated_at=excluded.updated_at",
+        [bot, *values],
+    )
 
 
 def update(c, bot, changes, at=None):

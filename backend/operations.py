@@ -24,17 +24,27 @@ TUNNEL_CONFIG = Path("/etc/tico/tunnel.yml")
 
 def report_health(store, service, *, success=None, error=None, detail=None):
     with store.transaction() as c:
-        c.execute("INSERT INTO service_health VALUES(?,?,?,?) ON CONFLICT(service) DO UPDATE SET "
-                  "last_succeeded_at=coalesce(excluded.last_succeeded_at,service_health.last_succeeded_at),"
-                  "last_error=excluded.last_error,detail=excluded.detail",
-                  (service, success, error, encode(detail or {})))
+        c.execute(
+            "INSERT INTO service_health VALUES(?,?,?,?) ON CONFLICT(service) DO UPDATE SET "
+            "last_succeeded_at=coalesce(excluded.last_succeeded_at,service_health.last_succeeded_at),"
+            "last_error=excluded.last_error,detail=excluded.detail",
+            (service, success, error, encode(detail or {})),
+        )
 
 
 def metric(client, name, value, unit="Count"):
     scope = os.environ.get("TICO_METRIC_SCOPE", "default")
-    client.put_metric_data(Namespace="Tico", MetricData=[{"MetricName": name, "Value": value, "Unit": unit,
-                           "Dimensions": [{"Name": "Application", "Value": "tico"},
-                                          {"Name": "Scope", "Value": scope}]}])
+    client.put_metric_data(
+        Namespace="Tico",
+        MetricData=[
+            {
+                "MetricName": name,
+                "Value": value,
+                "Unit": unit,
+                "Dimensions": [{"Name": "Application", "Value": "tico"}, {"Name": "Scope", "Value": scope}],
+            }
+        ],
+    )
 
 
 def api_healthy(settings):
@@ -44,9 +54,15 @@ def api_healthy(settings):
         if len(raw) > 4096:
             return False
         data = json.loads(raw)
-        return (data.get("ok") is True and data.get("service") == "tico"
-                and (not settings.release_id or data.get("release") == settings.release_id))
-    except (OSError, ValueError, urllib.error.HTTPError):
+        return (
+            data.get("ok") is True
+            and data.get("service") == "tico"
+            and (not settings.release_id or data.get("release") == settings.release_id)
+        )
+    except urllib.error.HTTPError as error:
+        with error:
+            return False
+    except (OSError, ValueError):
         return False
 
 
@@ -55,7 +71,10 @@ def replication_healthy():
         with urllib.request.urlopen("http://127.0.0.1:9091/metrics", timeout=2) as response:
             raw = response.read(65537)
         return 0 < len(raw) <= 65536
-    except (OSError, urllib.error.HTTPError):
+    except urllib.error.HTTPError as error:
+        with error:
+            return False
+    except OSError:
         return False
 
 
@@ -64,9 +83,13 @@ def tunnel_healthy():
     if not TUNNEL_CONFIG.is_file() or TUNNEL_CONFIG.is_symlink():
         return True
     try:
-        result = subprocess.run(["systemctl", "is-active", "--quiet", "tico-tunnel.service"],
-                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, timeout=3)
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", "tico-tunnel.service"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        )
         return result.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
@@ -77,7 +100,10 @@ def retention_tier(store, bucket, now):
     (a deploy's post-activation backup, a manual run) lands under backups/hourly/ and
     the bucket lifecycle expires it after two days."""
     with store.read() as c:
-        rows = {r["service"]: dict(r) for r in c.execute("SELECT * FROM service_health WHERE service IN ('backup-daily','backup-monthly')")}
+        rows = {
+            r["service"]: dict(r)
+            for r in c.execute("SELECT * FROM service_health WHERE service IN ('backup-daily','backup-monthly')")
+        }
     for tier, length in (("monthly", 7), ("daily", 10)):
         row = rows.get("backup-" + tier, {})
         detail = json.loads(row.get("detail") or "{}")
@@ -95,8 +121,15 @@ def backup(store, s3, cloudwatch, bucket):
         # cannot open the credentials, GitHub App, directory sync or Slack secrets (backend/backup.py).
         # Files may be in the company's own bucket (backend/company_storage.py): the bundle reads them there.
         from .company_storage import for_backup
-        report = upload_bundle(store.settings.db_path, bucket, key, s3, for_backup(store, Blobs(store.settings, s3)),
-                               key_dir=store.settings.db_path.parent)
+
+        report = upload_bundle(
+            store.settings.db_path,
+            bucket,
+            key,
+            s3,
+            for_backup(store, Blobs(store.settings, s3)),
+            key_dir=store.settings.db_path.parent,
+        )
     except Exception as error:
         report_health(store, "backup", error=type(error).__name__)
         try:
@@ -104,15 +137,22 @@ def backup(store, s3, cloudwatch, bucket):
         except Exception:
             pass
         raise
-    detail = {"bucket": bucket, "key": key, "sha256": report["sha256"], "tier": tier,
-              "database_bytes": report["bytes"],
-              "objects": report["objects"], "object_bytes": report["object_bytes"],
-              "objects_verified": report.get("objects_verified", 0), "manifest_sha256": report["manifest_sha256"],
-              "key_files": report.get("key_files", [])}
+    detail = {
+        "bucket": bucket,
+        "key": key,
+        "sha256": report["sha256"],
+        "tier": tier,
+        "database_bytes": report["bytes"],
+        "objects": report["objects"],
+        "object_bytes": report["object_bytes"],
+        "objects_verified": report.get("objects_verified", 0),
+        "manifest_sha256": report["manifest_sha256"],
+        "key_files": report.get("key_files", []),
+    }
     report_health(store, "backup", success=H.now(), detail=detail)
     # The first successful point of a month also satisfies that day's point;
     # longer retention covers both without duplicating all source verification.
-    for category in (("monthly", "daily") if tier == "monthly" else ("daily",) if tier == "daily" else ()):
+    for category in ("monthly", "daily") if tier == "monthly" else ("daily",) if tier == "daily" else ():
         report_health(store, "backup-" + category, success=now, detail=detail)
     metric(cloudwatch, "BackupSucceeded", 1)
     return {**report, "tier": tier}
@@ -137,7 +177,9 @@ def restore_check_due(store, now=None):
 
 def restore_check(store, s3, cloudwatch, bucket):
     with store.read() as c:
-        row = c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service='backup'").fetchone()
+        row = c.execute(
+            "SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service='backup'"
+        ).fetchone()
     try:
         if not row or not row["last_succeeded_at"] or row["last_error"]:
             raise RuntimeError("No successful current backup is available for an isolated restore check")
@@ -146,12 +188,16 @@ def restore_check(store, s3, cloudwatch, bucket):
             raise RuntimeError("Latest backup belongs to a different storage bucket")
         database_bytes = detail.get("database_bytes", store.settings.db_path.stat().st_size)
         object_bytes = detail.get("object_bytes")
-        if (not isinstance(database_bytes, int) or database_bytes < 1
-                or not isinstance(object_bytes, int) or object_bytes < 0):
+        if (
+            not isinstance(database_bytes, int)
+            or database_bytes < 1
+            or not isinstance(object_bytes, int)
+            or object_bytes < 0
+        ):
             raise RuntimeError("Latest backup has invalid capacity metadata")
         RESTORE_ROOT.mkdir(parents=True, mode=0o700, exist_ok=True)
         free = shutil.disk_usage(RESTORE_ROOT).free
-        required = database_bytes * 2 + object_bytes + 5 * 1024 ** 3
+        required = database_bytes * 2 + object_bytes + 5 * 1024**3
         if required > free:
             raise RuntimeError("Not enough retained-volume capacity for an isolated restore check")
         started = time.monotonic()
@@ -161,9 +207,15 @@ def restore_check(store, s3, cloudwatch, bucket):
             report = restore_bundle(bucket, detail["key"], settings, s3)
             if not report.get("verified") or not report.get("reenrollment_required"):
                 raise RuntimeError("Isolated restore did not pass its recovery fencing checks")
-        result = {"bucket": bucket, "key": detail["key"], "source_sha256": report["source"]["sha256"],
-                  "objects": report["objects"], "object_bytes": report["object_bytes"],
-                  "elapsed_ms": round((time.monotonic() - started) * 1000), "ephemeral_copy_removed": True}
+        result = {
+            "bucket": bucket,
+            "key": detail["key"],
+            "source_sha256": report["source"]["sha256"],
+            "objects": report["objects"],
+            "object_bytes": report["object_bytes"],
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+            "ephemeral_copy_removed": True,
+        }
     except Exception as error:
         report_health(store, "restore-check", error=type(error).__name__)
         try:
@@ -179,8 +231,11 @@ def restore_check(store, s3, cloudwatch, bucket):
 def health(store, cloudwatch):
     with store.read() as c:
         rows = {r["service"]: dict(r) for r in c.execute("SELECT * FROM service_health")}
-    age_metrics = {"scheduler": "SchedulerAgeSeconds", "backup": "BackupAgeSeconds",
-                   "restore-check": "RestoreCheckAgeSeconds"}
+    age_metrics = {
+        "scheduler": "SchedulerAgeSeconds",
+        "backup": "BackupAgeSeconds",
+        "restore-check": "RestoreCheckAgeSeconds",
+    }
     for service, name in age_metrics.items():
         row = rows.get(service, {})
         last = H.parse_ts(row.get("last_succeeded_at"))
@@ -192,18 +247,26 @@ def health(store, cloudwatch):
     metric(cloudwatch, "ApiHealthy", int(api_ok))
     metric(cloudwatch, "ReplicationHealthy", int(replication_ok))
     metric(cloudwatch, "TunnelHealthy", int(tunnel_ok))
-    return {"services": {k: {"last_succeeded_at": v["last_succeeded_at"], "last_error": v["last_error"]} for k, v in rows.items()},
-            "disk_free_bytes": free, "api_healthy": api_ok, "replication_healthy": replication_ok,
-            "tunnel_healthy": tunnel_ok}
+    return {
+        "services": {
+            k: {"last_succeeded_at": v["last_succeeded_at"], "last_error": v["last_error"]} for k, v in rows.items()
+        },
+        "disk_free_bytes": free,
+        "api_healthy": api_ok,
+        "replication_healthy": replication_ok,
+        "tunnel_healthy": tunnel_ok,
+    }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("backup", "restore-check", "health"))
-    parser.add_argument("--if-due", action="store_true",
-                        help="restore-check only: skip when today's check already succeeded")
+    parser.add_argument(
+        "--if-due", action="store_true", help="restore-check only: skip when today's check already succeeded"
+    )
     args = parser.parse_args()
     import boto3
+
     store = Store(Settings.from_env())
     cw = boto3.client("cloudwatch")
     if args.operation == "backup":

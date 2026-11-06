@@ -41,6 +41,9 @@ hold customer text and never enter this repository.
 Tests stay at zero failures. An intermittent test is fixed quickly or deleted; never rerun it until it passes, and
 never ship around a known failure. If a test may fail, it shouldn't exist.
 
+## Before you push
+Run scripts/check.sh before pushing; `git config core.hooksPath .githooks` runs it on every push.
+
 ## How we work
 Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The author merges when checks are
 green and the PR is reviewed. A red release candidate caused by your merge is your top priority. Releases ship from two
@@ -77,8 +80,11 @@ flight file, not the database.
 - Create persistent schema changes with `python3 scripts/new_migration.py name` (`--py` for `up(conn)`):
   `YYYYMMDDHHMMSS_name.sql|py`, UTC. Keep existing `NNNN_` files and applied checksums unchanged. Each migration
   stands alone and must not depend on another unmerged migration's schema; pending files run even below applied ones.
+- Format the Python files you change with `uvx ruff@0.15.9 format <files>` before committing; `scripts/lint.sh` fails on unformatted code. Branches older than the format commit: `scripts/format_rebase.sh`.
 - Keep real team names, human names, domains, buckets and credentials out of the repository. Examples use
   the fictional team Acme (`acme.example`).
-- The UI has no build step and loads nothing from the network: vendored libraries live in
-  `ui/vendor/` with their licenses.
+- The UI loads nothing from the network: vendored libraries live in `ui/vendor/` with their licenses. Write a new
+  UI file as TypeScript (`ui/app/name.ts`, listed in index.html by that name; strict types, no `any`). `npm run build:ui`
+  compiles it to `build/ui/` (`npm run watch:ui` while editing; tests and `backend.server` build it when they can), and the
+  server refuses a missing or stale build (ui/README.md).
 - Comments say why in the present tense; they do not name who asked or when.

@@ -7,6 +7,7 @@ bundle everywhere: the server, the runner and the skills helper compute it the s
 A bundle is `[{path, content}]`: the UTF-8 text files of one skill folder, `SKILL.md` at its root. Nothing is ever
 truncated: a folder over a limit, or with a binary file or a symlink in it, is refused with the reason.
 """
+
 import hashlib
 import json
 import os
@@ -16,13 +17,27 @@ from pathlib import Path
 
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
 # Path words under /api/v2/skills/ (and the helper's own plugin) that a skill name would shadow or be shadowed by.
-RESERVED = frozenset({"marketplace.json", "helper.mjs", "tico-skills", "devices", "usage", "plugins", "bundles", "proposals",
-                      "installs", "installed", "install-targets"})
+RESERVED = frozenset(
+    {
+        "marketplace.json",
+        "helper.mjs",
+        "tico-skills",
+        "devices",
+        "usage",
+        "plugins",
+        "bundles",
+        "proposals",
+        "installs",
+        "installed",
+        "install-targets",
+        "suggestions",
+    }
+)
 MAX_FILES = 100
-MAX_CHARS = 90_000            # the total of every file's text, which must fit the screening state with its diff
+MAX_CHARS = 90_000  # the total of every file's text, which must fit the screening state with its diff
 MAX_PATH = 200
 MAX_DESCRIPTION = 1024
-SKIP_FILES = {".DS_Store"}     # Finder's noise, never part of a skill
+SKIP_FILES = {".DS_Store"}  # Finder's noise, never part of a skill
 SKIP_DIRS = {"__pycache__"}
 
 _BLOCK = re.compile(r"^([A-Za-z_][\w-]*):\s*(.*)$")
@@ -96,7 +111,11 @@ def bundle_problem(name, files):
         return f"A skill has at most {MAX_FILES} files ({len(files)} here)"
     seen, total = set(), 0
     for item in files:
-        if not isinstance(item, dict) or not isinstance(item.get("path"), str) or not isinstance(item.get("content"), str):
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("path"), str)
+            or not isinstance(item.get("content"), str)
+        ):
             return "Each file is a path and its text content"
         if problem := path_problem(item["path"]):
             return problem
@@ -137,7 +156,9 @@ def bundle_sha(files):
 def repo_top(cwd):
     """The git repository's top folder above `cwd`, or None."""
     try:
-        done = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"], capture_output=True, timeout=10, check=False)
+        done = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--show-toplevel"], capture_output=True, timeout=10, check=False
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     return Path(done.stdout.decode().strip()) if done.returncode == 0 and done.stdout.strip() else None
@@ -164,7 +185,9 @@ def find_folder(name, path=None, cwd=None, home=None):
             raise SkillError("symlink", f"{folder} is a symbolic link; point --path at the real folder")
     if path:
         raise SkillError("no_folder", f"{path} is not a folder")
-    raise SkillError("no_folder", "No skill folder found; looked in " + ", ".join(str(p) for p in looked) + ". Use --path.")
+    raise SkillError(
+        "no_folder", "No skill folder found; looked in " + ", ".join(str(p) for p in looked) + ". Use --path."
+    )
 
 
 def pack(folder, name):
@@ -175,7 +198,9 @@ def pack(folder, name):
         here = Path(root)
         for d in dirs:
             if (here / d).is_symlink():
-                raise SkillError("symlink", f"{(here / d).relative_to(folder)} is a symbolic link; copy the folder itself")
+                raise SkillError(
+                    "symlink", f"{(here / d).relative_to(folder)} is a symbolic link; copy the folder itself"
+                )
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
         for n in sorted(names):
             full = here / n
@@ -189,8 +214,10 @@ def pack(folder, name):
             if len(files) >= MAX_FILES:
                 raise SkillError("bundle", f"A skill has at most {MAX_FILES} files; this folder has more")
             size = full.stat().st_size
-            if total + size > MAX_CHARS * 4:           # bytes; the character check below is the exact one
-                raise SkillError("bundle", f"A skill has at most {MAX_CHARS:,} characters of text; this folder is larger")
+            if total + size > MAX_CHARS * 4:  # bytes; the character check below is the exact one
+                raise SkillError(
+                    "bundle", f"A skill has at most {MAX_CHARS:,} characters of text; this folder is larger"
+                )
             data = full.read_bytes()
             if b"\0" in data:
                 raise SkillError("binary", f"{rel} is binary: a skill holds text files only")
@@ -212,6 +239,7 @@ def run_submit(person, args):
     """`hub skill submit`: the folder on this computer, checked here and sent as a proposal the server records (backend/skills.py).
     The server decides what happens next: a new skill or an update, the screening, and the approval by an admin."""
     from clients.tico import APIError
+
     try:
         folder, top = find_folder(args["skill"], args.get("path"))
         files = pack(folder, args["skill"])

@@ -22,18 +22,31 @@ RETIRED_FORWARDS = "Forward addresses are retired: a forward is a send, approved
 
 def view(c, bot):
     from .email_sending import effective, saved
+
     layer = saved(c, "bot:" + bot)
-    return {"bot": bot, "set": "mode" in layer, "outbound_send": effective(c, bot=bot)["mode"] == "on_their_own",
-            "forward_to": [], "requested": None, "unapproved": None,
-            "updated_at": layer.get("updated_at"), "updated_by": layer.get("updated_by")}
+    return {
+        "bot": bot,
+        "set": "mode" in layer,
+        "outbound_send": effective(c, bot=bot)["mode"] == "on_their_own",
+        "forward_to": [],
+        "requested": None,
+        "unapproved": None,
+        "updated_at": layer.get("updated_at"),
+        "updated_by": layer.get("updated_by"),
+    }
 
 
 def require_person(who, bot=""):
     """A person acting as themselves: never a bot or a computer, never BotOps or the Assistant acting for them."""
     if who.role not in ("owner", "human") or who.via or who.task_actor:
         from .botops_act import mail_settings_hint
-        raise Problem("forbidden", "Only a person who manages this bot turns its mail sending on or off, in Tico or "
-                                   "with their own token" + (". " + mail_settings_hint(bot) if bot else ""), 403)
+
+        raise Problem(
+            "forbidden",
+            "Only a person who manages this bot turns its mail sending on or off, in Tico or "
+            "with their own token" + (". " + mail_settings_hint(bot) if bot else ""),
+            403,
+        )
 
 
 def message_sender_can_approve_send(c, auth, row):
@@ -42,8 +55,10 @@ def message_sender_can_approve_send(c, auth, row):
     if not sender.startswith("human:") or not recipient.startswith("bot:"):
         return False
     from .email_sending import can_ok, effective
+
     bot = H.actor_id(recipient)
     from . import mailbox_access
+
     boxes = mailbox_access.mailboxes_for(c, recipient)
     if boxes:
         return any(can_ok(c, auth, sender, box["address"], bot, effective(c, box["address"], bot)) for box in boxes)
@@ -60,6 +75,7 @@ def update(c, auth, who, bot, body):
         raise Problem("forward_to", RETIRED_FORWARDS, 422)
     if body.outbound_send is not None:
         from .email_sending import PolicyUpdate, update_policy
+
         update_policy(c, who, "bot:" + bot, PolicyUpdate(mode="on_their_own" if body.outbound_send else "ask_first"))
         H.event(c, who.actor, "bot.mail_settings", bot, {"outbound_send": body.outbound_send})
     return view(c, bot)
@@ -81,23 +97,36 @@ def install(app, store, auth, mutate):
                 raise Problem("not_found", "Bot not found", 404)
             found = view(c, bot)
             from .email_sending import effective
+
             found["sending_policy"] = effective(c, bot=bot)
             # What Tico may do in Tools is the company's own switch over every bot's: with Send mail off
             # every send is refused (backend/mailbox_access.py caps `send`), and the bot reads sending as off.
             # Organize mail and Change calendar gate the connector's other writes the same way, whichever credential it
             # holds (connectors/mail/oauth.py company_allows).
             from .google_workspace import permissions
+
             may = permissions(c)
-            found.update(company_send=may["send_mail"], company_organize=may["organize_mail"],
-                         company_calendar=may["change_calendar"])
+            found.update(
+                company_send=may["send_mail"],
+                company_organize=may["organize_mail"],
+                company_calendar=may["change_calendar"],
+            )
             if who.actor == "bot:" + bot and not found["company_send"]:
                 found["outbound_send"] = False
             from . import lifecycle
+
             if who.actor == "bot:" + bot and lifecycle.is_onboarding(c, bot):
                 # An onboarding bot sends nothing (backend/lifecycle.py): the send queue refuses every message it
                 # queues, and its connector reads sending as off and `onboarding`.
-                found.update({"set": True, "outbound_send": False, "forward_to": [], "onboarding": True,
-                              "updated_by": "onboarding, until a person above it marks onboarding complete"})
+                found.update(
+                    {
+                        "set": True,
+                        "outbound_send": False,
+                        "forward_to": [],
+                        "onboarding": True,
+                        "updated_by": "onboarding, until a person above it marks onboarding complete",
+                    }
+                )
             return found
 
     @app.post("/api/v2/bots/{bot}/mail-settings")

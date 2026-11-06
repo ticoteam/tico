@@ -1,4 +1,5 @@
 """Two-party privacy, transparency, defaults and conservative upgrade boundaries."""
+
 import json
 
 import pytest
@@ -11,15 +12,28 @@ from backend import bot_settings as BS
 
 @pytest.mark.parametrize('requester,owner', [('human:ben', 'bot:cpo')])
 def test_private_two_party_matrix(api, requester, owner):
-    tokens = {'human:ana': 'ana-test', 'human:ben': 'ben-test', 'human:priya': 'priya-test',
-              **{'bot:' + slug: bot_token(api, slug) for slug in ('ops', 'cpo', 'cmo')}}
+    tokens = {
+        'human:ana': 'ana-test',
+        'human:ben': 'ben-test',
+        'human:priya': 'priya-test',
+        **{'bot:' + slug: bot_token(api, slug) for slug in ('ops', 'cpo', 'cmo')},
+    }
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, 'Private matrix work',
-                            [{'name': 'Open', 'status': 'open'}], bots='work')
-        task = H.task_create(c, requester, 'Review the sensitive packet', 'Sensitive packet.', owner,
-                             private=True, type=typ['id'], lint=False)
-        c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) '
-                  'VALUES(?,?,?,?,?)', (task['id'], 'bot:cmo', requester, None, H.shift(H.now(), hours=24)))
+        typ = H.type_create(c, H.KEEPER, 'Private matrix work', [{'name': 'Open', 'status': 'open'}], bots='work')
+        task = H.task_create(
+            c,
+            requester,
+            'Review the sensitive packet',
+            'Sensitive packet.',
+            owner,
+            private=True,
+            type=typ['id'],
+            lint=False,
+        )
+        c.execute(
+            'INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)',
+            (task['id'], 'bot:cmo', requester, None, H.shift(H.now(), hours=24)),
+        )
 
     def check(readers):
         for actor, token in tokens.items():
@@ -53,8 +67,15 @@ def test_company_read_does_not_grant_work_but_dev_type_does(api):
     assert not task['private']
     assert get(api, 'tasks/' + task['id'], token=token)['task']['id'] == task['id']
     post(api, 'tasks/' + task['id'], {'version': task['version'], 'owner': 'ops'}, token=token, expected=403)
-    typ = post(api, 'task-types', {'name': 'Dev', 'bots': 'work', 'steps': [
-        {'name': 'Todo', 'status': 'open'}, {'name': 'PR Review', 'status': 'review'}]})['type']
+    typ = post(
+        api,
+        'task-types',
+        {
+            'name': 'Dev',
+            'bots': 'work',
+            'steps': [{'name': 'Todo', 'status': 'open'}, {'name': 'PR Review', 'status': 'review'}],
+        },
+    )['type']
     task = post(api, 'tasks/' + task['id'], {'version': task['version'], 'type': typ['id']})
     found = get(api, 'tasks?type=' + typ['id'], token=token)['tasks']
     assert task['id'] in {row['id'] for row in found}
@@ -75,9 +96,13 @@ def test_private_defaults_reassignment_and_human_publication(api):
             config['private_tasks_default'] = True
             BS.write(c, slug, config)
     assigned = post(api, 'tasks', {'owner': 'ops', 'title': 'Review the request', 'body': 'Review it.'})
-    created = post(api, 'tasks', {'owner': 'cmo', 'title': 'Draft the response', 'body': 'Draft it.', 'private': False}, token=cpo)
+    created = post(
+        api, 'tasks', {'owner': 'cmo', 'title': 'Draft the response', 'body': 'Draft it.', 'private': False}, token=cpo
+    )
     assert assigned['private'] and created['private']
-    explicit = post(api, 'tasks', {'owner': 'ops', 'title': 'Review the public request', 'body': 'Review it.', 'private': False})
+    explicit = post(
+        api, 'tasks', {'owner': 'ops', 'title': 'Review the public request', 'body': 'Review it.', 'private': False}
+    )
     assert not explicit['private']
     post(api, 'tasks/' + assigned['id'], {'version': assigned['version'], 'private': False}, token=ops, expected=422)
     changed = post(api, 'tasks/' + assigned['id'], {'version': assigned['version'], 'owner': 'cpo'})
@@ -92,22 +117,37 @@ def test_private_defaults_reassignment_and_human_publication(api):
 
 def test_private_parent_has_no_ancestry_bypass_and_requires_detachment(api):
     parent = post(api, 'tasks', {'owner': 'ben', 'title': 'Review the packet', 'body': 'Review it.', 'private': True})
-    child = post(api, 'tasks', {'owner': 'priya', 'title': 'Check the packet', 'body': 'Check it.',
-                               'relations': [{'task': parent['id'], 'kind': 'parent'}]}, token='ben-test')
+    child = post(
+        api,
+        'tasks',
+        {
+            'owner': 'priya',
+            'title': 'Check the packet',
+            'body': 'Check it.',
+            'relations': [{'task': parent['id'], 'kind': 'parent'}],
+        },
+        token='ben-test',
+    )
     assert child['private'] and child['requester_id'] == 'human:ben'
     get(api, 'tasks/' + child['id'], expected=404)
     detail = get(api, 'tasks/' + parent['id'])
     assert not detail['children'] and detail['task']['parts']['total'] == 0
     post(api, 'tasks/' + child['id'], {'version': child['version'], 'private': False}, token='ben-test', expected=422)
-    detached = post(api, 'tasks/' + child['id'] + '/relations', {'task': parent['id'], 'kind': 'parent', 'remove': True},
-                    token='ben-test')
+    detached = post(
+        api,
+        'tasks/' + child['id'] + '/relations',
+        {'task': parent['id'], 'kind': 'parent', 'remove': True},
+        token='ben-test',
+    )
     assert 'parent' not in detached['relations']
     published = post(api, 'tasks/' + child['id'], {'version': detached['version'], 'private': False}, token='ben-test')
     assert not published['private']
 
 
 def test_cached_comment_response_cannot_bypass_reassignment(api):
-    task = post(api, 'tasks', {'owner': 'ben', 'title': 'Review the private draft', 'body': 'Review it.', 'private': True})
+    task = post(
+        api, 'tasks', {'owner': 'ben', 'title': 'Review the private draft', 'body': 'Review it.', 'private': True}
+    )
     replay_headers = headers('ben-test')
     url = '/api/v2/tasks/' + task['id'] + '/comments'
     first = api.post(url, json={'text': 'Sensitive response.'}, headers=replay_headers)
@@ -121,19 +161,32 @@ def test_cached_comment_response_cannot_bypass_reassignment(api):
 def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
     ordinary = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review ordinary work', 'body': 'Ordinary content.'})
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review the older work', 'body': 'Older content.'})
-    child = post(api, 'tasks', {'owner': 'ben', 'title': 'Review related work', 'body': 'Related content.', 'relations': [{'task': task['id'], 'kind': 'parent'}]})
+    child = post(
+        api,
+        'tasks',
+        {
+            'owner': 'ben',
+            'title': 'Review related work',
+            'body': 'Related content.',
+            'relations': [{'task': task['id'], 'kind': 'parent'}],
+        },
+    )
     routine = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review scheduled work', 'body': 'Scheduled content.'})
     orphan = post(api, 'tasks', {'owner': 'priya', 'title': 'Review orphaned work', 'body': 'Orphan content.'})
     post(api, 'tasks/' + task['id'] + '/files', {'name': 'legacy-brief.md', 'text': 'Legacy attachment bytes.'})
     with api.app.state.store.transaction() as c:
-        counts = {name: c.execute('SELECT count(*) FROM ' + name).fetchone()[0]
-                  for name in ('tasks', 'blobs', 'task_assets', 'bot_files')}
+        counts = {
+            name: c.execute('SELECT count(*) FROM ' + name).fetchone()[0]
+            for name in ('tasks', 'blobs', 'task_assets', 'bot_files')
+        }
         BS.write(c, 'cpo', {'template': 'general-counsel'})
         c.execute("UPDATE tasks SET requester_id='human:missing' WHERE id=?", (orphan['id'],))
         c.execute("UPDATE tasks SET requester_id='keeper' WHERE id=?", (routine['id'],))
         # A database from before task privacy had no change log (backend/events.py) or parties counter (backend/row_clock.py).
-        for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND "
-                                 "(name LIKE 'changes_%' OR name LIKE 'row_clock_parties_%')").fetchall():
+        for (name,) in c.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND "
+            "(name LIKE 'changes_%' OR name LIKE 'row_clock_parties_%')"
+        ).fetchall():
             c.execute('DROP TRIGGER ' + name)
         c.execute('DROP INDEX IF EXISTS tasks_private_parties')
         c.execute('DROP INDEX IF EXISTS tasks_private_status')
@@ -159,11 +212,16 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
 
 
 def test_private_dependency_and_refusal_audit_never_copy_sensitive_content(api):
-    private = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review sensitive evidence', 'body': 'Review it.', 'private': True})
+    private = post(
+        api, 'tasks', {'owner': 'cpo', 'title': 'Review sensitive evidence', 'body': 'Review it.', 'private': True}
+    )
     public = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review release timing', 'body': 'Review it.'})
     post(api, 'tasks/' + public['id'] + '/relations', {'task': private['id'], 'kind': 'blocked_by'}, expected=422)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,'now')", (private['id'], public['id'], 'blocks'))
+        c.execute(
+            "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,'now')",
+            (private['id'], public['id'], 'blocks'),
+        )
         H._unblock(c, H.task(c, private['id']))
         assert TR.blocker_ids(c, public['id']) == [private['id']]
         with pytest.raises(H.Refused) as exc:
@@ -175,7 +233,9 @@ def test_private_dependency_and_refusal_audit_never_copy_sensitive_content(api):
 
 def test_bot_acting_for_human_cannot_publish_in_domain(api):
     with api.app.state.store.transaction() as c:
-        task = H.task_create(c, 'human:ben', 'Review confidential work', 'Review it.', 'bot:cpo', private=True, lint=False)
+        task = H.task_create(
+            c, 'human:ben', 'Review confidential work', 'Review it.', 'bot:cpo', private=True, lint=False
+        )
         token = H.VIA.set('assistant')
         try:
             with pytest.raises(H.Refused):
@@ -187,15 +247,16 @@ def test_bot_acting_for_human_cannot_publish_in_domain(api):
 
 def test_acted_duplicate_diagnostics_keep_private_ids_out_of_responses_and_audit(api):
     with api.app.state.store.transaction() as c:
-        private = H.task_create(c, 'human:ben', 'Review confidential work', 'Review it.',
-                                'bot:cpo', private=True, lint=False)
-        ordinary = H.task_create(c, 'human:ben', 'Review ordinary work', 'Review it.',
-                                 'bot:cpo', lint=False)
+        private = H.task_create(
+            c, 'human:ben', 'Review confidential work', 'Review it.', 'bot:cpo', private=True, lint=False
+        )
+        ordinary = H.task_create(c, 'human:ben', 'Review ordinary work', 'Review it.', 'bot:cpo', lint=False)
         token = H.VIA.set('assistant')
         try:
-            for write in (lambda: H.task_create(c, 'human:ben', private['title'], 'Review it.',
-                                                'bot:cpo', lint=False),
-                          lambda: H.task_update(c, 'human:ben', ordinary['id'], title=private['title'])):
+            for write in (
+                lambda: H.task_create(c, 'human:ben', private['title'], 'Review it.', 'bot:cpo', lint=False),
+                lambda: H.task_update(c, 'human:ben', ordinary['id'], title=private['title']),
+            ):
                 with pytest.raises(H.Refused) as refused:
                     write()
                 assert private['id'] not in str(refused.value)
@@ -211,8 +272,9 @@ def test_acted_duplicate_diagnostics_keep_private_ids_out_of_responses_and_audit
 def test_native_hub_upgrade_from_23_is_atomic_and_preserves_tasks_messages(tmp_path):
     path = tmp_path / 'native-hub.db'
     c = H.connect(path)
-    H.sync_registry(c, {}, {'people': [{'id': 'ana', 'email': 'ana@acme.example'},
-                                      {'id': 'ben', 'email': 'ben@acme.example'}]})
+    H.sync_registry(
+        c, {}, {'people': [{'id': 'ana', 'email': 'ana@acme.example'}, {'id': 'ben', 'email': 'ben@acme.example'}]}
+    )
     ordinary = H.task_create(c, 'human:ana', 'Review ordinary work', 'Review it.', 'human:ben', lint=False)
     orphan = H.task_create(c, 'human:ana', 'Review orphan work', 'Review it.', 'human:ben', lint=False)
     comment = H.task_comment(c, 'human:ana', orphan['id'], 'Preserved tracked comment.', wake=False)
@@ -244,11 +306,18 @@ def test_a_visuals_line_link_to_a_private_task_message_opens_only_for_its_reader
     What it opens is the task as the reader may see it: its readers get the message, anyone else not-found."""
     from urllib.parse import parse_qs, urlsplit
     from backend import visuals
+
     task = post(api, 'tasks', {'owner': 'ben', 'title': 'Board pack', 'body': 'Chart the quarter.', 'private': True})
     with api.app.state.store.transaction() as c:
         cid = H.task(c, task['id'])['conversation_id']
-        said = H.say(c, 'human:ben', 'human:ana', 'Quarter attached, revenue up.', conversation_id=cid,
-                     refs={'task': task['id'], 'attachments': [{'file_id': 'f1', 'version': 1, 'kind': 'image', 'title': 'Q3'}]})
+        said = H.say(
+            c,
+            'human:ben',
+            'human:ana',
+            'Quarter attached, revenue up.',
+            conversation_id=cid,
+            refs={'task': task['id'], 'attachments': [{'file_id': 'f1', 'version': 1, 'kind': 'image', 'title': 'Q3'}]},
+        )
         message = H.message(c, said['id'])
     line = visuals.elsewhere('https://tico.example.com', message, task['id'])
     assert line['label'] == '1 visual - view in Tico'

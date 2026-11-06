@@ -1,5 +1,6 @@
 """Finance wired into Tico (phase 0, part B): setup on an existing install, the daily Gateway usage posting, run holds
 from claim to run end, a budget cutoff as a usage limit, warn and cutoff events, and the Gateway cap worker."""
+
 import io
 import json
 import urllib.error
@@ -23,18 +24,30 @@ def _turn(c, bot, finished, cost, model="tico-medium", billing="api", tid=None):
     tid = tid or f"t{bot}{finished}{model}"
     if c.execute("SELECT 1 FROM attempts WHERE id=?", (tid,)).fetchone():
         # A claimed run already has its attempts row: its run record is written onto that row.
-        c.execute("UPDATE attempts SET settled_at=?, usage_model=?, est_cost_usd=?, billing=?, trigger='message' WHERE id=?",
-                  (finished, model, cost, billing, tid))
+        c.execute(
+            "UPDATE attempts SET settled_at=?, usage_model=?, est_cost_usd=?, billing=?, trigger='message' WHERE id=?",
+            (finished, model, cost, billing, tid),
+        )
         return tid
-    c.execute("INSERT INTO attempts(id, bot_id, created_at, settled_at, trigger, usage_model, est_cost_usd, billing) "
-              "VALUES(?,?,?,?,'message',?,?,?)",
-              (tid, bot, finished, finished, model, cost, billing))
+    c.execute(
+        "INSERT INTO attempts(id, bot_id, created_at, settled_at, trigger, usage_model, est_cost_usd, billing) "
+        "VALUES(?,?,?,?,'message',?,?,?)",
+        (tid, bot, finished, finished, model, cost, billing),
+    )
     return tid
 
 
 def _meter(as_of, **prices):
-    rows = [{"model": model, "category": "image" if model.endswith("image") else "text", "charged": True, "calls": 1,
-             "price_usd": Decimal(price)} for model, price in prices.items()]
+    rows = [
+        {
+            "model": model,
+            "category": "image" if model.endswith("image") else "text",
+            "charged": True,
+            "calls": 1,
+            "price_usd": Decimal(price),
+        }
+        for model, price in prices.items()
+    ]
     rows.append({"model": "tico-free", "category": "text", "charged": False, "calls": 9, "price_usd": Decimal("9")})
     return {"month": "2026-10", "rows": rows, "as_of": as_of}
 
@@ -43,9 +56,10 @@ def _usage_lines(c):
     """{(teammate or "", account code): cents} over every usage entry."""
     out = {}
     for code, amount, mate in c.execute(
-            "SELECT a.code, l.amount, coalesce(t.value, '') FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
-            "JOIN fin_accounts a ON a.id=l.account_id LEFT JOIN fin_line_tags t ON t.line_id=l.id AND t.kind='teammate' "
-            "WHERE e.source='usage'"):
+        "SELECT a.code, l.amount, coalesce(t.value, '') FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
+        "JOIN fin_accounts a ON a.id=l.account_id LEFT JOIN fin_line_tags t ON t.line_id=l.id AND t.kind='teammate' "
+        "WHERE e.source='usage'"
+    ):
         out[(mate, code)] = out.get((mate, code), 0) + amount
     return out
 
@@ -63,22 +77,32 @@ def test_usage_posting_matches_gateway_billed_runs_once(books):
         _turn(c, "coder", "2026-10-15T13:00:00.000000Z", 0.30)
         _turn(c, "coder", "2026-10-15T14:00:00.000000Z", 0.20)
         _turn(c, "seller", "2026-10-15T14:30:00.000000Z", 0.10, model="tico-fast")
-        _turn(c, "seller", "2026-10-15T14:40:00.000000Z", 5.00, model="claude-sonnet-4-5")     # own key
-        _turn(c, "seller", "2026-10-15T14:50:00.000000Z", 1.00, billing="subscription")       # a sign-in
+        _turn(c, "seller", "2026-10-15T14:40:00.000000Z", 5.00, model="claude-sonnet-4-5")  # own key
+        _turn(c, "seller", "2026-10-15T14:50:00.000000Z", 1.00, billing="subscription")  # a sign-in
         meter = _meter("2026-10-15T16:00:00Z", **{"tico-medium": "0.50", "tico-fast": "0.10", "tico-image": "0.07"})
         assert FA.usage_snapshot(c, meter, fetched_at="2026-10-15T16:01:00.000000Z")
         posted = FA.post_usage(c, "2026-10-15T16:05:00.000000Z")
         assert sorted((p["line"], p["amount"]) for p in posted) == [("ai", 60), ("video", 7)]
-        assert _usage_lines(c) == {("bot:coder", "5100"): 50, ("bot:seller", "5100"): 10, ("", "5200"): 7,
-                                   ("", "1100"): -67}
+        assert _usage_lines(c) == {
+            ("bot:coder", "5100"): 50,
+            ("bot:seller", "5100"): 10,
+            ("", "5200"): 7,
+            ("", "1100"): -67,
+        }
         assert FA.usage_snapshot(c, meter, fetched_at="2026-10-15T17:00:00.000000Z") is None
         assert FA.post_usage(c, "2026-10-15T17:05:00.000000Z") == []
         # The next day's meter carries a sub-cent remainder until it rounds up.
-        FA.usage_snapshot(c, _meter("2026-10-16T16:00:00Z", **{"tico-medium": "0.504", "tico-fast": "0.10",
-                                                                "tico-image": "0.07"}), fetched_at=AT)
+        FA.usage_snapshot(
+            c,
+            _meter("2026-10-16T16:00:00Z", **{"tico-medium": "0.504", "tico-fast": "0.10", "tico-image": "0.07"}),
+            fetched_at=AT,
+        )
         assert FA.post_usage(c, "2026-10-16T16:05:00.000000Z") == []
-        FA.usage_snapshot(c, _meter("2026-10-17T16:00:00Z", **{"tico-medium": "0.516", "tico-fast": "0.10",
-                                                                "tico-image": "0.07"}), fetched_at=AT)
+        FA.usage_snapshot(
+            c,
+            _meter("2026-10-17T16:00:00Z", **{"tico-medium": "0.516", "tico-fast": "0.10", "tico-image": "0.07"}),
+            fetched_at=AT,
+        )
         assert [(p["line"], p["amount"]) for p in FA.post_usage(c, "2026-10-17T16:05:00.000000Z")] == [("ai", 2)]
         assert sum(v for (_, code), v in _usage_lines(c).items() if code == "5100") == 62
 
@@ -89,8 +113,15 @@ def test_gateway_usage_in_a_raw_totals_month_posts_nothing_because_the_totals_ca
     raw = (Path(__file__).parent / "fixtures" / "finance" / "raw_totals.csv").read_text()
     mapping = {"Software subscriptions": "6100", "Office rent": "6900", "Sales revenue": "4000", "Cash at bank": "1000"}
     with books.transaction() as c:
-        assert act(c, OWNER, "import_raw_totals", {"csv": raw, "basis": "cash", "mapping": mapping,
-                                                   "source_name": "Acme history"}).status == "committed"
+        assert (
+            act(
+                c,
+                OWNER,
+                "import_raw_totals",
+                {"csv": raw, "basis": "cash", "mapping": mapping, "source_name": "Acme history"},
+            ).status
+            == "committed"
+        )
         _turn(c, "coder", "2026-02-15T13:00:00.000000Z", 0.30)
         meter = _meter("2026-02-28T16:00:00Z", **{"tico-medium": "0.30", "tico-fast": "0.10", "tico-image": "0.07"})
         meter["month"] = "2026-02"
@@ -103,7 +134,7 @@ def test_a_run_hold_settles_once_and_the_posting_takes_it_in(books):
     with books.transaction() as c:
         ai = budget(c, "AI services")
         act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000})
-        _turn(c, "coder", "2026-10-14T10:00:00.000000Z", 0.40)                      # recent history: hold 40 cents
+        _turn(c, "coder", "2026-10-14T10:00:00.000000Z", 0.40)  # recent history: hold 40 cents
         held = FA.run_hold(c, "coder", "job1", at=AT)
         assert held.hold_id and not held.refused
         assert FA.budget_state(c, ai, AT).held == 40
@@ -197,8 +228,10 @@ def test_the_cap_worker_withholds_in_rehearsal_and_waits_out_a_404(books, monkey
     missing = _Gateway((404, {"error": "not_found"}))
     assert step(missing, "2026-10-15T14:00:00.000000Z") == "not_deployed"
     assert step(missing, "2026-10-15T14:10:00.000000Z") == "waiting" and len(missing.sent) == 1
-    live = _Gateway((200, {"spent_usd": 12.5, "cap_usd": 100}),
-                    (200, {"spent_usd": 12.5, "cap_usd": 100, "self_cap_usd": 12.5, "effective_cap_usd": 12.5}))
+    live = _Gateway(
+        (200, {"spent_usd": 12.5, "cap_usd": 100}),
+        (200, {"spent_usd": 12.5, "cap_usd": 100, "self_cap_usd": 12.5, "effective_cap_usd": 12.5}),
+    )
     assert step(live, "2026-10-15T15:10:00.000000Z") == "pushed"
     assert json.loads(live.sent[1][2]) == {"self_cap_usd": 12.5} and live.sent[1][1].endswith("/key/cap")
     assert step(live, "2026-10-15T15:20:00.000000Z") == "steady"
@@ -207,8 +240,10 @@ def test_the_cap_worker_withholds_in_rehearsal_and_waits_out_a_404(books, monkey
     cleared = _Gateway((200, {"spent_usd": 12.5, "cap_usd": 100, "self_cap_usd": None}))
     assert step(cleared, "2026-10-15T15:30:00.000000Z") == "pushed"
     assert json.loads(cleared.sent[0][2]) == {"self_cap_usd": None}
-    assert gateway_sync.usage_step(books, None, settings, opener=_Gateway((404, {})),
-                                   now="2026-10-15T15:40:00.000000Z") == "not_deployed"
+    assert (
+        gateway_sync.usage_step(books, None, settings, opener=_Gateway((404, {})), now="2026-10-15T15:40:00.000000Z")
+        == "not_deployed"
+    )
 
 
 def test_routes_read_in_the_callers_view_and_a_retry_replays_only_the_status(api):
@@ -216,7 +251,7 @@ def test_routes_read_in_the_callers_view_and_a_retry_replays_only_the_status(api
     with store.transaction() as c:
         assert FA.ensure_setup(c, store.settings.owner_email)
     ai = next(b for b in get(api, "finance/budgets")["budgets"] if b["name"] == "AI services")
-    assert get(api, "finance/budgets", token="ben-test")["budgets"] == []          # a manager of nothing sees none
+    assert get(api, "finance/budgets", token="ben-test")["budgets"] == []  # a manager of nothing sees none
     body = {"kind": "budget_update", "payload": {"budget_id": ai["id"], "amount": 5_000}}
     dry = api.post("/api/v2/finance/actions", json={**body, "dry_run": True}, headers=headers()).json()
     assert dry["dry_run"] and dry["status"] == "committed"
@@ -239,18 +274,26 @@ def _events(c, bid, name=None):
 
 def _job(c, jid, state):
     c.execute("INSERT INTO messages(id) VALUES(?)", ("m" + jid,))
-    c.execute("INSERT INTO jobs(id, message_id, bot_id, state, created_at) VALUES(?,?,?,?,?)", (jid, "m" + jid, "coder", state, AT))
+    c.execute(
+        "INSERT INTO jobs(id, message_id, bot_id, state, created_at) VALUES(?,?,?,?,?)",
+        (jid, "m" + jid, "coder", state, AT),
+    )
 
 
 def test_bots_get_only_their_own_recorded_cost_and_image_runs_land_on_video(books):
     with books.transaction() as c:
         _turn(c, "coder", "2026-10-15T13:00:00.000000Z", 0.10)
         _turn(c, "seller", "2026-10-15T13:10:00.000000Z", 0.07, model="tico-image")
-        FA.usage_snapshot(c, _meter("2026-10-15T16:00:00Z", **{"tico-medium": "1.00", "tico-image": "0.07"}),
-                          fetched_at=AT)
+        FA.usage_snapshot(
+            c, _meter("2026-10-15T16:00:00Z", **{"tico-medium": "1.00", "tico-image": "0.07"}), fetched_at=AT
+        )
         FA.post_usage(c, "2026-10-15T16:05:00.000000Z")
-        assert _usage_lines(c) == {("bot:coder", "5100"): 10, ("", "5100"): 90, ("bot:seller", "5200"): 7,
-                                   ("", "1100"): -107}
+        assert _usage_lines(c) == {
+            ("bot:coder", "5100"): 10,
+            ("", "5100"): 90,
+            ("bot:seller", "5200"): 7,
+            ("", "1100"): -107,
+        }
 
 
 def test_a_flat_meter_still_takes_in_a_run_it_already_carried(books):
@@ -259,7 +302,7 @@ def test_a_flat_meter_still_takes_in_a_run_it_already_carried(books):
         act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000})
         assert FA.run_hold(c, "coder", "job1", at=AT).hold_id
         FA.usage_snapshot(c, _meter("2026-10-15T13:00:00Z", **{"tico-medium": "0.60"}), fetched_at=AT)
-        FA.post_usage(c, "2026-10-15T13:05:00.000000Z")                    # the run is still going
+        FA.post_usage(c, "2026-10-15T13:05:00.000000Z")  # the run is still going
         run = _turn(c, "coder", "2026-10-15T13:30:00.000000Z", 0.60)
         assert FA.run_ended(c, "job1", run, "2026-10-15T13:30:01.000000Z") == "settled"
         FA.usage_snapshot(c, _meter("2026-10-15T14:00:00Z", **{"tico-medium": "0.60"}), fetched_at=AT)
@@ -275,8 +318,11 @@ def test_octobers_posting_never_takes_in_a_november_run(books):
         held = FA.run_hold(c, "coder", "jobnov", at="2026-11-01T01:00:00.000000Z")
         run = _turn(c, "coder", "2026-11-01T01:30:00.000000Z", 0.30)
         FA.run_ended(c, "jobnov", run, "2026-11-01T01:30:01.000000Z")
-        FA.usage_snapshot(c, {**_meter("2026-11-02T00:00:00Z", **{"tico-medium": "0.50"}), "month": "2026-10"},
-                          fetched_at="2026-11-02T00:00:00.000000Z")
+        FA.usage_snapshot(
+            c,
+            {**_meter("2026-11-02T00:00:00Z", **{"tico-medium": "0.50"}), "month": "2026-10"},
+            fetched_at="2026-11-02T00:00:00.000000Z",
+        )
         assert FA.post_usage(c, "2026-11-02T00:05:00.000000Z")
         assert c.execute("SELECT entry_id FROM fin_holds WHERE id=?", (held.hold_id,)).fetchone()[0] is None
 
@@ -295,12 +341,14 @@ def test_a_posting_that_takes_in_its_hold_crosses_nothing(books):
 
 def test_a_month_missed_over_its_turn_is_still_read_until_its_final_posting(books):
     with books.transaction() as c:
-        FA.usage_snapshot(c, _meter("2026-10-30T12:00:00Z", **{"tico-medium": "0.50"}),
-                          fetched_at="2026-10-30T12:00:00.000000Z")
+        FA.usage_snapshot(
+            c, _meter("2026-10-30T12:00:00Z", **{"tico-medium": "0.50"}), fetched_at="2026-10-30T12:00:00.000000Z"
+        )
         FA.post_usage(c, "2026-10-30T12:05:00.000000Z")
         assert "2026-10" in gateway_sync.due_months(c, "2026-11-04T12:00:00.000000Z")
-        FA.usage_snapshot(c, _meter("2026-11-04T12:00:00Z", **{"tico-medium": "0.70"}),
-                          fetched_at="2026-11-04T12:00:00.000000Z")
+        FA.usage_snapshot(
+            c, _meter("2026-11-04T12:00:00Z", **{"tico-medium": "0.70"}), fetched_at="2026-11-04T12:00:00.000000Z"
+        )
         FA.post_usage(c, "2026-11-04T12:05:00.000000Z")
         assert "2026-10" not in gateway_sync.due_months(c, "2026-11-05T12:00:00.000000Z")
 
@@ -309,13 +357,15 @@ def test_an_older_snapshot_is_set_aside_and_a_larger_same_time_one_replaces(book
     with books.transaction() as c:
         FA.usage_snapshot(c, _meter("2026-10-15T14:00:00Z", **{"tico-medium": "0.50"}), fetched_at=AT)
         FA.post_usage(c, "2026-10-15T14:05:00.000000Z")
-        FA.usage_snapshot(c, _meter("2026-10-15T13:00:00Z", **{"tico-medium": "0.40"}),
-                          fetched_at="2026-10-15T14:10:00.000000Z")
+        FA.usage_snapshot(
+            c, _meter("2026-10-15T13:00:00Z", **{"tico-medium": "0.40"}), fetched_at="2026-10-15T14:10:00.000000Z"
+        )
         assert FA.post_usage(c, "2026-10-15T14:15:00.000000Z") == []
         late = c.execute("SELECT posted_at, ignored_at FROM fin_usage_snapshots WHERE as_of LIKE '2026-10-15T13%'")
         assert [tuple(r) for r in late] == [(None, "2026-10-15T14:15:00.000000Z")]
-        assert FA.usage_snapshot(c, _meter("2026-10-15T14:00:00Z", **{"tico-medium": "0.70"}),
-                                 fetched_at="2026-10-15T14:20:00.000000Z")
+        assert FA.usage_snapshot(
+            c, _meter("2026-10-15T14:00:00Z", **{"tico-medium": "0.70"}), fetched_at="2026-10-15T14:20:00.000000Z"
+        )
         assert [p["amount"] for p in FA.post_usage(c, "2026-10-15T14:25:00.000000Z")] == [20]
 
 
@@ -336,13 +386,21 @@ def test_a_running_jobs_hold_outlives_its_expiry_and_a_late_run_still_counts(boo
 
 def test_a_bots_own_allocation_is_its_to_spend(books):
     from backend.finance import jobs
+
     with books.transaction() as c:
         ai = budget(c, "AI services")
         act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})
-        assert act(c, OWNER, "allocation_set", {"budget_id": ai, "target_kind": "teammate", "target_id": "bot:coder",
-                                                "amount": 100}).status == "committed"
+        assert (
+            act(
+                c,
+                OWNER,
+                "allocation_set",
+                {"budget_id": ai, "target_kind": "teammate", "target_id": "bot:coder", "amount": 100},
+            ).status
+            == "committed"
+        )
         assert usage_limits.blocked(c, "coder", at=NOON) is None
-        assert not FA.run_hold(c, "coder", "job-coder", at=AT).refused        # coder spends what was set aside for it
+        assert not FA.run_hold(c, "coder", "job-coder", at=AT).refused  # coder spends what was set aside for it
         # Nothing is spent, so no budget is at its cutoff and the reserve pauses no bot on its own (spec 4.4). A run claim
         # is work, not a request for budget: the reserve does not refuse the seller's run either, it is held against the
         # spend room that is left (only a budget at its cutoff refuses a run).
@@ -353,6 +411,7 @@ def test_a_bots_own_allocation_is_its_to_spend(books):
 
 def test_a_budget_event_reaches_watch_rules_by_its_budget_id(books, monkeypatch):
     from backend import rules
+
     seen = []
     monkeypatch.setattr(rules, "judge_event", lambda c, name, ctx, **kw: seen.append((name, ctx)) or [])
     with books.transaction() as c:
@@ -393,8 +452,10 @@ def test_a_retry_after_a_revoked_grant_shows_no_amount(api):
         ai = budget(c, "AI services")
         FA.act(c, "human:ana", "budget_update", {"budget_id": ai, "amount": 1_000}, "raise")
         grant = FA.act(c, "human:ana", "view_grant", {"subject": "human:ben", "what": "expenses"}, "grant")
-    body = {"kind": "allocation_set", "payload": {"budget_id": ai, "target_kind": "teammate", "target_id": "human:ben",
-                                                  "amount": 5_000}}
+    body = {
+        "kind": "allocation_set",
+        "payload": {"budget_id": ai, "target_kind": "teammate", "target_id": "human:ben", "amount": 5_000},
+    }
     key = headers("ben-test")
     first = api.post("/api/v2/finance/actions", json=body, headers=key).json()
     assert "1000" in first["reason"]
@@ -404,22 +465,27 @@ def test_a_retry_after_a_revoked_grant_shows_no_amount(api):
     assert again["action_id"] == first["action_id"] and "1000" not in _shown(again)
     seen = get(api, "finance/actions/" + first["action_id"], token="ben-test")
     assert seen["status"] == first["status"] and "1000" not in _shown(seen)
-    with store.transaction() as c:                      # the receipt lapses: Finance replays the action itself
+    with store.transaction() as c:  # the receipt lapses: Finance replays the action itself
         c.execute("DELETE FROM idempotency WHERE actor='human:ben'")
     lapsed = api.post("/api/v2/finance/actions", json=body, headers=key).json()
     assert lapsed["action_id"] == first["action_id"] and "1000" not in _shown(lapsed)
     get(api, "finance/actions/" + first["action_id"], token="cara-test", expected=404)
-    with store.transaction() as c:                      # cara is named to decide it: she reads what she decides
+    with store.transaction() as c:  # cara is named to decide it: she reads what she decides
         c.execute("UPDATE fin_actions SET approval_to='human:cara' WHERE id=?", (first["action_id"],))
     assert "1000" in get(api, "finance/actions/" + first["action_id"], token="cara-test")["reason"]
 
 
 def _attempt(c, jid, aid, state="running"):
     _job(c, jid, state)
-    c.execute("INSERT OR IGNORE INTO runners(id, label, owner_id, token_hash, created_at) VALUES('r1', 'r1', 'ana', 'h', ?)",
-              (AT,))
-    c.execute("INSERT INTO attempts(id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, created_at) "
-              "VALUES(?,?,?,?,?,?,?,?,?)", (aid, jid, "coder", "r1", 1, "h" + aid, "running", AT, AT))
+    c.execute(
+        "INSERT OR IGNORE INTO runners(id, label, owner_id, token_hash, created_at) VALUES('r1', 'r1', 'ana', 'h', ?)",
+        (AT,),
+    )
+    c.execute(
+        "INSERT INTO attempts(id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?)",
+        (aid, jid, "coder", "r1", 1, "h" + aid, "running", AT, AT),
+    )
 
 
 def _hold(c, hid):
@@ -429,14 +495,30 @@ def _hold(c, hid):
 def test_a_reason_naming_a_budget_above_hides_once_that_budget_is_out_of_view(books):
     with books.transaction() as c:
         soft = account(c, "6100")
-        root = act(c, OWNER, "budget_create", {"name": "Software", "account_id": soft, "amount": 1_000,
-                                               "at_limit": "decline"}).result["budget_id"]
-        web = act(c, OWNER, "budget_create", {"name": "Software web", "account_id": soft, "team": "web",
-                                              "parent_id": root, "amount": 500, "at_limit": "decline"}).result["budget_id"]
+        root = act(
+            c, OWNER, "budget_create", {"name": "Software", "account_id": soft, "amount": 1_000, "at_limit": "decline"}
+        ).result["budget_id"]
+        web = act(
+            c,
+            OWNER,
+            "budget_create",
+            {
+                "name": "Software web",
+                "account_id": soft,
+                "team": "web",
+                "parent_id": root,
+                "amount": 500,
+                "at_limit": "decline",
+            },
+        ).result["budget_id"]
         spend(c, "6100", 600)
         grant = act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "expenses"})
-        made = act(c, "human:cara", "allocation_set", {"budget_id": web, "target_kind": "teammate",
-                                                       "target_id": "human:eve", "amount": 450})
+        made = act(
+            c,
+            "human:cara",
+            "allocation_set",
+            {"budget_id": web, "target_kind": "teammate", "target_id": "human:eve", "amount": 450},
+        )
         assert "400" in made.reason
         act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]})
         assert FR.action_for(c, "human:cara", made.action_id)["reason"] == ""
@@ -451,8 +533,9 @@ def test_an_image_hold_does_not_count_beside_the_ai_posting(books):
         FA.run_hold(c, "coder", "jimg", at=AT)
         _turn(c, "coder", "2026-10-15T13:00:00.000000Z", 0.60, model="tico-image", tid="aimg")
         assert FA.run_ended(c, "jimg", "aimg", "2026-10-15T13:00:01.000000Z") == "settled"
-        FA.usage_snapshot(c, _meter("2026-10-15T16:00:00Z", **{"tico-medium": "0.50", "tico-image": "0.60"}),
-                          fetched_at=AT)
+        FA.usage_snapshot(
+            c, _meter("2026-10-15T16:00:00Z", **{"tico-medium": "0.50", "tico-image": "0.60"}), fetched_at=AT
+        )
         FA.post_usage(c, "2026-10-15T16:05:00.000000Z")
         assert _events(c, ai) == []
 
@@ -462,8 +545,9 @@ def test_a_replaced_snapshot_assigns_nothing_twice(books):
         _turn(c, "coder", "2026-10-15T13:00:00.000000Z", 0.50)
         FA.usage_snapshot(c, _meter("2026-10-15T14:00:00Z", **{"tico-medium": "0.50"}), fetched_at=AT)
         FA.post_usage(c, "2026-10-15T14:05:00.000000Z")
-        FA.usage_snapshot(c, _meter("2026-10-15T14:00:00Z", **{"tico-medium": "0.70"}),
-                          fetched_at="2026-10-15T14:10:00.000000Z")
+        FA.usage_snapshot(
+            c, _meter("2026-10-15T14:00:00Z", **{"tico-medium": "0.70"}), fetched_at="2026-10-15T14:10:00.000000Z"
+        )
         FA.post_usage(c, "2026-10-15T14:15:00.000000Z")
         assert _usage_lines(c) == {("bot:coder", "5100"): 50, ("", "5100"): 20, ("", "1100"): -70}
 
@@ -474,24 +558,38 @@ def test_no_settled_hold_outlives_its_months_final_posting(books):
         act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000})
         # Claimed on Oct 31, still running at October's final posting, ended in November.
         late = FA.run_hold(c, "coder", "joct", at="2026-10-31T23:00:00.000000Z").hold_id
-        FA.usage_snapshot(c, _meter("2026-11-04T00:00:00Z", **{"tico-medium": "0.50"}) | {"month": "2026-10"},
-                          fetched_at="2026-11-04T00:00:00.000000Z")
+        FA.usage_snapshot(
+            c,
+            _meter("2026-11-04T00:00:00Z", **{"tico-medium": "0.50"}) | {"month": "2026-10"},
+            fetched_at="2026-11-04T00:00:00.000000Z",
+        )
         FA.post_usage(c, "2026-11-04T00:05:00.000000Z")
         run = _turn(c, "coder", "2026-11-05T00:00:00.000000Z", 0.30)
         FA.run_ended(c, "joct", run, "2026-11-05T00:00:01.000000Z")
-        FA.usage_snapshot(c, _meter("2026-11-06T00:00:00Z", **{"tico-medium": "0.30"}) | {"month": "2026-11"},
-                          fetched_at="2026-11-06T00:00:00.000000Z")
+        FA.usage_snapshot(
+            c,
+            _meter("2026-11-06T00:00:00Z", **{"tico-medium": "0.30"}) | {"month": "2026-11"},
+            fetched_at="2026-11-06T00:00:00.000000Z",
+        )
         FA.post_usage(c, "2026-11-06T00:05:00.000000Z")
         assert _hold(c, late)[1] is not None
     with books.transaction() as c:
         # Settled in September, but September's meter billed nothing: the final posting frees it.
-        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000, "effective_from": "2026-09-01"},
-            at="2026-08-15T12:00:00.000000Z")
+        act(
+            c,
+            OWNER,
+            "budget_update",
+            {"budget_id": ai, "amount": 1_000, "effective_from": "2026-09-01"},
+            at="2026-08-15T12:00:00.000000Z",
+        )
         lone = FA.run_hold(c, "coder", "jsep", at="2026-09-20T10:00:00.000000Z").hold_id
         run = _turn(c, "coder", "2026-09-20T11:00:00.000000Z", 0.20)
         FA.run_ended(c, "jsep", run, "2026-09-20T11:00:01.000000Z")
-        FA.usage_snapshot(c, {"month": "2026-09", "rows": [], "as_of": "2026-10-04T00:00:00Z"},
-                          fetched_at="2026-10-04T00:00:00.000000Z")
+        FA.usage_snapshot(
+            c,
+            {"month": "2026-09", "rows": [], "as_of": "2026-10-04T00:00:00Z"},
+            fetched_at="2026-10-04T00:00:00.000000Z",
+        )
         FA.post_usage(c, "2026-10-04T00:05:00.000000Z")
         assert _hold(c, lone) == ("released", None)
 
@@ -514,8 +612,12 @@ def test_a_claim_may_spend_what_is_left_of_the_bots_own_allocation(books):
     with books.transaction() as c:
         ai = budget(c, "AI services")
         act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})
-        act(c, OWNER, "allocation_set", {"budget_id": ai, "target_kind": "teammate", "target_id": "bot:coder",
-                                         "amount": 100})
+        act(
+            c,
+            OWNER,
+            "allocation_set",
+            {"budget_id": ai, "target_kind": "teammate", "target_id": "bot:coder", "amount": 100},
+        )
         spend(c, "5100", 97, teammate="bot:coder")
         held = FA.run_hold(c, "coder", "job1", at=AT)
         assert not held.refused and held.hold_id
@@ -525,13 +627,29 @@ def test_a_claim_may_spend_what_is_left_of_the_bots_own_allocation(books):
 def test_the_requester_of_an_approved_action_needs_the_view_to_read_its_reason(books):
     with books.transaction() as c:
         soft = account(c, "6100")
-        root = act(c, OWNER, "budget_create", {"name": "Software", "account_id": soft, "amount": 1_000,
-                                               "at_limit": "decline"}).result["budget_id"]
-        web = act(c, OWNER, "budget_create", {"name": "Software web", "account_id": soft, "team": "web",
-                                              "parent_id": root, "amount": 500, "at_limit": "decline"}).result["budget_id"]
+        root = act(
+            c, OWNER, "budget_create", {"name": "Software", "account_id": soft, "amount": 1_000, "at_limit": "decline"}
+        ).result["budget_id"]
+        web = act(
+            c,
+            OWNER,
+            "budget_create",
+            {
+                "name": "Software web",
+                "account_id": soft,
+                "team": "web",
+                "parent_id": root,
+                "amount": 500,
+                "at_limit": "decline",
+            },
+        ).result["budget_id"]
         grant = act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "expenses"})
-        asked = act(c, "human:cara", "allocation_set", {"budget_id": web, "target_kind": "teammate",
-                                                        "target_id": "human:eve", "amount": 300})
+        asked = act(
+            c,
+            "human:cara",
+            "allocation_set",
+            {"budget_id": web, "target_kind": "teammate", "target_id": "human:eve", "amount": 300},
+        )
         assert (asked.status, asked.approver) == ("needs_approval", "human:ben")
         spend(c, "6100", 900)
         H.approval_decide(c, "human:ben", asked.approval_id, "approved")
@@ -550,8 +668,9 @@ def test_a_run_billed_in_october_is_taken_in_by_octobers_posting_though_it_settl
         held = FA.run_hold(c, "coder", "jlate", at="2026-10-31T23:00:00.000000Z").hold_id
         _turn(c, "coder", "2026-10-31T23:59:00.000000Z", 0.30, tid="alate")
         assert FA.run_ended(c, "jlate", "alate", "2026-11-01T00:01:00.000000Z") == "settled"
-        FA.usage_snapshot(c, _meter("2026-11-01T00:30:00Z", **{"tico-medium": "0.30"}),
-                          fetched_at="2026-11-01T00:30:00.000000Z")
+        FA.usage_snapshot(
+            c, _meter("2026-11-01T00:30:00Z", **{"tico-medium": "0.30"}), fetched_at="2026-11-01T00:30:00.000000Z"
+        )
         FA.post_usage(c, "2026-11-01T00:35:00.000000Z")
         assert _hold(c, held)[1] is not None
 
@@ -577,17 +696,29 @@ def test_a_claim_fits_what_is_left_along_the_whole_budget_path(books):
     with books.transaction() as c:
         ai = budget(c, "AI services")
         act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})
-        act(c, OWNER, "budget_create", {"name": "AI web", "account_id": account(c, "5100"), "team": "web",
-                                        "parent_id": ai, "amount": 50, "at_limit": "decline"})
+        act(
+            c,
+            OWNER,
+            "budget_create",
+            {
+                "name": "AI web",
+                "account_id": account(c, "5100"),
+                "team": "web",
+                "parent_id": ai,
+                "amount": 50,
+                "at_limit": "decline",
+            },
+        )
         spend(c, "5100", 47, team="web")
         spend(c, "5100", 51, team="sales")
-        held = FA.run_hold(c, "coder", "job1", at=AT)        # web has 3 left, AI services 2
+        held = FA.run_hold(c, "coder", "job1", at=AT)  # web has 3 left, AI services 2
         assert not held.refused and held.hold_id
         assert c.execute("SELECT amount FROM fin_holds WHERE id=?", (held.hold_id,)).fetchone()[0] == 2
 
 
 def test_a_quarter_budgets_gateway_cut_is_made_again_each_month(books, monkeypatch, caplog):
     from backend.finance import jobs
+
     monkeypatch.setattr(usage_limits, "LOGGED", set())
     with books.transaction() as c:
         ai = budget(c, "AI services")

@@ -4,6 +4,7 @@ read the task, and coverage says unknown rather than unused where Tico has no da
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
+
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -27,20 +28,49 @@ def skill_id(api, name="triage"):
         return c.execute("SELECT id FROM skills WHERE name=?", (name,)).fetchone()[0]
 
 
-def use(api, actor=("Human", "cara"), *, days=0.0, trigger="model", created=None, name="triage", task_id=None,
-        thread_id=None, requested_by=None, source="helper"):
+def use(
+    api,
+    actor=("Human", "cara"),
+    *,
+    days=0.0,
+    trigger="model",
+    created=None,
+    name="triage",
+    task_id=None,
+    thread_id=None,
+    requested_by=None,
+    source="helper",
+):
     """One raw use, as the runner, the helper or a typed /name writes it."""
     at = NOW - timedelta(days=days)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO skill_usages (skill_id, sha256, actor_type, actor_id, requested_by_id, trigger, source, session_key, "
-                  "tool_use_id, task_id, thread_id, used_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                  (skill_id(api, name), None, actor[0], actor[1], requested_by, trigger, source, H.new_id(), H.new_id(),
-                   task_id, thread_id, ts(at), ts(created or at)))
+        c.execute(
+            "INSERT INTO skill_usages (skill_id, sha256, actor_type, actor_id, requested_by_id, trigger, source, session_key, "
+            "tool_use_id, task_id, thread_id, used_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                skill_id(api, name),
+                None,
+                actor[0],
+                actor[1],
+                requested_by,
+                trigger,
+                source,
+                H.new_id(),
+                H.new_id(),
+                task_id,
+                thread_id,
+                ts(at),
+                ts(created or at),
+            ),
+        )
 
 
 def dailies(api):
     with api.app.state.store.read() as c:
-        return sorted(tuple(r) for r in c.execute("SELECT used_on, actor_type, actor_id, trigger, uses_count FROM skill_usage_dailies"))
+        return sorted(
+            tuple(r)
+            for r in c.execute("SELECT used_on, actor_type, actor_id, trigger, uses_count FROM skill_usage_dailies")
+        )
 
 
 def raw_count(api):
@@ -59,9 +89,9 @@ def test_the_rollup_is_idempotent_takes_late_rows_and_keeps_the_rollup_of_pruned
     use(api, days=3)
     use(api, days=3, trigger="person")
     use(api, ("Bot", bot_id(api, "ops")), days=3)
-    use(api, days=95)                                     # past the keep, before any rollup ever ran
+    use(api, days=95)  # past the keep, before any rollup ever ran
     use(api, days=89.5)
-    first = U.run(store, NOW - timedelta(days=6))       # a run back then: 95 days ago was still kept
+    first = U.run(store, NOW - timedelta(days=6))  # a run back then: 95 days ago was still kept
     assert first["pruned"] == 0
     assert (day(95), "Human", "cara", "model", 1) in dailies(api)
 
@@ -70,7 +100,7 @@ def test_the_rollup_is_idempotent_takes_late_rows_and_keeps_the_rollup_of_pruned
     once = dailies(api)
     assert (day(95), "Human", "cara", "model", 1) in once, "a pruned day keeps its counts"
     assert (day(3), "Human", "cara", "model", 1) in once and (day(3), "Human", "cara", "person", 1) in once
-    assert U.run(store, NOW + timedelta(minutes=5)) == {"days": 0, "pruned": 0}
+    assert U.run(store, NOW + timedelta(minutes=5)) == {"days": 0, "pruned": 0, "unlisted_pruned": 0}
     assert dailies(api) == once, "running it again changes nothing"
 
     # A use the helper reports late, for a day already rolled up, is counted on the next run without doubling the rest.
@@ -93,7 +123,7 @@ def test_reads_count_the_rollup_and_todays_raw_uses_once_each(api):
     use(api, days=10)
     use(api, days=10)
     U.run(api.app.state.store, NOW)
-    use(api, days=0)                                     # not rolled up yet: still counted
+    use(api, days=0)  # not rolled up yet: still counted
     (row,) = get(api, "skills/usage?days=30", "ben-test")["skills"]
     assert row["uses"] == 3 and row["people"] == 1 and row["bots"] == 0
     (week,) = get(api, "skills/usage?days=7", "ben-test")["skills"]
@@ -146,29 +176,45 @@ def test_coverage_is_unknown_without_data_and_unused_only_with_a_receipt_reporti
     store = api.app.state.store
     ops, finance = bot_id(api, "ops"), bot_id(api, "finance")
     for target_type, target_id in (("Bot", ops), ("Bot", finance), ("Human", "cara"), ("Human", "ben")):
-        r = api.post("/api/v2/skills/triage/installs", json={"target_type": target_type, "target_id": target_id,
-                                                          "version_policy": "latest"}, headers=headers("ana-test"))
+        r = api.post(
+            "/api/v2/skills/triage/installs",
+            json={"target_type": target_type, "target_id": target_id, "version_policy": "latest"},
+            headers=headers("ana-test"),
+        )
         assert r.status_code == 200, r.text
     with store.transaction() as c:
         sid = skill_id(api)
-        BS.update(c, ops, {"harness": "claude"})              # a harness that reports every skill use
+        BS.update(c, ops, {"harness": "claude"})  # a harness that reports every skill use
         c.execute("UPDATE skill_installs SET created_at=?", (ts(NOW - timedelta(days=40)),))
         for target_type, target_id in (("Bot", ops), ("Human", "cara"), ("Human", "ben")):
-            c.execute("INSERT INTO skill_receipts (target_type, target_id, skill_id, sha256, source, staged_at) VALUES (?,?,?,?,?,?)",
-                      (target_type, target_id, sid, "a" * 64, "runner" if target_type == "Bot" else "helper", H.now()))
-        c.execute("INSERT INTO skill_devices (id, person_id, label, token_hash, reporting_enabled, created_at, updated_at) "
-                  "VALUES ('skd_1', 'ben', 'laptop', 'h1', 1, ?, ?)", (H.now(), H.now()))
-        c.execute("INSERT INTO skill_devices (id, person_id, label, token_hash, reporting_enabled, created_at, updated_at) "
-                  "VALUES ('skd_2', 'cara', 'laptop', 'h2', 0, ?, ?)", (H.now(), H.now()))
-    use(api, ("Human", "ben"), days=40)                   # outside the 30 days
+            c.execute(
+                "INSERT INTO skill_receipts (target_type, target_id, skill_id, sha256, source, staged_at) VALUES (?,?,?,?,?,?)",
+                (target_type, target_id, sid, "a" * 64, "runner" if target_type == "Bot" else "helper", H.now()),
+            )
+        c.execute(
+            "INSERT INTO skill_devices (id, person_id, label, token_hash, reporting_enabled, created_at, updated_at) "
+            "VALUES ('skd_1', 'ben', 'laptop', 'h1', 1, ?, ?)",
+            (H.now(), H.now()),
+        )
+        c.execute(
+            "INSERT INTO skill_devices (id, person_id, label, token_hash, reporting_enabled, created_at, updated_at) "
+            "VALUES ('skd_2', 'cara', 'laptop', 'h2', 0, ?, ?)",
+            (H.now(), H.now()),
+        )
+    use(api, ("Human", "ben"), days=40)  # outside the 30 days
     states = {i["target"]["id"]: i["coverage"] for i in get(api, "skills/triage/usage", "ana-test")["installs"]}
     assert states == {ops: "unused", finance: "unknown", "cara": "unknown", "ben": "unused"}
 
     use(api, ("Bot", ops), days=1)
     with store.transaction() as c:
         c.execute("UPDATE skill_installs SET created_at=? WHERE target_id='ben'", (H.now(),))
-    states = {i["target"]["id"]: (i["coverage"], i["uses_30d"]) for i in get(api, "skills/triage/usage", "ana-test")["installs"]}
-    assert states[ops] == ("used", 1) and states["ben"] == ("unknown", 0), "an install under 30 days old says nothing yet"
+    states = {
+        i["target"]["id"]: (i["coverage"], i["uses_30d"])
+        for i in get(api, "skills/triage/usage", "ana-test")["installs"]
+    }
+    assert states[ops] == ("used", 1) and states["ben"] == ("unknown", 0), (
+        "an install under 30 days old says nothing yet"
+    )
     # A member sees coverage only for the installs she may see: her own and bots she sees.
     assert "ben" not in {i["target"]["id"] for i in get(api, "skills/triage/usage", "cara-test")["installs"]}
 
@@ -178,8 +224,11 @@ def test_a_codex_bot_is_never_unused_since_codex_reports_only_the_skills_its_inp
     store = api.app.state.store
     claude, codex = bot_id(api, "ops"), bot_id(api, "finance")
     for target in (claude, codex):
-        r = api.post("/api/v2/skills/triage/installs", json={"target_type": "Bot", "target_id": target, "version_policy": "latest"},
-                     headers=headers("ana-test"))
+        r = api.post(
+            "/api/v2/skills/triage/installs",
+            json={"target_type": "Bot", "target_id": target, "version_policy": "latest"},
+            headers=headers("ana-test"),
+        )
         assert r.status_code == 200, r.text
     with store.transaction() as c:
         sid = skill_id(api)
@@ -187,8 +236,10 @@ def test_a_codex_bot_is_never_unused_since_codex_reports_only_the_skills_its_inp
         BS.update(c, codex, {"harness": "codex"})
         c.execute("UPDATE skill_installs SET created_at=?", (ts(NOW - timedelta(days=40)),))
         for target in (claude, codex):
-            c.execute("INSERT INTO skill_receipts (target_type, target_id, skill_id, sha256, source, staged_at) VALUES ('Bot',?,?,?,?,?)",
-                      (target, sid, "a" * 64, "runner", H.now()))
+            c.execute(
+                "INSERT INTO skill_receipts (target_type, target_id, skill_id, sha256, source, staged_at) VALUES ('Bot',?,?,?,?,?)",
+                (target, sid, "a" * 64, "runner", H.now()),
+            )
     states = {i["target"]["id"]: i["coverage"] for i in get(api, "skills/triage/usage", "ana-test")["installs"]}
     assert states == {claude: "unused", codex: "unknown"}
 
@@ -201,9 +252,15 @@ def test_install_targets_offer_only_who_the_caller_may_install_for(api):
     assert [p["id"] for p in cara["people"]] == ["cara"] and not cara["admin"]
     assert bot_id(api, "ops") not in {b["id"] for b in cara["bots"]}
     for target in (t for team in cara["teams"] for t in team["targets"]):
-        assert target["target_id"] == "cara" if target["target_type"] == "Human" else target["target_id"] != bot_id(api, "ops")
+        assert (
+            target["target_id"] == "cara"
+            if target["target_type"] == "Human"
+            else target["target_id"] != bot_id(api, "ops")
+        )
     ana = get(api, "skills/install-targets", "ana-test")
-    assert {"ana", "ben", "cara"} <= {p["id"] for p in ana["people"]} and bot_id(api, "ops") in {b["id"] for b in ana["bots"]}
+    assert {"ana", "ben", "cara"} <= {p["id"] for p in ana["people"]} and bot_id(api, "ops") in {
+        b["id"] for b in ana["bots"]
+    }
 
 
 def test_installed_lists_my_installs_and_the_bots_i_may_write_only(api):
@@ -212,8 +269,11 @@ def test_installed_lists_my_installs_and_the_bots_i_may_write_only(api):
     with api.app.state.store.transaction() as c:
         restrict(c, ops, see={"everyone": True}, read={"everyone": True}, write={"people": ["ana"]})
     for target_type, target_id in (("Bot", ops), ("Bot", finance), ("Human", "cara"), ("Human", "ben")):
-        r = api.post("/api/v2/skills/triage/installs", json={"target_type": target_type, "target_id": target_id,
-                                                          "version_policy": "latest"}, headers=headers("ana-test"))
+        r = api.post(
+            "/api/v2/skills/triage/installs",
+            json={"target_type": target_type, "target_id": target_id, "version_policy": "latest"},
+            headers=headers("ana-test"),
+        )
         assert r.status_code == 200, r.text
     mine = {(i["target"]["type"], i["target"]["id"]) for i in get(api, "skills/installed", "cara-test")["installs"]}
     assert ("Human", "cara") in mine and ("Human", "ben") not in mine, "her own, never Ben's"

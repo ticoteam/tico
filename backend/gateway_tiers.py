@@ -12,6 +12,7 @@ and ignores anything malformed, so a new version appears without an app release.
 rows, prices and long-prompt rates from here, and looks up any other id (a pinned older version, an auto id, a version
 that arrived by refresh) through `row_for`, `price_for` and `long_prompt_for`.
 """
+
 import json
 import math
 import re
@@ -21,9 +22,18 @@ import time
 from clients import gateway as G
 
 SCHEMA = 1
-DEPARTMENTS = (("general", "General"), ("product", "Product"), ("engineering", "Engineering"),
-               ("marketing", "Marketing"), ("sales", "Sales"), ("finance", "Finance"), ("legal", "Legal"),
-               ("science", "Science"), ("operations", "Operations"), ("data", "Data"))
+DEPARTMENTS = (
+    ("general", "General"),
+    ("product", "Product"),
+    ("engineering", "Engineering"),
+    ("marketing", "Marketing"),
+    ("sales", "Sales"),
+    ("finance", "Finance"),
+    ("legal", "Legal"),
+    ("science", "Science"),
+    ("operations", "Operations"),
+    ("data", "Data"),
+)
 DEPARTMENT_IDS = tuple(row[0] for row in DEPARTMENTS)
 LEVELS = (("low", "Low"), ("medium", "Medium"), ("high", "High"))
 LEVEL_IDS = tuple(row[0] for row in LEVELS)
@@ -32,9 +42,18 @@ FIRST_VERSION = "1.0"
 PREFIX = "tico-"
 
 # A bot's department from its org-chart group (templates/groups.yaml); anything else is General.
-GROUP_DEPARTMENT = {"sales": "sales", "marketing": "marketing", "support": "operations", "finance": "finance",
-                    "operations": "operations", "legal": "legal", "hr": "operations", "product": "product",
-                    "engineering": "engineering", "leadership": "general"}
+GROUP_DEPARTMENT = {
+    "sales": "sales",
+    "marketing": "marketing",
+    "support": "operations",
+    "finance": "finance",
+    "operations": "operations",
+    "legal": "legal",
+    "hr": "operations",
+    "product": "product",
+    "engineering": "engineering",
+    "leadership": "general",
+}
 
 # What a model reads besides text: the catalog's `inputs` ("text", "image", "pdf") on every chat version. Claude reads
 # all three; DeepSeek V4.1 Flash (Low Fast) reads text only.
@@ -45,153 +64,342 @@ INPUT_KINDS = ("text", "image", "pdf")
 # maps to the same rows at 1.0: there is no department benchmark yet that justifies another pick. Haiku's rates go up
 # for a prompt past `long`'s limit.
 ROWS = {
-    "low": {"model": "Claude Haiku 5.5", "context": 1_000_000, "price": (0.15, 0.015, 0.75), "long": (100_000, (0.75, 0.075, 3.75)),
-            "inputs": CLAUDE_INPUTS},
-    "medium": {"model": "Claude Sonnet 5.5", "context": 1_000_000, "price": (2.50, 0.25, 12.50), "long": None, "inputs": CLAUDE_INPUTS},
-    "high": {"model": "Claude Opus 5.5", "context": 1_000_000, "price": (5.0, 0.50, 25.0), "long": None, "inputs": CLAUDE_INPUTS},
+    "low": {
+        "model": "Claude Haiku 5.5",
+        "context": 1_000_000,
+        "price": (0.15, 0.015, 0.75),
+        "long": (100_000, (0.75, 0.075, 3.75)),
+        "inputs": CLAUDE_INPUTS,
+    },
+    "medium": {
+        "model": "Claude Sonnet 5.5",
+        "context": 1_000_000,
+        "price": (2.50, 0.25, 12.50),
+        "long": None,
+        "inputs": CLAUDE_INPUTS,
+    },
+    "high": {
+        "model": "Claude Opus 5.5",
+        "context": 1_000_000,
+        "price": (5.0, 0.50, 25.0),
+        "long": None,
+        "inputs": CLAUDE_INPUTS,
+    },
 }
 # The row a fast tier points at (`tico-fast-low-1.0`, `tico-fast-high-1.0` at Tico HQ). Fast is measurably faster and may
 # cost more. Low Fast is DeepSeek V4.1 Flash; Medium Fast and High Fast are both Claude Opus 5.5 in Anthropic's fast mode,
 # the only fast route at or above Medium's quality. Cached input is 10% of input for both (HQ prices DeepSeek cache reads at a tenth).
 FAST_ROWS = {
     "low": {"model": "DeepSeek V4.1 Flash", "price": (0.45, 0.045, 1.80), "long": None, "inputs": ("text",)},
-    "medium": {"model": "Claude Opus 5.5 (fast mode)", "context": 1_000_000, "price": (10.0, 1.0, 50.0), "long": None, "inputs": CLAUDE_INPUTS},
-    "high": {"model": "Claude Opus 5.5 (fast mode)", "context": 1_000_000, "price": (10.0, 1.0, 50.0), "long": None, "inputs": CLAUDE_INPUTS},
+    "medium": {
+        "model": "Claude Opus 5.5 (fast mode)",
+        "context": 1_000_000,
+        "price": (10.0, 1.0, 50.0),
+        "long": None,
+        "inputs": CLAUDE_INPUTS,
+    },
+    "high": {
+        "model": "Claude Opus 5.5 (fast mode)",
+        "context": 1_000_000,
+        "price": (10.0, 1.0, 50.0),
+        "long": None,
+        "inputs": CLAUDE_INPUTS,
+    },
 }
 
 # The meeting tier (HQ's `tico-meeting`, pinned `tico-meeting-1.0`): a chat tier with no department, level or fast. It is
 # the reply model of the live-meeting bot (Inception Mercury 3, text only, 1M context), chosen in Settings, not a bot's.
 MEETING_TIER = "tico-meeting"
 MEETING_NAME = "Meeting"
-MEETING_ROW = {"model": "Inception Mercury 3", "price": (0.30, 0.03, 1.05), "long": None, "inputs": ("text",),
-               "context": 1_000_000, "max_output": 128_000, "released": "2026-10-29"}
+MEETING_ROW = {
+    "model": "Inception Mercury 3",
+    "price": (0.30, 0.03, 1.05),
+    "long": None,
+    "inputs": ("text",),
+    "context": 1_000_000,
+    "max_output": 128_000,
+    "released": "2026-10-29",
+}
 
 DECISIONS = (
-    {"id": "tico-decide-low", "level": "low", "name": "Decide · Low", "model": "Jev 1.13", "price": (0.06, 0.006, 0.0),
-     "types": ["noul", "choice", "score"],
-     "when": "Yes/no, which-one and how-much questions about a state; fastest and cheapest. The default."},
-    {"id": "tico-decide-medium", "level": "medium", "name": "Decide · Medium", "model": "Claude Sonnet 5.5", "price": (2.50, 0.25, 12.50),
-     "types": ["noul", "choice", "score"], "when": "The same questions when Low gets close calls wrong; slower."},
-    {"id": "tico-decide-high", "level": "high", "name": "Decide · High", "model": "Claude Opus 5.5", "price": (5.0, 0.50, 25.0),
-     "types": ["noul", "choice", "score"], "when": "The same questions that need careful judgment; slowest."},
-    {"id": "tico-classify-low", "level": "low", "name": "Classify · Low", "model": "Jev 1.13", "price": (0.06, 0.006, 0.0),
-     "types": ["choice"], "when": "Sorting one text into one of your labels."},
+    {
+        "id": "tico-decide-low",
+        "level": "low",
+        "name": "Decide · Low",
+        "model": "Jev 1.13",
+        "price": (0.06, 0.006, 0.0),
+        "types": ["noul", "choice", "score"],
+        "when": "Yes/no, which-one and how-much questions about a state; fastest and cheapest. The default.",
+    },
+    {
+        "id": "tico-decide-medium",
+        "level": "medium",
+        "name": "Decide · Medium",
+        "model": "Claude Sonnet 5.5",
+        "price": (2.50, 0.25, 12.50),
+        "types": ["noul", "choice", "score"],
+        "when": "The same questions when Low gets close calls wrong; slower.",
+    },
+    {
+        "id": "tico-decide-high",
+        "level": "high",
+        "name": "Decide · High",
+        "model": "Claude Opus 5.5",
+        "price": (5.0, 0.50, 25.0),
+        "types": ["noul", "choice", "score"],
+        "when": "The same questions that need careful judgment; slowest.",
+    },
+    {
+        "id": "tico-classify-low",
+        "level": "low",
+        "name": "Classify · Low",
+        "model": "Jev 1.13",
+        "price": (0.06, 0.006, 0.0),
+        "types": ["choice"],
+        "when": "Sorting one text into one of your labels.",
+    },
 )
 # Medium and High serve the same typed contract from a language model, at that model's price.
 
 # The services, as HQ lists them in its catalog. `details` are label/value pairs the Gateway card on Settings > Models shows under a
 # service; an older HQ's rows have none.
 SERVICES = (
-    {"id": "decide", "name": "Decide", "for": "Answer yes/no, choice and score questions about a state",
-     "price": "From $0.06 per 1M input tokens", "status": "live", "tools": ["hub_decision_ask", "hub_decision_readout", "hub_decision_outcome"],
-     "details": [
-         {"label": "Low", "value": "Jev 1.13 · $0.06 per 1M input"},
-         {"label": "Medium", "value": "Claude Sonnet 5.5 · $2.50 / $12.50 per 1M"},
-         {"label": "High", "value": "Claude Opus 5.5 · $5 / $25 per 1M"},
-     ]},
-    {"id": "classify", "name": "Classify", "for": "Pick one of your options for a state",
-     "price": "From $0.06 per 1M input tokens", "status": "live", "tools": ["hub_classify"],
-     "details": [
-         {"label": "Low", "value": "Jev 1.13 · $0.06 per 1M input"},
-     ]},
-    {"id": "inbox.email", "name": "Inbox · Email", "for": "Receive sign-in codes and notices",
-     "price": "Free addresses · $0.14 per 1,000 received", "status": "live", "tools": ["hub_inbound_create_email", "hub_inbound_wait"],
-     "details": [
-         {"label": "Addresses", "value": "Free"},
-         {"label": "Received", "value": "$0.14 per 1,000"},
-     ]},
-    {"id": "inbox.numbers", "name": "Inbox · Texts", "for": "A US number that receives texts, like sign-in codes",
-     "price": "From $14 per 30 days", "status": "approval", "tools": [],
-     "details": [
-         {"label": "Number", "value": "From $14 per 30 days"},
-         {"label": "Sending", "value": "Receive only"},
-     ]},
-    {"id": "alerts", "name": "Alerts", "for": "Urgent texts and calls to your own phone",
-     "price": "$1 per alert", "status": "live", "tools": [],
-     "details": [
-         {"label": "Alert", "value": "$1, texts and calls included"},
-         {"label": "Phone check", "value": "Free code to confirm your number"},
-         {"label": "Sent from", "value": "One Tico number"},
-     ]},
-    {"id": "search", "name": "Search", "for": "Search the web and read what it finds",
-     "price": "$0.00875 per search, plus tokens at $0.15 / $0.75 per 1M", "status": "live", "tools": ["hub_gateway_search"],
-     "details": [
-         {"label": "Search", "value": "$0.00875 each"},
-         {"label": "Tokens", "value": "$0.15 / $0.75 per 1M, like Low"},
-         {"label": "Engines", "value": "Exa, then Parallel"},
-     ]},
-    {"id": "fetch", "name": "Fetch", "for": "Read a web page or PDF",
-     "price": "$1.25 per 1,000 pages + tokens", "status": "live", "tools": ["hub_gateway_fetch"],
-     "details": [
-         {"label": "Pages", "value": "$1.25 per 1,000"},
-         {"label": "Reads", "value": "Web pages and PDFs"},
-     ]},
-    {"id": "images", "name": "Images", "for": "Make an image from a prompt and reference images",
-     "price": "Per image, at cost + 25%", "status": "live", "tools": ["hub_gateway_image"],
-     "details": [
-         {"label": "Storyboard", "value": "Gemini 3.1 Flash Image"},
-         {"label": "Photo", "value": "GPT-5.4 Image 2"},
-         {"label": "Graphic", "value": "GPT-5.4 Image 2"},
-         {"label": "Character", "value": "Gemini 3 Pro Image"},
-         {"label": "Price", "value": "At cost + 25%"},
-     ]},
-    {"id": "transcribe", "name": "Transcribe", "for": "Turn a recording into text, and live speech into text",
-     "price": "$0.33 per audio hour · live text $0.30 per audio hour", "status": "live", "tools": [],
-     "details": [
-         {"label": "Recordings", "value": "ElevenLabs Scribe v2 · $0.33 per hour"},
-         {"label": "Live", "value": "xAI · $0.30 per hour"},
-     ]},
-    {"id": "mail.physical", "name": "Physical mail and registered agent", "for": "A street address for letters, scanned and read, with a registered agent",
-     "price": "$10 a month per state, shared · private at cost + 25%", "status": "live", "tools": ["hub_mail_list", "hub_mail_read"],
-     "details": [
-         {"label": "States", "value": "DE, CA · others on request"},
-         {"label": "Shared address", "value": "$10 a month per state"},
-         {"label": "Private box", "value": "Box cost + 25%"},
-         {"label": "Scans", "value": "$1 a letter up to 10 pages, then $0.25 a page"},
-         {"label": "Forwarding", "value": "Postage + 25%"},
-         {"label": "Registered agent", "value": "On request"},
-     ]},
-    {"id": "mail.send", "name": "Send letters", "for": "Print and mail letters, First-Class or Certified",
-     "price": "Print and postage at cost + 25%", "status": "next", "tools": [],
-     "details": []},
-    {"id": "email.send", "name": "Send email", "for": "Send a message from a Tico address",
-     "price": None, "status": "later", "tools": [],
-     "details": []},
-    {"id": "enrich", "name": "Enrich", "for": "Look up a company or a person",
-     "price": None, "status": "later", "tools": [],
-     "details": []},
-    {"id": "voice", "name": "Voice", "for": "Speak and listen on a call",
-     "price": None, "status": "later", "tools": [],
-     "details": []},
-    {"id": "storage.s3", "name": "Object Storage", "for": "S3-compatible storage for files and backups",
-     "price": None, "status": "next", "tools": [],
-     "details": []},
-    {"id": "finance.accounting", "name": "Accounting", "for": "On-demand accounting for invoices, bills, payments, and financial reports",
-     "price": None, "status": "next", "tools": [],
-     "details": []},
-    {"id": "legal.software", "name": "Legal", "for": "On-demand software for legal matters, documents, and deadlines",
-     "price": None, "status": "next", "tools": [],
-     "details": []},
-    {"id": "crm.software", "name": "CRM", "for": "A workspace for customer accounts, contacts, opportunities, and sales follow-up",
-     "price": None, "status": "next", "tools": [],
-     "details": []},
-    {"id": "support.software", "name": "Customer Support", "for": "A support desk for customer requests, shared inboxes, and ticket follow-up",
-     "price": None, "status": "next", "tools": [],
-     "details": []},
-    {"id": "marketing.software", "name": "Marketing", "for": "Marketing tools and bots for campaigns and market intelligence",
-     "price": None, "status": "next", "tools": [],
-     "details": []},
+    {
+        "id": "decide",
+        "name": "Decide",
+        "for": "Answer yes/no, choice and score questions about a state",
+        "price": "From $0.06 per 1M input tokens",
+        "status": "live",
+        "tools": ["hub_decision_ask", "hub_decision_readout", "hub_decision_outcome"],
+        "details": [
+            {"label": "Low", "value": "Jev 1.13 · $0.06 per 1M input"},
+            {"label": "Medium", "value": "Claude Sonnet 5.5 · $2.50 / $12.50 per 1M"},
+            {"label": "High", "value": "Claude Opus 5.5 · $5 / $25 per 1M"},
+        ],
+    },
+    {
+        "id": "classify",
+        "name": "Classify",
+        "for": "Pick one of your options for a state",
+        "price": "From $0.06 per 1M input tokens",
+        "status": "live",
+        "tools": ["hub_classify"],
+        "details": [
+            {"label": "Low", "value": "Jev 1.13 · $0.06 per 1M input"},
+        ],
+    },
+    {
+        "id": "inbox.email",
+        "name": "Inbox · Email",
+        "for": "Receive sign-in codes and notices",
+        "price": "Free addresses · $0.14 per 1,000 received",
+        "status": "live",
+        "tools": ["hub_inbound_create_email", "hub_inbound_wait"],
+        "details": [
+            {"label": "Addresses", "value": "Free"},
+            {"label": "Received", "value": "$0.14 per 1,000"},
+        ],
+    },
+    {
+        "id": "inbox.numbers",
+        "name": "Inbox · Texts",
+        "for": "A US number that receives texts, like sign-in codes",
+        "price": "From $14 per 30 days",
+        "status": "approval",
+        "tools": [],
+        "details": [
+            {"label": "Number", "value": "From $14 per 30 days"},
+            {"label": "Sending", "value": "Receive only"},
+        ],
+    },
+    {
+        "id": "alerts",
+        "name": "Alerts",
+        "for": "Urgent texts and calls to your own phone",
+        "price": "$1 per alert",
+        "status": "live",
+        "tools": [],
+        "details": [
+            {"label": "Alert", "value": "$1, texts and calls included"},
+            {"label": "Phone check", "value": "Free code to confirm your number"},
+            {"label": "Sent from", "value": "One Tico number"},
+        ],
+    },
+    {
+        "id": "search",
+        "name": "Search",
+        "for": "Search the web and read what it finds",
+        "price": "$0.00875 per search, plus tokens at $0.15 / $0.75 per 1M",
+        "status": "live",
+        "tools": ["hub_gateway_search"],
+        "details": [
+            {"label": "Search", "value": "$0.00875 each"},
+            {"label": "Tokens", "value": "$0.15 / $0.75 per 1M, like Low"},
+            {"label": "Engines", "value": "Exa, then Parallel"},
+        ],
+    },
+    {
+        "id": "fetch",
+        "name": "Fetch",
+        "for": "Read a web page or PDF",
+        "price": "$1.25 per 1,000 pages + tokens",
+        "status": "live",
+        "tools": ["hub_gateway_fetch"],
+        "details": [
+            {"label": "Pages", "value": "$1.25 per 1,000"},
+            {"label": "Reads", "value": "Web pages and PDFs"},
+        ],
+    },
+    {
+        "id": "images",
+        "name": "Images",
+        "for": "Make an image from a prompt and reference images",
+        "price": "Per image, at cost + 25%",
+        "status": "live",
+        "tools": ["hub_gateway_image"],
+        "details": [
+            {"label": "Storyboard", "value": "Gemini 3.1 Flash Image"},
+            {"label": "Photo", "value": "GPT-5.4 Image 2"},
+            {"label": "Graphic", "value": "GPT-5.4 Image 2"},
+            {"label": "Character", "value": "Gemini 3 Pro Image"},
+            {"label": "Price", "value": "At cost + 25%"},
+        ],
+    },
+    {
+        "id": "transcribe",
+        "name": "Transcribe",
+        "for": "Turn a recording into text, and live speech into text",
+        "price": "$0.33 per audio hour · live text $0.30 per audio hour",
+        "status": "live",
+        "tools": [],
+        "details": [
+            {"label": "Recordings", "value": "ElevenLabs Scribe v2 · $0.33 per hour"},
+            {"label": "Live", "value": "xAI · $0.30 per hour"},
+        ],
+    },
+    {
+        "id": "mail.physical",
+        "name": "Physical mail and registered agent",
+        "for": "A street address for letters, scanned and read, with a registered agent",
+        "price": "$10 a month per state, shared · private at cost + 25%",
+        "status": "live",
+        "tools": ["hub_mail_list", "hub_mail_read"],
+        "details": [
+            {"label": "States", "value": "DE, CA · others on request"},
+            {"label": "Shared address", "value": "$10 a month per state"},
+            {"label": "Private box", "value": "Box cost + 25%"},
+            {"label": "Scans", "value": "$1 a letter up to 10 pages, then $0.25 a page"},
+            {"label": "Forwarding", "value": "Postage + 25%"},
+            {"label": "Registered agent", "value": "On request"},
+        ],
+    },
+    {
+        "id": "mail.send",
+        "name": "Send letters",
+        "for": "Print and mail letters, First-Class or Certified",
+        "price": "Print and postage at cost + 25%",
+        "status": "next",
+        "tools": [],
+        "details": [],
+    },
+    {
+        "id": "email.send",
+        "name": "Send email",
+        "for": "Send a message from a Tico address",
+        "price": None,
+        "status": "later",
+        "tools": [],
+        "details": [],
+    },
+    {
+        "id": "enrich",
+        "name": "Enrich",
+        "for": "Look up a company or a person",
+        "price": None,
+        "status": "later",
+        "tools": [],
+        "details": [],
+    },
+    {
+        "id": "voice",
+        "name": "Voice",
+        "for": "Speak and listen on a call",
+        "price": None,
+        "status": "later",
+        "tools": [],
+        "details": [],
+    },
+    {
+        "id": "storage.s3",
+        "name": "Object Storage",
+        "for": "S3-compatible storage for files and backups",
+        "price": None,
+        "status": "next",
+        "tools": [],
+        "details": [],
+    },
+    {
+        "id": "finance.accounting",
+        "name": "Accounting",
+        "for": "On-demand accounting for invoices, bills, payments, and financial reports",
+        "price": None,
+        "status": "next",
+        "tools": [],
+        "details": [],
+    },
+    {
+        "id": "legal.software",
+        "name": "Legal",
+        "for": "On-demand software for legal matters, documents, and deadlines",
+        "price": None,
+        "status": "next",
+        "tools": [],
+        "details": [],
+    },
+    {
+        "id": "crm.software",
+        "name": "CRM",
+        "for": "A workspace for customer accounts, contacts, opportunities, and sales follow-up",
+        "price": None,
+        "status": "next",
+        "tools": [],
+        "details": [],
+    },
+    {
+        "id": "support.software",
+        "name": "Customer Support",
+        "for": "A support desk for customer requests, shared inboxes, and ticket follow-up",
+        "price": None,
+        "status": "next",
+        "tools": [],
+        "details": [],
+    },
+    {
+        "id": "marketing.software",
+        "name": "Marketing",
+        "for": "Marketing tools and bots for campaigns and market intelligence",
+        "price": None,
+        "status": "next",
+        "tools": [],
+        "details": [],
+    },
 )
 STATUSES = ("live", "approval", "next", "later", "planned")
 
 # What each level is for, in a line a bot or a person reads.
-LEVEL_WHEN = {"low": "Fast and cheap: triage, sorting, short replies, routine checks.",
-              "medium": "Everyday work: writing, analysis, most bot turns.",
-              "high": "Hard problems: long plans, tricky code, careful reasoning."}
+LEVEL_WHEN = {
+    "low": "Fast and cheap: triage, sorting, short replies, routine checks.",
+    "medium": "Everyday work: writing, analysis, most bot turns.",
+    "high": "Hard problems: long plans, tricky code, careful reasoning.",
+}
 
 # The ids from before the tiers, with the tier row each one is (their price and behaviour never change).
-OLD = {"tico-cheap-1.1": ("Cheap 1.1", "low"), "tico-cheap-1.0": ("Cheap 1.0", "low"),
-       "tico-mid-1.0": ("Mid 1.0", "medium"), "tico-power-1.0": ("Power 1.0", "high")}
+OLD = {
+    "tico-cheap-1.1": ("Cheap 1.1", "low"),
+    "tico-cheap-1.0": ("Cheap 1.0", "low"),
+    "tico-mid-1.0": ("Mid 1.0", "medium"),
+    "tico-power-1.0": ("Power 1.0", "high"),
+}
 OLD_DECISIONS = {"tico-decide-1.0": "tico-decide-low-1.0", "tico-classify-1.0": "tico-classify-low-1.0"}
 OLD_SUFFIX = " (old lineup)"
 
@@ -203,8 +411,9 @@ _NAME = re.compile(r"[^\x00-\x1f]{1,120}")
 def name_of(department, level, fast=False):
     """`Marketing · Medium · Fast`, from ids."""
     departments, levels = dict(DEPARTMENTS), dict(LEVELS)
-    return " · ".join([departments.get(department, department.title()), levels.get(level, level.title())]
-                      + (["Fast"] if fast else []))
+    return " · ".join(
+        [departments.get(department, department.title()), levels.get(level, level.title())] + (["Fast"] if fast else [])
+    )
 
 
 def tier_id(department, level, fast=False):
@@ -225,9 +434,16 @@ def _long(row):
 
 
 def _version(row, ident, version, released=""):
-    return {"version": version, "id": ident, "model": row["model"], "price": _price(row), "long_prompt": _long(row),
-            "inputs": list(row["inputs"]), **({"context": row["context"]} if row.get("context") else {}),
-            **({"released": released} if released else {})}
+    return {
+        "version": version,
+        "id": ident,
+        "model": row["model"],
+        "price": _price(row),
+        "long_prompt": _long(row),
+        "inputs": list(row["inputs"]),
+        **({"context": row["context"]} if row.get("context") else {}),
+        **({"released": released} if released else {}),
+    }
 
 
 def _snapshot():
@@ -237,24 +453,61 @@ def _snapshot():
             for fast in (False, True):
                 ident = tier_id(department, level, fast)
                 row = (FAST_ROWS if fast else ROWS)[level]
-                models.append({"id": ident, "department": department, "level": level, "fast": fast,
-                               "name": name_of(department, level, fast), "current": FIRST_VERSION,
-                               "versions": [_version(row, f"{ident}-{FIRST_VERSION}", FIRST_VERSION)]})
+                models.append(
+                    {
+                        "id": ident,
+                        "department": department,
+                        "level": level,
+                        "fast": fast,
+                        "name": name_of(department, level, fast),
+                        "current": FIRST_VERSION,
+                        "versions": [_version(row, f"{ident}-{FIRST_VERSION}", FIRST_VERSION)],
+                    }
+                )
     meeting = _version(MEETING_ROW, f"{MEETING_TIER}-{FIRST_VERSION}", FIRST_VERSION, MEETING_ROW["released"])
     meeting.update(context=MEETING_ROW["context"], max_output=MEETING_ROW["max_output"])
-    models.append({"id": MEETING_TIER, "department": None, "level": None, "fast": False, "name": MEETING_NAME,
-                   "current": FIRST_VERSION, "versions": [meeting]})
-    decisions = [{"id": row["id"], "level": row["level"], "name": row["name"], "current": FIRST_VERSION,
-                  "types": row["types"], "when": row["when"],
-                  "versions": [{"version": FIRST_VERSION, "id": f"{row['id']}-{FIRST_VERSION}", "model": row["model"],
-                                "price": {"input": row["price"][0], "output": row["price"][2],
-                                          "cached_input": row["price"][1]}}] if row["price"] else []}
-                 for row in DECISIONS]
-    return {"schema": SCHEMA, "as_of": "2026-10-25",
-            "departments": [{"id": ident, "name": name} for ident, name in DEPARTMENTS],
-            "levels": [{"id": ident, "name": name} for ident, name in LEVELS],
-            "models": models, "decisions": decisions, "services": [{**row, "details": [dict(d) for d in row["details"]]} for row in SERVICES],
-            "changes": [{"date": "2026-10-25", "text": "Department tiers with Low, Medium, High and Fast."}]}
+    models.append(
+        {
+            "id": MEETING_TIER,
+            "department": None,
+            "level": None,
+            "fast": False,
+            "name": MEETING_NAME,
+            "current": FIRST_VERSION,
+            "versions": [meeting],
+        }
+    )
+    decisions = [
+        {
+            "id": row["id"],
+            "level": row["level"],
+            "name": row["name"],
+            "current": FIRST_VERSION,
+            "types": row["types"],
+            "when": row["when"],
+            "versions": [
+                {
+                    "version": FIRST_VERSION,
+                    "id": f"{row['id']}-{FIRST_VERSION}",
+                    "model": row["model"],
+                    "price": {"input": row["price"][0], "output": row["price"][2], "cached_input": row["price"][1]},
+                }
+            ]
+            if row["price"]
+            else [],
+        }
+        for row in DECISIONS
+    ]
+    return {
+        "schema": SCHEMA,
+        "as_of": "2026-10-25",
+        "departments": [{"id": ident, "name": name} for ident, name in DEPARTMENTS],
+        "levels": [{"id": ident, "name": name} for ident, name in LEVELS],
+        "models": models,
+        "decisions": decisions,
+        "services": [{**row, "details": [dict(d) for d in row["details"]]} for row in SERVICES],
+        "changes": [{"date": "2026-10-25", "text": "Department tiers with Low, Medium, High and Fast."}],
+    }
 
 
 SNAPSHOT = _snapshot()
@@ -272,24 +525,34 @@ def _text(value, default=""):
 def _clean_details(value):
     """A service's `details` (`[{label, value}]`, short text each), up to 12; [] when HQ sent none or none are usable."""
     rows = value if isinstance(value, list) else []
-    return [{"label": row["label"], "value": row["value"]} for row in rows
-            if isinstance(row, dict) and _text(row.get("label")) and _text(row.get("value"))][:12]
+    return [
+        {"label": row["label"], "value": row["value"]}
+        for row in rows
+        if isinstance(row, dict) and _text(row.get("label")) and _text(row.get("value"))
+    ][:12]
 
 
 def _clean_price(price):
     if not isinstance(price, dict) or not _number(price.get("input")) or not _number(price.get("output")):
         return None
     cached = price.get("cached_input")
-    return {"input": price["input"], "output": price["output"],
-            "cached_input": cached if _number(cached) else round(price["input"] * 0.1, 6)}
+    return {
+        "input": price["input"],
+        "output": price["output"],
+        "cached_input": cached if _number(cached) else round(price["input"] * 0.1, 6),
+    }
 
 
 def _clean_long(value):
     if not isinstance(value, dict) or not all(_number(value.get(k)) for k in ("from", "input", "output")):
         return None
     cached = value.get("cached_input")
-    return {"from": int(value["from"]), "input": value["input"], "output": value["output"],
-            "cached_input": cached if _number(cached) else round(value["input"] * 0.1, 6)}
+    return {
+        "from": int(value["from"]),
+        "input": value["input"],
+        "output": value["output"],
+        "cached_input": cached if _number(cached) else round(value["input"] * 0.1, 6),
+    }
 
 
 def _clean_inputs(value):
@@ -308,12 +571,22 @@ def _clean_versions(ident, rows):
         if not isinstance(row, dict):
             continue
         version, price = row.get("version"), _clean_price(row.get("price"))
-        if (not isinstance(version, str) or not _VERSION.fullmatch(version) or version in seen
-                or row.get("id") != f"{ident}-{version}" or price is None):
+        if (
+            not isinstance(version, str)
+            or not _VERSION.fullmatch(version)
+            or version in seen
+            or row.get("id") != f"{ident}-{version}"
+            or price is None
+        ):
             continue
         seen.add(version)
-        item = {"version": version, "id": row["id"], "model": _text(row.get("model")), "price": price,
-                "long_prompt": _clean_long(row.get("long_prompt"))}
+        item = {
+            "version": version,
+            "id": row["id"],
+            "model": _text(row.get("model")),
+            "price": price,
+            "long_prompt": _clean_long(row.get("long_prompt")),
+        }
         if inputs := _clean_inputs(row.get("inputs")):
             item["inputs"] = inputs
         for key in ("context", "max_output"):
@@ -343,12 +616,19 @@ def validate(doc):
     (`tico-meeting`) has no department, level or fast; it is kept beside the department tiers, else the release's copy."""
     if not isinstance(doc, dict) or doc.get("schema") != SCHEMA:
         return None
-    departments = [{"id": row["id"], "name": _text(row.get("name"), row["id"].title()),
-}
-                   for row in doc.get("departments") or [] if isinstance(row, dict)
-                   and isinstance(row.get("id"), str) and _WORD.fullmatch(row["id"])]
-    levels = [{"id": row["id"], "name": _text(row.get("name"), row["id"].title())}
-              for row in doc.get("levels") or [] if isinstance(row, dict) and row.get("id") in LEVEL_IDS]
+    departments = [
+        {
+            "id": row["id"],
+            "name": _text(row.get("name"), row["id"].title()),
+        }
+        for row in doc.get("departments") or []
+        if isinstance(row, dict) and isinstance(row.get("id"), str) and _WORD.fullmatch(row["id"])
+    ]
+    levels = [
+        {"id": row["id"], "name": _text(row.get("name"), row["id"].title())}
+        for row in doc.get("levels") or []
+        if isinstance(row, dict) and row.get("id") in LEVEL_IDS
+    ]
     known = {row["id"] for row in departments}
     models, meeting = [], None
     for row in doc.get("models") or []:
@@ -360,16 +640,27 @@ def validate(doc):
                 continue
             department, level, fast = None, None, False
             name = _text(row.get("name"), MEETING_NAME)
-        elif row.get("department") in known and row.get("level") in LEVEL_IDS and isinstance(row.get("fast"), bool) \
-                and row.get("id") == tier_id(row["department"], row["level"], row["fast"]):
+        elif (
+            row.get("department") in known
+            and row.get("level") in LEVEL_IDS
+            and isinstance(row.get("fast"), bool)
+            and row.get("id") == tier_id(row["department"], row["level"], row["fast"])
+        ):
             department, level, fast = row["department"], row["level"], row["fast"]
             name = _text(row.get("name"), name_of(department, level, fast))
         else:
             continue
         versions = _clean_versions(row["id"], row.get("versions"))
         if versions:
-            item = {"id": row["id"], "department": department, "level": level, "fast": fast, "name": name,
-                    "current": _current(row, versions), "versions": sorted(versions, key=lambda v: _version_key(v["version"]))}
+            item = {
+                "id": row["id"],
+                "department": department,
+                "level": level,
+                "fast": fast,
+                "name": name,
+                "current": _current(row, versions),
+                "versions": sorted(versions, key=lambda v: _version_key(v["version"])),
+            }
             if department is None:
                 meeting = item
             else:
@@ -382,29 +673,59 @@ def validate(doc):
     models.append(meeting)
     decisions = []
     for row in doc.get("decisions") or []:
-        if not isinstance(row, dict) or not isinstance(row.get("id"), str) \
-                or not re.fullmatch(r"tico-(decide|classify)-(low|medium|high)", row["id"]):
+        if (
+            not isinstance(row, dict)
+            or not isinstance(row.get("id"), str)
+            or not re.fullmatch(r"tico-(decide|classify)-(low|medium|high)", row["id"])
+        ):
             continue
         versions = _clean_versions(row["id"], row.get("versions"))
         if versions:
-            decisions.append({"id": row["id"], "level": row["id"].rsplit("-", 1)[1],
-                              "name": _text(row.get("name"), row["id"]), "current": _current(row, versions),
-                              "types": [t for t in row.get("types") or [] if t in ("noul", "choice", "score")],
-                              "when": _text(row.get("when")), "versions": versions})
+            decisions.append(
+                {
+                    "id": row["id"],
+                    "level": row["id"].rsplit("-", 1)[1],
+                    "name": _text(row.get("name"), row["id"]),
+                    "current": _current(row, versions),
+                    "types": [t for t in row.get("types") or [] if t in ("noul", "choice", "score")],
+                    "when": _text(row.get("when")),
+                    "versions": versions,
+                }
+            )
     services = []
     for row in doc.get("services") or []:
-        if isinstance(row, dict) and isinstance(row.get("id"), str) and _text(row.get("name")) \
-                and row.get("status") in STATUSES:
-            services.append({"id": row["id"][:60], "name": row["name"], "for": _text(row.get("for")),
-                             "price": _text(row.get("price")), "status": row["status"],
-                             "tools": [t for t in row.get("tools") or [] if isinstance(t, str) and len(t) < 60][:12],
-                             "details": _clean_details(row.get("details"))})
-    changes = [{"date": _text(row.get("date")), "text": _text(row.get("text"))} for row in doc.get("changes") or []
-               if isinstance(row, dict) and _text(row.get("text"))][:20]
-    return {"schema": SCHEMA, "as_of": _text(doc.get("as_of")),
-            "departments": departments or SNAPSHOT["departments"], "levels": levels or SNAPSHOT["levels"],
-            "models": models, "decisions": decisions or SNAPSHOT["decisions"], "services": services or SNAPSHOT["services"],
-            "changes": changes}
+        if (
+            isinstance(row, dict)
+            and isinstance(row.get("id"), str)
+            and _text(row.get("name"))
+            and row.get("status") in STATUSES
+        ):
+            services.append(
+                {
+                    "id": row["id"][:60],
+                    "name": row["name"],
+                    "for": _text(row.get("for")),
+                    "price": _text(row.get("price")),
+                    "status": row["status"],
+                    "tools": [t for t in row.get("tools") or [] if isinstance(t, str) and len(t) < 60][:12],
+                    "details": _clean_details(row.get("details")),
+                }
+            )
+    changes = [
+        {"date": _text(row.get("date")), "text": _text(row.get("text"))}
+        for row in doc.get("changes") or []
+        if isinstance(row, dict) and _text(row.get("text"))
+    ][:20]
+    return {
+        "schema": SCHEMA,
+        "as_of": _text(doc.get("as_of")),
+        "departments": departments or SNAPSHOT["departments"],
+        "levels": levels or SNAPSHOT["levels"],
+        "models": models,
+        "decisions": decisions or SNAPSHOT["decisions"],
+        "services": services or SNAPSHOT["services"],
+        "changes": changes,
+    }
 
 
 # ----------------------------------------------------------------------------- the catalog in use
@@ -432,12 +753,16 @@ def fetch(base, opener=None, timeout=TIMEOUT):
     """HQ's catalog from `<base>/catalog` (public, no key) validated, or None when it cannot be read or is malformed."""
     try:
         import urllib.request
+
         request = urllib.request.Request(G.safe_base(base) + "/catalog", headers={"Accept": "application/json"})
         with (opener or G._send)(request, timeout) as response:
             body = response.read(MAX_BYTES + 1)
         if len(body) > MAX_BYTES:
             return None
         return validate(json.loads(body))
+    except urllib.error.HTTPError as error:
+        with error:
+            return None
     except (ValueError, urllib.error.URLError, OSError, TimeoutError):
         return None
 
@@ -447,8 +772,9 @@ def refresh(base, opener=None, now=None, force=False):
     validates. Returns the catalog in use. A failed fetch is not asked again for five minutes."""
     now = time.monotonic() if now is None else now
     with _lock:
-        if not force and ((_state["catalog"] and now - _state["at"] < REFRESH_SECONDS)
-                          or now - _state["tried"] < RETRY_SECONDS):
+        if not force and (
+            (_state["catalog"] and now - _state["at"] < REFRESH_SECONDS) or now - _state["tried"] < RETRY_SECONDS
+        ):
             return catalog()
         _state["tried"] = now
     found = fetch(base, opener)
@@ -462,13 +788,19 @@ def refresh_soon(base):
     """The catalog in use now, asking HQ for a fresh one on a background thread when the cached one is stale. For
     screens and tools: nobody waits on the network. `base` is None while the Gateway is not connected."""
     now = time.monotonic()
-    if base and not _state["running"] and not (_state["catalog"] and now - _state["at"] < REFRESH_SECONDS) \
-            and now - _state["tried"] >= RETRY_SECONDS:
+    if (
+        base
+        and not _state["running"]
+        and not (_state["catalog"] and now - _state["at"] < REFRESH_SECONDS)
+        and now - _state["tried"] >= RETRY_SECONDS
+    ):
+
         def run():
             try:
                 refresh(base)
             finally:
                 _state["running"] = False
+
         _state["running"] = True
         threading.Thread(target=run, name="gateway-catalog", daemon=True).start()
     return catalog()
@@ -507,7 +839,7 @@ def _index(cat):
     for kind, rows in (("chat", cat["models"]), ("decide", cat["decisions"])):
         for raw in rows:
             row = live_row(raw)
-            if row is None:                 # no current version, or one that runs a held model: not offered
+            if row is None:  # no current version, or one that runs a held model: not offered
                 continue
             current = next(v for v in row["versions"] if v["version"] == row["current"])
             table[row["id"]] = {"tier": row, "version": current, "auto": True, "kind": kind}
@@ -537,28 +869,67 @@ def resolve(model, cat=None):
         label, level = OLD[model]
         version = model.rsplit("-", 1)[1]
         row = ROWS[level]
-        return {"id": model, "tier": model, "kind": "chat", "name": label + OLD_SUFFIX, "label": label, "model": row["model"],
-                "version": version, "auto": False, "price": _price(row), "long_prompt": _long(row)
-                if model == "tico-cheap-1.1" else None, "department": "", "level": level, "fast": False, "old": True,
-                "inputs": list(row["inputs"]), "context": row.get("context")}
+        return {
+            "id": model,
+            "tier": model,
+            "kind": "chat",
+            "name": label + OLD_SUFFIX,
+            "label": label,
+            "model": row["model"],
+            "version": version,
+            "auto": False,
+            "price": _price(row),
+            "long_prompt": _long(row) if model == "tico-cheap-1.1" else None,
+            "department": "",
+            "level": level,
+            "fast": False,
+            "old": True,
+            "inputs": list(row["inputs"]),
+            "context": row.get("context"),
+        }
     if model in OLD_DECISIONS:
         row = next(r for r in DECISIONS if r["id"] == OLD_DECISIONS[model].rsplit("-", 1)[0])
-        return {"id": model, "tier": model, "kind": "decide", "name": row["name"] + " 1.0" + OLD_SUFFIX, "label": row["name"],
-                "model": row["model"], "version": FIRST_VERSION, "auto": False,
-                "price": {"input": row["price"][0], "output": row["price"][2], "cached_input": row["price"][1]},
-                "long_prompt": None, "department": "", "level": row["level"], "fast": False, "old": True,
-                "inputs": ["text"]}
+        return {
+            "id": model,
+            "tier": model,
+            "kind": "decide",
+            "name": row["name"] + " 1.0" + OLD_SUFFIX,
+            "label": row["name"],
+            "model": row["model"],
+            "version": FIRST_VERSION,
+            "auto": False,
+            "price": {"input": row["price"][0], "output": row["price"][2], "cached_input": row["price"][1]},
+            "long_prompt": None,
+            "department": "",
+            "level": row["level"],
+            "fast": False,
+            "old": True,
+            "inputs": ["text"],
+        }
     entry = _index(cat or catalog()).get(model)
     if not entry:
         return None
     tier, version = entry["tier"], entry["version"]
     suffix = " (auto)" if entry["auto"] else " " + version["version"]
-    return {"id": model, "tier": tier["id"], "kind": entry["kind"], "name": tier["name"] + suffix, "label": tier["name"],
-            "model": version["model"], "version": version["version"], "auto": entry["auto"],
-            "price": version["price"], "long_prompt": version.get("long_prompt"),
-            "inputs": list(version.get("inputs") or ["text"]),
-            "department": tier.get("department") or "", "level": tier["level"], "fast": bool(tier.get("fast")),
-            "old": False, "current": tier["current"], "context": version.get("context")}
+    return {
+        "id": model,
+        "tier": tier["id"],
+        "kind": entry["kind"],
+        "name": tier["name"] + suffix,
+        "label": tier["name"],
+        "model": version["model"],
+        "version": version["version"],
+        "auto": entry["auto"],
+        "price": version["price"],
+        "long_prompt": version.get("long_prompt"),
+        "inputs": list(version.get("inputs") or ["text"]),
+        "department": tier.get("department") or "",
+        "level": tier["level"],
+        "fast": bool(tier.get("fast")),
+        "old": False,
+        "current": tier["current"],
+        "context": version.get("context"),
+    }
 
 
 def price_for(model):
@@ -584,20 +955,31 @@ def row_for(model):
         return None
     efforts, default = efforts_of(found["level"])
     if found["tier"] == MEETING_TIER:
-        efforts, default = ("low", "high", "max"), "low"       # the meeting tier's catalog effort (HQ: default low)
-    row = {"id": found["id"], "label": found["name"], "runtime": "pi", "provider": "tico",
-           "description": (found["model"] + " underneath") if found["model"] else "",
-           "efforts": efforts, "default_effort": default}
+        efforts, default = ("low", "high", "max"), "low"  # the meeting tier's catalog effort (HQ: default low)
+    row = {
+        "id": found["id"],
+        "label": found["name"],
+        "runtime": "pi",
+        "provider": "tico",
+        "description": (found["model"] + " underneath") if found["model"] else "",
+        "efforts": efforts,
+        "default_effort": default,
+    }
     if found.get("context"):
         row["context_tokens"] = found["context"]
     if found["old"]:
         row["deprecated"] = True
         row["lineup"] = "old"
     elif found["kind"] == "decide":
-        row["deprecated"] = True        # a decision tier is asked for by the judge, never picked as a bot's model
+        row["deprecated"] = True  # a decision tier is asked for by the judge, never picked as a bot's model
     else:
-        row["tier"] = {"department": found["department"], "level": found["level"], "fast": found["fast"],
-                       "version": found["version"], "auto": found["auto"]}
+        row["tier"] = {
+            "department": found["department"],
+            "level": found["level"],
+            "fast": found["fast"],
+            "version": found["version"],
+            "auto": found["auto"],
+        }
     return row
 
 
@@ -607,9 +989,9 @@ def listed_rows():
     rows = []
     for tier in SNAPSHOT["models"]:
         if tier["id"] == MEETING_TIER:
-            continue                         # the meeting tier is not a bot's pick: meeting_rows
+            continue  # the meeting tier is not a bot's pick: meeting_rows
         row = row_for(f"{tier['id']}-{tier['current']}")
-        if row is None:                      # its current version runs a held model
+        if row is None:  # its current version runs a held model
             continue
         if tier["id"] == tier_id(DEFAULT_DEPARTMENT, DEFAULT_LEVEL):
             row["recommended"] = True
@@ -682,14 +1064,32 @@ def view(cat=None):
     """What the model picker needs, small: the departments and levels, and for each tier its current version and the
     versions (id, version, model, price) to pick from."""
     cat = cat or catalog()
-    return {"as_of": cat.get("as_of", ""), "departments": [{"id": r["id"], "name": r["name"]} for r in cat["departments"]],
-            "levels": cat["levels"],
-            "tiers": {row["id"]: {"name": row["name"], "department": row.get("department", ""), "level": row["level"],
-                                  "fast": bool(row.get("fast")), "current": row["current"], "versions": [
-                {"version": v["version"], "id": v["id"], "model": v["model"], "price": v["price"],
-                 **({"context": v["context"]} if v.get("context") else {})}
-                for v in reversed(row["versions"])]} for row in (live_row(r) for r in cat["models"] if r.get("department"))
-                if row is not None}}
+    return {
+        "as_of": cat.get("as_of", ""),
+        "departments": [{"id": r["id"], "name": r["name"]} for r in cat["departments"]],
+        "levels": cat["levels"],
+        "tiers": {
+            row["id"]: {
+                "name": row["name"],
+                "department": row.get("department", ""),
+                "level": row["level"],
+                "fast": bool(row.get("fast")),
+                "current": row["current"],
+                "versions": [
+                    {
+                        "version": v["version"],
+                        "id": v["id"],
+                        "model": v["model"],
+                        "price": v["price"],
+                        **({"context": v["context"]} if v.get("context") else {}),
+                    }
+                    for v in reversed(row["versions"])
+                ],
+            }
+            for row in (live_row(r) for r in cat["models"] if r.get("department"))
+            if row is not None
+        },
+    }
 
 
 def lineup(query="", cat=None):
@@ -702,6 +1102,7 @@ def lineup(query="", cat=None):
     def keep(*texts):
         hay = " ".join(texts).lower()
         return all(w in hay for w in words)
+
     models = []
     for raw in cat["models"]:
         row = live_row(raw)
@@ -711,18 +1112,50 @@ def lineup(query="", cat=None):
         when = LEVEL_WHEN.get(row["level"], "") + (" Faster, and may cost more." if row["fast"] else "")
         department = row["department"] or ""
         if keep(row["name"], now["model"], department, names.get(department, ""), when):
-            models.append({"id": row["id"], "pinned": now["id"], "name": row["name"], "model": now["model"],
-                           "version": now["version"], "price": now["price"], "when": when})
-    decisions = [{"id": row["id"], "name": row["name"], "when": row["when"], "types": row["types"],
-                  "model": row["versions"][0]["model"] if row["versions"] else "",
-                  "pinned": next((v["id"] for v in row["versions"] if v["version"] == row["current"]), ""),
-                  "price": row["versions"][0]["price"] if row["versions"] else None}
-                 for row in (live_row(r) for r in cat["decisions"]) if row is not None and keep(row["name"], row["when"], row["id"])]
-    services = [{"id": row["id"], "name": row["name"], "when": row["for"], "price": row["price"],
-                 "status": row["status"], "tools": row["tools"], "details": row.get("details") or []}
-                for row in cat["services"] if keep(row["name"], row["for"], row["id"], " ".join(row["tools"]))]
-    return {"as_of": cat.get("as_of", ""), "models": models, "decisions": decisions, "services": services,
-            "note": "A model id without a version always means the tier's current version; add -<version> to pin it."}
+            models.append(
+                {
+                    "id": row["id"],
+                    "pinned": now["id"],
+                    "name": row["name"],
+                    "model": now["model"],
+                    "version": now["version"],
+                    "price": now["price"],
+                    "when": when,
+                }
+            )
+    decisions = [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "when": row["when"],
+            "types": row["types"],
+            "model": row["versions"][0]["model"] if row["versions"] else "",
+            "pinned": next((v["id"] for v in row["versions"] if v["version"] == row["current"]), ""),
+            "price": row["versions"][0]["price"] if row["versions"] else None,
+        }
+        for row in (live_row(r) for r in cat["decisions"])
+        if row is not None and keep(row["name"], row["when"], row["id"])
+    ]
+    services = [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "when": row["for"],
+            "price": row["price"],
+            "status": row["status"],
+            "tools": row["tools"],
+            "details": row.get("details") or [],
+        }
+        for row in cat["services"]
+        if keep(row["name"], row["for"], row["id"], " ".join(row["tools"]))
+    ]
+    return {
+        "as_of": cat.get("as_of", ""),
+        "models": models,
+        "decisions": decisions,
+        "services": services,
+        "note": "A model id without a version always means the tier's current version; add -<version> to pin it.",
+    }
 
 
 def money(price):

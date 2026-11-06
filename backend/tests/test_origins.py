@@ -17,6 +17,7 @@ def test_a_bot_filed_task_names_the_bot_and_stop_commands_parse_and_the_payload_
     assert origin["siblings"]["made"] >= 1 and origin["siblings"]["open"] <= origin["siblings"]["made"]
     assert 1 <= len(origin["stop"]) <= 3
     from clients import hubcli
+
     cli = hubcli.parser()
     for stop in origin["stop"]:
         words = shlex.split(stop["command"])
@@ -28,6 +29,7 @@ def test_a_bot_filed_task_names_the_bot_and_stop_commands_parse_and_the_payload_
 
 def test_an_automation_or_parent_task_is_named_with_a_stop_that_parses(api):
     from clients import hubcli
+
     cli = hubcli.parser()
     made = make(api)
     aid = made["automation"]["id"] if "automation" in made else made["id"]
@@ -57,8 +59,12 @@ def test_an_automation_or_parent_task_is_named_with_a_stop_that_parses(api):
 def test_an_item_the_caller_cannot_read_is_a_404_with_no_text_and_a_hidden_parent_is_not_named(api):
     r = api.get("/api/v2/origins/zzzzzzzzzzzz", headers=headers("ben-test"))
     assert r.status_code == 404
-    private = post(api, "tasks", {"title": "Ben's private plan", "body": "x", "owner": "human:ben", "private": True},
-                   token="ben-test")
+    private = post(
+        api,
+        "tasks",
+        {"title": "Ben's private plan", "body": "x", "owner": "human:ben", "private": True},
+        token="ben-test",
+    )
     assert get(api, "origins/" + private["id"], "ben-test")["id"] == private["id"]
     r = api.get("/api/v2/origins/" + private["id"], headers=headers("cara-test"))
     assert r.status_code == 404

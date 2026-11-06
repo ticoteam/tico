@@ -40,15 +40,22 @@ def can_create(c, auth, who):
 
 def has_live(c, who):
     """Whether this person holds a token that still works: Settings keeps their list when they may no longer make one."""
-    return bool(c.execute("SELECT 1 FROM human_tokens WHERE human=? AND revoked_at IS NULL AND (expires_at IS NULL OR "
-                          "expires_at>?) LIMIT 1", (H.actor_id(who.actor), H.now())).fetchone())
+    return bool(
+        c.execute(
+            "SELECT 1 FROM human_tokens WHERE human=? AND revoked_at IS NULL AND (expires_at IS NULL OR "
+            "expires_at>?) LIMIT 1",
+            (H.actor_id(who.actor), H.now()),
+        ).fetchone()
+    )
 
 
 def listing(c, who):
     """This person's tokens, newest first; never the secret or its hash."""
     _person(who)
-    rows = c.execute("SELECT " + ",".join(FIELDS) + " FROM human_tokens WHERE human=? "
-                     "ORDER BY created_at DESC", (H.actor_id(who.actor),)).fetchall()
+    rows = c.execute(
+        "SELECT " + ",".join(FIELDS) + " FROM human_tokens WHERE human=? ORDER BY created_at DESC",
+        (H.actor_id(who.actor),),
+    ).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -57,8 +64,10 @@ def listing_all(c, auth, who):
     _person(who)
     if not auth.bot_admin(who):
         raise Problem("forbidden", "Only the owner and the admins see everyone's tokens", 403)
-    rows = c.execute("SELECT " + ",".join("t." + f for f in FIELDS) + ",t.human,h.name,h.email FROM human_tokens t "
-                     "LEFT JOIN humans h ON h.id=t.human ORDER BY t.created_at DESC").fetchall()
+    rows = c.execute(
+        "SELECT " + ",".join("t." + f for f in FIELDS) + ",t.human,h.name,h.email FROM human_tokens t "
+        "LEFT JOIN humans h ON h.id=t.human ORDER BY t.created_at DESC"
+    ).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -67,13 +76,14 @@ def create(c, auth, who, body):
     _person(who)
     if not can_create(c, auth, who):
         raise Problem("forbidden", "Personal tokens are for the owner and admins", 403)
-    token = PREFIX + secrets.token_urlsafe(30)          # 30 bytes: 40 url-safe characters
+    token = PREFIX + secrets.token_urlsafe(30)  # 30 bytes: 40 url-safe characters
     now = H.now()
     expires_at = H.shift(now, days=body.expires_in_days)
     token_id = H.new_id()
-    c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by,expires_at) "
-              "VALUES(?,?,?,?,?,?,?)",
-              (token_id, H.actor_id(who.actor), body.label, digest(token), now, who.actor, expires_at))
+    c.execute(
+        "INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by,expires_at) VALUES(?,?,?,?,?,?,?)",
+        (token_id, H.actor_id(who.actor), body.label, digest(token), now, who.actor, expires_at),
+    )
     H.event(c, who.actor, "token.create", token_id, {"label": body.label, "expires_at": expires_at})
     return {"id": token_id, "token": token, "label": body.label, "expires_at": expires_at}
 

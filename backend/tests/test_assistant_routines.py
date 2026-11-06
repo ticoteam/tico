@@ -1,4 +1,5 @@
 """Inbox routines from chat stay off until the person's card click; the reviewed plan is what runs."""
+
 import copy
 
 import pytest
@@ -12,14 +13,25 @@ def flow(mode=None):
     choose = {"to": ["customers", "later"], "default": "customers"}
     if mode:
         choose["mode"] = mode
-    return {"name": "Customer mail", "owner": "person:ana",
-            "trigger": {"type": "message", "inbox": "ana@acme.example"},
-            "destinations": [
-                {"id": "customers", "name": "Customers", "then": [{"do": "leave_for_you", "args": {}}]},
-                {"id": "later", "name": "Read later", "then": [{"do": "label", "args": {"name": "Read later"}}]}],
-            "steps": [{"id": "route", "type": "llm", "as": "assistant:ana", "out": "answer",
-                       "prompt": "Draft a reply to customers. Newsletters go to Read later with no reply.",
-                       "choose": choose}]}
+    return {
+        "name": "Customer mail",
+        "owner": "person:ana",
+        "trigger": {"type": "message", "inbox": "ana@acme.example"},
+        "destinations": [
+            {"id": "customers", "name": "Customers", "then": [{"do": "leave_for_you", "args": {}}]},
+            {"id": "later", "name": "Read later", "then": [{"do": "label", "args": {"name": "Read later"}}]},
+        ],
+        "steps": [
+            {
+                "id": "route",
+                "type": "llm",
+                "as": "assistant:ana",
+                "out": "answer",
+                "prompt": "Draft a reply to customers. Newsletters go to Read later with no reply.",
+                "choose": choose,
+            }
+        ],
+    }
 
 
 def turn(api, text="Draft replies to new customer emails; newsletters go to Read later"):
@@ -27,8 +39,13 @@ def turn(api, text="Draft replies to new customer emails; newsletters go to Read
 
 
 def propose(api, token, body, path="/api/v2/automations", method="POST", expected=200):
-    return post(api, "assistant/actions", {"summary": "Handle customer mail", "method": method,
-                                          "path": path, "body": body}, token=token, expected=expected)
+    return post(
+        api,
+        "assistant/actions",
+        {"summary": "Handle customer mail", "method": method, "path": path, "body": body},
+        token=token,
+        expected=expected,
+    )
 
 
 def confirm(api, action, token="ana-test", expected=200):
@@ -51,7 +68,7 @@ def test_create_saves_off_with_a_card_and_only_its_person_can_turn_it_on(api):
     confirm(api, card, expected=409)
 
 
-@pytest.mark.parametrize("template", ["founder", "blank"])      # Draft and Sort; sales and support fill as founder does
+@pytest.mark.parametrize("template", ["founder", "blank"])  # Draft and Sort; sales and support fill as founder does
 def test_existing_templates_save_off_and_get_readable_cards(api, template):
     token = turn(api)
     given = fill(api, template, "person:ana", "ana@acme.example", token)
@@ -82,8 +99,11 @@ def test_summary_shows_the_inbox_destinations_and_mode_not_the_bots_summary(api)
     card = made["action"]
     assert card["description"] == 'Turn on routine “Customer mail”'
     assert [(d["field"], d["new"]) for d in card["diff"]] == [
-        ("Inbox", "ana@acme.example"), ("Mode", "Draft"),
-        ("Customers", "Leave in inbox"), ("Read later", "Label Read later")]
+        ("Inbox", "ana@acme.example"),
+        ("Mode", "Draft"),
+        ("Customers", "Leave in inbox"),
+        ("Read later", "Label Read later"),
+    ]
 
 
 def test_cancel_leaves_the_saved_routine_off(api):
@@ -98,9 +118,12 @@ def test_chat_cannot_enable_edit_run_or_restore_a_message_routine_without_a_card
     token = turn(api, "Turn it on and change the destination")
     path = "/api/v2/automations/" + saved["id"]
     for method, target, body in [
-            ("POST", "/api/v2/automations", {**flow("draft"), "enabled": True}),
-            ("PATCH", path, {"enabled": True}), ("PATCH", path, {"name": "Changed"}),
-            ("POST", path + "/run", {}), ("POST", path + "/versions/1/restore", {})]:
+        ("POST", "/api/v2/automations", {**flow("draft"), "enabled": True}),
+        ("PATCH", path, {"enabled": True}),
+        ("PATCH", path, {"name": "Changed"}),
+        ("POST", path + "/run", {}),
+        ("POST", path + "/versions/1/restore", {}),
+    ]:
         r = api.request(method, target, json=body, headers=headers(token))
         assert r.status_code == 403 and r.json()["error"]["code"] == "confirm_required", r.text
     updated = copy.deepcopy(saved["destinations"])
@@ -153,8 +176,11 @@ def test_reply_can_be_approved_but_company_send_permission_is_also_required(api)
     made = post(api, "automations", flow("reply"), token=token)
     assert confirm(api, made["action"])["action"]["status"] == "done"
     assert get(api, "automations/" + made["id"])["enabled"] is True
-    changed = api.put("/api/v2/google/permissions", json={"organize_mail": True, "send_mail": False,
-                                                       "change_calendar": True}, headers=headers())
+    changed = api.put(
+        "/api/v2/google/permissions",
+        json={"organize_mail": True, "send_mail": False, "change_calendar": True},
+        headers=headers(),
+    )
     assert changed.status_code == 200, changed.text
     refused = propose(api, token, flow("reply"), expected=403)
     assert refused["error"]["code"] == "send_permission"
@@ -187,9 +213,12 @@ def test_restoring_a_message_version_needs_a_card_even_after_the_trigger_changed
 def test_bulk_card_freezes_and_describes_message_edits_too(api):
     saved = post(api, "automations", {**flow("draft"), "enabled": False})
     token = turn(api)
-    card = propose(api, token, {"actions": [{"method": "PATCH",
-        "path": "/api/v2/automations/" + saved["id"], "body": {"enabled": True}}]},
-        "/api/v2/assistant/batch")["action"]
+    card = propose(
+        api,
+        token,
+        {"actions": [{"method": "PATCH", "path": "/api/v2/automations/" + saved["id"], "body": {"enabled": True}}]},
+        "/api/v2/assistant/batch",
+    )["action"]
     text = " ".join(line["new"] for line in card["diff"])
     assert "ana@acme.example" in text and "Read later" in text and "Draft" in text
     assert confirm(api, card)["action"]["status"] == "done"

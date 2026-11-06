@@ -1,4 +1,5 @@
 """Make page runs separately with the person’s ordinary rights and publishes a pinned page."""
+
 import json
 
 import pytest
@@ -15,8 +16,12 @@ from backend.tests.test_pages import HTML
 
 def page(api, turn, **fields):
     data = fields.pop("data", HTML)
-    return api.post("/api/v2/pages", params={"name": fields.pop("name", "weekly.html"), **fields},
-                    content=data, headers={**headers(turn["token"]), "Content-Type": "text/html"})
+    return api.post(
+        "/api/v2/pages",
+        params={"name": fields.pop("name", "weekly.html"), **fields},
+        content=data,
+        headers={**headers(turn["token"]), "Content-Type": "text/html"},
+    )
 
 
 def start(api, tid, person="ben-test", key=None, machine=None):
@@ -25,8 +30,9 @@ def start(api, tid, person="ben-test", key=None, machine=None):
         assign(api, machine, "coo")
         ready(api, machine, ["coo"], capabilities=["make_page"])
     sent = post(api, f"tasks/{tid}/make-page", {"text": "Make the alert flow with three scenario tabs."}, person, key)
-    attempt = post(api, "jobs/claim", {"next_run": True}, machine["token"],
-                   key="claim:" + sent["message"]["id"])["attempt"]
+    attempt = post(api, "jobs/claim", {"next_run": True}, machine["token"], key="claim:" + sent["message"]["id"])[
+        "attempt"
+    ]
     assert attempt["message"]["id"] == sent["message"]["id"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "make-page-test"}, machine["token"])
     return machine, attempt, sent["message"]
@@ -39,8 +45,10 @@ def status(api, tid, person="ben-test"):
 def fill_pins(api, tid, count=cards.PLACE_MAX):
     with api.app.state.store.transaction() as c:
         for i in range(count):
-            c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
-                      (H.new_id(), "task:" + tid, f"card:placeholder-{i}", i, "medium", "human:ana", H.now()))
+            c.execute(
+                "INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
+                (H.new_id(), "task:" + tid, f"card:placeholder-{i}", i, "medium", "human:ana", H.now()),
+            )
 
 
 def assert_no_page(api):
@@ -52,26 +60,55 @@ def assert_no_page(api):
 
 def test_old_runner_never_claims_make_page_and_upgrade_recovers_the_same_request(api):
     from runner_support.state import session_key
+
     t = task(api, private=False)
     machine, private = assistant_turn(api, "ben-test", text="PRIVATE_MARKER")
     post(api, f"attempts/{private['id']}/started", {"thread_id": "private-provider-session"}, machine["token"])
     post(api, f"attempts/{private['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
-    sent = post(api, f"tasks/{t['id']}/make-page", {"text": "Make a plan with the previously discussed marker"}, "ben-test")["message"]
+    sent = post(
+        api, f"tasks/{t['id']}/make-page", {"text": "Make a plan with the previously discussed marker"}, "ben-test"
+    )["message"]
     # Rechecking the retryable card preserves the queued request and never creates a provider turn on the old runner.
     for _ in range(2):
         assert post(api, "jobs/claim", {"next_run": True}, machine["token"])["attempt"] is None
-        assert status(api, t["id"]) == {"message_id": sent["id"], "conversation_id": sent["conversation_id"],
-                                          "state": "update_required"}
+        assert status(api, t["id"]) == {
+            "message_id": sent["id"],
+            "conversation_id": sent["conversation_id"],
+            "state": "update_required",
+        }
     with api.app.state.store.read() as c:
         job = c.execute("SELECT state,held,attempt_id FROM jobs WHERE message_id=?", (sent["id"],)).fetchone()
         assert tuple(job) == ("queued", 0, None)
         assert [r[0] for r in c.execute("SELECT id FROM attempts WHERE bot_id='coo'")] == [private["id"]]
-    ready(api, machine, ["coo"], capabilities=[
-        "task_lanes_v2", "session_roots_v1", "task_goals_v1", "capacity_continue_v1", "source_continue_v1",
-        "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1", "model_switch_to_key_v1",
-        "model_connect_v1", "turns_at_once_v1", "private_lanes_v1", "model_subscriptions_v1",
-        "model_subscription_activation_v1", "browser_exit_v1", "memory_tidy_packets_v1", "threads_v1",
-        "harness_allocation_v1", "make_page", "computer_logins_v1", "screen_v1"])
+    ready(
+        api,
+        machine,
+        ["coo"],
+        capabilities=[
+            "task_lanes_v2",
+            "session_roots_v1",
+            "task_goals_v1",
+            "capacity_continue_v1",
+            "source_continue_v1",
+            "model_sign_out_v1",
+            "model_keys_v1",
+            "model_switch_type_v1",
+            "model_remove_v1",
+            "model_switch_to_key_v1",
+            "model_connect_v1",
+            "turns_at_once_v1",
+            "private_lanes_v1",
+            "model_subscriptions_v1",
+            "model_subscription_activation_v1",
+            "browser_exit_v1",
+            "memory_tidy_packets_v1",
+            "threads_v1",
+            "harness_allocation_v1",
+            "make_page",
+            "computer_logins_v1",
+            "screen_v1",
+        ],
+    )
     claimed = post(api, "jobs/claim", {"next_run": True}, machine["token"])["attempt"]
     assert claimed["message"]["id"] == sent["id"]
     assert claimed["make_page"]["task"]["id"] == t["id"]
@@ -94,7 +131,10 @@ def test_make_page_files_and_pins_clean_html_as_the_person_with_authenticated_at
     token = attempt["token"]
     assert message["sender_id"] == "human:ben"
     assert {k: message["refs"][k] for k in ("assistant", "make_page", "delivery")} == {
-        "assistant": True, "make_page": {"task": t["id"]}, "delivery": "queue"}
+        "assistant": True,
+        "make_page": {"task": t["id"]},
+        "delivery": "queue",
+    }
     assert attempt["make_page"]["task"]["id"] == t["id"]
     assert attempt["make_page"]["task"]["body"] == t["body"]
     assert [m["id"] for m in attempt["task_context"]["meetings"]] == [mid]
@@ -118,8 +158,12 @@ def test_make_page_files_and_pins_clean_html_as_the_person_with_authenticated_at
         v = c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()
         assert f["scope"] == "task:" + t["id"] and f["bot_id"] == "coo"
         assert v["attempt_id"] == attempt["id"] and v["actor"] == "human:ben"
-        assert c.execute("SELECT made_by FROM pins WHERE place=? AND item=?",
-                         ("task:" + t["id"], "page:" + fid)).fetchone()[0] == "human:ben"
+        assert (
+            c.execute(
+                "SELECT made_by FROM pins WHERE place=? AND item=?", ("task:" + t["id"], "page:" + fid)
+            ).fetchone()[0]
+            == "human:ben"
+        )
     assert status(api, t["id"])["state"] == "made"
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM pins WHERE place=? AND item=?", ("task:" + t["id"], "page:" + fid))
@@ -127,8 +171,13 @@ def test_make_page_files_and_pins_clean_html_as_the_person_with_authenticated_at
     assert status(api, t["id"])["state"] == "made"
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     # A retry creates no second message; a later chat cannot erase this request's result.
-    repeated = post(api, f"tasks/{t['id']}/make-page", {"text": "Make the alert flow with three scenario tabs."},
-                    "ben-test", "make-once")
+    repeated = post(
+        api,
+        f"tasks/{t['id']}/make-page",
+        {"text": "Make the alert flow with three scenario tabs."},
+        "ben-test",
+        "make-once",
+    )
     assert repeated["message"]["id"] == message["id"]
     say(api, "What is next?", "ben-test")
     assert status(api, t["id"])["state"] == "made"
@@ -137,6 +186,7 @@ def test_make_page_files_and_pins_clean_html_as_the_person_with_authenticated_at
 
 def test_make_page_output_uses_page_audience_and_restores_after_clearing_it(api):
     from backend.tests.test_page_audience import edit
+
     t = task(api, private=False)
     _, attempt, _ = start(api, t["id"])
     made = page(api, attempt, task=t["id"], title="Generated audience plan")
@@ -158,9 +208,11 @@ def test_forged_make_page_refs_are_forbidden_on_generic_message_and_chat_routes(
     t = task(api, private=False)
     room = say(api, "Hello", "ben-test")["message"]["conversation_id"]
     for refs in ({"make_page": {"task": t["id"]}}, {"assistant": True, "make_page": {"task": t["id"]}}):
-        for path, body in (("messages", {"to": "assistant", "text": "Make this", "refs": refs}),
-                           ("chat/ops", {"text": "Make this", "refs": refs}),
-                           (f"threads/{room}/messages", {"text": "Make this", "to": "bot:coo", "refs": refs})):
+        for path, body in (
+            ("messages", {"to": "assistant", "text": "Make this", "refs": refs}),
+            ("chat/ops", {"text": "Make this", "refs": refs}),
+            (f"threads/{room}/messages", {"text": "Make this", "to": "bot:coo", "refs": refs}),
+        ):
             post(api, path, body, "ben-test", expected=403)
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM messages WHERE json_type(refs,'$.make_page') IS NOT NULL").fetchone()
@@ -178,12 +230,18 @@ def test_identical_html_completes_each_make_page_request_without_a_new_version(a
         assert made.json()["page"]["version"] == 1
         assert status(api, t["id"])["message_id"] == message["id"]
         assert status(api, t["id"])["state"] == "made"
-        post(api, f"attempts/{attempt['id']}/complete",
-             {"outcome": "completed", "text": "The page is published.", "last_seq": 0}, machine["token"])
+        post(
+            api,
+            f"attempts/{attempt['id']}/complete",
+            {"outcome": "completed", "text": "The page is published.", "last_seq": 0},
+            machine["token"],
+        )
         assert status(api, t["id"])["state"] == "made"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM bot_file_versions").fetchone()[0] == 1
-        assert {r[0] for r in c.execute("SELECT attempt_id FROM bot_file_activity WHERE action IN ('created','published')")} == set(requests)
+        assert {
+            r[0] for r in c.execute("SELECT attempt_id FROM bot_file_activity WHERE action IN ('created','published')")
+        } == set(requests)
 
 
 def test_ordinary_assistant_turn_cannot_publish_even_with_a_supplied_attempt(api):
@@ -207,13 +265,20 @@ def test_publish_rechecks_the_initiating_message(api):
             elif change == "deleted":
                 c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), message["id"]))
             else:
-                refs = {**message["refs"], **({"via": "assistant"} if change == "via" else {"make_page": {"task": "other"}})}
+                refs = {
+                    **message["refs"],
+                    **({"via": "assistant"} if change == "via" else {"make_page": {"task": "other"}}),
+                }
                 c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
         result = page(api, attempt, task=t["id"])
         assert result.status_code == 403, (change, result.text)
         assert_no_page(api)
-        post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
-             machine["token"])
+        post(
+            api,
+            f"attempts/{attempt['id']}/complete",
+            {"outcome": "completed", "last_seq": 0, "text": "Done."},
+            machine["token"],
+        )
 
 
 def test_task_access_checks_apply_to_the_route_status_and_publishing(api):
@@ -254,7 +319,11 @@ def test_failed_request_survives_later_chat_and_ignores_an_unrelated_pin(api):
     assert status(api, t["id"])["state"] == "making"
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     say(api, "Another question", "ben-test")
-    assert status(api, t["id"]) == {"message_id": message["id"], "conversation_id": message["conversation_id"], "state": "failed"}
+    assert status(api, t["id"]) == {
+        "message_id": message["id"],
+        "conversation_id": message["conversation_id"],
+        "state": "failed",
+    }
 
 
 def test_make_page_is_queued_separately_from_an_already_running_assistant_turn(api):
@@ -270,32 +339,43 @@ def test_make_page_is_queued_separately_from_an_already_running_assistant_turn(a
 
 def test_mcp_offers_page_publish_to_the_assistant_and_keeps_the_person_and_attempt(api):
     from backend.tests.test_mcp import call, rpc
+
     t = task(api, private=False)
     _, attempt, _ = start(api, t["id"])
     tools = rpc(api, "tools/list", token=attempt["token"])["result"]["tools"]
     assert "hub_page_publish" in {tool["name"] for tool in tools}
-    error, result = call(api, "hub_page_publish", {"name": "alerts.html", "text": HTML.decode(), "task": t["id"]},
-                         token=attempt["token"])
+    error, result = call(
+        api, "hub_page_publish", {"name": "alerts.html", "text": HTML.decode(), "task": t["id"]}, token=attempt["token"]
+    )
     assert not error, result
     assert result["page"]["updated_by"] == "human:ben"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT attempt_id FROM bot_file_versions WHERE file_id=?",
-                         (result["page"]["file_id"],)).fetchone()[0] == attempt["id"]
+        assert (
+            c.execute(
+                "SELECT attempt_id FROM bot_file_versions WHERE file_id=?", (result["page"]["file_id"],)
+            ).fetchone()[0]
+            == attempt["id"]
+        )
 
 
 def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_turn(api):
     from runner_support.state import session_key
+
     t = task(api, private=False)
     earlier = say(api, "Private chat content unrelated to this task", "ben-test")["message"]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE message_id=?", (earlier["id"],))
         from backend import delivery
+
         delivery.defer(c, "coo", "message", earlier["id"], conversation_id=earlier["conversation_id"])
-        c.execute("INSERT INTO chat_goals(id,conversation_id,bot,objective,status,set_by,set_at,updated_at) "
-                  "VALUES(?,?,'coo','Unrelated chat objective','active','human:ben',?,?)",
-                  (H.new_id(), earlier["conversation_id"], H.now(), H.now()))
-        other = H.task_create(c, "human:ana", "Private follow-up", "Private details", "bot:coo",
-                              next_run=True, private=True, lint=False)
+        c.execute(
+            "INSERT INTO chat_goals(id,conversation_id,bot,objective,status,set_by,set_at,updated_at) "
+            "VALUES(?,?,'coo','Unrelated chat objective','active','human:ben',?,?)",
+            (H.new_id(), earlier["conversation_id"], H.now(), H.now()),
+        )
+        other = H.task_create(
+            c, "human:ana", "Private follow-up", "Private details", "bot:coo", next_run=True, private=True, lint=False
+        )
     machine, attempt, message = start(api, t["id"])
     assert [m["id"] for m in attempt["history"]] == [message["id"]]
     assert attempt["next_run"] == [] and attempt["notes"] == []
@@ -314,11 +394,14 @@ def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_t
 def test_make_page_cannot_bypass_page_cleaning_with_a_generic_upload(api):
     t = task(api, private=False)
     _, attempt, _ = start(api, t["id"])
-    result = api.post("/api/v2/files/uploads", params={"name": "raw.html", "task": t["id"]}, content=HTML,
-                      headers=headers(attempt["token"]))
+    result = api.post(
+        "/api/v2/files/uploads",
+        params={"name": "raw.html", "task": t["id"]},
+        content=HTML,
+        headers=headers(attempt["token"]),
+    )
     assert result.status_code == 403, result.text
     assert_no_page(api)
-
 
 
 def test_make_page_has_normal_reads_beyond_context_and_no_source_publish_recheck(api):
@@ -335,6 +418,7 @@ def test_make_page_has_normal_reads_beyond_context_and_no_source_publish_recheck
     get(api, "meetings/transcript?id=" + mid, token)
     assert api.get("/api/v2/files/" + fid, headers=headers(token)).status_code == 200
     from backend.tests.test_page_audience import edit
+
     edit(api, fid, {"people": ["ana"]}, token="ana-test")
     get(api, "pages/" + fid, token, expected=404)
     # Already copied content is accepted; source access does not narrow the made page's default audience.
@@ -348,6 +432,7 @@ def test_make_page_has_normal_reads_beyond_context_and_no_source_publish_recheck
 def test_make_page_keeps_normal_assistant_learning_and_tools(api):
     from backend.tests.test_learned import learn
     from backend.tests.test_mcp import rpc
+
     learn(api, "Use a calm page layout", token="ana-test")
     t = task(api, private=False)
     _, attempt, _ = start(api, t["id"], person="ana-test")
@@ -365,11 +450,16 @@ def test_make_page_on_a_private_task_keeps_its_normal_task_audience(api):
     fid = made.json()["page"]["file_id"]
     get(api, "pages/" + fid, "ben-test")
     get(api, "pages/" + fid, "cara-test", expected=404)
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0,
-         "text": "The private page is made."}, machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "The private page is made."},
+        machine["token"],
+    )
     messages = get(api, "conversations/" + request["conversation_id"] + "/messages", "ben-test")
     assert any(m["body"] == "The private page is made." for m in messages)
     from backend import task_privacy
+
     with api.app.state.store.read() as c:
         assert not task_privacy.message_readable(c, "bot:coo", request)
         assert not task_privacy.attempt_readable(c, "bot:coo", attempt["id"])
@@ -398,8 +488,9 @@ def test_make_page_does_not_fall_back_to_bot_rights_after_person_loses_sign_in(a
     post(api, "access/people/ben", {"sign_in": False})
     assert post(api, "jobs/claim", {"next_run": True}, machine["token"])["attempt"] is None
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE j.message_id=?",
-                             (request["id"],)).fetchone()
+        assert not c.execute(
+            "SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE j.message_id=?", (request["id"],)
+        ).fetchone()
 
 
 def test_people_sharing_the_assistant_do_not_overwrite_each_others_page(api):
@@ -412,8 +503,7 @@ def test_people_sharing_the_assistant_do_not_overwrite_each_others_page(api):
     _, second, _ = start(api, t["id"], person="cara-test", machine=machine)
     # The shared publishing bot grants no rights to rename, archive, delete or arrange Ben's page.
     token = second["token"]
-    for path, body in (("files/" + fid, {"title": "Cara's title"}),
-                       ("pages/" + fid, {"archived": True})):
+    for path, body in (("files/" + fid, {"title": "Cara's title"}), ("pages/" + fid, {"archived": True})):
         refused = api.patch("/api/v2/" + path, json=body, headers=headers(token))
         assert refused.status_code == 403, refused.text
     refused = api.delete("/api/v2/files/" + fid, headers=headers(token))
@@ -431,8 +521,9 @@ def test_people_sharing_the_assistant_do_not_overwrite_each_others_page(api):
     assert b"Ben's plan" in content.content and b"Cara's plan" not in content.content
 
 
-@pytest.mark.parametrize("person,another_task,expected", [
-    ("cara-test", False, 403), ("cara-test", True, 404), ("ben-test", True, 404)])
+@pytest.mark.parametrize(
+    "person,another_task,expected", [("cara-test", False, 403), ("cara-test", True, 404), ("ben-test", True, 404)]
+)
 def test_make_page_replacement_requires_person_management_and_the_same_task(api, person, another_task, expected):
     t = task(api, private=False)
     machine, first, _ = start(api, t["id"])
@@ -480,6 +571,7 @@ def test_lost_private_make_page_claim_replays_the_lease_as_the_person_and_rechec
     claimed = post(api, "jobs/claim", body, machine["token"], key)["attempt"]
     assert [p["id"] for p in claimed["task_context"]["pages"]] == [fid]
     from backend import task_privacy
+
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM attempts WHERE id=?", (claimed["id"],)).fetchone()[0] == "leased"
         assert not task_privacy.attempt_readable(c, "bot:coo", claimed["id"])

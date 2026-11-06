@@ -3,6 +3,7 @@
 Runs the real script as a plain user with HOME in a temp dir, a loopback HTTP server standing in for a Tico
 server, and a fake runner binary (TICO_RUNNER_BIN) that exits at once in place of `tico-runner run`.
 """
+
 import json
 import os
 import shutil
@@ -27,6 +28,7 @@ pytestmark = pytest.mark.skipif(
 
 def serve(accepts):
     """A loopback server: 200 for the runner's token when `accepts`, 401 otherwise."""
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             ok = accepts and self.headers.get("Authorization") == f"Bearer {TOKEN}"
@@ -47,7 +49,7 @@ def closed_url():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    return f"http://127.0.0.1:{port}"   # nothing listens here any more
+    return f"http://127.0.0.1:{port}"  # nothing listens here any more
 
 
 @pytest.fixture
@@ -79,15 +81,16 @@ def run_join(home, fake_runner, url):
         "PYTHONPATH": str(ROOT),
         "TICO_RUNNER_BIN": str(fake_runner),
     }
-    return subprocess.run(["bash", str(SCRIPT), "join", "--url", url], env=env, capture_output=True,
-                          text=True, timeout=60)
+    return subprocess.run(
+        ["bash", str(SCRIPT), "join", "--url", url], env=env, capture_output=True, text=True, timeout=60
+    )
 
 
 def test_a_server_that_moved_is_followed_and_the_rest_of_the_file_is_kept(home, fake_runner):
     old, _ = serve(True)
     new, new_url = serve(True)
     config = enrolled(home, f"http://127.0.0.1:{old.server_address[1]}")
-    result = run_join(home, fake_runner, new_url + "/")   # a trailing slash on the given url is not a different url
+    result = run_join(home, fake_runner, new_url + "/")  # a trailing slash on the given url is not a different url
     assert result.returncode == 0, result.stderr
     saved = json.loads(config.read_text())
     assert saved == {"url": new_url, "token": TOKEN, "self_update": False, "name": "box"}
@@ -103,7 +106,7 @@ def test_a_new_url_that_refuses_or_is_silent_leaves_the_file_alone(home, fake_ru
     config = enrolled(home, old_url)
     before = config.read_bytes()
     result = run_join(home, fake_runner, other)
-    assert result.returncode == 0, result.stderr   # the runner goes on with the saved url
+    assert result.returncode == 0, result.stderr  # the runner goes on with the saved url
     assert config.read_bytes() == before
     assert f"the given --url {other} was not used" in result.stdout
     assert f"still using {old_url}" in result.stdout

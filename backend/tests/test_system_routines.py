@@ -9,8 +9,8 @@ from backend import ask_deadlines
 from backend import system_routines as SR
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_stale_review import FakeDecide, stale   # noqa: F401
-from backend.tests.test_tasks_board import api, get, headers, post   # noqa: F401
+from backend.tests.test_stale_review import FakeDecide, stale  # noqa: F401
+from backend.tests.test_tasks_board import api, get, headers, post  # noqa: F401
 from clients import judge as J
 
 
@@ -22,19 +22,25 @@ def rows(api, token="ana-test"):
 def test_the_jobs_list_and_each_run_record(api):
     from backend import go_live
     from backend.store import encode
+
     store = api.app.state.store
     # every built in job is listed with its group word and control availability
-    jobs, data = rows(api, token="ben-test")     # a member, not only the owner, sees the list
+    jobs, data = rows(api, token="ben-test")  # a member, not only the owner, sees the list
     assert "groups" not in data, "one flat list; a group is a word search finds, not a heading"
     store = api.app.state.store
     with store.read() as c:
-        hidden = SR.not_applying(c, store.settings)     # a job that cannot run here is left out (Job.applies)
+        hidden = SR.not_applying(c, store.settings)  # a job that cannot run here is left out (Job.applies)
     assert "directory_sync" in hidden and "topic_fresh" not in hidden
     assert [j["key"] for j in data["jobs"]] == [job.key for job in SR.JOBS if job.key not in hidden] + [
-        "task-rule-close-after-done"]
+        "task-rule-close-after-done"
+    ]
     assert {k for k, j in jobs.items() if j["controllable"]} == {
-        "stale_review", "kpi_asks", "ask_deadlines", "task_manager_report",
-        "bookkeeper_check"} - hidden
+        "stale_review",
+        "kpi_asks",
+        "ask_deadlines",
+        "task_manager_report",
+        "bookkeeper_check",
+    } - hidden
     assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "thread_rank"}
     assert "learnings" not in jobs, "Learn runs in Maintenance"
     # Housekeeping has no switch; Task roundup and Learn run in Maintenance.
@@ -51,8 +57,7 @@ def test_the_jobs_list_and_each_run_record(api):
     at = datetime.now(timezone.utc)
     Scheduler(store, api.app.state.execution).tick(at)
     jobs, _ = rows(api)
-    for key in ("ask_deadlines", "approval_expiry", "stall_checks", "kpi_asks",
-                "due_reminders", "snooze_ends"):
+    for key in ("ask_deadlines", "approval_expiry", "stall_checks", "kpi_asks", "due_reminders", "snooze_ends"):
         assert jobs[key]["last"] and jobs[key]["last"]["ok"], key
         assert jobs[key]["last"]["result"], key
     nxt = H.parse_ts(jobs["ask_deadlines"]["next"])
@@ -87,9 +92,15 @@ def test_the_jobs_list_and_each_run_record(api):
         assert c.execute("SELECT count(*) FROM system_runs WHERE job='cleanup'").fetchone()[0] == SR.KEEP
     # an expired go live is recorded as ended not as nothing
     from backend.store import encode
+
     with store.transaction() as c:
-        c.execute("INSERT INTO registry_metadata VALUES(?,?)", (go_live.PREFIX + "ops", encode(
-            {"actor": "bot:ops", "computer": "Mac", "requested_at": H.shift(H.now(), days=-8)})))
+        c.execute(
+            "INSERT INTO registry_metadata VALUES(?,?)",
+            (
+                go_live.PREFIX + "ops",
+                encode({"actor": "bot:ops", "computer": "Mac", "requested_at": H.shift(H.now(), days=-8)}),
+            ),
+        )
     Scheduler(store, api.app.state.execution).tick()
     jobs, _ = rows(api)
     assert jobs["go_live_expiry"]["last"]["result"] == "1 go-live ended"
@@ -101,6 +112,7 @@ def test_a_failed_run_shows_a_plain_reason_and_each_wrapped_block_reports_its_ol
 
     def broken(conn, at=None):
         raise RuntimeError("Ana's private note text")
+
     monkeypatch.setattr(ask_deadlines, "sweep", broken)
     result = Scheduler(store, api.app.state.execution).tick()
     assert {"ask_deadlines": "RuntimeError"} in result["failures"]
@@ -111,6 +123,7 @@ def test_a_failed_run_shows_a_plain_reason_and_each_wrapped_block_reports_its_ol
     # each wrapped block still reports its old failure name
     from backend import approval_expiry, billing_check, go_live, goal_asks, still_needed
     from backend import goals as G
+
     # The pass refreshes one live goal per transaction; an empty registry has no refresh to fail.
     with store.transaction() as c:
         G.create(c, "human:ana", "Exercise goal failure reporting", "company")
@@ -119,16 +132,32 @@ def test_a_failed_run_shows_a_plain_reason_and_each_wrapped_block_reports_its_ol
 
     def broken(*a, **k):
         raise RuntimeError("x")
-    for module, name in ((G, "refresh"), (goal_asks, "sync"), (go_live, "expire"),
-                         (ask_deadlines, "sweep"), (approval_expiry, "sweep"), (still_needed, "sweep"),
-                         (billing_check, "read_later")):
+
+    for module, name in (
+        (G, "refresh"),
+        (goal_asks, "sync"),
+        (go_live, "expire"),
+        (ask_deadlines, "sweep"),
+        (approval_expiry, "sweep"),
+        (still_needed, "sweep"),
+        (billing_check, "read_later"),
+    ):
         monkeypatch.setattr(module, name, broken)
     from backend import gateway_connection
+
     monkeypatch.setattr(gateway_connection, "check_soon", broken)
-    later = datetime.now(timezone.utc) + timedelta(hours=2)     # the hourly blocks are due again
+    later = datetime.now(timezone.utc) + timedelta(hours=2)  # the hourly blocks are due again
     failures = Scheduler(store, api.app.state.execution).tick(later)["failures"]
-    for name in ("goals", "goal_asks", "go_live", "ask_deadlines", "approval_expiry",
-                 "still_needed", "billing_check", "gateway"):
+    for name in (
+        "goals",
+        "goal_asks",
+        "go_live",
+        "ask_deadlines",
+        "approval_expiry",
+        "still_needed",
+        "billing_check",
+        "gateway",
+    ):
         assert {name: "RuntimeError"} in failures, name
     jobs, _ = rows(api)
     assert jobs["goal_colours"]["last"]["ok"] is False
@@ -141,9 +170,10 @@ def test_a_stale_review_shows_its_route_spend_and_each_fallback(stale):
     task("Ship the export button", pr="merged")
     run = SR.Run("stale_review")
     from backend import stale_review
+
     stale_review.words(run, stale_review.run_pass(store, engine=FakeDecide("update")))
     SR.write(store, run)
-    with store.transaction() as c:      # what `judge.metered` writes for a paid call
+    with store.transaction() as c:  # what `judge.metered` writes for a paid call
         H.event(c, H.KEEPER, "judge.spend", "stale-review@1", {"label": "stale-review@1", "cost_usd": 0.42})
         H.event(c, H.KEEPER, "judge.spend", "listening@2", {"label": "listening@2", "cost_usd": 9.0})
     jobs, _ = rows(api)
@@ -155,15 +185,17 @@ def test_a_stale_review_shows_its_route_spend_and_each_fallback(stale):
 
     task("Ship the export page", pr="merged")
     with store.transaction() as c:
-        c.execute("DELETE FROM registry_metadata WHERE key='stale_review'")    # the next hour's pass
+        c.execute("DELETE FROM registry_metadata WHERE key='stale_review'")  # the next hour's pass
 
     def gateway(state, questions, label=None):
         raise J.JudgeError("unavailable", "down")
+
     gateway.provider = J.GATEWAY_PROVIDER
     own = FakeDecide("update", provider=J.TYPESAFE_PROVIDER)
     own.provider = J.TYPESAFE_PROVIDER
     chain = B.ordered([gateway, own])
     from backend import stale_review
+
     run = stale_review.words(SR.Run("stale_review"), stale_review.run_pass(store, engine=chain))
     SR.write(store, run)
     jobs, _ = rows(api)
@@ -176,9 +208,10 @@ def test_a_stale_review_shows_its_route_spend_and_each_fallback(stale):
     llm = FakeDecide("update", provider=next(iter(J.LLM_PROVIDERS.values())))
     llm.provider = llm.provider
     with store.transaction() as c:
-        c.execute("DELETE FROM registry_metadata WHERE key='stale_review'")    # the next hour's pass
-    run = stale_review.words(SR.Run("stale_review"),
-                             stale_review.run_pass(store, engine=B.ordered([gateway, own, llm])))
+        c.execute("DELETE FROM registry_metadata WHERE key='stale_review'")  # the next hour's pass
+    run = stale_review.words(
+        SR.Run("stale_review"), stale_review.run_pass(store, engine=B.ordered([gateway, own, llm]))
+    )
     SR.write(store, run)
     jobs, _ = rows(api)
     assert jobs["stale_review"]["route"] == "Company AI"
@@ -189,6 +222,7 @@ def test_learn_without_a_model_stays_in_maintenance_and_a_failed_directory_sync_
     store = api.app.state.store
     # learn with no decision model is recorded in maintenance
     from backend import learnings, maintenance
+
     monkeypatch.setattr(learnings, "engine_for", lambda *args: None)
     with store.transaction() as c:
         maintenance.save_step(c, "human:ana", {"key": "learn", "enabled": True})
@@ -203,15 +237,20 @@ def test_learn_without_a_model_stays_in_maintenance_and_a_failed_directory_sync_
         assert c.execute("SELECT count(*) FROM system_runs WHERE job='learnings'").fetchone()[0] == 0
     # a failed directory sync shows members fixed words never the vendors text
     from backend.store import Problem
+
     directory = api.app.state.directory
     monkeypatch.setattr(type(directory), "due", lambda self, c: True)
     # With no directory connected the list leaves the job out (Job.applies); here it is listed to show its failure.
     import dataclasses
+
     jobs = [dataclasses.replace(job, applies=None) if job.key == "directory_sync" else job for job in SR.JOBS]
     monkeypatch.setattr(SR, "JOBS", jobs)
 
     def refused(self, *a, **k):
-        raise Problem("directory_entra", "Entra refused the request (403). AADSTS65001 tenant acme-secret app 1234", 502)
+        raise Problem(
+            "directory_entra", "Entra refused the request (403). AADSTS65001 tenant acme-secret app 1234", 502
+        )
+
     monkeypatch.setattr(type(directory), "run", refused)
     directory.tick(True)
     jobs, _ = rows(api, token="ben-test")

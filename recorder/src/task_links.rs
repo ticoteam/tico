@@ -488,7 +488,7 @@ impl Tico {
             !item.proposed_task_id.is_empty(),
             "This item has no task to link"
         );
-        let tasks = self.readable_tasks(&[item.proposed_task_id.clone()])?;
+        let tasks = self.readable_tasks(std::slice::from_ref(&item.proposed_task_id))?;
         ensure!(
             !item.proposed_task_id.is_empty() && !tasks.is_empty(),
             "This task is no longer available"
@@ -503,16 +503,21 @@ impl Tico {
             let server_id = delivery.receipt["items"][item_id]["id"]
                 .as_str()
                 .context("This proposal is not saved")?;
-            self.link_request(store, id, &[item.proposed_task_id.clone()], || {
-                self.call(
-                    &format!(
-                        "/api/v2/meetings/{}/items/{server_id}/link",
-                        delivery.meeting_id
-                    ),
-                    Some(&json!({})),
-                    &format!("recorder:{id}:accept-link:{server_id}"),
-                )
-            })?;
+            self.link_request(
+                store,
+                id,
+                std::slice::from_ref(&item.proposed_task_id),
+                || {
+                    self.call(
+                        &format!(
+                            "/api/v2/meetings/{}/items/{server_id}/link",
+                            delivery.meeting_id
+                        ),
+                        Some(&json!({})),
+                        &format!("recorder:{id}:accept-link:{server_id}"),
+                    )
+                },
+            )?;
         }
         store.update_context(id, |c| {
             c.live_destination = self.destination.id.clone();

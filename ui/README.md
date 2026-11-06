@@ -1,13 +1,13 @@
 # ui/
 
-The web UI: plain HTML, CSS and classic scripts, served as they are. There is no build step and no
-module system. Every script shares the page's globals (`S`, `$`, `esc`, `get`, `post`, `route`, ...).
+The web UI: plain HTML, CSS and classic scripts. There is no module system yet: every script shares the page's
+globals (`S`, `$`, `esc`, `get`, `post`, `route`, ...). A script is JavaScript or TypeScript (below).
 
     index.html        the markup skeleton, then <link> and <script> tags in load order; no inline script.
                       The tags between the `<!-- bundle:css:start/end -->` and `<!-- bundle:js:start/end -->`
                       markers are the styles and app scripts; the server bundles them (below)
     styles/*.css      the stylesheet, one file per area, linked in cascade order
-    app/*.js          the app: routing, state, sidebar and one file per page or feature
+    app/*.js, *.ts    the app: routing, state, sidebar and one file per page or feature
     *.js              features that mount into a page through a small `window.*` API
                       (docs-page.js, goals-kpis.js, first-run.js, support.js, ...)
     assets/, vendor/  images, the text font (Inter) and the icon font, marked
@@ -22,7 +22,7 @@ markers, in that order, into `/tico/ui/app.bundle.js` and `/tico/ui/app.bundle.c
 disk cache keeps nothing larger than an eighth of its size), and serves index.html with each region replaced by the
 parts' tags, each `?v=<hash of the whole bundle>`. The bundles are immutable for that URL (`Cache-Control: public, max-age=31536000,
 immutable`, strong ETag, gzip when the browser accepts it); index.html is revalidated on every load. It
-rebuilds when a listed file changes, so editing needs no step. index.html is the only list: adding a file to it
+rebuilds when a listed file changes, so editing a `.js` file needs no step. index.html is the only list: adding a file to it
 adds it to the bundle.
 
 A file that is not strict cannot share the bundle's one script (the bundle opens with `'use strict'` once), so
@@ -31,6 +31,23 @@ tests run the real bundler and serve the bundle by default; `TICO_UI_BUNDLE=off 
 the separate files. The feature files (`ui/*.js`) are in the bundle too, ahead of `app/`; only `theme.js` (in the head, before
 the first paint) and `vendor/` load on their own. The page names `theme.js` and `vendor/marked.min.js` with `?v=<content hash>` too, and the
 server keeps them for a year at that URL (`STANDALONE` in backend/ui_bundle.py), so opening the app revalidates neither.
+
+## TypeScript
+
+Write a new file as TypeScript, `app/name.ts`, and list it in index.html by that name: strict types, no `any`, and
+only syntax that erases (no `enum`, `namespace` or constructor parameter properties), since it stays a classic
+script whose top-level names are globals like any other file's. `npm run build:ui` (scripts/build-ui.cjs, after
+`npm ci`) compiles each `.ts` file to `build/ui/` at the same path (`build/ui/app/name.js`) with esbuild's per-file
+transform: types stripped, nothing bundled, the file's place in the load order unchanged. `npm run watch:ui`
+recompiles on every change. `build/` is not committed. Each output has an external source map beside it
+(`name.js.map`, which its last line names), served as `/tico/ui/app/name.js.map`, so with the files served separately
+(`TICO_UI_BUNDLE=off`) a stack trace and the developer tools show the `.ts`. The bundle drops that line: its parts have
+no maps, for `.js` files either. `build/ui/manifest.json` records each source's, output's and map's
+sha256, and the bundle and the server's `/tico/ui/<name>.ts` route serve the output only while both match
+(backend/ui_build.py): a missing or stale build is a 503 naming the command, and `python -m backend.server` refuses
+to start on one (it compiles first when the checkout has Node and `npm ci`; so do pytest and `npm run test:ui`). The
+image compiles the UI in its own stage (Dockerfile `ui-build`) and ships only the output: the server image has no
+Node. `bash scripts/check_ui_types.sh` type-checks the `.ts` files with the rest.
 
 An open tab does not pick up a new release by itself. The config carries the release (`version`) and the served build
 (`ui_build`, the `?v=` of the two bundle tags joined by a dot); `app/notices.js` compares both with what the page loaded with, on the

@@ -25,8 +25,9 @@ def pre_threads_hub(path):
     """A hub DB as it was before threads: the schema is there, the migration never ran, the rows carry no threads
     stamps, and no deliveries exist yet. hubdb.connect runs the migrations, so the reset is done after it."""
     conn = hubdb.connect(str(path))
-    for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger' "
-                                "AND name LIKE 'threads\\_%' ESCAPE '\\'").fetchall():
+    for (name,) in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'threads\\_%' ESCAPE '\\'"
+    ).fetchall():
         conn.execute(f"DROP TRIGGER {name}")
     conn.execute("DELETE FROM registry_metadata WHERE key IN ('threads-migration','threads-migration-progress')")
     conn.execute("DELETE FROM message_deliveries")
@@ -36,28 +37,57 @@ def pre_threads_hub(path):
     rng = random.Random(5)
     humans = [f"human:h{i}" for i in range(4)]
     bots = [f"bot:b{i}" for i in range(5)]
-    conversations = [("c-shared-open-1", "shared", "b1"), ("c-shared-old", "shared", "b1"),
-                     ("c-shared-open-2", "shared", "b2"), ("c-personal", "personal", "assistant"),
-                     ("c-task", "task", None), ("c-direct", "direct", None)]
+    conversations = [
+        ("c-shared-open-1", "shared", "b1"),
+        ("c-shared-old", "shared", "b1"),
+        ("c-shared-open-2", "shared", "b2"),
+        ("c-personal", "personal", "assistant"),
+        ("c-task", "task", None),
+        ("c-direct", "direct", None),
+    ]
     for cid, scope, room in conversations:
         closed = "2025-02-01" if cid == "c-shared-old" else None
-        conn.execute("INSERT INTO conversations(id,kind,subject,task_id,participants,created_at,last_message_at,"
-                     "closed_at,scope,owner_id,room_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                     (cid, "task" if scope == "task" else "direct", "", "t-1" if scope == "task" else None,
-                      '["human:h0","bot:b0"]', "2025-01-01", None, closed, scope,
-                      humans[0] if scope == "personal" else None, room))
+        conn.execute(
+            "INSERT INTO conversations(id,kind,subject,task_id,participants,created_at,last_message_at,"
+            "closed_at,scope,owner_id,room_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                cid,
+                "task" if scope == "task" else "direct",
+                "",
+                "t-1" if scope == "task" else None,
+                '["human:h0","bot:b0"]',
+                "2025-01-01",
+                None,
+                closed,
+                scope,
+                humans[0] if scope == "personal" else None,
+                room,
+            ),
+        )
     for n in range(240):
         cid = conversations[n % len(conversations)][0]
-        refs = rng.choice([None, '{"quiet": true}', '{"task": "t-1", "comment": true}', '{"via": "x"}',
-                           '{"task": "t-1"}'])
-        conn.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,"
-                     "created_at,delivered_at,read_at,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                     (f"m{n:04d}", cid, rng.choice(humans + bots), rng.choice([None, None, *humans, *bots]),
-                      "say", f"body {n}", refs, f"m{n - 1:04d}" if n and rng.random() < 0.2 else None,
-                      f"2025-01-02T00:{n // 60:02d}:{n % 60:02d}Z",
-                      f"2025-01-02T00:{n // 60:02d}:{n % 60:02d}Z" if rng.random() < 0.8 else None,
-                      None, f"2025-01-03T00:00:00Z" if rng.random() < 0.05 else None))
-    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")      # the copy below takes the main file only
+        refs = rng.choice(
+            [None, '{"quiet": true}', '{"task": "t-1", "comment": true}', '{"via": "x"}', '{"task": "t-1"}']
+        )
+        conn.execute(
+            "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,"
+            "created_at,delivered_at,read_at,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                f"m{n:04d}",
+                cid,
+                rng.choice(humans + bots),
+                rng.choice([None, None, *humans, *bots]),
+                "say",
+                f"body {n}",
+                refs,
+                f"m{n - 1:04d}" if n and rng.random() < 0.2 else None,
+                f"2025-01-02T00:{n // 60:02d}:{n % 60:02d}Z",
+                f"2025-01-02T00:{n // 60:02d}:{n % 60:02d}Z" if rng.random() < 0.8 else None,
+                None,
+                f"2025-01-03T00:00:00Z" if rng.random() < 0.05 else None,
+            ),
+        )
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # the copy below takes the main file only
     conn.close()
     return raw(path)
 
@@ -66,10 +96,10 @@ def reader_rows(conn):
     """What the migration writes, without the random ids and the migration-time stamps (which differ run to run)."""
     queries = {
         "conversations": "SELECT id,audience,owner_id,root_id,path,last_seq,last_unread_seq,"
-                         "archived_at IS NOT NULL FROM conversations ORDER BY id",
+        "archived_at IS NOT NULL FROM conversations ORDER BY id",
         "messages": "SELECT id,conversation_id,seq,restricted,legacy_audience,deleted_at FROM messages ORDER BY id",
         "deliveries": "SELECT message_id,recipient,mode,reason,cause,state,revision,delivered_at,read_at "
-                      "FROM message_deliveries ORDER BY message_id,recipient",
+        "FROM message_deliveries ORDER BY message_id,recipient",
         "sequences": "SELECT name,value FROM sequences ORDER BY name",
     }
     return {name: [tuple(row) for row in conn.execute(sql).fetchall()] for name, sql in queries.items()}
@@ -77,7 +107,7 @@ def reader_rows(conn):
 
 @pytest.fixture
 def small_chunks(monkeypatch):
-    monkeypatch.setattr(threads, "MIGRATION_CHUNK", 25)     # several chunks per step, so a crash lands between them
+    monkeypatch.setattr(threads, "MIGRATION_CHUNK", 25)  # several chunks per step, so a crash lands between them
 
 
 def test_an_interrupted_migration_resumes_to_the_same_rows(tmp_path, small_chunks, monkeypatch):
@@ -94,7 +124,7 @@ def test_an_interrupted_migration_resumes_to_the_same_rows(tmp_path, small_chunk
 
     def crash_after_some_chunks(c, step, rowid):
         calls.append(step)
-        if len(calls) == 9:                                # a few chunks have committed, this one has not
+        if len(calls) == 9:  # a few chunks have committed, this one has not
             raise RuntimeError("simulated crash")
         real(c, step, rowid)
 
@@ -105,9 +135,9 @@ def test_an_interrupted_migration_resumes_to_the_same_rows(tmp_path, small_chunk
     assert not threads.migrated(crashing), "the crash should leave the migration unrecorded"
     assert threads._progress(crashing), "the committed chunks should have left their progress"
 
-    assert threads.migrate(crashing) is True                # the restart resumes from that progress
+    assert threads.migrate(crashing) is True  # the restart resumes from that progress
     assert reader_rows(crashing) == expected
-    assert threads.migrate(crashing) is False               # and a later start is a no-op
+    assert threads.migrate(crashing) is False  # and a later start is a no-op
     crashing.close()
 
 

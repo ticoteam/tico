@@ -19,8 +19,11 @@ def forget_claims():
 
 
 def job_of(c, task_id, bot="ops"):
-    return c.execute("SELECT j.* FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv "
-                     f"ON cv.id=m.conversation_id WHERE j.bot_id=? AND {H.MESSAGE_TASK_SQL}=?", (bot, task_id)).fetchone()
+    return c.execute(
+        "SELECT j.* FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv "
+        f"ON cv.id=m.conversation_id WHERE j.bot_id=? AND {H.MESSAGE_TASK_SQL}=?",
+        (bot, task_id),
+    ).fetchone()
 
 
 def secret_taken_away(api):
@@ -48,8 +51,10 @@ def sweep(api):
 
 
 def suppressed(c, job_id):
-    return [H._json(r[0], {}) for r in c.execute(
-        "SELECT detail FROM events WHERE action='job.suppress' AND target=?", (job_id,))]
+    return [
+        H._json(r[0], {})
+        for r in c.execute("SELECT detail FROM events WHERE action='job.suppress' AND target=?", (job_id,))
+    ]
 
 
 def test_an_unreadable_job_is_canceled_and_a_readable_one_is_still_claimed(api):
@@ -64,10 +69,12 @@ def test_an_unreadable_job_is_canceled_and_a_readable_one_is_still_claimed(api):
     assert refusal(api, machine, unreadable) == "unreadable"
     assert refusal(api, machine, readable) is None
     sweep(api)
-    sweep(api)                                                    # a second pass finds nothing left to cancel
+    sweep(api)  # a second pass finds nothing left to cancel
     with store.read() as c:
         assert job_of(c, secret["id"])["state"] == "canceled"
-        assert suppressed(c, unreadable["id"]) == [{"reason": "unreadable", "source": "stuck-check"}]   # the stall pass did it
+        assert suppressed(c, unreadable["id"]) == [
+            {"reason": "unreadable", "source": "stuck-check"}
+        ]  # the stall pass did it
         done = job_of(c, finished["id"])
         assert done["state"] == "completed" and suppressed(c, done["id"]) == []
         assert job_of(c, first["id"])["state"] == "queued" and suppressed(c, readable["id"]) == []
@@ -84,15 +91,19 @@ def test_health_counts_no_queued_work_from_the_canceled_job(api):
 
     def ops_rows():
         with store.transaction() as c:
-            c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
+            c.execute(
+                "UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),)
+            )
             online = {r["id"] for r in health._online_runners(c)}
             waiting, slow, stuck = health._waiting(c, online, store.settings)
         return [r for r in waiting + slow + stuck if r["bot"] == "ops"]
 
-    assert post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None   # the claim passes it over...
+    assert (
+        post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None
+    )  # the claim passes it over...
     before = ops_rows()
     assert before and {r["queued"] for r in before} == {1} and "unreadable" in {r["reason"] for r in before}
-    sweep(api)                                                                     # ...the sweep lets it go
+    sweep(api)  # ...the sweep lets it go
     assert ops_rows() == []
 
 
@@ -102,17 +113,26 @@ def test_work_held_for_another_reason_stays_queued(api, monkeypatch):
     preset, checked, drained = new_task(api, "preset"), new_task(api, "checked"), new_task(api, "drained", "finance")
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("UPDATE jobs SET held=1 WHERE id=?", (job_of(c, preset["id"])["id"],))       # a wake preset holds it
+        c.execute("UPDATE jobs SET held=1 WHERE id=?", (job_of(c, preset["id"])["id"],))  # a wake preset holds it
         # Held and unreadable: its release would only hand the claim the same unreadable message.
         c.execute("UPDATE jobs SET held=1 WHERE id=?", (job_of(c, secret["id"])["id"],))
         c.execute("INSERT INTO bot_control(bot,draining) VALUES('finance',1)")
-        jobs = {"preset": job_of(c, preset["id"]), "checked": job_of(c, checked["id"]),
-                "drained": job_of(c, drained["id"], "finance")}
+        jobs = {
+            "preset": job_of(c, preset["id"]),
+            "checked": job_of(c, checked["id"]),
+            "drained": job_of(c, drained["id"], "finance"),
+        }
     # A check subtask whose model a usage limit still holds.
     real_of, real_held = check_models.of, check_models.held
-    monkeypatch.setattr(check_models, "of", lambda c, task_id, bot: {
-        "runtime": "codex", "model": "gpt-5", "harness": "codex", "effort": None, "role": "check"}
-                        if task_id == checked["id"] else real_of(c, task_id, bot))
+    monkeypatch.setattr(
+        check_models,
+        "of",
+        lambda c, task_id, bot: (
+            {"runtime": "codex", "model": "gpt-5", "harness": "codex", "effort": None, "role": "check"}
+            if task_id == checked["id"]
+            else real_of(c, task_id, bot)
+        ),
+    )
     monkeypatch.setattr(check_models, "held", lambda c, task_id: task_id == checked["id"] or real_held(c, task_id))
     assert refusal(api, machine, jobs["checked"]) == "check_model"
     with store.read() as c:

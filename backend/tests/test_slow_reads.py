@@ -18,12 +18,19 @@ def seed_turns(c, start, end, parent=None, tag="t"):
         key = f"{tag}-{n}"
         reply = H.task_comment(c, "human:ana", parent["id"], "Request " + key, wake=False)
         aid = "run-" + key
-        c.execute("INSERT INTO jobs(id,message_id,bot_id,state,created_at,attempt_id) VALUES(?,?,'ops','completed',?,?)",
-                  ("job-" + key, reply["id"], H.now(), aid))
-        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
-                  "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + key, aid, H.now(), H.now()))
-        c.execute("UPDATE attempts SET trigger='message',message_id=?,task_id=?,exit='ok' WHERE id=?",
-                  (reply["id"], parent["id"], aid))
+        c.execute(
+            "INSERT INTO jobs(id,message_id,bot_id,state,created_at,attempt_id) VALUES(?,?,'ops','completed',?,?)",
+            ("job-" + key, reply["id"], H.now(), aid),
+        )
+        c.execute(
+            "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
+            "VALUES(?,?,'ops','rn',0,?,'completed',?,?)",
+            (aid, "job-" + key, aid, H.now(), H.now()),
+        )
+        c.execute(
+            "UPDATE attempts SET trigger='message',message_id=?,task_id=?,exit='ok' WHERE id=?",
+            (reply["id"], parent["id"], aid),
+        )
     return parent
 
 
@@ -52,8 +59,10 @@ def test_deleted_message_with_a_list_run_ref_does_not_abort_the_page(api):
         parent = H.task_create(c, "human:ana", "Bad run ref", "Checklist", "bot:ops", lint=False)
         kept = H.task_comment(c, "human:ana", parent["id"], "Keep", wake=False)
         dropped = H.task_comment(c, "human:ana", parent["id"], "Drop", wake=False)
-        c.execute("UPDATE messages SET deleted_at=?, refs=? WHERE id=?",
-                  (H.now(), json.dumps({"turn_id": ["not-a-run"], "task": parent["id"]}), dropped["id"]))
+        c.execute(
+            "UPDATE messages SET deleted_at=?, refs=? WHERE id=?",
+            (H.now(), json.dumps({"turn_id": ["not-a-run"], "task": parent["id"]}), dropped["id"]),
+        )
         cid = parent["conversation_id"]
     ids = [row["id"] for row in get(api, "conversations/" + cid + "/messages")]
     assert kept["id"] in ids
@@ -80,9 +89,12 @@ def test_message_page_stays_bounded_as_messages_grow(api, monkeypatch):
 def test_operations_does_not_query_each_computer(api):
     with api.app.state.store.transaction() as c:
         for n in range(6):
-            c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?, 'ana',?,?)",
-                      (f"rn{n}", f"Mac {n}", f"th{n}", H.now()))
+            c.execute(
+                "INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?, 'ana',?,?)",
+                (f"rn{n}", f"Mac {n}", f"th{n}", H.now()),
+            )
     from backend.tests.test_task_privacy_reads import traced
+
     _, text = traced(api, lambda: get(api, "operations"))
     joined = "\n".join(text)
     assert "FROM assignments WHERE runner_id=?" not in joined
@@ -97,27 +109,43 @@ def test_covering_indexes_return_the_same_rows(tmp_path):
         conn.commit()
         names = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
         assert {"tasks_private_status", "conversations_id_task"} <= names
-        assert "tasks_private_parties" not in names     # a prefix of tasks_private_status (migration 0042)
+        assert "tasks_private_parties" not in names  # a prefix of tasks_private_status (migration 0042)
         id_plan = " ".join(row[3] for row in conn.execute("EXPLAIN QUERY PLAN SELECT id FROM tasks"))
         assert "COVERING INDEX" in id_plan
-        plain = [tuple(row) for row in conn.execute(
-            "SELECT id,requester_id,owner_id,readers,private FROM tasks WHERE private IS NOT 0 ORDER BY id")]
-        covered = [tuple(row) for row in conn.execute(
-            "SELECT id,requester_id,owner_id,readers,private FROM tasks INDEXED BY tasks_private_status "
-            "WHERE private IS NOT 0 ORDER BY id")]
+        plain = [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT id,requester_id,owner_id,readers,private FROM tasks WHERE private IS NOT 0 ORDER BY id"
+            )
+        ]
+        covered = [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT id,requester_id,owner_id,readers,private FROM tasks INDEXED BY tasks_private_status "
+                "WHERE private IS NOT 0 ORDER BY id"
+            )
+        ]
         assert plain == covered
         assert {row[0] for row in plain} == {hidden["id"]}
         rooms = dict(conn.execute("SELECT id,task_id FROM conversations"))
         indexed = dict(conn.execute("SELECT id,task_id FROM conversations INDEXED BY conversations_id_task"))
         assert rooms == indexed
         assert task["conversation_id"] in rooms
-        plan = " ".join(row[3] for row in conn.execute(
-            "EXPLAIN QUERY PLAN SELECT id,task_id FROM conversations INDEXED BY conversations_id_task"))
+        plan = " ".join(
+            row[3]
+            for row in conn.execute(
+                "EXPLAIN QUERY PLAN SELECT id,task_id FROM conversations INDEXED BY conversations_id_task"
+            )
+        )
         assert "conversations_id_task" in plan
-        asked = " ".join(row[3] for row in conn.execute(
-            "EXPLAIN QUERY PLAN SELECT t.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            "JOIN tasks t ON t.conversation_id=m.conversation_id "
-            "WHERE m.kind='ask' AND m.recipient_id='human:ana' AND m.answered_by_id IS NULL"))
+        asked = " ".join(
+            row[3]
+            for row in conn.execute(
+                "EXPLAIN QUERY PLAN SELECT t.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+                "JOIN tasks t ON t.conversation_id=m.conversation_id "
+                "WHERE m.kind='ask' AND m.recipient_id='human:ana' AND m.answered_by_id IS NULL"
+            )
+        )
         assert "messages_open_ask" in asked
     finally:
         conn.close()

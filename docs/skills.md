@@ -103,8 +103,25 @@ someone who may read it.
 Coverage. A skill's installs say **Used**, **Unused** or **Unknown**. Unused needs data: the target reports staging (a receipt),
 reports usage (a bot on a harness that reports every skill use, today Claude Code; a person through a skills helper with
 reporting on), has had the install for 30 days, and has no use
-in those 30 days. Anything else is Unknown, never Unused. Skills used on computers that aren't in the directory aren't collected,
-so the page has no "popular, not in the directory" list.
+in those 30 days. Anything else is Unknown, never Unused.
+
+Not in directory. A bot's use of a skill the directory doesn't have (its repository's own, one in its home) is kept only as a
+daily count by name and bot, 90 days. Admins see the most used under the Directory as **Not in directory**: name, uses in 30 days,
+bots. People's own computers report directory skills only, so no person is counted there.
+
+## Suggestions
+
+The maintenance run's Suggest step looks at this install's own data each day (no Gateway or consent needed) and puts two kinds
+of suggestion on the Directory for admins:
+
+- **Remove**: an install that is Unused (above). Unknown is never suggested.
+- **Ask to submit**: a skill outside the directory that 2 or more bots, or 10 or more uses, ran in 30 days. It names the bot that
+  used it most; **Ask to submit** sends that bot your message asking it to run `tico skill submit <name>`.
+
+Nothing is removed, sent or submitted until an admin clicks. Each subject (an install, a skill's name) has one suggestion: open
+until it's acted on or dismissed, it's 30 days old, or it no longer holds (the install went, the name was proposed or approved);
+after it closes it comes back only 30 days later, if it still holds. These wait on the page rather than in a bot's Update, which
+carries Gateway suggestions only.
 
 ## API
 
@@ -115,9 +132,12 @@ its files (`GET skills/{name}/versions/{number}`), proposals (`POST skills/propo
 version's files by sha (`GET skills/bundles/{sha256}`). The Skills page reads four more: usage per skill
 (`GET skills/usage?days=7|30`), one skill's usage (`GET skills/{name}/usage?days=7|30`), who the caller may install for
 (`GET skills/install-targets`) and the caller's own installs with those of the bots they can write (`GET skills/installed`).
-Route words such as `usage`, `installed`, `install-targets`, `proposals` and `installs` can't be skill names. The contract is in
-`docs/openapi/v2.json` under the Skills tag. How a runner stages installed skills on a Claude Code or Codex turn and reports
-them: [Harnesses](harnesses.md#company-skills-on-a-claude-code-or-codex-turn).
+Admins also read and act on suggestions: `GET skills/suggestions`, then `POST skills/suggestions/{id}/remove` (takes the install
+off, with the rights of uninstalling it), `/asked` (after the page sent the bot its message) or `/dismiss`; these four are internal,
+not in the OpenAPI contract. Route words such as `usage`, `installed`, `install-targets`, `suggestions`, `proposals` and
+`installs` can't be skill names. The contract is in
+`docs/openapi/v2.json` under the Skills tag. How a runner stages installed skills on a Claude Code or Codex turn and reports them:
+[Harnesses](harnesses.md#company-skills-on-a-claude-code-or-codex-turn).
 
 ## Privacy
 

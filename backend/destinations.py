@@ -46,7 +46,7 @@ def identity(url):
     try:
         host = host.encode("idna").decode("ascii")
     except UnicodeError:
-        pass                                              # already ASCII, or not a name IDNA takes: compared as typed
+        pass  # already ASCII, or not a name IDNA takes: compared as typed
     port = port if port is not None else DEFAULT_PORTS.get(scheme)
     return scheme, host.lower().rstrip("."), port, parts.path or "/", parts.query
 
@@ -77,7 +77,9 @@ def fingerprint(key, url):
     found = identity(url)
     if not key or not found:
         return ""
-    return hmac.new(key, b"tico-destination-path:v1\n" + f"{found[3]}?{found[4]}".encode(), hashlib.sha256).hexdigest()[:10]
+    return hmac.new(key, b"tico-destination-path:v1\n" + f"{found[3]}?{found[4]}".encode(), hashlib.sha256).hexdigest()[
+        :10
+    ]
 
 
 def safe(url):
@@ -119,14 +121,30 @@ def choice(value):
 def held(integration, moved, labels, revision, name=""):
     """The refusal a destination change gets while credentials are saved and the editor has not said what happens to
     them: the old and new destination and the credentials' labels, never their values. Nothing was saved."""
-    old, new = moved["old"]["address"] or "an address that is not a URL", moved["new"]["address"] or "the default address"
+    old, new = (
+        moved["old"]["address"] or "an address that is not a URL",
+        moved["new"]["address"] or "the default address",
+    )
     what = ", ".join(labels)
-    detail = (f"This sends the saved {what} to {new} instead of {old}. Send again with credentials \"keep\" to send the saved "
-              f"credentials to the new address, or \"clear\" to remove them and type them again. Nothing was saved.")
-    return Problem("destination_change", detail, 409, extra={
-        "integration": integration, "name": name, "old": moved["old"], "new": moved["new"],
-        **({"path": moved["path"]} if "path" in moved else {}),
-        "credentials": list(labels), "revision": int(revision or 0), "choices": list(CHOICES)})
+    detail = (
+        f"This sends the saved {what} to {new} instead of {old}. Send again with credentials \"keep\" to send the saved "
+        f"credentials to the new address, or \"clear\" to remove them and type them again. Nothing was saved."
+    )
+    return Problem(
+        "destination_change",
+        detail,
+        409,
+        extra={
+            "integration": integration,
+            "name": name,
+            "old": moved["old"],
+            "new": moved["new"],
+            **({"path": moved["path"]} if "path" in moved else {}),
+            "credentials": list(labels),
+            "revision": int(revision or 0),
+            "choices": list(CHOICES),
+        },
+    )
 
 
 def require_tap(who, moved):
@@ -134,8 +152,12 @@ def require_tap(who, moved):
     own tap on its Confirm card, whatever the request says about the credentials: the card is made before the route
     runs (backend/app.py `person_card`), and this holds even where it was not."""
     if moved and getattr(who, "via", "") and not getattr(who, "confirmed", False):
-        raise Problem("confirm_required", "Moving saved credentials to another address needs the person's own tap on "
-                      "a Confirm card. Nothing was saved.", 403)
+        raise Problem(
+            "confirm_required",
+            "Moving saved credentials to another address needs the person's own tap on "
+            "a Confirm card. Nothing was saved.",
+            403,
+        )
 
 
 def record(c, who, integration, target, moved, labels, option, revision):
@@ -143,8 +165,20 @@ def record(c, who, integration, target, moved, labels, option, revision):
     destination, which credentials were kept or cleared and what the editor chose."""
     kept = list(labels) if option == KEEP else []
     cleared = list(labels) if option in (CLEAR, REPLACED) else []
-    H.event(c, who.actor, EVENT, target, {
-        "integration": integration, "old": moved["old"], "new": moved["new"],
-        **({"path": moved["path"]} if "path" in moved else {}),
-        "kept": kept, "cleared": cleared, "option": option, "revision": int(revision or 0),
-        **({"confirmed_by": who.actor} if getattr(who, "confirmed", False) else {})})
+    H.event(
+        c,
+        who.actor,
+        EVENT,
+        target,
+        {
+            "integration": integration,
+            "old": moved["old"],
+            "new": moved["new"],
+            **({"path": moved["path"]} if "path" in moved else {}),
+            "kept": kept,
+            "cleared": cleared,
+            "option": option,
+            "revision": int(revision or 0),
+            **({"confirmed_by": who.actor} if getattr(who, "confirmed", False) else {}),
+        },
+    )

@@ -26,10 +26,34 @@ from . import REGISTRY, Failure, Refused, load_yaml
 HUB_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 # Mail providers anyone can sign up to: a roster address there says nothing about the team's own domain.
-PUBLIC_MAIL_DOMAINS = frozenset({
-    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "yahoo.com", "ymail.com",
-    "icloud.com", "me.com", "mac.com", "aol.com", "proton.me", "protonmail.com", "pm.me", "hey.com", "fastmail.com",
-    "gmx.com", "gmx.net", "mail.com", "zoho.com", "yandex.com", "qq.com", "163.com"})
+PUBLIC_MAIL_DOMAINS = frozenset(
+    {
+        "gmail.com",
+        "googlemail.com",
+        "outlook.com",
+        "hotmail.com",
+        "live.com",
+        "msn.com",
+        "yahoo.com",
+        "ymail.com",
+        "icloud.com",
+        "me.com",
+        "mac.com",
+        "aol.com",
+        "proton.me",
+        "protonmail.com",
+        "pm.me",
+        "hey.com",
+        "fastmail.com",
+        "gmx.com",
+        "gmx.net",
+        "mail.com",
+        "zoho.com",
+        "yandex.com",
+        "qq.com",
+        "163.com",
+    }
+)
 
 # One try at POST email/sends: the server's longest synchronous check (the org rule check's 15 s deadline at High,
 # backend/org_rule_check.py) plus a margin for the write around it.
@@ -43,6 +67,7 @@ def _default_hub_get(path):
         return None
     try:
         from clients.tico import Client
+
         return Client(url, token).get(path)
     except Exception:
         return None
@@ -67,11 +92,19 @@ def _default_hub_post(path, body, key=None):
     if not url or not token:
         return None
     from clients.tico import APIError, Client
+
     try:
         return Client(url, token, timeout=HUB_POST_TIMEOUT, retries=0).post(path, body, key=key)
     except APIError as exc:
-        reason = "forbidden" if exc.status == 403 else f"http_{exc.status}" if exc.status else \
-            "unavailable" if exc.code == "unavailable" else "error"
+        reason = (
+            "forbidden"
+            if exc.status == 403
+            else f"http_{exc.status}"
+            if exc.status
+            else "unavailable"
+            if exc.code == "unavailable"
+            else "error"
+        )
         raise HubFailed(reason, status=exc.status) from None
     except Exception:
         raise HubFailed("error") from None
@@ -82,23 +115,42 @@ HUB_POST = _default_hub_post
 
 # ---------------------------------------------------------------- the one send door
 
-def queue_send(mailbox, raw, thread_id="", reply_to_id="", approval_id="", automation_action_id="", draft_id="",
-               calendar_action_id=""):
+
+def queue_send(
+    mailbox,
+    raw,
+    thread_id="",
+    reply_to_id="",
+    approval_id="",
+    automation_action_id="",
+    draft_id="",
+    calendar_action_id="",
+):
     """Queue one frozen message with Tico and return its row: {id, state, detail, decision, approval_id,
     send_after, ...}. `state` is pending (the undo window runs), waiting_approval (a person approves in Tico) or
     blocked (`detail` says why). Fails closed: no durable server row, no provider send."""
-    body = {"mailbox": mailbox, "raw": raw, "thread_id": thread_id, "reply_to_id": reply_to_id,
-            "approval_id": str(approval_id or ""), "automation_action_id": automation_action_id, "draft_id": draft_id,
-            "calendar_action_id": calendar_action_id}
+    body = {
+        "mailbox": mailbox,
+        "raw": raw,
+        "thread_id": thread_id,
+        "reply_to_id": reply_to_id,
+        "approval_id": str(approval_id or ""),
+        "automation_action_id": automation_action_id,
+        "draft_id": draft_id,
+        "calendar_action_id": calendar_action_id,
+    }
     try:
         if automation_action_id or calendar_action_id:
             from . import oauth
+
             answer = oauth.broker(retries=0).post("email/sends", body)
         else:
             answer = HUB_POST("email/sends", body)
     except Exception as exc:
-        raise Failure("Tico did not queue this email; the draft has not been sent.",
-                      "Try again when Tico answers. Identical content and recipients never queue twice.") from exc
+        raise Failure(
+            "Tico did not queue this email; the draft has not been sent.",
+            "Try again when Tico answers. Identical content and recipients never queue twice.",
+        ) from exc
     if not isinstance(answer, dict) or not isinstance(answer.get("send"), dict):
         raise Failure("Tico did not confirm a durable queued send; the draft has not been sent.")
     return answer["send"]
@@ -108,8 +160,10 @@ def sending_preflight(mailbox, calendar_action_id=""):
     """A silent calendar event still checks the inbox's Never ceiling before creating any provider side effect."""
     if calendar_action_id:
         from . import oauth
-        answer = oauth.broker(retries=0).post("connectors/email/sends/preflight", {
-            "mailbox": mailbox, "calendar_action_id": calendar_action_id})
+
+        answer = oauth.broker(retries=0).post(
+            "connectors/email/sends/preflight", {"mailbox": mailbox, "calendar_action_id": calendar_action_id}
+        )
     else:
         answer = HUB_GET("email/inboxes/" + quote(mailbox, safe="") + "/sending-policy")
     if not isinstance(answer, dict) or not isinstance(answer.get("effective"), dict):
@@ -134,6 +188,7 @@ def sending_policy(slug, mailbox=""):
 
 
 # ---------------------------------------------------------------- the team's own domains
+
 
 def _walk_emails(value, found, depth=0):
     if depth > 8:
@@ -166,11 +221,12 @@ def team_domains(slug="", env=None):
     if found:
         return found
     try:
-        from . import access                                # noqa: PLC0415 - avoids a cycle
+        from . import access  # noqa: PLC0415 - avoids a cycle
+
         for entry in access.entries(access.load(slug or access.employee(None, env))):
             if str(entry.get("service", "")).lower() == "gmail":
                 add(entry.get("identity"))
-    except Exception:                                       # no bot, no manifest: the roster still counts
+    except Exception:  # no bot, no manifest: the roster still counts
         pass
     emails = []
     try:
@@ -199,9 +255,12 @@ def signature_names(mailbox=""):
 # The bot's mail setting (GET /api/v2/bots/<slug>/mail-settings, backend/mail_settings.py) carries the company's What
 # Tico may do as company_* fields, set only by a person in Tico. Tests replace `SERVER_GET`.
 SERVER_GET = None
-COMPANY_FIELDS = {"organize_mail": "company_organize", "send_mail": "company_send",
-                  "change_calendar": "company_calendar"}
-UNREAD = "unread"                                       # company(): Tico could not be asked (oauth.company_allows)
+COMPANY_FIELDS = {
+    "organize_mail": "company_organize",
+    "send_mail": "company_send",
+    "change_calendar": "company_calendar",
+}
+UNREAD = "unread"  # company(): Tico could not be asked (oauth.company_allows)
 
 
 def _server_row(slug):
@@ -210,8 +269,7 @@ def _server_row(slug):
         row = get(slug)
     except Exception:
         row = None
-    return row if isinstance(row, dict) and ("bot" in row or any(f in row for f in COMPANY_FIELDS.values())) \
-        else None
+    return row if isinstance(row, dict) and ("bot" in row or any(f in row for f in COMPANY_FIELDS.values())) else None
 
 
 def company(slug):
@@ -221,14 +279,15 @@ def company(slug):
 
     None for a server that answers without the fields (an older one). UNREAD when the setting could not be read: the
     run's writes are refused then, and its reads go on."""
-    from . import access                                # noqa: PLC0415 - avoids a cycle
+    from . import access  # noqa: PLC0415 - avoids a cycle
+
     slug = str(slug or "").strip().lower()
     if slug == access.CONNECTOR:
         return runner_company()
     row = _server_row(slug)
     if row is None:
         if access.entries(access._manifest(slug)):
-            return UNREAD                               # a bot here whose own mail setting Tico did not answer
+            return UNREAD  # a bot here whose own mail setting Tico did not answer
         # Not a bot with a mail setting (a person's own run): What Tico may do as Tico answered about this run's access.
         try:
             got = access.answer(slug).get("company")
@@ -259,7 +318,8 @@ def runner_company():
         if RUNNER_GET is not None:
             answer = RUNNER_GET("connectors/mail/targets")
         else:
-            from . import oauth                         # noqa: PLC0415
+            from . import oauth  # noqa: PLC0415
+
             answer = oauth.broker().get("connectors/mail/targets")
     except Exception:
         answer = None
@@ -267,5 +327,5 @@ def runner_company():
         return UNREAD
     may = answer.get("company")
     if not isinstance(may, dict):
-        return None                                     # an older server: it says nothing of What Tico may do
+        return None  # an older server: it says nothing of What Tico may do
     return {name: may.get(name) is not False for name in COMPANY_FIELDS}

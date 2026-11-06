@@ -67,9 +67,7 @@ function settingsAllChoices() {
   // one keeps its own choice in the editor).
   const enabled = SETTINGS_DATA.enabledProviders || [];
   // Meeting models (providers.py `meeting`) are picked in Settings' Meeting model select, not as a bot's own model.
-  // A held model (the server lists it only while a bot runs it) is offered to that bot alone, as its saved model.
-  return (SETTINGS_DATA.models || []).filter(model => (!model.deprecated || (model.held && model.id === SETTINGS_KEEP_MODEL)) &&
-    (!model.meeting || model.id === SETTINGS_KEEP_MODEL) &&
+  return (SETTINGS_DATA.models || []).filter(model => !model.deprecated && (!model.meeting || model.id === SETTINGS_KEEP_MODEL) &&
     (!enabled.length || !model.provider || enabled.includes(model.provider) || model.id === SETTINGS_KEEP_MODEL)).flatMap(model =>
     (model.harnesses || [model.runtime]).flatMap(harness =>
       (model.efforts?.length ? model.efforts : [model.default_effort || '']).map(effort => {
@@ -141,7 +139,6 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
   // harness, "Tico AI Gateway", stands for them). `real` maps it back to the pi harness the bot runs them on.
   const gw = settingsGateway(), viaTier = !!gw && all.some(row => settingsIsTico(row.model));
   const choices = viaTier ? all.filter(row => !settingsIsTico(row.model)) : all;
-  const tierRows = viaTier ? all.filter(row => settingsIsTico(row.model)) : [];
   // A bot's own Model control greys out what its computer cannot run; bulk change checks each bot on Apply.
   const box = fields.closest('[data-bot-choice]');
   const bot = box?.dataset.botChoice ? S.emps.find(row => row.id === box.dataset.botChoice) : null;

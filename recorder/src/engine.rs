@@ -35,7 +35,12 @@ fn chunk_boundary(pending: &[f32]) -> Option<usize> {
     }
     let window = &pending[MIN_CHUNK_SAMPLES..pending.len().min(MAX_CHUNK_SAMPLES)];
     let energy = |frame: &[f32]| frame.iter().map(|x| x * x).sum::<f32>() / frame.len() as f32;
-    let frames: Vec<f32> = window.chunks_exact(FRAME).map(energy).collect();
+    let frames: Vec<f32> = window
+        .as_chunks::<FRAME>()
+        .0
+        .iter()
+        .map(|frame| energy(frame))
+        .collect();
     let quietest = frames.iter().copied().fold(f32::INFINITY, f32::min);
     let mean = energy(&pending[..pending.len().min(MAX_CHUNK_SAMPLES)]);
     if quietest > (0.003_f32 * 0.003).max(mean * 0.06) && pending.len() < MAX_CHUNK_SAMPLES {
@@ -409,23 +414,21 @@ impl Writer {
                 .live_input
                 .as_ref()
                 .is_some_and(|aid| aid.processed.load(Ordering::Acquire));
-            if !processed {
-                if let Some(feed) = &self.feed {
-                    let at_ms = self.chunk_ms + before as f64 * 1000. / OUTPUT_RATE as f64;
-                    feed.push(at_ms, &self.pending[before..]);
-                }
+            if !processed && let Some(feed) = &self.feed {
+                let at_ms = self.chunk_ms + before as f64 * 1000. / OUTPUT_RATE as f64;
+                feed.push(at_ms, &self.pending[before..]);
             }
             self.flush(store, id, false)?;
         }
         if let Some(aid) = &mut self.source.live_input {
             while let Ok(packet) = aid.consumer.pop() {
-                if aid.processed.load(Ordering::Acquire) {
-                    if let Some(feed) = &self.feed {
-                        feed.push(
-                            self.base_ms + packet.start_frame as f64 * 1000. / OUTPUT_RATE as f64,
-                            &packet.samples[..packet.len],
-                        );
-                    }
+                if aid.processed.load(Ordering::Acquire)
+                    && let Some(feed) = &self.feed
+                {
+                    feed.push(
+                        self.base_ms + packet.start_frame as f64 * 1000. / OUTPUT_RATE as f64,
+                        &packet.samples[..packet.len],
+                    );
                 }
             }
         }
@@ -532,10 +535,10 @@ fn record(
                 Ok(Err(error)) => Some(format!("{error:#}")),
                 Err(_) => Some("Audio input setup stopped unexpectedly".into()),
             };
-            if !publisher.canceled.load(Ordering::Acquire) {
-                if let Some(error) = error {
-                    let _ = publisher.sender.send(InputEvent::Failed(error));
-                }
+            if !publisher.canceled.load(Ordering::Acquire)
+                && let Some(error) = error
+            {
+                let _ = publisher.sender.send(InputEvent::Failed(error));
             }
         })?;
     let mut writers: Vec<Writer> = Vec::new();

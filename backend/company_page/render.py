@@ -6,6 +6,7 @@ tiny Markdown subset, accent and logo are validated and dropped to a safe defaul
 Content-Security-Policy with hashes, so it holds wherever it is served; whoever serves it adds frame-ancestors, which a
 meta tag can't carry.
 """
+
 import base64
 import hashlib
 import html
@@ -27,9 +28,12 @@ _FONT_URL = re.compile(r"url\(assets/fonts/([A-Za-z0-9._-]+\.woff2)\)")
 def _inline_fonts(css):
     """The owner's preview has no release folder, and its sandbox origin can't load a file from the app: the fonts ride in
     the stylesheet instead, as data."""
+
     def data(match):
         return "url(data:font/woff2;base64," + base64.b64encode((FONT_DIR / match.group(1)).read_bytes()).decode() + ")"
+
     return _FONT_URL.sub(data, css)
+
 
 # Reader routes this template links to; reader_app.py answers them.
 SIGN_IN_PATH = "/sign-in"
@@ -39,11 +43,16 @@ HELP_PATH = "/can-help"
 
 DEFAULT_ACCENT = "#1E4FD8"
 FEED_ENTRIES = 50
-RECENT_UPDATES = 3      # shown before Show older when the view already holds every update
+RECENT_UPDATES = 3  # shown before Show older when the view already holds every update
 MAX_CHART_POINTS = 12
 
-SECTION_LABELS = {"numbers": "Numbers", "highlights": "Highlights", "lowlights": "Lowlights", "asks": "Asks",
-                  "next": "Next"}
+SECTION_LABELS = {
+    "numbers": "Numbers",
+    "highlights": "Highlights",
+    "lowlights": "Lowlights",
+    "asks": "Asks",
+    "next": "Next",
+}
 SECTION_ORDER = ("numbers", "highlights", "lowlights", "asks", "next")
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 PNL_STRONG = {"revenue", "total revenue", "gross profit", "total expenses", "net income", "net profit", "net loss"}
@@ -107,7 +116,7 @@ def _number(value):
 
 def _on_accent(accent):
     """Ink that reads on the accent: the company picks the colour, so a pale one can't take white text."""
-    r, g, b = (int(accent[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    r, g, b = (int(accent[i : i + 2], 16) / 255 for i in (1, 3, 5))
     linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in (r, g, b)]
     return "#14171f" if 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2] > 0.4 else "#ffffff"
 
@@ -167,7 +176,7 @@ def inline(value):
         parts = urlsplit(url)
         if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
             continue
-        out.append(_emphasis(escaped[at:match.start()]))
+        out.append(_emphasis(escaped[at : match.start()]))
         out.append(f'<a href="{match[2]}" rel="noopener noreferrer nofollow">{_emphasis(match[1])}</a>')
         at = match.end()
     out.append(_emphasis(escaped[at:]))
@@ -203,8 +212,12 @@ def markdown(value):
     flush()
     if len(blocks) == 1 and blocks[0][0] == "p":
         return inline(blocks[0][1])
-    return "".join(f"<p>{inline(b[1])}</p>" if b[0] == "p"
-                   else f"<{b[0]}>" + "".join(f"<li>{inline(i)}</li>" for i in b[1]) + f"</{b[0]}>" for b in blocks)
+    return "".join(
+        f"<p>{inline(b[1])}</p>"
+        if b[0] == "p"
+        else f"<{b[0]}>" + "".join(f"<li>{inline(i)}</li>" for i in b[1]) + f"</{b[0]}>"
+        for b in blocks
+    )
 
 
 # ------------------------------------------------------------------------------------------------- charts
@@ -213,8 +226,14 @@ def _points(stat):
     out = []
     for point in _list(_map(stat).get("series"))[-MAX_CHART_POINTS:]:
         point = _map(point)
-        out.append((_short_period(point.get("period")), _period(point.get("period")), _number(point.get("value")),
-                    _text(point.get("display")) or "—"))
+        out.append(
+            (
+                _short_period(point.get("period")),
+                _period(point.get("period")),
+                _number(point.get("value")),
+                _text(point.get("display")) or "—",
+            )
+        )
     return out
 
 
@@ -231,7 +250,7 @@ def _segments(points, width, top, height, center=False):
     """Screen coordinates, broken at a missing value so a gap isn't drawn as a change."""
     values = [p[2] for p in points if p[2] is not None]
     low, high = min(values), max(values)
-    span = high / 2 - low / 2       # halves, so two huge values can't overflow to infinity
+    span = high / 2 - low / 2  # halves, so two huge values can't overflow to infinity
     step = width / len(points) if center else width / max(len(points) - 1, 1)
     segments, current = [], []
     for i, point in enumerate(points):
@@ -260,8 +279,10 @@ def _sparkline(stat, points):
         area = f'<polygon class="area" points="{line[0][0]:g},44 {_coords(line)} {line[-1][0]:g},44"></polygon>'
     lines = "".join(f'<polyline points="{_coords(s)}"></polyline>' for s in segments)
     end = segments[-1][-1]
-    return (f'<svg class="spark" role="img" aria-label="{_alt(stat, points)}" viewBox="0 0 200 44">{area}{lines}'
-            f'<circle cx="{end[0]:g}" cy="{end[1]:g}" r="3"></circle></svg>')
+    return (
+        f'<svg class="spark" role="img" aria-label="{_alt(stat, points)}" viewBox="0 0 200 44">{area}{lines}'
+        f'<circle cx="{end[0]:g}" cy="{end[1]:g}" r="3"></circle></svg>'
+    )
 
 
 def _bars(stat, points):
@@ -276,14 +297,24 @@ def _bars(stat, points):
         up = round(value / span * height) if value > 0 else 0
         down = round(-value / span * height) if value < 0 else 0
         last = " last" if i == len(points) - 1 else ""
-        bar = f'<svg class="bar" width="100%" height="{max(up, 2) if value > 0 else up}"><rect width="100%" height="100%"></rect></svg>' if up or value > 0 else ""
+        bar = (
+            f'<svg class="bar" width="100%" height="{max(up, 2) if value > 0 else up}"><rect width="100%" height="100%"></rect></svg>'
+            if up or value > 0
+            else ""
+        )
         under = ""
         if below:
-            hang = (f'<svg class="bar" width="100%" height="{down}"><rect width="100%" height="100%"></rect></svg>' if down else "")
+            hang = (
+                f'<svg class="bar" width="100%" height="{down}"><rect width="100%" height="100%"></rect></svg>'
+                if down
+                else ""
+            )
             rest = f'<svg width="100%" height="{below - down}"></svg>' if below > down else ""
             under = f'<div class="below">{hang}{rest}</div>'
-        columns.append(f'<div class="col{last}"><div class="val">{_e(point[3])}</div>{bar}{under}'
-                       f'<div class="mon">{_e(point[0])}</div></div>')
+        columns.append(
+            f'<div class="col{last}"><div class="val">{_e(point[3])}</div>{bar}{under}'
+            f'<div class="mon">{_e(point[0])}</div></div>'
+        )
     return f'<div class="bars" role="img" aria-label="{_alt(stat, points)}">{"".join(columns)}</div>'
 
 
@@ -299,8 +330,10 @@ def _line(stat, points):
     end = _coords([segments[-1][-1]] * 2)
     dot = f'<polyline class="dot" vector-effect="non-scaling-stroke" points="{end}"></polyline>'
     values = "".join(f"<div><dt>{_e(p[0])}</dt><dd>{_e(p[3])}</dd></div>" for p in points)
-    return (f'<svg class="line" role="img" aria-label="{_alt(stat, points)}" viewBox="0 0 {width} {height}" width="100%" '
-            f'height="{height}" preserveAspectRatio="none">{area}{lines}{dot}</svg><dl class="vals">{values}</dl>')
+    return (
+        f'<svg class="line" role="img" aria-label="{_alt(stat, points)}" viewBox="0 0 {width} {height}" width="100%" '
+        f'height="{height}" preserveAspectRatio="none">{area}{lines}{dot}</svg><dl class="vals">{values}</dl>'
+    )
 
 
 def _previous(points):
@@ -344,10 +377,12 @@ def _hero(stat, year):
     previous = _previous(points)
     note = _note(stat, year)
     note = f'<div class="note">{note}</div>' if note else ""
-    return (f'<div class="hero"><div class="hero-head"><div class="hero-num"><div class="stat-label">{_e(stat.get("label"))} '
-            f'<span>· {_e(_period(stat.get("period")))}</span></div><div class="big">{_e(stat.get("display"))}</div>'
-            + (f'<div class="sub">{_e(previous)}</div>' if previous else "")
-            + f'</div>{note}</div>{chart}</div>')
+    return (
+        f'<div class="hero"><div class="hero-head"><div class="hero-num"><div class="stat-label">{_e(stat.get("label"))} '
+        f'<span>· {_e(_period(stat.get("period")))}</span></div><div class="big">{_e(stat.get("display"))}</div>'
+        + (f'<div class="sub">{_e(previous)}</div>' if previous else "")
+        + f'</div>{note}</div>{chart}</div>'
+    )
 
 
 def _tile(stat, year):
@@ -357,14 +392,20 @@ def _tile(stat, year):
     if _plottable(points):
         chart = _sparkline(stat, points)
         known = [p for p in points if p[2] is not None]
-        chart += (f'<div class="ends"><span>{_e(known[0][0])} {_e(known[0][3])}</span>'
-                  f'<span>{_e(known[-1][0])} {_e(known[-1][3])}</span></div>')
+        chart += (
+            f'<div class="ends"><span>{_e(known[0][0])} {_e(known[0][3])}</span>'
+            f'<span>{_e(known[-1][0])} {_e(known[-1][3])}</span></div>'
+        )
     fresh = _freshness(stat, year)
-    return (f'<div class="tile"><div class="tile-head"><b>{_e(stat.get("label"))}</b>'
-            f'<span>{_e(_period(stat.get("period")))}</span></div><div class="num">{_e(stat.get("display"))}</div>'
-            + (f'<div class="sub">{_e(previous)}</div>' if previous else "") + chart
-            + (f'<div class="def">{_e(stat.get("definition"))}</div>' if _text(stat.get("definition")) else "")
-            + (f'<div class="def">{fresh}</div>' if fresh else "") + "</div>")
+    return (
+        f'<div class="tile"><div class="tile-head"><b>{_e(stat.get("label"))}</b>'
+        f'<span>{_e(_period(stat.get("period")))}</span></div><div class="num">{_e(stat.get("display"))}</div>'
+        + (f'<div class="sub">{_e(previous)}</div>' if previous else "")
+        + chart
+        + (f'<div class="def">{_e(stat.get("definition"))}</div>' if _text(stat.get("definition")) else "")
+        + (f'<div class="def">{fresh}</div>' if fresh else "")
+        + "</div>"
+    )
 
 
 def _pnl(stats):
@@ -384,8 +425,10 @@ def _pnl(stats):
         strong = ' class="strong"' if _text(stat.get("label")).strip().lower() in PNL_STRONG else ""
         tds = "".join(f"<td>{_e(cells.get(p) or '—')}</td>" for p in periods)
         rows.append(f'<tr{strong}><th scope="row">{_e(stat.get("label"))}</th>{tds}</tr>')
-    return ('<div class="pnl"><div class="pnl-head">P&amp;L</div><div class="pnl-scroll"><table><thead><tr>'
-            f'<td></td>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>')
+    return (
+        '<div class="pnl"><div class="pnl-head">P&amp;L</div><div class="pnl-scroll"><table><thead><tr>'
+        f'<td></td>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>'
+    )
 
 
 def _stats(view, year):
@@ -396,9 +439,13 @@ def _stats(view, year):
     rest = [s for s in stats if s.get("group") != "pnl"]
     heroes = "".join(_hero(s, year) for s in rest if s.get("chart") in ("bars", "line"))
     tiles = "".join(_tile(s, year) for s in rest if s.get("chart") not in ("bars", "line"))
-    return ('<section class="stats" aria-labelledby="stats-heading"><h2 id="stats-heading">Stats</h2>' + heroes
-            + (f'<div class="tiles">{tiles}</div>' if tiles else "")
-            + (_pnl(pnl) if pnl else "") + "</section>")
+    return (
+        '<section class="stats" aria-labelledby="stats-heading"><h2 id="stats-heading">Stats</h2>'
+        + heroes
+        + (f'<div class="tiles">{tiles}</div>' if tiles else "")
+        + (_pnl(pnl) if pnl else "")
+        + "</section>"
+    )
 
 
 # ------------------------------------------------------------------------------------------------- updates
@@ -434,20 +481,24 @@ def _section(section, update, view):
     for item in items:
         form = ""
         if actions and _text(item.get("ask_id")):
-            form = (f'<form class="help" method="post" action="{HELP_PATH}">{_hidden(view)}'
-                    f'<input type="hidden" name="anchor" value="{_e(anchor_of(update.get("anchor")))}">'
-                    f'<input type="hidden" name="ask_id" value="{_e(item.get("ask_id"))}">'
-                    '<button class="btn" type="submit">I can help</button></form>')
+            form = (
+                f'<form class="help" method="post" action="{HELP_PATH}">{_hidden(view)}'
+                f'<input type="hidden" name="anchor" value="{_e(anchor_of(update.get("anchor")))}">'
+                f'<input type="hidden" name="ask_id" value="{_e(item.get("ask_id"))}">'
+                '<button class="btn" type="submit">I can help</button></form>'
+            )
         rows.append(f"<li>{markdown(item['body'])}{form}</li>")
-    return (f'<div class="section"><h4>{SECTION_LABELS[key]}</h4><ul class="prose">{"".join(rows)}</ul></div>')
+    return f'<div class="section"><h4>{SECTION_LABELS[key]}</h4><ul class="prose">{"".join(rows)}</ul></div>'
 
 
 def _reply(update, view, anchor):
     author = _text(_map(update.get("author")).get("name"))
-    return (f'<details class="reply"><summary>Reply</summary><form method="post" action="{REPLY_PATH}">{_hidden(view)}'
-            f'<input type="hidden" name="anchor" value="{_e(anchor)}"><label for="reply-{_e(anchor)}">Reply to {_e(author)}</label>'
-            f'<textarea id="reply-{_e(anchor)}" name="body" rows="3" required></textarea>'
-            '<div><button class="btn solid" type="submit">Send</button></div></form></details>')
+    return (
+        f'<details class="reply"><summary>Reply</summary><form method="post" action="{REPLY_PATH}">{_hidden(view)}'
+        f'<input type="hidden" name="anchor" value="{_e(anchor)}"><label for="reply-{_e(anchor)}">Reply to {_e(author)}</label>'
+        f'<textarea id="reply-{_e(anchor)}" name="body" rows="3" required></textarea>'
+        '<div><button class="btn solid" type="submit">Send</button></div></form></details>'
+    )
 
 
 def _update(update, view, is_open, year):
@@ -463,33 +514,41 @@ def _update(update, view, is_open, year):
     correction = f'<p class="correction">Corrected: {inline(note)}</p>' if note else ""
     link = f'<a href="#{_e(anchor)}">Link</a>'
     reply = _reply(update, view, anchor) if view.get("actions") is True else ""
-    return (f'<article class="update" id="{_e(anchor)}"><details{" open" if is_open else ""}><summary>'
-            f'<div class="head"><h3>{_e(update.get("title"))}</h3><span class="who">'
-            f'<span class="{avatar}" aria-hidden="true">{_e(_initials(author.get("name")))}</span><span>{_e(name)}</span>'
-            f'<span aria-hidden="true">·</span><time{date_attr}>{_e(_day(when, year))}</time></span></div>'
-            '<svg class="chev" aria-hidden="true" viewBox="0 0 16 16" width="18" height="18"><path d="M3.5 6l4.5 4.5L12.5 6"></path></svg>'
-            f'</summary><div class="body">{correction}{body}<div class="foot">{link}{reply}</div></div></details></article>')
+    return (
+        f'<article class="update" id="{_e(anchor)}"><details{" open" if is_open else ""}><summary>'
+        f'<div class="head"><h3>{_e(update.get("title"))}</h3><span class="who">'
+        f'<span class="{avatar}" aria-hidden="true">{_e(_initials(author.get("name")))}</span><span>{_e(name)}</span>'
+        f'<span aria-hidden="true">·</span><time{date_attr}>{_e(_day(when, year))}</time></span></div>'
+        '<svg class="chev" aria-hidden="true" viewBox="0 0 16 16" width="18" height="18"><path d="M3.5 6l4.5 4.5L12.5 6"></path></svg>'
+        f'</summary><div class="body">{correction}{body}<div class="foot">{link}{reply}</div></div></details></article>'
+    )
 
 
 def _updates(view, year):
     updates = [u for u in _list(view.get("updates")) if isinstance(u, dict)]
     if not updates:
-        return ('<section class="updates" aria-labelledby="updates-heading"><h2 id="updates-heading">Updates</h2>'
-                '<p class="empty">No updates yet.</p></section>')
+        return (
+            '<section class="updates" aria-labelledby="updates-heading"><h2 id="updates-heading">Updates</h2>'
+            '<p class="empty">No updates yet.</p></section>'
+        )
     before = _text(view.get("next_before"))
     articles = [_update(u, view, i == 0, year) for i, u in enumerate(updates)]
     if before:
         # There is a further page: no script follows the link, the script fetches it in place.
         listed = "".join(articles)
-        more = (f'<div class="more"><a class="btn" data-older href="?before={quote(before, safe="")}">Show older</a></div>')
+        more = (
+            f'<div class="more"><a class="btn" data-older href="?before={quote(before, safe="")}">Show older</a></div>'
+        )
     elif len(articles) > RECENT_UPDATES:
         # Static public files can't answer ?before=, so a whole view holds its older updates here, closed.
         listed = "".join(articles[:RECENT_UPDATES])
-        more = ('<details class="more"><summary>Show older</summary>' + "".join(articles[RECENT_UPDATES:]) + "</details>")
+        more = '<details class="more"><summary>Show older</summary>' + "".join(articles[RECENT_UPDATES:]) + "</details>"
     else:
         listed, more = "".join(articles), ""
-    return ('<section class="updates" aria-labelledby="updates-heading"><h2 id="updates-heading">Updates</h2>'
-            f'<div id="update-list">{listed}</div>{more}</section>')
+    return (
+        '<section class="updates" aria-labelledby="updates-heading"><h2 id="updates-heading">Updates</h2>'
+        f'<div id="update-list">{listed}</div>{more}</section>'
+    )
 
 
 # ------------------------------------------------------------------------------------------------- the page
@@ -511,7 +570,10 @@ def badge_label(view):
 
 def _is_public(view):
     """Only output that says it is public may be indexed or linked as a feed. Anything unknown counts as private."""
-    return _map(view.get("audience")).get("kind") == "public" and _map(view.get("company")).get("badge") in ("open", "public")
+    return _map(view.get("audience")).get("kind") == "public" and _map(view.get("company")).get("badge") in (
+        "open",
+        "public",
+    )
 
 
 def _hash(text):
@@ -519,7 +581,9 @@ def _hash(text):
 
 
 # A preview stays on the page: a link out would replace it inside the app's frame.
-PREVIEW_SCRIPT = "document.addEventListener('click',e=>{if(e.target.closest('a[href]:not([data-older])'))e.preventDefault()},true);"
+PREVIEW_SCRIPT = (
+    "document.addEventListener('click',e=>{if(e.target.closest('a[href]:not([data-older])'))e.preventDefault()},true);"
+)
 
 
 def _preview_theme(css, theme):
@@ -528,7 +592,9 @@ def _preview_theme(css, theme):
     if theme not in ("dark", "light"):
         return css
     dark_rules = "all" if theme == "dark" else "not all"
-    return css.replace("@media (prefers-color-scheme:dark)", f"@media {dark_rules}").replace("color-scheme:light dark", f"color-scheme:{theme}")
+    return css.replace("@media (prefers-color-scheme:dark)", f"@media {dark_rules}").replace(
+        "color-scheme:light dark", f"color-scheme:{theme}"
+    )
 
 
 def _document(view, body, title, description, canonical="", preview=False, scheme=""):
@@ -541,27 +607,34 @@ def _document(view, body, title, description, canonical="", preview=False, schem
         css = _preview_theme(_inline_fonts(css), scheme)
         script += PREVIEW_SCRIPT
     img, font = ("'self' data:", "data:") if preview else ("'self'", "'self'")
-    policy = ("default-src 'none'; "
-              f"style-src {_hash(theme)} {_hash(css)}; script-src {_hash(script)}; img-src {img}; font-src {font}; "
-              "connect-src 'self'; form-action 'self'; base-uri 'none'")
+    policy = (
+        "default-src 'none'; "
+        f"style-src {_hash(theme)} {_hash(css)}; script-src {_hash(script)}; img-src {img}; font-src {font}; "
+        "connect-src 'self'; form-action 'self'; base-uri 'none'"
+    )
     public = _is_public(view)
     robots = "" if public else '<meta name="robots" content="noindex,nofollow,noarchive">'
-    extra = (f'<link rel="alternate" type="application/atom+xml" href="feed.xml" title="{_e(title)}">' if public else "")
+    extra = f'<link rel="alternate" type="application/atom+xml" href="feed.xml" title="{_e(title)}">' if public else ""
     if canonical and public:
         extra += f'<link rel="canonical" href="{_e(canonical)}">'
-    return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            f'<meta http-equiv="Content-Security-Policy" content="{_e(policy)}">'
-            '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            '<meta name="referrer" content="strict-origin-when-cross-origin">'
-            f'{robots}<title>{_e(title)}</title><meta name="description" content="{_e(description)}">{extra}'
-            f'<style>{theme}</style><style>{css}</style></head><body>{body}<script>{script}</script></body></html>')
+    return (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        f'<meta http-equiv="Content-Security-Policy" content="{_e(policy)}">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta name="referrer" content="strict-origin-when-cross-origin">'
+        f'{robots}<title>{_e(title)}</title><meta name="description" content="{_e(description)}">{extra}'
+        f'<style>{theme}</style><style>{css}</style></head><body>{body}<script>{script}</script></body></html>'
+    )
 
 
 def _brand(company, preview=False):
     name = _text(company.get("name"))
     logo = logo_of(company.get("logo_url"), preview)
-    mark = (f'<img class="logo" src="{_e(logo)}" alt="" width="36" height="36">' if logo
-            else f'<div class="logo" aria-hidden="true">{_e(name[:1].upper())}</div>')
+    mark = (
+        f'<img class="logo" src="{_e(logo)}" alt="" width="36" height="36">'
+        if logo
+        else f'<div class="logo" aria-hidden="true">{_e(name[:1].upper())}</div>'
+    )
     return f'<div class="brand">{mark}<div class="name">{_e(name)}</div></div>'
 
 
@@ -573,7 +646,14 @@ def _url(company):
     """The page's own address, when the view knows it and it's a plain http(s) origin."""
     text = _text(company.get("url"))
     parts = urlsplit(text)
-    if parts.scheme not in ("https", "http") or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
+    if (
+        parts.scheme not in ("https", "http")
+        or not parts.hostname
+        or parts.username
+        or parts.password
+        or parts.query
+        or parts.fragment
+    ):
         return ""
     return text.rstrip("/") + "/"
 
@@ -591,16 +671,24 @@ def page(view, preview=False, theme=""):
     viewer = _text(_map(view.get("viewer")).get("email"))
     tools = ""
     if viewer:
-        tools = (f'<span>{_e(viewer)}</span><form method="post" action="{SIGN_OUT_PATH}">{_hidden(view)}'
-                 '<button class="linkish" type="submit">Sign out</button></form>')
+        tools = (
+            f'<span>{_e(viewer)}</span><form method="post" action="{SIGN_OUT_PATH}">{_hidden(view)}'
+            '<button class="linkish" type="submit">Sign out</button></form>'
+        )
     if public:
         tools += '<a class="linkish" href="feed.xml">RSS</a>'
-    mark = ('<i aria-hidden="true"></i>' if public else
-            '<svg aria-hidden="true" viewBox="0 0 16 16" width="13" height="13"><rect x="3" y="7" width="10" height="7" rx="1.5"></rect><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"></path></svg>')
+    mark = (
+        '<i aria-hidden="true"></i>'
+        if public
+        else '<svg aria-hidden="true" viewBox="0 0 16 16" width="13" height="13"><rect x="3" y="7" width="10" height="7" rx="1.5"></rect><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"></path></svg>'
+    )
     stamp = _day(company.get("updated_at"))
-    header = (f'<header><div class="top">{_brand(company, preview)}<div class="tools">{tools}</div></div>'
-              f'<h1>{_e(mission or "Company updates")}</h1><div class="meta"><span class="badge">{mark}{_e(badge_label(view))}</span>'
-              + (f'<span>Updated {_e(stamp)}</span>' if stamp else "") + "</div></header>")
+    header = (
+        f'<header><div class="top">{_brand(company, preview)}<div class="tools">{tools}</div></div>'
+        f'<h1>{_e(mission or "Company updates")}</h1><div class="meta"><span class="badge">{mark}{_e(badge_label(view))}</span>'
+        + (f'<span>Updated {_e(stamp)}</span>' if stamp else "")
+        + "</div></header>"
+    )
     body = f'<div class="wrap">{header}{_updates(view, year)}{_stats(view, year)}{_footer()}</div>'
     title = f"{name}: {mission}" if name and mission else (name or mission)
     return _document(view, body, title, mission or name, _url(company), preview=preview, scheme=theme)
@@ -612,10 +700,12 @@ def signed_out(view):
     company = _map(view.get("company"))
     name, mission = _text(company.get("name")), _text(company.get("mission"))
     who = _e(name) if name else "this company"
-    body = (f'<div class="wrap gate">{_brand(company)}<main><h1>{_e(badge_label(view))}</h1>'
-            f'<p class="lead">Sign in to read {who}\'s updates. {who} chooses who can see them.</p>'
-            f'<a class="signin" href="{SIGN_IN_PATH}">Sign in with Tico</a>'
-            f'<p class="small">No access? Ask your contact at {who} to add your email.</p></main>{_footer()}</div>')
+    body = (
+        f'<div class="wrap gate">{_brand(company)}<main><h1>{_e(badge_label(view))}</h1>'
+        f'<p class="lead">Sign in to read {who}\'s updates. {who} chooses who can see them.</p>'
+        f'<a class="signin" href="{SIGN_IN_PATH}">Sign in with Tico</a>'
+        f'<p class="small">No access? Ask your contact at {who} to add your email.</p></main>{_footer()}</div>'
+    )
     # Whatever the view says, this page is the door to private content and is never indexed.
     closed = {**view, "audience": {**_map(view.get("audience")), "kind": "private"}}
     return _document(closed, body, f"{name}, sign in" if name else "Sign in", mission or name)
@@ -644,7 +734,11 @@ def _entry_html(update):
     for key in SECTION_ORDER:
         items = [i for i in _list(sections.get(key, {}).get("items")) if isinstance(i, dict) and _text(i.get("body"))]
         if items:
-            out.append(f"<h4>{SECTION_LABELS[key]}</h4><ul>" + "".join(f"<li>{markdown(i['body'])}</li>" for i in items) + "</ul>")
+            out.append(
+                f"<h4>{SECTION_LABELS[key]}</h4><ul>"
+                + "".join(f"<li>{markdown(i['body'])}</li>" for i in items)
+                + "</ul>"
+            )
     return "".join(out)
 
 
@@ -661,12 +755,16 @@ def feed(view):
     for update in updates:
         anchor = anchor_of(update.get("anchor"))
         when = _rfc3339(update.get("published_at"))
-        entries.append(f"<entry><id>urn:uuid:{uuid.uuid5(feed_id, anchor)}</id><title>{_x(update.get('title'))}</title>"
-                       f'<link rel="alternate" type="text/html" href="{xml_escape(home + "#" + anchor, {chr(34): "&quot;"})}"/>'
-                       f"<published>{when}</published><updated>{when}</updated>"
-                       f"<author><name>{_x(_author(update.get('author')))}</name></author>"
-                       f'<content type="html">{xml_escape(_entry_html(update))}</content></entry>')
-    return ('<?xml version="1.0" encoding="utf-8"?>\n<feed xmlns="http://www.w3.org/2005/Atom">'
-            f"<id>urn:uuid:{feed_id}</id><title>{_x(name)}</title><updated>{_rfc3339(company.get('updated_at'))}</updated>"
-            f'<link rel="alternate" type="text/html" href="{xml_escape(home, {chr(34): "&quot;"})}"/>'
-            f'<generator>Tico</generator>{"".join(entries)}</feed>\n')
+        entries.append(
+            f"<entry><id>urn:uuid:{uuid.uuid5(feed_id, anchor)}</id><title>{_x(update.get('title'))}</title>"
+            f'<link rel="alternate" type="text/html" href="{xml_escape(home + "#" + anchor, {chr(34): "&quot;"})}"/>'
+            f"<published>{when}</published><updated>{when}</updated>"
+            f"<author><name>{_x(_author(update.get('author')))}</name></author>"
+            f'<content type="html">{xml_escape(_entry_html(update))}</content></entry>'
+        )
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>\n<feed xmlns="http://www.w3.org/2005/Atom">'
+        f"<id>urn:uuid:{feed_id}</id><title>{_x(name)}</title><updated>{_rfc3339(company.get('updated_at'))}</updated>"
+        f'<link rel="alternate" type="text/html" href="{xml_escape(home, {chr(34): "&quot;"})}"/>'
+        f'<generator>Tico</generator>{"".join(entries)}</feed>\n'
+    )

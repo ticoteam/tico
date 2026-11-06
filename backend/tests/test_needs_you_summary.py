@@ -25,12 +25,16 @@ def test_summary_total_is_the_board_count_and_splits_by_bot(api):
     assert capped["bots_left"] >= 0
 
     r = api.get("/api/v2/needs-you/summary", headers={"Authorization": "Bearer " + finance["token"]})
-    assert r.status_code in (403, 404), r.text   # people only
+    assert r.status_code in (403, 404), r.text  # people only
 
 
 def test_another_persons_private_task_is_not_counted_for_you(api):
-    post(api, "tasks", {"title": "Ben's private plan", "body": "x", "owner": "human:ben", "private": True},
-         token="ben-test")
+    post(
+        api,
+        "tasks",
+        {"title": "Ben's private plan", "body": "x", "owner": "human:ben", "private": True},
+        token="ben-test",
+    )
     cara = get(api, "needs-you/summary", "cara-test")
     shown = {item["id"] for bot in cara["by_bot"] for item in bot["items"]}
     assert cara["total"] == get(api, "needs-you?count=1", "cara-test")["count"]

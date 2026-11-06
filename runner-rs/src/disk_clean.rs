@@ -110,7 +110,11 @@ pub fn folder_states(rows: &[Value], busy: impl Fn(&str, &str) -> bool) -> HashM
     for row in rows {
         let path = text_of(&row["path"]);
         let mut parts = Path::new(&path).components();
-        let (Some(Component::Normal(top)), Some(Component::Normal(name))) = (parts.next(), parts.next()) else { continue };
+        let (Some(Component::Normal(top)), Some(Component::Normal(name))) =
+            (parts.next(), parts.next())
+        else {
+            continue;
+        };
         if top != "tasks" {
             continue;
         }
@@ -129,7 +133,13 @@ pub fn folder_states(rows: &[Value], busy: impl Fn(&str, &str) -> bool) -> HashM
         } else {
             FolderState::Closed
         };
-        let folder = out.entry(name.to_string_lossy().into_owned()).or_insert(Folder { state, owners: vec![], paths: vec![] });
+        let folder = out
+            .entry(name.to_string_lossy().into_owned())
+            .or_insert(Folder {
+                state,
+                owners: vec![],
+                paths: vec![],
+            });
         if state.rank() > folder.state.rank() {
             folder.state = state;
         }
@@ -206,7 +216,9 @@ fn device(path: &Path) -> Option<u64> {
 fn walk(root: &Path, dev: u64) -> Tree {
     let mut tree = Tree::default();
     let uid = unsafe { libc::geteuid() };
-    let Ok(meta) = root.symlink_metadata() else { return tree };
+    let Ok(meta) = root.symlink_metadata() else {
+        return tree;
+    };
     let mut stack = vec![(root.to_path_buf(), meta)];
     while let Some((path, meta)) = stack.pop() {
         let kind = meta.file_type();
@@ -224,7 +236,9 @@ fn walk(root: &Path, dev: u64) -> Tree {
                 tree.bytes += meta.blocks() * 512;
             }
         } else if kind.is_dir() {
-            let Ok(entries) = std::fs::read_dir(&path) else { continue };
+            let Ok(entries) = std::fs::read_dir(&path) else {
+                continue;
+            };
             for entry in entries.flatten() {
                 if let Ok(m) = entry.path().symlink_metadata() {
                     stack.push((entry.path(), m));
@@ -236,7 +250,8 @@ fn walk(root: &Path, dev: u64) -> Tree {
 }
 
 fn is_symlink(p: &Path) -> bool {
-    p.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())
+    p.symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_symlink())
 }
 
 /// `root` itself, resolved, when it is a real folder that is not a symlink.
@@ -251,7 +266,9 @@ fn real_root(root: &Path) -> Option<PathBuf> {
 fn under(root: &Path, relative: &str) -> Option<PathBuf> {
     let mut path = root.to_path_buf();
     for part in Path::new(relative).components() {
-        let Component::Normal(name) = part else { return None };
+        let Component::Normal(name) = part else {
+            return None;
+        };
         path.push(name);
         if is_symlink(&path) {
             return None;
@@ -261,7 +278,8 @@ fn under(root: &Path, relative: &str) -> Option<PathBuf> {
 }
 
 fn kept(path: &Path, keep: &[PathBuf]) -> bool {
-    keep.iter().any(|k| k.starts_with(path) || path.starts_with(k))
+    keep.iter()
+        .any(|k| k.starts_with(path) || path.starts_with(k))
 }
 
 fn held_under(path: &Path, held: &HashSet<PathBuf>) -> bool {
@@ -292,14 +310,21 @@ fn checkout_of(dir: &Path, folder: &Path) -> Option<PathBuf> {
 /// What the clean-up would remove, in the order it goes. Read-only.
 pub fn plan(scope: &Scope) -> Vec<Candidate> {
     let mut out = vec![];
-    let Some((ws, dev)) = workspace_device(scope) else { return out };
+    let Some((ws, dev)) = workspace_device(scope) else {
+        return out;
+    };
     if let (Some(folders), Some(tasks)) = (&scope.folders, under(&ws, "tasks")) {
         let mut finished = vec![];
         if let Ok(entries) = std::fs::read_dir(&tasks) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let folder = entry.path();
-                if name.starts_with('.') || is_symlink(&folder) || !folder.is_dir() || kept(&folder, &scope.keep) || device(&folder) != Some(dev) {
+                if name.starts_with('.')
+                    || is_symlink(&folder)
+                    || !folder.is_dir()
+                    || kept(&folder, &scope.keep)
+                    || device(&folder) != Some(dev)
+                {
                     continue;
                 }
                 // A folder the server lists nothing for may be anything (a retired computer lists nothing at all).
@@ -314,7 +339,14 @@ pub fn plan(scope: &Scope) -> Vec<Candidate> {
                         continue;
                     }
                     let checkout = checkout_of(&dir, &folder);
-                    finished.push(Candidate { class: Class::FinishedTaskCache, path: dir, bytes: tree.bytes, newest: tree.newest, folder: Some(name.clone()), checkout });
+                    finished.push(Candidate {
+                        class: Class::FinishedTaskCache,
+                        path: dir,
+                        bytes: tree.bytes,
+                        newest: tree.newest,
+                        folder: Some(name.clone()),
+                        checkout,
+                    });
                 }
             }
         }
@@ -323,21 +355,40 @@ pub fn plan(scope: &Scope) -> Vec<Candidate> {
     }
     if let Some(held) = &scope.held {
         let cutoff = scope.now - OLD_S;
-        for root in scope.temps.iter().filter_map(|t| real_root(t)).filter(|r| device(r) == Some(dev)) {
-            let Ok(entries) = std::fs::read_dir(&root) else { continue };
+        for root in scope
+            .temps
+            .iter()
+            .filter_map(|t| real_root(t))
+            .filter(|r| device(r) == Some(dev))
+        {
+            let Ok(entries) = std::fs::read_dir(&root) else {
+                continue;
+            };
             let mut found = vec![];
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let path = entry.path();
                 // The runner's own temp files (`tico-*`) and the system's dot folders are not leftovers.
-                if name.starts_with("tico") || name.starts_with('.') || is_symlink(&path) || kept(&path, &scope.keep) || held_under(&path, held) {
+                if name.starts_with("tico")
+                    || name.starts_with('.')
+                    || is_symlink(&path)
+                    || kept(&path, &scope.keep)
+                    || held_under(&path, held)
+                {
                     continue;
                 }
                 let tree = walk(&path, dev);
                 if !tree.plain() || tree.foreign || tree.newest >= cutoff {
                     continue;
                 }
-                found.push(Candidate { class: Class::Tmp, path, bytes: tree.bytes, newest: tree.newest, folder: None, checkout: None });
+                found.push(Candidate {
+                    class: Class::Tmp,
+                    path,
+                    bytes: tree.bytes,
+                    newest: tree.newest,
+                    folder: None,
+                    checkout: None,
+                });
             }
             found.sort_by(|a, b| a.newest.total_cmp(&b.newest));
             out.extend(found);
@@ -350,24 +401,70 @@ pub fn plan(scope: &Scope) -> Vec<Candidate> {
 /// checkout clean, holding no ignored files outside build folders and no commits origin lacks (the rule worktrees.rs
 /// `clear_task_scratch` keeps a checkout by). Any Git failure keeps it.
 pub async fn git_clear(c: &Candidate, env: &Env) -> bool {
-    let Some(checkout) = &c.checkout else { return true };
-    let Ok(rel) = c.path.strip_prefix(checkout) else { return false };
+    let Some(checkout) = &c.checkout else {
+        return true;
+    };
+    let Ok(rel) = c.path.strip_prefix(checkout) else {
+        return false;
+    };
     let rel = rel.to_string_lossy().into_owned();
-    for args in [&["ls-files", "-z", "--", &rel][..], &["status", "--porcelain", "-z", "--untracked-files=all", "--", &rel], &["status", "--porcelain"]] {
-        if !worktrees::git(checkout, env, args, true).await.is_ok_and(|o| o.stdout.trim_matches('\0').trim().is_empty()) {
+    for args in [
+        &["ls-files", "-z", "--", &rel][..],
+        &[
+            "status",
+            "--porcelain",
+            "-z",
+            "--untracked-files=all",
+            "--",
+            &rel,
+        ],
+        &["status", "--porcelain"],
+    ] {
+        if !worktrees::git(checkout, env, args, true)
+            .await
+            .is_ok_and(|o| o.stdout.trim_matches('\0').trim().is_empty())
+        {
             return false;
         }
     }
-    let ignored = worktrees::git(checkout, env, &["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], true).await;
-    if !ignored.is_ok_and(|o| o.stdout.split('\0').all(|n| n.is_empty() || worktrees::build_file(n))) {
+    let ignored = worktrees::git(
+        checkout,
+        env,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+        ],
+        true,
+    )
+    .await;
+    if !ignored.is_ok_and(|o| {
+        o.stdout
+            .split('\0')
+            .all(|n| n.is_empty() || worktrees::build_file(n))
+    }) {
         return false;
     }
-    worktrees::git(checkout, env, &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"], true).await.is_ok_and(|o| o.stdout.trim() == "0")
+    worktrees::git(
+        checkout,
+        env,
+        &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"],
+        true,
+    )
+    .await
+    .is_ok_and(|o| o.stdout.trim() == "0")
 }
 
 /// The roots a candidate may be in.
 fn roots(scope: &Scope, dev: u64) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = scope.temps.iter().filter_map(|r| real_root(r)).filter(|r| device(r) == Some(dev)).collect();
+    let mut roots: Vec<PathBuf> = scope
+        .temps
+        .iter()
+        .filter_map(|r| real_root(r))
+        .filter(|r| device(r) == Some(dev))
+        .collect();
     if let Some(tasks) = real_root(&scope.workspace).and_then(|w| under(&w, "tasks")) {
         roots.push(tasks);
     }
@@ -376,10 +473,15 @@ fn roots(scope: &Scope, dev: u64) -> Vec<PathBuf> {
 
 /// Remove one planned candidate after checking it again; the bytes freed on the workspace volume.
 pub fn remove(c: &Candidate, scope: &Scope) -> u64 {
-    let Some((_, dev)) = workspace_device(scope) else { return 0 };
+    let Some((_, dev)) = workspace_device(scope) else {
+        return 0;
+    };
     let roots = roots(scope, dev);
     // Still where it was planned: not a symlink, nothing on the way resolved elsewhere, inside a root.
-    if is_symlink(&c.path) || c.path.canonicalize().ok().as_deref() != Some(c.path.as_path()) || !roots.iter().any(|r| c.path.starts_with(r) && c.path != *r) {
+    if is_symlink(&c.path)
+        || c.path.canonicalize().ok().as_deref() != Some(c.path.as_path())
+        || !roots.iter().any(|r| c.path.starts_with(r) && c.path != *r)
+    {
         return 0;
     }
     if kept(&c.path, &scope.keep) || scope.held.as_ref().is_some_and(|h| held_under(&c.path, h)) {
@@ -390,9 +492,16 @@ pub fn remove(c: &Candidate, scope: &Scope) -> u64 {
     if !tree.plain() || (c.class == Class::Tmp && tree.foreign) {
         return 0;
     }
-    let meta = match c.path.symlink_metadata() { Ok(m) => m, Err(_) => return 0 };
+    let meta = match c.path.symlink_metadata() {
+        Ok(m) => m,
+        Err(_) => return 0,
+    };
     // remove_dir_all never follows a symlink, even one swapped in meanwhile.
-    let gone = if meta.is_dir() { std::fs::remove_dir_all(&c.path) } else { std::fs::remove_file(&c.path) };
+    let gone = if meta.is_dir() {
+        std::fs::remove_dir_all(&c.path)
+    } else {
+        std::fs::remove_file(&c.path)
+    };
     match gone {
         Ok(()) => tree.bytes,
         // Partly removed: what is left is measured.
@@ -408,9 +517,16 @@ pub fn held_paths() -> Option<HashSet<PathBuf>> {
         return None;
     }
     let mut held = HashSet::new();
-    let Ok(entries) = std::fs::read_dir(proc) else { return None };
+    let Ok(entries) = std::fs::read_dir(proc) else {
+        return None;
+    };
     for entry in entries.flatten() {
-        if !entry.file_name().to_string_lossy().bytes().all(|b| b.is_ascii_digit()) {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .bytes()
+            .all(|b| b.is_ascii_digit())
+        {
             continue;
         }
         let pid = entry.path();
@@ -454,9 +570,15 @@ impl Tally {
 }
 
 fn label(path: &Path, scope: &Scope) -> String {
-    let named = [("workspace", &scope.workspace)].into_iter().chain(scope.temps.iter().map(|t| ("tmp", t)));
+    let named = [("workspace", &scope.workspace)]
+        .into_iter()
+        .chain(scope.temps.iter().map(|t| ("tmp", t)));
     for (name, root) in named {
-        if let Some(rest) = root.canonicalize().ok().and_then(|r| path.strip_prefix(&r).ok().map(Path::to_path_buf)) {
+        if let Some(rest) = root
+            .canonicalize()
+            .ok()
+            .and_then(|r| path.strip_prefix(&r).ok().map(Path::to_path_buf))
+        {
             return format!("{name}/{}", rest.display());
         }
     }
@@ -464,7 +586,9 @@ fn label(path: &Path, scope: &Scope) -> String {
 }
 
 fn free(workspace: &Path) -> u64 {
-    crate::readiness::disk_usage(workspace).map(|d| d.1).unwrap_or(u64::MAX)
+    crate::readiness::disk_usage(workspace)
+        .map(|d| d.1)
+        .unwrap_or(u64::MAX)
 }
 
 /// Runs the clean-up when the workspace volume is low, at most once per CLEAN_EVERY, one at a time, and keeps the
@@ -487,14 +611,29 @@ impl DiskClean {
     }
 
     /// Start a clean-up when the workspace volume is below its low mark and none ran within CLEAN_EVERY.
-    pub fn check(self: &Arc<Self>, workspace: &Path, keep: Vec<PathBuf>, client: &Client, host: Arc<dyn Host>, trees: Arc<Worktrees>) {
-        let Some((total, free_now)) = crate::readiness::disk_usage(workspace) else { return };
+    pub fn check(
+        self: &Arc<Self>,
+        workspace: &Path,
+        keep: Vec<PathBuf>,
+        client: &Client,
+        host: Arc<dyn Host>,
+        trees: Arc<Worktrees>,
+    ) {
+        let Some((total, free_now)) = crate::readiness::disk_usage(workspace) else {
+            return;
+        };
         let low = low_mark(total);
         if free_now >= low {
             return;
         }
         let mut task = self.task.lock().unwrap();
-        if task.as_ref().is_some_and(|t| !t.is_finished()) || self.last.lock().unwrap().is_some_and(|at| at.elapsed() < CLEAN_EVERY) {
+        if task.as_ref().is_some_and(|t| !t.is_finished())
+            || self
+                .last
+                .lock()
+                .unwrap()
+                .is_some_and(|at| at.elapsed() < CLEAN_EVERY)
+        {
             return;
         }
         *self.last.lock().unwrap() = Some(Instant::now());
@@ -509,7 +648,12 @@ impl DiskClean {
 /// Every lock that keeps a turn or worktree step out of a task folder while something in it goes: each owner's
 /// checkout and task-lane locks (with the owner then shown busy to claims, and checked idle with no turn of any bot
 /// on its task), then the hub CLI task lock of every link path. None when any of them is taken.
-fn hold_folder(folder: &Folder, workspace: &Path, host: &Arc<dyn Host>, trees: &Worktrees) -> Option<(Vec<Box<dyn Send>>, Vec<worktrees::TaskLock>, Vec<String>)> {
+fn hold_folder(
+    folder: &Folder,
+    workspace: &Path,
+    host: &Arc<dyn Host>,
+    trees: &Worktrees,
+) -> Option<(Vec<Box<dyn Send>>, Vec<worktrees::TaskLock>, Vec<String>)> {
     let mut guards = vec![];
     let mut marked = vec![];
     let release = |marked: &[String]| {
@@ -527,7 +671,10 @@ fn hold_folder(folder: &Folder, workspace: &Path, host: &Arc<dyn Host>, trees: &
         if trees.maintaining.lock().unwrap().insert(bot.clone()) {
             marked.push(bot.clone());
         }
-        if !owners_free(std::slice::from_ref(&(bot.clone(), task.clone())), host.as_ref()) {
+        if !owners_free(
+            std::slice::from_ref(&(bot.clone(), task.clone())),
+            host.as_ref(),
+        ) {
             release(&marked);
             return None;
         }
@@ -541,18 +688,40 @@ fn hold_folder(folder: &Folder, workspace: &Path, host: &Arc<dyn Host>, trees: &
 
 /// Whether no owner of a folder has a turn in its main lane or on its task, and no bot has one on any of its tasks.
 pub fn owners_free(owners: &[(String, String)], host: &dyn Host) -> bool {
-    owners.iter().all(|(bot, task)| host.idle(bot, task) && !host.task_busy(task))
+    owners
+        .iter()
+        .all(|(bot, task)| host.idle(bot, task) && !host.task_busy(task))
 }
 
 /// One clean-up; its report.
-async fn run(workspace: &Path, keep: Vec<PathBuf>, client: &Client, host: Arc<dyn Host>, trees: Arc<Worktrees>, low: u64, before: u64) -> Value {
-    log(&format!("Tico runner: disk low ({:.1} GB free, mark {:.1} GB); cleaning up what is safe to remove", before as f64 / GB, low as f64 / GB));
+async fn run(
+    workspace: &Path,
+    keep: Vec<PathBuf>,
+    client: &Client,
+    host: Arc<dyn Host>,
+    trees: Arc<Worktrees>,
+    low: u64,
+    before: u64,
+) -> Value {
+    log(&format!(
+        "Tico runner: disk low ({:.1} GB free, mark {:.1} GB); cleaning up what is safe to remove",
+        before as f64 / GB,
+        low as f64 / GB
+    ));
     let target = low.saturating_add(HEADROOM);
     // Finished tasks' worktrees first, through their usual cleanup (it saves unpushed work or keeps the tree).
     trees.expedite(host.clone(), PASS_WAIT).await;
-    let rows = client.get("runners/me/worktrees").await.ok().and_then(|r| r["worktrees"].as_array().cloned());
+    let rows = client
+        .get("runners/me/worktrees")
+        .await
+        .ok()
+        .and_then(|r| r["worktrees"].as_array().cloned());
     let busy_host = host.clone();
-    let folders = rows.map(|rows| folder_states(&rows, |bot, task| !busy_host.idle(bot, task) || busy_host.task_busy(task)));
+    let folders = rows.map(|rows| {
+        folder_states(&rows, |bot, task| {
+            !busy_host.idle(bot, task) || busy_host.task_busy(task)
+        })
+    });
     let mut temps = vec![];
     if cfg!(target_os = "linux") {
         temps.push(std::env::temp_dir());
@@ -563,7 +732,11 @@ async fn run(workspace: &Path, keep: Vec<PathBuf>, client: &Client, host: Arc<dy
     // A root inside the Tico install is never cleaned.
     temps.retain(|r| crate::repo_safety::outside_installation(r).is_ok());
     let workspace_ok = crate::repo_safety::outside_installation(workspace).is_ok();
-    let keep: Vec<PathBuf> = keep.into_iter().filter(|k| k.is_absolute()).map(|k| k.canonicalize().unwrap_or(k)).collect();
+    let keep: Vec<PathBuf> = keep
+        .into_iter()
+        .filter(|k| k.is_absolute())
+        .map(|k| k.canonicalize().unwrap_or(k))
+        .collect();
     let scope = Scope {
         workspace: workspace.to_path_buf(),
         folders: folders.filter(|_| workspace_ok),
@@ -574,7 +747,9 @@ async fn run(workspace: &Path, keep: Vec<PathBuf>, client: &Client, host: Arc<dy
     };
     let planned = {
         let s = scope.clone();
-        tokio::task::spawn_blocking(move || plan(&s)).await.unwrap_or_default()
+        tokio::task::spawn_blocking(move || plan(&s))
+            .await
+            .unwrap_or_default()
     };
     let env = crate::env::process_environment();
     let mut tally = Tally::default();
@@ -582,7 +757,10 @@ async fn run(workspace: &Path, keep: Vec<PathBuf>, client: &Client, host: Arc<dy
         if free(workspace) >= target {
             break;
         }
-        let folder = c.folder.as_ref().and_then(|f| scope.folders.as_ref().and_then(|m| m.get(f)));
+        let folder = c
+            .folder
+            .as_ref()
+            .and_then(|f| scope.folders.as_ref().and_then(|m| m.get(f)));
         let held = match folder {
             Some(f) => match hold_folder(f, workspace, &host, &trees) {
                 Some(h) => Some(h),
@@ -595,7 +773,15 @@ async fn run(workspace: &Path, keep: Vec<PathBuf>, client: &Client, host: Arc<dy
             let (s, cand, h) = (scope.clone(), c.clone(), host.clone());
             let owners = folder.map(|f| f.owners.clone()).unwrap_or_default();
             // Git took a while: a turn that started meanwhile (a claim already on its way) keeps the folder.
-            tokio::task::spawn_blocking(move || if owners_free(&owners, h.as_ref()) { remove(&cand, &s) } else { 0 }).await.unwrap_or(0)
+            tokio::task::spawn_blocking(move || {
+                if owners_free(&owners, h.as_ref()) {
+                    remove(&cand, &s)
+                } else {
+                    0
+                }
+            })
+            .await
+            .unwrap_or(0)
         } else {
             0
         };
@@ -607,7 +793,12 @@ async fn run(workspace: &Path, keep: Vec<PathBuf>, client: &Client, host: Arc<dy
             drop(guards);
         }
         if freed > 0 {
-            log(&format!("Tico runner: disk clean-up removed {} {} ({:.1} MB)", c.class.name(), label(&c.path, &scope), freed as f64 / 1e6));
+            log(&format!(
+                "Tico runner: disk clean-up removed {} {} ({:.1} MB)",
+                c.class.name(),
+                label(&c.path, &scope),
+                freed as f64 / 1e6
+            ));
             tally.add(c.class, freed);
         }
     }
@@ -621,21 +812,36 @@ async fn run(workspace: &Path, keep: Vec<PathBuf>, client: &Client, host: Arc<dy
         "Tico runner: disk clean-up freed {:.1} GB ({:.1} GB free now){}",
         freed as f64 / GB,
         after as f64 / GB,
-        if still_low { "; still low: what is left is not safe for the computer to remove (docs/worktrees.md#low-disk)" } else { "" }
+        if still_low {
+            "; still low: what is left is not safe for the computer to remove (docs/worktrees.md#low-disk)"
+        } else {
+            ""
+        }
     ));
     report(&tally, before, after, low, crate::util::epoch_s())
 }
 
 /// Tico's own base clones: `repos/<folder>` with a `.git` folder holding Tico's `tico-managed` marker.
 pub fn base_clones(workspace: &Path) -> Vec<(String, PathBuf)> {
-    let Some(repos) = real_root(workspace).and_then(|w| under(&w, "repos")) else { return vec![] };
-    let Ok(entries) = std::fs::read_dir(&repos) else { return vec![] };
+    let Some(repos) = real_root(workspace).and_then(|w| under(&w, "repos")) else {
+        return vec![];
+    };
+    let Ok(entries) = std::fs::read_dir(&repos) else {
+        return vec![];
+    };
     let mut bases: Vec<(String, PathBuf)> = entries
         .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()) && !e.file_name().to_string_lossy().starts_with('.'))
+        .filter(|e| {
+            e.file_type().is_ok_and(|t| t.is_dir())
+                && !e.file_name().to_string_lossy().starts_with('.')
+        })
         .filter(|e| {
             let git = e.path().join(".git");
-            git.symlink_metadata().is_ok_and(|m| m.is_dir()) && git.join("tico-managed").symlink_metadata().is_ok_and(|m| m.is_file())
+            git.symlink_metadata().is_ok_and(|m| m.is_dir())
+                && git
+                    .join("tico-managed")
+                    .symlink_metadata()
+                    .is_ok_and(|m| m.is_file())
         })
         .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
         .collect();
@@ -645,10 +851,19 @@ pub fn base_clones(workspace: &Path) -> Vec<(String, PathBuf)> {
 
 /// `git worktree prune` in each base clone, one at a time, each under the lock its fetches take; a clone whose fetch
 /// is running is left for the next clean-up.
-async fn git_maintenance(workspace: &Path, repositories: Option<Arc<crate::repositories::Repositories>>, env: &Env, tally: &mut Tally) {
-    let Some(repositories) = repositories else { return };
+async fn git_maintenance(
+    workspace: &Path,
+    repositories: Option<Arc<crate::repositories::Repositories>>,
+    env: &Env,
+    tally: &mut Tally,
+) {
+    let Some(repositories) = repositories else {
+        return;
+    };
     for (folder, base) in base_clones(workspace) {
-        let Some(_sync) = repositories.try_sync_guard(&folder) else { continue };
+        let Some(_sync) = repositories.try_sync_guard(&folder) else {
+            continue;
+        };
         let before = free(workspace);
         let _ = worktrees::git(&base, env, MAINTENANCE, false).await;
         let gained = free(workspace).saturating_sub(before);
@@ -661,7 +876,11 @@ async fn git_maintenance(workspace: &Path, repositories: Option<Arc<crate::repos
 
 /// The readiness `disk_cleanup` document (backend/models.py DiskCleanupReadiness).
 pub fn report(tally: &Tally, before: u64, after: u64, low: u64, at: f64) -> Value {
-    let classes: Vec<Value> = tally.classes.iter().map(|(c, (n, b))| json!({"kind": c.name(), "count": n, "bytes": b})).collect();
+    let classes: Vec<Value> = tally
+        .classes
+        .iter()
+        .map(|(c, (n, b))| json!({"kind": c.name(), "count": n, "bytes": b}))
+        .collect();
     json!({
         "at": crate::util::iso(&json!(at.floor())),
         "free_before_bytes": before,
@@ -679,11 +898,16 @@ mod tests {
 
     struct Gone(PathBuf);
     impl Drop for Gone {
-        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     fn temp(name: &str) -> (Gone, PathBuf) {
-        let root = std::env::temp_dir().join(format!("disk-clean-{name}-{}", uuid::Uuid::new_v4().simple()));
+        let root = std::env::temp_dir().join(format!(
+            "disk-clean-{name}-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         std::fs::create_dir_all(&root).unwrap();
         let root = root.canonicalize().unwrap();
         (Gone(root.clone()), root)
@@ -696,7 +920,11 @@ mod tests {
 
     fn age(path: &Path, seconds_ago: f64) {
         let at = std::time::SystemTime::now() - Duration::from_secs_f64(seconds_ago);
-        let f = std::fs::File::options().write(true).open(path).or_else(|_| std::fs::File::open(path)).unwrap();
+        let f = std::fs::File::options()
+            .write(true)
+            .open(path)
+            .or_else(|_| std::fs::File::open(path))
+            .unwrap();
         f.set_modified(at).unwrap();
     }
 
@@ -713,11 +941,25 @@ mod tests {
     }
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git").arg("-C").arg(dir).args(args)
-            .env_clear().envs(crate::safegit::clean_environment(&crate::env::process_environment()))
-            .env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@acme.example").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@acme.example")
-            .output().unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env_clear()
+            .envs(crate::safegit::clean_environment(
+                &crate::env::process_environment(),
+            ))
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@acme.example")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@acme.example")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     fn rows() -> Vec<Value> {
@@ -745,7 +987,11 @@ mod tests {
 
     fn cargo_target(dir: &Path) {
         file(&dir.join("CACHEDIR.TAG"), 0);
-        std::fs::write(dir.join("CACHEDIR.TAG"), "Signature: 8a477f597d28d172789f06886806bc55\n").unwrap();
+        std::fs::write(
+            dir.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
         file(&dir.join("debug/big"), 4096);
     }
 
@@ -773,8 +1019,20 @@ mod tests {
         more.push(json!({"path": "tasks/open1/acme__lib", "owner": "bot:ops", "task_id": "open1-id", "task_status": "done", "state": "present"}));
         let f = folder_states(&more, |_, task| task == "live1-id");
         assert_eq!(f["done1"].state, FolderState::Closed);
-        assert_eq!(f["done1"].owners, vec![("dev".to_string(), "done1-id".to_string()), ("ops".to_string(), "done1-id".to_string())]);
-        assert_eq!(f["done1"].paths, vec!["tasks/done1/acme__app".to_string(), "tasks/done1/acme__lib".to_string()]);
+        assert_eq!(
+            f["done1"].owners,
+            vec![
+                ("dev".to_string(), "done1-id".to_string()),
+                ("ops".to_string(), "done1-id".to_string())
+            ]
+        );
+        assert_eq!(
+            f["done1"].paths,
+            vec![
+                "tasks/done1/acme__app".to_string(),
+                "tasks/done1/acme__lib".to_string()
+            ]
+        );
         assert_eq!(f["open1"].state, FolderState::Open);
         assert_eq!(f["live1"].state, FolderState::Running);
         assert!(!f.contains_key("acme__app"));
@@ -796,7 +1054,10 @@ mod tests {
         assert_eq!(f["refused"].state, FolderState::Kept);
         assert_eq!(f["gaveup"].state, FolderState::Kept);
         let (_g, root) = temp("kept");
-        let s = Scope { folders: Some(f), ..scope(&root) };
+        let s = Scope {
+            folders: Some(f),
+            ..scope(&root)
+        };
         for name in ["mine", "refused", "gaveup"] {
             cargo_target(&root.join(format!("ws/tasks/{name}/acme__app/target")));
         }
@@ -807,14 +1068,22 @@ mod tests {
     fn a_folder_the_server_lists_nothing_for_or_only_a_removed_link_on_an_open_task_is_left() {
         let (_g, root) = temp("unlisted");
         let tasks = root.join("ws/tasks");
-        let rows = vec![json!({"path": "tasks/reopened/acme__app", "owner": "bot:dev", "task_id": "x", "task_status": "doing", "state": "removed"})];
-        let s = Scope { folders: Some(folder_states(&rows, |_, _| false)), ..scope(&root) };
+        let rows = vec![
+            json!({"path": "tasks/reopened/acme__app", "owner": "bot:dev", "task_id": "x", "task_status": "doing", "state": "removed"}),
+        ];
+        let s = Scope {
+            folders: Some(folder_states(&rows, |_, _| false)),
+            ..scope(&root)
+        };
         cargo_target(&tasks.join("reopened/acme__app/target"));
         file(&tasks.join("orphan/node_modules/a.js"), 10);
         age_tree(&tasks.join("orphan"), 30.0 * 86400.0);
         assert!(plan(&s).is_empty());
         // A retired computer's empty inventory deletes nothing.
-        let empty = Scope { folders: Some(folder_states(&[], |_, _| false)), ..s.clone() };
+        let empty = Scope {
+            folders: Some(folder_states(&[], |_, _| false)),
+            ..s.clone()
+        };
         cargo_target(&tasks.join("done1/acme__app/target"));
         assert!(plan(&empty).is_empty());
     }
@@ -838,31 +1107,48 @@ mod tests {
         let paths: Vec<&PathBuf> = got.iter().map(|(_, p)| p).collect();
         assert!(got.iter().all(|(c, _)| *c == Class::FinishedTaskCache));
         assert_eq!(paths.len(), 3);
-        for p in ["done1/acme__app/target", "done1/acme__app/node_modules", "done1/venv"] {
+        for p in [
+            "done1/acme__app/target",
+            "done1/acme__app/node_modules",
+            "done1/venv",
+        ] {
             assert!(paths.contains(&&tasks.join(p)), "{p}");
         }
         for c in plan(&s) {
             remove(&c, &s);
         }
-        assert!(!tasks.join("done1/acme__app/target").exists() && !tasks.join("done1/acme__app/node_modules").exists());
+        assert!(
+            !tasks.join("done1/acme__app/target").exists()
+                && !tasks.join("done1/acme__app/node_modules").exists()
+        );
         assert!(tasks.join("done1/acme__app/src/main.rs").exists());
         assert!(tasks.join("open1/acme__app/target/debug/big").exists());
         assert!(tasks.join("live1/acme__app/target/debug/big").exists());
         // Without the server's rows no task folder is touched.
         cargo_target(&tasks.join("done1/acme__app/target"));
-        let blind = Scope { folders: None, ..s.clone() };
+        let blind = Scope {
+            folders: None,
+            ..s.clone()
+        };
         assert!(plan(&blind).iter().all(|c| !c.path.starts_with(&tasks)));
     }
 
     #[test]
     fn a_subtask_turn_running_in_its_parents_lane_keeps_the_subtasks_folder() {
         let (_g, root) = temp("subtask");
-        let rows = vec![json!({"path": "tasks/t2short/acme__app", "owner": "bot:dev", "task_id": "t2", "task_status": "done", "state": "present"})];
+        let rows = vec![
+            json!({"path": "tasks/t2short/acme__app", "owner": "bot:dev", "task_id": "t2", "task_status": "done", "state": "present"}),
+        ];
         // The turn is recorded under its lane's task t1 but claims t2 (sessions.rs LiveTurn).
-        let turn = crate::sessions::LiveTurn::of(&json!({"bot": "bot:dev", "lane": "task:t1", "task": {"id": "t2"}}));
+        let turn = crate::sessions::LiveTurn::of(
+            &json!({"bot": "bot:dev", "lane": "task:t1", "task": {"id": "t2"}}),
+        );
         let folders = folder_states(&rows, |bot, task| turn.bot == bot && turn.on(task));
         assert_eq!(folders["t2short"].state, FolderState::Running);
-        let s = Scope { folders: Some(folders), ..scope(&root) };
+        let s = Scope {
+            folders: Some(folders),
+            ..scope(&root)
+        };
         cargo_target(&root.join("ws/tasks/t2short/acme__app/target"));
         assert!(plan(&s).is_empty());
     }
@@ -874,7 +1160,10 @@ mod tests {
         git(&origin, &["init", "-q", "--bare", "-b", "main"]);
         std::fs::create_dir_all(tree).unwrap();
         git(tree, &["init", "-q", "-b", "main"]);
-        git(tree, &["remote", "add", "origin", &origin.display().to_string()]);
+        git(
+            tree,
+            &["remote", "add", "origin", &origin.display().to_string()],
+        );
         std::fs::write(tree.join(".gitignore"), "node_modules/\ntarget/\n").unwrap();
         git(tree, &["add", ".gitignore"]);
         git(tree, &["commit", "-q", "-m", "first"]);
@@ -894,7 +1183,12 @@ mod tests {
         git(&tree, &["commit", "-q", "-m", "vendor"]);
         git(&tree, &["push", "-q", "origin", "main"]);
         let got = plan(&s);
-        let by = |p: &str| got.iter().find(|c| c.path == tree.join(p)).cloned().unwrap();
+        let by = |p: &str| {
+            got.iter()
+                .find(|c| c.path == tree.join(p))
+                .cloned()
+                .unwrap()
+        };
         assert_eq!(by("target").checkout.as_deref(), Some(tree.as_path()));
         assert!(git_clear(&by("target"), &env()).await);
         assert!(!git_clear(&by("node_modules"), &env()).await);
@@ -907,7 +1201,12 @@ mod tests {
         let tree = root.join("ws/tasks/done1/acme__app");
         pushed_checkout(&root, &tree);
         cargo_target(&tree.join("target"));
-        let target = || plan(&s).into_iter().find(|c| c.path == tree.join("target")).unwrap();
+        let target = || {
+            plan(&s)
+                .into_iter()
+                .find(|c| c.path == tree.join("target"))
+                .unwrap()
+        };
         assert!(git_clear(&target(), &env()).await);
         // Uncommitted work.
         file(&tree.join("notes.txt"), 5);
@@ -943,22 +1242,43 @@ mod tests {
         file(&outside.join("node_modules/keep.js"), 10);
         std::fs::create_dir_all(tasks.join("done1/acme__app")).unwrap();
         // A cache folder that is a symlink, a task folder that is a symlink, and a link inside a cache.
-        std::os::unix::fs::symlink(outside.join("node_modules"), tasks.join("done1/acme__app/node_modules")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.join("node_modules"),
+            tasks.join("done1/acme__app/node_modules"),
+        )
+        .unwrap();
         std::os::unix::fs::symlink(&outside, tasks.join("open1")).unwrap();
         file(&tasks.join("done1/acme__app/target/CACHEDIR.TAG"), 0);
-        std::fs::write(tasks.join("done1/acme__app/target/CACHEDIR.TAG"), "Signature: 8a477f597d28d172789f06886806bc55\n").unwrap();
-        std::os::unix::fs::symlink(outside.join("target"), tasks.join("done1/acme__app/target/out")).unwrap();
+        std::fs::write(
+            tasks.join("done1/acme__app/target/CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            outside.join("target"),
+            tasks.join("done1/acme__app/target/out"),
+        )
+        .unwrap();
         // A tmp entry reached through a symlink.
         std::os::unix::fs::symlink(&outside, root.join("tmp/old-link")).unwrap();
         let got = plan(&s);
-        assert_eq!(got.iter().map(|c| c.path.clone()).collect::<Vec<_>>(), vec![tasks.join("done1/acme__app/target")]);
+        assert_eq!(
+            got.iter().map(|c| c.path.clone()).collect::<Vec<_>>(),
+            vec![tasks.join("done1/acme__app/target")]
+        );
         for c in &got {
             remove(c, &s);
         }
-        assert!(outside.join("target/debug/big").exists() && outside.join("node_modules/keep.js").exists());
+        assert!(
+            outside.join("target/debug/big").exists()
+                && outside.join("node_modules/keep.js").exists()
+        );
         // A planned folder swapped for a symlink before removal is refused.
         cargo_target(&tasks.join("done1/acme__app/target"));
-        let c = plan(&s).into_iter().find(|c| c.class == Class::FinishedTaskCache).unwrap();
+        let c = plan(&s)
+            .into_iter()
+            .find(|c| c.class == Class::FinishedTaskCache)
+            .unwrap();
         std::fs::remove_dir_all(&c.path).unwrap();
         std::os::unix::fs::symlink(outside.join("target"), &c.path).unwrap();
         assert_eq!(remove(&c, &s), 0);
@@ -980,9 +1300,19 @@ mod tests {
             let _a = Gone(away.clone());
             file(&away.join("old/x.bin"), 100);
             age_tree(&away, 3.0 * 86400.0);
-            let s2 = Scope { temps: vec![away.clone()], ..s.clone() };
+            let s2 = Scope {
+                temps: vec![away.clone()],
+                ..s.clone()
+            };
             assert!(plan(&s2).is_empty());
-            let c = Candidate { class: Class::Tmp, path: away.join("old"), bytes: 100, newest: 0.0, folder: None, checkout: None };
+            let c = Candidate {
+                class: Class::Tmp,
+                path: away.join("old"),
+                bytes: 100,
+                newest: 0.0,
+                folder: None,
+                checkout: None,
+            };
             assert_eq!(remove(&c, &s2), 0);
             assert!(away.join("old/x.bin").exists());
         }
@@ -1016,15 +1346,28 @@ mod tests {
         assert!(got.iter().all(|(c, _)| *c == Class::Tmp));
         let paths: Vec<&PathBuf> = got.iter().map(|(_, p)| p).collect();
         assert_eq!(paths.len(), 2, "{paths:?}");
-        assert!(paths.contains(&&tmp.join("old-build")) && paths.contains(&&tmp.join("old-file.log")));
+        assert!(
+            paths.contains(&&tmp.join("old-build")) && paths.contains(&&tmp.join("old-file.log"))
+        );
         let freed: u64 = plan(&s).iter().map(|c| remove(c, &s)).sum();
         assert!(freed >= 1000);
-        assert!(!tmp.join("old-build").exists() && tmp.join("fresh/out.bin").exists() && tmp.join("held-old/log.txt").exists());
-        assert!(tmp.join("tico-trust-1/x.gitconfig").exists() && tmp.join("clone/.git/HEAD").exists() && tmp.join("work/repo/.git").exists());
+        assert!(
+            !tmp.join("old-build").exists()
+                && tmp.join("fresh/out.bin").exists()
+                && tmp.join("held-old/log.txt").exists()
+        );
+        assert!(
+            tmp.join("tico-trust-1/x.gitconfig").exists()
+                && tmp.join("clone/.git/HEAD").exists()
+                && tmp.join("work/repo/.git").exists()
+        );
         // Where open files cannot be read, the temp folder is left.
         file(&tmp.join("old2/x"), 10);
         age_tree(&tmp.join("old2"), 2.0 * 86400.0);
-        let blind = Scope { held: None, ..s.clone() };
+        let blind = Scope {
+            held: None,
+            ..s.clone()
+        };
         assert!(plan(&blind).is_empty());
     }
 
@@ -1036,22 +1379,36 @@ mod tests {
         file(&state.join("heartbeat"), 10);
         age_tree(&state, 2.0 * 86400.0);
         s.keep = vec![state.clone()];
-        assert!(plan(&s).iter().all(|c| !c.path.starts_with(&state) && !state.starts_with(&c.path)));
+        assert!(plan(&s)
+            .iter()
+            .all(|c| !c.path.starts_with(&state) && !state.starts_with(&c.path)));
     }
 
     #[test]
     fn a_turn_that_starts_after_the_folder_was_locked_stops_its_removal() {
         let (_g, root) = temp("late");
         let client = Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
-        let lanes = crate::sessions::Lanes::new(Arc::new(crate::repositories::Repositories::new(&root, &root, client)));
+        let lanes = crate::sessions::Lanes::new(Arc::new(crate::repositories::Repositories::new(
+            &root, &root, client,
+        )));
         let owners = vec![("dev".to_string(), "t2".to_string())];
         assert!(owners_free(&owners, &lanes));
         // A claim that was on its way registers its turn on the subtask, in its parent's lane.
-        lanes.attempts.lock().unwrap().insert("a1".into(), crate::sessions::LiveTurn::of(&json!({"bot": "bot:dev", "lane": "task:t1", "task": {"id": "t2"}})));
+        lanes.attempts.lock().unwrap().insert(
+            "a1".into(),
+            crate::sessions::LiveTurn::of(
+                &json!({"bot": "bot:dev", "lane": "task:t1", "task": {"id": "t2"}}),
+            ),
+        );
         assert!(!owners_free(&owners, &lanes));
         // So does another bot's turn on the task (a reviewer's).
         lanes.attempts.lock().unwrap().clear();
-        lanes.attempts.lock().unwrap().insert("a2".into(), crate::sessions::LiveTurn::of(&json!({"bot": "bot:qa", "lane": "task:t2", "task": {"id": "t2"}})));
+        lanes.attempts.lock().unwrap().insert(
+            "a2".into(),
+            crate::sessions::LiveTurn::of(
+                &json!({"bot": "bot:qa", "lane": "task:t2", "task": {"id": "t2"}}),
+            ),
+        );
         assert!(!owners_free(&owners, &lanes));
     }
 
@@ -1060,7 +1417,10 @@ mod tests {
         let (_g, root) = temp("tasklock");
         let ws = root.join("ws");
         std::fs::create_dir_all(ws.join("tasks")).unwrap();
-        let paths = vec!["tasks/done1/acme__app".to_string(), "tasks/done1/acme__lib".to_string()];
+        let paths = vec![
+            "tasks/done1/acme__app".to_string(),
+            "tasks/done1/acme__lib".to_string(),
+        ];
         let step = worktrees::locked(&ws, &paths[1]).await.unwrap();
         assert!(worktrees::try_locked(&ws, &paths).is_none());
         drop(step);
@@ -1082,7 +1442,10 @@ mod tests {
         file(&repos.join("acme__bot/.git/HEAD"), 0); // a bot's own repository: no marker
         file(&repos.join("nested/acme__x/.git/tico-managed"), 0);
         std::os::unix::fs::symlink(repos.join("acme__app"), repos.join("acme__link")).unwrap();
-        let got: Vec<String> = base_clones(&root.join("ws")).into_iter().map(|b| b.0).collect();
+        let got: Vec<String> = base_clones(&root.join("ws"))
+            .into_iter()
+            .map(|b| b.0)
+            .collect();
         assert_eq!(got, vec!["acme__app".to_string()]);
     }
 
@@ -1090,7 +1453,11 @@ mod tests {
     async fn a_base_clone_whose_fetch_holds_its_lock_is_left() {
         let (_g, root) = temp("synclock");
         let client = Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
-        let repos = Arc::new(crate::repositories::Repositories::new(&root.join("ws"), &root.join("state"), client));
+        let repos = Arc::new(crate::repositories::Repositories::new(
+            &root.join("ws"),
+            &root.join("state"),
+            client,
+        ));
         let fetch = repos.try_sync_guard("acme__app").unwrap();
         assert!(repos.try_sync_guard("acme__app").is_none());
         drop(fetch);
@@ -1108,12 +1475,18 @@ mod tests {
             row("done", "done", "present", asked),
             row("declined", "declined", "present", asked),
             row("open", "doing", "present", asked),
-            row("gave-up", "done", "present", "{\"cleanup_requested\": true, \"cleanup_gave_up\": true}"),
+            row(
+                "gave-up",
+                "done",
+                "present",
+                "{\"cleanup_requested\": true, \"cleanup_gave_up\": true}",
+            ),
             row("gone", "done", "removed", asked),
             row("not-asked", "done", "present", "{}"),
             row("queued", "done", "present", asked),
         ];
-        let got = worktrees::urgent_removals(&rows, &[json!({"link_id": "queued", "action": "remove"})]);
+        let got =
+            worktrees::urgent_removals(&rows, &[json!({"link_id": "queued", "action": "remove"})]);
         let ids: Vec<String> = got.iter().map(|a| text_of(&a["link_id"])).collect();
         assert_eq!(ids, vec!["done", "declined"]);
         assert_eq!(got[0]["action"], "remove");
@@ -1130,7 +1503,10 @@ mod tests {
         let r = report(&t, 10, 20, 30, 0.0);
         assert_eq!(r["freed_bytes"], 1150);
         assert_eq!(r["still_low"], true);
-        assert_eq!(r["classes"][0], json!({"kind": "tmp", "count": 2, "bytes": 150}));
+        assert_eq!(
+            r["classes"][0],
+            json!({"kind": "tmp", "count": 2, "bytes": 150})
+        );
         assert_eq!(r["at"], "1970-01-01T00:00:00+00:00");
     }
 }

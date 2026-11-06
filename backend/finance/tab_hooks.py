@@ -1,6 +1,7 @@
 """Finance's webhook triggers (spec §3.4): a Mercury trigger's kept calls are bank payloads, so the ordinary trigger
 routes refuse them and they are read here alone, by a finance admin who also sees sources (§7.5). Re-exported by
 finance/reads, the only door."""
+
 import sqlite3
 
 from .context import is_set_up, load
@@ -29,7 +30,17 @@ def webhook_deliveries(c: sqlite3.Connection, viewer: str, *, limit: int = 20, a
     if not (view.everything or view.sources):
         raise denied("webhook deliveries need the sources view")
     rows = tico.finance_hook_calls(c, ctx.at, max(1, min(int(limit), MAX_CALLS)))
-    return {"deliveries": [{
-        "trigger": str(r["trigger_id"]), "delivery": str(r["delivery"]), "received_at": str(r["received_at"]),
-        "type": str(r["type"] or ""), "via": str(r["via"] or ""), "outcome": str(r["outcome"] or ""),
-        "body": bytes(r["body"]).decode("utf-8", "replace")} for r in rows]}
+    return {
+        "deliveries": [
+            {
+                "trigger": str(r["trigger_id"]),
+                "delivery": str(r["delivery"]),
+                "received_at": str(r["received_at"]),
+                "type": str(r["type"] or ""),
+                "via": str(r["via"] or ""),
+                "outcome": str(r["outcome"] or ""),
+                "body": bytes(r["body"]).decode("utf-8", "replace"),
+            }
+            for r in rows
+        ]
+    }

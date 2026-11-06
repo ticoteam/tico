@@ -104,7 +104,7 @@ jobs:
           # stamp (#1905: its build.rs does not read TICO_VERSION, and the runner has no --release) skips the check.
           if grep -q TICO_VERSION runner-rs/build.rs; then
             want="${TICO_VERSION#v}"
-            got="$(runner-rs/target/$TARGET/release/tico-runner --release)"
+            got="$("runner-rs/target/$TARGET/release/tico-runner" --release)"
             [ "$got" = "$want" ] || { echo "::error::tico-runner --release says '$got', release is '$want'"; exit 1; }
           else
             echo "::notice::runner-rs/build.rs predates the release stamp; tico-runner --release not checked"
@@ -321,6 +321,9 @@ jobs:
           # uv installs the same pinned lock as pip, in seconds instead of about a minute.
           python3 -m pip install --disable-pip-version-check uv==0.13.1
           python3 -m uv pip install --python "$RUNNER_TEMP/release-venv/bin/python" -r backend/requirements-dev.txt
+          # The UI's TypeScript, compiled as the image compiles it (backend/ui_build.py refuses a missing build). A
+          # candidate from before the build step has nothing to compile.
+          if [ -f scripts/build-ui.cjs ]; then npm ci --no-audit --no-fund && npm run --silent build:ui; fi
       # One real collection validates the filesystem shard plan while native-linux is still building. The other
       # 27 Python VMs never collect the whole suite; python-1 has about two minutes of binary-wait slack here.
       - name: Check Python shard coverage during the native build

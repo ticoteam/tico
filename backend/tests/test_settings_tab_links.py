@@ -1,17 +1,31 @@
 """Every in-app link that names a Settings tab names one that exists. A link to #/settings carries the tab it means
 (data-gs-tab in the UI, a fix's "tab" from the server); ui/getting-started.js switches to it, and settingsShow
 (ui/app/settings.js) quietly falls back to Computers for a name it does not know, so a wrong name opens the wrong tab."""
+
 import ast
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS = "#/settings"
-# Names settingsShow takes besides the tabs: old ones it maps (tags, types, providers; team, assistant, privacy and
-# storage, now sections of General), the Models section of Computers (models), History's Runs view (runs), or ones it
-# sends to the Tools page (credentials, cloud).
-ALIASES = {"tags", "types", "providers", "models", "team", "assistant", "privacy", "storage", "runs", "credentials",
-           "cloud"}
+# Names settingsShow takes besides the groups: old ones it maps (tags, types, providers; team, assistant, privacy and
+# storage, now sections of Company & policies; gateway, now on AI models; models, History's Runs view (runs), and ones
+# it sends to the Tools page (credentials, cloud). Health has its own group and old links keep working.
+ALIASES = {
+    "tags",
+    "types",
+    "providers",
+    "models",
+    "team",
+    "assistant",
+    "privacy",
+    "storage",
+    "runs",
+    "credentials",
+    "cloud",
+    "gateway",
+    "health",
+}
 
 
 def settings_tabs():
@@ -51,7 +65,7 @@ def server_links():
             if isinstance(node, ast.Call):
                 at = [i for i, arg in enumerate(node.args) if isinstance(arg, ast.Constant) and arg.value == SETTINGS]
                 for i in at:
-                    tabs = node.args[i + 1:i + 2] + [k.value for k in node.keywords if k.arg == "tab"]
+                    tabs = node.args[i + 1 : i + 2] + [k.value for k in node.keywords if k.arg == "tab"]
                     for tab in tabs:
                         for name in strings(tab):
                             yield f"{rel}:{node.lineno}", name
@@ -65,9 +79,14 @@ def server_links():
 
 def test_ui_links_name_a_settings_tab_that_exists():
     tabs, links = settings_tabs(), list(ui_links())
-    # The links people hit most: chat's waiting line, the health banner, first run.
-    assert {("ui/app/chat.js", "models"), ("ui/app/chat.js", "computers"), ("ui/app/heartbeat.js", "health"),
-            ("ui/first-run.js", "models")} <= set(links)
+    # The links people hit most: chat's waiting line, the health banner, first run; both computer aliases keep working.
+    assert {
+        ("ui/app/chat.js", "models"),
+        ("ui/app/chat.js", "computers"),
+        ("ui/app/chat.js", "devices"),
+        ("ui/app/heartbeat.js", "health"),
+        ("ui/first-run.js", "models"),
+    } <= set(links)
     assert [(rel, tab) for rel, tab in links if tab not in tabs] == []
 
 

@@ -13,11 +13,17 @@ def test_assignments_by_runner_matches_per_computer_lookups(api):
         c.execute("UPDATE bots SET state='archived' WHERE slug='coo'")
     with api.app.state.store.read() as c:
         placed, active = views.assignments_by_runner(c)
-        assert placed[a["runner_id"]] == [r[0] for r in c.execute(
-            "SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (a["runner_id"],))]
-        assert active.get(a["runner_id"], set()) == {r[0] for r in c.execute(
-            "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
-            "WHERE a.runner_id=? AND b.state<>'archived'", (a["runner_id"],))}
+        assert placed[a["runner_id"]] == [
+            r[0] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (a["runner_id"],))
+        ]
+        assert active.get(a["runner_id"], set()) == {
+            r[0]
+            for r in c.execute(
+                "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
+                "WHERE a.runner_id=? AND b.state<>'archived'",
+                (a["runner_id"],),
+            )
+        }
         assert "coo" in placed[a["runner_id"]]
         assert "coo" not in active.get(a["runner_id"], set())
         assert placed[b["runner_id"]] == ["cpo"]

@@ -1,11 +1,19 @@
 """Finance rights: what a teammate may ask for (spec §7.4). Seeing is separate (view.py); amounts are gate rules."""
+
 from collections.abc import Collection
 
 from .org import SYSTEM, Org
 
 BOOK, AP, AR, PAY, CARDS, BUDGETS, RULES, ADMIN = (
-    "finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards", "finance.budgets", "finance.rules",
-    "finance.admin")
+    "finance.book",
+    "finance.ap",
+    "finance.ar",
+    "finance.pay",
+    "finance.cards",
+    "finance.budgets",
+    "finance.rules",
+    "finance.admin",
+)
 RIGHTS = (BOOK, AP, AR, PAY, CARDS, BUDGETS, RULES, ADMIN)
 # System work posts usage and keeps budgets current; it never grants, pays or changes access.
 SYSTEM_RIGHTS = frozenset({BOOK, BUDGETS})

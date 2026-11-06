@@ -5,6 +5,7 @@ counts for.
 At most one enabled import per platform: two tools reading the same login (TIDY has a company set of keys and bots'
 copies) would count the same spend twice. Saving or asking for a run rings the import worker (ad_import.py); the
 routes ring it after the commit."""
+
 import re
 import sqlite3
 from datetime import date
@@ -38,8 +39,11 @@ def _tool(c: sqlite3.Connection, tool_id: str) -> tuple[str, str]:
 
 
 def books_lines(ctx: Ctx) -> list[Row]:
-    return [{"id": a.id, "code": a.code, "name": a.name} for a in sorted(ctx.accounts.values(), key=lambda a: a.code)
-            if a.type == "expense" and a.active]
+    return [
+        {"id": a.id, "code": a.code, "name": a.name}
+        for a in sorted(ctx.accounts.values(), key=lambda a: a.code)
+        if a.type == "expense" and a.active
+    ]
 
 
 def default_line(ctx: Ctx, platform: str) -> str:
@@ -62,9 +66,15 @@ def _current(ctx: Ctx, tool_id: str, platform: str) -> SA.AdImport:
     saved = SA.import_for(ctx.c, tool_id)
     if saved is not None:
         return saved
-    return SA.AdImport(id="", tool_id=tool_id, platform=platform, enabled=False, history_from=_jan_first(ctx.at),
-                       account_id=default_line(ctx, platform),
-                       credentials=AI.default_mapping(ctx.c, platform, tool_id))
+    return SA.AdImport(
+        id="",
+        tool_id=tool_id,
+        platform=platform,
+        enabled=False,
+        history_from=_jan_first(ctx.at),
+        account_id=default_line(ctx, platform),
+        credentials=AI.default_mapping(ctx.c, platform, tool_id),
+    )
 
 
 def _elsewhere(c: sqlite3.Connection, tool_id: str, platform: str) -> Row | None:
@@ -87,25 +97,62 @@ def view(c: sqlite3.Connection, viewer: str, tool_id: str, at: str | None = None
         options.setdefault(cand.slot, []).append({"id": cand.id, "name": cand.name})
     line = ctx.accounts.get(imp.account_id)
     return {
-        "tool_id": tool_id, "tool_name": name, "platform": platform, "platform_label": SA.LABEL[platform],
-        "import": {"saved": bool(imp.id), "enabled": imp.enabled, "history_from": imp.history_from,
-                   "account_id": imp.account_id, "account_name": line.name if line else "",
-                   "status": imp.status, "last_import_at": imp.last_import_at, "last_error": imp.last_error,
-                   "run_requested": bool(imp.run_requested_at), "every_hours": int(AI.EVERY.total_seconds() // 3600)},
-        "slots": [{"slot": s, "label": AI.SLOT_LABEL[s], "required": s in AI.REQUIRED[platform],
-                   "credential_id": imp.credentials.get(s, ""), "options": options.get(s, [])}
-                  for s in AI.SLOTS[platform]],
+        "tool_id": tool_id,
+        "tool_name": name,
+        "platform": platform,
+        "platform_label": SA.LABEL[platform],
+        "import": {
+            "saved": bool(imp.id),
+            "enabled": imp.enabled,
+            "history_from": imp.history_from,
+            "account_id": imp.account_id,
+            "account_name": line.name if line else "",
+            "status": imp.status,
+            "last_import_at": imp.last_import_at,
+            "last_error": imp.last_error,
+            "run_requested": bool(imp.run_requested_at),
+            "every_hours": int(AI.EVERY.total_seconds() // 3600),
+        },
+        "slots": [
+            {
+                "slot": s,
+                "label": AI.SLOT_LABEL[s],
+                "required": s in AI.REQUIRED[platform],
+                "credential_id": imp.credentials.get(s, ""),
+                "options": options.get(s, []),
+            }
+            for s in AI.SLOTS[platform]
+        ],
         "books_lines": books_lines(ctx),
         "elsewhere": _elsewhere(c, tool_id, platform),
-        "month": start.isoformat()[:7], "month_label": start.strftime("%B"),
-        "accounts": [{"id": a.id, "external_id": a.external_id, "name": a.name, "currency": a.currency,
-                      "bot_slug": a.bot_slug or None, "active": a.active, "month_to_date": spent.get(a.id, 0)}
-                     for a in SA.accounts(c, tool_id)],
+        "month": start.isoformat()[:7],
+        "month_label": start.strftime("%B"),
+        "accounts": [
+            {
+                "id": a.id,
+                "external_id": a.external_id,
+                "name": a.name,
+                "currency": a.currency,
+                "bot_slug": a.bot_slug or None,
+                "active": a.active,
+                "month_to_date": spent.get(a.id, 0),
+            }
+            for a in SA.accounts(c, tool_id)
+        ],
     }
 
 
-def configure(c: sqlite3.Connection, viewer: str, tool_id: str, *, enabled: bool, history_from: str | None,
-              account_id: str | None, credentials: dict[str, str | None] | None, at: str | None = None) -> Row:
+def configure(
+    c: sqlite3.Connection,
+    viewer: str,
+    tool_id: str,
+    *,
+    enabled: bool,
+    history_from: str | None,
+    account_id: str | None,
+    credentials: dict[str, str | None] | None,
+    at: str | None = None,
+) -> Row:
     """Save a tool's import settings; switching it on asks for a run. Refused: a second enabled import on the
     platform, a day that is not one, a line that is not an active expense line, a key for a slot that is neither that
     slot's variable nor on this tool (ad_import.candidates), or switching on without the required keys or a line."""
@@ -127,8 +174,9 @@ def configure(c: sqlite3.Connection, viewer: str, tool_id: str, *, enabled: bool
     mapping = dict(imp.credentials)
     if credentials is not None:
         found = AI.candidates(c, platform, tool_id)
-        allowed = {(x.slot, x.id) for x in found} | {(s, x.id) for x in found if x.tool_id == tool_id
-                                                     for s in AI.SLOTS[platform]}
+        allowed = {(x.slot, x.id) for x in found} | {
+            (s, x.id) for x in found if x.tool_id == tool_id for s in AI.SLOTS[platform]
+        }
         for slot, cid in credentials.items():
             if slot not in AI.SLOTS[platform]:
                 raise FinanceError(INVALID, f"{SA.LABEL[platform]} has no {slot}")
@@ -137,12 +185,16 @@ def configure(c: sqlite3.Connection, viewer: str, tool_id: str, *, enabled: bool
             elif (slot, cid) in allowed:
                 mapping[slot] = cid
             else:
-                raise FinanceError(INVALID, f"Pick a {AI.SLOT_LABEL[slot]} key: its variable is "
-                                            f"{AI.SLOTS[platform][slot][0]}, or it is on this tool")
+                raise FinanceError(
+                    INVALID,
+                    f"Pick a {AI.SLOT_LABEL[slot]} key: its variable is "
+                    f"{AI.SLOTS[platform][slot][0]}, or it is on this tool",
+                )
     if enabled:
         if _elsewhere(c, tool_id, platform) is not None:
-            raise FinanceError(CONFLICT, f"{SA.LABEL[platform]} spend already imports from another tool: switch "
-                                         "that one off first")
+            raise FinanceError(
+                CONFLICT, f"{SA.LABEL[platform]} spend already imports from another tool: switch that one off first"
+            )
         gaps = AI.missing(platform, mapping)
         if gaps:
             raise FinanceError(INVALID, "Choose the keys for " + ", ".join(AI.SLOT_LABEL[s] for s in gaps))
@@ -150,11 +202,25 @@ def configure(c: sqlite3.Connection, viewer: str, tool_id: str, *, enabled: bool
             raise FinanceError(INVALID, "Choose the books line ad spend goes to")
     changed = AI.settings_changed(imp, start) if imp.id else imp
     asked = ctx.at if enabled and (not imp.enabled or changed.last_import_at is None) else imp.run_requested_at
-    SA.save_import(c, SA.AdImport(
-        id=imp.id, tool_id=tool_id, platform=platform, enabled=enabled, history_from=start, account_id=line,
-        credentials=mapping, status=imp.status, last_import_at=changed.last_import_at, last_error=imp.last_error,
-        run_requested_at=asked if enabled else None, created_by=imp.created_by or viewer,
-        created_at=imp.created_at or ctx.at), ctx.at)
+    SA.save_import(
+        c,
+        SA.AdImport(
+            id=imp.id,
+            tool_id=tool_id,
+            platform=platform,
+            enabled=enabled,
+            history_from=start,
+            account_id=line,
+            credentials=mapping,
+            status=imp.status,
+            last_import_at=changed.last_import_at,
+            last_error=imp.last_error,
+            run_requested_at=asked if enabled else None,
+            created_by=imp.created_by or viewer,
+            created_at=imp.created_at or ctx.at,
+        ),
+        ctx.at,
+    )
     return view(c, viewer, tool_id, ctx.at)
 
 
@@ -168,8 +234,7 @@ def run_now(c: sqlite3.Connection, viewer: str, tool_id: str, at: str | None = N
     return view(c, viewer, tool_id, ctx.at)
 
 
-def assign(c: sqlite3.Connection, viewer: str, ad_account_id: str, bot_slug: str | None,
-           at: str | None = None) -> Row:
+def assign(c: sqlite3.Connection, viewer: str, ad_account_id: str, bot_slug: str | None, at: str | None = None) -> Row:
     """Which bot an ad account's spend counts for (None: not assigned)."""
     ctx = _admin(c, viewer, at)
     acct = SA.account(c, ad_account_id)
@@ -181,5 +246,12 @@ def assign(c: sqlite3.Connection, viewer: str, ad_account_id: str, bot_slug: str
     SA.set_bot(c, ad_account_id, slug or None, ctx.at)
     found = SA.account(c, ad_account_id)
     assert found is not None
-    return {"id": found.id, "tool_id": found.tool_id, "external_id": found.external_id, "name": found.name,
-            "currency": found.currency, "bot_slug": found.bot_slug or None, "active": found.active}
+    return {
+        "id": found.id,
+        "tool_id": found.tool_id,
+        "external_id": found.external_id,
+        "name": found.name,
+        "currency": found.currency,
+        "bot_slug": found.bot_slug or None,
+        "active": found.active,
+    }

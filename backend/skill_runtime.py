@@ -5,11 +5,14 @@
   (`GET skills/bundles/{sha256}`), stages them and reports what it staged (`POST attempts/{aid}/skills/receipt`).
 - Usage keeps the skill, who, where and when only, never prompt text or tool arguments: a `Skill` tool call the runner
   reports in the attempt's events (`record_runner_usage`), and a person's `/name` to a bot in a thread
-  (`record_thread_usage`). One row per (session, tool id); a repeat is ignored.
+  (`record_thread_usage`). One row per (session, tool id); a repeat is ignored. A bot's call to a skill the directory
+  does not have is only a daily count by name and bot (`unlisted_skill_usage_dailies`), which the Skills page lists as
+  "Not in directory" and the Suggest step reads (backend/skill_suggestions.py).
 
 Spec: emp-tico-open-source reports/2026-11-05-company-skills/spec.md §4 Bots and §5. Tables:
 backend/migrations/20261106061559_company_skills.sql.
 """
+
 import json
 import re
 
@@ -38,6 +41,7 @@ class StagedSkill(Contract):
 
 class SkillReceipt(Contract):
     """What a runner staged for one attempt (runner-rs/src/company_skills.rs)."""
+
     staged: list[StagedSkill] = Field(default_factory=list, max_length=200)
 
 
@@ -49,7 +53,9 @@ def resolved_installs(c, target_type, target_id):
         "JOIN skills s ON s.id=i.skill_id AND s.deleted_at IS NULL "
         "JOIN skill_versions v ON v.skill_id=s.id AND v.id = CASE WHEN i.version_policy='pinned' "
         "THEN i.pinned_version_id ELSE s.latest_version_id END "
-        "WHERE i.target_type=? AND i.target_id=? ORDER BY s.name", (target_type, target_id)).fetchall()
+        "WHERE i.target_type=? AND i.target_id=? ORDER BY s.name",
+        (target_type, target_id),
+    ).fetchall()
     return [{"name": r[0], "version": r[1], "sha256": r[2], "description": r[3] or ""} for r in rows]
 
 
@@ -70,9 +76,12 @@ def bundle(c, who, sha):
         raise Problem("forbidden", "Skill bundles are for people, bots and their computers", 403)
     if not SHA_RE.fullmatch(sha or ""):
         raise Problem("not_found", "Skill bundle not found", 404)
-    row = c.execute("SELECT s.name, v.number, v.sha256, v.files FROM skill_versions v "
-                    "JOIN skills s ON s.id=v.skill_id AND s.deleted_at IS NULL WHERE v.sha256=? "
-                    "ORDER BY v.approved_at LIMIT 1", (sha,)).fetchone()
+    row = c.execute(
+        "SELECT s.name, v.number, v.sha256, v.files FROM skill_versions v "
+        "JOIN skills s ON s.id=v.skill_id AND s.deleted_at IS NULL WHERE v.sha256=? "
+        "ORDER BY v.approved_at LIMIT 1",
+        (sha,),
+    ).fetchone()
     if not row:
         raise Problem("not_found", "Skill bundle not found", 404)
     files = json.loads(row[3])
@@ -86,14 +95,19 @@ def keep_receipt(c, row, body):
     version of a directory skill is ignored."""
     now, kept = H.now(), 0
     for item in body.staged:
-        skill = c.execute("SELECT s.id FROM skills s JOIN skill_versions v ON v.skill_id=s.id "
-                          "WHERE s.name=? AND s.deleted_at IS NULL AND v.sha256=?", (item.name, item.sha256)).fetchone()
+        skill = c.execute(
+            "SELECT s.id FROM skills s JOIN skill_versions v ON v.skill_id=s.id "
+            "WHERE s.name=? AND s.deleted_at IS NULL AND v.sha256=?",
+            (item.name, item.sha256),
+        ).fetchone()
         if not skill:
             continue
-        c.execute("INSERT INTO skill_receipts(target_type,target_id,skill_id,sha256,source,staged_at) "
-                  "VALUES('Bot',?,?,?,'runner',?) ON CONFLICT(target_type,target_id,skill_id) DO UPDATE SET "
-                  "sha256=excluded.sha256,source=excluded.source,staged_at=excluded.staged_at",
-                  (row["bot_id"], skill[0], item.sha256, now))
+        c.execute(
+            "INSERT INTO skill_receipts(target_type,target_id,skill_id,sha256,source,staged_at) "
+            "VALUES('Bot',?,?,?,'runner',?) ON CONFLICT(target_type,target_id,skill_id) DO UPDATE SET "
+            "sha256=excluded.sha256,source=excluded.source,staged_at=excluded.staged_at",
+            (row["bot_id"], skill[0], item.sha256, now),
+        )
         kept += 1
     return {"kept": kept}
 
@@ -104,50 +118,78 @@ def _skill_id(c, name):
 
 
 def _staged_sha(c, bot, skill_id):
-    found = c.execute("SELECT sha256 FROM skill_receipts WHERE target_type='Bot' AND target_id=? AND skill_id=?",
-                      (bot, skill_id)).fetchone()
+    found = c.execute(
+        "SELECT sha256 FROM skill_receipts WHERE target_type='Bot' AND target_id=? AND skill_id=?", (bot, skill_id)
+    ).fetchone()
     return found[0] if found else None
 
 
 def skill_calls(events):
-    """(name, tool id) of each `Skill` call starting in a batch, where the runner named a valid skill."""
+    """(name, tool id, seq) of each `Skill` call starting in a batch, where the runner named a valid skill."""
     calls = []
     for event in events:
         payload = event.payload if event.kind == "tool" else None
         if not isinstance(payload, dict) or payload.get("tool") != "Skill" or payload.get("status") != "started":
             continue
         name, tool_id = payload.get("skill"), payload.get("item_id")
-        if (isinstance(name, str) and NAME_RE.fullmatch(name) and isinstance(tool_id, str)
-                and 0 < len(tool_id) <= TOOL_ID_MAX):
-            calls.append((name, tool_id))
+        if (
+            isinstance(name, str)
+            and NAME_RE.fullmatch(name)
+            and isinstance(tool_id, str)
+            and 0 < len(tool_id) <= TOOL_ID_MAX
+        ):
+            calls.append((name, tool_id, getattr(event, "seq", None)))
     return calls
 
 
-def record_runner_usage(c, aid, events):
+def last_seq(c, aid):
+    """The attempt's last kept event, before a batch is taken: the batch's events after it are new."""
+    row = c.execute("SELECT last_seq FROM attempts WHERE id=?", (aid,)).fetchone()
+    return row[0] if row else None
+
+
+def record_runner_usage(c, aid, events, after_seq=None):
     """A usage row per `Skill` call in an attempt's events whose name is a directory skill: the bot, trigger model,
-    session = the attempt, the task the attempt works on, and the sha its runner staged. Others (a repository's own
-    skill, a plugin's) are not counted. Returns the rows written."""
+    session = the attempt, the task the attempt works on, and the sha its runner staged. Duplicates are ignored (one row
+    per session and tool id).
+
+    A call to a skill the directory does not have (a repository's own, one in the bot's home) adds one to that day's count
+    for its name and bot in `unlisted_skill_usage_dailies`, and keeps nothing else: no task, no session, no sha. A count
+    has no row to dedupe against, so only the batch's new events count (those after `after_seq`, the attempt's last
+    kept event before this batch: a resent batch adds nothing), once per tool id; the runner sends one started event per
+    tool id. Returns the directory rows written."""
     calls = skill_calls(events)
     if not calls:
         return 0
-    row = c.execute("SELECT a.bot_id, j.message_id FROM attempts a LEFT JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
-                    (aid,)).fetchone()
+    row = c.execute(
+        "SELECT a.bot_id, j.message_id FROM attempts a LEFT JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (aid,)
+    ).fetchone()
     if not row:
         return 0
     bot, task_id = row[0], None
     msg = H.message(c, row[1], include_deleted=True) if row[1] else None
     if msg:
         from .execution import work_task_id
+
         task_id = work_task_id(msg, H.conversation(c, msg["conversation_id"]))
-    written, now = 0, H.now()
-    for name, tool_id in calls:
+    written, now, counted = 0, H.now(), set()
+    for name, tool_id, seq in calls:
         skill_id = _skill_id(c, name)
         if not skill_id:
+            fresh = after_seq is None or (isinstance(seq, int) and seq > after_seq)
+            if fresh and tool_id not in counted:
+                counted.add(tool_id)
+                c.execute(
+                    "INSERT INTO unlisted_skill_usage_dailies(used_on,name,bot_id,uses_count) VALUES(?,?,?,1) "
+                    "ON CONFLICT(used_on,name,bot_id) DO UPDATE SET uses_count=uses_count+1",
+                    (now[:10], name, bot),
+                )
             continue
         written += c.execute(
             "INSERT OR IGNORE INTO skill_usages(skill_id,sha256,actor_type,actor_id,trigger,source,session_key,"
             "tool_use_id,task_id,used_at,created_at) VALUES(?,?,'Bot',?,'model','runner',?,?,?,?,?)",
-            (skill_id, _staged_sha(c, bot, skill_id), bot, aid, tool_id, task_id, now, now)).rowcount
+            (skill_id, _staged_sha(c, bot, skill_id), bot, aid, tool_id, task_id, now, now),
+        ).rowcount
     return written
 
 
@@ -168,8 +210,11 @@ def record_thread_usage(c, message, conversation, refs=None):
     if not name:
         return 0
     bot = H.actor_id(recipient)
-    found = c.execute("SELECT s.id FROM skills s JOIN skill_installs i ON i.skill_id=s.id AND i.target_type='Bot' "
-                      "AND i.target_id=? WHERE s.name=? AND s.deleted_at IS NULL", (bot, name)).fetchone()
+    found = c.execute(
+        "SELECT s.id FROM skills s JOIN skill_installs i ON i.skill_id=s.id AND i.target_type='Bot' "
+        "AND i.target_id=? WHERE s.name=? AND s.deleted_at IS NULL",
+        (bot, name),
+    ).fetchone()
     if not found:
         return 0
     task_id = H.message_task_id({"refs": refs or {}}, conversation)
@@ -178,8 +223,19 @@ def record_thread_usage(c, message, conversation, refs=None):
         "INSERT OR IGNORE INTO skill_usages(skill_id,sha256,actor_type,actor_id,requested_by_id,trigger,source,"
         "session_key,tool_use_id,task_id,thread_id,used_at,created_at) "
         "VALUES(?,?,'Bot',?,?,'person','thread',?,?,?,?,?,?)",
-        (found[0], _staged_sha(c, bot, found[0]), bot, H.actor_id(sender), conversation["id"], message["id"], task_id,
-         conversation["id"], now, now)).rowcount
+        (
+            found[0],
+            _staged_sha(c, bot, found[0]),
+            bot,
+            H.actor_id(sender),
+            conversation["id"],
+            message["id"],
+            task_id,
+            conversation["id"],
+            now,
+            now,
+        ),
+    ).rowcount
 
 
 def install(app, store, execution, mutate):
@@ -199,5 +255,6 @@ def install(app, store, execution, mutate):
     @app.post("/api/v2/attempts/{aid}/skills/receipt")
     def attempt_skills_receipt(request: Request, aid: str, body: SkillReceipt):
         """What the runner staged for this attempt's bot: the verified half of each install."""
-        return mutate(request, body, lambda c: keep_receipt(c, attempt_bot(c, execution, request.state.identity, aid),
-                                                            body))
+        return mutate(
+            request, body, lambda c: keep_receipt(c, attempt_bot(c, execution, request.state.identity, aid), body)
+        )

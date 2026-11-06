@@ -102,19 +102,6 @@ pub fn synthetic_input() -> bool {
     std::env::var_os("TICO_RECORDER_SYNTHETIC_INPUT").is_some()
         && std::env::var_os("TICO_RECORDER_DATA_DIR").is_some()
 }
-pub fn clock(ms: u64) -> String {
-    let seconds = ms / 1000;
-    if seconds >= 3600 {
-        format!(
-            "{}:{:02}:{:02}",
-            seconds / 3600,
-            seconds / 60 % 60,
-            seconds % 60
-        )
-    } else {
-        format!("{:02}:{:02}", seconds / 60, seconds % 60)
-    }
-}
 /// Consecutive lines from one speaker are one block; each line is a paragraph, and a long line
 /// breaks into paragraphs at sentence ends.
 pub fn transcript_blocks(record: &Recording) -> Vec<Block> {
@@ -170,11 +157,13 @@ pub fn sent_to(deliveries: &[store::Delivery], destination: &str) -> bool {
         .any(|row| row.destination_id == destination && row.status == "sent")
 }
 /// The Tico address in a `tico-recorder://connect?server=…` link.
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub fn connect_address(link: &str) -> Option<String> {
     link_address(link, "connect")
 }
 /// The Tico address in a `tico-recorder://<action>?server=…` link: `connect` (Tico's Connect recorder button) or
 /// `open` (Record in the Tico desktop app, which opens the Recorder on that org and starts nothing).
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub fn link_address(link: &str, action: &str) -> Option<String> {
     let url = reqwest::Url::parse(link).ok()?;
     if url.scheme() != "tico-recorder" || url.host_str() != Some(action) {
@@ -1404,10 +1393,10 @@ impl Recorder {
                         "live" => {
                             // Polled every few seconds; the window hears about it only on change.
                             if self.live != value["view"] {
-                                if value["view"]["state"] != "live" {
-                                    if let Some(id) = &self.meeting {
-                                        self.screen.stop_meeting(id);
-                                    }
+                                if value["view"]["state"] != "live"
+                                    && let Some(id) = &self.meeting
+                                {
+                                    self.screen.stop_meeting(id);
                                 }
                                 self.live = value["view"].clone();
                                 self.bump();
@@ -1418,10 +1407,9 @@ impl Recorder {
                             let sent = &value["sent"];
                             if sent.is_object()
                                 && let Some(chat) = self.live["chat"].as_array_mut()
+                                && !chat.iter().any(|row| row["id"] == sent["id"])
                             {
-                                if !chat.iter().any(|row| row["id"] == sent["id"]) {
-                                    chat.push(sent.clone());
-                                }
+                                chat.push(sent.clone());
                             }
                             self.last_sync = Instant::now() - Duration::from_secs(5);
                         }
@@ -1757,10 +1745,10 @@ impl Recorder {
         self.reload();
     }
     pub fn control_live(&mut self, action: &str) {
-        if action != "resume" {
-            if let Some(id) = &self.meeting {
-                self.screen.stop_meeting(id);
-            }
+        if action != "resume"
+            && let Some(id) = &self.meeting
+        {
+            self.screen.stop_meeting(id);
         }
         let Ok(record) = self.open_record() else {
             return;
@@ -2322,6 +2310,7 @@ impl Recorder {
     }
     /// Send does every step in one go: it stops this recording, waits for its last words,
     /// finishes a live meeting in Tico, then files it. Only what no step can fix stops it here.
+    #[cfg(test)]
     pub fn send_meeting(&mut self, id: &str, destination: &str) {
         self.send_meeting_confirmed(id, destination, false);
     }
@@ -2808,6 +2797,7 @@ impl Recorder {
     /// A link macOS delivered to the app: `connect` asks to sign in to that Tico; `open` (Record in the Tico desktop
     /// app) chooses that Tico for what comes next when the Recorder is signed in to it, and asks to sign in when not.
     /// Neither starts a recording.
+    #[cfg(any(target_os = "macos", target_os = "ios", test))]
     pub fn link(&mut self, link: &str) {
         if let Some(address) = link_address(link, "open") {
             let connected = self

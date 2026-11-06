@@ -126,16 +126,26 @@ def create_code(c, body, client, public_url):
     """The helper asks to be connected. Returns its secret device code (kept by the helper) and the short code."""
     now = H.now()
     c.execute("DELETE FROM skill_device_codes WHERE created_at<?", (H.shift(now, hours=-24),))
-    c.execute("UPDATE skill_device_codes SET status='expired',updated_at=? WHERE status IN ('pending','approved') "
-              "AND expires_at<=?", (now, now))
+    c.execute(
+        "UPDATE skill_device_codes SET status='expired',updated_at=? WHERE status IN ('pending','approved') "
+        "AND expires_at<=?",
+        (now, now),
+    )
     client_hash = digest("skills-device-client:" + client)
-    if c.execute("SELECT count(*) FROM skill_device_codes WHERE client_hash=? AND created_at>?",
-                 (client_hash, H.shift(now, hours=-1))).fetchone()[0] >= CODES_PER_CLIENT_HOUR:
-        raise Problem("rate_limited", "Too many connect requests from this address; try again in an hour", 429,
-                      retryable=True)
+    if (
+        c.execute(
+            "SELECT count(*) FROM skill_device_codes WHERE client_hash=? AND created_at>?",
+            (client_hash, H.shift(now, hours=-1)),
+        ).fetchone()[0]
+        >= CODES_PER_CLIENT_HOUR
+    ):
+        raise Problem(
+            "rate_limited", "Too many connect requests from this address; try again in an hour", 429, retryable=True
+        )
     if c.execute("SELECT count(*) FROM skill_device_codes WHERE status='pending'").fetchone()[0] >= CODES_PENDING_MAX:
-        raise Problem("rate_limited", "Too many connect requests are waiting; try again in a few minutes", 429,
-                      retryable=True)
+        raise Problem(
+            "rate_limited", "Too many connect requests are waiting; try again in a few minutes", 429, retryable=True
+        )
     for _ in range(20):
         code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(8))
         if not c.execute("SELECT 1 FROM skill_device_codes WHERE user_code=?", (code,)).fetchone():
@@ -143,18 +153,29 @@ def create_code(c, body, client, public_url):
     else:
         raise Problem("unavailable", "Could not make a code; try again", 503, retryable=True)
     device_code = secrets.token_urlsafe(32)
-    c.execute("INSERT INTO skill_device_codes(device_code_hash,user_code,label,status,expires_at,created_at,updated_at,"
-              "client_hash) VALUES(?,?,?,'pending',?,?,?,?)",
-              (digest(device_code), code, body.label, H.shift(now, seconds=CODE_TTL), now, now, client_hash))
-    return {"device_code": device_code, "user_code": _shown(code),
-            "verification_url": public_url + "/#/skills/connect?code=" + _shown(code),
-            "expires_in": CODE_TTL, "interval": POLL_EVERY}
+    c.execute(
+        "INSERT INTO skill_device_codes(device_code_hash,user_code,label,status,expires_at,created_at,updated_at,"
+        "client_hash) VALUES(?,?,?,'pending',?,?,?,?)",
+        (digest(device_code), code, body.label, H.shift(now, seconds=CODE_TTL), now, now, client_hash),
+    )
+    return {
+        "device_code": device_code,
+        "user_code": _shown(code),
+        "verification_url": public_url + "/#/skills/connect?code=" + _shown(code),
+        "expires_in": CODE_TTL,
+        "interval": POLL_EVERY,
+    }
 
 
 def _pending(c, user_code):
     code = _code(user_code)
-    row = c.execute("SELECT * FROM skill_device_codes WHERE user_code=? AND status='pending' AND expires_at>?",
-                    (code, H.now())).fetchone() if len(code) == 8 else None
+    row = (
+        c.execute(
+            "SELECT * FROM skill_device_codes WHERE user_code=? AND status='pending' AND expires_at>?", (code, H.now())
+        ).fetchone()
+        if len(code) == 8
+        else None
+    )
     if not row:
         raise Problem("not_found", "That code is not valid or has expired. Run setup again for a new one", 404)
     return row
@@ -170,8 +191,10 @@ def decide(c, who, user_code, approve, reporting_enabled=False):
     _approver(who)
     row = _pending(c, user_code)
     status = "approved" if approve else "denied"
-    c.execute("UPDATE skill_device_codes SET status=?,person_id=?,reporting_enabled=?,updated_at=? WHERE user_code=?",
-              (status, H.actor_id(who.actor), int(bool(approve and reporting_enabled)), H.now(), row["user_code"]))
+    c.execute(
+        "UPDATE skill_device_codes SET status=?,person_id=?,reporting_enabled=?,updated_at=? WHERE user_code=?",
+        (status, H.actor_id(who.actor), int(bool(approve and reporting_enabled)), H.now(), row["user_code"]),
+    )
     H.event(c, who.actor, "skill_device." + status, _shown(row["user_code"]), {"label": row["label"]})
     return {status: True, "label": row["label"]}
 
@@ -183,27 +206,36 @@ def exchange(c, device_code):
         return "unknown", None
     now = H.now()
     if row["status"] in ("pending", "approved") and row["expires_at"] <= now:
-        c.execute("UPDATE skill_device_codes SET status='expired',updated_at=? WHERE device_code_hash=?",
-                  (now, row["device_code_hash"]))
+        c.execute(
+            "UPDATE skill_device_codes SET status='expired',updated_at=? WHERE device_code_hash=?",
+            (now, row["device_code_hash"]),
+        )
         return "gone", "expired"
     if row["status"] == "pending":
         return "pending", None
     if row["status"] != "approved":
         return "gone", row["status"]
     token, device_id = PREFIX + secrets.token_urlsafe(32), "skd_" + secrets.token_hex(10)
-    c.execute("INSERT INTO skill_devices(id,person_id,label,token_hash,reporting_enabled,created_at,updated_at) "
-              "VALUES(?,?,?,?,?,?,?)", (device_id, row["person_id"], row["label"], digest(token),
-                                        row["reporting_enabled"], now, now))
-    c.execute("UPDATE skill_device_codes SET status='used',device_id=?,updated_at=? WHERE device_code_hash=?",
-              (device_id, now, row["device_code_hash"]))
+    c.execute(
+        "INSERT INTO skill_devices(id,person_id,label,token_hash,reporting_enabled,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (device_id, row["person_id"], row["label"], digest(token), row["reporting_enabled"], now, now),
+    )
+    c.execute(
+        "UPDATE skill_device_codes SET status='used',device_id=?,updated_at=? WHERE device_code_hash=?",
+        (device_id, now, row["device_code_hash"]),
+    )
     H.event(c, H.human_actor(row["person_id"]), "skill_device.enrolled", device_id, {"label": row["label"]})
     return "token", {"token": token, "device_id": device_id, "reporting_enabled": bool(row["reporting_enabled"])}
 
 
 def listing(c, who):
     _signed_in(who, "Your Claude Code devices")
-    rows = c.execute("SELECT " + ",".join(FIELDS) + " FROM skill_devices WHERE person_id=? AND revoked_at IS NULL "
-                     "ORDER BY created_at DESC", (H.actor_id(who.actor),)).fetchall()
+    rows = c.execute(
+        "SELECT " + ",".join(FIELDS) + " FROM skill_devices WHERE person_id=? AND revoked_at IS NULL "
+        "ORDER BY created_at DESC",
+        (H.actor_id(who.actor),),
+    ).fetchall()
     return [{**dict(r), "reporting_enabled": bool(r["reporting_enabled"])} for r in rows]
 
 
@@ -257,8 +289,10 @@ def _skills_by_name(c, names):
     if not names:
         return {}
     marks = ",".join("?" * len(names))
-    return {r["name"]: r["id"] for r in c.execute(
-        "SELECT id,name FROM skills WHERE deleted_at IS NULL AND name IN (" + marks + ")", names)}
+    return {
+        r["name"]: r["id"]
+        for r in c.execute("SELECT id,name FROM skills WHERE deleted_at IS NULL AND name IN (" + marks + ")", names)
+    }
 
 
 def receipt(c, who, body):
@@ -268,15 +302,22 @@ def receipt(c, who, body):
     staged = {s.name: s.sha256.lower() for s in body.staged if SHA.fullmatch(s.sha256.lower())}
     known = _skills_by_name(c, staged)
     for name, skill_id in known.items():
-        c.execute("INSERT INTO skill_receipts(target_type,target_id,skill_id,sha256,source,staged_at) "
-                  "VALUES('Human',?,?,?,'helper',?) ON CONFLICT(target_type,target_id,skill_id) DO UPDATE SET "
-                  "sha256=excluded.sha256,source=excluded.source,staged_at=excluded.staged_at",
-                  (person, skill_id, staged[name], now))
+        c.execute(
+            "INSERT INTO skill_receipts(target_type,target_id,skill_id,sha256,source,staged_at) "
+            "VALUES('Human',?,?,?,'helper',?) ON CONFLICT(target_type,target_id,skill_id) DO UPDATE SET "
+            "sha256=excluded.sha256,source=excluded.source,staged_at=excluded.staged_at",
+            (person, skill_id, staged[name], now),
+        )
     keep = sorted(known.values())
-    c.execute("DELETE FROM skill_receipts WHERE target_type='Human' AND target_id=? AND source='helper'"
-              + (" AND skill_id NOT IN (" + ",".join("?" * len(keep)) + ")" if keep else ""), (person, *keep))
-    c.execute("UPDATE skill_devices SET claude_version=?,last_seen_at=?,updated_at=? WHERE id=?",
-              (body.claude_version or device["claude_version"], now, now, device["id"]))
+    c.execute(
+        "DELETE FROM skill_receipts WHERE target_type='Human' AND target_id=? AND source='helper'"
+        + (" AND skill_id NOT IN (" + ",".join("?" * len(keep)) + ")" if keep else ""),
+        (person, *keep),
+    )
+    c.execute(
+        "UPDATE skill_devices SET claude_version=?,last_seen_at=?,updated_at=? WHERE id=?",
+        (body.claude_version or device["claude_version"], now, now, device["id"]),
+    )
     return {"staged": len(known), "dropped": len(body.staged) - len(known)}
 
 
@@ -296,18 +337,23 @@ def usage(c, who, body):
     person, now = device["person_id"], H.now()
     oldest = H.shift(now, days=-USAGE_MAX_AGE_DAYS)
     known = _skills_by_name(c, [e.name for e in body.events])
-    staged = {r["skill_id"]: r["sha256"] for r in c.execute(
-        "SELECT skill_id,sha256 FROM skill_receipts WHERE target_type='Human' AND target_id=?", (person,))}
+    staged = {
+        r["skill_id"]: r["sha256"]
+        for r in c.execute(
+            "SELECT skill_id,sha256 FROM skill_receipts WHERE target_type='Human' AND target_id=?", (person,)
+        )
+    }
     recorded = duplicates = dropped = 0
     for e in body.events:
         skill_id, used_at = known.get(e.name), _when(e.used_at, now)
         if not skill_id or e.trigger not in TRIGGERS or used_at < oldest:
             dropped += 1
             continue
-        inserted = c.execute("INSERT OR IGNORE INTO skill_usages(skill_id,sha256,actor_type,actor_id,trigger,source,"
-                             "session_key,tool_use_id,used_at,created_at) VALUES(?,?,'Human',?,?,'helper',?,?,?,?)",
-                             (skill_id, staged.get(skill_id), person, e.trigger, e.session_key, e.tool_use_id,
-                              used_at, now)).rowcount
+        inserted = c.execute(
+            "INSERT OR IGNORE INTO skill_usages(skill_id,sha256,actor_type,actor_id,trigger,source,"
+            "session_key,tool_use_id,used_at,created_at) VALUES(?,?,'Human',?,?,'helper',?,?,?,?)",
+            (skill_id, staged.get(skill_id), person, e.trigger, e.session_key, e.tool_use_id, used_at, now),
+        ).rowcount
         recorded += inserted
         duplicates += 1 - inserted
     c.execute("UPDATE skill_devices SET last_seen_at=? WHERE id=?", (now, device["id"]))
@@ -317,12 +363,14 @@ def usage(c, who, body):
 def install(app, store, auth, mutate, settings):
     def client_address(request):
         from .client_ip import client_ip, ip_bucket
+
         return ip_bucket(client_ip(request, settings))
 
     def refuse_in_rehearsal():
         if getattr(settings, "rehearsal", False):
-            raise Problem("rehearsal", "Connecting devices is off in a rehearsal: this server is a copy of real data",
-                          409)
+            raise Problem(
+                "rehearsal", "Connecting devices is off in a rehearsal: this server is a copy of real data", 409
+            )
 
     @app.post(CODES_PATH, status_code=201)
     def skill_device_code(request: Request, body: SkillDeviceCodeCreate):
@@ -387,4 +435,3 @@ def install(app, store, auth, mutate, settings):
     def skill_usage(request: Request, body: SkillUsage):
         who = request.state.identity
         return store.write(who, lambda c: usage(c, who, body))
-

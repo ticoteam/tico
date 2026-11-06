@@ -9,6 +9,7 @@
 The process runs with the checkout as its working directory, so `backend` is the checkout's; this tree is on PYTHONPATH,
 so `e2e` is this tree's. Both steps block outside network the way every e2e test does (backend/tests/live.py).
 """
+
 import argparse
 import importlib.util
 import json
@@ -33,7 +34,7 @@ def block_outside_network(reason):
 
 
 def populate(workdir, out):
-    from backend.tests.test_api import api   # the checkout's fixture: its seeding, bots and people
+    from backend.tests.test_api import api  # the checkout's fixture: its seeding, bots and people
     from e2e import renames, scenario
     from e2e.normalize import normalize
     from e2e.server import serve, settings_for, snapshot

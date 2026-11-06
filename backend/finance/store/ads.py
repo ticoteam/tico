@@ -3,6 +3,7 @@ for), the platforms' daily spend per campaign, and the budget warnings bots were
 
 The tables come from migration 20261106071500_finance_ad_spend; `ready` tells a database without them (an old test
 copy), and every read answers empty there."""
+
 import json
 import re
 import sqlite3
@@ -26,8 +27,9 @@ _CONTACT = {name.casefold(): p for p, name in VENDOR.items()}
 # but not Meta's other charges (Workplace, Quest, Verified, Blueprint) or a bare FACEBOOK or META PLATFORMS.
 DESCRIPTORS = {
     "google_ads": re.compile(r"\bgoogle\s*\*?\s*ads(?![a-z])", re.IGNORECASE),
-    "meta_ads": re.compile(r"\bfacebk\s*\*|\bfb\.me/ads(?![a-z])|\bfacebook\s*ads(?![a-z])|\bmeta\s*ads(?![a-z])",
-                           re.IGNORECASE),
+    "meta_ads": re.compile(
+        r"\bfacebk\s*\*|\bfb\.me/ads(?![a-z])|\bfacebook\s*ads(?![a-z])|\bmeta\s*ads(?![a-z])", re.IGNORECASE
+    ),
 }
 
 
@@ -38,9 +40,9 @@ class AdImport:
     platform: str
     enabled: bool
     history_from: str
-    account_id: str = ""                         # the books line spend books as
-    credentials: dict[str, str] = field(default_factory=dict[str, str])       # slot -> credential id
-    status: str = "never"                        # never | ok | reconnect | failed
+    account_id: str = ""  # the books line spend books as
+    credentials: dict[str, str] = field(default_factory=dict[str, str])  # slot -> credential id
+    status: str = "never"  # never | ok | reconnect | failed
     last_import_at: str | None = None
     last_error: str = ""
     run_requested_at: str | None = None
@@ -57,7 +59,7 @@ class AdAccount:
     external_id: str
     name: str
     currency: str
-    bot_slug: str                                # "" when not assigned
+    bot_slug: str  # "" when not assigned
     active: bool
 
 
@@ -72,16 +74,27 @@ def _credentials(text: object) -> dict[str, str]:
         return {}
     if not isinstance(raw, dict):
         return {}
-    pairs: dict[Any, Any] = raw          # type: ignore[assignment]
+    pairs: dict[Any, Any] = raw  # type: ignore[assignment]
     return {str(k): str(v) for k, v in pairs.items() if v}
 
 
 def _import(r: Any) -> AdImport:
-    return AdImport(id=r["id"], tool_id=r["tool_id"], platform=r["platform"], enabled=bool(r["enabled"]),
-                    history_from=r["history_from"], account_id=r["account_id"] or "",
-                    credentials=_credentials(r["credentials"]), status=r["status"], last_import_at=r["last_import_at"],
-                    last_error=r["last_error"] or "", run_requested_at=r["run_requested_at"],
-                    created_by=r["created_by"], created_at=r["created_at"], updated_at=r["updated_at"])
+    return AdImport(
+        id=r["id"],
+        tool_id=r["tool_id"],
+        platform=r["platform"],
+        enabled=bool(r["enabled"]),
+        history_from=r["history_from"],
+        account_id=r["account_id"] or "",
+        credentials=_credentials(r["credentials"]),
+        status=r["status"],
+        last_import_at=r["last_import_at"],
+        last_error=r["last_error"] or "",
+        run_requested_at=r["run_requested_at"],
+        created_by=r["created_by"],
+        created_at=r["created_at"],
+        updated_at=r["updated_at"],
+    )
 
 
 def imports(c: sqlite3.Connection) -> list[AdImport]:
@@ -99,24 +112,41 @@ def import_for(c: sqlite3.Connection, tool_id: str) -> AdImport | None:
 
 def save_import(c: sqlite3.Connection, imp: AdImport, at: str) -> None:
     """Insert or update a tool's import settings (its result fields stay as they are on an update)."""
-    c.execute("INSERT INTO fin_ad_imports(id, tool_id, platform, enabled, history_from, account_id, credentials, "
-              "status, last_import_at, last_error, run_requested_at, created_by, created_at, updated_at) "
-              "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(tool_id) DO UPDATE SET enabled=excluded.enabled, "
-              "history_from=excluded.history_from, account_id=excluded.account_id, "
-              "credentials=excluded.credentials, last_import_at=excluded.last_import_at, "
-              "run_requested_at=excluded.run_requested_at, updated_at=excluded.updated_at",
-              (imp.id or new_id(), imp.tool_id, imp.platform, int(imp.enabled), imp.history_from, imp.account_id,
-               json.dumps(imp.credentials, sort_keys=True), imp.status, imp.last_import_at, imp.last_error,
-               imp.run_requested_at, imp.created_by, imp.created_at or at, at))
+    c.execute(
+        "INSERT INTO fin_ad_imports(id, tool_id, platform, enabled, history_from, account_id, credentials, "
+        "status, last_import_at, last_error, run_requested_at, created_by, created_at, updated_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(tool_id) DO UPDATE SET enabled=excluded.enabled, "
+        "history_from=excluded.history_from, account_id=excluded.account_id, "
+        "credentials=excluded.credentials, last_import_at=excluded.last_import_at, "
+        "run_requested_at=excluded.run_requested_at, updated_at=excluded.updated_at",
+        (
+            imp.id or new_id(),
+            imp.tool_id,
+            imp.platform,
+            int(imp.enabled),
+            imp.history_from,
+            imp.account_id,
+            json.dumps(imp.credentials, sort_keys=True),
+            imp.status,
+            imp.last_import_at,
+            imp.last_error,
+            imp.run_requested_at,
+            imp.created_by,
+            imp.created_at or at,
+            at,
+        ),
+    )
 
 
 def finish(c: sqlite3.Connection, import_id: str, status: str, error: str, at: str, *, imported: bool) -> None:
     """Record a run's result (`at`: when its pass started). `imported`: the spend came in, so the next run takes the
     last 30 days only. A run asked for after the pass started stays asked for, so another pass runs it."""
-    c.execute("UPDATE fin_ad_imports SET status=?, last_error=?, updated_at=?, "
-              "run_requested_at=CASE WHEN run_requested_at>? THEN run_requested_at ELSE NULL END, "
-              "last_import_at=CASE WHEN ? THEN ? ELSE last_import_at END WHERE id=?",
-              (status, error[:500], at, at, int(imported), at, import_id))
+    c.execute(
+        "UPDATE fin_ad_imports SET status=?, last_error=?, updated_at=?, "
+        "run_requested_at=CASE WHEN run_requested_at>? THEN run_requested_at ELSE NULL END, "
+        "last_import_at=CASE WHEN ? THEN ? ELSE last_import_at END WHERE id=?",
+        (status, error[:500], at, at, int(imported), at, import_id),
+    )
 
 
 def request_run(c: sqlite3.Connection, import_id: str, at: str) -> None:
@@ -124,8 +154,16 @@ def request_run(c: sqlite3.Connection, import_id: str, at: str) -> None:
 
 
 def _account(r: Any) -> AdAccount:
-    return AdAccount(id=r["id"], tool_id=r["tool_id"], platform=r["platform"], external_id=r["external_id"],
-                     name=r["name"], currency=r["currency"], bot_slug=r["bot_slug"] or "", active=bool(r["active"]))
+    return AdAccount(
+        id=r["id"],
+        tool_id=r["tool_id"],
+        platform=r["platform"],
+        external_id=r["external_id"],
+        name=r["name"],
+        currency=r["currency"],
+        bot_slug=r["bot_slug"] or "",
+        active=bool(r["active"]),
+    )
 
 
 def accounts(c: sqlite3.Connection, tool_id: str = "") -> list[AdAccount]:
@@ -145,23 +183,32 @@ def account(c: sqlite3.Connection, account_id: str) -> AdAccount | None:
     return _account(row) if row else None
 
 
-def upsert_account(c: sqlite3.Connection, tool_id: str, platform: str, external_id: str, name: str, currency: str,
-                   at: str) -> str:
+def upsert_account(
+    c: sqlite3.Connection, tool_id: str, platform: str, external_id: str, name: str, currency: str, at: str
+) -> str:
     """The account's id; a known one takes the platform's current name and currency and is active again. Its bot stays."""
-    c.execute("INSERT INTO fin_ad_accounts(id, tool_id, platform, external_id, name, currency, bot_slug, active, "
-              "created_at, updated_at) VALUES(?,?,?,?,?,?,NULL,1,?,?) ON CONFLICT(tool_id, external_id) DO UPDATE SET "
-              "name=excluded.name, currency=excluded.currency, active=1, updated_at=excluded.updated_at",
-              (new_id(), tool_id, platform, external_id, name, currency.upper() or "USD", at, at))
-    return str(c.execute("SELECT id FROM fin_ad_accounts WHERE tool_id=? AND external_id=?",
-                         (tool_id, external_id)).fetchone()[0])
+    c.execute(
+        "INSERT INTO fin_ad_accounts(id, tool_id, platform, external_id, name, currency, bot_slug, active, "
+        "created_at, updated_at) VALUES(?,?,?,?,?,?,NULL,1,?,?) ON CONFLICT(tool_id, external_id) DO UPDATE SET "
+        "name=excluded.name, currency=excluded.currency, active=1, updated_at=excluded.updated_at",
+        (new_id(), tool_id, platform, external_id, name, currency.upper() or "USD", at, at),
+    )
+    return str(
+        c.execute(
+            "SELECT id FROM fin_ad_accounts WHERE tool_id=? AND external_id=?", (tool_id, external_id)
+        ).fetchone()[0]
+    )
 
 
 def deactivate_missing(c: sqlite3.Connection, tool_id: str, seen: Iterable[str], at: str) -> None:
     """Accounts the login no longer sees stop counting (their spend stays for the record)."""
     keep = sorted(set(seen))
     marks = ",".join("?" * len(keep))
-    c.execute("UPDATE fin_ad_accounts SET active=0, updated_at=? WHERE tool_id=? AND active=1"
-              + (f" AND external_id NOT IN ({marks})" if keep else ""), (at, tool_id, *keep))
+    c.execute(
+        "UPDATE fin_ad_accounts SET active=0, updated_at=? WHERE tool_id=? AND active=1"
+        + (f" AND external_id NOT IN ({marks})" if keep else ""),
+        (at, tool_id, *keep),
+    )
 
 
 def set_bot(c: sqlite3.Connection, account_id: str, bot_slug: str | None, at: str) -> None:
@@ -177,8 +224,9 @@ class SpendRow:
     currency: str
 
 
-def replace_spend(c: sqlite3.Connection, ad_account_id: str, start: str, end: str, rows: Sequence[SpendRow],
-                  at: str) -> int:
+def replace_spend(
+    c: sqlite3.Connection, ad_account_id: str, start: str, end: str, rows: Sequence[SpendRow], at: str
+) -> int:
     """The platform's word for [start, end] replaces what was stored for it: a restated day overwrites, a campaign
     gone from a day goes. Rows with the same day and campaign add up. Returns the rows stored."""
     c.execute("DELETE FROM fin_ad_spends WHERE ad_account_id=? AND day BETWEEN ? AND ?", (ad_account_id, start, end))
@@ -188,19 +236,30 @@ def replace_spend(c: sqlite3.Connection, ad_account_id: str, start: str, end: st
             continue
         key = (r.day, r.campaign_id)
         had = merged.get(key)
-        merged[key] = r if had is None else SpendRow(r.day, r.campaign_id, r.campaign_name or had.campaign_name,
-                                                     had.amount_cents + r.amount_cents, r.currency)
+        merged[key] = (
+            r
+            if had is None
+            else SpendRow(
+                r.day,
+                r.campaign_id,
+                r.campaign_name or had.campaign_name,
+                had.amount_cents + r.amount_cents,
+                r.currency,
+            )
+        )
     for r in merged.values():
-        c.execute("INSERT INTO fin_ad_spends(id, ad_account_id, day, campaign_external_id, campaign_name, amount_cents, "
-                  "currency, fetched_at) VALUES(?,?,?,?,?,?,?,?)",
-                  (new_id(), ad_account_id, r.day, r.campaign_id, r.campaign_name, r.amount_cents, r.currency.upper(),
-                   at))
+        c.execute(
+            "INSERT INTO fin_ad_spends(id, ad_account_id, day, campaign_external_id, campaign_name, amount_cents, "
+            "currency, fetched_at) VALUES(?,?,?,?,?,?,?,?)",
+            (new_id(), ad_account_id, r.day, r.campaign_id, r.campaign_name, r.amount_cents, r.currency.upper(), at),
+        )
     return len(merged)
 
 
 @dataclass(frozen=True)
 class LiveSpend:
     """One counting ad account's spend over a window: an active account of an enabled import."""
+
     ad_account_id: str
     platform: str
     bot_slug: str
@@ -219,18 +278,27 @@ def live_spend(c: sqlite3.Connection, start: str, end: str) -> list[LiveSpend]:
         "COALESCE(s.currency, a.currency) AS currency, COALESCE(SUM(s.amount_cents), 0) AS amount "
         "FROM fin_ad_accounts a JOIN fin_ad_imports i ON i.tool_id=a.tool_id AND i.enabled=1 "
         "LEFT JOIN fin_ad_spends s ON s.ad_account_id=a.id AND s.day BETWEEN ? AND ? "
-        "WHERE a.active=1 GROUP BY a.id, COALESCE(s.currency, a.currency) ORDER BY a.id", (start, end))
-    return [LiveSpend(r["id"], r["platform"], r["bot_slug"], r["account_id"] or "", r["currency"], int(r["amount"]))
-            for r in rows]
+        "WHERE a.active=1 GROUP BY a.id, COALESCE(s.currency, a.currency) ORDER BY a.id",
+        (start, end),
+    )
+    return [
+        LiveSpend(r["id"], r["platform"], r["bot_slug"], r["account_id"] or "", r["currency"], int(r["amount"]))
+        for r in rows
+    ]
 
 
 def account_spend(c: sqlite3.Connection, tool_id: str, start: str, end: str) -> dict[str, int]:
     """{ad account id: spend over [start, end]} for a tool's accounts."""
     if not ready(c):
         return {}
-    return {str(r[0]): int(r[1]) for r in c.execute(
-        "SELECT a.id, COALESCE(SUM(s.amount_cents), 0) FROM fin_ad_accounts a LEFT JOIN fin_ad_spends s "
-        "ON s.ad_account_id=a.id AND s.day BETWEEN ? AND ? WHERE a.tool_id=? GROUP BY a.id", (start, end, tool_id))}
+    return {
+        str(r[0]): int(r[1])
+        for r in c.execute(
+            "SELECT a.id, COALESCE(SUM(s.amount_cents), 0) FROM fin_ad_accounts a LEFT JOIN fin_ad_spends s "
+            "ON s.ad_account_id=a.id AND s.day BETWEEN ? AND ? WHERE a.tool_id=? GROUP BY a.id",
+            (start, end, tool_id),
+        )
+    }
 
 
 def last_import(c: sqlite3.Connection) -> str | None:
@@ -248,16 +316,23 @@ def enabled_platforms(c: sqlite3.Connection) -> dict[str, AdImport]:
 
 def warn_once(c: sqlite3.Connection, budget_id: str, period_key: str, level: str, bot_slug: str, at: str) -> bool:
     """Record that `level` was sent for the budget's period; False when it already was."""
-    cur = c.execute("INSERT INTO fin_ad_warnings(budget_id, period_key, level, bot_slug, created_at) VALUES(?,?,?,?,?) "
-                    "ON CONFLICT DO NOTHING", (budget_id, period_key, level, bot_slug, at))
+    cur = c.execute(
+        "INSERT INTO fin_ad_warnings(budget_id, period_key, level, bot_slug, created_at) VALUES(?,?,?,?,?) "
+        "ON CONFLICT DO NOTHING",
+        (budget_id, period_key, level, bot_slug, at),
+    )
     return cur.rowcount > 0
 
 
 def warned(c: sqlite3.Connection, budget_id: str, period_key: str) -> set[str]:
     if not ready(c):
         return set()
-    return {str(r[0]) for r in c.execute("SELECT level FROM fin_ad_warnings WHERE budget_id=? AND period_key=?",
-                                         (budget_id, period_key))}
+    return {
+        str(r[0])
+        for r in c.execute(
+            "SELECT level FROM fin_ad_warnings WHERE budget_id=? AND period_key=?", (budget_id, period_key)
+        )
+    }
 
 
 # ------------------------------------------------------------------------------------------------ what budgets read
@@ -288,6 +363,7 @@ class HeldFor:
     """A hold still counting in a window (held, or settled with no entry yet: what store/budgets.held counts) and the
     vendor it is for: a card hold's merchant (`text`), a payment's recipient (its contact and name), a bill's or an
     order's vendor contact. A hold of another source names none."""
+
     amount: int
     source: str
     contact_id: str
@@ -301,7 +377,9 @@ def holds_for(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end:
     rows = c.execute(
         "SELECT CASE WHEN status='held' THEN amount ELSE COALESCE(settled_amount, 0) END AS counted, source, source_id "
         f"FROM fin_holds WHERE budget_id IN ({marks}) AND held_on>=? AND held_on<=? "
-        "AND (status='held' OR (status='settled' AND entry_id IS NULL)) ORDER BY id", (*budget_ids, start, end))
+        "AND (status='held' OR (status='settled' AND entry_id IS NULL)) ORDER BY id",
+        (*budget_ids, start, end),
+    )
     out: list[HeldFor] = []
     for r in rows.fetchall():
         source, sid = str(r[1]), str(r[2] or "")
@@ -310,8 +388,11 @@ def holds_for(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end:
             found = c.execute("SELECT counterparty FROM fin_feed_txns WHERE id=?", (sid,)).fetchone()
             text = str(found[0] or "") if found is not None else ""
         elif source == "payment":
-            found = c.execute("SELECT r.contact_id, r.name FROM fin_payments p JOIN fin_recipients r "
-                              "ON r.id=p.recipient_id WHERE p.id=?", (sid,)).fetchone()
+            found = c.execute(
+                "SELECT r.contact_id, r.name FROM fin_payments p JOIN fin_recipients r "
+                "ON r.id=p.recipient_id WHERE p.id=?",
+                (sid,),
+            ).fetchone()
             if found is not None:
                 contact, text = str(found[0] or ""), str(found[1] or "")
         elif source in ("bill", "purchase_order"):
