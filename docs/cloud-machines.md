@@ -62,6 +62,27 @@ cloud machine" under Computer).
 - Billing and caps are HQ's: the shared machine is one machine against the company's machine cap, whatever the
   number of bots on it.
 
+## Size and Grow storage automatically
+
+HQ offers four sizes: Small and Default have a 51 GB disk, Large 111 GB and XLarge 251 GB. Settings shows each size's
+disk. HQ resizes a machine only when it starts it, so a size chosen while the machine runs (by a person, or by
+growing) drains it first: its runner takes no new turn ("restarts at a new size once its turns finish"), and once no
+turn is out and no update is under way it stops, Always on too, and starts again at the new size. Work queued
+meanwhile runs after the restart. A turn is never cut; a drain still waiting after 30 minutes is on Health.
+
+**Grow storage automatically** is on by default. The company sets it for the shared machine
+(`grow_storage` on `POST /api/v2/cloud-machines/shared`); an own machine follows the company until its bot chooses
+(`grow_storage` on `POST /api/v2/bots/{bot}/cloud-machine`). When it is on and the runner's newest disk reading (its
+one-minute performance point, at most 10 minutes old) shows under 15% or under 10 GB free, the machine is set to the
+next size with more disk (Default to Large to XLarge) and restarts at it as above. The row says
+"Grew to Large: disk was 96% full", and the event is `cloud_machine.grew`.
+
+It never goes past the largest size or the company's CPU cap at HQ. When it cannot grow (already the largest, over
+the cap, or HQ refused that size at the start), the machine is marked **Disk nearly full** with the reason, on Health,
+until the disk has room again (`cloud_machine.grow_blocked`). A size HQ refuses goes back to the size it runs at, and
+is not tried again until a person changes the size or the switch. Health's disk check for a cloud machine's computer
+reads the same fresh reading and says what happens next.
+
 ## Tico support
 
 Each cloud machine comes with a support helper, on by default. Tico staff and the Support Agent can use it to read

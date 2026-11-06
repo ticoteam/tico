@@ -318,6 +318,9 @@ function settingsEditBot(slug = '', inline = false) {
         stage('cloud-always', 'always on', cloudAlways.checked !== (cloudAlways.dataset.current === 'true')
           && cloudMachineRun(slug, {always_on: cloudAlways.checked}, cloudAlways));
       }
+      const cloudGrow = event.target.closest('[data-bot-cloud-grow]');
+      if (cloudGrow) stage('cloud-grow', 'grow storage', cloudGrow.checked !== (cloudGrow.dataset.current === 'true')
+        && cloudMachineRun(slug, {grow_storage: cloudGrow.checked}, cloudGrow));
       const compact = event.target.closest('[data-bot-compact]');
       if (compact) stage('compact', 'compact at', changed(compact) && settingsCompactRun(compact));
       const exit = event.target.closest('[data-bot-browser-exit]');

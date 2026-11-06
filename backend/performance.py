@@ -218,6 +218,28 @@ def load_statuses(c, runner_ids, now=None, *, include_memory=True):
     return out
 
 
+DISK_FRESH_S = 10 * 60
+
+
+def latest_disks(c, runner_ids, now=None, within=DISK_FRESH_S):
+    """{runner_id: {free_bytes, total_bytes, at}}: each computer's fullest volume in its newest one-minute point of the
+    last `within` seconds, for those that have one. The readiness report's disk is sent again only when something
+    else in it changes (runner.rs VOLATILE), so it can be hours old; these points come every minute. One seek per
+    computer on (runner_id, span, created_at)."""
+    now = int(time.time() if now is None else now)
+    ids, out = sorted(set(runner_ids)), {}
+    for start in range(0, len(ids), 200):
+        part = ids[start:start + 200]
+        sql = " UNION ALL ".join("SELECT * FROM (SELECT runner_id,disk_free,disk_total,created_at FROM perf_points "
+                                 "WHERE runner_id=? AND span=? AND created_at>=? AND disk_total>0 "
+                                 "ORDER BY created_at DESC LIMIT 1)" for _ in part)
+        for row in c.execute(sql, [v for rid in part for v in (rid, MINUTE, now - within)]):
+            if row["disk_free"] is not None:
+                out[row["runner_id"]] = {"free_bytes": row["disk_free"], "total_bytes": row["disk_total"],
+                                         "at": row["created_at"]}
+    return out
+
+
 def _newest_samples(c, runner_ids, since):
     """The six newest readings of each computer since `since`, newest first. One statement per 200 computers, each
     part a seek to its own (runner_id, ts) key: a computer's 48 hours of minutes are never read to find its six."""

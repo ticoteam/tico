@@ -1,13 +1,15 @@
-/* ui/app/cloud-machines.js — A bot's cloud machine on Tico Cloud, shared or its own: where it runs, size, Always on, state
+/* ui/app/cloud-machines.js — A bot's cloud machine on Tico Cloud, shared or its own: where it runs, size, Always on,
+   Grow storage automatically, state
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 // `cloud_machine` on a bot's row (/api/employees, backend/cloud_machines.py), null off Tico Cloud, so nothing here
 // shows there. `mode` cloud runs the bot on a cloud machine, started when there is work and stopped when idle;
 // `placement` says which: the company's shared one or its own. The size, Always on and state are that machine's. Any
-// other computer is a machine transition, as before. A size applies at the machine's next start; the shared machine's
-// size and Always on are the company's, changed by owners and admins. The sizes are HQ's (GET /v2/cloud-machines),
-// read once; before they come the four names stand alone.
+// other computer is a machine transition, as before. A running machine restarts at a new size once its turns finish;
+// the shared machine's size, Always on and Grow storage are the company's, changed by owners and admins (an own machine
+// grows as the company's does until its bot chooses). The sizes are HQ's (GET /v2/cloud-machines), read once; before
+// they come the four names stand alone.
 const CLOUD_SIZE_NAMES = ['small', 'default', 'large', 'xlarge'];
 const CLOUD_STATES = {none: 'Not started yet', starting: 'Starting', running: 'Running', stopping: 'Stopping',
   stopped: 'Stopped', deleted: 'Deleted', failed: 'Failed'};
@@ -36,15 +38,19 @@ async function cloudMachineSizes() {
 function cloudSizeLabel(size) {
   if (!size.cpu) return cloudSizeName(size.name);
   const hourly = Number(size.usd_per_hour).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6});
-  return `${cloudSizeName(size.name)} · ${size.cpu} CPU · ${size.memory_gb} GB · $${hourly}/h`;
+  const disk = size.disk_gb ? ` · ${size.disk_gb} GB disk` : '';
+  return `${cloudSizeName(size.name)} · ${size.cpu} CPU · ${size.memory_gb} GB${disk} · $${hourly}/h`;
 }
-// "Running · Default · $0.42 this month · 3 starts", then a size waiting for the next start; a problem replaces the state.
+// "Running · Default · $0.42 this month · 3 starts", then a size waiting for the restart, and the last word on growing
+// ("Grew to Large: disk was 96% full"); a problem replaces the state.
 function cloudMachineStatus(m) {
   const parts = [m.problem || CLOUD_STATES[m.state] || m.state, cloudSizeName(m.machine_size || m.size)];
   if (m.cost_month_usd) parts.push(`$${Number(m.cost_month_usd).toFixed(2)} this month`);
   if (m.starts_month) parts.push(`${m.starts_month} start${m.starts_month === 1 ? '' : 's'}`);
-  if (m.machine_size && m.size !== m.machine_size) parts.push(`${cloudSizeName(m.size)} at next start`);
+  if (m.machine_size && m.size !== m.machine_size)
+    parts.push(`${cloudSizeName(m.size)} ${m.resizing ? 'once its turns finish' : 'at next start'}`);
   if (m.always_on) parts.push('Always on');
+  if (m.grow_note) parts.push(m.grow_note);
   return parts.filter(Boolean).join(' · ');
 }
 // The Computer value on the bot's page and in its Info for a bot on a cloud machine; '' for any other.
@@ -58,9 +64,9 @@ function cloudMachineFacts(machine) {
   if (!m) return '';
   return m.shared ? `Cloud machine · ${cloudSizeName(m.size)}` : `Cloud machine · ${empName(m.bot)} · ${cloudSizeName(m.size)}`;
 }
-// The bot editor's rows under Computer: its machine's size, Pause after and Always on, all held until Save bot
-// (`stage`). The shared machine's are the company's: only owners and admins change them. Always on never pauses, so
-// Pause after is off while it is on.
+// The bot editor's rows under Computer: its machine's size, Pause after, Always on and Grow storage automatically, all
+// held until Save bot (`stage`). The shared machine's are the company's: only owners and admins change them. Always on
+// never pauses, so Pause after is off while it is on.
 function cloudMachineRowHTML(e) {
   if (!cloudMachineOn(e)) return '';
   const m = e.cloud_machine, scope = cloudMachineShared(e) ? 'shared' : 'own';
@@ -77,6 +83,9 @@ function cloudMachineRowHTML(e) {
     <div class="sb-row"><span>Pause after</span><div class="rel-line">
       <input type="number" min="5" max="1440" step="1" class="settings-inline-select" data-bot-cloud-pause="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.pause_minutes}" value="${m.pause_minutes}" aria-label="Pause after, in minutes, for ${what}" ${pauseOff}>
       <span class="muted">min</span>
+    </div><span></span></div>
+    <div class="sb-row"><span></span><div class="rel-line">
+      <label class="bot-editor-check"><input type="checkbox" data-bot-cloud-grow="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.grow_storage !== false}" ${m.grow_storage !== false ? 'checked' : ''} ${may}> Grow storage automatically</label>
     </div><span></span></div>
     <div class="sb-sub" data-bot-cloud-status>${esc(cloudMachineStatus(m))}</div>
     ${scope === 'own' && settingsIsAdmin() && (m.runner_id || !['none', 'deleted'].includes(m.state) || (m.state === 'deleted' && m.problem)) ? `<div class="sb-row"><span></span><div>
