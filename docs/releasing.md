@@ -21,6 +21,9 @@ task ("Release vX.Y.Z: <what>") instead of pushing the tag itself; the Release M
 so the tasks waiting on the release learn it shipped. Tico itself never moves a task on a tag, release or deploy; it
 only marks the merged PR links the running release contains as Shipped (backend/github.py).
 
+Tico's own repository is the exception: it releases itself through [release windows](#release-windows) in GitHub
+Actions. Its Release Manager bot no longer tags or rolls out Tico releases; it only monitors them.
+
 **When releases are cut.** The Release Manager hears about Dev tickets at Pending Release once, as one task:
 "Release: <n> tickets at Pending Release". It arrives once a day at a set hour (10:00 company time by default;
 an owner or admin changes the hour, adds a second one or turns it off in Settings, or with `hub release schedule`),
@@ -47,6 +50,56 @@ It is separate from the release command's "Release notes for vX.Y.Z" task. Docs 
 the pre-release checklist. Only the owner, a person who moves Dev tickets, the Release Manager and the bot that
 manages the Dev tickets type run `hub release now`. Routines can run `on: release_published` for one task per release.
 
+## Release windows
+
+Tico's own releases (ticoteam/tico) ship from two windows a day, run by `.github/workflows/train.yml` and
+`scripts/release_train.py`. No one tags by hand.
+
+- **When.** A window opens at 14:30 and 22:00 UTC: 07:30 and 15:00 in Los Angeles in summer, an hour earlier in
+  winter. It stays open until a `vX.Y.Z` release is published after it opened. Nothing is stored: every run works this
+  out from GitHub, so a late schedule or a missed event costs time, never a wrong release.
+- **At the open**, the canary's release is promoted to stable if the bake gate passes (below). Then, if main has moved
+  past the newest release, Release validation (`ci.yml`) is dispatched for main's head as the next patch.
+- **The first green candidate ships.** When a validation of this window goes green, the window tags that commit,
+  publishes it (`release.yml`, dispatched on the tag) and updates the canary. That closes the window.
+- **A red candidate keeps the window open.** The failure goes on the one open `release-train` issue. Each push to
+  main while the window is open validates the new head, one validation at a time. A red head waits for the next push;
+  it is not run again. A window still red at the next open carries on. The next window that ships closes the issue.
+- **Canary and stable.** The canary is Tico Team's install, stable is TIDY's. Both are updated through their update
+  keys ([Service keys](service-keys.md#update-keys)) with `GET`/`POST /api/v2/system/update`, never a browser or SSH.
+- **The bake gate.** Stable takes the canary's release only when the canary has run it for 4 hours (`BAKE_HOURS`), its
+  last update is healthy, `RELEASE_HOLD` is empty and no open issue is labelled `release-blocker`. Anything the gate
+  cannot read holds the release and is reported on the issue. Promotion runs at each open, and again just before a new
+  release goes to the canary.
+- **Holding.** Set the repository variable `RELEASE_HOLD` to a reason (or open a `release-blocker` issue) to keep
+  stable where it is. Set `RELEASE_TRAINS` to anything but `on` to stop the windows altogether.
+- **By hand.** `gh workflow run train.yml --ref main` runs one window step now (promote, then ship or validate),
+  even with `RELEASE_TRAINS` off. `python3 scripts/release_train.py status` (with `GITHUB_TOKEN`, and the install
+  variables to see them) shows the window, the next step and what each install runs.
+
+Triggers: the two schedules, every push to main, every finished Release validation run, and a manual run. A small
+read-only job decides first, so a push with nothing to do ends in seconds. Every job that acts (the window job and
+the hotfix) shares one concurrency group, so two never start a build or a release at once.
+
+Settings, in the GitHub environment `release` (deployments from `main` and `v*` tags only): variables `CANARY_URL`
+and `STABLE_URL`, secrets `CANARY_UPDATE_KEY` and `STABLE_UPDATE_KEY`. Repository variables: `RELEASE_TRAINS`
+(`on` to go live), `RELEASE_HOLD`, `BAKE_HOURS` (default 4). An optional secret `RELEASE_TAG_TOKEN` creates the tag
+with a token whose push starts `release.yml` itself; without it the window dispatches `release.yml` on the tag.
+
+### Hotfixes
+
+A hotfix is for a major production issue only: data loss, a security hole, an outage, an install that cannot update.
+Everything else waits for the next window. Land the fix on main, then:
+
+```sh
+gh workflow run hotfix.yml --ref main -f reason="Tasks vanish from the board after an update" [-f sha=<commit>] [-f promote_stable=false]
+```
+
+Anyone with write access may run it, bots included. It validates the commit as the next patch, publishes it, updates
+the canary and, unless `promote_stable` is off, stable right after, with no bake. The reason is required and goes on a
+`release-train` issue: closed when the hotfix succeeds, left open when it fails. A hotfix release also closes the
+current window.
+
 ## The fast path
 
 1. **While building a PR**, run the focused tests for its changes; CI selects the tests a change can reach (below).
@@ -60,8 +113,9 @@ manages the Dev tickets type run `hub release now`. Routines can run `on: releas
 6. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
 7. **Desktop follows**: built only when the shell changed, and attached to the published release when it is done.
 
-Releases are started by the Release Manager only. Release validation never runs on a schedule or on a push to main:
-each run is a full gate for one candidate.
+These steps are the release command's, for a team whose Release Manager releases. Tico's own repository releases
+through [release windows](#release-windows) instead. Release validation never runs on a schedule or on a push to main
+itself: each run is a full gate for one candidate, dispatched for an exact commit and version.
 
 ## Supported versions
 

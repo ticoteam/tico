@@ -1,0 +1,79 @@
+# The hotfix lane, for major production issues only (docs/releasing.md#hotfixes): everything else waits for the next
+# release window. Anyone with write access, bots included, may run it from main. It validates the commit as the next
+# patch (a full Release validation run), tags and publishes it, updates the canary and waits until it is healthy, then
+# (promote_stable, the default) updates stable at once with no bake. Its job shares the `release-train` concurrency
+# group with the release window job (train.yml), so the two never overlap. The reason goes in the job summary and on the
+# release-train issue: a success files a closed record, a failure leaves the issue open.
+name: Hotfix release
+run-name: "${{ format('Hotfix {0} ({1}): {2}', inputs.sha || 'main', github.actor, inputs.reason) }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit on main to release (default main's head)
+        required: false
+        default: ''
+        type: string
+      reason:
+        description: The production issue this fixes, in a sentence
+        required: true
+        type: string
+      promote_stable:
+        description: Update stable right after the canary is healthy (no bake)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  hotfix:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    environment: release
+    concurrency:
+      group: release-train
+      cancel-in-progress: false
+    permissions:
+      actions: write    # dispatches Release validation and release.yml
+      contents: write   # creates the version tag
+      issues: write     # the release-train issue
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      CANARY_URL: ${{ vars.CANARY_URL }}
+      STABLE_URL: ${{ vars.STABLE_URL }}
+      CANARY_UPDATE_KEY: ${{ secrets.CANARY_UPDATE_KEY }}
+      STABLE_UPDATE_KEY: ${{ secrets.STABLE_UPDATE_KEY }}
+      RELEASE_TAG_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
+    steps:
+      - id: checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/release_train.py
+            templates/catalog/release-notes/software/rollout.py
+          sparse-checkout-cone-mode: false
+      - id: hotfix
+        name: Validate, publish, canary, stable
+        env:
+          SHA: ${{ inputs.sha }}
+          REASON: ${{ inputs.reason }}
+          PROMOTE_STABLE: ${{ inputs.promote_stable }}
+        run: python3 scripts/release_train.py hotfix --sha "$SHA" --reason "$REASON" --promote-stable "$PROMOTE_STABLE"
+      - name: Report a hotfix that did not finish
+        if: always() && steps.checkout.outcome == 'success' && steps.hotfix.outputs.reported != 'true'
+        env:
+          REASON: ${{ inputs.reason }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, "scripts")
+          import release_train as t
+          gh = t.GitHub(os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_TOKEN"])
+          t.report(gh, False, ["Hotfix reason: " + os.environ.get("REASON", ""),
+                               "The hotfix job ended before it reported (canceled, timed out or crashed); see the run log."],
+                   title_="Hotfix failing: " + " ".join(os.environ.get("REASON", "").split())[:80])
+          EOF

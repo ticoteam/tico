@@ -194,3 +194,65 @@ def test_unchanged_apps_build_when_forced_or_missing_previous_assets(app_build_d
     assert app_build_decision(kind, force=True)
     other_manifest = "latest.json" if kind == "recorder" else "recorder-latest.json"
     assert app_build_decision(kind, assets=other_manifest)
+
+
+
+# ---- Release windows (train.yml), hotfixes (hotfix.yml) and the validations they dispatch (ci.yml) ----
+
+def _workflow(name):
+    data = yaml.safe_load((ROOT / ".github/workflows" / name).read_text())
+    return data, data[True]   # PyYAML reads the `on:` key as True
+
+
+def test_validation_is_dispatch_only_and_keeps_the_title_release_yml_finds():
+    from scripts import release_train
+    ci, on = _workflow("ci.yml")
+    assert set(on) == {"workflow_dispatch"}
+    assert ci["run-name"] == "Validate ${{ inputs.candidate_sha }} as ${{ inputs.version }} from ${{ inputs.previous_release }}"
+    assert release_train.title("s", "v", "p") == "Validate s as v from p"
+    assert ci["concurrency"] == {"group": "manual-release-validation", "cancel-in-progress": False}
+
+
+def test_window_triggers_match_the_script_and_every_acting_job_shares_one_lane():
+    from scripts import release_train
+    train, on = _workflow("train.yml")
+    assert [entry["cron"] for entry in on["schedule"]] == release_train.CRONS
+    assert on["push"] == {"branches": ["main"]}
+    assert on["workflow_run"] == {"workflows": ["Release validation"], "types": ["completed"], "branches": ["main"]}
+    assert "workflow_dispatch" in on and "concurrency" not in train
+    guard = train["jobs"]["guard"]
+    # The guard is read-only and outside the lane: a push with nothing to do never queues behind or displaces a hotfix.
+    assert "concurrency" not in guard and "environment" not in guard
+    assert set(guard["permissions"].values()) == {"read"}
+    hotfix, hotfix_on = _workflow("hotfix.yml")
+    for job in (train["jobs"]["window"], hotfix["jobs"]["hotfix"]):
+        assert job["concurrency"] == {"group": "release-train", "cancel-in-progress": False}
+        assert job["environment"] == "release"
+        assert "github.ref == 'refs/heads/main'" in job["if"]
+        assert job["permissions"] == {"actions": "write", "contents": "write", "issues": "write"}
+        for name in ("CANARY_URL", "STABLE_URL", "CANARY_UPDATE_KEY", "STABLE_UPDATE_KEY"):
+            assert name in job["env"]
+    assert train["jobs"]["window"]["needs"] == "guard"
+    inputs = hotfix_on["workflow_dispatch"]["inputs"]
+    assert inputs["reason"]["required"] is True
+    assert inputs["promote_stable"] == {**inputs["promote_stable"], "type": "boolean", "default": True}
+    # Free text reaches the shell only through the environment, never pasted into a script.
+    for name in ("train.yml", "hotfix.yml"):
+        data, _ = _workflow(name)
+        for job in data["jobs"].values():
+            for step in job.get("steps", []):
+                assert not re.search(r"inputs\.reason|workflow_run\.(display_title|html_url)", step.get("run", "")), name
+
+
+def test_a_window_starts_release_yml_on_the_tag_with_inputs_it_declares():
+    from scripts import release_train
+    import inspect
+    _, on = _workflow("release.yml")
+    declared = set(on["workflow_dispatch"]["inputs"])
+    sent = re.findall(r'dispatch\("release\.yml", version, (\{[^}]*\})\)', inspect.getsource(release_train))
+    assert sent and all(set(eval(literal)) <= declared for literal in sent)
+    # On a tag ref, a dispatched run takes its commit and version from the tag, as a push does.
+    validated = JOBS["validated"]["steps"][0]["run"]
+    assert 'echo "sha=$GITHUB_SHA"; echo "version=$GITHUB_REF_NAME"' in validated
+    assert JOBS["desktop-changes"]["steps"][-1]["env"]["FORCE"] == (
+        "${{ github.event_name == 'workflow_dispatch' && inputs.desktop }}")

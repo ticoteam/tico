@@ -1,0 +1,118 @@
+# Tico's own release windows (docs/releasing.md#release-windows). A window opens at 14:30 and 22:00 UTC (07:30 and
+# 15:00 in Los Angeles in daylight time, 06:30 and 14:00 in standard time) and stays open until a vX.Y.Z release is
+# published after it. Nothing is stored: each run works the window out from GitHub (scripts/release_train.py).
+#   - At the open (schedule) or on a manual run: promote canary (Tico Team) to stable (TIDY) when the bake gate passes.
+#   - While open, on the open, on every push to main and whenever a Release validation run finishes: ship the first green
+#     candidate (tag it, publish it with release.yml, update the canary), which closes the window; otherwise, when no
+#     validation is running and main's head has none yet, validate main's head as the next patch (ci.yml).
+#   - A red candidate keeps the window open and goes on the one `release-train` issue; a window that ships closes it.
+# The guard is read-only and outside the concurrency group, so a push with nothing to do costs one small GitHub-hosted
+# job and never queues behind, or displaces, a hotfix. Every job that acts (window here, hotfix in hotfix.yml) shares the
+# `release-train` group, so a push and a finished run can never both start a build or a release.
+# Schedules, pushes and finished runs act only when the repository variable RELEASE_TRAINS is `on`; a manual run always acts.
+name: Release window
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' && format('Release window (manual, {0})', github.actor)
+  || github.event_name == 'schedule' && 'Release window opens'
+  || github.event_name == 'workflow_run' && format('Release window: {0}', github.event.workflow_run.display_title)
+  || format('Release window: push {0}', github.sha) }}
+
+on:
+  schedule:
+    - cron: '30 14 * * *'
+    - cron: '0 22 * * *'
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: [Release validation]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read     # validation and hotfix runs
+      contents: read    # tags, releases, main
+    outputs:
+      go: ${{ steps.guard.outputs.go }}
+      open: ${{ steps.guard.outputs.open }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/release_train.py
+            templates/catalog/release-notes/software/rollout.py
+          sparse-checkout-cone-mode: false
+      - id: guard
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TRAINS: ${{ vars.RELEASE_TRAINS }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_TITLE: ${{ github.event.workflow_run.display_title }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: python3 scripts/release_train.py guard
+
+  window:
+    needs: guard
+    if: needs.guard.outputs.go == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    environment: release
+    concurrency:
+      group: release-train
+      cancel-in-progress: false
+    permissions:
+      actions: write    # dispatches Release validation, and release.yml on the new tag
+      contents: write   # creates the version tag
+      issues: write     # the release-train issue
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      CANARY_URL: ${{ vars.CANARY_URL }}
+      STABLE_URL: ${{ vars.STABLE_URL }}
+      CANARY_UPDATE_KEY: ${{ secrets.CANARY_UPDATE_KEY }}
+      STABLE_UPDATE_KEY: ${{ secrets.STABLE_UPDATE_KEY }}
+      BAKE_HOURS: ${{ vars.BAKE_HOURS }}
+      RELEASE_HOLD: ${{ vars.RELEASE_HOLD }}
+      RELEASE_TAG_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
+      RUN_EVENT: ${{ github.event.workflow_run.event }}
+      RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+      RUN_TITLE: ${{ github.event.workflow_run.display_title }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+    steps:
+      - id: checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/release_train.py
+            templates/catalog/release-notes/software/rollout.py
+          sparse-checkout-cone-mode: false
+      - id: window
+        name: Promote at the open, then ship the first green candidate or validate main
+        env:
+          OPEN: ${{ needs.guard.outputs.open }}
+        run: |
+          if [ "$OPEN" = true ]; then
+            python3 scripts/release_train.py window --open
+          else
+            python3 scripts/release_train.py window
+          fi
+      # The job reports its own outcome; this covers a job that died or timed out before it could.
+      - name: Report a window step that did not finish
+        if: always() && steps.checkout.outcome == 'success' && steps.window.outputs.reported != 'true'
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, "scripts")
+          import release_train as t
+          gh = t.GitHub(os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_TOKEN"])
+          t.report(gh, False, ["The release window job ended before it reported (canceled, timed out or crashed); see the run log."])
+          EOF
