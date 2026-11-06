@@ -299,10 +299,11 @@ def test_a_repeated_read_changes_nothing_and_a_changed_transaction_restates_its_
         assert _every_entry_balances(c)
 
 
-def test_the_backfill_walks_pages_across_passes_and_the_opening_makes_the_bank_line_the_balance(books, monkeypatch):
+def test_the_backfill_walks_pages_across_passes_and_the_opening_carries_every_row(books, monkeypatch):
     monkeypatch.setattr(brex_sync, "BACKFILL_PAGES", 1)
     fake = FakeBrex(page=2)
     amounts = [-1_000, 2_000, -3_000, 4_000, -5_000]
+    waiting = sum(a for a in amounts if a > 0)    # the credits wait for a category, so the bank line is short by them
     fake.cash_txns[CASH] = [cash_txn(f"cash_{i}", "PAYMENT", amt) for i, amt in enumerate(amounts)]
     fake.cash[0]["current_balance"] = money(100_000 + sum(amounts))    # the balance now: the opening plus every row
     fake.cash[0]["available_balance"] = money(100_000 + sum(amounts))
@@ -319,13 +320,15 @@ def test_the_backfill_walks_pages_across_passes_and_the_opening_makes_the_bank_l
         settings = _settings(c)
         assert settings["backfilled"] is True and "cursors" not in settings and "walked" not in settings
         assert _count(c, "SELECT COUNT(*) FROM fin_feed_txns") == len(amounts)
-        assert _sum(c, _code(c, "bank")) == 100_000 + sum(amounts)
+        # The opening is the balance less every row the balance holds; the debits post, the credits wait for a category.
+        assert _count(c, "SELECT COUNT(*) FROM fin_feed_txns WHERE amount > 0 AND entry_id IS NULL") == 2
+        assert _sum(c, _code(c, "bank")) == 100_000 + sum(amounts) - waiting
         money_id = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider='brex' AND kind='bank'").fetchone()[0])
         assert store_banking.opening_entry(c, load(c, AT).book.id, money_id) is not None
         assert _every_entry_balances(c)
     assert brex_pass(books, fake, "2026-10-15T16:00:00.000000Z") == "ok"
     with books.read() as c:
-        assert _sum(c, _code(c, "bank")) == 100_000 + sum(amounts)
+        assert _sum(c, _code(c, "bank")) == 100_000 + sum(amounts) - waiting
         assert _count(c, "SELECT COUNT(*) FROM fin_feed_txns") == len(amounts)
 
 
