@@ -1,8 +1,8 @@
 // Settings has no dead ends (settings stage 1). Fixtures only.
 //  - every #/settings/<name> link the app draws opens a real tab: a name Settings doesn't know would land on General
 //    with nothing said, which is how "Picks and services" once opened Updates;
-//  - #/settings/gateway opens Gateway, #/settings/models opens Computers with the Models card in view, and the two links
-//    between them go there;
+//  - Gateway is no tab: #/settings/gateway (and a card under it) opens Models with the Tico Gateway card in view; Health
+//    is no tab either: #/settings/health opens its page with no tab highlighted;
 //  - while a tab is shown the address bar names it (#/settings/<tab>), so it can be copied or shared: opening an address
 //    shows its tab's own, picking another tab follows without a history step, a reload reopens it, and a redraw
 //    (route() called again, as a status change does) keeps Settings and the tab; the old Rules and Routines
@@ -100,20 +100,19 @@ const address = page => page.evaluate(() => location.hash);
           `#/settings/${name} is linked in the app but Settings has no such tab`);
         await go(page, `#/settings/${name}`);
         assert.equal(await page.locator('#settings-denied').isVisible(), false, `#/settings/${name} opens for the owner`);
-        if (known.tabs.includes(name)) assert.equal(await selected(page), name, `#/settings/${name} opens that tab`);
+        if (name === 'health') assert.equal(await page.locator('#settings-tabs [aria-selected=true]').count(), 0, 'Health highlights no tab');
+        else if (known.tabs.includes(name)) assert.equal(await selected(page), name, `#/settings/${name} opens that tab`);
       }
 
-      // Gateway and Models, by address and by the links between them.
-      await go(page, '#/settings/gateway');
-      assert.equal(await selected(page), 'gateway');
-      await go(page, '#/settings/models');
-      assert.equal(await selected(page), 'models');
-      await page.locator('#settings-models [data-gateway-advanced] > summary').click();
-      await page.locator('#settings-models a[href="#/settings/gateway"]').click();
-      await page.waitForFunction(() => location.hash === '#/settings/gateway' && SETTINGS_TAB === 'gateway');
-      await page.locator('[data-gateway-key-link]').click();
-      await page.waitForFunction(() => location.hash === '#/settings/models' && SETTINGS_TAB === 'models');
-      await page.waitForFunction(() => { const r = document.querySelector('#settings-models')?.getBoundingClientRect(); return r && r.top < innerHeight && r.bottom > 0; });
+      // The old Gateway page, and a card under it, open Models scrolled to the Tico Gateway card once it is drawn.
+      for (const old of ['#/settings/gateway', '#/settings/gateway/set-gateway-page']) {
+        await go(page, '#/settings/general');
+        await go(page, old);
+        assert.equal(await selected(page), 'models', old);
+        assert.equal(await address(page), '#/settings/models', old);
+        await page.waitForFunction(() => { const r = document.querySelector('#settings-gateway-card[data-drawn]')?.getBoundingClientRect(); return r && !SETTINGS_REVEAL && r.top < innerHeight && r.bottom > 0; });
+      }
+      assert.equal(await page.locator('#settings-tabs [data-settings-tab=gateway], #settings-tabs [data-settings-tab=health]').count(), 0, 'no Gateway or Health tab');
 
       // A Settings address survives a refresh in a new tab: the address, not the last tab, decides.
       const fresh = await context.newPage();
@@ -125,9 +124,9 @@ const address = page => page.evaluate(() => location.hash);
     }
     {
       // The address bar names the tab shown, so it can be copied, bookmarked or shared.
-      const {page, context, errors} = await open(browser, {hash: '#/settings/gateway'});
-      await page.waitForFunction(() => SETTINGS_TAB === 'gateway');
-      assert.equal(await address(page), '#/settings/gateway', 'an opened tab keeps its address');
+      const {page, context, errors} = await open(browser, {hash: '#/settings/models'});
+      await page.waitForFunction(() => SETTINGS_TAB === 'models');
+      assert.equal(await address(page), '#/settings/models', 'an opened tab keeps its address');
       const steps = await page.evaluate(() => history.length);
       await page.locator('#settings-tabs [data-settings-tab=bots]').click();
       await page.waitForFunction(() => location.hash === '#/settings/bots');

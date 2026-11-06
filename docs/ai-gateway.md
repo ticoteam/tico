@@ -2,7 +2,7 @@
 
 The Tico AI Gateway is Tico's own model service. With a gateway key from Tico, your bots can run on a **pick**: a
 department, a level (Low, Medium or High), Fast or not, and a version. Decide asks the Gateway with the same key. You
-connect it once, in **Settings → Models**; **Settings → Gateway** shows what is in use. How runs reach the Gateway, for developers, is in
+connect it once, in **Settings → Models**, where the **Tico Gateway** card also shows prices and what is in use. How runs reach the Gateway, for developers, is in
 [Harnesses](harnesses.md#the-tico-ai-gateway).
 
 ## The picks
@@ -36,7 +36,7 @@ new can pick them.
 ## Choose how bots get their models
 
 In the first step of setup the owner picks one of four choices. Later, **Settings → Models → Tico Gateway** keeps one
-switch, **Use when a computer has no subscription, or a plan runs out**: on is the first choice (or Tico Gateway only,
+switch, **Use as fallback** (used when a computer has no subscription, or a plan runs out): on is the first choice (or Tico Gateway only,
 when that was picked), off is the second (or your company's plans or API keys).
 
 The four choices:
@@ -237,7 +237,7 @@ The bot's status says why, in plain words, and the run waits or is saved for lat
 | The Tico AI Gateway key is not working; save a new one in Settings > Computers | Waits for a new key. |
 | Tico models are paused: this company is out of credit | The company's credit is at its minimum ([Credit and the minimum balance](#credit-and-the-minimum-balance)). The bot runs on its other models meanwhile and tries Tico models again after a minute. The Gateway can take up to five minutes to refresh its balance after credit is added. |
 | Tico AI Gateway rate limited | Retries after the Gateway's requested wait, for the key's minute rate window or an address block. When the bot's other model finished the turn, the bot tries Tico models again after a minute. Update the server and its computers to use that wait; older computers without it wait at least an hour. |
-| The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick another in **Settings → Gateway**'s list, or in the bot's Model controls. |
+| The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick another in the bot's Model controls; **Settings → Models → Tico Gateway** lists the picks in use. |
 | The Tico AI Gateway refused the request as sent, with the Gateway's reason | Saved for later, not retried. |
 | No Tico route for this request | Saved for later, not retried. |
 | The Tico AI Gateway doesn't serve Tico models at its URL yet | Saved for later, not retried. Check the **Gateway URL**. |
@@ -246,13 +246,15 @@ The bot's status says why, in plain words, and the run waits or is saved for lat
 If the Gateway cuts a reply off after the bot started answering, the bot posts what it had written, with a note
 saying the Tico AI Gateway cut the reply off.
 
-## Settings → Gateway
+## Settings → Models → Tico Gateway
 
-One flat page in the owner's and admins' Settings: a line saying whether the Gateway is connected (and, for the owner
-only, this month's spend against its cap); **API keys**, a link for the owner while the Gateway is connected
-([API keys](#api-keys)); **Picks in use** (name, model, version or Auto, number of bots, price); and **Services**, with
-each service's status (Live, On request, Coming soon), price and the tools that use it. The key and the connect controls stay in
-**Settings → Models**, one link away.
+One card. Its first line says whether the Gateway is connected (and, for the owner only, this month's spend against its
+cap, with a bar) beside the **Use as fallback** switch. Owners and admins also see **prices** per 1M tokens in and out by
+level (Low, Medium, High) and mode (Regular, Fast), without the models underneath; **Picks in use** (name, version or
+Auto, number of bots) when a bot uses one; **API keys**, a link for the owner while the Gateway is connected
+([API keys](#api-keys)); and **Services**, folded, with each service's status (Live, On request, Coming soon), price and
+the tools that use it. The owner's key and Gateway URL are under **Advanced**. The old **Settings → Gateway** address
+(`#/settings/gateway`) opens this card.
 
 Services today: **Decide** and **Classify** (live), **Inbox** email addresses (live) and numbers (on request), **Search** and **Fetch**
 (live), with transcription, sending email, enrichment, voice and physical mail coming soon. Bots and agents read
@@ -263,7 +265,7 @@ skill is `skills/gateway/SKILL.md`.
 ## API keys
 
 To use the Gateway from other tools (your own code, Claude Code, Codex, curl), make an API key on
-[app.tico.dev/gateway](https://app.tico.dev/gateway#api-keys). The owner reaches it from **Settings → Gateway → API keys**.
+[app.tico.dev/gateway](https://app.tico.dev/gateway#api-keys). The owner reaches it from **Settings → Models → Tico Gateway → API keys**.
 Each key has a name and a monthly cap in dollars billed ($1 to $100, $20 by default), and its use bills to the company's
 credit like its bots' use. The company's owners and admins on app.tico.dev make and revoke keys once the company has
 prepaid credit. The key is shown once.

@@ -247,7 +247,7 @@ hub trigger relay create github
 
 It looks like `https://hooks.tico.dev/hr_<16 characters>/<secret>`, and like the first address it is shown once.
 `hub trigger relay rotate github` replaces it and `hub trigger relay delete github` removes it. The webhook's own address keeps
-working beside it. It needs the Tico Gateway connected in Settings → Gateway ([Tico AI Gateway](ai-gateway.md)).
+working beside it. It needs the Tico Gateway connected in Settings → Models ([Tico AI Gateway](ai-gateway.md)).
 
 - Your server collects the calls every 15 seconds and treats each as if the sender had posted it here. Signature checks,
   duplicates, routines and rules behave the same. The hourly cap does not apply to them.

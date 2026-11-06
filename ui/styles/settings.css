@@ -300,6 +300,14 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-role-guide summary{cursor:pointer;width:max-content}
 .settings-role-guide dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 14px;margin:8px 0 0}
 .settings-role-guide dt{color:var(--ink);font-weight:600}.settings-role-guide dd{margin:0}
+/* General's Health line (ui/health.js hlSummaryDraw) and the Health page's way back to General */
+.settings-health-row{display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;font-size:var(--t-base)}
+.settings-health-row .hl-alert{margin-left:-6px}
+.settings-health-counts,.settings-health-version{color:var(--muted)}
+.settings-health-fix{color:var(--wait-ink)}
+.settings-health-details{margin-left:auto;white-space:nowrap}
+.settings-back{display:inline-block;margin:0 0 10px;font-size:var(--t-sm);color:var(--muted);text-decoration:none}
+.settings-back:hover{color:var(--ink)}
 .settings-issues{margin-bottom:14px;border-color:color-mix(in srgb,var(--fail) 45%,var(--line))}
 .settings-issues>summary{display:flex;align-items:center;gap:7px;list-style:none;color:var(--ink);font-size:var(--t-md)}
 .settings-issues>summary::-webkit-details-marker{display:none}.settings-issues>summary .sub{margin-left:auto;font-weight:400}
@@ -838,46 +846,21 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .task-rule-form input:not([type=checkbox]),.task-rule-form select{max-width:100%;min-width:0}
 .task-rule-form input[name=ruleName]{flex:1 1 100%}
 .task-rule-form input[type=number]{width:90px}
-/* Settings > Gateway (ui/app/settings-gateway.js) and the Gateway pick in a bot's Model picker (settings-bots.js) */
+/* The Tico Gateway card's services (ui/app/settings-gateway.js) */
 .gw-table{width:100%;border-collapse:collapse;font-size:var(--t-sm)}
 .gw-table td,.gw-table th{padding:6px 8px 6px 0;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
-.gw-table .num{text-align:right;font-variant-numeric:tabular-nums}
-.gw-table .gw-bots-word{display:none}
 .gw-table code{font-size:var(--t-sm);margin-right:4px;white-space:nowrap}
 .gw-status-cell{white-space:nowrap}
 .gw-status-cell[data-status=live]{color:var(--ok)}
 .gw-status-cell:not([data-status=live]){color:var(--muted)}
-.gw-table .gw-note{color:var(--muted)}
-.gw-table .gw-open{text-align:right;white-space:nowrap}
 .gw-table .gw-sub{display:block;color:var(--muted);font-size:var(--t-xs);font-weight:400}
-.gw-table .gw-word{display:none}
-.gw-table .gw-ctx{white-space:nowrap}
-.gw-same{margin:8px 0 12px;font-size:var(--t-sm)}
-.gw-table tr.gw-has-details td{border-bottom:0;padding-bottom:2px}
-.gw-table .gw-details-row td{padding-top:0}
-.gw-details{display:flex;flex-wrap:wrap;gap:2px 18px;margin:0;font-size:var(--t-xs)}
-.gw-details div{display:flex;gap:6px;min-width:0}
-.gw-details dt{color:var(--muted);white-space:nowrap}
-.gw-details dd{margin:0;min-width:0;overflow-wrap:anywhere}
 @media (max-width:640px){
   .gw-table thead{display:none}
   .gw-table tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 0;border-bottom:1px solid var(--line)}
   .gw-table tbody tr:last-child{border-bottom:0}
   .gw-table td{padding:0;border:0}
   .gw-table .gw-name{font-weight:600}
-  .gw-table .gw-bots-word{display:inline}
-  .gw-table .gw-model,.gw-table .gw-tools,.gw-table .gw-price,.gw-table .gw-note{grid-column:1 / -1;color:var(--muted)}
-  .gw-table .gw-open{grid-column:2;grid-row:1}
-  .gw-table tbody tr.gw-has-details{border-bottom:0;padding-bottom:2px}
-  .gw-table tbody tr.gw-details-row{padding-top:0}
-  .gw-table .gw-details-row td{grid-column:1 / -1}
-  .gw-table .gw-word{display:inline}
-  .gw-table.gw-levels .gw-ctx{grid-column:2;grid-row:1;text-align:right;color:var(--muted)}
-  .gw-table.gw-levels .gw-model{grid-column:1;grid-row:2;color:var(--ink)}
-  .gw-table.gw-levels .gw-price{grid-column:2;grid-row:2;text-align:right;color:var(--ink)}
-  .gw-table.gw-levels .gw-fast{grid-column:1;grid-row:3}
-  .gw-table.gw-levels .gw-fast-price{grid-row:3}
-  .gw-table.gw-others .gw-price{grid-column:2;grid-row:1;text-align:right}
+  .gw-table .gw-tools,.gw-table .gw-price{grid-column:1 / -1;color:var(--muted)}
 }
 .settings-tier{display:grid;gap:8px;min-width:0}
 .settings-tier-row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;min-width:0}
@@ -999,6 +982,17 @@ section.card>header .settings-head-act{margin-left:auto}
 .models-adv[open]>summary{margin-bottom:8px}
 .models-gw-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 8px;font-size:var(--t-sm)}
 .models-gw-line .dot.ok{background:var(--ok)}
+.models-gw-head{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px}
+.models-gw-head .models-gw-line{margin:0;flex:1 1 220px}
+.models-gw-bar{width:48px}
+.models-gw-table{width:100%;max-width:560px;border-collapse:collapse;margin-top:12px;font-size:var(--t-sm)}
+.models-gw-table th,.models-gw-table td{padding:5px 10px 5px 0;border-bottom:1px solid var(--line);text-align:left;font-weight:400}
+.models-gw-table th{color:var(--muted)}
+.models-gw-table th:first-child{white-space:normal}
+.models-gw-table .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.models-gw-table tbody tr:last-child td{border-bottom:0}
+.models-gw-keys{display:flex;align-items:center;gap:12px;max-width:560px;margin:12px 0 0;font-size:var(--t-sm)}
+.models-gw-keys a{margin-left:auto}
 .models-adv .prov-gateway{display:grid;gap:8px;max-width:560px}
 @media (max-width:760px){
   .models-row{grid-template-columns:minmax(0,1fr);gap:4px}
