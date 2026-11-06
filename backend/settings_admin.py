@@ -355,7 +355,7 @@ class SettingsAdmin:
         if template not in names:
             closest = difflib.get_close_matches(template, names, n=3)
             hint = " Closest: " + ", ".join(closest) + "." if closest else ""
-            raise Problem("template", f"Unknown template {template}. Use hub_template_list.{hint}", 422)
+            raise Problem("template", f"Unknown template {template}. Use tico_template_list.{hint}", 422)
 
     def template_repo_defaults(self, template):
         from pathlib import Path
@@ -1344,7 +1344,7 @@ class SettingsAdmin:
 
         # The change applies at once. The bot's session is the bot's runtime's business: the
         # hub asks for no checkpoint turn and rebuilds nothing; a bot that wants what was said
-        # before reads it with `hub conversation show`.
+        # before reads it with `tico conversation show`.
         c.execute("UPDATE bot_transitions SET state='prepared',updated_at=? WHERE id=?", (H.now(), transition_id))
         self._apply(c, who, c.execute("SELECT * FROM bot_transitions WHERE id=?", (transition_id,)).fetchone())
         return self.get(c, who, transition_id)

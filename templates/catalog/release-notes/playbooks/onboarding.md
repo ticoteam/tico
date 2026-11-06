@@ -7,7 +7,7 @@ finished. Budget 25 minutes. The outcome is five recorded answers, a real draft 
 
 ## 1. Read before you ask
 
-    hub task show <id>
+    tico task show <id>
     gh release list -R <repo> --limit 5
     gh pr list -R <repo> --state merged --limit 40 --json number,title,labels,mergedAt
 
@@ -38,17 +38,17 @@ Take everything merged since the last release and follow `playbooks/weekly-relea
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will draft the release notes every Friday at 14:00, and a human publishes them." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will draft the release notes every Friday at 14:00, and a human publishes them." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

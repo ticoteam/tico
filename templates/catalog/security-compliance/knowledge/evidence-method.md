@@ -35,7 +35,7 @@ Each control in `controls.md` names the reference it answers. A control with no 
 
 ## Access reviews
 
-- The roster to compare against comes from the team's own list (`hub team show`). A person marked "left" who still has
+- The roster to compare against comes from the team's own list (`tico team show`). A person marked "left" who still has
   access is the first finding.
 - The dormant threshold is the team's policy and is written in `controls.md`. The playbook default is 45 days without a login
   where the tool shows logins. Pick one value, write it down, and use it every quarter.

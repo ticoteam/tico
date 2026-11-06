@@ -7,7 +7,7 @@ description: Check a visitor or an office event the day before it, against the h
 When to use: the day before each visitor or office event on the calendar, and again when a visit is added at short notice.
 
 Steps:
-1. Take the visitor or event from `hub calendar list` for the next 7 days: date and time, host, room, expected number of
+1. Take the visitor or event from `tico calendar list` for the next 7 days: date and time, host, room, expected number of
    people, and any catering or access note on the invite.
 2. Run the host checklist in `knowledge/visitors.md`, one line at a time:
    - reception told the name, the time and the host;

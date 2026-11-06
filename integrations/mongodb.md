@@ -2,14 +2,14 @@
 service: mongodb
 title: MongoDB
 kind: sql
-summary: A team MongoDB database (MongoDB Atlas first), read through `hub db` with find, aggregate, count, distinct and collections, a read-only user, a row cap, a timeout and an audit line per call.
-access: "`hub db <name> find|aggregate|count|distinct|collections ...` on the runner computer, read-only, with the connection string from a Credential granted to this bot for the run; each call is audited in Tico by shape, never by value."
+summary: A team MongoDB database (MongoDB Atlas first), read through `tico db` with find, aggregate, count, distinct and collections, a read-only user, a row cap, a timeout and an audit line per call.
+access: "`tico db <name> find|aggregate|count|distinct|collections ...` on the runner computer, read-only, with the connection string from a Credential granted to this bot for the run; each call is audited in Tico by shape, never by value."
 credentials:
   - DB_<NAME>_URL — the mongodb+srv:// connection string of an Atlas database user that holds only the `read` role on one database, stored in Tools > Credentials with this Bot variable name and granted to the bot; never in a repository
 declared_as: |
   - service: mongodb
     identity: Atlas database user with the read role on app
-    database: atlas                # the name you type after `hub db`
+    database: atlas                # the name you type after `tico db`
     can: [read]
     env: DB_ATLAS_URL              # optional; this is the default for a database named atlas
     max_rows: 500                  # optional, lowers the document cap for this bot
@@ -22,7 +22,7 @@ aliases: [mongo, atlas-db]
 
 ## What it is
 
-A MongoDB database the team owns, usually on MongoDB Atlas, opened by `hub db` for one read-only
+A MongoDB database the team owns, usually on MongoDB Atlas, opened by `tico db` for one read-only
 operation at a time. The setup (Atlas user, network access, connection string), the security
 guidance and troubleshooting are in [docs/databases.md](../docs/databases.md#mongodb-atlas); this
 page is what a bot needs in a turn. Each team database is a name with its own connection string,
@@ -33,21 +33,21 @@ config.
 
 Whatever the team put in it; this page cannot know. The database's own page (in the private
 config) says which collections matter and which fields are personal data. Discover the rest with
-`hub db <name> collections`: every collection with the field names and types seen in a small sample.
+`tico db <name> collections`: every collection with the field names and types seen in a small sample.
 
 ## How a bot uses it
 
 ```bash
-hub db list                                   # the databases you may use, and whether the credential is set
-hub db doctor atlas                           # grant, credential, connection, the user's write privileges
-hub db atlas collections                      # collections and a sample of field names
-hub db atlas find orders '{"status": "paid"}' --projection '{"total": 1, "placed_at": 1}' --sort '{"placed_at": -1}' --limit 20
-hub db atlas find orders '{"placed_at": {"$gte": {"$date": "2026-09-01T00:00:00Z"}}}' --limit 5
-hub db atlas count orders '{"status": "paid"}'
-hub db atlas distinct orders status
-hub db atlas aggregate orders '[{"$match": {"status": "paid"}}, {"$group": {"_id": "$region", "n": {"$sum": 1}}}]'
-hub db atlas --query signups-since --param since=2026-09-01      # a named query from the team's catalog
-hub tool query-search atlas signups                     # search the named queries first
+tico db list                                   # the databases you may use, and whether the credential is set
+tico db doctor atlas                           # grant, credential, connection, the user's write privileges
+tico db atlas collections                      # collections and a sample of field names
+tico db atlas find orders '{"status": "paid"}' --projection '{"total": 1, "placed_at": 1}' --sort '{"placed_at": -1}' --limit 20
+tico db atlas find orders '{"placed_at": {"$gte": {"$date": "2026-09-01T00:00:00Z"}}}' --limit 5
+tico db atlas count orders '{"status": "paid"}'
+tico db atlas distinct orders status
+tico db atlas aggregate orders '[{"$match": {"status": "paid"}}, {"$group": {"_id": "$region", "n": {"$sum": 1}}}]'
+tico db atlas --query signups-since --param since=2026-09-01      # a named query from the team's catalog
+tico tool query-search atlas signups                     # search the named queries first
 ```
 
 Filters, projections, sorts and pipelines are Extended JSON (relaxed): plain JSON, plus
@@ -79,7 +79,7 @@ type it, and an error never shows it.
   collection with no personal data.
 - Count before you fetch: `count orders '{"placed_at": {"$gte": {"$date": "2026-09-01T00:00:00Z"}}}'`.
 - Group instead of list: `aggregate` with `$match` then `$group`.
-- Search the catalog before writing a filter: `hub tool query-search <name> <term>`, then `hub tool query-search <name> --id <id>`.
+- Search the catalog before writing a filter: `tico tool query-search <name> <term>`, then `tico tool query-search <name> --id <id>`.
 
 ## Gotchas
 
@@ -89,10 +89,10 @@ type it, and an error never shows it.
 - `find` without `--limit` returns at most the document cap. `distinct` is capped the same way and
   fails past 16 MB.
 - Dates are UTC; ObjectIds print as `{"$oid": ...}`, so paste that back into the next filter as is.
-- `hub db doctor` warns when the user can write or reads other databases. Fix the user in Atlas
+- `tico db doctor` warns when the user can write or reads other databases. Fix the user in Atlas
   (docs/databases.md), not the warning.
 
 ## Learnings
 
-What bots and people learn about this integration is added with `hub tool learn mongodb "..."` and
+What bots and people learn about this integration is added with `tico tool learn mongodb "..."` and
 shown under this page; a person folds it into the page over time. The page is the rule.

@@ -3,7 +3,7 @@
 Schedule: Mondays at 10:00 team time (routine `weekly-records-check`), after setup. Budget 30 minutes.
 
 Inputs: `knowledge/leavers.md`, `knowledge/systems.md`, last week's check, the open tasks, any HR and payroll exports attached to
-this week's tasks, and `hub team show`.
+this week's tasks, and `tico team show`.
 
 Outcome: one page for the HR owner: leavers and what is still open, records that disagree, letters waiting for signature, and
 policy acknowledgements outstanding. Nothing is changed or sent.
@@ -15,9 +15,9 @@ is named, and the page is published on the task for the HR owner only.
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub team show
-    hub task list --status open --status doing --status waiting
+    tico task show <id>
+    tico team show
+    tico task list --status open --status doing --status waiting
 
 Then `knowledge/leavers.md`, `knowledge/systems.md` and last week's check.
 
@@ -29,7 +29,7 @@ checklist (`playbooks/offboard-a-leaver.md`).
 
 ## 3. Records audit
 
-If this week's tasks carry an HR export and a payroll export, compare them with each other and with `hub team show`, following
+If this week's tasks carry an HR export and a payroll export, compare them with each other and with `tico team show`, following
 `skills/audit-hr-records-against-payroll/SKILL.md`. Missing documents (a signed contract, a right-to-work check where required)
 are listed by reference and type.
 
@@ -41,8 +41,8 @@ List each policy version and how many people have not acknowledged it.
 ## 5. Write and hand over
 
 Write `reports/YYYY-MM-DD-records-check.md` in the shape of `knowledge/examples/records-check.md`, then publish it with
-`hub file publish reports/YYYY-MM-DD-records-check.md --scope task --task <id>`. Delete the exports from the working tree.
-Commit, and run `hub task update <id> --status done --note "..."`.
+`tico file publish reports/YYYY-MM-DD-records-check.md --scope task --task <id>`. Delete the exports from the working tree.
+Commit, and run `tico task update <id> --status done --note "..."`.
 
 ## When a source fails
 

@@ -26,9 +26,9 @@ Actions. Its Release Manager bot no longer tags or rolls out Tico releases; it o
 
 **When releases are cut.** The Release Manager hears about Dev tickets at Pending Release once, as one task:
 "Release: <n> tickets at Pending Release". It arrives once a day at a set hour (10:00 company time by default;
-an owner or admin changes the hour, adds a second one or turns it off in Settings, or with `hub release schedule`),
+an owner or admin changes the hour, adds a second one or turns it off in Settings, or with `tico release schedule`),
 and not at all when nothing is pending. A ticket arriving at Pending Release wakes no one. For a hotfix or a
-midday release, a person who moves Dev tickets (or the Release Manager or Head of Engineering bot) runs `hub release now [--note ...]`;
+midday release, a person who moves Dev tickets (or the Release Manager or Head of Engineering bot) runs `tico release now [--note ...]`;
 it sends the same task at once, or wakes the Release task the Release Manager already has open. With nothing at
 Pending Release, a person's `--note` still asks (work often reaches main as pull requests that were never Dev tickets):
 the task, "Release: requested by <name>", carries the note and no ticket list. A bot's request, or a person's with no
@@ -48,7 +48,7 @@ an existing repo writer when the writer lacks access. Changes and a conflict ret
 Older open bot PRs enter this same route at a limited rate; Health names PRs waiting over 24 hours without a review.
 It is separate from the release command's "Release notes for vX.Y.Z" task. Docs and release notes are not part of
 the pre-release checklist. Only the owner, a person who moves Dev tickets, the Release Manager and the bot that
-manages the Dev tickets type run `hub release now`. Routines can run `on: release_published` for one task per release.
+manages the Dev tickets type run `tico release now`. Routines can run `on: release_published` for one task per release.
 
 ## Release windows
 
@@ -670,7 +670,7 @@ under `<prefix>/releases/app/` when a prefix is configured.
 ## The Release Manager's rollout
 
 A team that runs several installs can hand the whole rollout to its Release Manager bot. The owner's approval of a
-named release on its release task is the only gate: an approval card the bot requested (`hub approval request --kind
+named release on its release task is the only gate: an approval card the bot requested (`tico approval request --kind
 publish`) that the owner approved, or the owner's own message on the task naming the version. From there the bot runs
 `playbooks/rollout.md` (`software/rollout.py` in its repository) without waiting on anyone:
 
@@ -690,10 +690,10 @@ leaves the other installs untouched, and the bot asks the owner what to do next.
 Setup, once:
 
 - **Write on the repository.** An owner or admin ticks the repository in Settings → General → Repositories and gives the bot
-  write on it: `hub bot repos <slug> --chosen <owner>/<repo>:write` (list the bot's other chosen repositories in the
+  write on it: `tico bot repos <slug> --chosen <owner>/<repo>:write` (list the bot's other chosen repositories in the
   same command; `--chosen` replaces them), or the same in the bot's settings ([Repositories](repositories.md)).
 - **An update key per install.** The owner of each install, the team's own included, runs
-  `hub service-key create --label "<team> Release Manager" --scope update` there ([Service keys](service-keys.md#update-keys)).
+  `tico service-key create --label "<team> Release Manager" --scope update` there ([Service keys](service-keys.md#update-keys)).
   Each key is stored in Tools → Credentials on the Release Manager's install, granted to the bot, with the variable
   named in its config.
 - **The list of installs.** `knowledge/rollout.json` in the bot's repository: the repository, and each install's
@@ -757,7 +757,7 @@ The company shell preserves its configured updater endpoint, including a separat
 `runner_url`. If the configured endpoint is the generic default, it uses the selected hub's
 `/download/latest.json`. A hub-origin feed may use the signed-in WebView session when one exists;
 the cookie is optional for public feeds and is never attached to a different runner origin. Hub
-feeds do not follow redirects, and artifact URLs from them must stay on the selected hub origin.
+feeds do not follow redirects, and artifact URLs from them must stay on the selected tico origin.
 Tauri still verifies each updater signature before installation. An older shell that cannot reach
 the protected feed must be replaced from the team's signed-in **Download** page; see
 [Desktop app](desktop.md#your-companys-app).

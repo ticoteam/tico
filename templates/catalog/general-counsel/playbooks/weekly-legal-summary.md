@@ -7,20 +7,20 @@ is due, which decisions are theirs, and who should take what next. A summary for
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/requests.md`, `knowledge/escalation.md` and last week's summary in `reports/`. If last week
 named a decision for the owner, check whether it was made; say so in the first section.
 
 ## 2. Collect the week's requests
 
-`hub task list --status open --status doing --status waiting` and any new task that is legal in kind (a
+`tico task list --status open --status doing --status waiting` and any new task that is legal in kind (a
 contract, an NDA, a notice, a privacy or employment question). Add each new one to `knowledge/requests.md`
 with its kind, urgency (a date or "none"), risk in one line and proposed owner. Close rows whose task is done.
 
 ## 3. Read the legal team
 
-For each legal bot in `hub team show`: `hub update list --bot <slug>` and its newest `reports/` file. Take:
+For each legal bot in `tico team show`: `tico update list --bot <slug>` and its newest `reports/` file. Take:
 - from `legal-review`: contracts waiting for a human and notice deadlines inside 30 days;
 - from `compliance`: filings and renewals inside 30 days, and anything overdue;
 - from `privacy`: open data subject requests and their response dates;
@@ -41,7 +41,7 @@ proposal as `AGENT.md` "Hiring" describes; it is asked on the task, never acted 
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-legal-summary.md` in the shape of `knowledge/examples/legal-summary.md`, ending with
-the not-legal-advice line, then `hub file publish reports/YYYY-MM-DD-legal-summary.md`. Commit, and `hub task
+the not-legal-advice line, then `tico file publish reports/YYYY-MM-DD-legal-summary.md`. Commit, and `tico task
 update <id> --status done --note`: the headline, the path, the sources you could not read.
 
 ## When a source fails

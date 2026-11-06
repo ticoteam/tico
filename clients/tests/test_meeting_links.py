@@ -42,6 +42,6 @@ def test_cli_links_lists_and_removes_through_the_mcp_handlers(monkeypatch):
         ('DELETE', 'meetings/m1/tasks/#12', None),
     ]
     assert client.calls[-1][1] == 'tasks' and client.calls[-1][2]['q'] == 'pricing review'
-    for name in ('hub_meeting_link', 'hub_meeting_unlink', 'hub_task_meetings'):
+    for name in ('tico_meeting_link', 'tico_meeting_unlink', 'tico_task_meetings'):
         audience = hubtools.offered_to(hubtools.BY_NAME[name])
         assert 'assistant' in audience and 'botops' in audience and 'bot' not in audience

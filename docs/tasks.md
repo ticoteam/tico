@@ -161,9 +161,9 @@ With no free pool bot, the check waits on the ticket: its page shows **Waiting f
 
 Health names the next move by calling the ticket flow's ticket, merge and verdict rules at the PR's current head, including closed checks. Held or finished tickets get no advice to merge or move on. When check steps share a Fixes target, both use the newest relevant event at the current head: failed feedback, a verdict move or a manual return. Events are ordered by time. A return after approval or before capture counts too; an old failure at an old head cannot replace a newer return. After a push, the last return still identifies which check judged the earlier head. Green CI can move the ticket on only at a head newer than the one that check judged. Health checks merge readiness first, including step skip tags such as `skip-qa`. Otherwise changes name the Builder; a check that passes names the Builder to merge or move on only when those rules allow it. Without an explicit skip, a later QA pass at a failed head still calls for fixes, even after the ticket returns to QA Fixes. The check must have been filed at a check step, not just titled for one. A verdict at an old head needs a new review. An open check names its owner; a check with no reviewer names its pool and wait reason. Private checks stay hidden.
 
-A reviewer or QA records the verdict as fields on its own subtask: `hub task done <id> --verdict approve|changes|pass|fail --head <sha>` (also `hub task update --verdict --head`, the `hub_task_done` and `hub_task_update` tools, and `verdict` and `verdict_head` on `POST /api/v2/tasks/{id}`). A `VERDICT: approve PR #12 head <sha>` clause anywhere in its note, comment or final reply fills the same fields when no flag is given; the latest one wins. A Review 1, Review 2, QA or Security subtask of someone else's ticket that a bot owns, marked done with no verdict since it was last reopened, is refused with the `--verdict` hint; reopening a check clears its verdict. A person's own subtask with one of those titles is an ordinary task and finishes without a verdict. Tico waits for the exact judging run's usage record, records the configured and executed model families on the check, and accepts the verdict even when the run used a fallback or its family is unknown. Duplicate delivery does not move the ticket or wake the Builder twice.
+A reviewer or QA records the verdict as fields on its own subtask: `tico task done <id> --verdict approve|changes|pass|fail --head <sha>` (also `tico task update --verdict --head`, the `tico_task_done` and `tico_task_update` tools, and `verdict` and `verdict_head` on `POST /api/v2/tasks/{id}`). A `VERDICT: approve PR #12 head <sha>` clause anywhere in its note, comment or final reply fills the same fields when no flag is given; the latest one wins. A Review 1, Review 2, QA or Security subtask of someone else's ticket that a bot owns, marked done with no verdict since it was last reopened, is refused with the `--verdict` hint; reopening a check clears its verdict. A person's own subtask with one of those titles is an ordinary task and finishes without a verdict. Tico waits for the exact judging run's usage record, records the configured and executed model families on the check, and accepts the verdict even when the run used a fallback or its family is unknown. Duplicate delivery does not move the ticket or wake the Builder twice.
 
-A person who owns a Dev ticket, or manages it (the company owner, someone on a team that may move any task, or a person above the owner on the org chart), may **waive its QA step** for one exact pull request head when QA cannot run in time: `hub task waive-qa <id> --head <full sha> --reason "..."` (`POST /api/v2/tasks/{id}/qa-waiver` with `head`, `reason` and optionally `step`). Only the ticket's current **In QA** step can be waived. CI, Review 1, Review 2 and release approval cannot be. The waiver is refused, naming what is missing, unless the head is the current head of one of the ticket's open pull requests, and every hosted check on each of those pull requests has passed, read from GitHub at that moment (a skipped check doesn't count as a pass, and a failed attempt still blocks after a passing re-run). A push recorded while GitHub is being read refuses it too; retry. That read needs the company's GitHub App: without it the waiver is refused, because check webhooks alone can't tell a pass from a skip. No review subtask may still be open, and the latest Review 1 and Review 2 must each have approved that exact head. A waiver stands in for a missing QA result, never a failed one: a QA `fail` at that head, or one that names no head, refuses it. A bot cannot waive QA, including BotOps or the Assistant acting for a person. The waiver records the actor, reason, head, step, pull request and time as a `qa_waiver` event in the ticket's history. The task view lists the ticket's waivers under `qa_waivers`, each with `current` (false once a push moves the pull request to a new head). A waiver is never a QA verdict: it sets no `verdict` and leaves the QA subtask alone. The task page shows it as **QA waived** in amber, never as a pass. The ticket's owner is told once, unless they waived it themselves. It does not move the ticket or merge anything. The owner merges at that exact head, and a new head needs a QA result or a new waiver.
+A person who owns a Dev ticket, or manages it (the company owner, someone on a team that may move any task, or a person above the owner on the org chart), may **waive its QA step** for one exact pull request head when QA cannot run in time: `tico task waive-qa <id> --head <full sha> --reason "..."` (`POST /api/v2/tasks/{id}/qa-waiver` with `head`, `reason` and optionally `step`). Only the ticket's current **In QA** step can be waived. CI, Review 1, Review 2 and release approval cannot be. The waiver is refused, naming what is missing, unless the head is the current head of one of the ticket's open pull requests, and every hosted check on each of those pull requests has passed, read from GitHub at that moment (a skipped check doesn't count as a pass, and a failed attempt still blocks after a passing re-run). A push recorded while GitHub is being read refuses it too; retry. That read needs the company's GitHub App: without it the waiver is refused, because check webhooks alone can't tell a pass from a skip. No review subtask may still be open, and the latest Review 1 and Review 2 must each have approved that exact head. A waiver stands in for a missing QA result, never a failed one: a QA `fail` at that head, or one that names no head, refuses it. A bot cannot waive QA, including BotOps or the Assistant acting for a person. The waiver records the actor, reason, head, step, pull request and time as a `qa_waiver` event in the ticket's history. The task view lists the ticket's waivers under `qa_waivers`, each with `current` (false once a push moves the pull request to a new head). A waiver is never a QA verdict: it sets no `verdict` and leaves the QA subtask alone. The task page shows it as **QA waived** in amber, never as a pass. The ticket's owner is told once, unless they waived it themselves. It does not move the ticket or merge anything. The owner merges at that exact head, and a new head needs a QA result or a new waiver.
 
 Receipts stay ordinary text, for example `Tests: base <40-character SHA> head <40-character SHA>: 9 passed, 0 failed`. The result and head belong on one line. Each result clause belongs to its own head. Phrases about earlier or repaired failures do not claim that the current run failed; an explicit result such as `40 passed, 2 failing/errored` still does. The shared reader used by review handoffs and the release checklist accepts ticket notes, owner messages, keeper ready-for-review notices and review-child evidence from the reviewer or Builder. The review gate also counts receipts posted by bots above the owner in its `reports_to` chain and people who may edit the ticket. This changes neither their task permissions nor privacy: the mover and Builder must both be able to read the evidence. A written failure cannot be cleared by another written passing rerun at that same head; all-green GitHub checks can supersede it. Refusals name the next action and who can supply it.
 
@@ -223,11 +223,11 @@ Only a Doer starts its open tasks by itself; a Reviewer starts only its review a
 Monitor starts a task when it is handed to them ([Profiles](how-it-works.md#profiles)). A Responder is given no task at all,
 and a Reviewer is given only a review or QA subtask: filing any other task for it is refused with the reason.
 
-`hub bot turns-at-once <bot> 2` caps how many of the bot's turns run at once across every computer; `unlimited` lifts
-it. The bot editor and `POST /api/v2/bots/{bot}/turns-at-once` (MCP tool `hub_bot_turns_at_once`) set the same value. At
+`tico bot turns-at-once <bot> 2` caps how many of the bot's turns run at once across every computer; `unlimited` lifts
+it. The bot editor and `POST /api/v2/bots/{bot}/turns-at-once` (MCP tool `tico_bot_turns_at_once`) set the same value. At
 the limit its queued work waits and says so, on every computer.
 
-`hub bot keep-tasks-going <bot> 3` sets a cap; `off` turns it off and `unlimited` restores the default.
+`tico bot keep-tasks-going <bot> 3` sets a cap; `off` turns it off and `unlimited` restores the default.
 Omit the value to read it. The matching MCP tool and `POST /api/v2/bots/{bot}/keep-tasks-going` use
 the same permissions and revision check. **Automations → System jobs** lists **Start assigned tasks** using
 WHEN/THEN wording; its `start_task` catalog action uses the same task delivery and claim checks.
@@ -260,8 +260,8 @@ Keep actively worked tasks in **Doing**. When another task must finish first, re
 then set **Waiting**:
 
 ```sh
-hub task relate <task> <blocker> --kind blocked_by
-hub task update <task> --status waiting --note "Needs the build environment"
+tico task relate <task> <blocker> --kind blocked_by
+tico task update <task> --status waiting --note "Needs the build environment"
 ```
 
 ### Holds
@@ -277,14 +277,14 @@ CLI) lists what holds it in `holds`, empty when nothing does:
 ```
 
 - `kind` is `blocked` or `snoozed`, at most one hold of each kind on a task.
-- `blocked` is set when the task moves to a waiting step or status: by a person or bot (`hub task update --status
+- `blocked` is set when the task moves to a waiting step or status: by a person or bot (`tico task update --status
   waiting --note ...`, a move to **Blocked** on the board), or by Tico when what it waits on is tracked (a blocker,
   a subtask, a question, an approval, a review gate). It clears when the task moves on to a working step, or when its
   last tracked wait clears. `cause` says which: `manual` (a person's or bot's move; `reason` is its note's first
   line), `dependency`, `stranded`, `gate`, `check` or `worktree` (Tico's own). `by` is the actor who moved it there
   for `manual`, else `keeper` (Tico). `until` is null: a block lasts until it clears.
 - `snoozed` is set by a snooze ([Snoozing a task](#snoozing-a-task): `POST /api/v2/tasks/{id}/snooze`,
-  `hub_task_snooze`, `hub task snooze`) and cleared by an unsnooze, its date passing, or the task finishing.
+  `tico_task_snooze`, `tico task snooze`) and cleared by an unsnooze, its date passing, or the task finishing.
   `reason` is the snoozer's note (left out of a `brief=true` list row), `until` its date, `by` the snoozer, `since` when it was last set.
 - `since` is when the hold began; `by` is an actor id (`human:<id>`, `bot:<slug>` or `keeper`); `reason` and `until`
   are null when there is none.
@@ -306,12 +306,12 @@ while its ticket stays In QA, or a release published while its checklist stays o
 milestone itself:
 
 ```sh
-hub task wait <task> --on pr:https://github.com/<owner>/<repo>/pull/943   # until that pull request merges
-hub task wait <task> --on pr:<other task>                                  # the one pull request linked on it
-hub task wait <task> --on release:v0.3.64                                  # until that release is published
-hub task wait <task> --on task:<other task>                                # the same as blocked_by
-hub task wait <task> --on pr:<url> --note "Check the migration notes, then QA"  # a note comes back in the wake
-hub task wait <task> --on pr:<url> --remove                                # take it off
+tico task wait <task> --on pr:https://github.com/<owner>/<repo>/pull/943   # until that pull request merges
+tico task wait <task> --on pr:<other task>                                  # the one pull request linked on it
+tico task wait <task> --on release:v0.3.64                                  # until that release is published
+tico task wait <task> --on task:<other task>                                # the same as blocked_by
+tico task wait <task> --on pr:<url> --note "Check the migration notes, then QA"  # a note comes back in the wake
+tico task wait <task> --on pr:<url> --remove                                # take it off
 ```
 
 The task shows it ("Waits for PR #943 to merge"). When the pull request merges or the release is published (the
@@ -321,7 +321,7 @@ never arrived (the server was down) is checked with GitHub every few minutes, in
 named (`release:<owner>/<repo>@v0.3.64`), and a version tag only (major.minor at least). Who may add or remove a
 wait is who may add a blocked_by: the task's owner, or a person on a team that moves tasks. `--note` on a pr: or
 release: wait is shown on the task and comes back in its wake as `Your note:`; a repeat with a note replaces it. A
-deleted task keeps its waits in the trash and gets them back when restored. The MCP tool is `hub_task_wait`; the API is
+deleted task keeps its waits in the trash and gets them back when restored. The MCP tool is `tico_task_wait`; the API is
 `POST /api/v2/tasks/{id}/waits` with `{"on": "pr:<url>", "remove": false}`; each task answer carries
 `milestone_waits`.
 
@@ -355,13 +355,13 @@ message carries `refs.reconnect` (`key`, `service`, `label`, `person`, `fix`, `s
 When the task waits on a bot doing prerequisite work (a builder, a reviewer, QA), wait on that bot's task:
 
 ```sh
-hub task wait <task> --on task:<the bot's task>
+tico task wait <task> --on task:<the bot's task>
 ```
 
 The task and its card show "Waiting on Builder (OpenAI)". The blocker holds the task, so its owner is not woken while
 the prerequisite stays open. When that task is done, declined or closed and nothing else blocks this one, its owner is
 woken once with the outcome ("Unblocked: … is finished" or "was declined") and picks it back up. `--on bot:<slug>` on
-`hub task update` is refused: a task waits on a person, not a bot. Ask a bot in a DM (`hub message send <slug>
+`tico task update` is refused: a task waits on a person, not a bot. Ask a bot in a DM (`tico message send <slug>
 "<question>" --needs-action`), or link its task as above. A subtask needs neither: its result comes back to its parent
 on its own.
 
@@ -369,7 +369,7 @@ When the task waits on a person to act instead (a decision, access, a host only 
 name them with `--on` and say plainly what you need in the note:
 
 ```sh
-hub task update <task> --status waiting --on ana --note "Restart the build host? It refuses SSH, and I'll rerun the deploy after."
+tico task update <task> --status waiting --on ana --note "Restart the build host? It refuses SSH, and I'll rerun the deploy after."
 ```
 
 Tico turns that into a question task for the person with no options, under the task: its title is the ask (its
@@ -383,13 +383,13 @@ it; a board ticket the ask held stays at the step it was in, and its hold clears
 One question, one card. If this rule already filed that person a card in the task's tree (its root and everything
 under it), no second card is made: the task is blocked on the existing one, and a different ask is added to it as a
 comment. Only such cards are joined, never another task the person was given, and never across privacy: a private
-task's ask gets its own private card, one per task, which its later asks join. A bot's own open question to the person under the task (`hub task
-question`) is the card too. `hub task question` asked from a run on one of the bot's own tasks is filed under that
+task's ask gets its own private card, one per task, which its later asks join. A bot's own open question to the person under the task (`tico task
+question`) is the card too. `tico task question` asked from a run on one of the bot's own tasks is filed under that
 task when no `--parent` is given. The answer follows the blocker link, so a progress note the bot adds while it waits
 doesn't lose it, and a declined or closed card no longer blocks the task. The note says the person answered only when they
 finished the card; when someone else closed it, it names who did.
 
-One open question per topic. A bot's `hub task question` to a person while its earlier one on the same topic still
+One open question per topic. A bot's `tico task question` to a person while its earlier one on the same topic still
 waits on them (unanswered, the task not finished) updates that one instead of filing a second: the same topic is the
 same `--topic` key under any task, or, with no key, the same parent task. The person keeps one card with the latest
 wording and options, its body lists the earlier asks under "Asked before", and nothing new is sent: no second Needs
@@ -410,7 +410,7 @@ the refusal says exactly what to change instead. A second request such as "And s
 an outcome such as "If yes, I'll sign it, send it and close the task" stays together. An affirmative "If yes" takes
 priority over a negative branch such as "If you do not approve" or "If you agree not to merge";
 nothing is sent and the task stays as it was. Every refusal is recorded and none counts toward a quarantine.
-A task with an open structured question to the person (`hub task question`) is already the card: it waits on them as itself, and its note is only warned
+A task with an open structured question to the person (`tico task question`) is already the card: it waits on them as itself, and its note is only warned
 about. Only the bot that owns the task or its managers name the person, and a private task can only ask a person who can read it,
 or, on a private task with no person on it, the one person it brings in as its reader (see "A private task with no
 person on it: the person it reaches").
@@ -433,8 +433,8 @@ and wakes the waiting bot. **Waiting** does not mean a person must review the co
 When another bot must act, file a subtask for it; finishing the subtask wakes the waiting task:
 
 ```sh
-hub task create --parent <task> --owner botops --title "Send the disk usage snapshot"
-hub task update <task> --status waiting --note "Needs BotOps's disk snapshot"
+tico task create --parent <task> --owner botops --title "Send the disk usage snapshot"
+tico task update <task> --status waiting --note "Needs BotOps's disk snapshot"
 ```
 
 A note alone wakes nobody. A bot's task waiting with no blocker, subtask, approval, question or
@@ -604,12 +604,12 @@ Decide and the task's **Needs you** box show the same question card: the same te
 
 #### Question tasks
 
-`hub task question "<question>" --on <person>` (MCP `hub_task_question`) files a **question task**: a task the person
+`tico task question "<question>" --on <person>` (MCP `tico_task_question`) files a **question task**: a task the person
 owns, with the question stored on the task itself (its picks, the recommended pick, what happens if nobody answers,
 files under review, and a spend). The bot sends no separate message. Asked from one of the bot's own tasks,
 the question task is that task's subtask, and the bot's task is blocked on it (unless the question is private and
 the bot's task is not). Otherwise it is a task on its own for that person. A bot never files a question task for
-another bot: the request is refused, and the bot is pointed to a direct message (`hub message send <bot> "<question>"
+another bot: the request is refused, and the bot is pointed to a direct message (`tico message send <bot> "<question>"
 --needs-action`).
 
 Answering closes the question task, and the answer stays on it:
@@ -657,8 +657,8 @@ Approvals for spending or publishing keep their own card.
 
 #### Reviewing files
 
-`hub task question "Is this cut ready?" --on <person> --review cut.mp4` (repeatable, a path or `FILE[@N]`; MCP
-`hub_task_question` with `review`) asks about exact file versions. A path is published first. The card shows the files
+`tico task question "Is this cut ready?" --on <person> --review cut.mp4` (repeatable, a path or `FILE[@N]`; MCP
+`tico_task_question` with `review`) asks about exact file versions. A path is published first. The card shows the files
 inline (pictures, video, audio, pages; four at most, the rest as chips) with **Approve** and **Request changes**, unless
 the bot gives its own options. `--pick` (2–5 files) makes one option per file, each under its media, plus **Request
 changes**. Request changes asks for a note. The person must be able to open each file. With your own `--option`s,
@@ -668,8 +668,8 @@ is a new question; about the same versions while the first is open, it is refuse
 The answer records `reviewed: [{file, version, digest, verdict}]` (`approve`, `changes`, `passed` for the files not
 picked, `other`). `--spend "LABEL=AMOUNT:WHAT"` (`--spend-account`, default `gateway`) makes picking LABEL also
 approve that spend: the answer stores `spend_approval`, a `spend` approval the bot requested and the person decided,
-which the bot consumes once (`hub approval consume`). [`hub file approved`](files.md#approved-versions) reads the
-verdicts. Where a bot moves a stage instead of a person, it reviews directly with `hub file review`.
+which the bot consumes once (`tico approval consume`). [`tico file approved`](files.md#approved-versions) reads the
+verdicts. Where a bot moves a stage instead of a person, it reviews directly with `tico file review`.
 
 Tico refuses a bot's question to a person, saying why and with an example, when:
 
@@ -712,7 +712,7 @@ The old question links to its replacement, and the hold names the new recipient.
 A failed repair leaves that question for Health and continues with the others.
 Health names a task waiting on a recipient who cannot read or answer.
 
-A bot's question may say what it will do if nobody answers (`hub task question ... --if-no-answer "Yes"
+A bot's question may say what it will do if nobody answers (`tico task question ... --if-no-answer "Yes"
 --default-kind reversible [--by <date>]`; MCP `if_no_answer: {do, kind, by}`), and the card says it: "If you don't
 answer by Fri, Oct 16, Writer goes ahead: Yes". When that step is reversible and internal and the person has said
 nothing by then (at `by`, or after the team's days when that is later: 3 by default; `by` is at most 14 days away,
@@ -743,7 +743,7 @@ addresses, never the followers. For each bot it reaches, whether it wakes that b
 `same_state`, `bot_to_bot`, `batch_*`, `assignment`, `stall`, ...). A person's message, another bot's @mention, an ask, an
 approval and a gate verdict always wake (a Manager hears of a verdict, and of its subtasks' and blockers' results, as a note). A rule can be set for the whole team, a task type, a department, a bot or one task, and the most
 specific wins (the **What wakes** automations on the Automations page). The message and the run both record the rule, and
-`rule_weekly` in `hub sql` shows how often each woke a bot and how often that run did nothing.
+`rule_weekly` in `tico sql` shows how often each woke a bot and how often that run did nothing.
 
 An event no rule names waits as a note (`default_note`): the bot reads it on its next run. Work still wakes the bot: an
 assignment or a task handed back to it, a review or QA request, a blocker, a routine, a schedule, a due date, a snooze
@@ -794,7 +794,7 @@ until an authorized editor explicitly enables it again; the hourly cap still app
 
 **Events without a task.** Some events are not a message to a bot and have no task: `webhook.received` (an incoming
 webhook was accepted) and `tico.notice`. A rule names one as its `event`
-(or a prefix such as `webhook.*`) and `hub event-types` lists them. Rules on these events are judged by `judge_event`,
+(or a prefix such as `webhook.*`) and `tico event-types` lists them. Rules on these events are judged by `judge_event`,
 which fires every enabled row, bot rows before department rows before team rows, then by position, at most one row per
 target. A bot's first row decides it, so a bot-scope `ignore` silences the team's wake for that bot and no other. An
 `ignore` with no bot ends the rows after it for every target. A bare `*` row is for messages only and never reaches
@@ -828,17 +828,17 @@ its review and QA requests and people and notes the rest, a Lead gets everything
 digest, a Manager wakes for people, tasks given to it, its own clock and its exceptions list and notes the rest, a Responder and a Monitor note the rest. The bot's **What wakes** automation shows them as the profile's, and a Custom bot's copies as its own
 ([Profiles](how-it-works.md#profiles)).
 
-`GET /api/v2/event-types` (`hub event-types`, `hub_event_types`) lists the named events a rule or automation can use.
+`GET /api/v2/event-types` (`tico event-types`, `tico_event_types`) lists the named events a rule or automation can use.
 
 ## Choosing the model a task runs on
 
 A bot's task runs on the bot's task model, or on its own model while that is not set
 ([Run a bot's tasks on another model](harnesses.md#run-a-bots-tasks-on-another-model)). A task can name its own model,
 effort and harness instead. In a bot's task window, **Runs on** picks them and **Apply** saves. When filing, use
-`hub task create --model <id> --effort <effort> --harness <harness>`. To change a task that already exists, use
-`hub task model <id> <model> --effort <effort> --harness <harness>`, or `hub task model <id> --clear` to return it to the
-bot's task model. `hub_task_create`, `hub_task_model` and `POST /api/v2/tasks/{id}/model` (with `{"model": null}` to clear) do
-the same. `hub bot task-model` and `hub_bot_task_model` read or set the bot's task model. `GET /api/v2/tasks/{id}` shows
+`tico task create --model <id> --effort <effort> --harness <harness>`. To change a task that already exists, use
+`tico task model <id> <model> --effort <effort> --harness <harness>`, or `tico task model <id> --clear` to return it to the
+bot's task model. `tico_task_create`, `tico_task_model` and `POST /api/v2/tasks/{id}/model` (with `{"model": null}` to clear) do
+the same. `tico bot task-model` and `tico_bot_task_model` read or set the bot's task model. `GET /api/v2/tasks/{id}` shows
 the task's own choice as `run_model`, and `can_set_run_model` says whether the reader may change it.
 
 Whoever may change the bot's model may change a task's model. A bot never does, not even on its own task. On a
@@ -853,11 +853,11 @@ that bot's task model.
 **Snooze** sets a task aside until a date: it tells its bot or person that nobody plans to get to it
 before then. Its requester, its owner, their managers, anyone on it by role, or a mover snoozes it from the task's
 **…** menu (Tomorrow, Next week, In two weeks, In a month, or a typed date), with
-`hub task snooze <id> --until 2026-11-02`, `hub_task_snooze` or `POST /api/v2/tasks/{id}/snooze`
+`tico task snooze <id> --until 2026-11-02`, `tico_task_snooze` or `POST /api/v2/tasks/{id}/snooze`
 with `{"until": ...}`. A bare date means the start of that day, Pacific; a date-time with a zone is
 taken as it is. Snoozing again moves the date. The task keeps its status, owner, goal and place;
 its `snoozed` hold ([Holds](#holds)) says until when and who. A snoozed task still counts toward its goal.
-The snoozer may leave a **note** (`--note`, `note` on the API, `hub_task_snooze`): what to check when it ends.
+The snoozer may leave a **note** (`--note`, `note` on the API, `tico_task_snooze`): what to check when it ends.
 It goes in the **Snooze over** wake, as `Your note:`, and is the snoozed hold's `reason` until then
 (at most 500 characters; a longer one is refused).
 When someone other than its requester snoozes a task, the requester is told. A role holder's
@@ -865,8 +865,8 @@ manager gains no snooze permission unless they also manage the owner or requeste
 
 Until that moment:
 
-- it is off the board, the Open list, Needs you, Decide and `hub task list`. **Snoozed** beside the Tasks
-  page's archive icon (listed while something is snoozed), `hub task list --snoozed only|all` and
+- it is off the board, the Open list, Needs you, Decide and `tico task list`. **Snoozed** beside the Tasks
+  page's archive icon (listed while something is snoozed), `tico task list --snoozed only|all` and
   `GET /api/v2/tasks?snoozed=only|all` list it; a read by id or number always finds it.
 - nothing automatic moves it: no stall wake or status check and no **Due:** reminder. Tico's notices about it reach its owner bot
   deferred, read on the bot's next run instead of starting one, and so does another bot's comment.
@@ -876,7 +876,7 @@ Until that moment:
 
 When the date comes, the task is back everywhere and its owner bot gets one **Snooze over** notice,
 which also stands in for a due date that passed during the snooze. **Unsnooze** (the **…** menu, the
-**Snoozed to** chip on the task, `hub task unsnooze <id>` or `POST /api/v2/tasks/{id}/unsnooze`)
+**Snoozed to** chip on the task, `tico task unsnooze <id>` or `POST /api/v2/tasks/{id}/unsnooze`)
 brings it back early and wakes its owner bot once, with the note if one was left. Finishing, declining or
 closing a task, or moving it to review, ends its snooze and clears the note.
 
@@ -895,8 +895,8 @@ task's box. The bot that asked is told either way, as *<name> marked this done: 
 comment on the next line when there is one. When a bot needs a specific answer it asks a yes/no
 or choice question instead.
 
-An owner can reopen a Done task with `hub task update <id> --status doing`, or put it back
-with `hub task update <id> --status open --note "why it goes back"`. On Dev tickets, open is
+An owner can reopen a Done task with `tico task update <id> --status doing`, or put it back
+with `tico task update <id> --status open --note "why it goes back"`. On Dev tickets, open is
 On Deck. A bot owner must include a note when returning work to open. Automatic starts wait
 60 minutes after an owner puts work back, unless the task gets a comment, a new link, or a
 blocker finishes. Ordinary note edits and automatic notices do not end that wait. A linked
@@ -924,16 +924,16 @@ Repo chip, a fold that hides some rows) sends the ids it shows instead, up to 10
 changed one update each, as before. Close can be undone for ten seconds either way.
 
 ```sh
-hub task bulk step "Legal review" --where-type idea --where-step Draft --where-label launch --dry-run
-hub task bulk close --where-owner me --where-status waiting --note "Not needed this quarter"
-hub task bulk tags --add q4 --remove backlog --where-label backlog
-hub task bulk status open --where-label q4 --where-status closed
+tico task bulk step "Legal review" --where-type idea --where-step Draft --where-label launch --dry-run
+tico task bulk close --where-owner me --where-status waiting --note "Not needed this quarter"
+tico task bulk tags --add q4 --remove backlog --where-label backlog
+tico task bulk status open --where-label q4 --where-status closed
 ```
 
 `POST /api/v2/task-bulk` takes a `filter` with the filters of `GET /api/v2/tasks` (`owner`, `requester`, `status`,
 `lane`, `label`, `type`, `step`, `number`, `updated_since`, `member`, `role`, `snoozed`, and `ids`, a list of up to
 100 task ids or numbers), one `action` (`step`, `status`, `owner`, `tags` with `add` and `remove`, or `close`), an
-optional `note` and `dry_run`. `hub_task_bulk` takes the same. The filter must name something: an empty one, or an
+optional `note` and `dry_run`. `tico_task_bulk` takes the same. The filter must name something: an empty one, or an
 owner or requester who is nobody, is refused rather than read as every task. Each matching task is changed by the
 same update a single change makes, with the caller's own rights: its events, wakes and refusals are that task's.
 A task the caller may not change is skipped with the reason and the rest still change; a task already that way
@@ -946,7 +946,7 @@ cannot be archived or forked: those are not task actions, in bulk or one at a ti
 
 Every bot can read company-visible tasks subject to existing bot activity restrictions. Types
 control additional permission to comment, file subtasks or change work in **Settings → Tasks**,
-with `bots` on the task-types routes or `hub task type update "Dev ticket" --bots work`.
+with `bots` on the task-types routes or `tico task type update "Dev ticket" --bots work`.
 
 | `bots` | Additional permission for unrelated bots |
 |---|---|
@@ -960,8 +960,8 @@ human controls. Changing type cannot publish a private task.
 Labels are a mover's, with one exception for bots: a bot adds and removes classification labels
 (`qa`, an area, a priority) on a task it owns, asked for, or whose type it manages (the type's
 `manager`), whatever the type's `bots` setting. A public roadmap label needs its exact approved
-publish approval (`hub task publication-preview <id> --label ...` for the labels the task keeps,
-then `hub task label <id> --add roadmap --approval-id <id>`), and `goal:on`/`goal:off` need a mover.
+publish approval (`tico task publication-preview <id> --label ...` for the labels the task keeps,
+then `tico task label <id> --add roadmap --approval-id <id>`), and `goal:on`/`goal:off` need a mover.
 The same goes for a task a bot creates: it may carry classification labels, but one created with a
 public roadmap label or `goal:on`/`goal:off` is refused before anything is written; create it without
 the label, then add it on the task as above.
@@ -1020,7 +1020,7 @@ woken and pauses its Building clock. The owner can hold a ticket by moving it in
 made (a step whose status is waiting) and writing the reason in its note:
 
 ```sh
-hub task update <task-id> --step "Waiting for a test machine" --note "Waiting for a test machine"
+tico task update <task-id> --step "Waiting for a test machine" --note "Waiting for a test machine"
 ```
 
 A ticket parked by hand in a team's waiting step stays a declared hold, and clearing it means moving it back
@@ -1045,7 +1045,7 @@ A task filed to DevOps or a person about a blocker can name it: `--blocker <repo
 for example `--blocker acme/app 403 workflow_dispatch`. When an open ask names the same repository, HTTP
 status and endpoint, the new task is not a second ask: it stays with the bot that filed it, blocked by
 the open ask, and the reply says so. Every task it blocks wakes when the ask is done. Unlinking it
-(`hub task relate <id> <ask> --kind blocked_by --remove`) hands it to the owner it was filed for, as its
+(`tico task relate <id> <ask> --kind blocked_by --remove`) hands it to the owner it was filed for, as its
 own ask. Endpoint case and slashes are significant; only surrounding whitespace is ignored. A different
 endpoint is a different blocker. Private tasks never join or are joined. When DevOps
 files the person ask for a blocker, its own open tasks for that blocker wait on it.
@@ -1065,24 +1065,24 @@ in that order.
 ## CLI and MCP
 
 ```sh
-hub task types
-hub task create --owner content --title "Draft the campaign" --body "Use the brief." --type idea
-hub task update <task-id> --step "Legal review"
-hub task update <task-id> --title "(B/F) Account page: improve the copy"
-hub task update <task-id> --status review
-hub task update <task-id> --type General
-hub task update <task-id> --step ""
-hub task type update "Dev ticket" --numbered --steps-only
-hub task create --owner ben --title "(B/F) Fix the account page" --type "Dev ticket" --number 18945
-hub task show '#18945'
-hub task update '#18945' --step "On deck" --step-rank 2.5
-hub task list --type "Dev ticket" --sort step
+tico task types
+tico task create --owner content --title "Draft the campaign" --body "Use the brief." --type idea
+tico task update <task-id> --step "Legal review"
+tico task update <task-id> --title "(B/F) Account page: improve the copy"
+tico task update <task-id> --status review
+tico task update <task-id> --type General
+tico task update <task-id> --step ""
+tico task type update "Dev ticket" --numbered --steps-only
+tico task create --owner ben --title "(B/F) Fix the account page" --type "Dev ticket" --number 18945
+tico task show '#18945'
+tico task update '#18945' --step "On deck" --step-rank 2.5
+tico task list --type "Dev ticket" --sort step
 ```
 
-`hub_task_types` lists types and ordered steps. `hub_task_create` and `hub_task_update` accept
-`type` and `step`, as ids or names, and `number`; `hub_task_update` also takes `step_rank` and `title`, and
-`hub_task_list` takes `type`, `step` and `sort`. Movers manage definitions with `hub_task_type_create`,
-`hub_task_type_update` and `hub_task_type_delete` (with `numbered` and `steps_only`), or `hub task type create|update|delete`.
+`tico_task_types` lists types and ordered steps. `tico_task_create` and `tico_task_update` accept
+`type` and `step`, as ids or names, and `number`; `tico_task_update` also takes `step_rank` and `title`, and
+`tico_task_list` takes `type`, `step` and `sort`. Movers manage definitions with `tico_task_type_create`,
+`tico_task_type_update` and `tico_task_type_delete` (with `numbered` and `steps_only`), or `tico task type create|update|delete`.
 
 For example, put this JSON array in `steps.json`:
 
@@ -1090,9 +1090,9 @@ For example, put this JSON array in `steps.json`:
 [{"name":"Draft","status":"open"},{"name":"Legal review","status":"review"}]
 ```
 
-Then run `hub task type create --name Marketing --steps-file steps.json`. To edit steps, first
-read `hub task types Marketing`, keep the ids of retained steps in the JSON array, and run
-`hub task type update Marketing --steps-file steps.json`. Array order supplies positions unless
+Then run `tico task type create --name Marketing --steps-file steps.json`. To edit steps, first
+read `tico task types Marketing`, keep the ids of retained steps in the JSON array, and run
+`tico task type update Marketing --steps-file steps.json`. Array order supplies positions unless
 explicit positions are provided. Omitted steps are removed; new steps omit `id`.
 
 ## API and SQL
@@ -1111,10 +1111,10 @@ include `type_id`, `step_id`, a `type` object, a `step` object (null when unmapp
 step in every type), `number`, and `sort=step`: by the step's position, then `step_rank`, then
 when the task was created. `GET /api/v2/tasks?type=Dev%20ticket&sort=step` is a board's columns,
 in order. Add `updated_since=<ISO-8601 time with timezone>` to poll only changed tasks; `brief=true`
-leaves out bodies and acceptance criteria. `hub task list` and `hub_task_list` accept the same filters,
+leaves out bodies and acceptance criteria. `tico task list` and `tico_task_list` accept the same filters,
 including with `--all`/`all`, and support `number` lookup.
 
-`GET /api/v2/pipeline` (`hub pipeline`, `hub_pipeline`) is a board's numbers in one read, counted over the same
+`GET /api/v2/pipeline` (`tico pipeline`, `tico_pipeline`) is a board's numbers in one read, counted over the same
 tickets the board shows the caller: per working step the count, how many are snoozed, the oldest and median time
 since tickets entered the step, owners, whom they wait on (a bot, a person, something external or nothing) and their
 open pull requests. It also gives each bot the caller may read its running, queued, held, `quarantine_held`, `dead` and uncertain jobs
@@ -1151,7 +1151,7 @@ the parent's next turn resumes there. That holds while the parent is Waiting on 
 do not hold one subtask's result back. Its other waits still do: a snooze, a person it waits on, an unanswered
 question, an undecided approval, a worktree, or a blocker that is not one of its subtasks. The result does not move
 the parent out of Waiting. There is no requester delivery session on the completed
-subtask and no relay or `hub task run` needed. The worker keeps its own independent task session. A manager completing the worker's delegated
+subtask and no relay or `tico task run` needed. The worker keeps its own independent task session. A manager completing the worker's delegated
 subtask returns its result to the parent in the same way.
 A bot that filed the subtask may close it explicitly; until then it stays Done. The parent's
 requester hears when the parent itself finishes, so a manager's task → builder task → review
@@ -1201,14 +1201,14 @@ Done, Closed and Declined count as finished. Open descendants under a finished s
 block its parent.
 
 ```sh
-hub task child <parent-id> --owner engineer --title "Build the service" --body "Use the plan."
-hub task tree <task-id>
-hub task relate <task-id> <new-parent-id> --kind parent
-hub task relate <task-id> <parent-id> --kind parent --remove
+tico task child <parent-id> --owner engineer --title "Build the service" --body "Use the plan."
+tico task tree <task-id>
+tico task relate <task-id> <new-parent-id> --kind parent
+tico task relate <task-id> <parent-id> --kind parent --remove
 ```
 
-The corresponding MCP tools are `hub_task_child_create`, `hub_task_tree` and `hub_task_relate`.
-`hub task create --parent <id>` files a new task as a subtask; the API takes
+The corresponding MCP tools are `tico_task_child_create`, `tico_task_tree` and `tico_task_relate`.
+`tico task create --parent <id>` files a new task as a subtask; the API takes
 `"relations": [{"task": "<id>", "kind": "parent"}]` on task create.
 `GET /api/v2/tasks/{id}/tree` returns nested subtasks with `id`, `title`, `status`, `owner`,
 `pr_state` and `children`. Task detail and list answers include `children_summary` with descendant
@@ -1217,7 +1217,7 @@ counts: `total`, `open`, `done`, `prs_total` and `prs_merged`, plus `direct_tota
 visible descendants; `open` ignores work below finished subtasks. Closed, unmerged PRs are
 excluded from the PR totals.
 
-Attach as many PRs as the task needs with `hub task link`. `GET/POST /api/v2/tasks/{id}/links`
+Attach as many PRs as the task needs with `tico task link`. `GET/POST /api/v2/tasks/{id}/links`
 list or attach links; `DELETE /api/v2/tasks/{id}/links/{link_id}` removes one. The older POST
 with `remove` still works. People who can read a task can add or remove its links. Bots
 need task rights; worktree links keep their worktree rules.
@@ -1226,7 +1226,7 @@ number, branch, checks, mergeability, review state and pending review comments. 
 Failing, Conflict, Changes requested, Open, then Merged. Closed PRs are excluded; shipped PRs
 count as merged. A PR link is information only: adding, removing, opening, merging, closing or
 shipping a PR leaves the task's status and step as they are.
-`hub task link <id> <pr url> --wake-once` arms one wake for the PR's next finished checks, approving or
+`tico task link <id> <pr url> --wake-once` arms one wake for the PR's next finished checks, approving or
 change-requesting review, or release ([GitHub App](github-app.md)); it also leaves the task as it is.
 
 Opening a task returns its last known PR state immediately and schedules a background
@@ -1253,7 +1253,7 @@ that runs lanes); a bot's shared thread is never one. The task's set-up worktree
 its session, with each repo's AGENTS.md (else CLAUDE.md) in the prompt as rules for writing code there. A task has at most one primary: a newer thread or a
 new owner's session replaces it, and the old one stays as an alternate. Anyone with link rights can add other sessions to track:
 a thread URL, a `claude --resume <id>` or `codex resume <id>` command, or another reference
-(`hub task link <id> <value> --session`, `hub_task_link` with `kind: session`, or Sessions + on the task).
+(`tico task link <id> <value> --session`, `tico_task_link` with `kind: session`, or Sessions + on the task).
 They are for tracking only: task thread and comments go to the owning bot, or to the bot that asked when a person owns the task.
 
 A subtask someone else files for a bot under its task does not get a session of its own. A turn on a task runs in its
@@ -1265,7 +1265,7 @@ and the bot's other tasks, up to the bot's turn limit. A parent owned by someone
 bot's subtask under a person's task is its own root. The primary session, the Copy session
 ID and the checkpoint all live on the root, and a fresh session on such a subtask starts from the root's checkpoint;
 such a subtask shows no session.
-`subtask_session: own` on a bot (`hub bot update <slug> --subtask-session own`, `hub_bot_update`, or the bot
+`subtask_session: own` on a bot (`tico bot update <slug> --subtask-session own`, `tico_bot_update`, or the bot
 definition API) keeps every subtask its own session; unset or `parent` is the default. A runner from before this
 change keys every task, subtasks included, on its own session, and Tico gives it lanes the same way.
 
@@ -1274,8 +1274,8 @@ change keys every task, subtasks included, on its own session, and Tico gives it
 A bot can have another model look at its work without a second bot:
 
 ```sh
-hub task child <parent-id> --check-model grok --role review --title "Review PR 655" --body "https://github.com/..."
-hub task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the migration plan" --body "..."
+tico task child <parent-id> --check-model grok --role review --title "Review PR 655" --body "https://github.com/..."
+tico task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the migration plan" --body "..."
 ```
 
 `--check-model` takes a runtime (its provider's recommended model) or `runtime:model`. With no value (`auto` in the
@@ -1283,7 +1283,7 @@ API) it takes the company's check model (Settings > Models, [How it works](how-i
 order from a provider other than the parent's authors and runnable on the bot's computer. The authors are every
 maker on the parent's finished runs (a fallback counts) and the provider its owner runs on. Another provider is a
 preference: with none that can run, it runs on an author's own, and the subtask's history says so. `--role` is `review` or `check` (the default). The API takes `check_model` and `check_role` on task create; the MCP tool is
-`hub_task_child_create` with the same fields.
+`tico_task_child_create` with the same fields.
 
 - The subtask is the filing bot's own, under a task it owns. Its turns run on the named runtime and model with no
   fallback to another provider, always in a session of their own, and read only the subtask's thread: name the PR
@@ -1315,7 +1315,7 @@ preference: with none that can run, it runs on an author's own, and the subtask'
   a provider disabled after filing still runs; a computer that stays signed out of the check's runtime leaves the
   subtask waiting with no notice; a check held by its model's limit waits for the reset even when a person comments
   on it or presses Try now.
-- A reviewer bot set to `review_model: check` (`hub bot update <slug> --review-model check`, `hub_bot_update`, or the
+- A reviewer bot set to `review_model: check` (`tico bot update <slug> --review-model check`, `tico_bot_update`, or the
   bot definition API) runs every subtask it is handed under another's task as a `review` on the company's check
   model, chosen against the parent's authors the same way, and its verdict comes back the same way. When the authors
   are unknown (a person's task with no runs) or no check model can run it, the subtask is filed as usual on the
@@ -1378,7 +1378,7 @@ always empty, as an @mention reaches whoever it names); and `comment_delivery` (
 bot, `steers` says the bot's harness can take a message into a running turn, and `goal` says a goal can be set (null
 and false without a bot). A task still in a thread (one filed into a thread before task
 threads) has no `execution` and no goal of its own: that thread's runs and goal belong to the thread, so `goal` is false.
-`hub task comment <id> "<text>" --steer|--queue|--defer [30m|4h|2d|never]|--goal` (one at most), `hub_task_comment`
+`tico task comment <id> "<text>" --steer|--queue|--defer [30m|4h|2d|never]|--goal` (one at most), `tico_task_comment`
 with `delivery` and `defer_for`, and `POST /v2/tasks/{id}/comments` with `delivery` and `defer_for` choose the same
 ways; the answer's `sent_as` (`delivery`, `until`) says how it went. In v0.5.0 `queue` on a comment meant what `defer`
 means now; it now wakes the bot after its turn. A question (`ask`) always wakes the one it is for, so it takes no
@@ -1394,7 +1394,7 @@ Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each
 The **Stalled task check** no longer runs. Tico no longer wakes a bot about one quiet task, so Decide reads none of them.
 A quiet task still shows on its bot's task roundup (for a bot that sweeps) and in the Task Manager's report.
 
-`task_goal: on` on a bot (`hub bot update <slug> --task-goal on`, `hub_bot_update`, or the bot definition API; off by
+`task_goal: on` on a bot (`tico bot update <slug> --task-goal on`, `tico_bot_update`, or the bot definition API; off by
 default) works each task it owns as a goal: the turn carries `task.goal` (the title and its acceptance criteria), and
 the bot is told to keep at it until that holds, then mark the task done with a summary, or file a subtask for the
 person it waits on. A `goal:on` or `goal:off` label on a task overrides the setting. A person's task never has one.
@@ -1409,11 +1409,11 @@ When the requester (or a person) closes a task its bot had already marked done o
 woken; a person's close note that differs from the bot's own done note reaches an active bot as a wake. Routine completions with nothing said are batched; paused bots read them on their next run.
 
 When a bot's task is blocked on a person's approval or input, the bot files a subtask for them under it
-(`hub task create --owner <person> --parent <task> ...`, or `hub task question ... --parent <task>` for a pick or
+(`tico task create --owner <person> --parent <task> ...`, or `tico task question ... --parent <task>` for a pick or
 Yes / No) rather than a new top-level task. When the person marks it done, declines or closes it, the bot is woken
 once on the parent and picks up in the parent's session (a private subtask that not everyone on the parent may read
-tells the bot on the subtask instead). A quick question for a person is `hub task question` on the task, and a
-send or publish that needs a yes stays `hub approval request`. A question to a bot is a direct message.
+tells the bot on the subtask instead). A quick question for a person is `tico task question` on the task, and a
+send or publish that needs a yes stays `tico approval request`. A question to a bot is a direct message.
 
 ## Related tasks
 
@@ -1428,12 +1428,12 @@ Every link between two tasks is a relation, read `<task> <kind> <other>`:
 | `follow_up` | the task was split off or followed up from the other | Follow-up of, Follow-ups |
 
 ```sh
-hub task relate <task-id> <other-task-id>                      # related
-hub task relate <task-id> <other-task-id> --kind blocked_by
-hub task relate <task-id> <other-task-id> --kind parent --remove
+tico task relate <task-id> <other-task-id>                      # related
+tico task relate <task-id> <other-task-id> --kind blocked_by
+tico task relate <task-id> <other-task-id> --kind parent --remove
 ```
 
-The MCP tool is `hub_task_relate`; the API is `POST /api/v2/tasks/{id}/relations` with
+The MCP tool is `tico_task_relate`; the API is `POST /api/v2/tasks/{id}/relations` with
 `{"task": "<other id>", "kind": "...", "remove": false}`, and task create takes `"relations": [...]`.
 Each write reads back what it stored, in words from both ends, in `readback` (the CLI prints it as `hub: stored:`):
 `#237 "…" waits for #233 "…"` and `#233 "…" blocks #237 "…"`. A `blocks` sent where `blocked_by` was meant reads
@@ -1463,13 +1463,13 @@ whatever their roles ([Followers](#followers)). One person may hold several role
 ```
 
 ```sh
-hub task update <task-id> --role developer=bob --role reviewer=charlie   # replace a role's people; NAME= clears
-hub task list --member me                                                # every task you are on
-hub task list --member me --role reviewer                                # the ones you review
+tico task update <task-id> --role developer=bob --role reviewer=charlie   # replace a role's people; NAME= clears
+tico task list --member me                                                # every task you are on
+tico task list --member me --role reviewer                                # the ones you review
 ```
 
-`hub_task_update` and `hub_task_create` take `roles` (`{role: [people]}`; each role named replaces
-that role's people, `[]` clears one, a role not named stays); `hub_task_list` and `GET /api/v2/tasks`
+`tico_task_update` and `tico_task_create` take `roles` (`{role: [people]}`; each role named replaces
+that role's people, `[]` clears one, a role not named stays); `tico_task_list` and `GET /api/v2/tasks`
 take `member=<actor>` and optionally `role=<name>`. The API shape on task update and create is the
 same `"roles"` object. Whoever may change the task's other fields may change who is on it; on a
 private task only people who can read it can be added. Each change is in the task's history
@@ -1489,22 +1489,22 @@ A version a person reviews is shown on its question task ([Reviewing files](#rev
 Media metadata can be null until processing finishes.
 
 ```sh
-hub task attach <task-id> report.md --note "Revised introduction"
-hub task comment <task-id> "Choose a draft" --attach draft-a.md --attach draft-b.md
-hub task answers <task-id>
+tico task attach <task-id> report.md --note "Revised introduction"
+tico task comment <task-id> "Choose a draft" --attach draft-a.md --attach draft-b.md
+tico task answers <task-id>
 ```
 
-MCP `hub_task_attach` accepts `note`. Comment's `attachments` contains references such as `file-id@2`.
-`hub_task_answers` lists recorded answers.
+MCP `tico_task_attach` accepts `note`. Comment's `attachments` contains references such as `file-id@2`.
+`tico_task_answers` lists recorded answers.
 
 To give a bot's task a file that is already in Tico, such as one sent in a thread, a person comments with its
-reference instead of uploading it again: `hub task comment <task-id> "The export" --file <file-id>@1`. When the
+reference instead of uploading it again: `tico task comment <task-id> "The export" --file <file-id>@1`. When the
 person can open the file in the thread, the task gets its own copy (the same bytes, no new upload), which anyone who can
 read the task can open; the file in the thread itself keeps its own access and stays put if the task changes. Sharing the
 same file again points at the copy already there. A bot, or a person who cannot open the file, gets `File version
 not found on this task` and attaches a copy with `--attach` instead.
 
-A question about file versions is a question task, filed with `hub task question ... --review` (see
+A question about file versions is a question task, filed with `tico task question ... --review` (see
 [Reviewing files](#reviewing-files)). It takes the same options, recommended picks and fallback as any question task.
 Only the person it asks, or someone acting for them, answers it ([The question card](#the-question-card)).
 Every answer stays on its question task, oldest first, in `GET /api/v2/tasks/{id}/answers`. Settling a question does
@@ -1583,7 +1583,7 @@ A task's **followers** are the people and bots who follow its thread, each at a 
 - The owner follows, at `live`. A new owner follows; the old owner stops unless they chose to follow or were
   @mentioned.
 - Filing a task does not follow it, for people and bots alike. Choose **Follow** on the new-task form, `follow: true`
-  on `POST /api/v2/tasks`, `hub task create --follow`, or `follow` on `hub_task_create`.
+  on `POST /api/v2/tasks`, `tico task create --follow`, or `follow` on `tico_task_create`.
 - Commenting does not follow a task either. An @mention does. Under the comment box, **Follow** (shown until you
   follow) follows the task once your comment is in; it stays ticked or unticked for your next task
   (`compose.follow.task`).
@@ -1593,8 +1593,8 @@ A task's **followers** are the people and bots who follow its thread, each at a 
   readers) adds and takes off others; a bot only teammates in its reach.
 - The task's **Followers** row lists them by name, with the level when it is not live: **Follow** or **Following**
   (your level, Unfollow) for you, × and + for others.
-- `hub task followers <id>`; `hub task follow <id> [--level live|mentions|digest|muted] [--who X]`;
-  `hub task unfollow <id> [--who X]` (MCP: `hub_task_followers`; `hub_task_follow`, with `unfollow` to stop).
+- `tico task followers <id>`; `tico task follow <id> [--level live|mentions|digest|muted] [--who X]`;
+  `tico task unfollow <id> [--who X]` (MCP: `tico_task_followers`; `tico_task_follow`, with `unfollow` to stop).
 - API: `GET /api/v2/tasks/{id}/followers`; `PUT` with `{"actor"?: X, "following": true|false, "notify"?: level}`
   (no `actor`: you). Each answers `{task_id, following, notify, followers: [{actor, notify, reason}]}`, `following`
   and `notify` being yours; `reason` is `owner`, `manual` (chosen) or `mentioned`. The task's detail carries
@@ -1629,9 +1629,9 @@ read it, as before; they are not listed. A company task is seen by everyone.
   above it, or a task mover. Each add and remove is in the task's history.
 - A bot adds people and bots within its reach, and from a private run only those who read every private task the run
   carries. Only a person adds a group. Taking a reader off has no such check.
-- `hub task create --private --reader X` (repeat for more; `group:<id>` for a group) files it with readers.
-  `hub task readers list|add|remove <id> [X ...]` reads and changes them (MCP: `hub_task_readers_list`,
-  `hub_task_readers_add`, `hub_task_readers_remove`).
+- `tico task create --private --reader X` (repeat for more; `group:<id>` for a group) files it with readers.
+  `tico task readers list|add|remove <id> [X ...]` reads and changes them (MCP: `tico_task_readers_list`,
+  `tico_task_readers_add`, `tico_task_readers_remove`).
 - API: `GET /api/v2/tasks/{id}/readers`; `POST` with `{"add": [...], "remove": [...]}`; `PUT` with `{"readers": [...]}`
   replaces the list. A task create takes `readers` too. Each answers `{private, requester_id, owner_id, readers}`.
 - Readers go only on a private task: a company task refuses them and lists none. Making a task company-visible takes
@@ -1644,8 +1644,8 @@ read it, as before; they are not listed. A company task is seen by everyone.
 
 A private task between two bots (or a bot's private task to itself) has nobody who could act on it, so its owning
 bot may bring in one person as a reader. The first time that bot hands them work from the task, they become its
-reader: a subtask for them under it (`hub task create --owner <person> --parent <task>`), a question to them on it
-(`hub task question`), or setting it waiting on them (`--status waiting --on <person>`). The task's history records
+reader: a subtask for them under it (`tico task create --owner <person> --parent <task>`), a question to them on it
+(`tico task question`), or setting it waiting on them (`--status waiting --on <person>`). The task's history records
 who it reached, and its Who can see row names them.
 
 - They read that task as its requester and owner do: its words, comments and files, even if they may not read
@@ -1661,19 +1661,19 @@ who it reached, and its Who can see row names them.
   does not become a reader.
 - Their answer on their subtask or question comes back to the task, and wakes its owner, as on any task.
 - Approvals stay refused from private work (they go to the default approver): ask the person with a subtask or
-  `hub task question`.
+  `tico task question`.
 - `POST /api/v2/tasks/dry-run` makes the same privacy checks as the create and returns the same refusal text.
 
 ### A private task with no person on it: a sealed subtask for another bot
 
 The same task's owning bot (or its manager), from its own run, may hand work to another bot in a **sealed** private
-subtask: `hub task create --owner <bot> --parent <task>`. The other bot reads that subtask, and only the words written
+subtask: `tico task create --owner <bot> --parent <task>`. The other bot reads that subtask, and only the words written
 into it: never the parent (its title, words, comments or id), its other subtasks, or the run's other work. Each of
 those stays "not found" for it, and its notices and run prompt leave the parent out.
 
 - Every private task the run carries that the other bot cannot read must have no person on it (no person requester,
   owner or reader), nor any private task above it. Otherwise the create is refused, naming the person: ask them with
-  `hub task question`, or have them file the subtask. When the person is on a task above that the filer cannot read,
+  `tico task question`, or have them file the subtask. When the person is on a task above that the filer cannot read,
   the refusal leaves their name out and says to ask the filer's own requester to file it.
 - The subtask is private; a company-visible one is refused, as for any create from private work.
 - Its words may not carry the private work: a secret-shaped value, or 12 or more words in a row copied from a private
@@ -1691,7 +1691,7 @@ those stays "not found" for it, and its notices and run prompt leave the parent 
 ### A private task with no person on it: a company-visible task from private work
 
 When the work belongs to the company (a repair anyone may pick up, see and follow), the same owning bot (or its
-manager), from its own run, files it **from private work**: `hub task create --from-private --owner <bot> --parent
+manager), from its own run, files it **from private work**: `tico task create --from-private --owner <bot> --parent
 <task>` (or with no `--parent`). The task is company-visible and carries only its own title, body and acceptance
 criteria; the private task stays sealed.
 
@@ -1779,24 +1779,24 @@ copies cannot be recalled here. Current task read access is
 required on every call, including an idempotent retry.
 
 ```sh
-hub task comment-edit <task-id> <comment-id> "Use the August numbers."
-hub task comment-delete <task-id> <comment-id>
+tico task comment-edit <task-id> <comment-id> "Use the August numbers."
+tico task comment-delete <task-id> <comment-id>
 ```
 
-The comment id is the `id` in the task's `comments` (`hub task show`). MCP: `hub_task_comment_edit`
-(`id`, `comment_id`, `text`) and `hub_task_comment_delete` (`id`, `comment_id`). The API routes are
+The comment id is the `id` in the task's `comments` (`tico task show`). MCP: `tico_task_comment_edit`
+(`id`, `comment_id`, `text`) and `tico_task_comment_delete` (`id`, `comment_id`). The API routes are
 in [Task comments](api.md#task-comments).
 
 A question is not a comment and is never edited or deleted. The person it asks answers it in Needs you, in Decide,
 in the Assistant, or by replying in their chat with the bot. The answer closes the question task and stays on it.
 A bot cannot answer a question for a person. To take back a question it filed with no options, the bot runs
-`hub task update <task-id> --on ""`, and nobody is asked or woken.
+`tico task update <task-id> --on ""`, and nobody is asked or woken.
 
 ```sh
-hub task answers <task-id>
+tico task answers <task-id>
 ```
 
-MCP: `hub_task_answers` (`id`).
+MCP: `tico_task_answers` (`id`).
 
 ## Deleting tasks made by mistake
 
@@ -1805,12 +1805,12 @@ instead: by its human requester, or by anyone who may move any task, signed in a
 Bots and delegated sessions close tasks; they never delete one.
 
 ```sh
-hub task delete <task-id>
-hub task deleted              # deleted tasks you may restore, newest first
-hub task restore <task-id>    # or its number
+tico task delete <task-id>
+tico task deleted              # deleted tasks you may restore, newest first
+tico task restore <task-id>    # or its number
 ```
 
-`hub_task_delete`, `hub_task_deleted` and `hub_task_restore`, and `POST /api/v2/tasks/{id}/delete`,
+`tico_task_delete`, `tico_task_deleted` and `tico_task_restore`, and `POST /api/v2/tasks/{id}/delete`,
 `GET /api/v2/deleted-tasks` and `POST /api/v2/tasks/{id}/restore` do the same. A client can tell a
 server offers this by the `deleteTask` operation in `GET /api/v2/openapi.json`.
 
@@ -1860,12 +1860,12 @@ Open **Settings → Tasks → Task settings** to see what Tico does when a task 
 A bot's task may carry a **follow-up time** (`check_back_at`, shown as **Follow up by**): an inspection time, separate from the delivery deadline, that does not pause useful work. Choose a time longer than the expected work:
 
 ```sh
-hub task check-back <task-id> --in 45m --for "Verify the review assignment and inspect its result"
+tico task check-back <task-id> --in 45m --for "Verify the review assignment and inspect its result"
 # Or use an ISO date-time with its timezone:
-hub task check-back <task-id> --at 2026-12-02T15:00:00-08:00 --for "Read the returned acceptance result"
+tico task check-back <task-id> --at 2026-12-02T15:00:00-08:00 --for "Read the returned acceptance result"
 ```
 
-`hub_task_check_back` and `POST /api/v2/tasks/{id}/check-back` take `at` (a duration or timestamp) and `note`. Task create/update also accept `check_back_at` and `check_back_note`. An omitted time stays empty: Tico sets no follow-up time of its own, only a person or a bot does (the explicit set is recorded in history as `check_back_explicit`). A task view carries the time, the note, who set it and whether it is due, as a `check_back` object. An explicit bot time is at least five minutes ahead and within 14 days, and a bot cannot set one on a done or declined task. A person's dated snooze can be longer, and a human snooze takes precedence over an earlier inspection.
+`tico_task_check_back` and `POST /api/v2/tasks/{id}/check-back` take `at` (a duration or timestamp) and `note`. Task create/update also accept `check_back_at` and `check_back_note`. An omitted time stays empty: Tico sets no follow-up time of its own, only a person or a bot does (the explicit set is recorded in history as `check_back_explicit`). A task view carries the time, the note, who set it and whether it is due, as a `check_back` object. An explicit bot time is at least five minutes ahead and within 14 days, and a bot cannot set one on a done or declined task. A person's dated snooze can be longer, and a human snooze takes precedence over an earlier inspection.
 
 A follow-up time wakes nobody. Once it has come, it is listed once on its owner's task roundup (three times a day by default, at 6am, noon and 6pm company time), and then cleared. Only live tasks (open, doing, waiting, review or ready) are listed.
 

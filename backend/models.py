@@ -424,7 +424,7 @@ class TaskTypeCreate(Contract):
 # Refusing a `manager` field says where the choice it was after lives.
 MANAGER_FIXED = (
     "A task type's manager is fixed by its role and can't be changed. To choose which bot receives public "
-    "roadmap suggestions, use Settings → Tasks → Public roadmap → Suggestions go to (or `hub roadmap settings`)."
+    "roadmap suggestions, use Settings → Tasks → Public roadmap → Suggestions go to (or `tico roadmap settings`)."
 )
 
 
@@ -482,7 +482,7 @@ class ReviewFile(Contract):
 
 
 class FileReview(Contract):
-    """A verdict given directly on one file version (`hub file review`, backend/file_reviews.py): by file id, or by a
+    """A verdict given directly on one file version (`tico file review`, backend/file_reviews.py): by file id, or by a
     path and the SHA-256 of its bytes."""
 
     file: ID | None = None

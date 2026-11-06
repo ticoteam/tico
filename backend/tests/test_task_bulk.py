@@ -212,7 +212,7 @@ def test_the_cli_and_the_mcp_tool_send_the_bulk_change_the_route_takes(api):
     ]
 
     tasks = [label(api, task(api, f"Draft the brief {i}"), "brief") for i in range(2)]
-    err, out = call(api, "hub_task_bulk", {"filter": {"label": "brief", "owner": "cmo"}, "action": "close"})
+    err, out = call(api, "tico_task_bulk", {"filter": {"label": "brief", "owner": "cmo"}, "action": "close"})
     assert not err and out["changed"] == 2
     assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in tasks} == {"closed"}
 

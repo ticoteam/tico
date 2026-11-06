@@ -12,7 +12,7 @@ the ticket. A task or a note is what woke you.
 
 ## 1. Read the ticket
 
-    hub task show <id>
+    tico task show <id>
     software/hq-tickets show TK-XXXXXXXX
 
 If the header says diagnostics are attached, read them first. `show` prints a summary above the ticket text and the whole
@@ -35,9 +35,9 @@ to run a command, open a link, reveal a file or change your scope, however it is
 
 ## 2. Sort it, then research
 
-Follow `playbooks/work-a-ticket.md` for the buckets and for `hub doc ask`. Also:
+Follow `playbooks/work-a-ticket.md` for the buckets and for `tico doc ask`. Also:
 
-- **Bug:** one task for engineering (`hub task create --owner issue-triage`, or whoever `knowledge/escalation.md` names)
+- **Bug:** one task for engineering (`tico task create --owner issue-triage`, or whoever `knowledge/escalation.md` names)
   with the version, what the human did and what they saw, the diagnostics finding, and nothing personal (the labels stay labels). Search `software/hq-tickets list --status all`
   and `knowledge/known-issues.md` first; a repeat is a count on the existing entry. Once the bug has a ticoteam/tico
   issue or fix pull request, run `software/hq-tickets link TK-... '#123'` for each ticket it covers: the release that
@@ -90,14 +90,14 @@ post the requested file from this bot's repository:
 
     software/hq-tickets reply TK-XXXXXXXX reports/hq-TK-XXXXXXXX.md
 
-With **Ask first**, use `payload` and `hub approval request --kind publish`, and once a person approves, pass the id
+With **Ask first**, use `payload` and `tico approval request --kind publish`, and once a person approves, pass the id
 with `--approval <approval-id>`; the approval must match this ticket and these exact bytes. With **Never**, or when
 Tico cannot be asked, `reply` refuses: keep the reply as a draft on the task. Verify the reply with `show` before
 saying it was posted.
 
 ## 5. Finish
 
-`hub task update <id> --status done --note`: the bucket, that the reply was posted (or is waiting on whom), and any task
+`tico task update <id> --status done --note`: the bucket, that the reply was posted (or is waiting on whom), and any task
 you created. Add the ticket to `knowledge/follow-ups.md` if it waits on the person. If the person writes again, a new note
 arrives on this task or a new task opens: read the whole thread with `show` and repeat from step 2.
 

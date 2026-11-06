@@ -1,20 +1,42 @@
-#!/usr/bin/env bash
-# `tico`: this computer's commands go to scripts/tico-computer, everything else to scripts/hub (the teamwork CLI).
-# Usage: tico [-e ENV] install|uninstall|restart|status|doctor|logs|update|open|env|enroll|profile|screen|server|help ...
-#        tico [-e ENV] bot create ...      the same as tico-computer ... (see scripts/tico-computer help)
-#        tico update list|show|create|reply ...   the bots' updates: hub update ... (a bare tico update updates Tico)
-#        tico <anything else>              the same as hub <anything else>: tico task list = hub task list
-# A scripts/tico from before tico-computer ends `update` with `scripts/tico [-e ENV] restart all`: that lands here.
-set -euo pipefail
+#!/usr/bin/env python3
+"""`tico`: the teamwork CLI, the company hub's commands (tasks, messages, Decisions, status). See clients/hubcli.py.
 
-SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"   # ~/.local/bin/tico is a symlink here
-DIR="$(dirname "$SELF")"
+This computer's own commands (install, restart, update, logs, ...) are scripts/tico-computer's since R0, and this file
+refuses them: `tico install` prints `tico: moved to tico-computer install` and exits 2. A bare `tico update` is refused
+the same way. `tico update list|show|create|reply` is the bots' updates and stays here.
 
-case "${1:-help}" in
-  # Only the computer commands take an environment.
-  -e|--env|-e=*|--env=*|install|uninstall|restart|status|doctor|logs|open|env|enroll|profile|screen|server|help|-h|--help)
-    exec "$DIR/tico-computer" "$@" ;;
-  bot) [ "${2:-}" != create ] || exec "$DIR/tico-computer" "$@" ;;
-  update) [ $# -gt 1 ] || exec "$DIR/tico-computer" "$@" ;;
-esac
-exec "$DIR/hub" "$@"
+~/.local/bin/tico is a symlink to this file. It resolves the checkout from its own path, so a second checkout uses its own
+clients/.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from clients import hubcli  # noqa: E402
+
+# The computer's verbs, as scripts/tico-computer help lists them. `bot create` is not among them: `tico bot create`
+# registers a bot with the hub, as it always has, and a computer's bot is made by `tico-computer bot create`.
+COMPUTER_VERBS = frozenset(
+    {"install", "uninstall", "restart", "status", "doctor", "logs", "update", "open", "enroll", "env", "profile", "screen", "server"}
+)
+
+
+def moved(argv):
+    """The computer command `argv` names, which this CLI refuses, or None."""
+    if not argv:
+        return None
+    first = argv[0]
+    if first == "-e" or first == "--env" or first.startswith(("-e=", "--env=")):  # an environment is the computer's
+        return argv
+    if first in COMPUTER_VERBS and not (first == "update" and len(argv) > 1):
+        return argv
+    return None
+
+
+if __name__ == "__main__":
+    argv = sys.argv[1:]
+    refused = moved(argv)
+    if refused:
+        print(f"tico: moved to tico-computer {' '.join(refused)}", file=sys.stderr)
+        sys.exit(2)
+    sys.exit(hubcli.main(argv))

@@ -2154,7 +2154,7 @@ Resolve each name against the market graph before you invent an entity.
 Write the evidence row first, then the entity or edge that cites it.
 Close the insight as applied, merged, rejected with one sentence, or needs-human.
 All needs-human items from this run go into one task on the company owner.
-On Mondays the sweep refreshes the weekly delta page from market events. hub market refresh does the same.
+On Mondays the sweep refreshes the weekly delta page from market events. tico market refresh does the same.
 Mark unverified only the entities you tried to check and could not. Do not file a listening task just because a date is old.
 If there are no new insights and it is not Monday, stop.
 """
@@ -2624,7 +2624,7 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/market/pages/{name}")
     def page_read(request: Request, name: str):
-        """One market page as it reads now, for a curator about to add to it (`hub market page <name>`)."""
+        """One market page as it reads now, for a curator about to add to it (`tico market page <name>`)."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:

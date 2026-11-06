@@ -247,11 +247,11 @@ BOT_STATES = SV.BOT_STATES
 STATUS_STATES = SV.BOT_STATUS_STATES
 MESSAGE_KINDS = ("say", "notice", "steer")
 # Kinds old rows may still have, read as history only: nothing writes an ask or an answer since step 6c (a question
-# to a person is a question task, `hub task question`; to a bot, a DM flagged needs-action).
+# to a person is a question task, `tico task question`; to a bot, a DM flagged needs-action).
 OLD_MESSAGE_KINDS = ("ask", "answer")
 ASK_GONE = (
-    "asks are gone: ask a person with hub task question \"<question>\" --on <person> [--parent <task>]; "
-    "ask a bot with hub message send <bot> \"<question>\" --needs-action"
+    "asks are gone: ask a person with tico task question \"<question>\" --on <person> [--parent <task>]; "
+    "ask a bot with tico message send <bot> \"<question>\" --needs-action"
 )
 CONVERSATION_KINDS = ("chat", "ask", "task", "notice")
 CONVERSATION_SCOPES = ("direct", "personal", "shared", "task")
@@ -859,7 +859,7 @@ CREATE INDEX IF NOT EXISTS goal_asks_task ON goal_asks(task_id);
 """
 
 # What woke a run and whether it changed anything (backend/run_triggers.py); append to preserve existing installations.
-# A run from before this has NULLs, which `run_weekly` in hub sql reads as `unknown`.
+# A run from before this has NULLs, which `run_weekly` in tico sql reads as `unknown`.
 RUN_TRIGGERS_SCHEMA = """
 ALTER TABLE turns ADD COLUMN trigger_kind TEXT;
 ALTER TABLE turns ADD COLUMN trigger_source TEXT;
@@ -1689,7 +1689,7 @@ def migrate(conn, adopt_legacy=False):
     TR.migrate(conn)
     # Who is on a task, by role (task_roles).
     TRo.migrate(conn)
-    # Next-run tasks (`hub task create --next-run`): `next_run` marks a task that waits for its
+    # Next-run tasks (`tico task create --next-run`): `next_run` marks a task that waits for its
     # owner's next run instead of starting one; `carried_by` is the attempt that took it there.
     if "next_run" not in columns:
         conn.execute("ALTER TABLE tasks ADD COLUMN next_run INTEGER NOT NULL DEFAULT 0")
@@ -1818,7 +1818,7 @@ def migrate(conn, adopt_legacy=False):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS bot_file_versions_pending ON bot_file_versions(blob_id) WHERE media_state='pending'"
     )
-    # Quiet notes (`hub note`): a line left for a bot's next run, asking nothing. `carried_by` is
+    # Quiet notes (`tico note`): a line left for a bot's next run, asking nothing. `carried_by` is
     # the attempt that took it there; a canceled note never goes.
     conn.execute(
         "CREATE TABLE IF NOT EXISTS notes(id TEXT PRIMARY KEY, from_actor TEXT NOT NULL, "
@@ -2915,7 +2915,7 @@ def _botops_only(conn, actor, target):
         actor,
         "botops-only",
         "The Health Monitor gives its fixes to BotOps, not to a person: file it with "
-        "`hub task create --owner botops` (or hand a task to it with `hub task update <id> --owner botops`), and "
+        "`tico task create --owner botops` (or hand a task to it with `tico task update <id> --owner botops`), and "
         "BotOps decides who to ask",
     )
 
@@ -4477,8 +4477,8 @@ def task_reopen_hint(conn, actor, row):
     if row['status'] == 'closed' and is_bot(actor) and (actor != row['requester_id'] or is_human(closer)):
         return f"ask {actor_name(conn, closer)} to reopen it, or file a new task"
     if actor == row['owner_id'] or is_human(actor) or (actor == row['requester_id'] and row['status'] == 'closed'):
-        return f"reopen it with `hub task update {row['id']} --status doing`, or file a new task"
-    return "ask the owner to reopen it with " + f"`hub task update {row['id']} --status doing`, or file a new task"
+        return f"reopen it with `tico task update {row['id']} --status doing`, or file a new task"
+    return "ask the owner to reopen it with " + f"`tico task update {row['id']} --status doing`, or file a new task"
 
 
 def _task_state(conn, actor, row, status=None, type=None, step=None):
@@ -5104,7 +5104,7 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
                 actor,
                 "label",
                 f"approval {approval_id} does not cover this change: a publish approval is used once, must be "
-                f"approved, and must match `hub task publication-preview {row['id']}` with a --label for each "
+                f"approved, and must match `tico task publication-preview {row['id']}` with a --label for each "
                 f"label the task keeps; request a new one, or ask a person on the {teams} teams",
                 task=row["id"],
             )
@@ -5114,7 +5114,7 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
         public,
         teams,
         (
-            f"it needs an approved publish approval: get the payload with `hub task publication-preview {row['id']}` and "
+            f"it needs an approved publish approval: get the payload with `tico task publication-preview {row['id']}` and "
             f"a --label for each label the task keeps, request the approval, then retry with its id (--approval-id), or "
             f"ask a person on the {teams} teams"
             if settings["bot_public_approval"]
@@ -5168,7 +5168,7 @@ def _create_labels(conn, actor, keys):
         (
             f"it needs an approved publish approval, which is for a task that exists: create the task without "
             f"{'it' if len(public) == 1 else 'them'}, then add {'it' if len(public) == 1 else 'them'} on the task with the "
-            f"approval (`hub task publication-preview <id>`, then --approval-id), or ask a person on the {teams} teams"
+            f"approval (`tico task publication-preview <id>`, then --approval-id), or ask a person on the {teams} teams"
             if settings["bot_public_approval"]
             else f"a person on the {teams} teams adds {'it' if len(public) == 1 else 'them'}"
         ),
@@ -5424,7 +5424,7 @@ def _unlinked_text(missing):
     )
     return (
         "; and ".join(parts) + ". Open the pull request (Tico links a worktree branch's PR itself) or run "
-        "`hub task link <PR URL>`"
+        "`tico task link <PR URL>`"
     )
 
 
@@ -7419,7 +7419,7 @@ def task_update(
                 actor,
                 "question-owner",
                 "A question task is for a person; a bot never owns one. Ask a bot in "
-                "a DM: hub message send <bot> \"<question>\" --needs-action",
+                "a DM: tico message send <bot> \"<question>\" --needs-action",
             )
     mine = _task_party(conn, actor, row) or type_bot_works(conn, actor, row) or task_manager_acts(conn, actor, row)
     if actor == TASK_MANAGER and actor not in (row["owner_id"], row["requester_id"]):
@@ -7514,7 +7514,7 @@ def task_update(
                 actor,
                 "reviewer",
                 f"You are reviewing this ticket, so you don't move it. Finish your review task {check['id']} with "
-                f"your verdict (hub task done {check['id']} --verdict approve|changes --head <sha>); the Builder "
+                f"your verdict (tico task done {check['id']} --verdict approve|changes --head <sha>); the Builder "
                 "moves the ticket.",
             )
     if not mine and not mover and actor != KEEPER:
@@ -7543,7 +7543,7 @@ def task_update(
             actor,
             'lint',
             'Putting your task back to open requires a note: '
-            f'hub task update {task_id} --status open --note "why it goes back"',
+            f'tico task update {task_id} --status open --note "why it goes back"',
         )
     left_open = set()
     if state_change:
@@ -7691,7 +7691,7 @@ def task_update(
             actor,
             "close",
             f"{actor_name(conn, closer)} closed this task, so it stays closed; {task_reopen_hint(conn, actor, row)}; "
-            "add anything new as a comment (hub task comment)",
+            "add anything new as a comment (tico task comment)",
         )
     if (
         row["status"] == "closed"
@@ -7761,14 +7761,14 @@ def task_update(
                 else [
                     f"nothing this task waits on is recorded, so it goes back to open "
                     f"in {GRACE_HOURS} h: "
-                    f"file a subtask for whoever must act (hub task create "
+                    f"file a subtask for whoever must act (tico task create "
                     f"--parent {task_id} --owner <bot or person>), relate a blocker, name the person with --on, "
                     "or set --due for when to look again"
                 ]
             )
     # A bot that needs a person on its own task asks them in one question task they own, with no options
     # (_ask_in_subtask): the task stays the bot's, blocked on it, and is never itself a card in their Needs you. With no
-    # note, an open question task to them from the owner on the task (`hub task question`) already asks: nothing is filed.
+    # note, an open question task to them from the owner on the task (`tico task question`) already asks: nothing is filed.
     asked_in = None
     said = str(note if note is not None else row.get("note") or "").strip() if waiting_on else ""
     if waiting_on and (said or not _owner_asked(conn, row, waiting_on)):
@@ -8403,7 +8403,7 @@ def supersede_ask_cards(conn, row, status):
 
 
 def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
-    """The person `hub task update --status waiting --on <person>` names, or "" when none is named.
+    """The person `tico task update --status waiting --on <person>` names, or "" when none is named.
 
     The wait is filed as a question task for them with no options under the task (_ask_in_subtask): that puts it in
     their Needs you and counts toward the bot's `needs_human`. Only a person who can read the task: a private task
@@ -8428,8 +8428,8 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
             conn,
             actor,
             "waiting_on",
-            f"A task waits on a person, not a bot. Ask {slug} in a DM: hub message send {slug} \"<question>\" "
-            f"--needs-action. To wait on its work, link that task: hub task wait {row['id']} --on task:<its task>",
+            f"A task waits on a person, not a bot. Ask {slug} in a DM: tico message send {slug} \"<question>\" "
+            f"--needs-action. To wait on its work, link that task: tico task wait {row['id']} --on task:<its task>",
         )
     if not person or not is_human(person):
         refuse(
@@ -8437,7 +8437,7 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
             actor,
             "waiting_on",
             f"{value} is not a person on the team: a task waits on a person with --on, or on another task with "
-            "hub task wait <task> --on task:<other>",
+            "tico task wait <task> --on task:<other>",
         )
     _botops_only(conn, actor, person)
     if not task_private_readable(conn, person, row if private is None else {**row, "private": int(bool(private))}):

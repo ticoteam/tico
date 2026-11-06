@@ -1496,7 +1496,7 @@ def test_a_reserved_worktree_is_prepared_only_while_idle_and_a_failed_setup_is_r
 @pytest.mark.slow
 @pytest.mark.parametrize('phase', ['setup_running', 'setup_failed'])
 def test_the_advertised_retry_resumes_an_expired_setup_in_place(trees, phase):
-    """A setup that stopped part-way (the server's deadline then names `hub task worktree setup`): the registered setup
+    """A setup that stopped part-way (the server's deadline then names `tico task worktree setup`): the registered setup
     command re-runs setup in the same folder on the same branch, keeping its files and proof, and reports it ready."""
     workspace, base, remote, row, client = trees
     first = W.command(client, 'add', 'org/product')  # no folder yet: the checkout is made

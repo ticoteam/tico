@@ -17,7 +17,7 @@ import pytest
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.store import H
 from backend.tests.test_api import api, headers, post, setup_attempt  # noqa: F401  (the api fixture)
-from backend.tests.test_mcp import call
+from backend.tests.test_mcp import call, rpc
 from clients import hubcli, remotecli
 from clients.tico import APIError
 
@@ -209,7 +209,7 @@ def test_hub_history_is_the_conversation_show_alias_and_pages_back_like_the_rest
     assert [m["id"] for m in older["messages"]] == order[:-200] and older["has_more"] is False
 
 
-def test_an_old_mcp_name_is_refused_with_its_new_name_and_writes_nothing(api):
+def test_an_old_mcp_name_runs_as_its_new_tool_and_its_answer_says_so(api):
     cid = post(api, "chat/ops", {"text": "Read this back"})["conversation_id"]
     with api.app.state.store.transaction() as c:
         H.say(c, "bot:ops", "human:ana", "Done.", conversation_id=cid)
@@ -219,19 +219,29 @@ def test_an_old_mcp_name_is_refused_with_its_new_name_and_writes_nothing(api):
         with api.app.state.store.read() as c:
             return c.execute("SELECT read_at FROM messages WHERE id=?", (note,)).fetchone()[0]
 
-    # hubtools._call answers an old name with `renamed` and the new name; it does not run the old name.
-    err, out = call(api, "hub_history", {"conversation": cid})
-    assert err and out["error"] == "renamed" and out["renamed_to"] == "hub_conversation_show" and "messages" not in out
-    err, out = call(api, "hub_say", {"to": "ops", "text": "Said under the old name"})
-    assert err and out["error"] == "renamed" and out["renamed_to"] == "hub_message_send"
-    err, out = call(api, "hub_ack", {"message_id": note})
-    assert err and out["error"] == "renamed" and out["renamed_to"] == "hub_message_mark_read"
+    # hubtools._call runs an old name as its new tool. The answer is the new tool's, with a warning after its content:
+    # the old name stops working in the next release.
+    reply = rpc(api, "tools/call", {"name": "hub_history", "arguments": {"conversation": cid}}, token="ana-test")
+    assert not reply["result"]["isError"]
+    assert "`hub_history` is now `tico_conversation_show`" in reply["result"]["content"][-1]["text"]
+    err, old_page = call(api, "hub_history", {"conversation": cid})
+    assert not err and any(m["id"] == note for m in old_page["messages"])
+    err, _ = call(api, "hub_say", {"to": "ops", "text": "Said under the old name"})
+    assert not err
+    err, _ = call(api, "hub_ack", {"message_id": note})
+    assert not err
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE body='Said under the old name'").fetchone()[0] == 0
-    assert read_at() is None
+        assert c.execute("SELECT count(*) FROM messages WHERE body='Said under the old name'").fetchone()[0] == 1
+    assert read_at() is not None
 
-    # The new names answer the same request, so a bot that retries under them gets its answer.
-    err, page = call(api, "hub_conversation_show", {"conversation": cid})
+    # A removed name is still refused, and runs nothing.
+    err, out = call(api, "hub_ask", {"to": "ops", "text": "Asked under the old name"})
+    assert err and out["error"] == "removed"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM messages WHERE body='Asked under the old name'").fetchone()[0] == 0
+
+    # The new names answer the same request.
+    err, page = call(api, "tico_conversation_show", {"conversation": cid})
     rest = read(api, cid)
     assert not err and page == {
         "conversation": rest["conversation"],
@@ -239,12 +249,10 @@ def test_an_old_mcp_name_is_refused_with_its_new_name_and_writes_nothing(api):
         "has_more": rest["has_more"],
         "next_before": rest["next_before"],
     }
-    # hub_message_send answers with the message itself (POST /messages), not wrapped as the reply route wraps it.
-    err, sent = call(api, "hub_message_send", {"to": "ops", "text": "Said under the new name", "conversation_id": cid})
+    # tico_message_send answers with the message itself (POST /messages), not wrapped as the reply route wraps it.
+    err, sent = call(api, "tico_message_send", {"to": "ops", "text": "Said under the new name", "conversation_id": cid})
     assert not err and sent["conversation_id"] == cid and sent["body"] == "Said under the new name"
     assert "Said under the new name" in [m["body"] for m in read(api, cid)["messages"]]
-    err, _ = call(api, "hub_message_mark_read", {"message_id": note})
-    assert not err and read_at() is not None
 
 
 def test_the_runner_claim_carries_the_conversation_and_epochs_its_session_is_keyed_on(api):

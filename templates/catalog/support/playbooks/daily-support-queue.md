@@ -16,9 +16,9 @@ due follow-up has its nudge or its closed-quiet line, the watermark is moved, an
 
 ## 1. Read what came in since the last pass
 
-    hub task show <id>
+    tico task show <id>
 
-Then the source setup named: tasks routed to you (`hub task list --owner me --status open`),
+Then the source setup named: tasks routed to you (`tico task list --owner me --status open`),
 the support mailbox (`$HUB_DIR/scripts/mail.sh inbox --untriaged --format brief`), a Slack channel. Read
 what arrived since the watermark in `state.md` and nothing older. If a source refuses you, name it
 and go on. An unread queue and an empty queue must never read the same.
@@ -34,11 +34,11 @@ follow `skills/check-a-repeat-before-you-escalate/SKILL.md`.
 
 - **Draft** a reply for each ticket you can answer, following `playbooks/work-a-ticket.md`
   step 3. Put every draft on the task. Never in the support tool.
-- **Route** what needs a human: `hub task create --owner <human> --parent <id>` with the ticket and
+- **Route** what needs a human: `tico task create --owner <human> --parent <id>` with the ticket and
   one line on what they decide. Money, a deadline, a legal matter, a security concern or an
   outage goes first, before you finish the pass.
 - **Cluster** the repeats. Three tickets that ask a question the docs never answer are one task to the
-  Librarian (`hub task create --owner librarian`) with the question, the ticket references and the
+  Librarian (`tico task create --owner librarian`) with the question, the ticket references and the
   count; you do not write the answer. Three that report the same failure become one line in
   `knowledge/known-issues.md` and one task for the owner of the fix. Add a repeat to an existing
   entry's count, not a new entry.
@@ -61,7 +61,7 @@ tickets by bucket with the draft and the doc it rests on, follow-ups due, then p
 
 ## 5. Finish
 
-Update the watermark in `state.md` and `knowledge/follow-ups.md`, commit, then `hub task update <id> --status done --note`: how many
+Update the watermark in `state.md` and `knowledge/follow-ups.md`, commit, then `tico task update <id> --status done --note`: how many
 arrived, how many you drafted, how many went to a human and to whom, and anything you could not read.
 Always finish it: an open routine task absorbs the next occurrence.
 

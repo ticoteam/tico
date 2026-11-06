@@ -14,7 +14,7 @@ ran on the new head, and the ticket note names the head and any comment you did 
 ## 1. Read every comment
 
     gh pr view <n> -R <repo> --comments
-    hub task show <id>
+    tico task show <id>
 
 Read each reviewer comment and, for QA, the failing test and the head it judged.
 
@@ -38,7 +38,7 @@ Run the checks at the new head and record the head commit. A check that did not 
 - Review 2 Fixes done: move to In QA.
 - QA Fixes done: move back to In QA, with the fix and the test that now covers the failing case.
 
-    hub task update <id> --step "<step>" --note "<head sha>: fixed <list>; declined <list with one line each>; checks run <list>"
+    tico task update <id> --step "<step>" --note "<head sha>: fixed <list>; declined <list with one line each>; checks run <list>"
 
 When QA passes (or, for a change nobody will see, once its review fixes are done) the merge is next: merge then, under
 `skills/check-the-merge-rules-at-the-head/SKILL.md`, with the checks green at the head, and never before. The merge moves

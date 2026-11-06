@@ -7,7 +7,7 @@ description: Grade a key result from 0 to 1 as the fraction of the way from its 
 When to use: when grading last quarter, or at a mid-quarter check-in that needs a grade.
 
 Steps:
-1. Read the final reading with `hub kpi show <kpi id>`, with its date. Check that the date falls inside the quarter.
+1. Read the final reading with `tico kpi show <kpi id>`, with its date. Check that the date falls inside the quarter.
 2. Compute the fraction: (reading minus baseline) divided by (target minus baseline), to one decimal. This also works when the target is below the baseline. Then clamp the fraction to 0 to 1: above 1 is 1.0, below 0 is 0. A binary result is 0 or 1.
 3. With no reading in the quarter, write "ungraded" and name what was missing. Never write 0 and never write 1.
 4. Mark the result committed or aspirational. A committed result under 1.0 gets one sentence on why.

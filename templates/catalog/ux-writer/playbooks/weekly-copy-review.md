@@ -7,7 +7,7 @@ rule, ready for an engineer to post. Nothing is posted.
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/glossary.md`, `knowledge/error-rules.md` and last week's review. Note which of last week's
 rewrites were applied (read the merged diffs).
@@ -35,6 +35,6 @@ Legal, pricing and privacy strings go to their owner as a flag with no rewrite.
 
 ## 5. Write and hand over
 
-Write `reports/YYYY-MM-DD-copy-review.md` in the shape of `knowledge/examples/copy-review.md`, `hub file
-publish` it, commit, and `hub task update <id> --status done --note`: how many pull requests, how many
+Write `reports/YYYY-MM-DD-copy-review.md` in the shape of `knowledge/examples/copy-review.md`, `tico file
+publish` it, commit, and `tico task update <id> --status done --note`: how many pull requests, how many
 blocking, and new terms proposed for the glossary.

@@ -83,14 +83,14 @@ def test_json_is_accepted_anywhere_on_the_line(capsys):
 def test_a_command_without_its_id_prints_its_usage_and_an_example(capsys):
     code, err = parse_failure(capsys, ["task", "show"])
     assert code == 2
-    assert "usage: hub task show" in err
-    assert "Example: hub task show <id>" in err
+    assert "usage: tico task show" in err
+    assert "Example: tico task show <id>" in err
 
 
 def test_a_mistyped_command_names_the_closest_commands_that_exist(capsys):
     code, err = parse_failure(capsys, ["task", "lst"])
     assert code == 2
-    assert "Did you mean: hub task list" in err.splitlines()[-1]
+    assert "Did you mean: tico task list" in err.splitlines()[-1]
 
 
 def test_a_bad_flag_value_lists_its_choices(capsys):

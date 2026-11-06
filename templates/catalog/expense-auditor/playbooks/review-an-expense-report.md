@@ -12,7 +12,7 @@ Done when the note is on the task for the owner and the task is closed with the 
 
 ## 1. Read the report
 
-    hub task show <id>
+    tico task show <id>
 
 Note who submitted it, who approves it, the period, each line and each receipt.
 
@@ -27,5 +27,5 @@ Use `skills/write-an-owner-review-note/SKILL.md`. Keep it under 150 words.
 
 ## 4. Hand over
 
-Put the note on the task for the owner, then `hub task update <id> --status done --note "..."` with "Pass" or the count of
+Put the note on the task for the owner, then `tico task update <id> --status done --note "..."` with "Pass" or the count of
 questions. If the owner grants an exception, record it in `knowledge/exceptions.md` with who granted it and when.

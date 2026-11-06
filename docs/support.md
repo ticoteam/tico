@@ -126,12 +126,12 @@ A bot that hits a Tico bug (or a person's token, through MCP) reports it to the 
 copy-and-paste task. Whether a person says yes first is the team's rule **Bots send reports to the Tico team without
 asking** (`bot_reports_direct`, Settings > General > Team, owner only; on by default).
 
-**On.** `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) is drafted as below and then decided and sent at once by the team rule: no card is made, and the command prints the ticket. The draft is decided as the install's default person (the one a drafted report would ask), with the note "team rule: bots send reports without asking", so it never shows in Needs you. The ticket is filed as that person and counts toward their 10 a day, but it is not in their Support chat: its replies
+**On.** `tico support report --message "..."` (or `--file report.md`; MCP `tico_support_report`) is drafted as below and then decided and sent at once by the team rule: no card is made, and the command prints the ticket. The draft is decided as the install's default person (the one a drafted report would ask), with the note "team rule: bots send reports without asking", so it never shows in Needs you. The ticket is filed as that person and counts toward their 10 a day, but it is not in their Support chat: its replies
 are kept for the team and the bot, not shown to the person. The checks are a drafted report's, and they run first: the message is checked as `lint_approval` checks it, a quarantined bot is refused, and the privacy check for this send must pass. The day limit, the HQ call and the source are the same. The bot sends an `Idempotency-Key`, as every write does: a retry with the same key is the same ticket and nothing more reaches HQ, and the same key with other content is refused (409) and sends nothing. A retry after the owner turns direct reports off is still the same ticket, and a report already sent stays sent. If the rule is off when a report is sent, the draft waits for a person (below); a retry after the owner turns the rule on sends that draft once. If the send fails, the rule's decision is taken back and the draft waits the same way. The version and install ID go with it unless `--no-ids`.
 
 **Off.** The report waits for a person's yes:
 
-1. `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) drafts the report as a
+1. `tico support report --message "..."` (or `--file report.md`; MCP `tico_support_report`) drafts the report as a
    `support` approval: the `message` (up to 4000 characters, plain text), its `content_sha256`, and `include_ids`
    (default true: the version and install ID go with it; `--no-ids` sends only the message). It prints the approval id.
    Nothing is sent, and the draft is refused while support is off (demo, rehearsal, `TICO_SUPPORT=off`).
@@ -141,7 +141,7 @@ are kept for the team and the bot, not shown to the person. The checks are a dra
    A token may not approve it. Declining sends nothing, so anyone who may decide it may decline it. A bot's report goes
    where any approval goes: the owner of its task, else the default person. A person's own report (drafted with their
    token) goes to them.
-3. After a yes, `hub support send --approval <id>` (MCP `hub_support_send`, `POST /api/v2/support/tickets/from-approval`)
+3. After a yes, `tico support send --approval <id>` (MCP `tico_support_send`, `POST /api/v2/support/tickets/from-approval`)
    files it **as the person who approved it**: the ticket is kept under their name and counts
    toward their 10 a day, but it is not in their Support chat (a bot's report is not shown there, and its replies are
    not either). Only whoever asked for the approval may send it, and only once it is approved and its message
@@ -293,7 +293,7 @@ so the decision model can be tuned. The human who filed a ticket sees nothing di
 
 The same check is `POST /v1/staff/judge` (`{"text": "..."}` answers `{verdict, reason}`, nothing kept), which `software/gh-support`
 calls, with the staff key already in its secrets, for each new issue, Discussion and outside comment: `spam` is not filed and is
-counted in its output line, `injection_risk` is filed with a warning. A message bot checks email with `hub classify` (text on
+counted in its output line, `injection_risk` is filed with a warning. A message bot checks email with `tico classify` (text on
 standard input or `--file`), which asks the server's own decision model the same question.
 
 On HQ, `HQ_JUDGE_KEY` is that provider's key (`HQ_JUDGE_URL` only to point elsewhere). Without it every verdict is
@@ -312,7 +312,7 @@ watcher's report is answered at once; the ticket's task opens a few seconds late
 
 An ordinary note to a person, such as "please ignore this test", counts as legitimate text.
 Words such as "ignore", "test", and "please" do not make it a prompt injection by themselves.
-The check looks for instructions addressed to an AI, bot, or assistant. `hub classify` uses the same distinction.
+The check looks for instructions addressed to an AI, bot, or assistant. `tico classify` uses the same distinction.
 
 | Answer | What happens |
 |---|---|

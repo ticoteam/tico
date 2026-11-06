@@ -391,7 +391,7 @@ def test_notes_take_a_deadline_and_the_old_names_still_work(api):
         parse(["task", "create", "--owner", "ops", "--title", "Watch refunds", "--defer", "4h"])
     ) == {"delivery": "defer", "defer_for": "4h"}
     assert parse(["task", "defer", "T1", "--next-run"]).fn == parse(["task", "later", "T1", "--next-run"]).fn
-    assert hubtools.CALL_ALIASES["hub_task_defer"] == "hub_task_later" and "hub_task_defer" not in hubtools.BY_NAME
+    assert hubtools.CALL_ALIASES["hub_task_defer"] == "tico_task_later" and "hub_task_defer" not in hubtools.BY_NAME
     task = post(api, "tasks", {"owner": "ops", "title": "Watch refunds", "body": "x", "next_run": True})
     for route in ("later", "defer"):
         post(api, f"tasks/{task['id']}/{route}", {"next_run": True})

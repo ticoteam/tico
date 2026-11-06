@@ -7,7 +7,7 @@ description: "Write the budget vs actual note for a month close or a monthly rep
 When to use: the note in a month-ready-to-close task, and the budget section of the monthly report.
 
 Steps:
-1. Read `hub finance report budget_vs_actual` for the month. Its amounts are minor units: 315000 is 3,150.00, so divide
+1. Read `tico finance report budget_vs_actual` for the month. Its amounts are minor units: 315000 is 3,150.00, so divide
    by 100 before you write any figure. Put the basis (cash or accrual) and the as-of time at the top of the note.
 2. Test each line against the threshold. Use the one the close checklist or the owner names, for example a dollar amount
    and a percentage together. If none is set, ask the owner once for one and, until then, take the three largest lines

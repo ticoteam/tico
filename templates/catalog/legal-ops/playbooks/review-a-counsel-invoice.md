@@ -7,7 +7,7 @@ on in two minutes: the total, the lines to question and why. An invoice action w
 
 ## 1. Match it
 
-    hub task show <id>
+    tico task show <id>
 
 Find the firm in `knowledge/firms.md` and the matter in `knowledge/matters.md`. No engagement letter on record: say
 so at the top and review only against `knowledge/billing-rules.md`. An unknown matter: flag it first.
@@ -28,12 +28,12 @@ Check the arithmetic of every line and the total.
 
 `reports/invoices/<firm>-<invoice>.md`: two lines first (billed, in question, the main reason), the lines to question
 in a table with the rule each breaks, budget position after this invoice, then a draft query to the firm in plain
-words. It stays a draft unless a person has turned mail sending on in Tico and the task asks for it. Then **Summary for a human, not legal advice.** `hub file publish` it.
+words. It stays a draft unless a person has turned mail sending on in Tico and the task asks for it. Then **Summary for a human, not legal advice.** `tico file publish` it.
 
 ## 4. Hand over
 
 Put it on the task for the owner named at setup. Payments need the task to ask for them and a granted Tool to allow them; otherwise they wait for a person. Messages to the firm are drafts on the task and go out only when a person has turned mail sending on in Tico and the task asks for it. Update the
-matter's spend to date in `knowledge/matters.md`, commit, and `hub task update <id> --status done --note`.
+matter's spend to date in `knowledge/matters.md`, commit, and `tico task update <id> --status done --note`.
 
 ## Done when
 - The review opens with the amount billed and the amount in question, and each questioned line has its date, timekeeper, hours, rate, amount and rule.

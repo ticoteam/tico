@@ -191,7 +191,7 @@ def test_with_assistant_acts_without_asking_off_a_computer_limit_is_a_confirm_ca
     r, attempt = assistant_turn(api, "ana-test", "Let Test Mac run 3 turns at once")
     err, card = mcp(
         api,
-        "hub_settings_set",
+        "tico_settings_set",
         {"key": "computer.turns_at_once", "value": {"turns_at_once": 3}, "computer": rid, "on_behalf_of": "turn"},
         attempt["token"],
     )

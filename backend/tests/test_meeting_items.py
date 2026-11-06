@@ -1,6 +1,6 @@
 """The three sections of a meeting, and Push.
 
-The task, doc and feature pushes go through the real hub task path, because that is the point of them.
+The task, doc and feature pushes go through the real tico task path, because that is the point of them.
 """
 
 import pytest

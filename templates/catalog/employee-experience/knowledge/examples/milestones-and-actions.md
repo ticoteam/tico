@@ -26,5 +26,5 @@ not yet reviewed.
 - Team offsite 2026-11-06: venue quote $2,400 of the $3,000 budget, spending record on T-455.
 
 ## Sources
-- `hub team show`, `knowledge/actions.md`, `hub calendar list`, read 2026-10-01
+- `tico team show`, `knowledge/actions.md`, `tico calendar list`, read 2026-10-01
 ```

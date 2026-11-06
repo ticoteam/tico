@@ -35,7 +35,7 @@
   "kind": "tool",
   "thread_id": "thr_1",
   "turn_id": "turn_1",
-  "tool": "mcp__hub__hub_task_show",
+  "tool": "mcp__tico__tico_task_show",
   "status": "started",
   "item_id": "m1",
   "parent_id": null,
@@ -45,7 +45,7 @@
   "kind": "tool",
   "thread_id": "thr_1",
   "turn_id": "turn_1",
-  "tool": "mcp__hub__hub_task_show",
+  "tool": "mcp__tico__tico_task_show",
   "status": "failed",
   "item_id": "m1",
   "parent_id": null

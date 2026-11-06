@@ -2,7 +2,7 @@
 
 Triggered by a waiting question in the digest, or a task linking one thread ("can someone answer this?"). Budget 10 minutes per thread.
 
-Inputs: the thread link and its whole conversation, `knowledge/community.md` (response target, who may answer, routing), and the team's docs through `hub doc ask`.
+Inputs: the thread link and its whole conversation, `knowledge/community.md` (response target, who may answer, routing), and the team's docs through `tico doc ask`.
 
 Outcome: one sourced reply ready for review, or, when the thread is not a how-to, a short public line and a routed task.
 
@@ -25,9 +25,9 @@ Follow `skills/sort-community-threads/SKILL.md`. The type sets the next step:
 
 ## 3. Find the answer
 
-    hub doc ask "<the member's question, in their words>"
+    tico doc ask "<the member's question, in their words>"
 
-Use the answer and its citations. If the Librarian says it is not covered, do not guess: report the gap to it (`hub task create --owner librarian`) and tell the owner the thread needs a human.
+Use the answer and its citations. If the Librarian says it is not covered, do not guess: report the gap to it (`tico task create --owner librarian`) and tell the owner the thread needs a human.
 
 ## 4. Write the reply
 
@@ -35,4 +35,4 @@ The answer in the first sentence, then the steps, then the doc link. Use the mem
 
 ## 5. Put it up for review
 
-Add the reply to the week's batch, or, for one thread, put it to the human named in setup as a review question: `hub task question "Post this reply?" --on <that person> --parent <id> --review <reply file>`, with the thread link in the file. A person approves it. It is posted with your Tools only when the task asks for it and mail sending is on in Tico; otherwise it stays a draft. After it is posted, note it in the digest, then `hub task update <id> --status done --note "<type>; <reply or task link>"`.
+Add the reply to the week's batch, or, for one thread, put it to the human named in setup as a review question: `tico task question "Post this reply?" --on <that person> --parent <id> --review <reply file>`, with the thread link in the file. A person approves it. It is posted with your Tools only when the task asks for it and mail sending is on in Tico; otherwise it stays a draft. After it is posted, note it in the digest, then `tico task update <id> --status done --note "<type>; <reply or task link>"`.

@@ -297,7 +297,7 @@ def test_a_delivery_that_cannot_apply_is_refused_and_nothing_is_saved(api):
 def test_mcp_and_the_hub_cli_send_the_same_delivery(api):
     machine, tid = world(api)
     is_error, payload = call(
-        api, "hub_task_comment", {"id": tid, "text": "Pick the venue.", "delivery": "defer", "defer_for": "4h"}
+        api, "tico_task_comment", {"id": tid, "text": "Pick the venue.", "delivery": "defer", "defer_for": "4h"}
     )
     assert is_error is False and payload["woke"] is False and payload["sent_as"]["delivery"] == "defer"
     # One of the ways at most, on the command line too.

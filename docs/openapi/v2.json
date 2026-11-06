@@ -1243,7 +1243,7 @@
     },
     "/api/v2/assistant/actions": {
       "post": {
-        "summary": "Propose one operation for the caller to confirm (what the assistant's `hub assistant propose` calls)",
+        "summary": "Propose one operation for the caller to confirm (what the assistant's `tico assistant propose` calls)",
         "operationId": "proposeAssistantAction",
         "requestBody": {
           "content": {

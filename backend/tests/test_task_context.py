@@ -81,7 +81,7 @@ def test_context_is_bounded_metadata_newest_first_and_claims_include_it(api):
     attempt = claim(api, machine, 'ops')
     assert attempt['task_context'] == result
     assert get(api, 'tasks/' + t['id'][:8] + '/context', attempt['token']) == result
-    error, mcp = call(api, 'hub_task_context', {'id': t['id']}, token=attempt['token'])
+    error, mcp = call(api, 'tico_task_context', {'id': t['id']}, token=attempt['token'])
     assert not error and mcp == result
     with api.app.state.store.transaction() as c:
         restrict(c, 'ops', people=['ana'])
@@ -212,5 +212,5 @@ def test_notes_are_paged_without_repeating_them_at_transcript_offsets(api):
     transcript = get(api, f'meetings/transcript?id={mid}&offset=1')
     assert 'notes' not in transcript and 'decision' not in transcript['text']
     _, attempt = turn(api)
-    error, notes = call(api, 'hub_meeting_read', {'id': mid, 'notes': True}, token=attempt['token'])
+    error, notes = call(api, 'tico_meeting_read', {'id': mid, 'notes': True}, token=attempt['token'])
     assert not error and notes['text'] == first['notes']

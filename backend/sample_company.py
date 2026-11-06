@@ -9,7 +9,7 @@ stand in for the setup chat, so a starter task is claimed as soon as a computer 
 stays off until a person turns it on. Each bot gets its goal, and the owner files its starter tasks.
 
 It is not demo mode (backend/demo.py): these are real bots on the person's own subscriptions. Nothing a starter task
-asks for leaves the company. Each ends with one Yes/No question to the owner (`hub task question`), which is the card
+asks for leaves the company. Each ends with one Yes/No question to the owner (`tico task question`), which is the card
 in Needs you; Tico's approvals are for a send, spending, publishing or a merge, and a starter task does none of them.
 
 Two doors: the first-run welcome's "Start with a sample company" (POST /api/v2/setup/sample, the owner), and
@@ -39,7 +39,7 @@ ASK = """
 ## Ask for the approval
 When {what} is on this task, ask the owner once, from this task:
 
-    hub task question --on {owner} "Approve {what}?"
+    tico task question --on {owner} "Approve {what}?"
 
 Their answer reaches you on this task. Yes: mark this task done. No: change it as they say and ask once more.
 Nothing in this task is sent, posted or published outside Sample Co, whatever they answer.

@@ -25,18 +25,18 @@ OPEN_TASKS_KEY = "open-tasks-daily"  # retired; the key finds the old rows
 SWEEP_KEY = "task-sweep"
 SWEEP_TEXT = (
     "Sweep stuck tasks across the fleet (follow playbooks/task-sweep.md if you have it). "
-    "`hub task list --stuck` lists every bot's open work that has not moved in a day and waits on "
-    "nobody. For each: start it with `hub task run <id>` when the bot can simply do it; "
+    "`tico task list --stuck` lists every bot's open work that has not moved in a day and waits on "
+    "nobody. For each: start it with `tico task run <id>` when the bot can simply do it; "
     "fix the cause when something in the bot or Tico keeps it stuck; or tell the requester "
     "in one line why it cannot move. Then review the open tasks you filed for humans "
-    "(`hub task list --requester me --status open`): close each whose condition is already true or superseded "
+    "(`tico task list --requester me --status open`): close each whose condition is already true or superseded "
     "with a one-line note, and ask once about one you cannot tell. "
     "Nothing to do: finish this task with one line."
 )
 OPEN_TASKS_TEXT = (
-    "Daily open-tasks check. List the tasks you own that are still open (`hub task list`). "
+    "Daily open-tasks check. List the tasks you own that are still open (`tico task list`). "
     "Move the top one forward: finish it, take its next step, or say in one line with "
-    "`hub task update <id> --note` what it is waiting on. If a person asked for something that "
+    "`tico task update <id> --note` what it is waiting on. If a person asked for something that "
     "is not a task yet, file it now. Nothing open: finish this task with one line."
 )
 FIELDS = ("title", "cron", "on", "timezone", "text")

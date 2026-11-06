@@ -1,7 +1,7 @@
 """The Video Producer's pipeline script (templates/catalog/video-producer/software/pipeline.py) with `hub` stubbed: a
 stage waits for its mover's approval of each file, the owner is found from pipeline.yaml or the command, a self-moved
 stage runs until its project budget (plus any raise the owner approved) and is done on its `.done` file, a file is
-used only when it is approved or its stage is self-moved, and a failed `hub file approved` stops the pipeline instead of
+used only when it is approved or its stage is self-moved, and a failed `tico file approved` stops the pipeline instead of
 reading as pending."""
 
 import importlib.machinery
@@ -28,7 +28,7 @@ def repo(tmp_path, monkeypatch):
     (root / "pipeline.yaml").write_text((TEMPLATE / "pipeline.yaml").read_text())
     approved = set()
 
-    def hub_approved(asset, mover="owner"):  # stands in for `hub file approved --by`: (approved, detail)
+    def hub_approved(asset, mover="owner"):  # stands in for `tico file approved --by`: (approved, detail)
         rel = asset.relative_to(root).as_posix()
         return rel in approved, ({"by": "Ana"} if rel in approved else {})
 
@@ -82,7 +82,7 @@ def test_the_owner_comes_from_the_pipeline_or_the_command_and_is_asked_for_when_
     waiting = pipeline.next_step(repo.project, stages, task="T-1")
     assert waiting.startswith("waiting: no owner is named") and "--owner" in waiting
     step = pipeline.next_step(repo.project, stages, task="T-1", owner="Ana Lee")
-    assert step.startswith("hub task question 'Approve the script files for launch?' --on 'Ana Lee' --parent T-1")
+    assert step.startswith("tico task question 'Approve the script files for launch?' --on 'Ana Lee' --parent T-1")
     assert "--review projects/launch/script/intro.md" in step
     repo.approved.add(script.relative_to(repo.root).as_posix())
     assert pipeline.next_step(repo.project, stages, owner="Ana Lee").startswith("waiting: make the storyboard files")
@@ -104,7 +104,7 @@ def test_a_bot_mover_gets_a_hand_off_task_not_a_question(repo):
     put(repo, "brief", "brief.md", approve=True)
     put(repo, "script", "intro.md")
     step = pipeline.next_step(repo.project, cfg(repo), task="T-1")
-    assert "hub task create --owner bot:reviewer --parent T-1" in step and "--review" not in step
+    assert "tico task create --owner bot:reviewer --parent T-1" in step and "--review" not in step
     assert "projects/launch/script/intro.md" in step
 
 
@@ -129,7 +129,7 @@ def test_going_over_budget_asks_the_owner_for_a_raise_and_an_approved_raise_lets
     put(repo, "shots", "clip.mp4", cost=10.0)
     (repo.project / "shots" / ".done").write_text("")
     ask = pipeline.next_step(repo.project, stages, task="T-1", owner="Ana Lee")
-    assert ask.startswith("over budget (10.00 of 10.00 USD used): ask the owner: hub task question")
+    assert ask.startswith("over budget (10.00 of 10.00 USD used): ask the owner: tico task question")
     assert "--on 'Ana Lee' --parent T-1" in ask and "--spend" in ask and "--option" in ask
     assert "Raise budget=10:launch self-moved stages" in ask
     assert pipeline.next_step(repo.project, stages, owner="").startswith("waiting: no owner")
@@ -154,9 +154,9 @@ def test_a_bot_mover_is_approved_by_that_bot_and_the_hand_off_says_how_to_review
     assert calls[-1][-2:] == ["--by", "bot:reviewer"]
     assert REAL_APPROVAL(intro, "owner")[0] is True and calls[-1][-2:] == ["--by", "human"]
     hand_off = pipeline.request(repo.project, cfg(repo), {"id": "script", "mover": "bot:reviewer"}, [intro], "T-1", "")
-    assert "hub task create --owner bot:reviewer --parent T-1" in hand_off
-    assert hand_off.splitlines()[0] == "1. hub file publish projects/launch/script/intro.md"
-    assert "<FILE@N>" in hand_off and "hub file review <FILE@N> --approve|--changes --task <this task>" in hand_off
+    assert "tico task create --owner bot:reviewer --parent T-1" in hand_off
+    assert hand_off.splitlines()[0] == "1. tico file publish projects/launch/script/intro.md"
+    assert "<FILE@N>" in hand_off and "tico file review <FILE@N> --approve|--changes --task <this task>" in hand_off
     assert "projects/launch/script/intro.md" not in hand_off.split("\n", 1)[1].replace("intro.md: <FILE@N>", "")
 
 
@@ -169,8 +169,8 @@ TRACEBACK = (
 )
 
 
-def hub_file_approved(monkeypatch, answers):
-    """The real approval() against a fake `hub file approved`: answers maps a file's repo path to (exit, stdout, stderr)."""
+def tico_file_approved(monkeypatch, answers):
+    """The real approval() against a fake `tico file approved`: answers maps a file's repo path to (exit, stdout, stderr)."""
     calls = []
 
     def fake_run(command, **kwargs):
@@ -186,7 +186,7 @@ def hub_file_approved(monkeypatch, answers):
 def test_exit_0_is_approved_and_the_pipeline_moves_on(repo, monkeypatch):
     brief = put(repo, "brief", "brief.md")
     script = put(repo, "script", "intro.md")
-    hub_file_approved(
+    tico_file_approved(
         monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": APPROVED}
     )
     assert REAL_APPROVAL(brief) == (True, {"approved": True, "by": "Ana"})
@@ -197,12 +197,12 @@ def test_exit_0_is_approved_and_the_pipeline_moves_on(repo, monkeypatch):
 def test_the_hubs_not_approved_answer_is_pending_and_asks_for_review(repo, monkeypatch):
     put(repo, "brief", "brief.md")
     script = put(repo, "script", "intro.md")
-    hub_file_approved(
+    tico_file_approved(
         monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": NOT_APPROVED}
     )
     assert REAL_APPROVAL(script) == (False, {})
     step = pipeline.next_step(repo.project, cfg(repo), task="T-1", owner="Ana Lee")
-    assert step.startswith("hub task question 'Approve the script files for launch?' --on 'Ana Lee' --parent T-1")
+    assert step.startswith("tico task question 'Approve the script files for launch?' --on 'Ana Lee' --parent T-1")
     assert "--review projects/launch/script/intro.md" in step
     assert pipeline.gate(script) == 1
 
@@ -225,20 +225,20 @@ def test_the_hubs_not_approved_answer_is_pending_and_asks_for_review(repo, monke
             "",
         ),
         (2, json.dumps({"error": "validation", "retryable": False, "detail": "--by is human"}), ""),  # bad input
-        (2, "", "usage: hub file approved TARGET"),
+        (2, "", "usage: tico file approved TARGET"),
         (7, "", "something unexpected"),
     ],
 )
 def test_a_failed_hub_call_is_an_error_not_a_pending_file(repo, monkeypatch, code, stdout, stderr):
     put(repo, "brief", "brief.md")
     script = put(repo, "script", "intro.md")
-    hub_file_approved(
+    tico_file_approved(
         monkeypatch,
         {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": (code, stdout, stderr)},
     )
     with pytest.raises(pipeline.Problem) as caught:
         pipeline.next_step(repo.project, cfg(repo), task="T-1", owner="Ana Lee")
-    assert f"hub file approved exited {code}" in str(caught.value)
+    assert f"tico file approved exited {code}" in str(caught.value)
     assert (stderr or stdout).strip()[-40:] in str(caught.value)
     with pytest.raises(pipeline.Problem):
         pipeline.gate(script)
@@ -247,13 +247,13 @@ def test_a_failed_hub_call_is_an_error_not_a_pending_file(repo, monkeypatch, cod
 def test_a_crash_shows_the_stderr_tail_in_the_error_and_stops_the_command(repo, monkeypatch, capsys):
     put(repo, "brief", "brief.md")
     put(repo, "script", "intro.md")
-    hub_file_approved(
+    tico_file_approved(
         monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": (1, "", TRACEBACK)}
     )
     assert pipeline.main(["next", str(repo.project), "--task", "T-1", "--owner", "Ana Lee"]) == 2
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err.startswith("error: hub file approved exited 1 for projects/launch/script/intro.md")
+    assert captured.err.startswith("error: tico file approved exited 1 for projects/launch/script/intro.md")
     assert "TypeError: Client.get() got multiple values for argument 'path'" in captured.err
 
 

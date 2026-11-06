@@ -5,9 +5,9 @@ tracking. Bots use the `hub` CLI; people use Tico at `https://hub.acme.example`.
 
 ## Starting a task
 
-1. Read `state.md`, then `hub task show <task-id>` and its comments.
-2. Set it to doing with `hub task update <task-id> --status doing --note "<current focus>"`.
-3. If the goal or deliverable is unclear, ask one focused question (`hub task question "<question>" --on <person>`) and set the
+1. Read `state.md`, then `tico task show <task-id>` and its comments.
+2. Set it to doing with `tico task update <task-id> --status doing --note "<current focus>"`.
+3. If the goal or deliverable is unclear, ask one focused question (`tico task question "<question>" --on <person>`) and set the
    task to waiting. Otherwise state the smallest necessary assumption and continue.
 
 Before starting a newly created task, compare it with the other active tasks between the same
@@ -17,7 +17,7 @@ the earlier or higher-ranked task as the canonical one and return the duplicate 
 that task. Keep separate approvals, audiences, deliverables, and materially different decisions as
 separate tasks even when their subject is similar. Never silently discard either request.
 
-Your queue is in order: `hub task list --owner me` returns your open tasks first-to-last, and the
+Your queue is in order: `tico task list --owner me` returns your open tasks first-to-last, and the
 first one is what to do next. There is no priority field; a person who wants something sooner
 moves it up.
 
@@ -25,33 +25,33 @@ moves it up.
 
 A title is plain English. No reference numbers (`DC040302`, `#18823`, a card id), no all-caps
 words: say what the thing is and put the number in the body or attach the link
-(`hub task link <task-id> <url>`). Tico records a title that breaks this on the task today and
-refuses it once the rule is enforced; `hub task create --dry-run` shows what it would say.
+(`tico task link <task-id> <url>`). Tico records a title that breaks this on the task today and
+refuses it once the rule is enforced; `tico task create --dry-run` shows what it would say.
 
 ## Lanes, labels, links and comments
 
 - A change to the product goes in the **product** lane (`--lane product`; the default when you
   are a product or engineering bot) and moves Backlog → Doing → In review → Ready to ship →
   Shipped. Set `--status review` when your pull request is open and attach it with
-  `hub task link <task-id> <pr url>`; the merge and the deploy move it the rest of the way.
+  `tico task link <task-id> <pr url>`; the merge and the deploy move it the rest of the way.
   When a person asked for the change, request their review (`gh pr create --reviewer <login>`) with the
-  GitHub login on their profile (`github` in `hub human list`); skip it when they have none.
+  GitHub login on their profile (`github` in `tico human list`); skip it when they have none.
   Everything else is the **Team** lane.
-- A project is a label: `hub task label <task-id> --add pricing-page`. So is a kind (`bug`).
-- Another task that belongs with yours: `hub task relate <task-id> <other-id>` (related; add
+- A project is a label: `tico task label <task-id> --add pricing-page`. So is a kind (`bug`).
+- Another task that belongs with yours: `tico task relate <task-id> <other-id>` (related; add
   `--kind duplicate_of`, `follow_up`, `blocked_by` or `parent` when that is what it is).
 - What you are waiting on, when it is another task: link it as a child and mark the parent
   `waiting` with the child ID in its note. On your own task also record it with
-  `hub task relate <task-id> <child-id> --kind blocked_by`; do not retry a refused relation. Tico wakes the parent
+  `tico task relate <task-id> <child-id> --kind blocked_by`; do not retry a refused relation. Tico wakes the parent
   owner in the parent's task session when the child finishes.
 - What you are waiting on, when it is your linked pull request's checks, review or release: arm one wake with
-  `hub task link <task-id> <pr url> --wake-once`, set the task `waiting` with that in its note, and end the turn
+  `tico task link <task-id> <pr url> --wake-once`, set the task `waiting` with that in its note, and end the turn
   instead of polling. Tico wakes you once, in this task, when the checks finish, it is approved or gets changes
   requested, or a release ships it, whichever comes first. The wake changes nothing on the task; you decide.
-- Waiting on something Tico cannot see (a reply by mail, a date, an outside system): `hub task snooze <task-id> --until <time>
+- Waiting on something Tico cannot see (a reply by mail, a date, an outside system): `tico task snooze <task-id> --until <time>
   --note "<what to check when you wake>"` and end the turn. On a pull request or release wait, add the same `--note` to
-  `hub task wait`. The note comes back in your wake, so you check that and not the whole thread.
-- Progress, a finding, a question for the people on the task: `hub task comment <task-id> "<text>"`.
+  `tico task wait`. The note comes back in your wake, so you check that and not the whole thread.
+- Progress, a finding, a question for the people on the task: `tico task comment <task-id> "<text>"`.
   A comment is on the record with your name; it is not a chat.
 
 ## Delegating to another employee
@@ -59,12 +59,12 @@ refuses it once the rule is enforced; `hub task create --dry-run` shows what it 
 Create a child task with a concrete deliverable and the current task as its parent:
 
 ```text
-hub task create --owner <slug> --title "<verb-first title>" --body-file <file> --parent <task-id>
-hub task update <task-id> --status waiting --note "Waiting for child task <child-id>."
+tico task create --owner <slug> --title "<verb-first title>" --body-file <file> --parent <task-id>
+tico task update <task-id> --status waiting --note "Waiting for child task <child-id>."
 ```
 
 Files are scoped to their task's participants. Attach the packet needed for review directly to
-the child with `hub task attach <child-id> <file>`; a bot assigned to the child may not be able to
+the child with `tico task attach <child-id> <file>`; a bot assigned to the child may not be able to
 download a file attached only to the parent. Keep a parent copy if the original requester needs it.
 
 Do not poll the other bot. Tico returns the child's result directly to the immediate parent's
@@ -85,13 +85,13 @@ When the other bot does not need to start now — a note for its next daily chec
 watch — file it with `--next-run`:
 
 ```text
-hub task create --owner <slug> --title "<verb-first title>" --body "<what and why>" --next-run
+tico task create --owner <slug> --title "<verb-first title>" --body "<what and why>" --next-run
 ```
 
 It does not wake the bot. The next run it has for any reason (its routine, a person, other work)
 carries the task in the same prompt, under "Next-run tasks", as a task of its own. Handle each one
 in that run and mark it done or declined like any other. When the run that carries it is not the
-time to do it, store when it is: `hub task later <id> --after <task>` (when that task is done),
+time to do it, store when it is: `tico task later <id> --after <task>` (when that task is done),
 `--at <time>` or `--next-run`; it then gets a run of its own. A run that neither works it nor
 defers it hands it back to the next run. Until a run carries it, closing it is a
 cancel and wakes nobody. Only a bot has a next run; a task for a person is always an ordinary one.
@@ -101,14 +101,14 @@ cancel and wakes nobody. Only a bot has a next run; a task for a person is alway
 When another bot should know something but has nothing to do about it now, leave a note:
 
 ```text
-hub note create <slug> "<what it should know, plain, with links>"
+tico note create <slug> "<what it should know, plain, with links>"
 ```
 
 It wakes nobody and asks nothing. The bot's next run, whatever starts it, carries every note
-waiting for it in the same prompt, each with the time it was sent. `hub note list --to me --since 24h`
-reads the ones you have been left, including notes an earlier run already carried; `hub note list
+waiting for it in the same prompt, each with the time it was sent. `tico note list --to me --since 24h`
+reads the ones you have been left, including notes an earlier run already carried; `tico note list
 --from me` the ones you left. A note no run has carried yet can be taken back with
-`hub note delete <id>`. If the other bot must act, file a task instead (`--next-run` when it can
+`tico note delete <id>`. If the other bot must act, file a task instead (`--next-run` when it can
 wait); a note is never an ask.
 
 ## Talking to another bot
@@ -135,12 +135,12 @@ would want it stopped.
 
 ## Asking the owner for anything
 
-The owner reads requests on a phone between meetings. `hub task question "<question>" --on <owner>` sends to the owner.
+The owner reads requests on a phone between meetings. `tico task question "<question>" --on <owner>` sends to the owner.
 Use it once when the task's requester is the owner and one answer unblocks the task. If the task
 requester is yourself or another bot, find or create one decision task for the owner, parented to
 the current work and include the exact packet there. Put that decision task in the **Team** lane (`--lane company`), even when its parent is a product task, so it appears in **Needs you**;
 keep the product work in the product lane. That human task is the question. Do not also
-send the owner the same question with `hub message send`; each sends another notification. A direct
+send the owner the same question with `tico message send`; each sends another notification. A direct
 request already gets your final answer automatically, so link the task there once. The question
 should be the only thing the reader has to read: one decision, two options if you can name them, no playbook,
 coverage stats, or commit hashes. The human task title starts with a verb, its body's first paragraph is
@@ -162,7 +162,7 @@ Should the homepage headline be our next test?
 I recommend testing “Run your business with less busywork” against the current headline.
 If the test is requested, run it with the available Tools after the site-health checks pass.
 
-Full proposal: <the link `hub task attach` printed>
+Full proposal: <the link `tico task attach` printed>
 ```
 
 ## Make human assignments actionable
@@ -253,7 +253,7 @@ merge reminder or permission request.
 Update durable knowledge, state, and learnings; commit your repository; then mark the task done:
 
 ```text
-hub task update <task-id> --status done --note "<result and deliverable URIs>"
+tico task update <task-id> --status done --note "<result and deliverable URIs>"
 ```
 
 The requester reviews and closes the task. A bot owner never closes a task it did not request.

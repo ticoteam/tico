@@ -97,7 +97,7 @@ def test_a_quiet_task_opens_one_check_that_a_later_report_absorbs_and_a_private_
     first = report(api)
     assert first["items"] == 1 and first["words"] == "1 department, 1 item"
     (check,) = checks(api)
-    assert check["title"] == "Task check: Company (1)" and quiet in check["body"] and "hub task get" in check["body"]
+    assert check["title"] == "Task check: Company (1)" and quiet in check["body"] and "tico task get" in check["body"]
     assert private not in check["body"] and SECRET not in check["body"]
     assert report(api)["items"] == 0 and len(checks(api)) == 1  # reported once: left out for a day, nothing new
     second = quiet_task(api, "Chase the Acme renewal")

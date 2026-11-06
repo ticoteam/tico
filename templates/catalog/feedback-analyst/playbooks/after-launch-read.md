@@ -12,14 +12,14 @@ Done when: the read is published with one verdict, and the task is finished with
 
 ## 1. Read the measure
 
-    hub task show <id>
+    tico task show <id>
 
 Take the measure exactly as written: what it counts, the target, the baseline and the source. If no measure was
 written, the verdict is "no measure". Say so once, in the task, and stop.
 
 ## 2. Read the number
 
-Take the current value from its source: `hub kpi show <id>`, the data source the spec names, or a number the requester
+Take the current value from its source: `tico kpi show <id>`, the data source the spec names, or a number the requester
 gives on the task. Write the source and the date of the reading. If it cannot be read, do not estimate it. The verdict
 is "can't tell yet", and the note says what is missing.
 
@@ -46,5 +46,5 @@ Write `reports/after-launch/YYYY-MM-DD-<change>.md`:
 - customer evidence: counts, severity, two or three quotes, and what could not be read;
 - any bug, as a suggestion. File it with `issue-triage` only when the task asks for it.
 
-Publish it with `hub file publish reports/after-launch/<file>`, attach it to the task, and finish with
-`hub task update <id> --status done --note`. Name the verdict and the path in the note.
+Publish it with `tico file publish reports/after-launch/<file>`, attach it to the task, and finish with
+`tico task update <id> --status done --note`. Name the verdict and the path in the note.

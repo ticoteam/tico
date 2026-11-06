@@ -7,7 +7,7 @@ description: Check each finance date in the next 14 days (close, payroll, tax, f
 When to use: when you write the next-14-days section of the weekly summary, or when a finance date may be missed.
 
 Steps:
-1. List every date in the window from `knowledge/finance-calendar.md` and `hub calendar list`. Note where each came from and
+1. List every date in the window from `knowledge/finance-calendar.md` and `tico calendar list`. Note where each came from and
    when it was last confirmed.
 2. For each date, name the owner from `knowledge/team.md` and the inputs it needs (for example the payroll register, the tax
    amount, the bank export). Mark each input ready, open or not supplied.

@@ -651,15 +651,15 @@ def test_an_external_agent_cannot_write_a_held_task_but_can_write_another_over_m
         result = post(api, "tasks/" + first["id"], {"version": row["version"], "number": 993}, token, expected=403)
         assert result["error"]["code"] == "identity"
     assert [row["task_id"] for row in holds(api)] == [first["id"]]
-    assert call(api, "hub_task_update", {"id": first["id"], "status": "doing"}, token=token)[0]
-    assert call(api, "hub_task_comment", {"id": first["id"], "text": "Keep trying."}, token=token)[0]
-    assert not call(api, "hub_task_update", {"id": second["id"], "status": "doing"}, token=token)[0]
-    assert not call(api, "hub_task_comment", {"id": second["id"], "text": "Checked the archive."}, token=token)[0]
+    assert call(api, "tico_task_update", {"id": first["id"], "status": "doing"}, token=token)[0]
+    assert call(api, "tico_task_comment", {"id": first["id"], "text": "Keep trying."}, token=token)[0]
+    assert not call(api, "tico_task_update", {"id": second["id"], "status": "doing"}, token=token)[0]
+    assert not call(api, "tico_task_comment", {"id": second["id"], "text": "Checked the archive."}, token=token)[0]
     with api.app.state.store.read() as c:
         assert H.task(c, first["id"])["status"] == first["status"]
         assert H.task(c, second["id"])["status"] == "doing"
     post(api, "bots/scout/quarantine/clear", {})
-    assert not call(api, "hub_task_update", {"id": first["id"], "status": "doing"}, token=token)[0]
+    assert not call(api, "tico_task_update", {"id": first["id"], "status": "doing"}, token=token)[0]
 
 
 @pytest.mark.parametrize("mutation", ["snooze", "relations"])

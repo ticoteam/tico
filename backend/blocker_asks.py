@@ -1,7 +1,7 @@
 """One known blocker, one ask (Dev 553).
 
 A bot that files a task to DevOps or to a person about a blocker may name it: the repository, the HTTP status and
-the endpoint that refused (`blocker` on task create, `hub task create --blocker ticoteam/tico 403 workflow_dispatch`).
+the endpoint that refused (`blocker` on task create, `tico task create --blocker ticoteam/tico 403 workflow_dispatch`).
 Two blockers are the same when all three match; nothing looser, so an old ask never hides a different problem.
 When the same blocker already has an open ask, the new task is not a second ask: it stays the filing bot's own task,
 blocked by the open ask, quiet until that ask is done, when every task it blocks wakes (hubdb._unblock). The bot is
@@ -107,7 +107,7 @@ def joined_text(c, ask, blocker_key, task_id):
     return (
         f"Same blocker as open task {ask['id']} ({ask['title'][:120]}), already asked of {who}: {blocker_key}. "
         "This task is yours, blocked by that ask instead of a second ask, and wakes when it is done. "
-        f"To ask separately, unlink it: hub task relate {task_id} {ask['id']} --kind blocked_by --remove"
+        f"To ask separately, unlink it: tico task relate {task_id} {ask['id']} --kind blocked_by --remove"
     )
 
 

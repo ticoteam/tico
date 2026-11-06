@@ -1,5 +1,5 @@
 """File reviews (backend/file_reviews.py): a bot's question about exact file versions, the verdict each answer records,
-the spend a pick approves, and `hub file approved` reading it back."""
+the spend a pick approves, and `tico file approved` reading it back."""
 
 import pytest
 
@@ -126,7 +126,7 @@ def test_a_pick_spend_is_approved_once_and_spent_once(api):
 
 
 def test_closing_a_spend_question_by_its_pick_records_the_approval(api):
-    """`hub task close <id> --note "teaser a"` (the Assistant's close for the person) names the pick: the question is
+    """`tico task close <id> --note "teaser a"` (the Assistant's close for the person) names the pick: the question is
     answered as it, so the spend is approved and the files under review get their verdicts, as an answer would."""
     _, _, attempt = setup_attempt(api)
     bot = attempt["token"]

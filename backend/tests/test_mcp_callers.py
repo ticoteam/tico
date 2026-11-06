@@ -6,20 +6,20 @@ from backend.tests.test_member_bots import botops, turn  # noqa: F401
 from backend.tests.test_mcp import call, rpc
 from clients import hubtools
 
-BOTOPS_ONLY = {"hub_credential_set", "hub_message_redact", "hub_support_file"}
+BOTOPS_ONLY = {"tico_credential_set", "tico_message_redact", "tico_support_file"}
 HUMANS_ONLY = {
-    "hub_brief",
-    "hub_bot_recent",
-    "hub_needs_you_start",
-    "hub_needs_you_commit",
-    "hub_proposal_decide",
-    "hub_update_reply",
-    "hub_assistant_read",
-    "hub_assistant_send",
-    "hub_changelog_list",
-    "hub_changelog_mark_read",
+    "tico_brief",
+    "tico_bot_recent",
+    "tico_needs_you_start",
+    "tico_needs_you_commit",
+    "tico_proposal_decide",
+    "tico_update_reply",
+    "tico_assistant_read",
+    "tico_assistant_send",
+    "tico_changelog_list",
+    "tico_changelog_mark_read",
 }
-BOTS_ONLY = {"hub_update_create", "hub_file_publish", "hub_file_link"}
+BOTS_ONLY = {"tico_update_create", "tico_file_publish", "tico_file_link"}
 
 
 def offered(api, token):
@@ -43,33 +43,33 @@ def test_each_caller_is_offered_only_the_tools_it_can_use(api, botops):
         assert names < everything, who  # nobody is offered every tool
         # The Assistant's own: offered to bots (its background run is a bot, and a listing cannot tell it apart), and the
         # server refuses a `for` from any bot but the Assistant (backend/assistant.py `propose`, `morning`).
-        assert not {"hub_assistant_propose", "hub_assistant_morning"} & names or who == "bot", who
-        assert {"hub_whoami", "hub_task_list", "hub_message_send", "hub_doc_search", "hub_sql"} <= names, who
+        assert not {"tico_assistant_propose", "tico_assistant_morning"} & names or who == "bot", who
+        assert {"tico_whoami", "tico_task_list", "tico_message_send", "tico_doc_search", "tico_sql"} <= names, who
     for who in ("owner", "admin", "member"):
         assert HUMANS_ONLY <= lists[who] and not BOTS_ONLY & lists[who] and not BOTOPS_ONLY & lists[who], who
     for who in ("bot", "agent"):
         assert BOTS_ONLY <= lists[who] and not HUMANS_ONLY & lists[who] and not BOTOPS_ONLY & lists[who], who
-    assert all("hub_external_sync" in lists[role] for role in ("owner", "admin", "member"))
+    assert all("tico_external_sync" in lists[role] for role in ("owner", "admin", "member"))
     # Bots are offered it; the server lets only one with Create product repositories use it (test_bot_product_repos).
-    assert all("hub_repo_product_create" in lists[who] for who in ("owner", "bot", "botops"))
-    assert all("hub_repo_product_create" not in lists[who] for who in ("admin", "member", "agent"))
-    assert {"hub_api", "hub_bot_update"} <= lists["member"]
+    assert all("tico_repo_product_create" in lists[who] for who in ("owner", "bot", "botops"))
+    assert all("tico_repo_product_create" not in lists[who] for who in ("admin", "member", "agent"))
+    assert {"tico_api", "tico_bot_update"} <= lists["member"]
     # A bot asks for its own credential (a card in its chat or task thread); people store one in Credentials.
-    assert all("hub_credential_request" in lists[who] for who in ("bot", "botops"))
-    assert all("hub_credential_request" not in lists[who] for who in ("owner", "admin", "member", "agent"))
+    assert all("tico_credential_request" in lists[who] for who in ("bot", "botops"))
+    assert all("tico_credential_request" not in lists[who] for who in ("owner", "admin", "member", "agent"))
     assert BOTOPS_ONLY <= lists["botops"] and BOTS_ONLY <= lists["botops"] and not HUMANS_ONLY & lists["botops"]
     assert lists["bot"] < lists["owner"] | lists["bot"] and len(lists["bot"]) < len(lists["botops"])
 
 
 def test_a_tool_that_is_not_offered_is_refused_when_it_is_called(api, botops):
     token = setup_attempt(api, "ops")[2]["token"]
-    err, out = call(api, "hub_api", {"method": "GET", "path": "me"}, token=token)
+    err, out = call(api, "tico_api", {"method": "GET", "path": "me"}, token=token)
     assert err and out["error"] == "forbidden" and "not available" in out["detail"]
-    err, out = call(api, "hub_needs_you_start", {}, token=token)
+    err, out = call(api, "tico_needs_you_start", {}, token=token)
     assert err and out["error"] == "forbidden"
-    err, out = call(api, "hub_bot_update", {"slug": "ops", "status": "paused"}, token="cara-test")
+    err, out = call(api, "tico_bot_update", {"slug": "ops", "status": "paused"}, token="cara-test")
     assert err and out["error"] == "forbidden"
-    err, out = call(api, "hub_update_create", {"body": "- Did a thing"}, token="ana-test")
+    err, out = call(api, "tico_update_create", {"body": "- Did a thing"}, token="ana-test")
     assert err and out["error"] == "forbidden"
     # And the server still refuses what the list does not: a bot cannot register a bot however the call is made.
     r = api.post("/api/v2/bots/register", json={"slug": "x", "display_name": "X"}, headers=headers(token))
@@ -78,8 +78,8 @@ def test_a_tool_that_is_not_offered_is_refused_when_it_is_called(api, botops):
 
 def test_the_assistant_is_offered_reads_its_own_writes_and_its_proposal_tool():
     names = {t["name"] for t in hubtools.listing(kind="assistant")}
-    assert "hub_assistant_propose" in names and "hub_task_create" in names and "hub_health_check" in names
+    assert "tico_assistant_propose" in names and "tico_task_create" in names and "tico_health_check" in names
     # Only the NEVER tools are hidden from an Assistant turn (hubtools.ASSISTANT_HIDDEN): the server's gate decides the rest.
-    assert not set(hubtools.ASSISTANT_HIDDEN) & names and "hub_sql" not in names
-    assert "hub_message_send" in names and "hub_update_create" not in names
+    assert not set(hubtools.ASSISTANT_HIDDEN) & names and "tico_sql" not in names
+    assert "tico_message_send" in names and "tico_update_create" not in names
     assert {t["name"] for t in hubtools.listing()} >= names  # no kind: everything, the server decides

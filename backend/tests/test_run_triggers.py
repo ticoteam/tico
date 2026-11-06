@@ -1,4 +1,4 @@
-"""What woke each run, its tokens and whether it acted, and the weekly table of them in hub sql
+"""What woke each run, its tokens and whether it acted, and the weekly table of them in tico sql
 (backend/run_triggers.py; token saving 1/9)."""
 
 import json
@@ -216,7 +216,7 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
     start(api, r, attempt)
     token = attempt["token"]
     if case == "bookkeeping_only":
-        # Its status line, a look in hub sql and a conversation read: nobody else sees anything change.
+        # Its status line, a look in tico sql and a conversation read: nobody else sees anything change.
         post(api, "bots/ops/status", {"state": "running", "focus": "Checking the bank feed"}, token)
         post(api, "sql", {"sql": "SELECT count(*) FROM tasks"}, token)
         get(api, f"conversations/{task['conversation_id']}/messages", token)

@@ -34,8 +34,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Build the register from escalations open today and produce the first digest, labelled "First draft,
    not yet reviewed". Send nothing to a customer.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -56,20 +56,20 @@ Always:
 - `skills/write-a-customer-update/SKILL.md`: read before you draft any update to a customer.
 
 ## Starting a run
-1. Read `state.md`, the task with `hub task show <id>`, and `memory/learnings.md`.
+1. Read `state.md`, the task with `tico task show <id>`, and `memory/learnings.md`.
 2. Read `knowledge/escalation-rules.md` and `knowledge/register.md`.
-3. Check for new escalations: `hub task list --status open` for tasks labelled or titled as escalations.
+3. Check for new escalations: `tico task list --status open` for tasks labelled or titled as escalations.
 
 ## Ending a run
 1. Update every touched case file and the register; add the lesson for any closed case.
 2. Rewrite `state.md`, record decisions in `memory/decisions.md`, commit this repository.
-3. Finish with `hub task update <id> --status done --note`: open by severity, updates due, the path.
+3. Finish with `tico task update <id> --status done --note`: open by severity, updates due, the path.
 
 ## Talking to {{app_name}}
-Read with `hub task show`, `hub task list`, `hub meeting search "<customer>"`, and the linked issue with
-read-only `gh issue view` where GitHub is connected. A bug for engineering is `hub task create --owner
+Read with `tico task show`, `tico task list`, `tico meeting search "<customer>"`, and the linked issue with
+read-only `gh issue view` where GitHub is connected. A bug for engineering is `tico task create --owner
 <engineer or bot>` with the report attached, after the case owner agrees. Tell a case owner their update
-is due with `hub message send <person> "<case, due time, link>"`. One question per task with `hub task question "<question>" --on <person> --parent <id>`.
+is due with `tico message send <person> "<case, due time, link>"`. One question per task with `tico task question "<question>" --on <person> --parent <id>`.
 
 ## Quality standards
 - **Answer first.** The digest opens with the count by severity and the updates due today.
@@ -88,5 +88,5 @@ a customer threatens to leave or mentions legal action, or engineering has not a
 within a day. The ask in the first line, under 120 words.
 
 ## Publishing your work
-The digest goes to `reports/` and is listed with `hub file publish reports/<name>.md`. Files humans
+The digest goes to `reports/` and is listed with `tico file publish reports/<name>.md`. Files humans
 send you are inputs, not yours to list.

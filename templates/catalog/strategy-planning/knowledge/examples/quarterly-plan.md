@@ -9,7 +9,7 @@ First draft, not yet reviewed.
 **Headline: Q3 landed at 0.65 on aspirational key results. The Q4 focus: reach 40 paying studios by
 2026-12-18 without adding support headcount.**
 
-## Last quarter, graded (sources: `hub goal list --all`, readings to 2026-08-29)
+## Last quarter, graded (sources: `tico goal list --all`, readings to 2026-08-29)
 - KR1 Paying studios 18 to 30: reached 26, grade 0.7, aspirational.
 - KR2 Weekly active instructors 400 to 700: reached 590, grade 0.6, aspirational.
 - KR3 First reply under 4 hours, from 8 hours: reached 6.4 hours, grade 0.4, **committed**: it missed. Support
@@ -35,6 +35,6 @@ KR1 of O1 needs two more sales hires at the current close rate. I did not assume
 No Q3 readings for the waitlist launch. Two weekly updates (2026-07-11, 2026-07-18) were empty.
 
 ## Sources
-- `hub goal list --all`, 2026-09-01; weekly updates 2026-07-04 to 2026-08-29
-- `hub strategy show`, version 2, read 2026-09-01
+- `tico goal list --all`, 2026-09-01; weekly updates 2026-07-04 to 2026-08-29
+- `tico strategy show`, version 2, read 2026-09-01
 ```

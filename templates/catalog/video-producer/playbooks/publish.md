@@ -7,7 +7,7 @@ Nothing leaves the team without the owner's yes on the exact final file.
 2. Go through `knowledge/production-checklist.md`, line by line. Check the shot classes and labels with
    `skills/label-real-generated-and-staged-footage/SKILL.md` before the platform answer is written. Anything that fails goes back to the cut stage. Do not
    ask for approval on a file you know fails a line.
-3. Publish the final to Tico: `hub file publish projects/<slug>/final/<file>`. Keep its qa report in `reports/`.
+3. Publish the final to Tico: `tico file publish projects/<slug>/final/<file>`. Keep its qa report in `reports/`.
 4. Put the final up for review with the publish mover from `pipeline.yaml` (`python3 software/pipeline.py next` prints
    the command). The question names where it would go.
 5. Only after it is approved does the file go anywhere, and only as the approved version. A person uploads or posts it

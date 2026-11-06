@@ -75,8 +75,8 @@ want.
 - **Mail:** an old computer's mail tool still queues through `POST /api/v2/email/sends`, which hasn't changed. Its
   local checks no longer exist on the new side but are now a subset of the server's. An old computer that tries to
   dispatch a Workspace mailbox's send gets `workspace_owned`, and the server sends that email instead.
-- **CLI:** `hub connections list` is gone (`/api/v2/connections` is removed). Use `hub tool index` and
-  `hub tool check <id>`. Bots on the new release get `hub tool call` and MCP `hub_tool_call`.
+- **CLI:** `hub connections list` is gone (`/api/v2/connections` is removed). Use `tico tool index` and
+  `tico tool check <id>`. Bots on the new release get `tico tool call` and MCP `tico_tool_call`.
 
 ## Before the upgrade (Chris)
 

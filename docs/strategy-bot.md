@@ -54,7 +54,7 @@ To rename the Strategy Bot, the owner changes its **Name** in **Settings > Bots*
 
 Over the API, `GET /api/v2/strategy-bot` shows `name`, `regular_checks`, `level` and `level_history`;
 `POST /api/v2/strategy-bot/level` with `{"level": 2}` changes the level and `POST /api/v2/strategy-bot/checks` with
-`{"on": false}` the regular checks. `hub goal strategy-bot` reads them and each person's count for today.
+`{"on": false}` the regular checks. `tico goal strategy-bot` reads them and each person's count for today.
 
 ## Strategy
 
@@ -198,8 +198,8 @@ The entry then says, in plain words, what could not be restored. An entry is und
 Strategy Bot never makes a change you undid alone again (the same new task for the same bot, or the same reorder, reassign or
 close of a task); tried again, it becomes an item in your **Needs you**.
 
-Over the API, the owner reads the log with `GET /api/v2/strategy-bot/log` (`hub goal strategy-bot-log`) and undoes an entry
+Over the API, the owner reads the log with `GET /api/v2/strategy-bot/log` (`tico goal strategy-bot-log`) and undoes an entry
 with `POST /api/v2/strategy-bot/log/{id}/undo`. The Strategy Bot decides with `POST /api/v2/strategy-bot/decisions`
-(`hub goal strategy-bot-decide`), at level 3 only.
+(`tico goal strategy-bot-decide`), at level 3 only.
 
 Related: [Strategy](strategy.md), [Goals and KPIs](goals-and-kpis.md), [Team chart](org-chart.md).

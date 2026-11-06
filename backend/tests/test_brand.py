@@ -157,12 +157,12 @@ def test_the_hub_tools_reach_every_brand_route(api):
     from backend.tests.test_mcp import call
 
     ok = lambda name, args=None, token="ana-test": call(api, name, args, token)  # noqa: E731
-    err, out = ok("hub_brand_draft", {"section": "words", "body": '{"avoid": [{"word": "cheap", "level": "block"}]}'})
+    err, out = ok("tico_brand_draft", {"section": "words", "body": '{"avoid": [{"word": "cheap", "level": "block"}]}'})
     assert not err and out["draft"]["revision"] == 1
-    assert not ok("hub_brand_publish", {"note": "First"})[0]
-    err, out = ok("hub_brand_check", {"text": "So cheap"}, token="cara-test")
+    assert not ok("tico_brand_publish", {"note": "First"})[0]
+    err, out = ok("tico_brand_check", {"text": "So cheap"}, token="cara-test")
     assert not err and [h["match"] for h in out["hits"]] == ["cheap"]
-    err, out = ok("hub_brand_show", {"section": "words"}, token="cara-test")
+    err, out = ok("tico_brand_show", {"section": "words"}, token="cara-test")
     assert not err and out["n"] == 1 and out["value"]["avoid"][0]["word"] == "cheap"
-    assert "cheap" in ok("hub_brand_summary")[1]["text"]
-    assert not ok("hub_brand_show", {"version": 1})[0]
+    assert "cheap" in ok("tico_brand_summary")[1]["text"]
+    assert not ok("tico_brand_show", {"version": 1})[0]

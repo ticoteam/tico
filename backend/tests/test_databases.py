@@ -1,4 +1,4 @@
-"""`hub db`: read-only company-database access, its grants, audit and private catalogs.
+"""`tico db`: read-only company-database access, its grants, audit and private catalogs.
 
 Enforcement is tested against a real SQLite file, and against a throwaway PostgreSQL container
 when Docker can run one (skipped otherwise). The statement scanner and binder are tested for
@@ -40,7 +40,7 @@ def sqlite_db(tmp_path, **kw):
 
 
 class FakeHub:
-    """The two hub calls `hub db` makes: who am I, and record this query."""
+    """The two hub calls `tico db` makes: who am I, and record this query."""
 
     def __init__(self, actor="bot:ops", catalog=None, fail_audit=False):
         self.actor, self.catalog, self.fail_audit, self.audits = actor, catalog or {}, fail_audit, []

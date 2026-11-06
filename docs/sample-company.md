@@ -19,7 +19,7 @@ and so on, which is the card in **Needs you**. Yes and the bot marks the task do
 asked and asks again. Nothing a first task does is sent, posted or published outside the company: the Support Agent
 and the Content Marketer only draft.
 
-The approval is a question (`hub task question`), not a Tico [approval](permissions.md): approvals are for an
+The approval is a question (`tico task question`), not a Tico [approval](permissions.md): approvals are for an
 outward action, such as a send, spending, publishing or a merge, and a first task does none of them.
 
 ## Starting it

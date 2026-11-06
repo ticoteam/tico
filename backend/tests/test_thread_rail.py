@@ -259,7 +259,7 @@ def test_a_group_chat_needs_a_name_and_a_bot_is_told_how_to_give_one(api):
     with api.app.state.store.transaction() as c:
         with pytest.raises(Problem) as caught:
             threads.dm(c, "bot:ops", ["human:ben", "human:cara"])
-    assert caught.value.code == "name_required" and "hub_thread_dm_group" in caught.value.detail
+    assert caught.value.code == "name_required" and "tico_thread_dm_group" in caught.value.detail
     with api.app.state.store.read() as c:
         assert (
             c.execute("SELECT COUNT(*) FROM conversations WHERE audience='personal' AND owner_id='bot:ops'").fetchone()[

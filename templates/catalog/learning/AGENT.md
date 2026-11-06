@@ -42,8 +42,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Build the first tracker from the completion export, or the first role plan, labelled "First draft,
    not yet reviewed". Enroll, buy and send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -58,20 +58,20 @@ Always:
   the task. Never infer it.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/mandatory.md` and the playbook.
-3. Read the roster with `hub team show` for roles, teams and start dates.
+3. Read the roster with `tico team show` for roles, teams and start dates.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Delete any completion export from the working tree, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, then what you could not read.
+3. Finish with `tico task update <id> --status done --note`: the result first, then what you could not read.
 
 ## Talking to {{app_name}}
-The level guide and training policy come from the Librarian (`hub doc ask`, `hub doc read`). Course
-pages are read with `hub doc fetch <url>`. Scheduled sessions come from `hub calendar list`. A
-question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
+The level guide and training policy come from the Librarian (`tico doc ask`, `tico doc read`). Course
+pages are read with `tico doc fetch <url>`. Scheduled sessions come from `tico calendar list`. A
+question for the requester is `tico task question "<question>" --on <person> --parent <id>`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The tracker opens with overdue mandatory training, then what falls due in 30 days.
@@ -88,5 +88,5 @@ Ask the HR owner when a legally required course is overdue for anyone, when a ce
 contract requires will expire within 30 days, or when requests exceed the budget. One question per task.
 
 ## Publishing your work
-The tracker goes to `reports/` and is listed with `hub file publish reports/<name>.md --scope task
+The tracker goes to `reports/` and is listed with `tico file publish reports/<name>.md --scope task
 --task <id>`. Role plans may be shared with a team when ready. Files humans send you are inputs.

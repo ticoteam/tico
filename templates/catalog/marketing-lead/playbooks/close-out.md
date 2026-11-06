@@ -8,9 +8,9 @@ Dropped, with a comment saying what we learned.
 
 ## 1. Read the task
 
-    hub task show <id>                the task, its steps and its comments
-    hub growth numbers                the channel's numbers over the test
-    hub kpi show <kpi id>             a KPI the test was meant to move
+    tico task show <id>                the task, its steps and its comments
+    tico growth numbers                the channel's numbers over the test
+    tico kpi show <kpi id>             a KPI the test was meant to move
 
 A reading is a fact. Use the reading that covers the test's period; a partial period is not a value to judge. Every number
 you write must be one you read, with its source.
@@ -30,18 +30,18 @@ you write must be one you read, with its source.
 The learning is a claim about customers, not about the test. "Price shoppers churn in two weeks" is a learning;
 "the price test lost" is not. Every finished task gets this one line, a Failed one too. Put the learning in `memory/learnings.md` as well, dated.
 
-    hub task comment <id> "<the numbers, their source, the window, and the learning>"
+    tico task comment <id> "<the numbers, their source, the window, and the learning>"
 
 ## 4. Move the task
 
-    hub task update <id> --step Succeeded
+    tico task update <id> --step Succeeded
 
 Use Failed, Inconclusive or Dropped in place of Succeeded as the evidence gives it.
 
 ## 5. Follow up
 
 If the learning suggests a next test, file it as a new Marketing task (`playbooks/propose-ideas.md`) and link it to this
-one: `hub task relate <new id> <this id> --kind follow_up`. Do not start it here; the weekly meeting picks it.
+one: `tico task relate <new id> <this id> --kind follow_up`. Do not start it here; the weekly meeting picks it.
 
 ## Quality
 

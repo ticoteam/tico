@@ -40,8 +40,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Produce the first report now from the last four weeks of requests, labelled "First draft, not yet
    reviewed". Reply to no customer.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -62,19 +62,19 @@ Always:
 - `skills/check-the-cancel-path/SKILL.md`: read before any reply that answers a cancellation goes on the task.
 
 ## Starting a run
-1. Read `state.md`, the task with `hub task show <id>`, and `memory/learnings.md`.
+1. Read `state.md`, the task with `tico task show <id>`, and `memory/learnings.md`.
 2. Read `knowledge/save-policy.md` and the open lines in `knowledge/reasons.md`.
 
 ## Ending a run
 1. Update `knowledge/reasons.md` and `knowledge/watch.md`, rewrite `state.md`, record decisions in
    `memory/decisions.md`, commit this repository.
-2. Finish with `hub task update <id> --status done --note`: requests, saves, losses, the path.
+2. Finish with `tico task update <id> --status done --note`: requests, saves, losses, the path.
 
 ## Talking to {{app_name}}
-Requests arrive as tasks. Read with `hub task show`, `hub task list`, the support mailbox where
+Requests arrive as tasks. Read with `tico task show`, `tico task list`, the support mailbox where
 connected, and the usage export the owner has shared. A missing-feature
-pattern is `hub task create --owner feedback-analyst`; an at-risk business account is `hub task create
---owner customer-success`. One question per task with `hub task question "<question>" --on <person> --parent <id>`.
+pattern is `tico task create --owner feedback-analyst`; an at-risk business account is `tico task create
+--owner customer-success`. One question per task with `tico task question "<question>" --on <person> --parent <id>`.
 
 ## Quality standards
 - **Answer first.** The report opens with requests, saves and the net loss this week.
@@ -90,5 +90,5 @@ reason causes three losses in a week, or when the policy has no offer for a comm
 the ask first, under 120 words.
 
 ## Publishing your work
-The report goes to `reports/` and is listed with `hub file publish reports/<name>.md`. Files humans
+The report goes to `reports/` and is listed with `tico file publish reports/<name>.md`. Files humans
 send you are inputs, not yours to list.

@@ -111,15 +111,15 @@ Importing from another bot's file still needs a credential administrator. File i
 and then tries the connection as the bot:
 
 1. If the credential is only in the first bot's own file (`secrets/<bot>.env` on its computer), BotOps moves it into Credentials first
-   (`hub credential import JIRA_BASIC_AUTH --from-bot jira-manager`). The computer that runs that bot reads the variable from
+   (`tico credential import JIRA_BASIC_AUTH --from-bot jira-manager`). The computer that runs that bot reads the variable from
    that one file and sends it to the server itself, over its own signed-in channel. The value is not printed, logged or put in a
    message, and the file is not changed, so the first bot keeps working. Only a credential administrator can ask, and only for a
    variable in that bot's own file (not `_shared.env`, not another bot's).
-2. It grants the stored credential to the second bot: `hub credential grant "JIRA_BASIC_AUTH" --to engineering-monitor`. (`--to` takes the
+2. It grants the stored credential to the second bot: `tico credential grant "JIRA_BASIC_AUTH" --to engineering-monitor`. (`--to` takes the
    bot's name or slug; the credential is named by its name or its variable.) The second bot has it, as that variable, from its next run.
-3. To take it away: `hub credential revoke "JIRA_BASIC_AUTH" --from engineering-monitor`.
+3. To take it away: `tico credential revoke "JIRA_BASIC_AUTH" --from engineering-monitor`.
 
-The same three steps are the tools `hub_credential_import`, `hub_credential_grant` and `hub_credential_revoke`, and Tools → Credentials
+The same three steps are the tools `tico_credential_import`, `tico_credential_grant` and `tico_credential_revoke`, and Tools → Credentials
 does the grant and revoke by hand. A grant to a person, or to every computer, still asks for the person's own click when it comes through BotOps.
 
 ## The local credential key and backups
@@ -178,7 +178,7 @@ pairing expires.
 
 ## Credentials asked for in the chat
 
-A bot that needs a credential opens a **credential card** in the thread where it asked (`hub credential request <VARIABLE> --for-bot <bot> --label
+A bot that needs a credential opens a **credential card** in the thread where it asked (`tico credential request <VARIABLE> --for-bot <bot> --label
 "your Jira credential" --format "you@example.com:API token" --help-url https://...`): the title says what it is for, the input shows the exact format,
 "Get one" opens the page where the token is made, and Save sends the value from the browser to `POST /api/v2/credential-requests/{id}/save`.
 The server checks its shape (a `:` where the format has one; never echoing the value), stores it in this vault under the variable's name
@@ -197,10 +197,10 @@ card for the same variable stays (saving either saves both); canceling the card 
 When the task finishes, changes hands, or is made private from the card's person, its card says Not needed and its
 request is canceled; a person who cannot read the task cannot open its request either.
 
-If a human pastes a credential into a thread instead, BotOps stores it with `hub credential set <VARIABLE> --for-bot <bot>` (the value on standard input,
+If a human pastes a credential into a thread instead, BotOps stores it with `tico credential set <VARIABLE> --for-bot <bot>` (the value on standard input,
 never on the command line) as that human, and the server takes the pasted words out of their messages, the run's recorded events and the answers kept
 for retries, replacing them with `•••• saved as <VARIABLE>`; later events of the same run are scrubbed as they arrive. The runner masks granted values in
-what it posts and logs. `hub message redact <id>` does the same for one message.
+what it posts and logs. `tico message redact <id>` does the same for one message.
 
 ## Credential files on the computer
 
@@ -239,7 +239,7 @@ breaks the `op://` form; reference it by its item id.
 - Credentials never go in tasks, git, logs, updates or prompts. A key-shaped string in a
   draft fails lint for this reason. A bot that needs one opens a card in the thread; BotOps stores what a human
   pastes and removes it from the thread.
-- A missing credential is not yours to work around: open the card (`hub credential request`); on a task it goes in the
+- A missing credential is not yours to work around: open the card (`tico credential request`); on a task it goes in the
   task's thread and the task waits for it, so stop there. The bot's Tools list shows every declared Credential as present or missing.
 - Saving a credential is not permission to use it. Only a `tools:` entry and a grant connects a bot to a credential. Changing `tools:` is a task for the owner.
 - A granted value exists only for that run; do not copy it anywhere that outlives the run.
@@ -249,11 +249,11 @@ breaks the `op://` form; reference it by its item id.
 
 ## Delete a Credential
 
-A Credential administrator can choose **Delete** in Credentials, use `hub credential delete <name>`, or call
+A Credential administrator can choose **Delete** in Credentials, use `tico credential delete <name>`, or call
 `DELETE /api/v2/credentials/<id>`. Deletion erases the encrypted value and all grants together. History records names and
 variable names only. Revocation removes access while keeping the stored value; deletion removes the Credential itself.
 
 **Every computer (signs models in)** is available only for stored model API keys and tokens whose explicit or inferred variable is
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY`. Those names infer a blank variable;
 older name-only keys fill the field when granted. This signs the model software in; tool Credentials still need a grant per bot.
-`hub_credential_grant` targets one bot; use Credentials to grant a model key to Every computer.
+`tico_credential_grant` targets one bot; use Credentials to grant a model key to Every computer.

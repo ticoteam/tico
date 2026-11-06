@@ -8,17 +8,17 @@ When to use: a "Merged or shipped, step unmoved" item, a stalled task whose work
 the task that nobody closed.
 
 Steps:
-1. Read it: `hub task show <id>`. Note its status, step, wait, linked pull requests or releases, and its last three
+1. Read it: `tico task show <id>`. Note its status, step, wait, linked pull requests or releases, and its last three
    messages.
 2. Choose one of four:
    - Plainly done: a release containing the work has shipped, or the answer was given and accepted in the task.
    - Merged, not shipped: a linked pull request has merged, but no release has shipped it. Not done.
    - Plainly in another step: the evidence names the step.
    - Unsure: the task has an open question to a person, a review that has not come back, or evidence that disagrees.
-3. Plainly done: `hub task close <id> --note "<the release or the answer, in one line>"`.
+3. Plainly done: `tico task close <id> --note "<the release or the answer, in one line>"`.
 4. Merged, not shipped: change no status or step. If something is still left on the task, say so on the Task Manager's
    check task. Merged work waits for a person to move it to ready to ship.
-5. Plainly in another step: `hub task update <id> --step "<step>" --note "<the evidence in one line>"`.
+5. Plainly in another step: `tico task update <id> --step "<step>" --note "<the evidence in one line>"`.
 6. Unsure: change nothing. Comment on the task with what you saw, or put one line in Needs you for the department.
 
 Checks before you finish:

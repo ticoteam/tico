@@ -181,7 +181,7 @@ def queue_items(c: Any) -> list[dict[str, str]]:
     for row in pending(c):
         label = (
             f"Invoice {row['number']}{_which(row['stage'])} email waits to send. Read it: "
-            f"hub finance search --kind invoice --q {row['number']}"
+            f"tico finance search --kind invoice --q {row['number']}"
         )
         items.append(
             {

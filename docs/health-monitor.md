@@ -22,7 +22,7 @@ It shows the company count, warning and stop levels, and when the incident opene
 See [Company turn levels](computers.md#company-turn-levels) for what counts, defaults, recovery and how an admin changes the levels.
 This record does not provide the separate automatic fixer.
 
-Health's **Stuck bots** check and `hub health check` name the bot, its queue split as `hub pipeline` splits it (jobs
+Health's **Stuck bots** check and `tico health check` name the bot, its queue split as `tico pipeline` splits it (jobs
 that can start, jobs behind an interrupted run awaiting review, jobs held after repeated refusals until cooldown,
 jobs held on purpose), the oldest age, why it cannot
 start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list,
@@ -105,7 +105,7 @@ same ticket. The ticket is the owner's: replies show on their Support page.
 
 The team rule `health_monitor_reports` (on by default; in Settings > Health and `PUT /api/v2/access/rules`) files
 tickets without a Needs you card. When it is off, each report is an **Ask before reporting** approval that a person
-reads first, sent with `hub support send --approval <id>` once approved. A declined or withdrawn approval clears the
+reads first, sent with `tico support send --approval <id>` once approved. A declined or withdrawn approval clears the
 report, so the next report of that problem asks again. `TICO_SUPPORT=off` turns reporting off with the rest of support.
 
 ## On the Tico team's side
@@ -126,5 +126,5 @@ open ticket with that signature and closes each (`POST /v1/staff/tickets/by-sign
 
 ## Commands
 
-    hub health findings        what Check health found, with each problem's report
-    hub health report <key>    report a finding as a Tico bug, one ticket per problem
+    tico health findings        what Check health found, with each problem's report
+    tico health report <key>    report a finding as a Tico bug, one ticket per problem

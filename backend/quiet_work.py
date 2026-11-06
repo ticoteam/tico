@@ -1,18 +1,18 @@
 """Quiet work stays visible and resumes (Dev 257).
 
-A deferred task (`hub task create --defer`, formerly `--next-run`) waits for its owner's next run, which carries it in its prompt and
+A deferred task (`tico task create --defer`, formerly `--next-run`) waits for its owner's next run, which carries it in its prompt and
 marks it with `carried_by` (execution.claim). Until this, the carrier finishing took it for good, whether or not the
 run did anything with it: a run that said "after Dev 241" in its own words left nothing to bring it back (Dev 242,
 Oct 19: seven hours, until a person pressed Run now). Now:
 
-- A quiet task is in one of three states (`view`, on the task and in `hub task show`): `queued`, a run of its own
+- A quiet task is in one of three states (`view`, on the task and in `tico task show`): `queued`, a run of its own
   is waiting or going; `eligible`, the bot's next run carries it; `delivered`, a run carried it (which run, when),
   with `resume` when that run stored when to pick it up again.
-- A run that carries a task it will not do now stores a resume condition (`defer`, `hub task later`, once named
-  `hub task defer`): after another task is finished (done or closed), at a time, or with the next run. A stored condition holds the task until it
+- A run that carries a task it will not do now stores a resume condition (`defer`, `tico task later`, once named
+  `tico task defer`): after another task is finished (done or closed), at a time, or with the next run. A stored condition holds the task until it
   comes true; then the task gets one run of its own, as Run now gives it (`resume`).
 - When a carrier finishes, each task it carried is settled (`settle`): one the run worked (a comment, a step,
-  status or note change, a pull request, or `hub task later --handled`) stays delivered; one it deferred keeps its
+  status or note change, a pull request, or `tico task later --handled`) stays delivered; one it deferred keeps its
   condition; any other goes back to eligible, with a line in its history, and the next run carries it again.
 - Health Monitor: a quiet task delivered more than two hours ago and not worked since, with no condition, is a
   finding naming the bot and the task (`stale`).
@@ -36,8 +36,8 @@ FIELD = "quiet"
 WORKED, RETURNED, DEFERRED, HANDLED = "worked", "returned", "deferred", "handled"
 # What a carried task tells the run, beside its id and title (execution.claim): how to say "not now".
 HINT = (
-    "Not doing it in this run? Store when to pick it up: hub task later {id} --after <task id> (when that task is "
-    "done), --at <ISO time>, or --next-run (MCP: hub_task_later). With none, and without working it here, your "
+    "Not doing it in this run? Store when to pick it up: tico task later {id} --after <task id> (when that task is "
+    "done), --at <ISO time>, or --next-run (MCP: tico_task_later). With none, and without working it here, your "
     "next run is handed it again."
 )
 

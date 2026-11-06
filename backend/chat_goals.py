@@ -162,9 +162,9 @@ def task_goal_objective(task, objective, steps=()):
     steps-only type (`steps`, its step names) moving it to the step its work has reached."""
     tail = (
         f"\nThen move task {task['id']} to the step its work has reached ({', '.join(steps)}) with a summary "
-        f"(hub task update {task['id']} --step \"<step>\" --note ...)."
+        f"(tico task update {task['id']} --step \"<step>\" --note ...)."
         if steps
-        else f"\nThen mark task {task['id']} done with a summary (hub task update {task['id']} --status done --note ...)."
+        else f"\nThen mark task {task['id']} done with a summary (tico task update {task['id']} --status done --note ...)."
     )
     return objective[: TASK_GOAL_CHARS - len(tail)].rstrip() + tail
 

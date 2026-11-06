@@ -11,7 +11,7 @@ Done when: `reports/YYYY-MM-DD-marketing-week.md` is written and published; ever
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/workstreams.md`, `knowledge/calendar.md`, `knowledge/priorities.md` and last week's
 summary in `reports/`.
@@ -19,7 +19,7 @@ summary in `reports/`.
 ## 2. Gather the week, by workstream
 
 For each workstream in `knowledge/workstreams.md`, read what its owner produced since last Friday:
-`hub task list --status open --status doing --status waiting`, `hub update list --kind weekly --bot <slug>`,
+`tico task list --status open --status doing --status waiting`, `tico update list --kind weekly --bot <slug>`,
 the owner's newest published report, and imported meetings that mention it. A bot or human with
 nothing this week is "no report", never "on track".
 
@@ -35,7 +35,7 @@ missing facts or Tools are named as blockers.
 
 ## 5. Calendar, six weeks ahead
 
-Update `knowledge/calendar.md` from `hub calendar list` and the workstreams. Flag collisions (two
+Update `knowledge/calendar.md` from `tico calendar list` and the workstreams. Flag collisions (two
 sends or two launches the same day), launches inside two weeks with no brief or owner, and gaps.
 
 ## 6. Propose next week's priorities
@@ -47,9 +47,9 @@ Routing and reassigning tasks are not part of this playbook; a request for them 
 
 `reports/YYYY-MM-DD-marketing-week.md` in the shape of `knowledge/examples/marketing-week.md`. Then:
 
-    hub file publish reports/YYYY-MM-DD-marketing-week.md
+    tico file publish reports/YYYY-MM-DD-marketing-week.md
 
-Commit, then `hub task update <id> --status done --note`: the headline, the path, what you could not read.
+Commit, then `tico task update <id> --status done --note`: the headline, the path, what you could not read.
 Always finish it: an open scheduled task absorbs the next.
 
 ## When a source fails

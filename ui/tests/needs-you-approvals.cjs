@@ -132,8 +132,8 @@ async function letterProof(browser) {
   await page.close();
 }
 
-const REPORT = 'hub task update has failed since 0.2.17 with: refused (version); a fresh read gives the same error. ' +
-  'Tried: hub task show, then the update with the new version; still refused. <script>window.pwned=1</script> stays text.';
+const REPORT = 'tico task update has failed since 0.2.17 with: refused (version); a fresh read gives the same error. ' +
+  'Tried: tico task show, then the update with the new version; still refused. <script>window.pwned=1</script> stays text.';
 const report = {id: 'ap-sup', kind: 'approval', what: 'support', title: 'Send this to Tico support?', requester_id: 'bot:support',
   requested_by: 'bot:support', created_at: new Date().toISOString(), support: {to: 'updates.tico.team'},
   payload: {message: REPORT, content_sha256: 'e'.repeat(64)}};

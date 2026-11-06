@@ -9,9 +9,9 @@ the one line `Nothing new in the market since yesterday.`, because an empty repl
 
 Gather what changed since yesterday:
 
-- `hub market delta --since 1d`: the graph's changes, grouped by entity, each with its source.
-- `hub listening item list --destination market`: the items accepted since yesterday, which is what listening heard.
-- `hub strategy show`: the published bets, each with its `why` and `wrong_if`. An item about an entity a bet cites
+- `tico market delta --since 1d`: the graph's changes, grouped by entity, each with its source.
+- `tico listening item list --destination market`: the items accepted since yesterday, which is what listening heard.
+- `tico strategy show`: the published bets, each with its `why` and `wrong_if`. An item about an entity a bet cites
   matters most, and goes first.
 
 ## 2. Write the items
@@ -32,7 +32,7 @@ weigh.
 The server works out which bets a briefing touches only from tagged items, never from the words, and the Market page's
 answer lines come only from the answers file. So post both before you reply:
 
-    hub market briefing post --week 2026-W44 --title "<a few words>" --body-file briefing.md --items-file items.json \
+    tico market briefing post --week 2026-W44 --title "<a few words>" --body-file briefing.md --items-file items.json \
       --answers-file answers.json
 
 `--week` is the ISO week of the day you run. `briefing.md` is the page you are about to reply with. The items file is a

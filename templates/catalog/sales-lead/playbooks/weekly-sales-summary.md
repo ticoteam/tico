@@ -7,7 +7,7 @@ pipeline moved, which deals need a human, and what to route where. Nothing is ch
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/pipeline-rules.md`, `knowledge/team.md`, `knowledge/routing.md` and last week's summary in `reports/`. If
 last week flagged an action, check whether it happened; say so in the summary.
@@ -20,7 +20,7 @@ step. Compare with last week's summary to find what entered, moved, closed and s
 
 ## 3. Read what the team produced
 
-`hub update list --kind weekly` and `hub task list` for each sales bot in `knowledge/team.md`, plus the
+`tico update list --kind weekly` and `tico task list` for each sales bot in `knowledge/team.md`, plus the
 newest file in its `reports/`. Count drafts made, leads researched, proposals started, renewals
 flagged. List tasks waiting more than 5 days on a human or on a missing input.
 
@@ -28,7 +28,7 @@ flagged. List tasks waiting more than 5 days on a human or on a missing input.
 
 From `sales-ops`' latest report: commit, best case and pipeline for the period, and the deals it flagged
 (commit without evidence, closing this period but still pipeline). Put the gap to the period's target, if
-`hub goal list` shows one, in one line. Pick the deals to inspect on the forecast call: at most five.
+`tico goal list` shows one, in one line. Pick the deals to inspect on the forecast call: at most five.
 
 ## 4. Choose the priority deals
 
@@ -38,7 +38,7 @@ Three to five, in this order: closest to close and needing a step; stalled past 
 ## 5. Draft routing proposals
 
 For each new lead, account or request with no owner: pick the owner from `knowledge/routing.md` and
-propose it in one line with the reason. Create tasks for requested follow-through with your Tools. When the work requests it, create `hub task create --owner <slug>` (see `playbooks/route-a-request.md`).
+propose it in one line with the reason. Create tasks for requested follow-through with your Tools. When the work requests it, create `tico task create --owner <slug>` (see `playbooks/route-a-request.md`).
 
 ## 5b. Note coaching and hiring
 
@@ -49,7 +49,7 @@ note it under Hiring and follow `playbooks/propose-a-hire.md`.
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-sales-summary.md` in the shape of `knowledge/examples/sales-summary.md`, then
-`hub file publish reports/YYYY-MM-DD-sales-summary.md`. Commit, and `hub task update <id> --status done
+`tico file publish reports/YYYY-MM-DD-sales-summary.md`. Commit, and `tico task update <id> --status done
 --note`: the headline, the path, which sources you could not read. Always finish the task.
 
 ## When a source fails

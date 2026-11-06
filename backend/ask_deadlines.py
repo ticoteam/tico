@@ -6,7 +6,7 @@ Every question task (backend/question_tasks.py) with a date closes on it (Decide
 close"); one without a date goes back to its bot after two business days (backend/still_needed.py). Its go-ahead is
 the keeper's answer that closes the task done; its expiry closes it.
 
-1. Go ahead. A bot may say what it will do if nobody answers (`if_no_answer` on `hub task question`:
+1. Go ahead. A bot may say what it will do if nobody answers (`if_no_answer` on `tico task question`:
    what it does, what kind of step that is, and optionally by when). When the step is reversible and internal and the
    person has said nothing by then (`by` or `go_ahead_days` after the ask, whichever is later: the team's days are the
    least a person gets, and `by` is at most EXPIRE_DAYS away), the keeper answers the question for them:

@@ -1329,13 +1329,13 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
                 "assistant",
             ),
         )
-        H.event(c, "bot:ops", "mcp.call", "hub_task_show", {"tool": "hub_task_show", "ms": 40})
+        H.event(c, "bot:ops", "mcp.call", "tico_task_show", {"tool": "tico_task_show", "ms": 40})
         H.event(
             c,
             "human:ana",
             "mcp.call",
-            "hub_assistant_send",
-            {"tool": "hub_assistant_send", "ms": 900, "via": "ana-laptop"},
+            "tico_assistant_send",
+            {"tool": "tico_assistant_send", "ms": 900, "via": "ana-laptop"},
         )
     token = world["attempt"]["token"]
     totals = "SELECT status, sum(actions) FROM assistant_action_weekly GROUP BY status"
@@ -1357,24 +1357,24 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
         ["assistant", "done", 2, 66.7],
         ["bot:botops", "done", 1, 100.0],
     ]
-    assert query(api, "SELECT tool, calls FROM mcp_call_weekly", token)["rows"] == [["hub_task_show", 1]]
+    assert query(api, "SELECT tool, calls FROM mcp_call_weekly", token)["rows"] == [["tico_task_show", 1]]
     stats = api.get("/api/v2/live/stats", headers=headers(token))
     assert stats.status_code == 200
-    assert {r["tool"]: r["calls"] for r in stats.json()["tools"]} == {"hub_task_show": 1}
+    assert {r["tool"]: r["calls"] for r in stats.json()["tools"]} == {"tico_task_show": 1}
     # People keep their existing all-caller stats; the narrow grant cannot borrow them.
     owner_stats = api.get("/api/v2/live/stats", headers=headers()).json()["tools"]
-    assert {r["tool"]: r["calls"] for r in owner_stats} == {"hub_task_show": 1, "hub_assistant_send": 1}
+    assert {r["tool"]: r["calls"] for r in owner_stats} == {"tico_task_show": 1, "tico_assistant_send": 1}
     # Failed MCP calls record caller-typed names too, even when they resemble a hub name.
     for name in ("Ana wants to pay Dana's private invoice", "hub_ana_private_invoice"):
         assert rpc(api, "tools/call", {"name": name, "arguments": {}}, token=token)["error"]["code"] == -32602
     assert query(api, "SELECT tool, calls FROM mcp_call_weekly ORDER BY tool", token)["rows"] == [
-        ["hub_task_show", 1],
+        ["tico_task_show", 1],
         ["other", 2],
     ]
     stats = api.get("/api/v2/live/stats", headers=headers(token))
     assert stats.status_code == 200
-    assert {r["tool"]: r["calls"] for r in stats.json()["tools"]} == {"hub_task_show": 1, "other": 2}
-    failed, via_mcp = call(api, "hub_mcp_stats", token=token)
+    assert {r["tool"]: r["calls"] for r in stats.json()["tools"]} == {"tico_task_show": 1, "other": 2}
+    failed, via_mcp = call(api, "tico_mcp_stats", token=token)
     assert not failed and via_mcp["tools"] == stats.json()["tools"]
     assert api.get("/api/v2/live/stats?via=ana-laptop", headers=headers(token)).status_code == 403
     # Still no row: not the table, not a hidden column, not the base events the totals are built from.

@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
-"""`hub`: the company hub's CLI. See docs/history/hub-v2.md §5 and clients/hubcli.py.
+"""`hub`: the old name of `tico`, forwarded for two releases (R1, then the release after). It prints one notice on stderr
+and then runs exactly what `tico` runs, with the same arguments and standard input.
 
-Resolves the hub checkout from its own path, so the symlink in ~/.local/bin works from
-anywhere and a second checkout uses its own clients/.
+Two releases after R1 (spec D12, step R2) the notice becomes an error: the same line, exit 2, nothing run. That change is
+not built here; it belongs in `forward` below.
 """
+import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from clients import hubcli  # noqa: E402
+HERE = Path(__file__).resolve().parent
+NOTICE = 'hub: "hub" is now "tico"; the old name stops working in the next release'
+
+
+def forward(argv):
+    print(NOTICE, file=sys.stderr)
+    # R2: print NOTICE, then return 2 here and run nothing.
+    os.execv(sys.executable, [sys.executable, str(HERE / "tico"), *argv])
+
 
 if __name__ == "__main__":
-    sys.exit(hubcli.main(sys.argv[1:]))
+    forward(sys.argv[1:])

@@ -233,7 +233,7 @@ def version_review(c, fid, number, *, actor):
 
 
 def edit_version(c, auth, who, task_id, fid, number, body):
-    """Whoever added a file version changes its note. A question about it is a question task (`hub task question`)."""
+    """Whoever added a file version changes its note. A question about it is a question task (`tico task question`)."""
     auth.task(c, who, task_id)
     H._writer(c, who.actor, task_id=task_id)
     version = file_version(c, task_id, fid, number, auth=auth, who=who)

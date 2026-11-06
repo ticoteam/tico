@@ -1,5 +1,5 @@
 //! A credential administrator asked for one variable of a bot's own secrets file to move into Credentials
-//! (`hub credential import`; service.py `poll_credential_imports`, `import_credential`). The value is read from
+//! (`tico credential import`; service.py `poll_credential_imports`, `import_credential`). The value is read from
 //! `secrets/<bot>.env` and no other file, and goes into that one request only: never a log, never the state.
 
 use std::sync::Arc;

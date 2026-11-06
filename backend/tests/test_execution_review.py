@@ -2890,12 +2890,12 @@ def test_restart_uses_start_evidence_and_does_not_hold_internal_shell_writes(api
         c.execute(
             "UPDATE attempt_events SET payload=json_set(payload,'$.summary',?) "
             "WHERE attempt_id=? AND kind='tool' AND json_extract(payload,'$.status')='started'",
-            ('hub task create --title report', attempt['id']),
+            ('tico task create --title report', attempt['id']),
         )
         c.execute(
             "UPDATE attempt_events SET payload=json_set(payload,'$.summary',?) "
             "WHERE attempt_id=? AND kind='tool' AND json_extract(payload,'$.status')='completed'",
-            ('The instructions mention npm publish and hub mail send', attempt['id']),
+            ('The instructions mention npm publish and tico mail send', attempt['id']),
         )
     assert [d['state'] for d in sweep(api)] == ['queued']
 
@@ -2903,8 +2903,8 @@ def test_restart_uses_start_evidence_and_does_not_hold_internal_shell_writes(api
 @pytest.mark.parametrize(
     'tool,label',
     [
-        ('mcp__hub__hub_release_now', 'publish release'),
-        ('mcp__hub__hub_webhook_send', 'send webhook'),
+        ('mcp__tico__tico_release_now', 'publish release'),
+        ('mcp__tico__tico_webhook_send', 'send webhook'),
     ],
 )
 def test_restart_with_hub_publish_or_send_call_is_held_and_names_it(api, tool, label):

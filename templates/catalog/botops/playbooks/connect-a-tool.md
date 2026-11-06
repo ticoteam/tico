@@ -24,17 +24,17 @@ documentation: some require renewed human consent. In order:
 
 For route 1 declare the server when you add the tool (the same request as any tool, plus three flags):
 
-    hub tool add <bot> <service> --can read --env <VARIABLE> --mcp-url https://<vendor address> --transport http \
+    tico tool add <bot> <service> --can read --env <VARIABLE> --mcp-url https://<vendor address> --transport http \
         --header 'Authorization: Bearer ${VARIABLE}'
 
 `${VARIABLE}` must be the `--env` name and nothing else; write it literally, never the value (the server refuses a value, and
-`hub tool update <tool-id> --bot <bot> --mcp-url ...` changes it later, as the requester). Tico passes the server to Claude Code, Codex,
+`tico tool update <tool-id> --bot <bot> --mcp-url ...` changes it later, as the requester). Tico passes the server to Claude Code, Codex,
 Gemini CLI and Grok Build with the credential filled in at run time; Cursor, Antigravity and pi cannot take it, so if the bot runs
 on one, say so and offer to move it or use route 2. Then do steps 1 to 6: the credential is stored and granted exactly as below.
 
 ## 1. Open the card
 
-    hub credential request <VARIABLE> --for-bot <bot> --label "<your Jira credential>" \
+    tico credential request <VARIABLE> --for-bot <bot> --label "<your Jira credential>" \
         --format "<the exact shape>" --help-url <https page where they make one>
 
 - `VARIABLE` is the name the bot's `bot.yaml` `tools:` entry declares in `env:`.
@@ -58,29 +58,29 @@ for the value in words.
 You get a message from them that says it was saved. Run the bot's own read-only check of the
 connection (read one Jira project, list one repository), then report in plain words what it showed
 ("Connected to Jira: project HTM loaded."). If it fails, say why in one line and open the card again
-(`hub credential request` with the same variable replaces the value).
+(`tico credential request` with the same variable replaces the value).
 
 ## 3. If they paste the credential in chat
 
-Store it and go on: `printf '%s' "$VALUE" | hub credential set <VARIABLE> --for-bot <bot>`. That keeps it in
+Store it and go on: `printf '%s' "$VALUE" | tico credential set <VARIABLE> --for-bot <bot>`. That keeps it in
 Credentials for that bot only and removes it from the conversation. Say in one line: it is saved and
 removed from the chat, and next time the card keeps it off the model entirely. Never repeat the value,
 write it in a file, a task or a commit, or copy it to another bot.
 
 ## 4. Declare it, then check it
 
-The bot's `bot.yaml` `tools:` entry names the variable (`hub tool add <bot> <service> --can read --env <VARIABLE>`). A stored credential
-reaches a run only when it is granted to that bot; saving it from a card or `hub credential set` grants it to that one bot.
+The bot's `bot.yaml` `tools:` entry names the variable (`tico tool add <bot> <service> --can read --env <VARIABLE>`). A stored credential
+reaches a run only when it is granted to that bot; saving it from a card or `tico credential set` grants it to that one bot.
 Then verify with one read-only call the bot itself makes (list one project, read one issue). For an MCP server the bot's
-Tools tab (`hub tool list --bot <bot>`) also says whether Tico's runner reached it: reachable, auth failed (the credential
+Tools tab (`tico tool list --bot <bot>`) also says whether Tico's runner reached it: reachable, auth failed (the credential
 was refused: open the card again) or unreachable (the address is wrong or the vendor is down). Never paste a secret into
 `bot.yaml`, a skill, a task or a commit.
 
 ## 5. Close what you filed
 
 A task you filed for the human about this credential ("Add the Jira key", "Create the Jira record") is settled
-once the test in step 2 passes, or once you did the work yourself: `hub task close <id> --note "Saved and
-connected."`. Change what a bot's tool `can` do or its scope with `hub tool update <tool-id> --bot <bot> ...`,
+once the test in step 2 passes, or once you did the work yourself: `tico task close <id> --note "Saved and
+connected."`. Change what a bot's tool `can` do or its scope with `tico tool update <tool-id> --bot <bot> ...`,
 never by removing and adding it.
 
 ## 6. What stops you

@@ -11,7 +11,7 @@ Steps:
 2. Read the cancellation window, lead time, buffer, and any deposit or fee in `knowledge/booking-rules.md`. Work out the notice given, in hours, from the time the request arrived.
 3. Find two or three open slots, in the same service and resource, that fit the rules and the customer's limits. Prefer the nearest slot that keeps the same service length. Do not offer a slot that breaks a buffer or an opening hour.
 4. State the effect on any deposit or fee exactly as the rules state it. If the rules say a fee applies, say so. Do not waive a fee; a waiver is a person's decision.
-5. If no slot fits, name the rule that blocks it and who can grant an exception, using `knowledge/exceptions.md` for any precedent. Route the request to that person with `hub task create --owner <person>`, or ask the requester with `hub task question "<question>" --on <person> --parent <id>`.
+5. If no slot fits, name the rule that blocks it and who can grant an exception, using `knowledge/exceptions.md` for any precedent. Route the request to that person with `tico task create --owner <person>`, or ask the requester with `tico task question "<question>" --on <person> --parent <id>`.
 6. Draft the reply: the options as a short list, the fee line if there is one, and one ask (pick a slot, or reply by a stated time). Keep it under 100 words.
 7. Attach the options and the draft to the task. The booking changes only when the task asks for the change, a granted Tool allows it and a person has confirmed the slot.
 

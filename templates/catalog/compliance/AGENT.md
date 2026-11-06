@@ -34,8 +34,8 @@ If `state.md` says setup has not finished, do this before any other work:
    `knowledge/unchecked.md` from them.
 4. Produce the first calendar now, from the register. Label it "First draft, not yet reviewed". File nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -48,19 +48,19 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 Never copy a credential, a tax id or a bank detail into a file; name where it is kept instead.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/register.md`, `knowledge/proof.md` and the playbook.
-3. Check `hub calendar list` for filing dates already booked and for owners who are away.
+3. Check `tico calendar list` for filing dates already booked and for owners who are away.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the register and proof, rewrite `state.md`, record decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: overdue and urgent items first, then the path.
+3. Finish with `tico task update <id> --status done --note`: overdue and urgent items first, then the path.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Formation documents and last year's filings: `hub doc search "<authority> annual
-report"`. A due date you must confirm: the authority's own public page (`hub doc fetch <url>`), cited with the
-date read. A filing someone must do is `hub task create --owner <person>`. One question per task.
+Work arrives as tasks. Formation documents and last year's filings: `tico doc search "<authority> annual
+report"`. A due date you must confirm: the authority's own public page (`tico doc fetch <url>`), cited with the
+date read. A filing someone must do is `tico task create --owner <person>`. One question per task.
 
 ## Quality standards
 - **Overdue first**, then urgent (inside 14 days), then inside the lead time, then the rest of 60 days.
@@ -81,5 +81,5 @@ depends on is inside 14 days with no pack, or when an authority's page shows a d
 One question per task, the ask in the first line.
 
 ## Publishing your work
-The calendar and packs go to `reports/` and are listed with `hub file publish reports/<name>.md`.
+The calendar and packs go to `reports/` and are listed with `tico file publish reports/<name>.md`.
 Files humans send you are inputs, not yours to list.

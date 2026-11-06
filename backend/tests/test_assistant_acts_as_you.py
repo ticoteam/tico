@@ -377,9 +377,9 @@ def test_the_morning_tool_is_offered_to_the_assistant_and_its_bot_and_to_no_one_
         kind: {t["name"] for t in hubtools.listing(local=True, kind=kind)}
         for kind in ("assistant", "bot", "owner", "admin", "member", "botops", "agent")
     }
-    assert "hub_assistant_morning" in offered["assistant"] and "hub_assistant_morning" in offered["bot"]
+    assert "tico_assistant_morning" in offered["assistant"] and "tico_assistant_morning" in offered["bot"]
     assert not any(
-        "hub_assistant_morning" in names for kind, names in offered.items() if kind not in ("assistant", "bot")
+        "tico_assistant_morning" in names for kind, names in offered.items() if kind not in ("assistant", "bot")
     )
 
 
@@ -548,4 +548,4 @@ def test_the_assistant_turn_is_offered_the_tools_its_template_runs_and_never_the
     assert template - names == set(), sorted(template - names)
     assert not set(hubtools.ASSISTANT_HIDDEN) & names and set(hubtools.ASSISTANT_HIDDEN) <= everything
     assert len(json.dumps(offered)) <= 200_000, len(json.dumps(offered))
-    assert "hub_assistant_propose" in {t["name"] for t in hubtools.listing(local=True, kind="bot")}
+    assert "tico_assistant_propose" in {t["name"] for t in hubtools.listing(local=True, kind="bot")}

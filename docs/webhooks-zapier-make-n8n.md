@@ -10,8 +10,8 @@ post to. This page connects them in both directions. The background is on [Webho
 Add an incoming webhook (Automations → Incoming webhooks), or:
 
 ```
-hub trigger create "Zapier orders" --id zapier-orders
-hub trigger update zapier-orders --type-from /type
+tico trigger create "Zapier orders" --id zapier-orders
+tico trigger update zapier-orders --type-from /type
 ```
 
 Copy the address it shows, `https://tico.example.com/api/v2/hooks/zapier-orders/<secret>`. It is shown once.
@@ -49,7 +49,7 @@ is `202` with a small JSON note.
 Either of these:
 
 ```
-hub automation create --file - <<'EOF'
+tico automation create --file - <<'EOF'
 {"name": "Order paid", "owner": "bot:ops", "enabled": true,
  "trigger": {"type": "webhook", "id": "zapier-orders",
              "filters": [{"field": "webhook.type", "op": "is", "value": "order.paid"}]},
@@ -79,7 +79,7 @@ Make the trigger that waits for a call and copy its address.
 Add an outgoing endpoint (Tools → Add tool → Outgoing webhook), or:
 
 ```
-hub webhook create --name "Zapier tasks" --url https://hooks.zapier.com/hooks/catch/000000/example/ --events task.done task.blocked
+tico webhook create --name "Zapier tasks" --url https://hooks.zapier.com/hooks/catch/000000/example/ --events task.done task.blocked
 ```
 
 Tico shows a signing secret. These tools do not check it, so you can ignore it. The address still has to be `https` and public.
@@ -89,7 +89,7 @@ Tico shows a signing secret. These tools do not check it, so you can ignore it. 
 Send a sample before a real event happens, so the tool can learn the fields:
 
 ```
-hub webhook example <endpoint id> --type task.done
+tico webhook example <endpoint id> --type task.done
 ```
 
 The tool gets this body, and shows the nested fields under `data` and `links`:
@@ -101,9 +101,9 @@ The tool gets this body, and shows the nested fields under `data` and `links`:
 ```
 
 Build the rest of the Zap, scenario or workflow from that. Then turn it on. When a task finishes, Tico posts the event; the
-**Outgoing** tab shows each send and its state, and `hub webhook sends <endpoint id>` lists them.
+**Outgoing** tab shows each send and its state, and `tico webhook sends <endpoint id>` lists them.
 
-A real event can have a different shape than the sample. Check one real send, with `hub webhook sends <endpoint id> --send <id>`,
+A real event can have a different shape than the sample. Check one real send, with `tico webhook sends <endpoint id> --send <id>`,
 before you rely on a field.
 
 If the tool is down or answers with an error, Tico tries again after 5 seconds, 5 minutes, 30 minutes, and on up to about 28
@@ -115,7 +115,7 @@ hours. See [Webhooks](webhooks.md#answering-and-retries). Delivery is at least o
 To post something that is not one of Tico's events, use `custom.`:
 
 ```
-hub webhook send <endpoint id> --type custom.deploy-done --data '{"app":"web"}'
+tico webhook send <endpoint id> --type custom.deploy-done --data '{"app":"web"}'
 ```
 
 The endpoint must list `custom.*`. An automation can do the same with a `call_webhook` action.

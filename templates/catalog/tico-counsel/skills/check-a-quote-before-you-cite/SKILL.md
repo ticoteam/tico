@@ -4,11 +4,11 @@ description: "Before a suggestion cites a quote and its section, check that the 
 ---
 # Check a quote before you cite it
 
-When to use: before each `hub rules add` that carries a `--quote`, and when a write is refused because its quote is not
+When to use: before each `tico rules add` that carries a `--quote`, and when a write is refused because its quote is not
 in the document.
 
 Steps:
-1. Copy the quote from the text `hub file read` returned for this version, not from memory or from a summary. Keep
+1. Copy the quote from the text `tico file read` returned for this version, not from memory or from a summary. Keep
    punctuation, capitals and numbers exactly as printed.
 2. Take a whole clause: from where the sentence starts to where it ends. It must be at least 20 characters. A fragment
    such as "within 30 days" does not show the duty; take the clause that holds it.

@@ -3,16 +3,16 @@
 "My assistant can decide approvals for me" (Settings > General) is on unless the person turned it off. Never look it up
 first: read back, and the server tells you if it is off.
 
-Inputs: the approvals the person named in this chat, their ids from `hub approval list` (the waiting ones), and their
-read-back. `hub approval show <id>` gives one in full. Never guess an id.
+Inputs: the approvals the person named in this chat, their ids from `tico approval list` (the waiting ones), and their
+read-back. `tico approval show <id>` gives one in full. Never guess an id.
 
-1. Read back what you are about to approve in ONE list: `hub approval read-back <id> <id> ...`. The server writes the whole
+1. Read back what you are about to approve in ONE list: `tico approval read-back <id> <id> ...`. The server writes the whole
    message in their chat, one line per approval, and it is your reply: make it the turn's last call (do the closes and declines first), then say nothing more. Only what it
    lists can be approved, and only on their plain "yes" to it, even when they already said "approve ...". After the read-back,
    your reply is one line with no items in it, for example "The list is in your chat; reply yes to approve it."
-   Put any real decision you found (by name, in plain words: the read-back shows no links) in `--note`: `hub approval read-back <id> --note "<the decision>"`.
+   Put any real decision you found (by name, in plain words: the read-back shows no links) in `--note`: `tico approval read-back <id> --note "<the decision>"`.
    The read-back is the whole reply, so anything you write after it is not posted. The yes still approves only the listed ids.
-2. On their yes, decide each one: `hub approval approve <id> --on-behalf-of turn` (or `hub approval decline <id> --note "<reason>"`; declines need
+2. On their yes, decide each one: `tico approval approve <id> --on-behalf-of turn` (or `tico approval decline <id> --note "<reason>"`; declines need
    no read-back). Never ask again per item. Reply with one line per item: "Approved <item> as you, through the Assistant. Say undo to put it back."
    - An approval you requested yourself is never yours to approve (`own_request`): it stays their click on a card.
    - So does an approval with a field too long to list in full (`approve_too_long`): leave it out of the read-back.

@@ -1,6 +1,6 @@
 One file per recurring kind of work. A playbook is the checklist you would hand a new hire.
 
-- `commands.md`: the hub commands for goal work, by job, with their arguments. Run only these; read it before your first hub call.
+- `commands.md`: the hub commands for goal work, by job, with their arguments. Run only these; read it before your first tico call.
 - `which-run.md`: which playbook a run needs, by the work it starts from.
 - `levels.md`: what Passive, level 2 and level 3 each allow, and the limit on Needs you items.
 - `strategy-and-bets.md`: the strategy page, bets, goals, KPIs, and the commands that read and write them.
@@ -17,7 +17,7 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
   Weigh each touched bet; propose (source `briefing`) only when one is no longer right.
 - `kpi-pass.md`: the daily routine. Every KPI due on its cadence, one pass, a time budget each, then the status pass.
 - `new-kpi.md`: what to build the first time a KPI needs computing, and how to change one that is wrong.
-- `status-pass.md`: `hub goal refresh` after the readings, and how to report what it did.
+- `status-pass.md`: `tico goal refresh` after the readings, and how to report what it did.
 - `check-ins.md`: when a KPI slips, ask the goal's owner and record the answer.
 - `goals-make-sense.md`: flag vague or duplicate goals; suggest a measure once or clearer words. Missing optional measures are not a problem.
 - `weekly-goals-review.md`: the short review for the owner.
@@ -28,8 +28,8 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
 
 ## Proposals
 Every change to a goal or a KPI that is not yours to make is a proposal the owner confirms. Write the payload
-to a file, then `hub proposal create --kind <kind> [--goal ID] [--kpi ID] --payload-file f.json --reason "..."`.
-`hub proposal list` shows what is pending; look before you propose the same thing again.
+to a file, then `tico proposal create --kind <kind> [--goal ID] [--kpi ID] --payload-file f.json --reason "..."`.
+`tico proposal list` shows what is pending; look before you propose the same thing again.
 
 | kind | needs | payload |
 |---|---|---|

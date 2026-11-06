@@ -2559,7 +2559,7 @@ pub(crate) fn clear_label(id: &str) -> String {
 /// browser. Each webview keeps its own `signing_in` and its own hub, so a window opened for one org keeps
 /// following that org after the person switches to another. Embedded frames navigate through the same
 /// handler with nothing to tell them apart, so only the top-level page ends a sign-in, by committing on the
-/// hub origin; and only the hub's own logins start one. `page_label` identifies an org page (the main window's
+/// tico origin; and only the hub's own logins start one. `page_label` identifies an org page (the main window's
 /// children, which also follow visual links); other windows have none.
 fn sign_in_hooks(
     app: &App,

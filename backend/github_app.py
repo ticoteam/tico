@@ -820,7 +820,7 @@ class GitHubApp:
         )  # a bot's repository may be either
         if self.can_create_repos():
             create = (
-                f"Create it with BotOps: `hub bot repo-create {slugs.split(', ')[0]}` "
+                f"Create it with BotOps: `tico bot repo-create {slugs.split(', ')[0]}` "
                 "(add `--empty` for a bot built locally, whose history its runner then pushes)"
             )
         else:
@@ -860,7 +860,7 @@ class GitHubApp:
 
     def repository_history(self, repository):
         """Whether GitHub's `repository` holds any commit: True, False (empty or missing), or None when it cannot
-        be learned. A repository `hub bot create` made is empty until the computer that built the bot publishes it."""
+        be learned. A repository `tico bot create` made is empty until the computer that built the bot publishes it."""
         if not repository or not self.row():
             return None
         try:
@@ -1267,7 +1267,7 @@ def install_github_app(app, settings, store):
             raise Problem(
                 "forbidden",
                 f"{name} is a bot repository name. Bots create product repositories only; a new "
-                "bot's repository is made with `hub bot repo-create`",
+                "bot's repository is made with `tico bot repo-create`",
                 403,
             )
 

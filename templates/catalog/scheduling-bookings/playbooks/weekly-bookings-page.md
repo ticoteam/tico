@@ -45,11 +45,11 @@ decided it and why. A rule that needed an exception twice is a question for the 
 
 Write `reports/YYYY-MM-DD-bookings-page.md`, then:
 
-    hub file publish reports/YYYY-MM-DD-bookings-page.md
+    tico file publish reports/YYYY-MM-DD-bookings-page.md
 
 Add the week's no-show count and the source counts to `knowledge/no-show-patterns.md`. Commit, then:
 
-    hub task update <id> --status done --note "..."
+    tico task update <id> --status done --note "..."
 
 The note holds the headline (bookings this week, clashes, requests waiting), the page path and what could not be read.
 Finish the task on a quiet week too.

@@ -17,7 +17,7 @@ from backend.store import H
 
 
 def act(api, attempt, method, path, body=None, ref="turn"):
-    """One `hub api` call: the request BotOps makes, asking to be answered as the person it works for."""
+    """One `tico api` call: the request BotOps makes, asking to be answered as the person it works for."""
     kwargs = {"headers": {**headers(attempt["token"]), **({"X-Tico-On-Behalf-Of": ref} if ref else {})}}
     if body is not None:
         kwargs["json"] = body
@@ -43,12 +43,12 @@ def test_botops_records_its_own_blocker_without_borrowing_human_authority(api, b
         )
     attempt = claim(api, botops, "botops")
     err, result = mcp(
-        api, "hub_task_relate", {"id": task["id"], "task": blocker["id"], "kind": "blocked_by"}, attempt["token"]
+        api, "tico_task_relate", {"id": task["id"], "task": blocker["id"], "kind": "blocked_by"}, attempt["token"]
     )
     assert not err, result
     err, result = mcp(
         api,
-        "hub_task_update",
+        "tico_task_update",
         {"id": task["id"], "status": "waiting", "note": "The authorized registry source is missing.", "quiet": True},
         attempt["token"],
     )
@@ -552,7 +552,7 @@ def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api,
     api.app.state.store.settings.catalog_dir = template.parent
     err, made = mcp(
         api,
-        "hub_bot_create",
+        "tico_bot_create",
         {
             "slug": "qa-custom",
             "template": "qa-custom",
@@ -575,7 +575,7 @@ def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api,
     qa = bot_id(api, "qa-custom")
     with api.app.state.store.transaction() as c:
         restrict(c, qa, people=["ana" if person == "ana-test" else "cara"])
-    err, status = mcp(api, "hub_tool_list", {"bot": "qa-custom"}, attempt["token"])
+    err, status = mcp(api, "tico_tool_list", {"bot": "qa-custom"}, attempt["token"])
     assert not err and status["bot"] == qa, status
     assign(api, botops, "qa-custom")
     ready(api, botops, ["botops", qa])

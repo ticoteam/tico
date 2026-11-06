@@ -1310,7 +1310,7 @@ def place_view(ctx, place, timings=None):
 
 def log(ctx, action, target, detail, private=False):
     """The event a write leaves. A write to someone's My dashboard names nothing: no card, page or place, since the
-    event log is the company's (the owner reads it whole, `hub sql` included) and the dashboard is its person's alone."""
+    event log is the company's (the owner reads it whole, `tico sql` included) and the dashboard is its person's alone."""
     if private:
         H.event(ctx.c, ctx.who.actor, action, "", {})
     else:

@@ -117,7 +117,7 @@ For the shortest trial, use Docker above. For a native development setup, follow
 and [register a Mac computer](docs/install.md#mac). Open the app, complete **Finish setup**, join the
 computer and sign in to your model provider. All four built-in repositories are created automatically. Each other role waits as a Recruiting seat; a bot is created only
 when you recruit one, and it is parked in **Needs setup** until you open it and press **Start onboarding**; then follow [Your first result](docs/install.md#your-first-result).
-Bots can allow [branches](docs/creating-bots.md#branches): personal tasks and chats on your computer, following the original's instructions and repository. Independent copies keep using `hub bot copy`.
+Bots can allow [branches](docs/creating-bots.md#branches): personal tasks and chats on your computer, following the original's instructions and repository. Independent copies keep using `tico bot copy`.
 
 See [Setup reference](docs/onboarding.md) for the wizard's saved fields and [Creating bots](docs/creating-bots.md) for custom bots.
 
@@ -234,8 +234,8 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_CREDENTIAL_KMS_KEY` | Optional AWS KMS key for the credential vault. Unset (the default), the vault works with a key in `/data/credential.key`: back that file up with the database ([docs/credential-vault.md](docs/credential-vault.md)) | `alias/tico-acme` |
 | `TICO_EXPECTED_AWS_ACCOUNT` and `TICO_EXPECTED_AWS_ROLE` | Optional: the Docker server, Slack gateway and `restore` refuse to start unless STS GetCallerIdentity reports this 12-digit account and, when set, this role (a name or role ARN). Unset, nothing is checked. See [docs/install.md](docs/install.md#check-the-aws-identity) | `123456789012`, `tico-server` |
 | `TICO_DECISIONS_DAILY_CALLS_OWNER`, `TICO_DECISIONS_DAILY_CALLS_HUMAN`, `TICO_DECISIONS_DAILY_CALLS_BOT` | How many calls to the server's own models one actor may make in a UTC day, by role (defaults 20000, 5000, 5000; `0` refuses every call). Decisions (`POST /api/v2/decisions`, listening and live-meeting routing, and Slack routing, counted against the sender) share one count; market asks (`POST /api/v2/market/ask`) are counted apart under the same caps. Over the cap is a 429 | `1000` |
-| `TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, and `TICO_GATEWAY_URL` | The Tico AI Gateway key behind `hub_decision_ask` / `POST /api/v2/decisions` and the Slack gateway: Decide asks the Gateway first, as Tico Decide 1.0, in one try of at most 8 seconds. The URL defaults to Tico HQ's (`<TICO_HQ_URL>/v1/gateway/decisions`). When the Gateway is not set up, is down or refuses the key, the server asks the next provider below; all of them together answer within 25 seconds | |
-| `TICO_TYPESAFE_SECRET_ARN` or `TYPESAFE_API_KEY` | Optional: your own key for TypeSafe's Jev, asked after the Gateway, behind `hub_decision_ask` / `POST /api/v2/decisions` and the Slack gateway (`skills/decisions/SKILL.md`, `questions/README.md`), which is also what checks a message bot's mail for spam and injection. Not set by default and not needed. Without it, or when it fails, the server asks the team's own model provider, using `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY` or `OPENROUTER_API_KEY` from `.env` (`compose.yaml` hands these to the server); with none of them the route answers 503. The `judge.call` audit events and `TYPESAFE_*` names are unchanged | |
+| `TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, and `TICO_GATEWAY_URL` | The Tico AI Gateway key behind `tico_decision_ask` / `POST /api/v2/decisions` and the Slack gateway: Decide asks the Gateway first, as Tico Decide 1.0, in one try of at most 8 seconds. The URL defaults to Tico HQ's (`<TICO_HQ_URL>/v1/gateway/decisions`). When the Gateway is not set up, is down or refuses the key, the server asks the next provider below; all of them together answer within 25 seconds | |
+| `TICO_TYPESAFE_SECRET_ARN` or `TYPESAFE_API_KEY` | Optional: your own key for TypeSafe's Jev, asked after the Gateway, behind `tico_decision_ask` / `POST /api/v2/decisions` and the Slack gateway (`skills/decisions/SKILL.md`, `questions/README.md`), which is also what checks a message bot's mail for spam and injection. Not set by default and not needed. Without it, or when it fails, the server asks the team's own model provider, using `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY` or `OPENROUTER_API_KEY` from `.env` (`compose.yaml` hands these to the server); with none of them the route answers 503. The `judge.call` audit events and `TYPESAFE_*` names are unchanged | |
 | `TICO_UPDATE_CHECK`, `TICO_RELEASES_URL`, `TICO_VERSION`, `TICO_UPDATER_URL`, `TICO_UPDATER_TOKEN` | The sidebar's "Update to" row and owner-only "Update now"; `TICO_UPDATE_CHECK=off` disables it. See [docs/releasing.md](docs/releasing.md) | |
 | `TICO_TELEMETRY`, `DO_NOT_TRACK`, `TICO_TELEMETRY_DEBUG`, `TICO_HQ_URL` | The anonymous usage count: `TICO_TELEMETRY=off` or `DO_NOT_TRACK=1` (or Settings > General) turns it off, `TICO_TELEMETRY_DEBUG=1` prints what would be sent and sends nothing. See [PRIVACY.md](PRIVACY.md) | |
 | `TICO_HQ_STAFF_READ_KEY` | For the Tico team's own server only: Tico HQ's read-only staff key. With it, the server reads HQ's nightly billing check every hour and the owner's Health page shows each billing mismatch (the company's install id and the difference in dollars), and a check that missed a night or cannot be read, in red. Read-only; unset, nothing is sent | |
@@ -300,7 +300,7 @@ scripts/tico-computer -e ENV server install|uninstall|start|stop|restart|status|
 `-e ENV` (or `TICO_ENV`) picks a team environment.
 
 `install` links `~/.local/bin/tico-computer` and `~/.local/bin/tico`. `tico` takes the same commands and hands any
-other to `hub` (`tico task list` is `hub task list`); in a later release `tico` becomes the teamwork CLI and these
+other to `hub` (`tico task list` is `tico task list`); in a later release `tico` becomes the teamwork CLI and these
 commands stay on `tico-computer` only.
 
 `scripts/setup-runner.sh [--env <slug>] <enrollment.json> [workspace]` does the venv, the
@@ -371,8 +371,8 @@ registry directory (`TICO_REGISTRY_DIR`) and in bot repositories outside this on
 is the product. `templates/environment-registry/` shows the shape of the registry.
 
 Tasks support [tags with metadata, Markdown checklists and templates](docs/using-tico.md#tags-and-release-checklists).
-Open **Settings > Tasks** (under **Task tags**) or use `hub tag list|show|create|update`. Existing `--label` and
-`hub_task_label` calls keep using tag keys.
+Open **Settings > Tasks** (under **Task tags**) or use `tico tag list|show|create|update`. Existing `--label` and
+`tico_task_label` calls keep using tag keys.
 
 ## Task pipelines
 

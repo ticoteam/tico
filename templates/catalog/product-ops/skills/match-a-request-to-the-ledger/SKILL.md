@@ -20,7 +20,7 @@ Steps:
    - New: a new row with the need, area, account, segment, source and date.
 5. Check the segment before you merge. If the new account is a different kind of customer (for example one site or
    several), record the segment on the row. Do not let the merge hide it.
-6. If the account is missing from the request, ask the sender once with `hub task question "<question>" --on <person> --parent <id>`. Do not guess an account.
+6. If the account is missing from the request, ask the sender once with `tico task question "<question>" --on <person> --parent <id>`. Do not guess an account.
 7. Recount distinct accounts for the row. One account that asked three times is one account.
 
 Checks before you finish:

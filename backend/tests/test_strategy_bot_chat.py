@@ -120,7 +120,7 @@ def test_nobody_chats_with_the_strategy_bot_a_post_to_it_reaches_their_assistant
     strategy_bot(api)
     for token in ("ana-test", "ben-test", "cara-test"):
         room = get(api, "assistant", token)["room_id"]
-        # The Goals page and `hub chat` post with no room: the words go to their Assistant, in their own chat.
+        # The Goals page and `tico chat` post with no room: the words go to their Assistant, in their own chat.
         direct = post(api, "chat/goal-manager", {"text": "Hello"}, token=token)
         assert (direct["recipient_id"], direct["conversation_id"], direct["refs"]["assistant"]) == (
             "bot:coo",

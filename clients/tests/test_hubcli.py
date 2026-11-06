@@ -1,4 +1,4 @@
-"""The `hub` CLI as a bot runs it: `scripts/hub` in a subprocess, remote-only.
+"""The `tico` CLI as a bot runs it: `scripts/tico` in a subprocess, remote-only.
 
 The command surface (docs/history/hub-v2.md §5) and the exit codes are the contract every bot's AGENT.md
 depends on: 0 fine, 2 refused or a non-retryable API error, 1 anything else. The real HTTP round
@@ -22,7 +22,7 @@ import pytest
 
 from clients import hubcli
 
-HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
+HUB = Path(__file__).resolve().parents[2] / "scripts" / "tico"
 ALIASES = {"approvals", "automations", "bots", "rule", "tasks"}
 SUBCOMMANDS = [
     "whoami",
@@ -151,7 +151,7 @@ def test_wake_url_commands_reach_the_tools_that_put_the_owners_address(monkeypat
         ("PUT", "hooks/wake-url", {"url": "https://wake.acme.example/start"}),
         ("PUT", "hooks/wake-url", {"url": None}),
     ]
-    assert {"hub_relay_wake_url_show", "hub_relay_wake_url_set", "hub_relay_wake_url_off"} <= set(hubtools.BY_NAME)
+    assert {"tico_relay_wake_url_show", "tico_relay_wake_url_set", "tico_relay_wake_url_off"} <= set(hubtools.BY_NAME)
 
 
 def test_page_link_queries_reach_the_api_through_cli_and_mcp(monkeypatch):
@@ -207,7 +207,7 @@ def test_health_findings_and_report_reach_their_routes(monkeypatch):
     remotecli.run(hubcli.parser().parse_args(["health", "findings"]))
     remotecli.run(hubcli.parser().parse_args(["health", "report", "hm-0123456789ab"]))
     assert calls == [("GET", "health/findings"), ("POST", "health/findings/hm-0123456789ab/report")]
-    assert {"hub_health_findings", "hub_health_report"} <= set(hubtools.BY_NAME)
+    assert {"tico_health_findings", "tico_health_report"} <= set(hubtools.BY_NAME)
 
 
 def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
@@ -346,26 +346,26 @@ def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
         remotecli.run(hubcli.parser().parse_args(words))
         assert calls == [expected], words
     assert {
-        "hub_thread_list",
-        "hub_thread_show",
-        "hub_thread_create",
-        "hub_thread_post",
-        "hub_thread_reply",
-        "hub_thread_sub",
-        "hub_thread_edit",
-        "hub_thread_follow",
-        "hub_thread_unfollow",
-        "hub_thread_read",
-        "hub_thread_search",
-        "hub_thread_members_list",
-        "hub_thread_members_add",
-        "hub_thread_members_remove",
-        "hub_thread_update",
-        "hub_thread_link_slack",
-        "hub_thread_dm_group",
-        "hub_thread_react",
-        "hub_thread_unreact",
-        "hub_thread_open_earlier",
+        "tico_thread_list",
+        "tico_thread_show",
+        "tico_thread_create",
+        "tico_thread_post",
+        "tico_thread_reply",
+        "tico_thread_sub",
+        "tico_thread_edit",
+        "tico_thread_follow",
+        "tico_thread_unfollow",
+        "tico_thread_read",
+        "tico_thread_search",
+        "tico_thread_members_list",
+        "tico_thread_members_add",
+        "tico_thread_members_remove",
+        "tico_thread_update",
+        "tico_thread_link_slack",
+        "tico_thread_dm_group",
+        "tico_thread_react",
+        "tico_thread_unreact",
+        "tico_thread_open_earlier",
     } <= set(hubtools.BY_NAME)
 
 
@@ -581,7 +581,7 @@ class Parser(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertNotIn("closed", out["_stdout"])
         statuses = ["open", "doing", "waiting", "review", "ready", "done", "declined"]
-        schema = next(t["inputSchema"] for t in hubtools.TOOLS if t["name"] == "hub_task_update")
+        schema = next(t["inputSchema"] for t in hubtools.TOOLS if t["name"] == "tico_task_update")
         self.assertEqual(schema["properties"]["status"]["enum"], [status for status in statuses if status != "ready"])
         for status in statuses:
             args = hubcli.parser().parse_args(["task", "update", "T1", "--status", status])
@@ -683,7 +683,7 @@ class AgainstAStub(unittest.TestCase):
         for status_arg in (("--status", "closed"), ("--status=closed",)):
             code, out = run_hub("task", "update", "T1", *status_arg, env=self.env)
             self.assertEqual(code, 1, out)
-            self.assertIn("use `hub task close <id>`", out["_stderr"])
+            self.assertIn("use `tico task close <id>`", out["_stderr"])
             self.assertEqual(Stub.seen, [])
 
     def test_task_list_still_filters_closed_tasks(self):
@@ -754,13 +754,13 @@ class AgainstAStub(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp) / "report.md"
-            report.write_bytes(b"hub task update fails.\r\nError: refused (version)\r\n\r\n")
+            report.write_bytes(b"tico task update fails.\r\nError: refused (version)\r\n\r\n")
             code, out = run_hub("support", "report", "--file", str(report), "--no-ids", env=self.env)
         self.assertEqual(code, 0, out)
         self.assertEqual(out["approval"], "ap-1")
-        self.assertIn("hub support send --approval ap-1", out["next"])
+        self.assertIn("tico support send --approval ap-1", out["next"])
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/approvals")
-        message = "hub task update fails.\nError: refused (version)"
+        message = "tico task update fails.\nError: refused (version)"
         self.assertEqual(
             posted,
             {
@@ -878,7 +878,7 @@ ONBOARDING = {
 
 
 class BotSetup(unittest.TestCase):
-    """`hub template list` and `hub bot create|check`: the three commands BotOps needs in a turn.
+    """`tico template list` and `tico bot create|check`: the three commands BotOps needs in a turn.
 
     The parsing is the real parser and the work is the real `clients/catalog.py`; only the API is
     a fake, so what these assert is which endpoints a command reads and what it writes to disk.
@@ -979,7 +979,7 @@ class BotSetup(unittest.TestCase):
         self.client.github = APIError("forbidden", "seo is not a bot being set up or running", 403, False)
         made = self.run_command("bot", "create", "seo", "--template", "specialist")
         self.assertIn("skipped", made["github"])
-        self.assertIn("hub bot repo-create seo --empty", made["github"]["note"])
+        self.assertIn("tico bot repo-create seo --empty", made["github"]["note"])
 
     def test_a_bot_created_without_a_slug_takes_the_one_picked_from_its_name(self):
         # The server picks it in a person's turn; the build and its repository use that slug.
@@ -1044,7 +1044,7 @@ def test_creation_qa_override_and_paths_survive_cli_and_mcp(monkeypatch, choice)
         ]
     )
     remotecli.run(args)
-    hubtools.BY_NAME['hub_task_create']['fn'](
+    hubtools.BY_NAME['tico_task_create']['fn'](
         api,
         {
             'owner': 'cpo',
@@ -1067,7 +1067,7 @@ def test_keep_tasks_going_cli_preserves_explicit_unlimited(monkeypatch):
     from clients.hubtools import BY_NAME
 
     sent = []
-    monkeypatch.setitem(BY_NAME['hub_bot_keep_tasks_going'], 'fn', lambda api, args: sent.append(args))
+    monkeypatch.setitem(BY_NAME['tico_bot_keep_tasks_going'], 'fn', lambda api, args: sent.append(args))
     for argv in (
         ['bot', 'keep-tasks-going', 'ops'],
         ['bot', 'keep-tasks-going', 'ops', 'unlimited'],
@@ -1084,7 +1084,7 @@ def test_turns_at_once_cli_preserves_explicit_unlimited(monkeypatch):
     from clients.hubtools import BY_NAME
 
     sent = []
-    monkeypatch.setitem(BY_NAME['hub_bot_turns_at_once'], 'fn', lambda api, args: sent.append(args))
+    monkeypatch.setitem(BY_NAME['tico_bot_turns_at_once'], 'fn', lambda api, args: sent.append(args))
     for argv in (
         ['bot', 'turns-at-once', 'ops'],
         ['bot', 'turns-at-once', 'ops', 'unlimited'],
@@ -1100,7 +1100,7 @@ def test_computer_turns_at_once_cli_sends_automatic_as_null(monkeypatch):
     from clients.hubtools import BY_NAME
 
     sent = []
-    monkeypatch.setitem(BY_NAME['hub_computer_turns_at_once'], 'fn', lambda api, args: sent.append(args))
+    monkeypatch.setitem(BY_NAME['tico_computer_turns_at_once'], 'fn', lambda api, args: sent.append(args))
     for argv in (['computer', 'turns-at-once', 'rig-1', 'automatic'], ['computer', 'turns-at-once', 'rig-1', '3']):
         remotecli.via_tool(None, hubcli.parser().parse_args(argv))
     assert [row['limit'] for row in sent] == [None, 3]
@@ -1112,7 +1112,7 @@ def test_browser_exit_cli_sends_none_as_null_and_on_off_as_booleans(monkeypatch)
     from clients.hubtools import BY_NAME
 
     sent = []
-    for name in ('hub_bot_browser_exit', 'hub_computer_browser_exit'):
+    for name in ('tico_bot_browser_exit', 'tico_computer_browser_exit'):
         monkeypatch.setitem(BY_NAME[name], 'fn', lambda api, args: sent.append(args))
     for argv in (
         ['bot', 'browser-exit', 'ops'],
@@ -1192,7 +1192,7 @@ def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_
 
 
 def test_market_apply_sends_the_verified_date_to_an_entity_or_a_new_one_and_only_when_given(monkeypatch):
-    """`hub market apply --last-verified-at` puts the date on the existing entity, or on the new entity it creates;
+    """`tico market apply --last-verified-at` puts the date on the existing entity, or on the new entity it creates;
     without the flag the body is what it was. The date is passed through: the server refuses a bad one."""
     import pytest
     from clients import remotecli
@@ -1262,12 +1262,12 @@ def test_the_market_apply_tool_puts_the_verified_date_in_the_body_for_an_entity_
             calls.append((path, body))
             return {}
 
-    fn = BY_NAME['hub_market_apply']['fn']
+    fn = BY_NAME['tico_market_apply']['fn']
     fn(Api(), {'id': 'ins-1', 'entity_id': 'company/x', 'last_verified_at': '2026-11-03'})
     fn(Api(), {'id': 'ins-1', 'entity_type': 'company', 'entity_name': 'Acme', 'last_verified_at': '2026-11-03'})
     assert calls[0][1]['last_verified_at'] == '2026-11-03' and 'entity' not in calls[0][1]
     assert calls[1][1]['entity']['last_verified_at'] == '2026-11-03' and 'last_verified_at' not in calls[1][1]
-    assert 'last_verified_at' in BY_NAME['hub_market_apply']['inputSchema']['properties']
+    assert 'last_verified_at' in BY_NAME['tico_market_apply']['inputSchema']['properties']
 
 
 def test_market_apply_refuses_a_timestamp_or_a_written_date_and_sends_nothing(monkeypatch):
@@ -1296,7 +1296,7 @@ def test_market_apply_refuses_a_timestamp_or_a_written_date_and_sends_nothing(mo
         assert refused.value.status == 422 and 'YYYY-MM-DD' in str(refused.value)
     assert sent == []
 
-    api = BY_NAME['hub_market_apply']
+    api = BY_NAME['tico_market_apply']
     for bad in ('2026-11-03T09:00:00Z', '2026-02-31'):
         with pytest.raises(ValueError):
             api['fn'](Api(), {'id': 'ins-1', 'entity_id': 'company/x', 'last_verified_at': bad})
@@ -1304,7 +1304,7 @@ def test_market_apply_refuses_a_timestamp_or_a_written_date_and_sends_nothing(mo
 
 
 def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(monkeypatch):
-    """`hub thread link-slack` runs `hub_thread_link_slack` (clients/hubtools.py): a channel asks for the link, the thread
+    """`tico thread link-slack` runs `tico_thread_link_slack` (clients/hubtools.py): a channel asks for the link, the thread
     alone lists its links, and --off lists them and deletes each one."""
     from clients import remotecli
 
@@ -1342,8 +1342,8 @@ def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(mo
 
 
 def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
-    """`hub task create --private --reader X` sends the readers; `hub task readers list|add|remove` run the
-    hub_task_readers_* tools against /tasks/{id}/readers."""
+    """`tico task create --private --reader X` sends the readers; `tico task readers list|add|remove` run the
+    tico_task_readers_* tools against /tasks/{id}/readers."""
     from clients import remotecli
 
     calls = []
@@ -1393,7 +1393,7 @@ def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
         ["task", "readers", "remove", "T1", "ben"],
     ):
         args = hubcli.parser().parse_args(argv)
-        assert remotecli.tool_name(args.fn) == "hub_task_readers_" + argv[2]
+        assert remotecli.tool_name(args.fn) == "tico_task_readers_" + argv[2]
         remotecli.run(args)
     assert calls == [
         ("GET", "tasks/T1/readers", None),
@@ -1403,7 +1403,7 @@ def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
 
 
 def test_followers_run_from_the_cli_and_its_mcp_tools(monkeypatch):
-    """`hub task create --follow` sends follow; `hub task followers|follow|unfollow` run the hub_task_* tools against
+    """`tico task create --follow` sends follow; `tico task followers|follow|unfollow` run the tico_task_* tools against
     /tasks/{id}/followers."""
     from clients import remotecli
 
@@ -1437,11 +1437,11 @@ def test_followers_run_from_the_cli_and_its_mcp_tools(monkeypatch):
     assert len(made) == 2 and made[0]["follow"] is True and "follow" not in made[1], calls
     calls.clear()
     for argv, tool in (
-        (["task", "followers", "T1"], "hub_task_followers"),
-        (["task", "follow", "T1", "--level", "digest"], "hub_task_follow"),
-        (["task", "follow", "T1", "--who", "bot:cpo"], "hub_task_follow"),
-        (["task", "unfollow", "T1", "--who", "ben"], "hub_task_follow"),
-        (["task", "unfollow", "T1"], "hub_task_follow"),
+        (["task", "followers", "T1"], "tico_task_followers"),
+        (["task", "follow", "T1", "--level", "digest"], "tico_task_follow"),
+        (["task", "follow", "T1", "--who", "bot:cpo"], "tico_task_follow"),
+        (["task", "unfollow", "T1", "--who", "ben"], "tico_task_follow"),
+        (["task", "unfollow", "T1"], "tico_task_follow"),
     ):
         args = hubcli.parser().parse_args(argv)
         assert remotecli.tool_name(args.fn) == tool
@@ -1536,7 +1536,7 @@ def test_every_webhook_command_runs_against_a_remote_server(argv, monkeypatch):
 
 
 def test_hub_notice_list_is_not_the_renamed_notice_send():
-    """Only the old `hub notice <text>` becomes `message send --fyi`; the new `notice list` and its flags stay."""
+    """Only the old `tico notice <text>` becomes `message send --fyi`; the new `notice list` and its flags stay."""
     assert hubcli.rename_argv(["notice", "list"]) == (["notice", "list"], None)
     assert hubcli.rename_argv(["notice", "--help"]) == (["notice", "--help"], None)
     argv, said = hubcli.rename_argv(["notice", "Deploy done"])
@@ -1546,11 +1546,11 @@ def test_hub_notice_list_is_not_the_renamed_notice_send():
 @pytest.mark.parametrize(
     "argv, instead",
     [
-        (["question", "ask", "ops", "Which plan?"], "hub task question"),
+        (["question", "ask", "ops", "Which plan?"], "tico task question"),
         (["question", "answer", "m1", "Yes"], "Needs you"),
-        (["ask", "ops", "Which plan?"], "hub task question"),
+        (["ask", "ops", "Which plan?"], "tico task question"),
         (["answer", "m1", "Yes"], "Needs you"),
-        (["task", "ask", "t1", "Which plan?"], "hub task question"),
+        (["task", "ask", "t1", "Which plan?"], "tico task question"),
         (["task", "ask-resolve", "t1", "c1"], "Needs you"),
     ],
 )
@@ -1560,10 +1560,10 @@ def test_a_removed_ask_command_prints_one_line_naming_its_replacement(argv, inst
     assert hubcli.main(argv) == 1
     out = capsys.readouterr()
     lines = out.err.strip().splitlines()
-    assert out.out == "" and len(lines) == 1 and lines[0].startswith('hub: "') and "is gone" in lines[0]
+    assert out.out == "" and len(lines) == 1 and lines[0].startswith('tico: "') and "is gone" in lines[0]
     assert instead in lines[0]
-    if "ask" in argv[:2] and instead == "hub task question":
-        assert "hub message send" in lines[0] and "--needs-action" in lines[0]
+    if "ask" in argv[:2] and instead == "tico task question":
+        assert "tico message send" in lines[0] and "--needs-action" in lines[0]
 
 
 def test_goal_checkin_list_with_the_list_word_is_checkin_list():
@@ -1681,7 +1681,7 @@ def test_a_plain_webhook_header_sends_no_secret_key():
 
 
 def test_file_approved_by_path_asks_with_the_path_and_digest_as_query_fields(tmp_path, monkeypatch):
-    """`hub file approved <path>` sends the path and digest as query fields, not as the client's own path argument."""
+    """`tico file approved <path>` sends the path and digest as query fields, not as the client's own path argument."""
     import hashlib
     from urllib.parse import parse_qs, urlsplit
     from clients import hubtools, remotecli, tico
@@ -1908,7 +1908,7 @@ def test_the_retired_gtm_and_growth_idea_lines_run_their_new_commands_with_a_not
     ):
         assert hubcli.main(old) == 0
         assert ran[-1] == new
-    assert '"hub gtm show" is now "hub strategy show --section how"' in capsys.readouterr().err
+    assert '"gtm show" is now "tico strategy show --section how"' in capsys.readouterr().err
 
     assert (
         hubcli.main(
@@ -1956,7 +1956,7 @@ def test_the_retired_gtm_and_growth_idea_lines_run_their_new_commands_with_a_not
         "--label",
         "channel:door",
     ]
-    assert '"hub growth idea create" is now "hub task create --type idea"' in capsys.readouterr().err
+    assert '"tico growth idea create" is now "tico task create --type idea"' in capsys.readouterr().err
     assert hubcli.main(["growth", "idea", "list", "--status", "testing", "--channel", "referral"]) == 0
     assert ran[-1] == ["task", "list", "--type", "idea", "--step", "Live", "--label", "channel:referral"]
     assert (
@@ -2053,7 +2053,7 @@ def test_call_commands_run_the_call_tools_on_their_routes(monkeypatch):
 
 
 def test_thread_delete_runs_the_message_delete_route(monkeypatch):
-    """`hub thread delete` runs `hub_thread_delete`: DELETE on the message, with no body."""
+    """`tico thread delete` runs `tico_thread_delete`: DELETE on the message, with no body."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2066,7 +2066,7 @@ def test_thread_delete_runs_the_message_delete_route(monkeypatch):
 
 
 def test_thread_upload_streams_the_file_to_the_thread_message_route(monkeypatch, tmp_path):
-    """`hub thread upload` runs `hub_thread_upload`: the file is streamed (never read whole) as multipart to the thread's
+    """`tico thread upload` runs `tico_thread_upload`: the file is streamed (never read whole) as multipart to the thread's
     upload route, with the text and reply target as form fields."""
     from pathlib import Path
     from unittest.mock import Mock
@@ -2096,7 +2096,7 @@ def test_thread_upload_streams_the_file_to_the_thread_message_route(monkeypatch,
 
 
 def test_thread_slack_resume_posts_to_the_link_resume_route(monkeypatch):
-    """`hub thread slack-resume` runs `hub_thread_slack_resume`: POST on the link's resume route, as the person asking."""
+    """`tico thread slack-resume` runs `tico_thread_slack_resume`: POST on the link's resume route, as the person asking."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2109,7 +2109,7 @@ def test_thread_slack_resume_posts_to_the_link_resume_route(monkeypatch):
 
 
 def test_rules_withdraw_posts_an_empty_body_to_the_hold_withdraw_route(monkeypatch):
-    """`hub rules withdraw <hold-id>` runs `hub_rules_withdraw`: POST rule-holds/{id}/withdraw with an empty body."""
+    """`tico rules withdraw <hold-id>` runs `tico_rules_withdraw`: POST rule-holds/{id}/withdraw with an empty body."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2122,7 +2122,7 @@ def test_rules_withdraw_posts_an_empty_body_to_the_hold_withdraw_route(monkeypat
 
 
 def test_assistant_withdraw_posts_the_reason_to_the_card_route(monkeypatch):
-    """`hub assistant withdraw <id> --reason ...` runs `hub_assistant_withdraw`: POST assistant/actions/{id}/withdraw."""
+    """`tico assistant withdraw <id> --reason ...` runs `tico_assistant_withdraw`: POST assistant/actions/{id}/withdraw."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2135,7 +2135,7 @@ def test_assistant_withdraw_posts_the_reason_to_the_card_route(monkeypatch):
 
 
 def test_assistant_proposals_lists_the_callers_waiting_cards(monkeypatch):
-    """`hub assistant proposals` runs `hub_assistant_proposals`: GET assistant/proposals."""
+    """`tico assistant proposals` runs `tico_assistant_proposals`: GET assistant/proposals."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2148,7 +2148,7 @@ def test_assistant_proposals_lists_the_callers_waiting_cards(monkeypatch):
 
 
 def test_tool_index_reaches_the_tool_index_route_with_its_paging(monkeypatch):
-    """`hub tool index --limit 5 --cursor c2` runs `hub_tool_index`: GET tool-index with the page."""
+    """`tico tool index --limit 5 --cursor c2` runs `tico_tool_index`: GET tool-index with the page."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2188,7 +2188,7 @@ def test_task_check_back_reaches_the_same_api_from_cli_and_mcp(monkeypatch):
 
 
 def test_the_background_card_names_its_person_on_the_wire(monkeypatch):
-    """`hub assistant propose --for human:<id>` reaches the server as the body's `for`: remotecli.run used to drop it."""
+    """`tico assistant propose --for human:<id>` reaches the server as the body's `for`: remotecli.run used to drop it."""
     from clients import hubcli, remotecli
 
     client = mock.Mock()
@@ -2232,7 +2232,7 @@ def test_a_propose_without_for_sends_no_recipient(monkeypatch):
 
 
 def test_the_morning_message_posts_its_person_and_body_to_the_assistant(monkeypatch):
-    """`hub assistant morning --for human:<id> --body <text>` reaches the server as assistant/morning with both fields."""
+    """`tico assistant morning --for human:<id> --body <text>` reaches the server as assistant/morning with both fields."""
     from clients import hubcli, remotecli
 
     client = mock.Mock()
@@ -2247,8 +2247,8 @@ def test_the_morning_message_posts_its_person_and_body_to_the_assistant(monkeypa
 
 
 def test_approval_list_is_the_pending_default_and_the_mcp_tool_matches(monkeypatch):
-    """`hub approval list` runs `approval list` (GET approvals, pending by default, with --from/--since passed through),
-    and the MCP tool `hub_approval_list` takes the same arguments."""
+    """`tico approval list` runs `approval list` (GET approvals, pending by default, with --from/--since passed through),
+    and the MCP tool `tico_approval_list` takes the same arguments."""
     from clients import remotecli, hubtools
     from unittest.mock import Mock
 
@@ -2257,7 +2257,7 @@ def test_approval_list_is_the_pending_default_and_the_mcp_tool_matches(monkeypat
     monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
     args = hubcli.parser().parse_args(["approval", "list"])
-    assert args.fn == "approval list" and remotecli.tool_name(args.fn) == "hub_approval_list"
+    assert args.fn == "approval list" and remotecli.tool_name(args.fn) == "tico_approval_list"
     remotecli.run(args)
     client.get.assert_called_with("approvals", status="pending", limit=20, offset=0)
     remotecli.run(
@@ -2279,7 +2279,7 @@ def test_approval_list_is_the_pending_default_and_the_mcp_tool_matches(monkeypat
     client.get.assert_called_with(
         "approvals", status="declined", limit=5, offset=0, **{"from": "bot:finance"}, since="2026-10-01"
     )
-    tool = hubtools.BY_NAME["hub_approval_list"]
+    tool = hubtools.BY_NAME["tico_approval_list"]
     assert set(tool["inputSchema"]["properties"]) == {"status", "from", "before", "since", "limit", "offset"}
     tool["fn"](client, {"from": "bot:finance", "since": "2026-10-01"})
     client.get.assert_called_with(
@@ -2300,8 +2300,8 @@ def test_approval_list_is_the_pending_default_and_the_mcp_tool_matches(monkeypat
     ],
 )
 def test_an_alias_runs_the_same_calls_as_the_command_it_names(alias, canonical, monkeypatch):
-    """The parser keeps the spelling typed, so dispatch renames an alias first: `hub tasks list` makes the calls of
-    `hub task list` and never reaches the "unsupported" fallback."""
+    """The parser keeps the spelling typed, so dispatch renames an alias first: `tico tasks list` makes the calls of
+    `tico task list` and never reaches the "unsupported" fallback."""
     from clients import remotecli
     from unittest.mock import MagicMock
 
@@ -2316,8 +2316,8 @@ def test_an_alias_runs_the_same_calls_as_the_command_it_names(alias, canonical, 
 
 
 def test_maintenance_status_reads_the_one_maintenance_tool(monkeypatch):
-    """`hub maintenance status` has no tool of its own: its command name is hub_maintenance_status only in the parser's
-    listing (CLI_TOOL_ALIASES), so the dispatch must name the tool that exists, hub_maintenance."""
+    """`tico maintenance status` has no tool of its own: its command name is hub_maintenance_status only in the parser's
+    listing (CLI_TOOL_ALIASES), so the dispatch must name the tool that exists, tico_maintenance."""
     from clients import remotecli
 
     reads = []
@@ -2357,4 +2357,4 @@ def test_personal_alert_cli_keeps_paid_test_identity_and_explicit_consent(monkey
     args = hubcli.parser().parse_args(["alerts", "verify", "+14155550123", "--sms-consent", "--call-consent"])
     remotecli.run(args)
     assert api.calls[-1][1] == {"phone": "+14155550123", "sms_consent": True, "call_consent": True}
-    assert "hub_alerts_test" not in {t["name"] for t in hubtools.listing(kind="botops")}
+    assert "tico_alerts_test" not in {t["name"] for t in hubtools.listing(kind="botops")}

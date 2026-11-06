@@ -437,7 +437,7 @@ def test_the_gate_fails_open():
     )
 
 
-def test_the_weekly_audit_samples_skips_in_hub_sql(api):
+def test_the_weekly_audit_samples_skips_in_tico_sql(api):
     setup(api)
     with api.app.state.store.transaction() as c:
         task, _ = parked_task(c)

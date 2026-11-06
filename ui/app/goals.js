@@ -6,7 +6,7 @@
 // The Goals page is one tree: the team, then every human and bot as the team chart nests them,
 // one line each with their goal (ui/goals-kpis.js draws it and the panel a tap opens). A goal's level
 // comes from its owner: `company`, a human or a bot. Its parent is optional ("Supports"); a goal with
-// none is simply not linked. A bot reads its own with `hub goal list`; nothing here is pushed into a run.
+// none is simply not linked. A bot reads its own with `tico goal list`; nothing here is pushed into a run.
 let GOALS_ST = null;
 const goalBuiltInOwner = actor => String(actor || '').startsWith('bot:') && isBuiltInBot(actor.slice(4));
 const goalLive = g => !['done', 'dropped'].includes(g.status);

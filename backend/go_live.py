@@ -47,7 +47,7 @@ def fail(c, key, bot, record, code, notice):
         try:
             label = (H.bot(c, bot) or {}).get("slug", bot)
             H.say(
-                c, H.KEEPER, actor, notice + f" Run `hub bot go-live {label}` again once that is fixed.", kind="notice"
+                c, H.KEEPER, actor, notice + f" Run `tico bot go-live {label}` again once that is fixed.", kind="notice"
             )
         except H.Refused as exc:
             H.event(c, H.KEEPER, "bot.go_live_notice_refused", bot, {"reason": str(exc)[:300]})

@@ -143,7 +143,7 @@ def test_a_bot_puts_its_default_on_a_question_and_a_past_or_far_deadline_is_refu
     by = (datetime.now(pacific) + timedelta(days=5)).replace(hour=9, minute=0, second=0, microsecond=0)
     err, out = call(
         api,
-        "hub_task_question",
+        "tico_task_question",
         {
             "question": "Archive the September drafts?",
             "on": "ana",
@@ -161,7 +161,7 @@ def test_a_bot_puts_its_default_on_a_question_and_a_past_or_far_deadline_is_refu
     }
     err, out = call(
         api,
-        "hub_task_question",
+        "tico_task_question",
         {
             "question": "Archive the August drafts?",
             "on": "ana",
@@ -172,7 +172,7 @@ def test_a_bot_puts_its_default_on_a_question_and_a_past_or_far_deadline_is_refu
     assert err and "already past" in str(out)
     err, out = call(
         api,
-        "hub_task_question",
+        "tico_task_question",
         {
             "question": "Archive the July drafts?",
             "on": "ana",

@@ -8,7 +8,7 @@ checklist a human can run in an afternoon. Nothing is run against production and
 
 ## 1. Read what is changing
 
-    hub task show <id>
+    tico task show <id>
     gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,files,labels
     gh pr view <n> -R <repo>
 
@@ -40,6 +40,6 @@ the product's core flows if it does not exist), plus any flow a recent bug broke
 Write `reports/test-plans/<release>.md`: headline (the three riskiest changes), the ranked table (change,
 risk, why, cases), the cases, the checklist, and what you could not read. A case no one has run is marked not run,
 never passed. Done when every change in the window is in the table or named as not read, each top risk has a
-negative case, and the plan is published and attached to the task. `hub file publish` it, attach it
-to the task, commit, then `hub task update <id> --status done --note`. A human runs the plan and records
+negative case, and the plan is published and attached to the task. `tico file publish` it, attach it
+to the task, commit, then `tico task update <id> --status done --note`. A human runs the plan and records
 the results; a failed case becomes a proposed issue in your next triage pass.

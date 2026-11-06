@@ -1,12 +1,11 @@
-"""scripts/tico hands this computer's commands to scripts/tico-computer and everything else to scripts/hub.
-
-Customers' ~/.local/bin/tico is a symlink to a checkout's scripts/tico, and a scripts/tico from before tico-computer
-ends `update` with `exec "$SELF" [-e ENV] restart all`, where $SELF is the path that now holds the dispatcher. These
-run the real scripts from a temporary checkout, through that symlink.
+"""scripts/tico is the teamwork CLI (R1). It refuses this computer's commands with a pointer to tico-computer, and
+scripts/hub forwards to it with one notice. An update from R0 (its bash scripts/tico, embedded below) still ends with
+tico-computer restart through the new checkout, and the next update is tico-computer's by name.
 """
 
 import json
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -15,9 +14,33 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-DISPATCH = ROOT / 'scripts' / 'tico'
+TICO = ROOT / 'scripts' / 'tico'
+HUB = ROOT / 'scripts' / 'hub'
 COMPUTER = ROOT / 'scripts' / 'tico-computer'
-OLD_EXEC = 'if [ -n "$ENV_SLUG" ]; then exec "$SELF" -e "$ENV_SLUG" restart all; else exec "$SELF" restart all; fi\n'
+NOTICE = 'hub: "hub" is now "tico"; the old name stops working in the next release'
+
+# R0's scripts/tico, the bash dispatcher that shipped before R1 (git show of that release).
+R0_TICO = '''#!/usr/bin/env bash
+# `tico`: this computer's commands go to scripts/tico-computer, everything else to scripts/hub (the teamwork CLI).
+# Usage: tico [-e ENV] install|uninstall|restart|status|doctor|logs|update|open|env|enroll|profile|screen|server|help ...
+#        tico [-e ENV] bot create ...      the same as tico-computer ... (see scripts/tico-computer help)
+#        tico update list|show|create|reply ...   the bots' updates: hub update ... (a bare tico update updates Tico)
+#        tico <anything else>              the same as hub <anything else>: tico task list = hub task list
+# A scripts/tico from before tico-computer ends `update` with `scripts/tico [-e ENV] restart all`: that lands here.
+set -euo pipefail
+
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"   # ~/.local/bin/tico is a symlink here
+DIR="$(dirname "$SELF")"
+
+case "${1:-help}" in
+  # Only the computer commands take an environment.
+  -e|--env|-e=*|--env=*|install|uninstall|restart|status|doctor|logs|open|env|enroll|profile|screen|server|help|-h|--help)
+    exec "$DIR/tico-computer" "$@" ;;
+  bot) [ "${2:-}" != create ] || exec "$DIR/tico-computer" "$@" ;;
+  update) [ $# -gt 1 ] || exec "$DIR/tico-computer" "$@" ;;
+esac
+exec "$DIR/hub" "$@"
+'''
 
 
 def stub(path, name):
@@ -25,55 +48,79 @@ def stub(path, name):
     path.chmod(0o755)
 
 
-@pytest.fixture
-def linked(tmp_path):
-    """A checkout's scripts/ with the real dispatcher and stand-ins for both commands, and ~/.local/bin/tico to it."""
-    scripts = tmp_path / 'checkout' / 'scripts'
-    scripts.mkdir(parents=True)
-    shutil.copy2(DISPATCH, scripts / 'tico')
-    stub(scripts / 'tico-computer', 'computer')
-    stub(scripts / 'hub', 'hub')
+def command_home(tmp_path, name, target):
+    """A ~/.local/bin with `name` linked to `target`, as the installer links it."""
     bin_dir = tmp_path / 'home' / '.local' / 'bin'
-    bin_dir.mkdir(parents=True)
-    (bin_dir / 'tico').symlink_to(scripts / 'tico')
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    (bin_dir / name).symlink_to(target)
+    return bin_dir / name
 
-    def run(*args):
-        done = subprocess.run(
-            [str(bin_dir / 'tico'), *args],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env={'PATH': os.environ.get('PATH', os.defpath), 'HOME': str(tmp_path / 'home')},
-        )
-        assert done.returncode == 0, done.stderr
-        return done.stdout.strip()
 
-    return run
+def run(cmd, *args, env=None):
+    return subprocess.run(
+        [str(cmd), *args],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env or {'PATH': os.environ.get('PATH', os.defpath), 'HOME': os.environ.get('HOME', '')},
+    )
+
+
+@pytest.fixture
+def tico(tmp_path):
+    return command_home(tmp_path, 'tico', TICO)
 
 
 @pytest.mark.parametrize(
-    'args, ran',
+    'args',
     [
-        (['install'], 'computer: install'),
-        (['restart', 'all'], 'computer: restart all'),
-        (['-e', 'acme', 'restart', 'all'], 'computer: -e acme restart all'),
-        (['--env=acme', 'status'], 'computer: --env=acme status'),
-        (['-e', 'acme', 'task', 'list'], 'computer: -e acme task list'),  # an environment is only ever the computer's
-        (['update'], 'computer: update'),
-        (['-e', 'acme', 'update'], 'computer: -e acme update'),
-        (['update', 'list'], 'hub: update list'),  # the bots' daily updates
-        (['doctor'], 'computer: doctor'),
-        (['env', 'list'], 'computer: env list'),
-        (['bot', 'create', 'ops'], 'computer: bot create ops'),
-        ([], 'computer:'),
-        (['help'], 'computer: help'),
-        (['task', 'list'], 'hub: task list'),
-        (['bot', 'list'], 'hub: bot list'),
-        (['thread', 'post', '--', '-e'], 'hub: thread post -- -e'),
+        ['install'],
+        ['restart', 'all'],
+        ['-e', 'acme', 'restart', 'all'],
+        ['--env=acme', 'status'],
+        ['-e', 'acme', 'task', 'list'],  # an environment is only ever the computer's
+        ['update'],
+        ['-e', 'acme', 'update'],
+        ['doctor'],
+        ['env', 'list'],
+        ['logs', 'bot'],
+        ['server', 'start'],
     ],
 )
-def test_computer_commands_go_to_tico_computer_and_the_rest_to_hub(linked, args, ran):
-    assert linked(*args) == ran
+def test_a_computer_command_is_refused_with_its_tico_computer_name(tico, args):
+    done = run(tico, *args)
+    assert done.returncode == 2, done.stdout + done.stderr
+    assert done.stderr.strip() == f'tico: moved to tico-computer {" ".join(args)}'
+    assert done.stdout == ''
+
+
+def test_the_teamwork_commands_are_not_refused():
+    moved = runpy.run_path(str(TICO), run_name='tico_module')['moved']
+    for argv in (
+        ['task', 'list'],
+        ['bot', 'create', 'ops'],  # a bot is registered with the company, as it always was
+        ['update', 'list'],  # the bots' updates stay teamwork
+        ['update', 'show', '7'],
+        ['update', 'reply', '7'],
+        ['message', 'send', 'ops', 'hi'],
+        [],
+    ):
+        assert moved(argv) is None, argv
+
+
+def test_hub_forwards_to_tico_with_one_notice(tmp_path):
+    hub = command_home(tmp_path, 'hub', HUB)
+    done = run(hub, '--version')
+    assert done.returncode == 0, done.stderr
+    assert done.stderr == NOTICE + '\n'
+    assert done.stdout.strip()
+
+
+def test_hub_forwards_a_refused_computer_command_with_the_notice_too(tmp_path):
+    hub = command_home(tmp_path, 'hub', HUB)
+    done = run(hub, 'install')
+    assert done.returncode == 2
+    assert done.stderr == NOTICE + '\ntico: moved to tico-computer install\n'
 
 
 def git(cwd, *args):
@@ -87,33 +134,25 @@ def git(cwd, *args):
     )
 
 
-def test_an_update_by_the_old_scripts_tico_restarts_through_the_dispatcher_and_links_tico_computer(tmp_path):
-    # The old script is today's tico-computer as it was before the move: `update` re-runs "$SELF" for the restart and
-    # links nothing.
-    old = COMPUTER.read_text()
-    new_exec = old[old.index('    if [ -n "$ENV_SLUG" ]; then exec "$HUB/scripts/tico-computer"') :]
-    new_exec = new_exec[: new_exec.index('    ;;\n')]
-    assert old.count(new_exec) == 1 and old.count('    link_commands tico-computer\n    # exec:') == 1
-    old = old.replace(new_exec, '    ' + OLD_EXEC).replace(
-        '    link_commands tico-computer\n    # exec:', '    # exec:'
-    )
-
+def test_an_update_from_r0_ends_with_tico_computer_restart_and_the_next_update_is_tico_computer(tmp_path):
     source, checkout, home = tmp_path / 'source', tmp_path / 'checkout', tmp_path / 'home'
     (source / 'scripts').mkdir(parents=True)
-    (source / 'scripts' / 'tico').write_text(old)
+    (source / 'scripts' / 'tico').write_text(R0_TICO)
     (source / 'scripts' / 'tico').chmod(0o755)
+    shutil.copy2(COMPUTER, source / 'scripts' / 'tico-computer')
+    stub(source / 'scripts' / 'hub', 'hub')
     git(source, 'init', '-q', '-b', 'main')
     git(source, 'add', '-A')
-    git(source, 'commit', '-q', '-m', 'R-1')
-    git(tmp_path, 'clone', '-q', str(source), str(checkout))
-    for name in ('tico', 'tico-computer'):
-        shutil.copy2(ROOT / 'scripts' / name, source / 'scripts' / name)
-    stub(source / 'scripts' / 'hub', 'hub')
-    git(source, 'add', '-A')
     git(source, 'commit', '-q', '-m', 'R0')
+    git(tmp_path, 'clone', '-q', str(source), str(checkout))
 
-    (home / '.local' / 'bin').mkdir(parents=True)
-    (home / '.local' / 'bin' / 'tico').symlink_to(checkout / 'scripts' / 'tico')
+    # R1 lands on the remote; the installed checkout is still R0 until the update pulls it.
+    for name in ('tico', 'hub', 'tico-computer'):
+        shutil.copy2(ROOT / 'scripts' / name, source / 'scripts' / name)
+    git(source, 'add', '-A')
+    git(source, 'commit', '-q', '-m', 'R1')
+
+    tico_cmd = command_home(tmp_path, 'tico', checkout / 'scripts' / 'tico')  # R0's dispatcher is the installed `tico`
     envs = tmp_path / 'environments'
     (envs / 'acme').mkdir(parents=True)
     (envs / 'acme' / 'environment.json').write_text(json.dumps({'url': 'https://acme.example', 'id': 'env_acme'}))
@@ -131,30 +170,25 @@ def test_an_update_by_the_old_scripts_tico_restarts_through_the_dispatcher_and_l
         'GIT_CONFIG_NOSYSTEM': '1',
     }
 
-    def update(*args):
-        done = subprocess.run(
-            [str(home / '.local' / 'bin' / 'tico'), *args, 'update'],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=120,
-        )
-        assert done.returncode == 0, done.stdout + done.stderr
-        return done.stdout
-
-    out = update('-e', 'acme')
+    done = run(tico_cmd, '-e', 'acme', 'update', env=env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    out = done.stdout
     assert 'updated ' in out
     # No job is installed here, so tico-computer's restart says so for each: it ran, with the environment.
     for kind in ('bot', 'connectors', 'close-calls', 'importers'):
         assert f'{kind}: not installed' in out
-    assert (checkout / 'scripts' / 'tico-computer').is_file()
+    assert 'linked ~/.local/bin/tico-computer' in out
     link = home / '.local' / 'bin' / 'tico-computer'
     assert link.is_symlink() and link.resolve() == (checkout / 'scripts' / 'tico-computer').resolve()
-    assert 'linked ~/.local/bin/tico-computer' in out
 
-    # The next update runs the new script, which restarts with tico-computer by name.
-    (source / 'NOTES').write_text('R0.1\n')
+    # The new `tico` is the teamwork CLI, so its bare `update` is refused with the name that does it now.
+    refused = run(tico_cmd, 'update', env=env)
+    assert refused.returncode == 2 and refused.stderr.strip() == 'tico: moved to tico-computer update'
+
+    # The next update runs by tico-computer's name, and restarts through the checkout's script.
+    (source / 'NOTES').write_text('R1.1\n')
     git(source, 'add', '-A')
-    git(source, 'commit', '-q', '-m', 'R0.1')
-    out = update()
-    assert 'updated ' in out and 'importers: not installed' in out and 'linked' not in out
+    git(source, 'commit', '-q', '-m', 'R1.1')
+    done = run(link, 'update', env=env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert 'updated ' in done.stdout and 'importers: not installed' in done.stdout and 'linked' not in done.stdout

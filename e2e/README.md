@@ -104,7 +104,7 @@ not from these kinds.
 | Webhooks and triggers | `backend/tests/test_e2e_webhooks.py` (generic JSON, signed delivery) | No Make-shaped payload: no backend code names Zapier or Make, so it would run the same path |
 | Integrations | `backend/tests/test_vendor_contracts.py` (HQ billing and storage, Stripe, QuickBooks, Xero, Slack, GitHub), `test_granola_recorded_shapes.py`, `test_mail_api.py`, `test_google_connect.py` | Mail and Google only against their unit fakes |
 | Templates | `backend/tests/test_e2e_templates.py` | |
-| `hub sql` | `backend/tests/test_sql_parity.py` (each caller sees what the API shows it; a reassigned bot is refused), `test_sql_scale.py` | Not an e2e kind; the stable query set is not run against an upgraded backup copy |
+| `tico sql` | `backend/tests/test_sql_parity.py` (each caller sees what the API shows it; a reassigned bot is refused), `test_sql_scale.py` | Not an e2e kind; the stable query set is not run against an upgraded backup copy |
 | Upgrade, interrupted | Unit: `backend/tests/test_migrations.py` (a failed migration rolls back and runs once fixed), `test_upgrade.py` | No process killed partway through an upgrade of a real backup |
 | Hosted | not built | Needs staging HQ |
 | Mac app | not built | macOS GUI, pairing |

@@ -880,7 +880,7 @@ def test_owner_mcp_product_repository_tool_previews_confirms_and_replays(api, gh
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
-                "params": {"name": "hub_repo_product_create", "arguments": arguments},
+                "params": {"name": "tico_repo_product_create", "arguments": arguments},
             },
             headers=auth(),
         )
@@ -1290,7 +1290,7 @@ def test_a_new_bot_goes_live_first_on_the_computer_that_built_it(api, gh):
     assert refused.status_code == 409, refused.text
     error = refused.json()["error"]
     assert error["code"] == "history_elsewhere"
-    assert "built on mac" in error["detail"] and 'hub bot go-live newbie --computer "mac"' in error["detail"]
+    assert "built on mac" in error["detail"] and 'tico bot go-live newbie --computer "mac"' in error["detail"]
     assert not _placed(api)
     waiting = _go_live(api)
     assert waiting.status_code == 202 and waiting.json()["computer"] == "mac", waiting.text

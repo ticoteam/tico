@@ -13,7 +13,7 @@ The outcome is the cause, the first bad commit, and the fix or the owner. You re
 
 ## Steps
 
-1. **Find the first failure.** `hub task show <id>`, then the run list above. Walk back to the last green run. The first
+1. **Find the first failure.** `tico task show <id>`, then the run list above. Walk back to the last green run. The first
    red run after it bounds the commit range to look at.
 2. **Read the log.** Read the first failing step, not the last one: later steps often fail because an earlier one left
    state behind. Classify the failure with `skills/classify-a-failed-run/SKILL.md`: product bug, flaky test,
@@ -36,4 +36,4 @@ On the task, four lines:
 
 - The cause is named, or the log is named as unreadable with the reason.
 - The first bad run and commit are linked, or the commit range is given with the reason it could not be narrowed.
-- The task is closed with `hub task update <id> --status done --note`.
+- The task is closed with `tico task update <id> --status done --note`.

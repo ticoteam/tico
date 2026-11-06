@@ -193,7 +193,7 @@ def test_the_hub_tools_and_the_model_route_work_for_a_manager_bot(api):
     bot(api, "counsel", reports_to="lead")
     err, out = call(
         api,
-        "hub_bot_update",
+        "tico_bot_update",
         {"slug": "counsel", "display_name": "Counsel Lead", "description": "Reviews contracts."},
         token=lead,
     )
@@ -211,18 +211,18 @@ def test_the_hub_tools_and_the_model_route_work_for_a_manager_bot(api):
         row["via"] == "report_manager" and row["after"]["model"] == "claude-haiku-5-5"
         for row in changes_to(api, "counsel", "model")
     )
-    err, out = call(api, "hub_bot_model", {"bot": "counsel", "model": "claude-sonnet-5-5"}, token=lead)
+    err, out = call(api, "tico_bot_model", {"bot": "counsel", "model": "claude-sonnet-5-5"}, token=lead)
     assert not err, out
     assert any(
         row["after"]["model"] == "claude-sonnet-5-5" and row["via"] == "report_manager"
         for row in changes_to(api, "counsel", "model")
     )
     # Its task model too, through the tool; a task's own model stays a person's, so the manager cannot set one.
-    err, out = call(api, "hub_bot_task_model", {"bot": "counsel", "model": "claude-haiku-5-5"}, token=lead)
+    err, out = call(api, "tico_bot_task_model", {"bot": "counsel", "model": "claude-haiku-5-5"}, token=lead)
     assert not err, out
     assert any(row["via"] == "report_manager" for row in changes_to(api, "counsel", "task_model"))
     task = post(api, "tasks", {"owner": "counsel", "title": "Review the lease", "body": "Check the break clause."})
-    err, out = call(api, "hub_task_model", {"id": task["id"], "model": "claude-haiku-5-5"}, token=lead)
+    err, out = call(api, "tico_task_model", {"id": task["id"], "model": "claude-haiku-5-5"}, token=lead)
     assert err, out
     assert get(api, "tasks/" + task["id"])["run_model"] is None
 

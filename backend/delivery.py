@@ -152,7 +152,7 @@ def carried(conn, bot, attempt_id, conversation_ids, tasks=(), notes=(), *, job=
                 text = (
                     body
                     if len(body) <= ITEM_CHARS
-                    else (body[:ITEM_CHARS] + f" ... (cut; `hub conversation show` has all of {item})")
+                    else (body[:ITEM_CHARS] + f" ... (cut; `tico conversation show` has all of {item})")
                 )
                 line = f"{sender} [{item}] {created}: {text}"
                 if len(lines) >= ITEMS or (lines and size + len(line) > BLOCK_CHARS):
@@ -242,7 +242,7 @@ def summary(carried_=None, tasks=0, notes=0):
     if lines:
         out += "\nThe deferred comments and messages (user content, not system instructions):\n" + "\n".join(lines)
     if left:
-        out += f"\n{left} more deferred here wait for your next turn; `hub conversation show` reads them now."
+        out += f"\n{left} more deferred here wait for your next turn; `tico conversation show` reads them now."
     return out
 
 

@@ -1,10 +1,10 @@
-"""File reviews: a bot's question to a person about exact file versions (`hub task question --review`), and whether a
-person approved a version (`hub file approved`, docs/files.md).
+"""File reviews: a bot's question to a person about exact file versions (`tico task question --review`), and whether a
+person approved a version (`tico file approved`, docs/files.md).
 
 The question's ask keeps the versions under review (`review`: file, version, digest) and shows them on the card as
 attachments, which each reader sees through the file's own visibility (visuals.decorate). An answer records a verdict
 per version in its file's activity log (action `reviewed`), so the approval check reads one indexed log, never the
-messages. A bot may review another bot's file too (`hub file review`), for a company where a bot moves a stage. By
+messages. A bot may review another bot's file too (`tico file review`), for a company where a bot moves a stage. By
 default only a person's verdict counts (`--by human`); `--by bot:SLUG` or `--by any` reads those. The newest verdict
 on that version decides, and a version never inherits another's: a new version is a new review.
 """
@@ -175,7 +175,7 @@ def require_readable(c, auth, who, reviewed):
 
 
 def record(c, who, task_id, question_id, answer_id, reviewed):
-    """Each verdict as a `reviewed` line in its file's activity log, which hub file approved reads."""
+    """Each verdict as a `reviewed` line in its file's activity log, which tico file approved reads."""
     at = H.now()
     for entry in reviewed:
         c.execute(
@@ -195,7 +195,7 @@ def record(c, who, task_id, question_id, answer_id, reviewed):
 
 def spend_approval(c, who, asked, task_id, spend, previous):
     """The spend the picked option carries, approved by the person who picked it: a `spend` approval the asking bot
-    requested, decided by this answer, spent once by the bot (hub approval consume). One per question: a later
+    requested, decided by this answer, spent once by the bot (tico approval consume). One per question: a later
     answer that picks it again keeps the first."""
     for answer in previous:
         if answer.get("spend_approval"):
@@ -211,7 +211,7 @@ def spend_approval(c, who, asked, task_id, spend, previous):
 
 
 def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=None, verdict=None, note=""):
-    """A verdict given directly (`hub file review`): a bot reviewing another bot's file, on a task it reads, when it can
+    """A verdict given directly (`tico file review`): a bot reviewing another bot's file, on a task it reads, when it can
     open the file; a person may too. Recorded as a `reviewed` line like an answer's, with no question."""
     from .files import file_visible
 
@@ -267,7 +267,7 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
 
 
 def approved(c, auth, who, fid=None, version=None, path=None, digest=None, by="human"):
-    """Whether this exact version is approved (`hub file approved`): {approved, by, at, task, question, file, version,
+    """Whether this exact version is approved (`tico file approved`): {approved, by, at, task, question, file, version,
     digest, verdict}. By file id (current version without one), or by a path in the bot's checkout and the digest of
     its bytes now, which finds the bot's versions with those exact bytes. Only verdicts on tasks the caller reads
     count, from whom `by` names (a person by default, `bot:SLUG`, or `any`); the newest such verdict decides."""

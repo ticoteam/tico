@@ -253,7 +253,7 @@ def _own_ask_to_a_person(who, row):
     A turn is granted the conversations its attempt was handed, which for a scheduled routine is
     that routine's task and nothing else. So a routine had no way to ask a person anything --
     `hub question ask ben` came back "outside the current execution context" -- and the bots that run
-    entirely on routines fell back to `hub task create --owner ben`. That put questions on a
+    entirely on routines fell back to `tico task create --owner ben`. That put questions on a
     person's task list in a shape nobody wanted, and made them clear the human-item lint first:
     a bot could spend several attempts getting one title past it, to file something
     that was a question the whole time.
@@ -1176,7 +1176,7 @@ class Auth:
                 "bot_contact",
                 f"{slug} takes work as a task and nothing else (notes only from its manager "
                 "and BotOps). File one "
-                f"with `hub task create --owner {slug}`, say what you want "
+                f"with `tico task create --owner {slug}`, say what you want "
                 "done in the body, and do not wait for it.",
                 403,
             )

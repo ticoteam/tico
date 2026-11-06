@@ -6,7 +6,7 @@ Three things, all in plain code, none asked of a model:
   a second hour if the team wants one, or off. At each hour the Release Manager gets ONE task, "Release: <n> tickets
   at Pending Release", listing them; with nothing at Pending Release nobody is woken. Pending Release arrivals are
   notes, so the Release Manager hears about the tickets only here (or from `release now`).
-- **Release now** (`hub release now`): a person or bot who moves Dev tickets asks for the same task at once, for a
+- **Release now** (`tico release now`): a person or bot who moves Dev tickets asks for the same task at once, for a
   hotfix or a midday release. An unfinished Release task is woken instead of a second one being filed. A PERSON who
   gives a note is heard even with nothing at Pending Release ("Release: requested by <name>", the note and an empty
   listing): work often reaches main as pull requests that were never Dev tickets. A bot, or a person with no note,
@@ -223,7 +223,7 @@ def _task_body(c, tickets, why):
         )
     return (
         f"{why}\n\nAt Pending Release now:\n"
-        + _listing(c, tickets, 'with `hub task list --step "Pending Release"`')
+        + _listing(c, tickets, 'with `tico task list --step "Pending Release"`')
         + "\n\nCut one release for them with your release playbook and docs/releasing.md. When it is published, "
         "Tico wakes each ticket's QA owner and the Technical Writer by itself."
     )

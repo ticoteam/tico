@@ -926,7 +926,7 @@ impl CodexHost {
             crate::mcp::codex_config(&settings.mcp_servers, &settings.env, &self.0.env),
         );
         if let Some(hub) = hub_mcp_server(&settings.env) {
-            servers.insert("hub".into(), hub);
+            servers.insert("tico".into(), hub);
         }
         if !servers.is_empty() {
             cfg.insert("mcp_servers".into(), Value::Object(servers));
@@ -1402,7 +1402,7 @@ mod tests {
             assert_eq!(params["config"][key], false, "{key}");
         }
         assert_eq!(params["config"]["web_search"], "disabled");
-        assert!(params["config"]["mcp_servers"].get("hub").is_none());
+        assert!(params["config"]["mcp_servers"].get("tico").is_none());
     }
 
     #[tokio::test]

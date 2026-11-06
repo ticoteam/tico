@@ -1,4 +1,4 @@
-"""Pipeline stats for a task type in one read (`GET /api/v2/pipeline`, `hub pipeline`, the `hub_pipeline` tool).
+"""Pipeline stats for a task type in one read (`GET /api/v2/pipeline`, `tico pipeline`, the `tico_pipeline` tool).
 
 The tickets are the Tasks board's own read: `H.tasks` over the caller's `Auth.task_sql`, the company lane and the live
 statuses, so a private ticket counts only for a reader who may open it and a closed one never counts. Each step

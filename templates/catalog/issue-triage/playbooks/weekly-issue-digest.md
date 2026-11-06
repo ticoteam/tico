@@ -8,7 +8,7 @@ changes.
 
 ## 1. Read what was decided last time
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/themes.md` and the last digest in `reports/`. If this week's digest exists, update it.
 The watermark is the newest issue number and `updatedAt` you recorded in `state.md`; read only what is
@@ -40,9 +40,9 @@ Write `reports/YYYY-MM-DD-issue-digest.md` in the shape of `knowledge/examples/i
 headline, needs a human today, proposed labels and duplicates by area, waiting on a reporter with the
 drafted question, themes, and what you could not read. Then:
 
-    hub file publish reports/YYYY-MM-DD-issue-digest.md
+    tico file publish reports/YYYY-MM-DD-issue-digest.md
 
-Apply the requested label changes described in `playbooks/triage-an-issue.md` step 6. Tell the recipient with `hub message send --fyi <person> "<one line and the link>"`.
+Apply the requested label changes described in `playbooks/triage-an-issue.md` step 6. Tell the recipient with `tico message send --fyi <person> "<one line and the link>"`.
 
 ## 6. Look back
 
@@ -52,5 +52,5 @@ closed, which missing-information requests got an answer. Each miss, with its is
 
 ## 7. Finish
 
-Update the watermark in `state.md`, commit, then `hub task update <id> --status done --note` with the
+Update the watermark in `state.md`, commit, then `tico task update <id> --status done --note` with the
 headline, counts, and the report path. Always finish it: an open routine task absorbs next Monday's.

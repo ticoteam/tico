@@ -127,7 +127,7 @@ def test_done_task_question_refusal_gives_owner_command_and_nonowner_route(api):
         attempt['token'],
         expected=422,
     )
-    assert f"hub task update {task['id']} --status doing" in result['error']['detail']
+    assert f"tico task update {task['id']} --status doing" in result['error']['detail']
     assert 'or file a new task' in result['error']['detail']
     with api.app.state.store.transaction() as c:
         other = H.task_create(c, 'human:ana', 'Another owners task', 'Leave with its owner.', 'bot:finance', lint=False)

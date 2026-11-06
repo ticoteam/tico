@@ -26,6 +26,6 @@ Run `skills/find-unbilled-work/SKILL.md` for the cycle. Each finding goes to `kn
 
 ## 5. Write the run and hand it over
 
-Write `reports/YYYY-MM-DD-invoice-run.md` in the shape of `knowledge/examples/invoice-run.md` and publish it with `hub file publish`. Issue the ready invoices
+Write `reports/YYYY-MM-DD-invoice-run.md` in the shape of `knowledge/examples/invoice-run.md` and publish it with `tico file publish`. Issue the ready invoices
 only when the task asks for the issue and your Tools allow it. Customer messages stay drafts until a person turns mail sending on in Tico. Commit, then
-`hub task update <id> --status done --note` with ready, held, unbilled and the path.
+`tico task update <id> --status done --note` with ready, held, unbilled and the path.

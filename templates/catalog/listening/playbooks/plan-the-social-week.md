@@ -12,11 +12,11 @@ Done when: two weeks of posts are in `knowledge/social-calendar.md`, each with i
 
 ## 1. Read what is already planned
 
-    hub task show <id>
-    hub calendar list
+    tico task show <id>
+    tico calendar list
 
 Read `knowledge/social-calendar.md`, the last two weeks of sweep digests in `reports/sweeps/`, and
-the Content Marketer's plan if the team has one (`hub update list --bot content`). Launches, events
+the Content Marketer's plan if the team has one (`tico update list --bot content`). Launches, events
 and announcements on the calendar come first; do not invent news.
 
 ## 2. Choose the posts
@@ -41,4 +41,4 @@ The payload lists each post's account, time and exact text. Publish or schedule 
 
 Mark each post drafted, scheduled, published, changed or dropped in `knowledge/social-calendar.md`.
 A correction teaches the voice: add the lesson to `memory/learnings.md`.
-`hub task update <id> --status done --note` with the count planned, published and still drafted.
+`tico task update <id> --status done --note` with the count planned, published and still drafted.

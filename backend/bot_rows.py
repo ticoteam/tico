@@ -45,7 +45,7 @@ class BotRows:
         }
         self.statuses = _by(c, "SELECT * FROM bot_status WHERE bot IN ({})", read)
         self.status_inputs = privacy.status_inputs(c, list(self.statuses))
-        # The queued number of hub pipeline: work that will run, not work fenced behind a run nobody reviewed.
+        # The queued number of tico pipeline: work that will run, not work fenced behind a run nobody reviewed.
         self.queued = {slug: q["queued"] for slug, q in pipeline_stats.job_queues(c, who, read).items()}
         self.next_run = H.next_run_tasks_by(c, read)
         self.notes = H.notes_waiting_counts(c, read, limit=500)

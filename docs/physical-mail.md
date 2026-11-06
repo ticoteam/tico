@@ -103,13 +103,13 @@ null inherits the company default. Caps include Tico-originated letters and unce
 company, plus the optional bot cap, in each UTC month. A failed delivery does not erase spend: HQ's billing state
 must confirm no charge, a void or a reversal. Older HQ responses without billing fields keep the reservation.
 
-Use `hub letter quote --text "..." --recipient '{"name":"Recipient","line1":"2 Main St","city":"Dover","state":"DE","postal_code":"19901"}'`
-(MCP `hub_letter_quote`), or `--file-id` for a PDF already in Tico's upload/media store. ReportLab renders text and
+Use `tico letter quote --text "..." --recipient '{"name":"Recipient","line1":"2 Main St","city":"Dover","state":"DE","postal_code":"19901"}'`
+(MCP `tico_letter_quote`), or `--file-id` for a PDF already in Tico's upload/media store. ReportLab renders text and
 markdown as searchable US Letter text, without fetching images or executing HTML; upload a PDF for characters
 outside its Latin character set. The source PDF may have 1–100 pages and be at most 5 MiB. The result includes the
 page count, live total and a link to HQ's rendered proof, kept in Tico's own blob store.
 
-`hub letter send <letter_id>` (`hub_letter_send`) asks for approval by default. The existing approval card shows the
+`tico letter send <letter_id>` (`tico_letter_send`) asks for approval by default. The existing approval card shows the
 proof, recipient, return address, mail class and total. A bot's manager or an admin decides; decline closes the
 letter. On their own is an explicit company opt-in and still asks for certified mail, courts/agencies, uncertain
 classification, unreadable or truncated PDF text, and the first letter to an address. An incomplete PDF extraction
@@ -134,7 +134,7 @@ retry POST. If sending is no longer allowed, HQ's resolve-by-key capability reco
 abandons the key without printing. Older HQ versions leave the letter in Needs review and keep its hold. Never create
 a replacement for a `submitting` or `needs_review` letter until its existing outcome is confirmed.
 
-`hub letter list`, `hub letter show <id>` and `hub letter cancel <id>` have matching MCP tools and v2 endpoints:
+`tico letter list`, `tico letter show <id>` and `tico letter cancel <id>` have matching MCP tools and v2 endpoints:
 `GET /api/v2/letters`, `GET /api/v2/letters/{id}` and `POST /api/v2/letters/{id}/cancel`. Lists are paged and byte
 capped. Status sync polls each active record with backoff and publishes a permission-filtered `letters` live event
 with the changed row. Cancellation passes through HQ's honest answer; User Credit jobs cannot be cancelled and
@@ -176,7 +176,7 @@ For example, to let a bot whose slug is `legal` read physical mail at every comp
 `PUT /api/v2/postal/settings` with `{"legal_bot_id":"legal"}` to give it future legal-mail tasks while keeping the
 owner informed. Use `DELETE` on the grant's URL to revoke it, and `{"legal_bot_id":null}` to restore owner routing.
 
-Bots and people read letters with `hub mail list` and `hub mail read <id>` (MCP `hub_mail_list`, `hub_mail_read`).
+Bots and people read letters with `tico mail list` and `tico mail read <id>` (MCP `tico_mail_list`, `tico_mail_read`).
 
 ## Personal alerts
 
@@ -204,8 +204,8 @@ same provider idempotency key; it never gets a fresh incident id to bypass dedup
 spend are visible in Alerts settings. Tests bypass quiet hours but still require consent and both spend caps.
 
 These controls use `/api/v2/alerts/me` and `/api/v2/alerts/company`, with `/me/phone`, `/me/phone/confirm` and `/me/test`
-subroutes (see [the v2 contract](openapi/v2.json)). The same actions are `hub alerts show|set|verify|confirm|remove|test|company`
-and MCP's `hub_alerts_*`, offered only to people. `hub alerts test --accept-charge --operation-id <stable-id>` keeps
+subroutes (see [the v2 contract](openapi/v2.json)). The same actions are `tico alerts show|set|verify|confirm|remove|test|company`
+and MCP's `tico_alerts_*`, offered only to people. `tico alerts test --accept-charge --operation-id <stable-id>` keeps
 retries to one paid test. They are personal settings, including in the Tauri app; Slack/BotOps directs you to them.
 HQ must deploy the person-scoped paging API and configure its signed Twilio opt-out webhook before personal
 verification/sending works. Demo and rehearsal mode send nothing.

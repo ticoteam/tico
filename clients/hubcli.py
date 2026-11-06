@@ -4,91 +4,91 @@
 Thin on purpose (docs/history/hub-v2.md §5): parse the arguments, hand them to `clients/remotecli.py`,
 which makes one HTTP call against the Tico API and prints JSON on stdout. Every rule lives on
 the server (`backend/hubdb.py`), never here. A command is its tool's name (clients/hubtools.py) with
-`hub_` dropped: `hub message send` is `hub_message_send`, `hub bot go-live` is `hub_bot_go_live`.
+`hub_` dropped: `tico message send` is `tico_message_send`, `tico bot go-live` is `tico_bot_go_live`.
 
-    hub whoami
-    hub message send <bot|human> "<text>" [--fyi] [--conversation ID] [--ref task:ID ...] [--steer | --queue |
+    tico whoami
+    tico message send <bot|human> "<text>" [--fyi] [--conversation ID] [--ref task:ID ...] [--steer | --queue |
                     --defer [30m|4h|2d|never]] [--needs-action]
                                            --fyi: expects no reply, takes no conversation or references; to a bot,
                                            --steer goes into its running turn, --queue right after it, --defer with
                                            its next turn (at the latest after the time given)
-    hub message list                       what waits for you
-    hub message mark-read <message-id>     an external agent's own delivery
-    hub message redact <message-id> [--label L]   take a secret (read from stdin) out of a message
-    hub thread catchup <thread-id> [--thread-only]
+    tico message list                       what waits for you
+    tico message mark-read <message-id>     an external agent's own delivery
+    tico message redact <message-id> [--label L]   take a secret (read from stdin) out of a message
+    tico thread catchup <thread-id> [--thread-only]
                                            what is new in a thread and its sub-threads you may read, summarized into
                                            your Assistant DM (the newest 40 messages; nothing new posts nothing)
-    hub conversation show <conversation-id> [--before MSG] [--since TIME]
+    tico conversation show <conversation-id> [--before MSG] [--since TIME]
                                            what was said in a conversation: the newest 200, oldest
                                            first; has_more says there is an older page, --before
                                            its next_before reads it. The run's prompt names it
-    hub thread list [--with ACTOR] [--cursor C] [--limit N]   your threads: needs attention, then unread, then recent;
+    tico thread list [--with ACTOR] [--cursor C] [--limit N]   your threads: needs attention, then unread, then recent;
                                                DMs apart; --with: only the threads shared with that actor
-    hub thread show <thread> [--cursor C] [--flat]   one thread in tree order: a message's sub-thread sits under it
+    tico thread show <thread> [--cursor C] [--flat]   one thread in tree order: a message's sub-thread sits under it
                                                (--flat: it and its open sub-threads as one list in time order)
-    hub thread home <actor>                    a teammate's Home thread, made on first use (needs Read on them)
-    hub thread dm <actor>                      your DM with one person or bot: the open one, or a new one (needs Write)
-    hub thread dm-group <actor> <actor> [...] [--body "<text>"] [--title T]   a group DM with these people or bots;
+    tico thread home <actor>                    a teammate's Home thread, made on first use (needs Read on them)
+    tico thread dm <actor>                      your DM with one person or bot: the open one, or a new one (needs Write)
+    tico thread dm-group <actor> <actor> [...] [--body "<text>"] [--title T]   a group DM with these people or bots;
                                                --body is the first message; a new one with 2+ others needs --title
-    hub thread create ["<title>"] [--audience members|team|company|personal] [--group G] [--member ACTOR ...]
+    tico thread create ["<title>"] [--audience members|team|company|personal] [--group G] [--member ACTOR ...]
                     [--body "<text>"] [--pin-for-members]   the first message goes in with --body; a title is needed
                                                unless it is a DM with one teammate
-    hub thread pin|unpin <thread>              pin a thread for yourself, or unpin it (even one pinned for everyone)
-    hub thread catch-up [--cursor C] [--limit N]   each thread with something new for you, mentions first, with its
-                                               new messages; mark one read with hub thread read <thread> --all
-    hub thread post <thread> "<text>" [--to ACTOR] [--reply-to MESSAGE] [--ref KIND:ID ...]
+    tico thread pin|unpin <thread>              pin a thread for yourself, or unpin it (even one pinned for everyone)
+    tico thread catch-up [--cursor C] [--limit N]   each thread with something new for you, mentions first, with its
+                                               new messages; mark one read with tico thread read <thread> --all
+    tico thread post <thread> "<text>" [--to ACTOR] [--reply-to MESSAGE] [--ref KIND:ID ...]
                                                --reply-to answers that message: yours stays in the thread, quoting it
-    hub thread bot-status <thread>             the bots it waits on: working, up next or can't reply, and why
-    hub thread reply <thread> <message> "<text>"   a separate side topic in that message's sub-thread (to answer a
+    tico thread bot-status <thread>             the bots it waits on: working, up next or can't reply, and why
+    tico thread reply <thread> <message> "<text>"   a separate side topic in that message's sub-thread (to answer a
                                                message, post --reply-to)
-    hub thread edit <message> "<text>"         edit a message you wrote: a new revision
-    hub thread sub <message>                   open a message's sub-thread without posting
-    hub thread react|unreact <message-id> <emoji>   your reaction to a message, such as :+1:
-    hub thread open-earlier <thread>           a bot's manager opens its earlier messages to its Home readers
-    hub thread task <message-id> --title T --owner O   a task from a message: private unless the thread is company-wide
-    hub thread delete <message-id>             delete a message you wrote (a marker stays)
-    hub thread upload <thread> <file> [--text T] [--to ACTOR] [--under MESSAGE]   a file in a message
-    hub thread follow|unfollow <thread> [--notify live|mentions|digest|muted]
-    hub thread read <thread> [--seq N | --all]
-    hub thread search "<words>" [--cursor C]   the messages in threads you can read
-    hub thread members list|add|remove <thread> [<actor>] [--owner]   actors: human:<id>, bot:<slug>, group:<id>
-    hub thread update <thread> [--title T] [--archive|--unarchive] [--audience ...] [--group G] [--keep-days N|--keep-forever]
+    tico thread edit <message> "<text>"         edit a message you wrote: a new revision
+    tico thread sub <message>                   open a message's sub-thread without posting
+    tico thread react|unreact <message-id> <emoji>   your reaction to a message, such as :+1:
+    tico thread open-earlier <thread>           a bot's manager opens its earlier messages to its Home readers
+    tico thread task <message-id> --title T --owner O   a task from a message: private unless the thread is company-wide
+    tico thread delete <message-id>             delete a message you wrote (a marker stays)
+    tico thread upload <thread> <file> [--text T] [--to ACTOR] [--under MESSAGE]   a file in a message
+    tico thread follow|unfollow <thread> [--notify live|mentions|digest|muted]
+    tico thread read <thread> [--seq N | --all]
+    tico thread search "<words>" [--cursor C]   the messages in threads you can read
+    tico thread members list|add|remove <thread> [<actor>] [--owner]   actors: human:<id>, bot:<slug>, group:<id>
+    tico thread update <thread> [--title T] [--archive|--unarchive] [--audience ...] [--group G] [--keep-days N|--keep-forever]
                     [--pin-for-everyone|--unpin-for-everyone]   a pin for everyone: its starter or an admin
-    hub thread link-slack <thread> [<channel>] [--history] [--off]
+    tico thread link-slack <thread> [<channel>] [--history] [--off]
                                            a thread's Slack link (admins): with a channel, asks for it and Tico
                                            checks it; --history also brings the channel's earlier messages; --off
                                            takes it away; with the thread alone, lists its links
-    hub thread slack-resume <link-id>          check a suspended or refused Slack link again (admins)
-    hub note create <bot> "<text>" [--text-file f] [--defer 4h]  a deferred message: wakes nobody; the bot's next
+    tico thread slack-resume <link-id>          check a suspended or refused Slack link again (admins)
+    tico note create <bot> "<text>" [--text-file f] [--defer 4h]  a deferred message: wakes nobody; the bot's next
                                            run reads it (with --defer, a run starts by then if none came)
-    hub note list [--to me|X] [--from me|X] [--since 24h|ISO] [--waiting]   notes, newest first
-    hub note delete <id>                   take back a note no run has carried yet
-    hub feedback give message|task|approval <id> up|down [--reason R] [--tell-bot]   a person's 👍/👎 on a bot's work;
+    tico note list [--to me|X] [--from me|X] [--since 24h|ISO] [--waiting]   notes, newest first
+    tico note delete <id>                   take back a note no run has carried yet
+    tico feedback give message|task|approval <id> up|down [--reason R] [--tell-bot]   a person's 👍/👎 on a bot's work;
                                            again replaces it; --tell-bot (👎) leaves the bot a note
-    hub feedback remove <id>               take back your feedback (and its note, if no run carried it)
-    hub feedback markers message|task|approval <id> [<id>...]   your feedback on these and everyone's up/down counts
-    hub feedback list [--bot B] [--rating up|down] [--since 7d] [--cursor C] [--limit N]   newest first
-    hub feedback reasons                   your five latest distinct reasons
-    hub feedback rule-draft <id>           a one-sentence rule drafted from your 👎; stores nothing
-    hub feedback rule <id> "<text>" [--all-bots]   your 👎 as an org rule: active if you manage the bot, else suggested
-    hub task create --owner <bot|human> --title "..." [--body "..."|--body-file f] [--due D] [--parent ID]
+    tico feedback remove <id>               take back your feedback (and its note, if no run carried it)
+    tico feedback markers message|task|approval <id> [<id>...]   your feedback on these and everyone's up/down counts
+    tico feedback list [--bot B] [--rating up|down] [--since 7d] [--cursor C] [--limit N]   newest first
+    tico feedback reasons                   your five latest distinct reasons
+    tico feedback rule-draft <id>           a one-sentence rule drafted from your 👎; stores nothing
+    tico feedback rule <id> "<text>" [--all-bots]   your 👎 as an org rule: active if you manage the bot, else suggested
+    tico task create --owner <bot|human> --title "..." [--body "..."|--body-file f] [--due D] [--parent ID]
                     [--goal ID] [--model M [--effort E] [--harness H]] [--dry-run] the checks a create would fail,
                     nothing written
                     [--private [--reader X ...]]  private: only its requester, owner and readers (people, bots,
                                            group:<id>) see it
-    hub task readers list|add|remove <id> [X ...]   who can see a private task besides its requester and owner
-    hub task followers <id>                who follows a task, each at their level
-    hub task follow|unfollow <id> [--level live|mentions|digest|muted] [--who X]   follow a task or stop; --who: for
+    tico task readers list|add|remove <id> [X ...]   who can see a private task besides its requester and owner
+    tico task followers <id>                who follows a task, each at their level
+    tico task follow|unfollow <id> [--level live|mentions|digest|muted] [--who X]   follow a task or stop; --who: for
                                            someone else who sees it, when you may change the task
-    hub task model <id> [<model>] [--effort E] [--harness H] [--clear]
+    tico task model <id> [<model>] [--effort E] [--harness H] [--clear]
                                            the model this task's runs use; --clear puts it back on the bot's task model
                     [--defer [24h|2d|never]]  for a bot: a deferred task, no wake; its next run carries it, and
                                            one starts by the time given (24h when none; --next-run is the old name)
                                            blocked on a person? --owner <person> --parent <your task>
                                            for a person, the body's first paragraph is the ask (as --note below)
-    hub task update <id> --status waiting --on <person> --note "<plain ask>"
+    tico task update <id> --status waiting --on <person> --note "<plain ask>"
                                            ask a person on your task: one small subtask for them, yours stays blocked
-    hub task question "<question>" --on <person> [--why "<why it matters>"]
+    tico task question "<question>" --on <person> [--why "<why it matters>"]
                     [--option "A -> what happens" --option "B=<file> -> what happens"] [--multi --recommend A]
                                            one decision as a task they own, under your task; none for Yes / No.
                                            Their answer closes it. Never to a bot: DM a bot instead.
@@ -97,579 +97,579 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--if-no-answer "Yes" --default-kind reversible|send|spend|delete] [--by D]
                                            what you do if they don't answer: a reversible step goes ahead
                                            after the team's days (3); asks expire after 14 days
-    hub task comment <id> "<text>" [--steer | --queue | --defer [30m|4h|2d|never] | --goal]   on the record
+    tico task comment <id> "<text>" [--steer | --queue | --defer [30m|4h|2d|never] | --goal]   on the record
                                            with your name; reaches the task's followers and whoever you @mention.
                                            --steer (the default) goes into each bot's running turn, --queue right
                                            after it, --defer with its next turn on the task (at the latest 24h, or
                                            the time given; never notifies no follower), --goal sets its goal
-    hub task comment-edit <id> <comment-id> "<text>"   change a comment you wrote; wakes nobody
-    hub task comment-delete <id> <comment-id>          take back a comment you wrote
-    hub task delete <id>                               delete a task made by mistake, to the trash (a person only)
-    hub task requesters <id>                           who asked for it (internal contacts, counts; never tokens)
-    hub task requester-save <id> [--requester-id R] [--email E] [--organization O] [--important]
+    tico task comment-edit <id> <comment-id> "<text>"   change a comment you wrote; wakes nobody
+    tico task comment-delete <id> <comment-id>          take back a comment you wrote
+    tico task delete <id>                               delete a task made by mistake, to the trash (a person only)
+    tico task requesters <id>                           who asked for it (internal contacts, counts; never tokens)
+    tico task requester-save <id> [--requester-id R] [--email E] [--organization O] [--important]
                                                        add a requester, or update one with --requester-id
-    hub task requester-remove <id> <requester-id>      take a requester off a task
-    hub task publication-preview <id> [--public-title T] [--public-summary S] [--visibility public|private]
+    tico task requester-remove <id> <requester-id>      take a requester off a task
+    tico task publication-preview <id> [--public-title T] [--public-summary S] [--visibility public|private]
                                  [--label L] [--comment "..."]   the exact payload a publish approval needs
-    hub task comment-moderate <id> <comment-id> hide|show|delete   a public comment on a task you manage
-    hub roadmap tasks [--sort requester_count|external_requesters|important|organization|size]   ranked roadmap
-    hub roadmap settings [--label L] [--cors-origin O] [--action-limit N] [--suggestion-limit N]
+    tico task comment-moderate <id> <comment-id> hide|show|delete   a public comment on a task you manage
+    tico roadmap tasks [--sort requester_count|external_requesters|important|organization|size]   ranked roadmap
+    tico roadmap settings [--label L] [--cors-origin O] [--action-limit N] [--suggestion-limit N]
                          [--bot-public-approval|--no-bot-public-approval] [--suggestions-bot SLUG|--automatic]
                                                        read, or change (owners and admins)
-    hub task deleted                                   deleted tasks you may restore
-    hub task restore <id>                              put a deleted task back
-    hub task update <id> --status doing|waiting|done|declined [--note "..."] [--goal ID|--goal ""]
+    tico task deleted                                   deleted tasks you may restore
+    tico task restore <id>                              put a deleted task back
+    tico task update <id> --status doing|waiting|done|declined [--note "..."] [--goal ID|--goal ""]
                     [--title "..."]        rename it: checked as a new task's title would be
                     [--on PERSON]          with --status waiting: files the person a question task under it
                                            (their Needs you); --note is your ask, one or two plain sentences:
                                            "Approve the video tool trial on Thursday? If yes, I'll send the invite."
-                                           --on "" withdraws it. Not a bot: DM it, or hub task wait on its task
-    hub task close <id> [--note "..."]
-    hub task wait <id> --on task:<id>|pr:<url>|release:<tag> [--note "..."]
+                                           --on "" withdraws it. Not a bot: DM it, or tico task wait on its task
+    tico task close <id> [--note "..."]
+    tico task wait <id> --on task:<id>|pr:<url>|release:<tag> [--note "..."]
                                            wait on a task, a PR merging or a release; one wake when it happens
-    hub task snooze <id> --until DATE [--note "..."]
+    tico task snooze <id> --until DATE [--note "..."]
                                            set it aside until DATE: off the lists and quiet until then
-    hub task later <id> --after ID|--at DATE|--next-run|--handled
+    tico task later <id> --after ID|--at DATE|--next-run|--handled
                                            a deferred task this run carried and will not do now: when to pick it up
-                                           (`hub task defer` is the old name)
-    hub task unsnooze <id>                 bring a snoozed task back now
-    hub task waive-qa <id> --head SHA --reason "..."
+                                           (`tico task defer` is the old name)
+    tico task unsnooze <id>                 bring a snoozed task back now
+    tico task waive-qa <id> --head SHA --reason "..."
                                            a person waives a Dev ticket's In QA step for that exact head; a waiver,
                                            never a QA pass (CI and both reviews on that head stay required)
-    hub task attach <id> <file> [--name "..."]
+    tico task attach <id> <file> [--name "..."]
                                            store a deliverable with the task; prints the link
-    hub task list [--owner me|X] [--requester me] [--status open|doing|waiting|done] [--member me|X [--role R]]
+    tico task list [--owner me|X] [--requester me] [--status open|doing|waiting|done] [--member me|X [--role R]]
                   [--all]                  the board: every task and every bot you may see, {tasks, bots}
                   [--stuck [--hours N]]    BotOps's sweep: open work untouched for a day that waits on nobody
-    hub task show <id>                     <id> is the full id or its first 8+ characters (short_id in the list)
-    hub file publish <path> [--title T] [--task ID] [--scope task|bot]
+    tico task show <id>                     <id> is the full id or its first 8+ characters (short_id in the list)
+    tico file publish <path> [--title T] [--task ID] [--scope task|bot]
                                            list a file from this checkout on your page (reports/x.md);
                                            publishing it again adds a version (docs/files.md)
-    hub file link <https-url> [--title T] [--task ID]   a Google Doc, Notion page, Figma file
-    hub file touch <file-id|url>           you edited a linked document again: it moves to the top
-    hub file import s3://bucket/key [--title T] [--task ID]  copy an object with this computer's credentials
-    hub file list [--bot X] [--limit N]    what is on the page, newest activity first
-    hub file search "<words>" [--limit N]  every file you may read, by title and text, with an excerpt
-    hub file read <id> [--version N]       one version of a file you may read, as text, in full
-    hub file delete <id>                   the owner deletes a file for good: its bytes leave storage
-    hub page publish <file.html> [--title T] [--cadence none|daily|weekly|monthly] [--as-of YYYY-MM-DD]
+    tico file link <https-url> [--title T] [--task ID]   a Google Doc, Notion page, Figma file
+    tico file touch <file-id|url>           you edited a linked document again: it moves to the top
+    tico file import s3://bucket/key [--title T] [--task ID]  copy an object with this computer's credentials
+    tico file list [--bot X] [--limit N]    what is on the page, newest activity first
+    tico file search "<words>" [--limit N]  every file you may read, by title and text, with an excerpt
+    tico file read <id> [--version N]       one version of a file you may read, as text, in full
+    tico file delete <id>                   the owner deletes a file for good: its bytes leave storage
+    tico page publish <file.html> [--title T] [--cadence none|daily|weekly|monthly] [--as-of YYYY-MM-DD]
                   [--task ID] [--replaces PAGE]
                                            a page people see with an updated line; again adds a version
                                            (docs/pages.md)
-    hub page list [--bot X] [--task ID] [--archived]   pages you may read, newest first
-    hub page show <id>                     one page's status: updated, by, version, cadence, stale or replaced
-    hub page access <id> [--audience everyone|ben,group:legal,bot:analyst]
-    hub page archive <id> [--restore]      hide a page from lists and search, or bring it back
-    hub card list [--place P]              what is pinned at dashboard, growth, team:<group>, bot:<slug>, task:<id>
+    tico page list [--bot X] [--task ID] [--archived]   pages you may read, newest first
+    tico page show <id>                     one page's status: updated, by, version, cadence, stale or replaced
+    tico page access <id> [--audience everyone|ben,group:legal,bot:analyst]
+    tico page archive <id> [--restore]      hide a page from lists and search, or bring it back
+    tico card list [--place P]              what is pinned at dashboard, growth, team:<group>, bot:<slug>, task:<id>
                                            or person:me (My dashboard)
-    hub card add <template> [--place P] [--team G] [--weeks N] [--count N] [--kpi ID] [--title T] [--size S]
+    tico card add <template> [--place P] [--team G] [--weeks N] [--count N] [--kpi ID] [--title T] [--size S]
                                            [--metric M] [--channel C] [--months N]
                                            tasks_by_status, done_per_week, needs_you, spend, kpi, automation_runs,
                                            latest_pages, needs_attention, unread_threads, my_tasks, updates; a bot
                                            pins to its own sidebar or task. The Growth page's cards (growth_number,
                                            growth_funnel, growth_channels, growth_retention, growth_board) go on
                                            --place growth only; --metric and --channel are for growth_number
-    hub card update <id> [--title T] [--team G] [--weeks N] [--count N] [--kpi ID] [--metric M] [--channel C] [--months N]
-    hub card remove <id>
-    hub email mailboxes                    your readable email mailboxes (hub mail is postal mail)
-    hub email inbox <address> [--q Q] [--limit N] [--cursor C] [--json]
-    hub email search <address> "<gmail query>" [--limit N] [--cursor C] [--json]
-    hub email thread <address> <thread-id> [--json]
-    hub email message <address> <message-id> [--json]
-    hub email archive|unarchive|mark-read|mark-unread <address> [<id> ...] [--query Q] [--limit N] [--json]
-    hub email label|unlabel <address> <label> [<id> ...] [--query Q] [--limit N] [--json]
-    hub inbound audience <inbox-id> company|team [--group G]
+    tico card update <id> [--title T] [--team G] [--weeks N] [--count N] [--kpi ID] [--metric M] [--channel C] [--months N]
+    tico card remove <id>
+    tico email mailboxes                    your readable email mailboxes (tico mail is postal mail)
+    tico email inbox <address> [--q Q] [--limit N] [--cursor C] [--json]
+    tico email search <address> "<gmail query>" [--limit N] [--cursor C] [--json]
+    tico email thread <address> <thread-id> [--json]
+    tico email message <address> <message-id> [--json]
+    tico email archive|unarchive|mark-read|mark-unread <address> [<id> ...] [--query Q] [--limit N] [--json]
+    tico email label|unlabel <address> <label> [<id> ...] [--query Q] [--limit N] [--json]
+    tico inbound audience <inbox-id> company|team [--group G]
                                            who reads a Tico address or number (owner or admin)
-    hub pin add <place> <page:FILE|card:ID> [--size small|medium|large] [--position N]
-    hub pin update <pin-id> [--size S] [--position N]
-    hub pin remove <pin-id>
-    hub doc list [--prefix sales/]         the company's internal docs by path
-    hub doc read <id|path|external:id|manual:name>  one doc in full, with its revision and provenance
-    hub doc search "<words>" [--manual] [--market]
+    tico pin add <place> <page:FILE|card:ID> [--size small|medium|large] [--position N]
+    tico pin update <pin-id> [--size S] [--position N]
+    tico pin remove <pin-id>
+    tico doc list [--prefix sales/]         the company's internal docs by path
+    tico doc read <id|path|external:id|manual:name>  one doc in full, with its revision and provenance
+    tico doc search "<words>" [--manual] [--market]
                                            internal and external docs, linked metadata and the Tico manual (--manual:
                                            only it; --market: also the market's notes, entities and evidence)
-    hub doc write <path> --title T (--body-file F | stdin) [--note N]
+    tico doc write <path> --title T (--body-file F | stdin) [--note N]
                                            create or replace a doc; every write is a version
-    hub doc history <id|path>              its versions: who changed it, when and why
-    hub doc link-list                      where the company's other docs live (links, never copies)
-    hub doc ask "<question>" [--wait 120]  ask the Librarian about the team's docs: {answer, citations, covered}
-    hub doc fetch <url> [--max-chars N]    read one public link (web page, Google Doc, Drive folder, GitHub repo,
+    tico doc history <id|path>              its versions: who changed it, when and why
+    tico doc link-list                      where the company's other docs live (links, never copies)
+    tico doc ask "<question>" [--wait 120]  ask the Librarian about the team's docs: {answer, citations, covered}
+    tico doc fetch <url> [--max-chars N]    read one public link (web page, Google Doc, Drive folder, GitHub repo,
                                            sitemap) as text; runs on this computer, public addresses only
-    hub meeting search ["<words>"] [--person P] [--since D] [--until D]
-    hub meeting read <id> [--offset N]     a transcript
-    hub meeting pending                    your Pending queue
-    hub meeting approve <id>|--all         share your meetings
-    hub meeting dismiss <id>               keep a meeting out of the queue
-    hub meeting import <file> [--title T] [--date D] [--participant P ...]
-    hub call list <thread> [--limit N] [--before T]  the calls in a thread, newest first
-    hub call start <thread> [--title T] [--speak]  start a call there; you are its connector
-    hub call show <call>                   a call: its state, people, bots, how it ended
-    hub call join <call>                   join: the URL and a token good for 5 minutes
-    hub call token <call>                  a fresh token while you are joined
-    hub call leave <call>                  leave a call you joined
-    hub call end <call>                    end a call you started; its transcript goes to the thread
-    hub call retry <call>                  ask again for action items the Gateway could not make
-    hub call bot add <call> <bot>...       bots listen to a call and reply in its thread
-    hub call bot remove <call> <bot>       take a bot out of a call
-    hub assistant propose --summary "..." --path /api/v2/... [--method POST] [--body '{...}']
+    tico meeting search ["<words>"] [--person P] [--since D] [--until D]
+    tico meeting read <id> [--offset N]     a transcript
+    tico meeting pending                    your Pending queue
+    tico meeting approve <id>|--all         share your meetings
+    tico meeting dismiss <id>               keep a meeting out of the queue
+    tico meeting import <file> [--title T] [--date D] [--participant P ...]
+    tico call list <thread> [--limit N] [--before T]  the calls in a thread, newest first
+    tico call start <thread> [--title T] [--speak]  start a call there; you are its connector
+    tico call show <call>                   a call: its state, people, bots, how it ended
+    tico call join <call>                   join: the URL and a token good for 5 minutes
+    tico call token <call>                  a fresh token while you are joined
+    tico call leave <call>                  leave a call you joined
+    tico call end <call>                    end a call you started; its transcript goes to the thread
+    tico call retry <call>                  ask again for action items the Gateway could not make
+    tico call bot add <call> <bot>...       bots listen to a call and reply in its thread
+    tico call bot remove <call> <bot>       take a bot out of a call
+    tico assistant propose --summary "..." --path /api/v2/... [--method POST] [--body '{...}']
                                            Assistant only: ask the person to confirm a side effect (an
                                            approval, anything outside the company, spend, settings,
                                            archive/delete, activating a bot); it runs only on their click.
                                            Several actions: ONE card, --path /api/v2/assistant/batch
                                            --body '{"actions": [{"path": "/api/v2/tasks/<id>", "body": {...}}, ...]}'
                                            (task actions, approval decisions, answers to bots' questions)
-    hub assistant morning --for human:<id> --body "<text>"
+    tico assistant morning --for human:<id> --body "<text>"
                                            the Assistant's background run only: the person's one morning message in
                                            their own Assistant chat, as the Assistant (no card); a second one that
                                            company day is refused
-    hub assistant learn "<line>" [--company]
+    tico assistant learn "<line>" [--company]
                                            in a person's own chat: save what they taught you, in their own
                                            layer (--company: the Strategy Bot, about the company, owner's chat only)
-    hub assistant learned                  what a person's chat bot has learned (What it has learned)
-    hub assistant proposals [--proposer botops] [--owner human:ana]
+    tico assistant learned                  what a person's chat bot has learned (What it has learned)
+    tico assistant proposals [--proposer botops] [--owner human:ana]
                                            the Confirm cards still waiting for their owner, with their ids
-    hub assistant withdraw <id> [--reason "..."]
+    tico assistant withdraw <id> [--reason "..."]
                                            take back a Confirm card that waits: it never runs, and the owner's chat
                                            says who withdrew it (only the owner confirms)
-    hub assistant change list [--days N] [--limit N] [--before NEXT]
+    tico assistant change list [--days N] [--limit N] [--before NEXT]
                                            what your Assistant did for you, with the words it acted on, and whether
                                            each can be undone (and why not)
-    hub assistant change restore <id>      undo one of those changes as you; restoring it again changes nothing
-    hub origin show <ref>                  why an item is on your list: who made it, its cause (automation, rule,
+    tico assistant change restore <id>      undo one of those changes as you; restoring it again changes nothing
+    tico origin show <ref>                  why an item is on your list: who made it, its cause (automation, rule,
                                            parent task, bot), its siblings this week, and commands that stop it
-    hub replay show [--from ISO] [--to ISO] [--bot B|--person P|--team T]
+    tico replay show [--from ISO] [--to ISO] [--bot B|--person P|--team T]
                                            what happened in a window (default the last 24 hours), as you may see it
-    hub goal list [--owner me|X] [--all]   what you are for: your goals in order, the chain above
+    tico goal list [--owner me|X] [--all]   what you are for: your goals in order, the chain above
                                            them, and your reports' goals; --all is every goal
-    hub goal show <id>                     the goal, its KPIs (target, colour), tasks, check-ins, history
-    hub goal read-back '[{"kind":"goal_create","owner":"company","title":"..."}]'
-    hub goal save POST /api/v2/goals '<body>' --on-behalf-of turn
-    hub goal save POST /api/v2/goal-proposals/turned-down '<body>' --on-behalf-of turn
+    tico goal show <id>                     the goal, its KPIs (target, colour), tasks, check-ins, history
+    tico goal read-back '[{"kind":"goal_create","owner":"company","title":"..."}]'
+    tico goal save POST /api/v2/goals '<body>' --on-behalf-of turn
+    tico goal save POST /api/v2/goal-proposals/turned-down '<body>' --on-behalf-of turn
                                            the owner's "no" to a suggestion you made in chat: stored at once as turned down
-    hub goal create --owner me|X --title "..." [--parent ID] [--body "..."|--body-file f] [--top] [--bet ID]
+    tico goal create --owner me|X --title "..." [--parent ID] [--body "..."|--body-file f] [--top] [--bet ID]
                                            set a goal; a parent is optional. With one, it supports that goal
-    hub goal status <id> red|yellow|green|done|dropped "<one sentence>"
+    tico goal status <id> red|yellow|green|done|dropped "<one sentence>"
                                            set the colour by hand: it sticks (with your name) until handed back
-    hub goal status <id> auto              let the Strategy Bot set the colour again (ends a colour set by hand)
-    hub goal refresh [--goal ID ...]       the Strategy Bot's status pass: work automatic colours out again
-    hub goal checkin <id> "<words>" [--signal on_track|at_risk|off_track] [--from X] [--kpi ID]
+    tico goal status <id> auto              let the Strategy Bot set the colour again (ends a colour set by hand)
+    tico goal refresh [--goal ID ...]       the Strategy Bot's status pass: work automatic colours out again
+    tico goal checkin <id> "<words>" [--signal on_track|at_risk|off_track] [--from X] [--kpi ID]
                                            how the owner says it is going, in their words (colours a goal with no KPI)
-    hub goal checkin-list <id>             a goal's check-ins, newest first
-    hub goal needs-you                     red KPIs on your goals, stale KPIs you own, proposals to confirm
-    hub goal company                       the company's Vision and Description (read-only)
-    hub goal strategy-bot                       the Strategy Bot: its level (1 Passive to 3), regular checks and today's
+    tico goal checkin-list <id>             a goal's check-ins, newest first
+    tico goal needs-you                     red KPIs on your goals, stale KPIs you own, proposals to confirm
+    tico goal company                       the company's Vision and Description (read-only)
+    tico goal strategy-bot                       the Strategy Bot: its level (1 Passive to 3), regular checks and today's
                                                 Needs you count
-    hub goal strategy-bot-merge <person> "<title>" "<question>" <task-id> <task-id>...
+    tico goal strategy-bot-merge <person> "<title>" "<question>" <task-id> <task-id>...
                                            the Strategy Bot at level 2+: one item for several bots' same ask of a person
-    hub goal strategy-bot-level3-offer          the Strategy Bot: record the level-3 offer its Monday note made (when
+    tico goal strategy-bot-level3-offer          the Strategy Bot: record the level-3 offer its Monday note made (when
                                                 is due)
-    hub goal strategy-bot-decide "<reason>" '<changes json>' [--goal-id ID]
+    tico goal strategy-bot-decide "<reason>" '<changes json>' [--goal-id ID]
                                            the Strategy Bot at level 3: one decision alone on bot tasks, logged with
                                            Undo
-    hub goal strategy-bot-log [--before CURSOR] the Strategy Bot log (the owner only): what it decided alone, proposed
+    tico goal strategy-bot-log [--before CURSOR] the Strategy Bot log (the owner only): what it decided alone, proposed
                                                 instead
-    hub goal update <id> [--title ...] [--body ...|--body-file f] [--parent ID|--parent ""] [--owner X]
+    tico goal update <id> [--title ...] [--body ...|--body-file f] [--parent ID|--parent ""] [--owner X]
                     [--rank N|--top] [--bet ID|--bet ""]
-    hub kpi list [--goal ID] [--owner me|X] [--unlinked] [--bot SLUG] [--archived]
+    tico kpi list [--goal ID] [--owner me|X] [--unlinked] [--bot SLUG] [--archived]
                                            KPIs with latest reading and colour; --bot: that bot's five automatic KPIs
-    hub kpi show <id> [--effective]        definition and versions, the goals using it, every reading, check-ins
-    hub kpi archive <id> | restore <id>    hide from active lists, or restore; history stays
-    hub kpi create "<name>" [--goal ID] [--definition "..."] [--unit %] [--direction up|down|range]
+    tico kpi show <id> [--effective]        definition and versions, the goals using it, every reading, check-ins
+    tico kpi archive <id> | restore <id>    hide from active lists, or restore; history stays
+    tico kpi create "<name>" [--goal ID] [--definition "..."] [--unit %] [--direction up|down|range]
                 [--cadence daily|weekly|monthly] [--owner me|X|company] [--source-note "..."] [target flags]
                                            a KPI of its own; with --goal it is linked, the target on the link
-    hub kpi update <id> [--name ...] [--definition ...] [--unit ...] [--direction ...] [--cadence ...]
+    tico kpi update <id> [--name ...] [--definition ...] [--unit ...] [--direction ...] [--cadence ...]
                     [--source-note ...] [--owner X] [--parent ID] [--role north_star|input|guardrail]
                     [--stage reach|acquire|activate|retain|refer] [--loop NAME:STEP]
                                            a change to what it measures is a new definition version
-    hub kpi link <goal-id> <kpi-id> [target flags]   link a goal to a KPI, or change the target on the link
-    hub kpi unlink <goal-id> <kpi-id>      take a KPI off a goal
+    tico kpi link <goal-id> <kpi-id> [target flags]   link a goal to a KPI, or change the target on the link
+    tico kpi unlink <goal-id> <kpi-id>      take a KPI off a goal
         target flags: --baseline N --target N --deadline YYYY-MM-DD (improve; a deadline is required)
                       or --min N --max N (a range to stay in); none: just linked
-    hub kpi log <kpi-id> <value> ["<note>"] [--period-start D] [--period-end D|--at D] [--collected-at T]
+    tico kpi log <kpi-id> <value> ["<note>"] [--period-start D] [--period-end D|--at D] [--collected-at T]
                 [--evidence "url or note"] [--quality measured|estimate|partial|--estimate] [--source posthog]
                 [--definition-version N] [--supersedes READING-ID]
                                            a reading: a fact with its period; to correct one, supersede it
-    hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag|goal_why|recovery|strategy_draft|
+    tico proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag|goal_why|recovery|strategy_draft|
                                brand_draft
                         [--goal ID] [--kpi ID]
                         (--payload '{json}'|--payload-file f.json) [--reason "..."]
                                            a change you may not make yourself, for the owner to confirm
-    hub proposal list [--status pending|confirmed|rejected|all] [--goal ID] [--kpi ID]
-    hub proposal decide <id> confirm|reject [--note "..."] [--option N]
+    tico proposal list [--status pending|confirmed|rejected|all] [--goal ID] [--kpi ID]
+    tico proposal decide <id> confirm|reject [--note "..."] [--option N]
                                            a person's own decision; a bot is refused. --option: a recovery's other option
-    hub rules list [--kind internal|external] [--status active|suggested|retired|any] [--who N] [--with N]
+    tico rules list [--kind internal|external] [--status active|suggested|retired|any] [--who N] [--with N]
                    [--source N] [--bot N] [--mine] [--cursor C] [--limit N]
                                            the org rules in force; --mine: your bot's rules and its settings as sentences
-    hub rules read <id>                    one rule: its sentence, Who and With, From, due dates, the quote it cites
-    hub rules read <file-id|url> --from F [--kind K] [--note "..."]   add a document: Counsel reads it and suggests rules
-    hub rules ask "<question>"             can I...? Counsel answers with the rules that apply, cited
-    hub rules suggested                    the suggestions waiting for a person
-    hub rules add --kind internal|external --text "..." [--who N ...] [--everyone] [--all-bots] [--with N ...]
+    tico rules read <id>                    one rule: its sentence, Who and With, From, due dates, the quote it cites
+    tico rules read <file-id|url> --from F [--kind K] [--note "..."]   add a document: Counsel reads it and suggests rules
+    tico rules ask "<question>"             can I...? Counsel answers with the rules that apply, cited
+    tico rules suggested                    the suggestions waiting for a person
+    tico rules add --kind internal|external --text "..." [--who N ...] [--everyone] [--all-bots] [--with N ...]
                   [--where thread:ID|team:GROUP|kind:dm|has_outside_members ...]
                   [--from SOURCE] [--description "..."] [--if-broken block|escalate|warn] [--reviewer P]
                   [--file FILE_ID --version N --section S --quote Q]   external: the words the rule rests on
-    hub rules edit <id> --version N [--text ...] [--who N ...] [--everyone] [--all-bots] [--with N ...] [--from SOURCE]
+    tico rules edit <id> --version N [--text ...] [--who N ...] [--everyone] [--all-bots] [--with N ...] [--from SOURCE]
                    [--where TERM ...]
-    hub rules accept <id> --version N [--who N ...] [--everyone] [--all-bots]   a person; a bot is refused
-    hub rules skip <id> --version N        set a suggestion aside
-    hub rules retire <id> --version N      retire a rule in force; its due dates come back
-    hub rules due [--next 90d] [--status overdue|due_soon|upcoming|satisfied] [--limit N]
-                                           the due dates of rules in force (`hub rules due list` is the same)
-    hub rules due add <rule-id> --first YYYY-MM-DD --repeats once|weekly|monthly|quarterly|yearly --owner N
+    tico rules accept <id> --version N [--who N ...] [--everyone] [--all-bots]   a person; a bot is refused
+    tico rules skip <id> --version N        set a suggestion aside
+    tico rules retire <id> --version N      retire a rule in force; its due dates come back
+    tico rules due [--next 90d] [--status overdue|due_soon|upcoming|satisfied] [--limit N]
+                                           the due dates of rules in force (`tico rules due list` is the same)
+    tico rules due add <rule-id> --first YYYY-MM-DD --repeats once|weekly|monthly|quarterly|yearly --owner N
                       [--timezone Z] [--task-days N]   --task-days: a routine opens the owner's task N days before
-    hub rules due edit <id> [--first ...] [--repeats ...] [--owner N] [--timezone Z] [--task-days N | --no-routine]
-    hub rules due satisfied <id> [--on YYYY-MM-DD]   a due date's or its rule's id; --on when two are open
-    hub rules check "<draft>" --to <teammate> [--as message|comment|task|assign]
+    tico rules due edit <id> [--first ...] [--repeats ...] [--owner N] [--timezone Z] [--task-days N | --no-routine]
+    tico rules due satisfied <id> [--on YYYY-MM-DD]   a due date's or its rule's id; --on when two are open
+    tico rules check "<draft>" --to <teammate> [--as message|comment|task|assign]
                                            a bot checks a draft against its rules; sending it then costs no second check
-    hub rules appeal <hold-id> "<why>"     a bot asks the reviewer to look at its held output
-    hub rules withdraw <hold-id>           take back your held write to edit it and send it again
-    hub strategy show                      the published strategy, its bets with their goals and colour, the website
-    hub strategy summary                   the text every run carries
-    hub strategy versions [N]              published versions, newest first; N: that version whole
-    hub strategy diff --from N --to N      what changed between two versions
-    hub strategy guides                    deprecated: the Strategy Bot's drafting questions; the exercises are lenses
-    hub strategy draft [--summary ...] [--vision ...] [--section KEY=TEXT ...] [--revision N]
-    hub strategy publish [--note "..."] [--revision N]
-    hub strategy bet add --statement "..." [--why ...] [--rules-out ...] [--status proposed|active] [--rank N]
+    tico rules appeal <hold-id> "<why>"     a bot asks the reviewer to look at its held output
+    tico rules withdraw <hold-id>           take back your held write to edit it and send it again
+    tico strategy show                      the published strategy, its bets with their goals and colour, the website
+    tico strategy summary                   the text every run carries
+    tico strategy versions [N]              published versions, newest first; N: that version whole
+    tico strategy diff --from N --to N      what changed between two versions
+    tico strategy guides                    deprecated: the Strategy Bot's drafting questions; the exercises are lenses
+    tico strategy draft [--summary ...] [--vision ...] [--section KEY=TEXT ...] [--revision N]
+    tico strategy publish [--note "..."] [--revision N]
+    tico strategy bet add --statement "..." [--why ...] [--rules-out ...] [--status proposed|active] [--rank N]
                          [--wrong-if-kpi ID --wrong-if-direction above|below --wrong-if-threshold N |
                           --wrong-if-thesis MARKET-ID | --wrong-if-text "..." --check-by YYYY-MM-DD] [--cite ID ...]
-    hub strategy bet update <id> [same flags]
-    hub strategy bet retire <id>
+    tico strategy bet update <id> [same flags]
+    tico strategy bet retire <id>
                                            draft, publish and bets: the owner only; a bot proposes with
                                            proposal create --kind strategy_draft
-    hub brand show [--section S] [--version N] | summary | check <file|->
+    tico brand show [--section S] [--version N] | summary | check <file|->
                                            the brand; check: avoided words, wrong names, never-made claims in a draft
-    hub brand draft --section S --body JSON [--revision N] | publish [--note "..."]
+    tico brand draft --section S --body JSON [--revision N] | publish [--note "..."]
                                            owner or admin; a bot proposes with --kind brand_draft
-    hub growth channel list [--retired] | show SLUG | add SLUG --name ... | update SLUG | retire SLUG
+    tico growth channel list [--retired] | show SLUG | add SLUG --name ... | update SLUG | retire SLUG
                                            a channel's open marketing tasks are labelled channel:<slug>
-    hub growth source list [--retired] | add --truth-for ... --system ... --reach-kind ... | update ID | retire ID
-    hub growth cohort list [--channel SLUG] [--month M] [--limit N] | set --channel SLUG|unknown --month YYYY-MM
+    tico growth source list [--retired] | add --truth-for ... --system ... --reach-kind ... | update ID | retire ID
+    tico growth cohort list [--channel SLUG] [--month M] [--limit N] | set --channel SLUG|unknown --month YYYY-MM
                            [--spend N --bot-cost N --new N --d30 PCT --d90 PCT --d180 PCT --revenue N
                            --margin PCT --quality actual|estimate --source FIELD=TEXT]
-    hub growth economics [--month M] | numbers [--months N] | kpis | settings [--set KEY=VALUE]
-    hub lens list [--market]               the lenses: thought exercises run against the strategy or the market
-    hub lens run <id> [--answers-file f.json] [--draft] [--no-wait]
+    tico growth economics [--month M] | numbers [--months N] | kpis | settings [--set KEY=VALUE]
+    tico lens list [--market]               the lenses: thought exercises run against the strategy or the market
+    tico lens run <id> [--answers-file f.json] [--draft] [--no-wait]
                                            run one (the owner, the Strategy Bot; a market lens also the Librarian);
                                            waits up to 60 s and prints the run with its summary; --draft: the owner's
                                            draft
-    hub lens show <run-id>                 one run: answers, result, changes
-    hub lens runs [--lens ID]              runs, newest first, with their summaries
-    hub approval request --kind send|spend|publish|merge|support|task_cap|spend_limit --payload-file f.json [--task ID] [--supersedes ID]
+    tico lens show <run-id>                 one run: answers, result, changes
+    tico lens runs [--lens ID]              runs, newest first, with their summaries
+    tico approval request --kind send|spend|publish|merge|support|task_cap|spend_limit --payload-file f.json [--task ID] [--supersedes ID]
                                            if the owner already said send in Tico, skip this and
                                            `mail send --approve <their-message-id>`
-    hub approval show <id>
-    hub approval list [--status pending|approved|declined] [--from ACTOR] [--before DATE] [--since DATE] [--limit N] [--offset N]
+    tico approval show <id>
+    tico approval list [--status pending|approved|declined] [--from ACTOR] [--before DATE] [--since DATE] [--limit N] [--offset N]
                                            pending is what Needs you counts; the rows you may open, newest first
-    hub approval read-back <id>... [--note "..."]
+    tico approval read-back <id>... [--note "..."]
                                            the Assistant: the list it will approve, as its reply; the person's yes runs it
-    hub approval approve <id> [--note "..."] [--on-behalf-of turn]
+    tico approval approve <id> [--note "..."] [--on-behalf-of turn]
                                            a person approves one addressed to them (the Assistant: when they let it
                                            decide approvals and asked)
-    hub approval decline <id> [--note "why"] [--on-behalf-of turn]
+    tico approval decline <id> [--note "why"] [--on-behalf-of turn]
                                            a person declines one addressed to them (the Assistant: when they asked)
-    hub listening save --file run.json     Listening: one sweep and the posts it saw (status ok|blocked|
+    tico listening save --file run.json     Listening: one sweep and the posts it saw (status ok|blocked|
                                            rate_limited|error; a post already saved is kept as it was)
-    hub listening decide [--limit 20] [--item ID]
+    tico listening decide [--limit 20] [--item ID]
                                            put the listening-item decisions to new posts and route them to the message bots
-    hub listening show <item-id>           a post, the run that saw it, its decisions, where it went
-    hub listening runs [--since DATE] [--source x]
-    hub listening stats [--since DATE]     coverage by source, precision by message bot
-    hub listening item list [--destination D] [--status new]
+    tico listening show <item-id>           a post, the run that saw it, its decisions, where it went
+    tico listening runs [--since DATE] [--source x]
+    tico listening stats [--since DATE]     coverage by source, precision by message bot
+    tico listening item list [--destination D] [--status new]
                                            posts Listening routed to you, oldest first
-    hub listening item resolve <id> --status accepted --ref <your record> | rejected --reason "..." |
+    tico listening item resolve <id> --status accepted --ref <your record> | rejected --reason "..." |
                     duplicate --ref <existing>
-    hub tool list [--bot X] [--json]       the team's tools: how to reach each, credentials, counts; --bot: what
+    tico tool list [--bot X] [--json]       the team's tools: how to reach each, credentials, counts; --bot: what
                                            that bot uses (model, repository, each declared tool)
-    hub tool show <service> [--json]       the page, its query index and the learnings (plain text)
-    hub tool index [--cursor C] [--limit N] Tools: every API tool, mailbox, number and connection you may see,
+    tico tool show <service> [--json]       the page, its query index and the learnings (plain text)
+    tico tool index [--cursor C] [--limit N] Tools: every API tool, mailbox, number and connection you may see,
                                            its status and who can use it (`hub tools index` too)
-    hub tool check <id>                    check an API tool's keys now: Working, Key rejected or Check failed
-    hub tool call <tool> <METHOD> <path> [--data JSON] [--query k=v ...]
+    tico tool check <id>                    check an API tool's keys now: Working, Key rejected or Check failed
+    tico tool call <tool> <METHOD> <path> [--data JSON] [--query k=v ...]
                                            call a proxied API tool from a turn (Tico adds the real key)
-    hub tool query-search <service> [term] [--id ID]   search a query catalog; --id prints the SQL and params
-    hub tool learn <service> "<text>"      add a shared learning under a tool page
-    hub tool add <bot> <service> --can read[,post] [--identity "..."] [--scope database=warehouse ...]
+    tico tool query-search <service> [term] [--id ID]   search a query catalog; --id prints the SQL and params
+    tico tool learn <service> "<text>"      add a shared learning under a tool page
+    tico tool add <bot> <service> --can read[,post] [--identity "..."] [--scope database=warehouse ...]
                     [--env VAR_NAME] [--note "..."]
                     [--mcp-url https://... [--transport http|sse] [--header "Authorization: Bearer ${VAR_NAME}" ...]]
                                            register a tool (with --mcp-url, a remote MCP server the bot's harness uses): BotOps gets a task with the entry; it shows pending
                                            until the computer reports it. A variable's name, never its value
-    hub tool update <tool-id> --bot <bot> [--can read,draft,send] [--scope KEY=VALUE ...] [--note "..."]
+    tico tool update <tool-id> --bot <bot> [--can read,draft,send] [--scope KEY=VALUE ...] [--note "..."]
                     [--mcp-url URL] [--transport http|sse] [--header "Name: value" ...]
                                            change a declared tool in place (BotOps: as the requester); never remove
                                            and add it again. `--scope KEY=` takes a key off, `--note ""` clears it
-    hub tool remove <bot> <tool-id>        ask BotOps to remove one (or withdraw a pending request)
-    hub automation list [--owner O]        automations you may see, each with can_edit
-    hub automation show <id>               trigger, steps, version, today's counts, next run
-    hub automation create --file F         a new one from a JSON flow ({name, owner, trigger, steps}); - reads stdin
-    hub automation update <id> [--file F] [--name N] [--enable|--disable] [--summary S]
+    tico tool remove <bot> <tool-id>        ask BotOps to remove one (or withdraw a pending request)
+    tico automation list [--owner O]        automations you may see, each with can_edit
+    tico automation show <id>               trigger, steps, version, today's counts, next run
+    tico automation create --file F         a new one from a JSON flow ({name, owner, trigger, steps}); - reads stdin
+    tico automation update <id> [--file F] [--name N] [--enable|--disable] [--summary S]
                                            new trigger/steps/batch = a new version; a bot without rights proposes one
                                            (BotOps: the asker's rights; what it creates is off unless enabled is sent)
-    hub automation delete <id>
-    hub automation run <id> [--input JSON] run now with a sample trigger output; prints the run
-    hub automation runs <id> [--limit N] [--before RUN]
-    hub automation held <id> release|drop  end a run-guard hold: queue its held runs, or skip them
-    hub automation recent-runs [--range 5m|1h|24h|7d] [--status S] [--trigger T] [--owner O] [--limit N] [--before B]
+    tico automation delete <id>
+    tico automation run <id> [--input JSON] run now with a sample trigger output; prints the run
+    tico automation runs <id> [--limit N] [--before RUN]
+    tico automation held <id> release|drop  end a run-guard hold: queue its held runs, or skip them
+    tico automation recent-runs [--range 5m|1h|24h|7d] [--status S] [--trigger T] [--owner O] [--limit N] [--before B]
                                            runs across every automation you may see, newest first
-    hub automation stats [--range 5m|1h|24h|7d]
+    tico automation stats [--range 5m|1h|24h|7d]
                                            runs, failures and cost per automation over the range
-    hub automation versions <id> [--pending]
-    hub automation restore <id> <n>        make version n current (a pending one keeps its number)
-    hub automation discard <id> <n>        drop a pending version (a proposal); the automation stays as it is
-    hub automation question-sets           the question sets a Decide step may name (set: id@version)
-    hub automation guide                   how BotOps builds automations, with the flow format
-    hub automation templates               the inbox templates: founder, support, sales, blank
-    hub automation template <id> --owner <ref> --inbox <inbox>
+    tico automation versions <id> [--pending]
+    tico automation restore <id> <n>        make version n current (a pending one keeps its number)
+    tico automation discard <id> <n>        drop a pending version (a proposal); the automation stays as it is
+    tico automation question-sets           the question sets a Decide step may name (set: id@version)
+    tico automation guide                   how BotOps builds automations, with the flow format
+    tico automation templates               the inbox templates: founder, support, sales, blank
+    tico automation template <id> --owner <ref> --inbox <inbox>
                                            one filled in for that owner and inbox; saves nothing
-    hub audit [--object O] [--limit N] [--before B]
+    tico audit [--object O] [--limit N] [--before B]
                                            who changed caps, spend, groups, automations and inboxes; the owner sees all
-    hub automation inbox <inbox> [--send on|off]
+    tico automation inbox <inbox> [--send on|off]
                                            an inbox's send switch (email, slack:dm, slack:#chan); off = drafts only
-    hub trigger list                       webhooks people and bots made; an automation runs on one
-    hub trigger create <name> [--id X]     make one; the address (with its secret) is shown once
-    hub trigger show <id>                  address, settings, 24-hour counts, automations
-    hub trigger update <id> [--name N] [--preset none|hmac|github|standard|stripe|slack] [--type-from H|/pointer]
+    tico trigger list                       webhooks people and bots made; an automation runs on one
+    tico trigger create <name> [--id X]     make one; the address (with its secret) is shown once
+    tico trigger show <id>                  address, settings, 24-hour counts, automations
+    tico trigger update <id> [--name N] [--preset none|hmac|github|standard|stripe|slack] [--type-from H|/pointer]
                     [--hourly 1-600] [--keep-days 1-30] [--unheard log|note]
-    hub trigger rotate <id>                a new secret; the old address stops
-    hub trigger sign <id> [--preset P] [--secret S] [--off]
+    tico trigger rotate <id>                a new secret; the old address stops
+    tico trigger sign <id> [--preset P] [--secret S] [--off]
                                            verify each call (preset default hmac); the secret is shown once
-    hub trigger delete <id>
-    hub trigger deliveries <id>            the latest calls: delivery id, type, outcome, stored
-    hub trigger delivery <id> <delivery> [--part N]
+    tico trigger delete <id>
+    tico trigger deliveries <id>            the latest calls: delivery id, type, outcome, stored
+    tico trigger delivery <id> <delivery> [--part N]
                                            one stored call, headers redacted; long bodies read in parts
-    hub trigger replay <id> <delivery>     run a stored call again as a new occurrence
-    hub trigger recover <id> [--since HOURS]
+    tico trigger replay <id> <delivery>     run a stored call again as a new occurrence
+    tico trigger recover <id> [--since HOURS]
                                            run again the calls refused in the last hours (a fixed secret) whose body is kept
-    hub event-types [--group task]         every event Tico names, with an example payload (automations, wake rules, webhooks)
-    hub trigger relay create|rotate|delete <trigger>
-                                           a second address through Tico Gateway (shown once); hub relay status
-    hub relay set <trigger> --wake on|off  whether a delivery to that address starts a sleeping server
-    hub relay wake-url show|off|set <url>  the https address Tico Gateway knocks on to start a server you run when a webhook
+    tico event-types [--group task]         every event Tico names, with an example payload (automations, wake rules, webhooks)
+    tico trigger relay create|rotate|delete <trigger>
+                                           a second address through Tico Gateway (shown once); tico relay status
+    tico relay set <trigger> --wake on|off  whether a delivery to that address starts a sleeping server
+    tico relay wake-url show|off|set <url>  the https address Tico Gateway knocks on to start a server you run when a webhook
                                            waits for it; the owner (set shows the signing secret once)
-    hub webhook list|create|show|update|rotate|pause|resume|delete|send|sends|retry|example
-    hub webhook recover|replay <id> --since DATE|enable <id>
+    tico webhook list|create|show|update|rotate|pause|resume|delete|send|sends|retry|example
+    tico webhook recover|replay <id> --since DATE|enable <id>
                                            send again what gave up / what was never sent since a date; turn an endpoint back on
-                                           outgoing webhooks: endpoints Tico posts events to (hub webhook create --help)
-    hub sleep status                       stop this hosted server after quiet hours; show the setting
-    hub sleep set --hours N [--runners on|off]
+                                           outgoing webhooks: endpoints Tico posts events to (tico webhook create --help)
+    tico sleep status                       stop this hosted server after quiet hours; show the setting
+    tico sleep set --hours N [--runners on|off]
                                            1-24 quiet hours, 0 = off; bot computers stop with it unless --runners off
-    hub notice list                        notices from Tico Team, newest first (tico.notice in rules)
-    hub settings find "<words>"            a control in Settings by its words: key, place, who may change it, class
-    hub settings show <key> [--bot B|--computer C|--person P|--id I]
+    tico notice list                        notices from Tico Team, newest first (tico.notice in rules)
+    tico settings find "<words>"            a control in Settings by its words: key, place, who may change it, class
+    tico settings show <key> [--bot B|--computer C|--person P|--id I]
                                            its value, who may change it and the link to its card
-    hub settings set <key> <value> [--bot B|--computer C|--person P|--id I] [--on-behalf-of turn]
+    tico settings set <key> <value> [--bot B|--computer C|--person P|--id I] [--on-behalf-of turn]
                                            change it as yourself (BotOps, the Assistant: as the person who asked; a
                                            confirm one is their Confirm card, a person-only one says why and links the
                                            card; the Assistant cites their words for a direct one)
-    hub settings ask <key> <value> [--to P] [--note "..."] [--bot B|...] [--on-behalf-of turn]
+    tico settings ask <key> <value> [--to P] [--note "..."] [--bot B|...] [--on-behalf-of turn]
                                            one you may not change: on your yes, its Confirm card and a request go to
                                            one person who may (an admin, or the owner for the owner's); you're told
                                            when they confirm or say no
-    hub release now [--note "..."]         ask the Release Manager to release what is at Pending Release now
-    hub release schedule [--on|--off] [--time HH:MM ...] [--manager BOT] [--writer BOT]
+    tico release now [--note "..."]         ask the Release Manager to release what is at Pending Release now
+    tico release schedule [--on|--off] [--time HH:MM ...] [--manager BOT] [--writer BOT]
                                            show or change the daily release (company time; an owner or admin)
-    hub bot status set "<focus>" [--state waiting_human|blocked|...] [--task ID] [--bot X]
-    hub bot status list [--team marketing]
-    hub bot status history <bot> [--since 7d]
-    hub bot recent [--days N] [--limit N]  the bots you have been working with lately and where each stands
-    hub run list <bot> [--since 24h]       a bot's recent runs
-    hub team budget [--hour N] [--day N]    the team default runs per hour and per day (owner and admins)
-    hub team show [--person ID] [--team NAME]
+    tico bot status set "<focus>" [--state waiting_human|blocked|...] [--task ID] [--bot X]
+    tico bot status list [--team marketing]
+    tico bot status history <bot> [--since 7d]
+    tico bot recent [--days N] [--limit N]  the bots you have been working with lately and where each stands
+    tico run list <bot> [--since 24h]       a bot's recent runs
+    tico team budget [--hour N] [--day N]    the team default runs per hour and per day (owner and admins)
+    tico team show [--person ID] [--team NAME]
                                            humans and bots: who they are, Slack, what they own; each bot
                                            with its reports_to, group and template (the bots you may see)
-    hub seat list                          Recruiting seats: roles on the chart with no bot yet; they hold no work
-    hub seat create <title> [--description D] [--reports-to R] [--team G]
+    tico seat list                          Recruiting seats: roles on the chart with no bot yet; they hold no work
+    tico seat create <title> [--description D] [--reports-to R] [--team G]
                                            add a seat under you or someone below you; update <seat> / close <seat>
-    hub org order <manager> [--set a,b,c]  a manager's direct reports in the chart's order; --set puts them in
+    tico org order <manager> [--set a,b,c]  a manager's direct reports in the chart's order; --set puts them in
                                            that order (the ones left out keep their places)
-    hub org reports-to <bot:slug|human:id> <manager> [--on-behalf-of turn]
+    tico org reports-to <bot:slug|human:id> <manager> [--on-behalf-of turn]
                                            change who a teammate reports to, as the person who asked
-    hub health check                       what is wrong with the bots, most urgent first, each with its fix
-    hub health metrics [--minutes N]       the server's flight recorder (owners, admins and bots)
+    tico health check                       what is wrong with the bots, most urgent first, each with its fix
+    tico health metrics [--minutes N]       the server's flight recorder (owners, admins and bots)
                                            (the Assistant gets the live snapshot)
-    hub update list [--kind daily|weekly] [--bot X] [--scope all|direct] [--unread] [--limit N]
+    tico update list [--kind daily|weekly] [--bot X] [--scope all|direct] [--unread] [--limit N]
                                            the bots' updates, newest first
-    hub update show <id>                   one update with its thread
-    hub update create "<- bullets>" [--kind daily|weekly] [--learnings-saved N] [--suggestion TEXT ...] [--delivery-batch ID]
+    tico update show <id>                   one update with its thread
+    tico update create "<- bullets>" [--kind daily|weekly] [--learnings-saved N] [--suggestion TEXT ...] [--delivery-batch ID]
                                            post your own update when Tico asks (three bullets)
-    hub update create --skip               nothing real to report: posts nothing, the request closes as skipped
-    hub update create --slides-file week.json [--day D]   a week in review: {goal, kpis, done, focus, blockers}
-    hub update redo --day D [--kind weekly|daily] [--bot B ...] [--with-managers]   ask the bots to redo a past day (owner)
-    hub update mark-read [ids...] [--all] [--unread]
-    hub update reply <id> "<text>"
-    hub update settings <bot> [--daily on|off] [--weekly on|off]
-    hub changelog list [--unread] [--since-version V] [--q TEXT] [--kind product|activity|all]
-    hub changelog mark-read <entry-id> [entry-id ...]   acknowledge changes shown to you
-    hub brief [--since ISO]                alerts, who needs the person, what bots said since --since
-    hub mcp stats [--days N] [--via LABEL] per-tool timing and answer size of assistants' calls
-    hub needs-you start|next|respond|commit|abandon   a person's walk through what needs them (backend/batch.py)
-    hub needs-you show [--by bot|kind] [--limit N]    what needs you, counted as the board counts it, per kind and
+    tico update create --skip               nothing real to report: posts nothing, the request closes as skipped
+    tico update create --slides-file week.json [--day D]   a week in review: {goal, kpis, done, focus, blockers}
+    tico update redo --day D [--kind weekly|daily] [--bot B ...] [--with-managers]   ask the bots to redo a past day (owner)
+    tico update mark-read [ids...] [--all] [--unread]
+    tico update reply <id> "<text>"
+    tico update settings <bot> [--daily on|off] [--weekly on|off]
+    tico changelog list [--unread] [--since-version V] [--q TEXT] [--kind product|activity|all]
+    tico changelog mark-read <entry-id> [entry-id ...]   acknowledge changes shown to you
+    tico brief [--since ISO]                alerts, who needs the person, what bots said since --since
+    tico mcp stats [--days N] [--via LABEL] per-tool timing and answer size of assistants' calls
+    tico needs-you start|next|respond|commit|abandon   a person's walk through what needs them (backend/batch.py)
+    tico needs-you show [--by bot|kind] [--limit N]    what needs you, counted as the board counts it, per kind and
                                                       per bot, with each bot's newest items
-    hub calendar list [--calendar EMAIL]
+    tico calendar list [--calendar EMAIL]
                                            appointments visible on a company calendar
-    hub calendar schedule --title "..." --start ISO --end ISO [--calendar EMAIL]
+    tico calendar schedule --title "..." --start ISO --end ISO [--calendar EMAIL]
                     [--attendee EMAIL ...] [--description "..."] [--no-meet]
                                            queue one idempotent calendar invitation
-    hub calendar status <action-id>        whether the provider confirmed the event
-    hub sql "<select>" [--json|--csv] [--max-rows N] [--param key=value ...]
+    tico calendar status <action-id>        whether the provider confirmed the event
+    tico sql "<select>" [--json|--csv] [--max-rows N] [--param key=value ...]
                                            read-only SQL, what you may see (docs/hub-sql.md)
-    hub db list | doctor [name]            the company databases this bot may read, and a health check
-    hub db <name> "<select>" [--param k=v ...] [--json|--csv] [--max-rows N] [--timeout S]
-    hub db <mongo> find <collection> ['<filter>'] [--projection J] [--sort J] [--limit N] | aggregate <collection> '<pipeline>'
+    tico db list | doctor [name]            the company databases this bot may read, and a health check
+    tico db <name> "<select>" [--param k=v ...] [--json|--csv] [--max-rows N] [--timeout S]
+    tico db <mongo> find <collection> ['<filter>'] [--projection J] [--sort J] [--limit N] | aggregate <collection> '<pipeline>'
                    | count <collection> ['<filter>'] | distinct <collection> <field> | collections
-    hub db <name> --query <id> [--param k=v ...]
+    tico db <name> --query <id> [--param k=v ...]
                                            read-only SQL on a company database, run on this computer
                                            with its credential; every query is audited (docs/databases.md)
-    hub classify [--file F]                spam / injection check on outside text from stdin or F: {verdict, reason}
+    tico classify [--file F]                spam / injection check on outside text from stdin or F: {verdict, reason}
                                            (legit|spam|injection_risk|unchecked); the message bots and Support gate on it
-    hub decision ask --set <name> --state-file s.json [--option covered=opts.json] [--label L]
+    tico decision ask --set <name> --state-file s.json [--option covered=opts.json] [--label L]
                                            ask the decision model typed questions about a state (questions/README.md);
                                            --questions-file q.json instead of --set; --list shows the sets
-    hub decision outcome --ref R --verdict V --action A [--label L]
-                                           after acting on a decision ask or hub classify answer (its `ref`):
+    tico decision outcome --ref R --verdict V --action A [--label L]
+                                           after acting on a decision ask or tico classify answer (its `ref`):
                                            what you did with it, once per call
-    hub gateway catalog [QUERY]            the Tico AI Gateway's lineup: models, decision levels, services (skills/gateway)
-    hub gateway search QUERY [--max 5]     web search through the Gateway: results, answer, cost
-    hub gateway fetch URL [--max-tokens N] read a web page or PDF through the Gateway: title, content, cost
-    hub gateway image PROMPT --category C [--ref FILE]... [--size WxH] [--count N] --out PATH
+    tico gateway catalog [QUERY]            the Tico AI Gateway's lineup: models, decision levels, services (skills/gateway)
+    tico gateway search QUERY [--max 5]     web search through the Gateway: results, answer, cost
+    tico gateway fetch URL [--max-tokens N] read a web page or PDF through the Gateway: title, content, cost
+    tico gateway image PROMPT --category C [--ref FILE]... [--size WxH] [--count N] --out PATH
                                            make an image (storyboard, photo, character or graphic) and save it;
                                            PATH.json beside it says how it was made
-    hub decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
+    tico decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
                                            month's spend against the cap (`text` is the readout in plain words)
-    hub template list                      the bot templates this company can pick from
-    hub bot create --template T [--name "Display"] [<slug>]
+    tico template list                      the bot templates this company can pick from
+    tico bot create --template T [--name "Display"] [<slug>]
                                            set a chosen bot up in the workspace (BotOps only); the slug is picked
                                            from the name (else the template's) and printed. It also registers
                                            the bot with Tico as the requester when a person's message started the run,
                                            and asks for its empty <org>/bot-<slug> when GitHub is connected (exits
                                            non-zero when a person must first let BotOps create repositories)
-    hub bot create --record-only --name N [<slug>] [--description D] [--reports-to R] [--template T]
+    tico bot create --record-only --name N [<slug>] [--description D] [--reports-to R] [--template T]
                                            only register a new bot with Tico (planned), as the requester (BotOps)
-    hub bot check <slug>                   what preflight would still refuse about that repository
-    hub bot check-names <slug|folder> [--fix]
+    tico bot check <slug>                   what preflight would still refuse about that repository
+    tico bot check-names <slug|folder> [--fix]
                                            old column, field and command names left in a bot's files; --fix rewrites
                                            the ones with one new spelling (runs here: no server)
-    hub bot update <slug> [--new-slug S] [--reports-to R] [--display-name N] [--description D] [--status S]
+    tico bot update <slug> [--new-slug S] [--reports-to R] [--display-name N] [--description D] [--status S]
                                            apply a person's bot-settings request as them (BotOps)
-    hub bot access <slug> [--see V] [--read V] [--write V]
+    tico bot access <slug> [--see V] [--read V] [--write V]
                                            show or set who sees, reads, writes (V: everyone, or ben,group:legal,bot:x)
-    hub bot owners <slug> [--add P ...] [--remove P ...]
+    tico bot owners <slug> [--add P ...] [--remove P ...]
                                            add or remove the humans who own a bot, as the requester (BotOps)
-    hub bot mail <slug> [--send|--no-send]
+    tico bot mail <slug> [--send|--no-send]
                                            show or set whether the bot sends mail without approval and its forward
                                            targets; a person who manages the bot only, never a bot (docs/mail.md)
-    hub bot setup-done [slug]              mark a bot's onboarding complete: a person above it on the org chart
-    hub bot ready --summary S              an onboarding bot says it is ready, with what it learned
-    hub bot place <bot> [--computer <label|id>]
+    tico bot setup-done [slug]              mark a bot's onboarding complete: a person above it on the org chart
+    tico bot ready --summary S              an onboarding bot says it is ready, with what it learned
+    tico bot place <bot> [--computer <label|id>]
                                            put a bot on a computer: the one named, or the best one that takes it
-    hub bot go-live <bot> [--computer C] [--no-setup]
+    tico bot go-live <bot> [--computer C] [--no-setup]
                                            place it if needed, turn it on, start its setup; waits for the computer
                                            to get its repository and finishes by itself (`--help`: the file's shape)
-    hub bot model <bot> [<model>] [--effort E]
+    tico bot model <bot> [<model>] [--effort E]
                                            list the models, or change the bot's
-    hub bot task-model <bot> [<model>] [--effort E] [--harness H] [--clear]
+    tico bot task-model <bot> [<model>] [--effort E] [--harness H] [--clear]
                                            the model the bot's tasks run on; --clear puts them back on its own
-    hub bot pause|resume <bot>             stop or restart a bot (resume places one that has no computer)
-    hub bot budget <bot> [--hour N] [--day N] | release
+    tico bot pause|resume <bot>             stop or restart a bot (resume places one that has no computer)
+    tico bot budget <bot> [--hour N] [--day N] | release
                                            read or set a bot's runs per hour and per day (0 no limit, default follows the
                                            team), or release it after Tico stopped it
-    hub bot release <bot>                  release a bot Tico stopped (failed runs, budget, or runs it could not start)
-    hub bot profile <bot> [doer|reviewer|lead|manager|responder|monitor|custom] [--batch-seconds N] [--digest-hour H]
+    tico bot release <bot>                  release a bot Tico stopped (failed runs, budget, or runs it could not start)
+    tico bot profile <bot> [doer|reviewer|lead|manager|responder|monitor|custom] [--batch-seconds N] [--digest-hour H]
                                            read or set what wakes a bot and which tasks it takes (--sweeps/--pulls/--takes
                                            are for custom; --confirm-drop-rules when leaving custom deletes its own rules)
-    hub bot scope <bot> <task>|--release   limit a bot's claims to one task and its subtasks, or lift that
-    hub bot copy <bot> [--slug S] [--name N] [--with-memory] [--computer C]
+    tico bot scope <bot> <task>|--release   limit a bot's claims to one task and its subtasks, or lift that
+    tico bot copy <bot> [--slug S] [--name N] [--with-memory] [--computer C]
                                            copy a bot into a new one the requester owns: its instructions, skills, playbooks and
                                            tools, never a secret; notes and memory only with --with-memory (BotOps)
-    hub bot update-from-original <bot> [--resolved]
+    tico bot update-from-original <bot> [--resolved]
                                            bring a copy's instructions up to date with its original (three-way merge, one commit)
-    hub bot suggest-to-original <bot> [--paths P ...] [--title T]
+    tico bot suggest-to-original <bot> [--paths P ...] [--title T]
                                            a pull request (or a task with the diff) for the original from the copy's changes
-    hub skill copy <skill> --from <bot> --to <bot> [<bot> ...] [--replace]
+    tico skill copy <skill> --from <bot> --to <bot> [<bot> ...] [--replace]
                                            copy skills/<skill>/ into other bots' repositories, a commit in each
-    hub skill submit <skill> [--path DIR] [--note TEXT] [--base N]
+    tico skill submit <skill> [--path DIR] [--note TEXT] [--base N]
                                            propose a skill folder to the company's Skills directory; an admin approves it (docs/skills.md)
-    hub bot repo-create <slug> [--template OWNER/REPO | --empty]
+    tico bot repo-create <slug> [--template OWNER/REPO | --empty]
                                            owner or BotOps: create <org>/bot-<slug> from a template (docs/github-app.md)
-    hub human add <email> [--name N] [--title T] [--reports-to P]
+    tico human add <email> [--name N] [--title T] [--reports-to P]
                                            add a human to the roster and sign-in list (a Confirm card first, unless they are in the team's domain)
-    hub human list                         the humans on the roster
-    hub human access <human> [--see V] [--read V] [--write V]
+    tico human list                         the humans on the roster
+    tico human access <human> [--see V] [--read V] [--write V]
                                            show or set who sees, reads (their Home), writes (DMs) to a person
-    hub group list                         the groups (they nest), with their humans and bots
-    hub group update [<group>] [--name N] [--parent G|''] [--lead bot:B|person:P|''] [--add-human H ...]
+    tico group list                         the groups (they nest), with their humans and bots
+    tico group update [<group>] [--name N] [--parent G|''] [--lead bot:B|person:P|''] [--add-human H ...]
                      [--add-bot B ...] [--remove-human H ...] [--remove-bot B ...] [--on-behalf-of turn]
                                            an owner or admin (a lead in its groups), or BotOps / the Strategy Bot as
                                            the person who asked: with no <group>, create one from --name; else
                                            rename, move, lead or fill it. A teammate is in one group at a time
-    hub group delete <group> [--on-behalf-of turn]
+    tico group delete <group> [--on-behalf-of turn]
                                            delete a group; its teammates and groups move up to its parent
-    hub group access <group> [--see V] [--read V] [--write V]
+    tico group access <group> [--see V] [--read V] [--write V]
                                            show or set who sees, reads, writes to a group (a lead or an admin)
-    hub api GET|POST|PUT|PATCH|DELETE <path> ['{json}']
+    tico api GET|POST|PUT|PATCH|DELETE <path> ['{json}']
                                            BotOps: any v2 route, as the person who asked; a Confirm card for what
                                            always needs their click. Never a secret in the body
-    hub computer list [--computer C]       the computers a bot may go on, one short row each; one in full
-    hub computer performance <label|id> [--hours 24]
+    tico computer list [--computer C]       the computers a bot may go on, one short row each; one in full
+    tico computer performance <label|id> [--hours 24]
                                            its CPU, memory and disk over time, overloads and what ran then
-    hub credential request <ENV> [--for-bot B] [--label "your Jira login"] [--format "you@x.com:API token"]
+    tico credential request <ENV> [--for-bot B] [--label "your Jira login"] [--format "you@x.com:API token"]
                     [--help-url https://...] [--kind api_key|token|password]
                                            open a card in the chat for the person to type the secret into
-    hub credential set <ENV> --for-bot B [--name N] [--kind K] [--username U] [--no-redact]
+    tico credential set <ENV> --for-bot B [--name N] [--kind K] [--username U] [--no-redact]
                                            store a secret a person gave you (read from stdin, never the command line)
-    hub credential list                    names, variables and which bots have each; never a value
-    hub credential grant <name> --to <bot>       give a bot a stored credential (a credential admin; a bot has only what is granted)
-    hub credential revoke <name> --from <bot>    take it away again
-    hub credential import <VAR> --from-bot <bot> [--name N] [--wait S]
+    tico credential list                    names, variables and which bots have each; never a value
+    tico credential grant <name> --to <bot>       give a bot a stored credential (a credential admin; a bot has only what is granted)
+    tico credential revoke <name> --from <bot>    take it away again
+    tico credential import <VAR> --from-bot <bot> [--name N] [--wait S]
                                            move one variable from that bot's own secrets file into Credentials, granted to
                                            that bot: its computer sends the value itself, it is never shown
-    hub slack channel list                 the Slack channels bots may read and post in, who reads each
-    hub slack channel add <channel> [--reader BOT ...] [--post|--no-post] [--note "..."] [--digest-hours N]
+    tico slack channel list                 the Slack channels bots may read and post in, who reads each
+    tico slack channel add <channel> [--reader BOT ...] [--post|--no-post] [--note "..."] [--digest-hours N]
                                            list a channel (#name or id) or add readers to one already listed; an owner
                                            or an admin (BotOps: as the requester). Posting is on unless --no-post
-    hub slack channel remove <channel> [--reader BOT]   take the channel off the list, or only that reader off it
-    hub slack channel import               store the channels of the old registry/slack-channels.yaml, once
-    hub support file "<message>"           tell the Tico team about a gap or fault (a Confirm card first)
-    hub support report --message "..." | --file report.md [--no-ids]
+    tico slack channel remove <channel> [--reader BOT]   take the channel off the list, or only that reader off it
+    tico slack channel import               store the channels of the old registry/slack-channels.yaml, once
+    tico support file "<message>"           tell the Tico team about a gap or fault (a Confirm card first)
+    tico support report --message "..." | --file report.md [--no-ids]
                                            send a Tico bug report to the Tico team: at once when the team lets bots send
                                            without asking, else drafted for a person to approve in Needs you (the
                                            version and install ID go with it unless --no-ids). Prints its id or ticket
-    hub support send --approval <id>       send the report once a person approved it, filed as them; again is the
+    tico support send --approval <id>       send the report once a person approved it, filed as them; again is the
                                            same ticket, never a second one
-    hub health findings                    what Check health found on this install, each problem with its report
-    hub health report <key>                report a finding as a Tico bug, one ticket per problem
-    hub finance search [--kind entry|feed|bill|invoice|contact|rule|card|account] [--q words] [--status S] [--vendor V]
+    tico health findings                    what Check health found on this install, each problem with its report
+    tico health report <key>                report a finding as a Tico bug, one ticket per problem
+    tico finance search [--kind entry|feed|bill|invoice|contact|rule|card|account] [--q words] [--status S] [--vendor V]
                     [--start D] [--end D] [--cursor C] [--limit N]   the books you may see; name a kind to page
-    hub finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|close|sales_tax|1099>
+    tico finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|close|sales_tax|1099>
                     [--start D] [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor] [--month YYYY-MM]
                     [--year YYYY]
-    hub finance metric <name> [--budget-id B] [--start D] [--end D] [--days N]   one number, with its as-of time
-    hub finance act <kind|help> [--payload JSON|-] [--dry-run] [--operation-id KEY]
+    tico finance metric <name> [--budget-id B] [--start D] [--end D] [--days N]   one number, with its as-of time
+    tico finance act <kind|help> [--payload JSON|-] [--dry-run] [--operation-id KEY]
                                            ask for one Finance action; help lists kinds, `help --payload
                                            '{"kind":"bill_create"}'` one kind's fields. The key makes a retry land once
-    hub finance action <action-id>         an action's status and result
-    hub finance inbox [--kind K] [--cursor C] [--limit N]   your Finance work queue, with counts per kind; --kind pages one kind
-    hub finance card-fill                  fill your card into a checkout (not available yet)
-    hub task-manager status                the Task Manager: bot, hourly report switch and schedule, last run, each department
-    hub task-manager on|off                the hourly department report (the owner or an admin)
-    hub task-manager schedule <business|hourly|4h|daily> [--at HH:MM]
+    tico finance action <action-id>         an action's status and result
+    tico finance inbox [--kind K] [--cursor C] [--limit N]   your Finance work queue, with counts per kind; --kind pages one kind
+    tico finance card-fill                  fill your card into a checkout (not available yet)
+    tico task-manager status                the Task Manager: bot, hourly report switch and schedule, last run, each department
+    tico task-manager on|off                the hourly department report (the owner or an admin)
+    tico task-manager schedule <business|hourly|4h|daily> [--at HH:MM]
                                            when the report runs (business = hourly, weekdays 08:00 to 18:00)
-    hub task-manager run                   run the department check now
-    hub task-manager bot on|off            turn the Task Manager bot itself on or off (the owner)
-    hub maintenance status                 schedule, pause, monthly judge cap, and each step's switch, frequency and last run
-    hub maintenance set [flags]            change them (owner or admin): --step KEY with --on/--off, --frequency,
+    tico task-manager run                   run the department check now
+    tico task-manager bot on|off            turn the Task Manager bot itself on or off (the owner)
+    tico maintenance status                 schedule, pause, monthly judge cap, and each step's switch, frequency and last run
+    tico maintenance set [flags]            change them (owner or admin): --step KEY with --on/--off, --frequency,
                                            --every, --unit or --max-bots for a step; --schedule, --pause/--resume, --cap
-    hub maintenance run [--step KEY]       run now, all steps or one (owner or admin)
-    hub maintenance runs [--limit N]       recent runs and each step's status
-    hub service-key create --label "Billing backend"
+    tico maintenance run [--step KEY]       run now, all steps or one (owner or admin)
+    tico maintenance runs [--limit N]       recent runs and each step's status
+    tico service-key create --label "Billing backend"
                                            the owner or an admin: a key another system uses to file, update and close
                                            tasks (POST /api/v2/inbound/tasks, docs/service-keys.md); shown once
-    hub service-key create --label "Release Manager" --scope update
+    tico service-key create --label "Release Manager" --scope update
                                            the owner: a key a release bot on another install uses to check for,
                                            start and follow an update of this one (/api/v2/system/update), and nothing else
-    hub service-key list | revoke <id>     every service key, never its secret; stop one at once
-    hub grokbot sync --file f.json         sync your Grok Bots into Tico
-    hub external sync --provider dots --file f.json   sync your Grok Bots or Dots into Tico
+    tico service-key list | revoke <id>     every service key, never its secret; stop one at once
+    tico grokbot sync --file f.json         sync your Grok Bots into Tico
+    tico external sync --provider dots --file f.json   sync your Grok Bots or Dots into Tico
 
 The commands of the last release keep working for one more release, hidden: each prints a one-line "renamed to"
 notice on stderr and runs the new command (RENAMED below). A command that is gone (REMOVED below) prints one
@@ -682,7 +682,7 @@ Identity (§3): a bot is `HUB_BOT` + `HUB_TOKEN` from the run's environment (`HU
 `HUB_BOT`, still read); the runner sets both, with `HUB_API_URL` and `HUB_WORKSPACE` (where this company's bot
 repositories live), for every run. There is no `--as`. `--human <id>` is still
 parsed so an old command line is not misread, and the API refuses it: remote identity comes
-from authentication. Outside a run, `hub sql` and the tool reads (`tool list`, `tool show`,
+from authentication. Outside a run, `tico sql` and the tool reads (`tool list`, `tool show`,
 `tool query-search`) fall back to this Mac's runner credential (`~/.config/tico/runner.json`); `sql`
 queries as the person who registered the computer. A person's own script sets `HUB_API_URL` and a personal
 API token as `HUB_TOKEN` (Settings, Computers, API tokens) and no `HUB_BOT`: every command is
@@ -720,7 +720,7 @@ class CliError(Exception):
 
 def task_update_status(value):
     if value == "closed":
-        raise argparse.ArgumentTypeError("use `hub task close <id>` to close a task")
+        raise argparse.ArgumentTypeError("use `tico task close <id>` to close a task")
     return value
 
 
@@ -805,7 +805,7 @@ def task_problems(actor, owner, title, body, type=None):
 
 
 def cmd_task_dry_run(args, who):
-    """`hub task create --dry-run`: print what a create would be refused for; write nothing.
+    """`tico task create --dry-run`: print what a create would be refused for; write nothing.
 
     No database is opened and no request is made; the owner's kind comes from the registry
     files and the same lint runs here, so a bot on the cloud API can size a human item before
@@ -913,7 +913,7 @@ def on_off(word):
 
 
 def _finance_payload(text):
-    """`hub finance act --payload`: a JSON object, or `-` to read it from stdin."""
+    """`tico finance act --payload`: a JSON object, or `-` to read it from stdin."""
     try:
         value = json.loads(sys.stdin.read() if text == "-" else text)
     except ValueError as exc:
@@ -979,7 +979,7 @@ def command_paths(p, prefix=()):
 def did_you_mean(words, names):
     """A one-line hint naming the closest of `names` (commands that exist), or "" when none is close."""
     close = difflib.get_close_matches(" ".join(words), names, n=2, cutoff=0.5)
-    return f" Did you mean: {', '.join('hub ' + name for name in close)}?" if close else ""
+    return f" Did you mean: {', '.join('tico ' + name for name in close)}?" if close else ""
 
 
 def typed_words(argv):
@@ -1014,7 +1014,7 @@ def unknown_flag_hint(p, argv, unknown):
 
 
 def example_line(p):
-    """`hub task show <id>`: the command's name with a placeholder for each positional it takes."""
+    """`tico task show <id>`: the command's name with a placeholder for each positional it takes."""
     parts = [p.prog]
     for a in p._actions:
         if a.option_strings or isinstance(a, argparse._SubParsersAction):
@@ -1043,7 +1043,7 @@ class HubParser(argparse.ArgumentParser):
             hint = did_you_mean(typed_words(argv), names)
         elif argv is not None and message.startswith("unrecognized arguments: "):
             hint = unknown_flag_hint(self, argv, message[len("unrecognized arguments: ") :].split())
-        elif "invalid choice" in message and self.prog != "hub":  # a bad word under a command, e.g. `task lst`
+        elif "invalid choice" in message and self.prog != "tico":  # a bad word under a command, e.g. `task lst`
             bad = message.split("invalid choice: '", 1)[-1].split("'", 1)[0]
             under = self.prog.split()[1:]
             names = [" ".join(under + list(path)) for path in command_paths(self)]
@@ -1053,7 +1053,7 @@ class HubParser(argparse.ArgumentParser):
 
 
 def parser():
-    p = HubParser(prog="hub", description="the company hub: messages, tasks, status")
+    p = HubParser(prog="tico", description="the company hub: messages, tasks, status")
     p.add_argument("--version", action=_Version, help="print the Tico version")
     sub = p.add_subparsers(dest="cmd")
 
@@ -1875,7 +1875,7 @@ def parser():
         "learned", help="what your chat bot has learned: your layer, and the company's for the owner"
     ).set_defaults(fn="assistant learned")
     s = assistant.add_parser("withdraw", help="take back a Confirm card that waits: it never runs (any teammate)")
-    s.add_argument("id", help="the card's proposal id (hub assistant proposals)")
+    s.add_argument("id", help="the card's proposal id (tico assistant proposals)")
     s.add_argument("--reason", default="", help="why, in one short sentence: the person reads it in their chat")
     s.set_defaults(fn="assistant withdraw")
     change = assistant.add_parser(
@@ -1887,7 +1887,7 @@ def parser():
     s.add_argument("--before", help="the `next` of the page before, to read older changes")
     s.set_defaults(fn="assistant change list")
     s = change.add_parser("restore", help="undo one change as you; restoring it again changes nothing")
-    s.add_argument("id", help="the change's id (hub assistant change list)")
+    s.add_argument("id", help="the change's id (tico assistant change list)")
     s.set_defaults(fn="assistant change restore")
     s = assistant.add_parser("proposals", help="the Confirm cards still waiting for their owner (find one to withdraw)")
     s.add_argument("--proposer", choices=["botops", "assistant"], default=None, help="only the cards one proposed")
@@ -2016,7 +2016,7 @@ def parser():
     )
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
-    s.add_argument("--goal", help="the goal this task serves (hub goal list); optional")
+    s.add_argument("--goal", help="the goal this task serves (tico goal list); optional")
     ways = delivery_flags(s, steer=False)
     # The older words for --defer, kept: a deferred task with the default deadline.
     ways.add_argument("--next-run", dest="next_run", action="store_true", help="the older name for --defer")
@@ -2035,7 +2035,7 @@ def parser():
     s.add_argument("--number", type=int, help="movers: keep an imported ticket's number")
     s.add_argument(
         "--model",
-        help="the model this bot-owned task's runs use, from `hub bot model`'s list; leave out "
+        help="the model this bot-owned task's runs use, from `tico bot model`'s list; leave out "
         "for the bot's task model",
     )
     s.add_argument("--effort", help="the reasoning effort that model takes")
@@ -2128,7 +2128,7 @@ def parser():
         action="append",
         metavar="PATH|FILE[@N]",
         help="a file version for them to review, shown on the card: a path here (published first, as "
-        "hub file publish does) or a file id; repeat. Without --option: Approve / Request changes",
+        "tico file publish does) or a file id; repeat. Without --option: Approve / Request changes",
     )
     s.add_argument(
         "--pick",
@@ -2171,8 +2171,8 @@ def parser():
         help="with --status waiting: the person you need. It files them a question task under this one, "
         "and this task opens again with their answer. --note is your question: one or two plain "
         "sentences saying what you need and what happens after, at most 40 words, with no ids, hashes, "
-        "file paths or tool names (\"PR #1555\" is fine). Not a bot: ask a bot in a DM (hub message "
-        "send <slug> ... --needs-action), or wait on its task (hub task wait <id> --on task:<its task>)",
+        "file paths or tool names (\"PR #1555\" is fine). Not a bot: ask a bot in a DM (tico message "
+        "send <slug> ... --needs-action), or wait on its task (tico task wait <id> --on task:<its task>)",
     )
     s.add_argument("--goal", help='the goal this task serves; "" takes it off')
     s.add_argument(
@@ -2348,7 +2348,7 @@ def parser():
         )
         s.set_defaults(
             fn="task follow", **({"unfollow": True} if change == "unfollow" else {})
-        )  # one tool: hub_task_follow
+        )  # one tool: tico_task_follow
     s = task.add_parser("relate", help="relate another task to this one: <id> <kind> <task>")
     s.add_argument("id")
     s.add_argument("task")
@@ -2604,7 +2604,7 @@ def parser():
     s.add_argument("--body", default="")
     s.add_argument("--body-file", dest="body_file")
     s.add_argument("--top", action="store_true", help="put it first in the owner's order")
-    s.add_argument("--bet", dest="bet_id", help="the strategy bet it serves (hub strategy show lists them)")
+    s.add_argument("--bet", dest="bet_id", help="the strategy bet it serves (tico strategy show lists them)")
     s.add_argument(
         "--on-behalf-of",
         metavar="MESSAGE_ID",
@@ -3546,7 +3546,7 @@ def parser():
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="tool index")
     s = tools.add_parser("check", help="check an API tool's keys now")
-    s.add_argument("id", help="the API tool id (`hub tool index`)")
+    s.add_argument("id", help="the API tool id (`tico tool index`)")
     s.set_defaults(fn="tool check")
     s = tools.add_parser("call", help="call a proxied API tool from a turn; Tico adds the real key")
     s.add_argument("tool", help="the API tool id, e.g. close-crm (its TICO_TOOL_<ID>_URL)")
@@ -3561,7 +3561,7 @@ def parser():
     s.add_argument("--id", dest="query_id", help="print one query's SQL and params")
     s.add_argument("--json", action="store_true", help="print the matching queries as JSON")
     s.set_defaults(fn="tool query-search")
-    s = tools.add_parser("learn", help='add a learning: hub tool learn <service> "<text>"')
+    s = tools.add_parser("learn", help='add a learning: tico tool learn <service> "<text>"')
     s.add_argument("service")
     s.add_argument("text")
     s.set_defaults(fn="tool learn")
@@ -3588,7 +3588,7 @@ def parser():
     s = tools.add_parser(
         "update", help="change a declared tool's can, scope or note in place; never remove and add again"
     )
-    s.add_argument("id", help="the tool id from `hub tool list --bot`")
+    s.add_argument("id", help="the tool id from `tico tool list --bot`")
     s.add_argument("--bot", required=True, help="the bot's slug")
     s.add_argument(
         "--can", help="the full list from now on: read, draft, post, act, use, send or write; comma separated"
@@ -3605,7 +3605,7 @@ def parser():
     s.set_defaults(fn="tool update")
     s = tools.add_parser("remove", help="ask BotOps to remove a tool, or withdraw a pending request")
     s.add_argument("bot")
-    s.add_argument("id", help="the tool id from `hub tool list --bot`")
+    s.add_argument("id", help="the tool id from `tico tool list --bot`")
     s.set_defaults(fn="tool remove")
 
     auto = sub.add_parser(
@@ -3779,7 +3779,7 @@ def parser():
         ("delete", "remove the address; the trigger and its own address stay"),
     ):
         s = relay.add_parser(word, help=text)
-        s.add_argument("trigger", help="the trigger id from `hub trigger list`")
+        s.add_argument("trigger", help="the trigger id from `tico trigger list`")
         s.set_defaults(fn="trigger relay " + word)
     relay_top = sub.add_parser("relay", help="webhooks through Tico Gateway").add_subparsers(dest="sub")
     s = relay_top.add_parser(
@@ -3787,7 +3787,7 @@ def parser():
     )
     s.set_defaults(fn="relay status")
     s = relay_top.add_parser("set", help="whether a delivery to a trigger's Gateway address starts a sleeping server")
-    s.add_argument("trigger", help="the trigger id from `hub trigger list`")
+    s.add_argument("trigger", help="the trigger id from `tico trigger list`")
     s.add_argument(
         "--wake", type=on_off, metavar="on|off", required=True, help="start the server on a delivery (on) or not (off)"
     )
@@ -3868,7 +3868,7 @@ def parser():
         ("ask", "a setting you may not change: ask one person who may, with its Confirm card"),
     ):
         s = catalogue.add_parser(leaf, help=text)
-        s.add_argument("key", help="the key `hub settings find` gives, e.g. team.rules.admin_sql")
+        s.add_argument("key", help="the key `tico settings find` gives, e.g. team.rules.admin_sql")
         if leaf in ("set", "ask"):
             s.add_argument("value", help="on/off, a number, text, a comma-separated list or JSON")
             s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
@@ -4145,7 +4145,7 @@ def parser():
     s.add_argument("--since")
     s.set_defaults(fn="run list")
     s = runs.add_parser("export", help="a run's captured provider stream (owners and engineering bots)")
-    s.add_argument("run", help="the run id, from hub run list")
+    s.add_argument("run", help="the run id, from tico run list")
     s.add_argument(
         "--fixture",
         action="store_true",
@@ -4299,14 +4299,14 @@ def parser():
         dest="sub"
     )
     s = grok.add_parser("sync", help="sync Grok Bots from a JSON file: {\"bots\": [...], \"source\": ...}")
-    s.add_argument("--file", required=True, help="the JSON body hub_grokbot_sync takes")
+    s.add_argument("--file", required=True, help="the JSON body tico_grokbot_sync takes")
     s.set_defaults(fn="grokbot sync")
     ext = sub.add_parser(
         "external", help="your bots on another platform in Tico (docs/external-agent-sync.md)"
     ).add_subparsers(dest="sub")
     s = ext.add_parser("sync", help="sync Grok Bots or Dots from a JSON file: {\"bots\": [...], \"source\": ...}")
     s.add_argument("--provider", required=True, choices=("grokbot", "dots", "muse"))
-    s.add_argument("--file", required=True, help="the JSON body hub_external_sync takes")
+    s.add_argument("--file", required=True, help="the JSON body tico_external_sync takes")
     s.set_defaults(fn="external sync")
 
     calendar = sub.add_parser("calendar", help="read or schedule company appointments").add_subparsers(dest="sub")
@@ -4445,7 +4445,7 @@ def parser():
     s.add_argument("--days", type=int, help="how many days back from now (1-31, 7 by default)")
     s.set_defaults(fn="decision readout")
 
-    # A new bot: BotOps builds the chosen template in the workspace (`hub bot create`) or only registers it (--record-only).
+    # A new bot: BotOps builds the chosen template in the workspace (`tico bot create`) or only registers it (--record-only).
     # The Librarian (docs/librarian.md): ask a question, and read a linked doc on this computer.
     s = docs.add_parser("ask", help="ask the Librarian about the team's docs and wait for the answer")
     s.add_argument("question")
@@ -4475,7 +4475,7 @@ def parser():
         "create", help="build a bot from a template in the workspace and register it; --record-only only registers"
     )
     s.add_argument("slug", nargs="?", help="leave out: Tico picks one from --name, else the template's name")
-    s.add_argument("--template", help="a template from `hub template list`")
+    s.add_argument("--template", help="a template from `tico template list`")
     s.add_argument(
         "--record-only",
         dest="record_only",
@@ -4521,7 +4521,7 @@ def parser():
     s.add_argument(
         "--capture-stream",
         choices=("on", "off"),
-        help="on (owner only): keep each run's raw provider stream a week for hub run export; off (default): not",
+        help="on (owner only): keep each run's raw provider stream a week for tico run export; off (default): not",
     )
     s.add_argument(
         "--subscribe-updates",
@@ -5219,7 +5219,7 @@ READ_OUTSIDE_A_TURN = ("sql", "tool list", "tool show", "tool query-search")
 
 
 # ----------------------------------------------------------------------------- the last release's spellings
-def _goal_auto(rest):  # hub goal auto <id>  ->  hub goal status <id> auto
+def _goal_auto(rest):  # tico goal auto <id>  ->  tico goal status <id> auto
     return rest[:1] + ["auto"] + rest[1:]
 
 
@@ -5308,8 +5308,8 @@ RENAMED.sort(key=lambda rule: -len(rule[0]))
 # Commands taken away with asks (Tico 0.5): each prints one line naming what to use instead and exits 1. The longest
 # old spelling that matches wins.
 ASK_INSTEAD = (
-    'ask a person with: hub task question "<question>" --on <person>; '
-    'ask a bot with: hub message send <bot> "<question>" --needs-action'
+    'ask a person with: tico task question "<question>" --on <person>; '
+    'ask a bot with: tico message send <bot> "<question>" --needs-action'
 )
 ANSWER_INSTEAD = "a question to a person is a question task: answer it in Tico (Needs you); a bot's question is a DM"
 REMOVED = [
@@ -5322,7 +5322,7 @@ REMOVED = [
     (("task", "ask-resolve"), ANSWER_INSTEAD),
 ]
 REMOVED.sort(key=lambda rule: -len(rule[0]))
-NOTICE_COMMANDS = ("list",)  # the subcommands `hub notice` has now
+NOTICE_COMMANDS = ("list",)  # the subcommands `tico notice` has now
 
 
 MARKETING_TYPE = (
@@ -5363,14 +5363,14 @@ LEGACY_IDEA_FLAGS = (
 
 
 def legacy_idea(argv):
-    """The old `hub growth idea create|list|verdict` lines as the task commands they are now, run in order, with the
+    """The old `tico growth idea create|list|verdict` lines as the task commands they are now, run in order, with the
     notice to print; None for any other line. Ideas are tasks of the idea type (id, not name: a team's own Marketing type
     does not change where they go): a channel is its label, a verdict moves the task to its step with what it found as
     the note. The ICE scores, segments and the idea's source have no task field and are read and dropped; the bet and
     the KPI stay as lines in the body."""
     if argv[:2] != ["growth", "idea"] or argv[2:3] not in (["create"], ["list"], ["verdict"]):
         return None
-    p = argparse.ArgumentParser(prog="hub growth idea", allow_abbrev=False)
+    p = argparse.ArgumentParser(prog="tico growth idea", allow_abbrev=False)
     p.add_argument("verb")
     p.add_argument("id", nargs="?")
     p.add_argument("--channel", action="append")
@@ -5409,14 +5409,14 @@ def legacy_idea(argv):
         ]
         for channel in old.channel or []:
             line += ["--label", f"channel:{channel}"]
-        return f'"hub growth idea create" is now "hub task create --type {MARKETING_TYPE}"', [line + json_out]
+        return f'"tico growth idea create" is now "tico task create --type {MARKETING_TYPE}"', [line + json_out]
     if old.verb == "list":
         line = ["task", "list", "--type", MARKETING_TYPE]
         if old.status:
             line += ["--step", legacy_idea_step(old.status)]
         if old.channel:
             line += ["--label", f"channel:{old.channel[0]}"]
-        return f'"hub growth idea list" is now "hub task list --type {MARKETING_TYPE}"', [line + json_out]
+        return f'"tico growth idea list" is now "tico task list --type {MARKETING_TYPE}"', [line + json_out]
     if not old.status:
         p.error("verdict needs --status won|lost|inconclusive|dropped|paused")
     if not old.id:
@@ -5429,13 +5429,13 @@ def legacy_idea(argv):
         found = "Test paused"  # a pause needs a note; with no result or learning, the note says only that
     if found:
         update += ["--note", found]  # the verdict's words are the note of every outcome
-    return ('"hub growth idea verdict" is now "hub task update --step --note"', [update + json_out])
+    return ('"tico growth idea verdict" is now "tico task update --step --note"', [update + json_out])
 
 
 def parse(p, argv):
     """`p.parse_args(argv)`, except that a `--json` no command on the line takes is ignored, so a bot that adds it out of
     habit gets the command's normal answer instead of a usage error. One parse: a value read from standard input is read
-    once, a `--json` after `--` stays a value, and a command with its own `--json` (`hub tool list`) still gets it."""
+    once, a `--json` after `--` stays a value, and a command with its own `--json` (`tico tool list`) still gets it."""
     p.hub_argv = list(argv)  # the errors below name the closest command the line could have meant
     args, extra = p.parse_known_args(argv)
     left = [a for a in extra if a != "--json"]
@@ -5448,7 +5448,7 @@ def removed_notice(argv):
     """The one line for a command that is gone (REMOVED), or None."""
     for old, instead in REMOVED:
         if tuple(argv[: len(old)]) == old:
-            return f'hub: "{" ".join(old)}" is gone; {instead}'
+            return f'tico: "{" ".join(old)}" is gone; {instead}'
     return None
 
 
@@ -5461,23 +5461,23 @@ def rename_argv(argv):
         and argv[1] not in ("create", "list", "delete")
         and not argv[1].startswith("-")
     ):
-        return ["note", "create"] + argv[1:], '"hub note <bot> <text>" is now "hub note create <bot> <text>"'
+        return ["note", "create"] + argv[1:], '"tico note <bot> <text>" is now "tico note create <bot> <text>"'
     if argv[:1] == ["notice"] and len(argv) > 1 and (argv[1] in NOTICE_COMMANDS or argv[1].startswith("-")):
-        return argv, None  # `hub notice list` is new; only `hub notice <text>` is the old send
-    if argv[:2] in (["org", "order"], ["org", "reports-to"]):  # `hub org` alone is the old `hub team show`
+        return argv, None  # `tico notice list` is new; only `tico notice <text>` is the old send
+    if argv[:2] in (["org", "order"], ["org", "reports-to"]):  # `tico org` alone is the old `tico team show`
         return argv, None
     for old, new, tail, rewrite in RENAMED:
         if tuple(argv[: len(old)]) == old:
             rest = argv[len(old) :]
             rest = (rewrite(rest) if rewrite else rest) + list(tail)
-            return list(new) + rest, f'"hub {" ".join(old)}" is now "hub {" ".join(new)}"'
+            return list(new) + rest, f'"{" ".join(old)}" is now "tico {" ".join(new)}"'
     return argv, None
 
 
 def runner_credential(path=None):
     """This Mac's runner credential as (url, token), or None when it is not registered.
 
-    `hub sql` and the integration reads use it; the API answers a runner's SQL as the person
+    `tico sql` and the integration reads use it; the API answers a runner's SQL as the person
     who registered the machine. That is how a script or an agent on the Mac reads without a
     browser session.
     """
@@ -5505,7 +5505,7 @@ def main(argv):
     old = legacy_idea(argv)
     if old:
         notice, lines = old
-        print(f"hub: {notice}; the old name stops working in the next release", file=sys.stderr)
+        print(f"tico: {notice}; the old name stops working in the next release", file=sys.stderr)
         for line in lines:
             code = run(line, who)
             if code:
@@ -5517,7 +5517,7 @@ def main(argv):
         return 1
     argv, renamed = rename_argv(argv)
     if renamed:
-        print(f"hub: {renamed}; the old name stops working in the next release", file=sys.stderr)
+        print(f"tico: {renamed}; the old name stops working in the next release", file=sys.stderr)
     return run(argv, who)
 
 

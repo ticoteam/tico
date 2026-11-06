@@ -241,7 +241,7 @@ def _broken(c, wait, reason):
             H.task(c, wait['task_id']),
             wait['owner'],
             f"Tico stopped holding a place for this task's {wait['repo']} worktree: {reason}. Run "
-            f"`hub task worktree add {wait['repo']}` again when you work on this task.",
+            f"`tico task worktree add {wait['repo']}` again when you work on this task.",
             refs={'worktree_wait': wait['id'], 'quiet': True},
             trigger='other',
             source=wait['id'],
@@ -285,7 +285,7 @@ def _serve_one(c, wait, full, default_org):
                     wait,
                     task,
                     f"Tico stopped holding a place for this task's {wait['repo']} worktree: this "
-                    "bot's computer cannot prepare one by itself. Run `hub task worktree add "
+                    "bot's computer cannot prepare one by itself. Run `tico task worktree add "
                     f"{wait['repo']}` again when you work on this task.",
                 )
             return False
@@ -353,9 +353,9 @@ def _serve_one(c, wait, full, default_org):
     if detail.get('checkout_state') == 'setup_failed' or detail.get('error'):
         reason = str(detail.get('error') or 'Setup failed')
         retry = (
-            'hub task worktree setup '
+            'tico task worktree setup '
             if detail.get('checkout_state') in ('checkout_ready', 'setup_failed')
-            else 'hub task worktree add '
+            else 'tico task worktree add '
         ) + wait['repo']
         if not _finish(c, wait, 'failed', reason):
             return False

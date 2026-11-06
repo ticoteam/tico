@@ -19,8 +19,8 @@ from clients.tico import APIError, Client
 
 
 def tool_name(fn):
-    """The MCP tool a command runs: `message mark-read` is `hub_message_mark_read`."""
-    return "hub_" + fn.replace(" ", "_").replace("-", "_")
+    """The MCP tool a command runs: `message mark-read` is `tico_message_mark_read`."""
+    return "tico_" + fn.replace(" ", "_").replace("-", "_")
 
 
 def visuals_from_args(args):
@@ -44,7 +44,7 @@ def _delivery(args):
 
 
 def _rules_args(args):
-    """`hub rules` flags as the API takes them: the Who and With flags become scope objects, the rest pass as they are."""
+    """`tico rules` flags as the API takes them: the Who and With flags become scope objects, the rest pass as they are."""
 
     def scope(names, everyone=False, all_bots=False, outside_editions=False):
         out = {}
@@ -72,12 +72,12 @@ def _rules_args(args):
         if with_scope is not None:
             setattr(args, "with", with_scope)
     if args.fn == "rules read" and not getattr(args, "source", None):
-        args.fn = "rules get"  # one rule by id; with --from it is a document read (hub_rules_read)
+        args.fn = "rules get"  # one rule by id; with --from it is a document read (tico_rules_read)
     if args.fn == "rules add" and getattr(args, "file_version", None) and not getattr(args, "quote", None):
-        raise SystemExit("hub rules add: --version goes with --file and --quote")
+        raise SystemExit("tico rules add: --version goes with --file and --quote")
     if args.fn == "rules add" and getattr(args, "quote", None):
         if not getattr(args, "file_id", None):
-            raise SystemExit("hub rules add: a quote needs --file (the document it is in)")
+            raise SystemExit("tico rules add: a quote needs --file (the document it is in)")
         args.cite = {"file_id": args.file_id, "section": getattr(args, "section", None) or "", "quote": args.quote}
         if getattr(args, "file_version", None):
             args.cite["version"] = args.file_version
@@ -122,7 +122,7 @@ def via_tool(client, args, **more):
 
 
 def automation(client, args):
-    """`hub automation ...`: the hub_automation_* tools, with flows read from a file or stdin."""
+    """`tico automation ...`: the tico_automation_* tools, with flows read from a file or stdin."""
     from clients import hubtools
 
     def flow(path):
@@ -138,7 +138,7 @@ def automation(client, args):
         client, {**fields, "operation_id": os.environ.get("HUB_OPERATION_ID")}
     )
     if args.sub == "inbox":
-        return run("hub_inbox_send", {"inbox": args.inbox, **({"send": args.send == "on"} if args.send else {})})
+        return run("tico_inbox_send", {"inbox": args.inbox, **({"send": args.send == "on"} if args.send else {})})
     fields = {"id": args.id} if hasattr(args, "id") else {}
     if args.sub == "list":
         fields.update({k: getattr(args, k) for k in ("owner", "limit", "cursor") if getattr(args, k) is not None})
@@ -282,7 +282,7 @@ def counsel_held(args):
         raise SystemExit(f"{fn} is not available to Counsel: it has no credentials and sends nothing")
 
 
-# The aliases hubcli.parser() declares. Argparse keeps the spelling typed (`hub tasks list` sets cmd to "tasks"), and the
+# The aliases hubcli.parser() declares. Argparse keeps the spelling typed (`tico tasks list` sets cmd to "tasks"), and the
 # dispatch below tests the canonical names, so each alias is renamed once, here, before anything is dispatched on it.
 COMMAND_ALIASES = {
     "tasks": "task",
@@ -478,7 +478,7 @@ def run(args, who=None):
         from clients import hubtools
 
         if not args.fixture:
-            return hubtools.BY_NAME["hub_run_export"]["fn"](client, {"run": args.run})
+            return hubtools.BY_NAME["tico_run_export"]["fn"](client, {"run": args.run})
         found = hubtools.run_export_full(client, args.run)
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
     if fn in ("task child create", "task tree", "task bulk", "task model", "task meetings", "task context"):
@@ -539,7 +539,7 @@ def run(args, who=None):
         from clients import hubtools
 
         text = Path(args.file).read_text(errors="replace") if args.file else sys.stdin.read()
-        return hubtools.BY_NAME["hub_classify"]["fn"](client, {"text": text})
+        return hubtools.BY_NAME["tico_classify"]["fn"](client, {"text": text})
     if fn in (
         "decision readout",
         "decision outcome",
@@ -573,12 +573,12 @@ def run(args, who=None):
         from clients import hubtools
 
         body = json.loads(Path(args.file).read_text())
-        return hubtools.BY_NAME["hub_grokbot_sync"]["fn"](client, body)
+        return hubtools.BY_NAME["tico_grokbot_sync"]["fn"](client, body)
     if args.cmd == "external":
         from clients import hubtools
 
         body = json.loads(Path(args.file).read_text())
-        return hubtools.BY_NAME["hub_external_sync"]["fn"](client, {**body, "provider": args.provider})
+        return hubtools.BY_NAME["tico_external_sync"]["fn"](client, {**body, "provider": args.provider})
     if args.cmd == "file":
         from clients import hubtools
 
@@ -616,7 +616,7 @@ def run(args, who=None):
             body = json.loads(args.body or "{}")
         except ValueError:
             raise APIError("body", "--body must be JSON") from None
-        return hubtools.BY_NAME["hub_assistant_propose"]["fn"](
+        return hubtools.BY_NAME["tico_assistant_propose"]["fn"](
             client,
             {
                 "summary": args.summary,
@@ -713,7 +713,7 @@ def run(args, who=None):
     if fn == "message send":
         from clients import hubtools
 
-        return hubtools.BY_NAME["hub_message_send"]["fn"](
+        return hubtools.BY_NAME["tico_message_send"]["fn"](
             client,
             {
                 "to": args.to,
@@ -778,7 +778,7 @@ def run(args, who=None):
                         fields[name] = getattr(args, name)
                 if steps_file:
                     fields["steps"] = json.loads(Path(steps_file).read_text())
-            return hubtools.BY_NAME["hub_task_type_" + change]["fn"](client, fields)
+            return hubtools.BY_NAME["tico_task_type_" + change]["fn"](client, fields)
         if sub == "create":
             body = Path(args.body_file).read_text() if args.body_file else args.body
             payload = {
@@ -827,10 +827,10 @@ def run(args, who=None):
             return s3links.annotate(post("tasks", payload), links)
         if sub == "show":
             ids = args.id if isinstance(args.id, list) else [args.id]
-            if len(ids) > 1:  # one read for several (hub_task_show_many), not one GET each
+            if len(ids) > 1:  # one read for several (tico_task_show_many), not one GET each
                 from clients import hubtools
 
-                return hubtools.BY_NAME["hub_task_show_many"]["fn"](client, {"ids": ids})
+                return hubtools.BY_NAME["tico_task_show_many"]["fn"](client, {"ids": ids})
             return client.get("tasks/" + ids[0])
         if sub == "check-back":
             return post(
@@ -1154,7 +1154,7 @@ def run(args, who=None):
     if fn == "thread link-slack":  # the MCP tool of the same name: the CLI and MCP run one function
         from clients import hubtools
 
-        return hubtools.BY_NAME["hub_thread_link_slack"]["fn"](
+        return hubtools.BY_NAME["tico_thread_link_slack"]["fn"](
             client,
             {
                 "thread": args.thread,
@@ -1206,7 +1206,7 @@ def run(args, who=None):
         from clients import hubtools
 
         description = Path(args.description_file).read_text() if args.description_file else args.description
-        return hubtools.BY_NAME["hub_calendar_schedule"]["fn"](
+        return hubtools.BY_NAME["tico_calendar_schedule"]["fn"](
             client,
             {
                 "calendar": args.calendar,
@@ -1228,7 +1228,7 @@ def run(args, who=None):
 
 
 def botops_tools(client, args):
-    """`hub api`, `hub credential ...`, `hub computer list`, `hub health check`, `hub message redact`, `hub support file`: the
+    """`tico api`, `tico credential ...`, `tico computer list`, `tico health check`, `tico message redact`, `tico support file`: the
     tool of the same name. A secret is read from standard input, never from the command line."""
     from clients import hubtools
 
@@ -1239,7 +1239,7 @@ def botops_tools(client, args):
             body = json.loads(text) if text else None
         except ValueError:
             raise APIError("body", "The body must be JSON") from None
-        return hubtools.BY_NAME["hub_api"]["fn"](
+        return hubtools.BY_NAME["tico_api"]["fn"](
             client,
             {
                 "method": args.method,
@@ -1268,7 +1268,7 @@ def botops_tools(client, args):
 
 # ----------------------------------------------------------------------------- bots
 def bots(client, args):
-    """`hub template list`, `hub bot create|check` and the bot commands that act as the requester: how BotOps sets the
+    """`tico template list`, `tico bot create|check` and the bot commands that act as the requester: how BotOps sets the
     chosen bots up.
 
     The materialization is `clients/catalog.py`, which needs no network. What comes from the
@@ -1333,7 +1333,7 @@ def bots(client, args):
             picked = [p.strip() for p in args.subscribe_updates.split(",") if p.strip() and p.strip() != "none"]
             fields["update_subscriptions"] = picked
         try:
-            return hubtools.BY_NAME["hub_bot_update"]["fn"](client, fields)
+            return hubtools.BY_NAME["tico_bot_update"]["fn"](client, fields)
         except ValueError as exc:
             raise APIError("not_found", str(exc)) from None
     if args.fn in (
@@ -1376,7 +1376,7 @@ def bots(client, args):
         problems = catalog.check(folder_dir(workspace, folder_of(client, args.slug), args.slug), args.slug)
         return {"ready": not problems, "problems": problems}
     if not args.template:
-        raise APIError("usage", "hub bot create --template T builds the bot; --record-only only registers it")
+        raise APIError("usage", "tico bot create --template T builds the bot; --record-only only registers it")
     record = onboarding(client)
     chosen = (record.get("selected") or {}).get(args.slug) or {} if args.slug else {}
     registered = register_for_requester(client, args, chosen)
@@ -1440,7 +1440,7 @@ def github_repository(client, slug, path):
             return {"skipped": exc.detail}
         if exc.code in ("forbidden", "not_found"):
             # A bot the server has not registered stays on this computer, as before.
-            return {"skipped": exc.detail, "note": f"register the bot, then hub bot repo-create {slug} --empty"}
+            return {"skipped": exc.detail, "note": f"register the bot, then tico bot repo-create {slug} --empty"}
         if exc.code == "github_repo_exists":
             return {"repository": path.name, "existing": True, "note": exc.detail}
         if exc.code == "github_permission_missing":
@@ -1456,8 +1456,8 @@ def github_repository(client, slug, path):
 
 
 def register_for_requester(client, args, chosen):
-    """`hub bot create` in a turn a person's chat message started also registers the bot with the server as
-    them (planned, they own it), so `hub bot update` and its routines have a bot to act on. A refusal for what that
+    """`tico bot create` in a turn a person's chat message started also registers the bot with the server as
+    them (planned, they own it), so `tico bot update` and its routines have a bot to act on. A refusal for what that
     person may not do (no create_bots, the limit) stops the build; a turn no person started (onboarding, a
     routine) registers nothing here, as before."""
     try:
@@ -1559,12 +1559,12 @@ def integrations(client, args):
     return query_search(page["queries"], args.term)
 
 
-from clients.hubtools import query_search  # (one search, shared with the hub_tool_query_search tool)
+from clients.hubtools import query_search  # (one search, shared with the tico_tool_query_search tool)
 
 
 # ----------------------------------------------------------------------------- decisions
 def judge(client, args):
-    """`hub decision ask`: load the questions on this side, send them inline, print the answers.
+    """`tico decision ask`: load the questions on this side, send them inline, print the answers.
 
     The hub knows nothing about question sets (questions/README.md): the set is read from this
     checkout, a dynamic choice is completed from `--option`, and the label is the set's
@@ -1574,9 +1574,9 @@ def judge(client, args):
     if args.list:
         return J.list_sets()
     if bool(args.question_set) == bool(args.questions_file):
-        raise APIError("usage", "hub decision ask takes --set <name> or --questions-file <file>, and --state-file")
+        raise APIError("usage", "tico decision ask takes --set <name> or --questions-file <file>, and --state-file")
     if not args.state_file:
-        raise APIError("usage", "hub decision ask needs --state-file <json> (`-` for stdin)")
+        raise APIError("usage", "tico decision ask needs --state-file <json> (`-` for stdin)")
     try:
         if args.question_set:
             chosen = J.load_set(args.question_set)
@@ -1635,11 +1635,11 @@ def integration_text(page):
     if page["queries"]:
         out += [
             "",
-            f"## Queries ({len(page['queries'])}; `hub tool query-search {page['service']} <term>` searches, `--id <id>` prints one)",
+            f"## Queries ({len(page['queries'])}; `tico tool query-search {page['service']} <term>` searches, `--id <id>` prints one)",
         ]
         out += [f"  {q['id']:<44} {q['title']}" for q in page["queries"]]
     notes = page.get("learnings") or []
-    out += ["", f"## Learnings ({len(notes)}; add one with `hub tool learn {page['service']} \"...\"`)"]
+    out += ["", f"## Learnings ({len(notes)}; add one with `tico tool learn {page['service']} \"...\"`)"]
     out += [f"  {n['created_at'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]
     return "\n".join(out)
 
@@ -1705,7 +1705,7 @@ def sql_csv(result):
     return out.getvalue().rstrip("\n")
 
 
-# `hub task worktree add` at the bot's worktree limit: Tico recorded a wait and wakes the task; end the turn.
+# `tico task worktree add` at the bot's worktree limit: Tico recorded a wait and wakes the task; end the turn.
 WORKTREE_WAIT_EXIT = 3
 
 
@@ -1743,7 +1743,7 @@ def _table(rows, cols):
 
 
 def growth_text(fn, result):
-    """`hub brand|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines.
+    """`tico brand|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines.
     `--json` prints the API response instead."""
     if not isinstance(result, dict):
         return "\n".join(_plain(result))
@@ -1822,7 +1822,7 @@ def growth_text(fn, result):
 
 
 def strategy_section_text(result, key):
-    """One section of the published strategy as text, for `hub strategy show --section`."""
+    """One section of the published strategy as text, for `tico strategy show --section`."""
     current = result.get("current") if isinstance(result, dict) else None
     if not current:
         return "Nothing published yet."
@@ -1843,7 +1843,7 @@ def email_text(result, action):
         if not result['count']:
             return text
         undo = result['undo']
-        words = ['hub', 'email', undo['action'].replace('_', '-'), result['mailbox']]
+        words = ['tico', 'email', undo['action'].replace('_', '-'), result['mailbox']]
         if 'label' in undo:
             words.append(undo['label'])
         command = shlex.join(words + undo['ids'])

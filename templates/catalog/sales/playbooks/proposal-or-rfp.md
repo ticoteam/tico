@@ -8,10 +8,10 @@ with a gap list on top. Prices, terms and undocumented answers are gaps with an 
 
 ## 1. Read the request and the deal
 
-    hub task show <id>
+    tico task show <id>
 
 Read `knowledge/deals/<deal>.md` and the discovery call. Note the deadline, the required format and who
-signs off internally. If there is no call and no note, ask once with `hub task question "<question>" --on <person> --parent <id>` for the buyer's
+signs off internally. If there is no call and no note, ask once with `tico task question "<question>" --on <person> --parent <id>` for the buyer's
 three priorities.
 
 ## 2. A proposal
@@ -25,7 +25,7 @@ one page, every sentence serving a win theme.
 ## 3. An RFP or questionnaire
 
 Sort the questions (product, commercial, security, legal, compliance, references). For each, search
-`knowledge/library/` and `hub doc ask`. A match under twelve months old is **reused**; one needing change is
+`knowledge/library/` and `tico doc ask`. A match under twelve months old is **reused**; one needing change is
 **adapted**; no match is **new**, and a new security, legal or compliance answer is not drafted: it is
 `[owner: <name>]`. Technical depth goes to `sales-engineer` as a sub-task if the team has one.
 
@@ -36,5 +36,5 @@ gap list at the top: the gap, the human, the day it is needed by.
 
 ## 5. Hand over
 
-Write `reports/YYYY-MM-DD-<deal>-proposal.md` (or `-rfp.md`), `hub file publish` it and attach it. Fill gaps from the stated terms. Send the final file to the recipient only when the task asks, mail sending is on in Tico, and a granted Tool allows it; otherwise keep it as a draft. Add each newly documented answer to `knowledge/library/` with its owner and date.
-`hub task update <id> --status done --note`: counts reused, adapted, new; open gaps and owners.
+Write `reports/YYYY-MM-DD-<deal>-proposal.md` (or `-rfp.md`), `tico file publish` it and attach it. Fill gaps from the stated terms. Send the final file to the recipient only when the task asks, mail sending is on in Tico, and a granted Tool allows it; otherwise keep it as a draft. Add each newly documented answer to `knowledge/library/` with its owner and date.
+`tico task update <id> --status done --note`: counts reused, adapted, new; open gaps and owners.

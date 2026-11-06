@@ -5,7 +5,7 @@ Triggered by a task that names a vendor, and used for each quiet thread in
 can send with one edit, and a line in `knowledge/vendors.md`. Nothing is sent unless step 4 applies.
 
 Inputs: the task that names the vendor; the thread (`mail.sh search` if the operations mailbox is connected,
-otherwise the task and `hub doc search "<vendor>"`); `knowledge/vendors.md` for the agreed wait; and
+otherwise the task and `tico doc search "<vendor>"`); `knowledge/vendors.md` for the agreed wait; and
 `skills/chase-a-quiet-vendor/SKILL.md` for the draft checks.
 
 Done when: the draft is on the task with its recipient, subject and the source that shows the thread was quiet;
@@ -16,10 +16,10 @@ asked for it and mail sending is on in Tico) or left on the task for a person to
 
 ## 1. Read what was said
 
-    hub task show <id>
+    tico task show <id>
 
 Find the last exchange: the operations mailbox if connected (`$HUB_DIR/scripts/mail.sh search "<vendor>"`),
-otherwise the task, `hub doc search "<vendor>"` and `knowledge/vendors.md`. Read the whole thread before
+otherwise the task, `tico doc search "<vendor>"` and `knowledge/vendors.md`. Read the whole thread before
 you write. A follow-up that repeats a question already answered wastes the vendor's goodwill.
 
 ## 2. Decide whether a follow-up is right

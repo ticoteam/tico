@@ -91,7 +91,7 @@ def used_commands():
                 stale.setdefault(words[0], rel)
                 continue
             if subparsers(leaf) is not None or leaf.get_default("fn") is None:
-                continue  # a group named in prose (`hub task`), not a command to run
+                continue  # a group named in prose (`tico task`), not a command to run
             used.setdefault(" ".join(found), (leaf, rel))
     return used, stale
 
@@ -199,7 +199,7 @@ def argument_value(action, command):
     if dest in ("person", "human", "email") or dest.endswith("_email"):
         return "smoke@acme.example"
     if dest == "name":
-        return "acme-smoke"  # a slug in most commands (`hub market page <slug>`)
+        return "acme-smoke"  # a slug in most commands (`tico market page <slug>`)
     if dest in ("text", "title", "body", "note", "subject", "reason", "description", "question"):
         return SMOKE
     if dest in ("url",):

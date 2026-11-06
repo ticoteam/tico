@@ -2,7 +2,7 @@
 
 A dream is an ordinary task: the bot owns it, the person who started it is its requester, it carries the label
 `dream` and its body is INSTRUCTIONS. It runs as a task turn on the bot's computer with the bot's own model, and its
-session resumes across the one question it may ask (`hub_task_question`), so the answer lands in the same context. The
+session resumes across the one question it may ask (`tico_task_question`), so the answer lands in the same context. The
 commits it makes are memory updates like any other: the Learnings history names their run's task, and the panel
 filters them by this task. Nothing is stored here beyond the task.
 
@@ -43,7 +43,7 @@ MARKED = (
 
 INSTRUCTIONS = """Dream: tidy your own instructions and memory. {waiting}
 They watch this task's note while you work: at the start of each step below, and whenever you begin something that
-takes a while, set it with `hub_task_update` (note only, never the status) to one short line saying what you are
+takes a while, set it with `tico_task_update` (note only, never the status) to one short line saying what you are
 doing now, e.g. "2/7 Gathering: reading chats since Oct 20" or "5/7 Applying: rewriting the merge rules in AGENT.md".
 
 1. Orient. Read your instructions and memory: AGENT.md, AGENTS.md or CLAUDE.md if present, `memory/` (the working
@@ -64,7 +64,7 @@ doing now, e.g. "2/7 Gathering: reading chats since Oct 20" or "5/7 Applying: re
    instructions about the work disagree, or one broad question that would align you better. Never ask for
    permission, about which files to edit, how to organize your memory, or anything else about the dream itself:
    decide those yourself. If something only {requester} can settle, ask at most 3 such questions in ONE
-   `hub_task_question` on this task. Number them. Each one makes sense on its own and ends with your suggested answer
+   `tico_task_question` on this task. Number them. Each one makes sense on its own and ends with your suggested answer
    ("Suggested: ..."). Ask big alignment questions before small either/or ones. Zero questions is fine. {wait}
 
 5. Apply. Fold the answers in. A broad answer may rewrite whole sections. Fix each fact where it lives, delete what
@@ -247,7 +247,7 @@ def view(c, who, row):
     else:
         ask = H.unanswered_ask(c, row, actor=privacy.actor(who))
         if ask and ask["recipient_id"] == row["requester_id"]:
-            # Its question task (`hub_task_question` under the dream), answered on the Learnings panel.
+            # Its question task (`tico_task_question` under the dream), answered on the Learnings panel.
             state = "asking"
             questions = {
                 "task_id": ask["id"],

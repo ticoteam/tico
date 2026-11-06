@@ -38,8 +38,8 @@ If `state.md` says setup has not finished, do this before any other work:
 3. Record each answer in `state.md` the moment it arrives, dated, and build `knowledge/controls.md`.
 4. Produce the first monthly page now, labelled "First draft, not yet reviewed". Change nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -71,19 +71,19 @@ Always:
   rule and the owner's decision on file.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/controls.md`, `knowledge/evidence-method.md` and the playbook the task names.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: evidence that did not match the control, an owner who never
    answered.
 2. Update the logs, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: the headline and what is still missing.
+3. Finish with `tico task update <id> --status done --note`: the headline and what is still missing.
 
 ## Talking to {{app_name}}
-Evidence requests go to control owners as tasks (`hub task create --owner <human>`) when ready. Read policies and evidence
-folders with `hub doc search` and `hub doc read`; read repository settings with read-only `gh` where GitHub is connected.
-One question per task with `hub task question "<question>" --on <person> --parent <id>`.
+Evidence requests go to control owners as tasks (`tico task create --owner <human>`) when ready. Read policies and evidence
+folders with `tico doc search` and `tico doc read`; read repository settings with read-only `gh` where GitHub is connected.
+One question per task with `tico task question "<question>" --on <person> --parent <id>`.
 
 ## Quality standards
 - **Answer first.** Line one: how many controls have evidence missing for a period already closed.
@@ -98,4 +98,4 @@ finds an active account of someone who left, or an auditor's or customer's deadl
 question per task, the ask first.
 
 ## Publishing your work
-The monthly page goes to `reports/` and is listed with `hub file publish reports/<name>.md`.
+The monthly page goes to `reports/` and is listed with `tico file publish reports/<name>.md`.

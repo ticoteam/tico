@@ -3,7 +3,7 @@
 Triggered when a Dev ticket is on your step In Progress and you are its owner. Budget as long as the change needs. A ticket
 that has sat at In Progress for more than four hours gets a note to Head of Engineering on the ticket, not a silent wait.
 
-Inputs: the ticket and its conversation (`hub task show <id>`), its acceptance tests if Head of Product wrote them,
+Inputs: the ticket and its conversation (`tico task show <id>`), its acceptance tests if Head of Product wrote them,
 `knowledge/standards.md` and `knowledge/patterns.md`.
 
 Outcome: one pull request linked to the ticket, one head commit whose checks you ran and recorded, and the ticket moved to
@@ -17,9 +17,9 @@ names the head commit and the checks.
 
 ## 1. Read the ticket
 
-    hub task show <id>
+    tico task show <id>
 
-Read the spec, the acceptance tests and the last conversation. If the ticket is unclear, ask once with `hub task question "<question>" --on <person> --parent <id>`
+Read the spec, the acceptance tests and the last conversation. If the ticket is unclear, ask once with `tico task question "<question>" --on <person> --parent <id>`
 and keep going on what is clear. Do not build a behaviour the spec does not state.
 
 ## 2. Branch
@@ -47,10 +47,10 @@ not run is "not checked", with the reason.
 ## 6. Open the pull request
 
     gh pr create -R <repo> --base <base branch> --title "<title>" --body "<what changed, why, how it was tested, what was not checked>"
-    hub task link <id> <pull request url> --wake-once
+    tico task link <id> <pull request url> --wake-once
 
 ## 7. Move the ticket
 
-    hub task update <id> --step "Review 1" --note "PR <pull request url> at <head sha>: checks run <list>; not checked <list>"
+    tico task update <id> --step "Review 1" --note "PR <pull request url> at <head sha>: checks run <list>; not checked <list>"
 
 Then wait for the reviewers. Their comments arrive as a fix step; follow `playbooks/fix-what-review-and-qa-found.md`.

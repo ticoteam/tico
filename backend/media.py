@@ -779,7 +779,7 @@ def install_media(
             raise Problem(
                 "validation",
                 f"{body.on} is a bot: a question task is for a person. Ask a bot in a DM: "
-                f"hub message send {H.actor_id(person)} \"<question>\" --needs-action",
+                f"tico message send {H.actor_id(person)} \"<question>\" --needs-action",
                 422,
             )
         if not person or not H.is_human(person) or not H.human(c, H.actor_id(person)):
@@ -1145,7 +1145,7 @@ def install_media(
 
     @app.post("/api/v2/task-questions")
     def task_question(request: Request, body: M.TaskQuestion):
-        """A bot puts one decision to a person (`hub task question`): a question task the person owns, the question
+        """A bot puts one decision to a person (`tico task question`): a question task the person owns, the question
         on its fields (backend/question_tasks.py), under the bot's task when asked from one, all in one write, so a
         refusal or a retry never leaves half a question behind. A bot never files one for another bot (D9). Option files come in the request and are attached to the new task. Every
         check, including whether the person could read the task, runs first in a read, the bytes are stored with no

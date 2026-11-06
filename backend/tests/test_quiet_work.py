@@ -66,7 +66,7 @@ def test_a_run_that_leaves_it_hands_it_to_the_next_run(api):
     assert listed["deferred"]["state"] == "eligible" and listed["quiet"] == listed["deferred"], "the board's rows too"
     first = wake(api, r)
     assert [t["id"] for t in first["next_run"]] == [task["id"]]
-    assert "hub task later " + task["id"] in first["next_run"][0]["if_not_now"], "the run is told how to say not now"
+    assert "tico task later " + task["id"] in first["next_run"][0]["if_not_now"], "the run is told how to say not now"
     during = shown(api, task)["deferred"]
     assert during["state"] == "delivered" and during["run"] == first["id"] and during["running"] is True
     assert during["at"], "and when it was handed over"
@@ -255,7 +255,7 @@ def test_health_names_a_task_handed_over_two_hours_ago_and_not_worked(api):
         found = maintenance_health._quiet_work_checks(c)
         assert [f["key"] for f in found] == [f"quiet_unworked:ops:{task['id']}"]
         assert "ops" in found[0]["title"] and task["id"][:8] in found[0]["detail"]
-        assert "hub task later " + task["id"] in found[0]["fix"]
+        assert "tico task later " + task["id"] in found[0]["fix"]
         Q.defer(c, "bot:ops", task["id"], at=H.shift(H.now(), hours=1))
         assert maintenance_health._quiet_work_checks(c) == [], "a stored condition is not a finding"
 

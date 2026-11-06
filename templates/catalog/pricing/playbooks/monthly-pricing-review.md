@@ -11,14 +11,14 @@ Done when: the review is published in the shape of `knowledge/examples/pricing-r
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/our-prices.md`, `knowledge/competitor-prices.md`, `knowledge/discounts.md` and last
 month's review.
 
 ## 2. Re-read competitors' public pricing
 
-`hub doc fetch <url>` for each watched competitor. Read the page text yourself before you rely on a summary or a parser's label. Record plans, prices, limits and what is included, with the date. Compare with the last entry: a change is logged with both dates. A page you could not read is "not read", and says why. A page that refuses reads three days running goes to the owner as a question: a manual read, or another source. A price the team has changed that is not on the buyer's page after its effective date is a gap: report it once, with the page, the time and what you saw. Report a real change with `hub market report`.
+`tico doc fetch <url>` for each watched competitor. Read the page text yourself before you rely on a summary or a parser's label. Record plans, prices, limits and what is included, with the date. Compare with the last entry: a change is logged with both dates. A page you could not read is "not read", and says why. A page that refuses reads three days running goes to the owner as a question: a manual read, or another source. A price the team has changed that is not on the buyer's page after its effective date is a gap: report it once, with the page, the time and what you saw. Report a real change with `tico market report`.
 
 ## 3. Discounts actually given
 
@@ -37,5 +37,5 @@ answer it: a query, an experiment, or a willingness-to-pay study.
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-pricing-review.md` in the shape of `knowledge/examples/pricing-review.md`,
-`hub file publish` it, update `knowledge/discounts.md`, commit, and `hub task update <id> --status done
+`tico file publish` it, update `knowledge/discounts.md`, commit, and `tico task update <id> --status done
 --note`: the headline and what could not be read.

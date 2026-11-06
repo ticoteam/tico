@@ -42,4 +42,4 @@ Follow `skills/flag-a-return-pattern/SKILL.md` for each pattern. The flags go to
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-returns.md` in the shape of `knowledge/examples/returns-report.md`, then
-`hub file publish reports/YYYY-MM-DD-returns.md`. Commit, then `hub task update <id> --status done --note "..."` with the counts and the path.
+`tico file publish reports/YYYY-MM-DD-returns.md`. Commit, then `tico task update <id> --status done --note "..."` with the counts and the path.

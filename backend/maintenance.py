@@ -261,7 +261,7 @@ def _receipt(c, actor, key):
 
 
 def run_now(store, auth, actor, step=None, wait=False, key=None):
-    """Run now (POST /api/v2/maintenance/run, `hub maintenance run`): one run, claimed like a scheduled one. A plain run keeps
+    """Run now (POST /api/v2/maintenance/run, `tico maintenance run`): one run, claimed like a scheduled one. A plain run keeps
     the due rules. `step` runs only that step, due or not (a switched off step stays off). A run already live is returned
     as it is, so Run now and the schedule give one run. With an Idempotency-Key (`key`), the request leaves a receipt, and
     a repeat of the key returns the run that first request started or joined, even once that run has finished or been

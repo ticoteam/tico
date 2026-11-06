@@ -1,11 +1,11 @@
-"""`hub bot check-names <bot>`: the names a bot's own checkout still uses from before the renames.
+"""`tico bot check-names <bot>`: the names a bot's own checkout still uses from before the renames.
 
 The map is clients/renames.json (written by scripts/cleanup/export_names.py): the column renames that have shipped, with
 the tables each one moved on and the tables that keep the old name, the API fields that moved, and the hub CLI commands
 that were renamed or removed. The command runs on this computer, beside the bot's files: no Tico server, no credential,
 nothing is sent.
 
-Only code is read, and only four things in it: the SQL of a `hub sql` call (a quoted argument, a heredoc or the rest of
+Only code is read, and only four things in it: the SQL of a `tico sql` call (a quoted argument, a heredoc or the rest of
 the line), other SQL-looking text (a quoted statement, or a statement that starts a line in a code span or fenced block),
 a key read from an API answer or a stored document (`row["refs_json"]`, `.get("attempt_id")`, `row.refs_json`), and a
 `hub` command in a code span, a fenced block, a shell line or a quoted argument. Prose outside code spans is never
@@ -21,7 +21,7 @@ the receiver is named after a table it moved on, in a file that talks to the hub
 the name is a SQL alias (`AS created`), when the key is a word other code uses too (`attempt`), when the field changed
 shape (`snoozed_until` is now part of `holds`), when the name has more than one new spelling or a table keeps it
 (`owner`), when it is a key renamed on some tables only (the same word may be an input or a stored document's key), when
-SQL is not in a `hub sql` call (it may be the bot's own database), or when the file is under memory/: a bot's notes are
+SQL is not in a `tico sql` call (it may be the bot's own database), or when the file is under memory/: a bot's notes are
 reported, never rewritten.
 """
 
@@ -192,7 +192,7 @@ def _regions(text, prose):
 
 
 def _sql_body(s, pos):
-    """(start, end) of the SQL a `hub sql` call runs: a quoted argument (it may run over lines), a heredoc, or the rest
+    """(start, end) of the SQL a `tico sql` call runs: a quoted argument (it may run over lines), a heredoc, or the rest
     of the line."""
     i = SEP.match(s, pos).end()
     if i < len(s) and s[i] in "\"'":
@@ -218,7 +218,7 @@ def _commands(s, line_start):
 
 
 def _hub_sql_bodies(s, line_start):
-    """(start, end) of the SQL of each `hub sql` call in s."""
+    """(start, end) of the SQL of each `tico sql` call in s."""
     for words, shell in _commands(s, line_start):
         if words[0][0] == "sql":
             yield _sql_body(
@@ -285,8 +285,8 @@ def _statement_tables(stmt):
     return tables, spots
 
 
-def _table_scoped_findings(body, base, names, out, in_hub_sql):
-    """Each renamed name a statement uses on a table it moved on. In a `hub sql` body the names renamed on every table
+def _table_scoped_findings(body, base, names, out, in_tico_sql):
+    """Each renamed name a statement uses on a table it moved on. In a `tico sql` body the names renamed on every table
     were already read, without needing their table; elsewhere the SQL may be the bot's own database, so it is reported."""
     for offset, stmt in _statements(body):
         tables, spots = _statement_tables(stmt)
@@ -297,7 +297,7 @@ def _table_scoped_findings(body, base, names, out, in_hub_sql):
             name = m.group(1)
             if name not in names.tables or m.start(1) in spots or stmt[m.end() : m.end() + 1] == "(":
                 continue
-            if in_hub_sql and name in names.columns:
+            if in_tico_sql and name in names.columns:
                 continue
             qualifier = QUALIFIER.search(stmt[max(0, m.start() - 64) : m.start()])
             if qualifier and qualifier.group(1).lower() != "excluded":
@@ -318,7 +318,7 @@ def _table_scoped_findings(body, base, names, out, in_hub_sql):
                     old=name,
                     new=new,
                     kind="sql",
-                    fixable=in_hub_sql and names.one_spelling(name),
+                    fixable=in_tico_sql and names.one_spelling(name),
                     start=start,
                     end=start + len(name),
                     replacement=new,
@@ -362,7 +362,7 @@ def _command_findings(s, base, names, out, line_start):
         old, new, fixable, removed = hit
         start, end = words[0][1], words[len(old) - 1][2]
         if removed:
-            target = "hub " + " ".join(new) + " (the flags differ: hub automation create --file)"
+            target = "hub " + " ".join(new) + " (the flags differ: tico automation create --file)"
         else:
             target = "hub " + " ".join(new)
         out.append(
@@ -527,20 +527,20 @@ def fix(root, findings):
 
 
 def command(target, fix_it, workspace, names=None):
-    """`hub bot check-names <target>`: print each finding and return 0 when none is left, else 1."""
+    """`tico bot check-names <target>`: print each finding and return 0 when none is left, else 1."""
     from clients import manifest
 
     folder = Path(target)
     if not folder.is_dir():
         if not workspace:
             print(
-                f"hub bot check-names: {target} is not a folder, and HUB_WORKSPACE is not set to find a bot by slug",
+                f"tico bot check-names: {target} is not a folder, and HUB_WORKSPACE is not set to find a bot by slug",
                 file=sys.stderr,
             )
             return 1
         folder = manifest.repo_dir(Path(workspace), target)
     if not folder.is_dir():
-        print(f"hub bot check-names: no checkout at {folder}", file=sys.stderr)
+        print(f"tico bot check-names: no checkout at {folder}", file=sys.stderr)
         return 1
     names = names or load_names()
     findings = scan(folder, names)

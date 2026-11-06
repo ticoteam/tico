@@ -13,12 +13,12 @@ description: "Files one proposal on a goal, KPI or strategy that the owner confi
 
 ## Steps
 
-1. Check first: `hub proposal list --status pending --goal <id>` (or `--kpi <id>`), then `hub proposal list --status rejected --goal <id>`. Read the `decision_note` of each rejected one. Do not repeat a suggestion that a reason rules out, and do not file a second proposal for a problem that already has one pending.
+1. Check first: `tico proposal list --status pending --goal <id>` (or `--kpi <id>`), then `tico proposal list --status rejected --goal <id>`. Read the `decision_note` of each rejected one. Do not repeat a suggestion that a reason rules out, and do not file a second proposal for a problem that already has one pending.
 2. Keep to one proposal per problem. A goal with two problems gets two proposals, each with its own reason.
 3. Pick the kind from the table in `playbooks/README.md`: `flag`, `goal_wording`, `goal_kpi`, `kpi_definition`, `goal_why`, `recovery`, `kpi_target` or `strategy_draft`.
 4. Write the payload to a file in that kind's shape. Use only the numbers the owner gave or the record states. A target the goal does not state is not yours to invent.
 5. Write the reason as one sentence: what is wrong, and why now.
-6. File it once: `hub proposal create --kind <kind> --goal <id> --payload-file <file> --reason "<one sentence>"`. Add `--kpi` where the kind needs it. The command returns the proposal's id once it is saved; that means it is filed.
+6. File it once: `tico proposal create --kind <kind> --goal <id> --payload-file <file> --reason "<one sentence>"`. Add `--kpi` where the kind needs it. The command returns the proposal's id once it is saved; that means it is filed.
 7. Do not edit the goal, the KPI or the strategy yourself. The owner confirms. Say so in one line: the proposal waits for their confirmation and is not live until then.
 
 ## Checks before you finish

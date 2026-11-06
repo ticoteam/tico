@@ -33,12 +33,12 @@ its thread, or bot-wide) and a canonical identity:
    authorized bytes or opens a short-lived link on the company's files address when it uses
    [Tico file hosting](#tico-file-hosting).
 2. **Cloud documents.** A Google Doc, Sheet or Slides, a Notion page, a Figma file or any https
-   document. `hub file link <url> --title "..."` registers the address (http, `javascript:`,
+   document. `tico file link <url> --title "..."` registers the address (http, `javascript:`,
    credentials in the URL and private-network hosts are refused). Open goes to the provider, which
    decides who may read it; the row says "Link opens in Google (requires access)". Tico never
    fetches, proxies or copies the document and never holds a provider token. Each time the bot says
-   it edited the document (`hub file touch <id|url>`, or add-link again) the row moves to the top.
-3. **S3 objects.** `hub file import s3://bucket/key [--title ...] [--task ...]` runs on the bot's
+   it edited the document (`tico file touch <id|url>`, or add-link again) the row moves to the top.
+3. **S3 objects.** `tico file import s3://bucket/key [--title ...] [--task ...]` runs on the bot's
    computer. It copies the object with the credentials that computer already has (the bot's credentials
    or its AWS environment; boto3, or the aws CLI when boto3 is missing), refuses a type or size
    outside the limits, and uploads the bytes to Tico's store. The object's ETag (and version id) is
@@ -56,18 +56,18 @@ links in task bodies, comments and threads (images as thumbnails, PDFs and docum
 tools rewrite them in a bot's text before sending. An entry that is not https, names a malformed bucket, or names
 `TICO_BLOB_BUCKET` (Tico's own private store, served only through its access checks) is ignored and logged. Whether the distribution is public or behind signed URLs or cookies is the operator's choice; Tico only
 rewrites the link and never signs or fetches it. An unmapped `s3://` URI shows as a file chip with a Copy button;
-`hub file import` makes it a Tico file that shows inline.
+`tico file import` makes it a Tico file that shows inline.
 
 ## Publishing
 
-**Explicitly**, from a run (the same tools exist over MCP as `hub_file_*`):
+**Explicitly**, from a run (the same tools exist over MCP as `tico_file_*`):
 
 ```
-hub file publish reports/2026-09-29-pipeline.md [--title T] [--task ID] [--scope task|bot]
-hub file link https://docs.google.com/document/d/... --title "Q4 plan"
-hub file touch <file id or link>
-hub file import s3://bucket/key
-hub file list
+tico file publish reports/2026-09-29-pipeline.md [--title T] [--task ID] [--scope task|bot]
+tico file link https://docs.google.com/document/d/... --title "Q4 plan"
+tico file touch <file id or link>
+tico file import s3://bucket/key
+tico file list
 ```
 
 A bot can write only its own files: the authenticated bot decides, never a parameter.
@@ -82,7 +82,7 @@ files:
 ```
 
 Documents, images, video, audio, csv, tsv, json, yaml, md, html, pdf and office files can be published.
-Every kind but video and audio is capped at 25 MB. `hub file publish` and `hub file import` take video and audio up to
+Every kind but video and audio is capped at 25 MB. `tico file publish` and `tico file import` take video and audio up to
 the server's upload limit (`TICO_UPLOAD_MAX_BYTES`, 2 GiB by default). They stream from disk with a raw body and a
 Content-Length, never as base64, and the server hashes the bytes as they arrive. A video or audio file must start with
 the container its extension names, or it is refused. Older servers do not advertise `features.file_media_stream`: they
@@ -97,7 +97,7 @@ file that could not be uploaded is not linked and never opens nothing.
 When the bot's repository is on GitHub and the file is committed and pushed, the version records
 the commit and the row offers **View on GitHub** at that exact commit.
 
-A bot's deliverable attached to a task (`hub task attach`) is listed as a file for that task too.
+A bot's deliverable attached to a task (`tico task attach`) is listed as a file for that task too.
 Text attachments preserve indentation, spaces and final newlines. Unsupported bot deliverable types return a clear
 422 error listing the allowed types.
 
@@ -105,7 +105,7 @@ A picture, SVG, HTML page, video or audio clip can also go on a thread reply or 
 (`--visual PATH --title "…"`); it is stored as a file there and shows inline as a card; video and audio play in it. See
 [Visuals in replies](visuals.md).
 
-`hub file archive <id>` also accepts a task attachment's ID. A task participant or a human who may move the task can
+`tico file archive <id>` also accepts a task attachment's ID. A task participant or a human who may move the task can
 archive it; the attachment is detached from the task and the action is recorded. Stored bytes and version history remain.
 
 ## Visibility
@@ -170,7 +170,7 @@ visibility check as a list row.
 Tico indexes a version when it is published. A file from before this release is indexed in the background, a few
 hundred at a time; until then only its title is found.
 
-`GET /api/v2/files/search?q=&limit=&kind=`, `hub file search "<words>" [--kind page]`, file hits in the search box (⌘K), and the
+`GET /api/v2/files/search?q=&limit=&kind=`, `tico file search "<words>" [--kind page]`, file hits in the search box (⌘K), and the
 Librarian, which searches files beside the docs.
 
 `kind` accepts the Library's kinds (`page`, `document`, `image`, `data`, `media`, `other`). The task's **Link page**
@@ -179,7 +179,7 @@ picker searches with `kind=page`.
 ## Deleting a file for good
 
 For a file that holds something it shouldn't. **Only the owner** deletes a file for good: **Delete for good** in a
-page's menu, `DELETE /api/v2/files/{id}`, or `hub file delete ID` with an owner token. BotOps asks the owner to
+page's menu, `DELETE /api/v2/files/{id}`, or `tico file delete ID` with an owner token. BotOps asks the owner to
 confirm first.
 
 - Every version's bytes leave every place Tico stored them: this server, the company's bucket and its earlier
@@ -445,11 +445,11 @@ Staging needs enough free disk space for the upload and media processing. Tempor
 removed after processing; abandoned media staging directories expire after a day.
 The JSON `text`/`content_base64` route still accepts files up to 10 MB for older clients.
 
-`hub task attach <id> cut.mp4 --poster poster.jpg --note "Rough cut"` streams from disk when
+`tico task attach <id> cut.mp4 --poster poster.jpg --note "Rough cut"` streams from disk when
 `/api/v2/config` advertises `features.task_files_multipart`. An older server receives the existing
 JSON upload; the client refuses files over 10 MB before reading them. The Computer's automatic
 file publishing also hashes and uploads from disk. Video and audio extensions are accepted
-alongside the existing document and image types. The local MCP adapter can use `hub_task_attach`
+alongside the existing document and image types. The local MCP adapter can use `tico_task_attach`
 with `path` and optional `poster`; server MCP calls keep using text/base64 and cannot read server paths.
 
 Every file, version, poster, and thumbnail request checks the existing Tico rights first.
@@ -493,7 +493,7 @@ and answer contracts.
 
 ### Approved versions
 
-`hub file approved <path|FILE[@N]> [--by human|bot:SLUG|any]` (MCP `hub_file_approved`,
+`tico file approved <path|FILE[@N]> [--by human|bot:SLUG|any]` (MCP `tico_file_approved`,
 `GET /api/v2/file-approvals?file=&version=` or `?path=&digest=`, plus `&by=`) says whether that exact version is
 approved. It prints `{approved, by, at, task, question}` and exits 0 when approved, 1 when not (the answer says
 `"approved": false`), 2 on bad input. A failed call also exits 1 or 2, with an error answer instead: read the answer,
@@ -502,7 +502,7 @@ verdict counts (an answer to a [file review](tasks.md#reviewing-files)); `--by` 
 newest matching verdict on that version decides (Request changes after Approve means not approved), a new version is
 never approved by an older one's review, and a deleted task's verdicts stop counting.
 
-`hub file review <path|FILE[@N]> --approve|--changes --task <task> [--note TEXT]` (MCP `hub_file_review`,
+`tico file review <path|FILE[@N]> --approve|--changes --task <task> [--note TEXT]` (MCP `tico_file_review`,
 `POST /api/v2/file-reviews`) gives a verdict directly, for a company where a bot moves a stage: a bot reviews another
 bot's file on a task it can read, when it can open the file. A bot never reviews its own bot's file (403). A person
 may use it too; Decide is the usual way.

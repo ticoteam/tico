@@ -183,7 +183,7 @@ def merge(c, actor, person, title, question, task_ids):
         f"{question}\n\n{len(found)} bots asked you this; it is one item instead of {len(found)}:\n{who}\n"
         f"Answer it once and the {strategy_bot.name(c)} passes your answer to each of them."
     )
-    # A question task for the person with no options, as `hub task question` files one: every way they answer it
+    # A question task for the person with no options, as `tico task question` files one: every way they answer it
     # ("answer" in Needs you, Done with a note) closes it and reaches `on_close`.
     from . import question_tasks
 

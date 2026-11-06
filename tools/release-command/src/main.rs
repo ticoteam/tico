@@ -398,7 +398,7 @@ fn file_writer_task(
     let task = ["short_id", "id"]
         .iter()
         .find_map(|key| filed["task"][key].as_str().or(filed[key].as_str()))
-        .ok_or("hub task create returned no task id")?
+        .ok_or("tico task create returned no task id")?
         .to_owned();
     state.writer_task = Some(task.clone());
     state.writer_filing = false;

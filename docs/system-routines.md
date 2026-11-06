@@ -58,7 +58,7 @@ Choose from the presets offered on the row:
 
 Times use company time (Pacific). Leave the time field or press Enter to save it. These rows offer no cron expressions or custom intervals.
 
-Task roundup is now [Maintenance's Find stuck step](maintenance.md). Its old switch, schedule and read-only Automations mirror are retired. The latest saved switch carries over at cutover. Use `hub maintenance run --step find_stuck` to run it now; `POST /api/v2/system-routines/task_roundup/run` also runs that step and returns Maintenance's `{run, started}` response.
+Task roundup is now [Maintenance's Find stuck step](maintenance.md). Its old switch, schedule and read-only Automations mirror are retired. The latest saved switch carries over at cutover. Use `tico maintenance run --step find_stuck` to run it now; `POST /api/v2/system-routines/task_roundup/run` also runs that step and returns Maintenance's `{run, started}` response.
 
 **Run now** appears only on the scheduled built-ins in the permissions table. Switch the job on first. It runs through the same checks and caps as its scheduled run, then shows the result on the row. A job asking Decide shows **Running…** while it works. Task rules, **Start fresh when the topic changes** and **Stalled task check** have no **Run now** button.
 
@@ -114,7 +114,7 @@ When the Gateway did not answer, a line under the pill says what ran instead and
 [Task Manager](task-manager.md) only for a department that has something. Its run record reads "3 departments, 7 items"
 or "Nothing to do". The default preset runs hourly on weekdays between 08:00 and 18:00 in the team's time zone; a weekend
 or evening tick does not run. It finds nothing while the Task Manager bot is paused. Details, the checks and the
-`hub task-manager` commands are on [Task Manager](task-manager.md).
+`tico task-manager` commands are on [Task Manager](task-manager.md).
 
 ## The jobs
 

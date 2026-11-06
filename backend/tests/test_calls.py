@@ -559,20 +559,20 @@ def test_the_call_tools_run_the_same_routes_the_rest_api_has(meet):
         return hubtools.BY_NAME[name]["fn"](ana, args)
 
     cid = thread(meet)
-    call_id = tool("hub_call_start", {"thread_id": cid, "title": "Acme standup", "operation_id": "op-start"})["id"]
+    call_id = tool("tico_call_start", {"thread_id": cid, "title": "Acme standup", "operation_id": "op-start"})["id"]
     with pytest.raises(AssertionError):  # one live call per thread: the second start is refused
-        tool("hub_call_start", {"thread_id": cid, "operation_id": "op-start-again"})
-    assert [row["id"] for row in tool("hub_call_list", {"thread_id": cid})["calls"]] == [call_id]
-    assert tool("hub_call_show", {"call_id": call_id})["state"] == "live"
-    joined = tool("hub_call_join", {"call_id": call_id, "operation_id": "op-join"})
+        tool("tico_call_start", {"thread_id": cid, "operation_id": "op-start-again"})
+    assert [row["id"] for row in tool("tico_call_list", {"thread_id": cid})["calls"]] == [call_id]
+    assert tool("tico_call_show", {"call_id": call_id})["state"] == "live"
+    joined = tool("tico_call_join", {"call_id": call_id, "operation_id": "op-join"})
     assert joined["url"] == meet.app.state.call_media.url and joined["token"] and "room" not in joined
-    assert tool("hub_call_token", {"call_id": call_id})["token"]
-    tool("hub_call_bot_add", {"call_id": call_id, "bots": ["ops"], "operation_id": "op-bot-add"})
-    assert tool("hub_call_show", {"call_id": call_id})["bots"] == ["ops"]
-    tool("hub_call_bot_remove", {"call_id": call_id, "bot": "ops", "operation_id": "op-bot-remove"})
-    assert tool("hub_call_show", {"call_id": call_id})["bots"] == []
-    tool("hub_call_leave", {"call_id": call_id, "operation_id": "op-leave"})
-    assert tool("hub_call_end", {"call_id": call_id, "operation_id": "op-end"})["state"] == "ended"
+    assert tool("tico_call_token", {"call_id": call_id})["token"]
+    tool("tico_call_bot_add", {"call_id": call_id, "bots": ["ops"], "operation_id": "op-bot-add"})
+    assert tool("tico_call_show", {"call_id": call_id})["bots"] == ["ops"]
+    tool("tico_call_bot_remove", {"call_id": call_id, "bot": "ops", "operation_id": "op-bot-remove"})
+    assert tool("tico_call_show", {"call_id": call_id})["bots"] == []
+    tool("tico_call_leave", {"call_id": call_id, "operation_id": "op-leave"})
+    assert tool("tico_call_end", {"call_id": call_id, "operation_id": "op-end"})["state"] == "ended"
 
 
 def test_the_declared_call_answers_match_the_live_ones(meet):

@@ -13,14 +13,14 @@ Done when: the report is written and published, the decisions asked are in `know
 ## 1. Fix the window and read the targets
 
 The window is the last seven full days, and the week before it for comparison. Read `knowledge/targets.md`,
-`knowledge/team.md` and `knowledge/decisions-needed.md`. Set `hub bot status set` to one line naming the summary.
+`knowledge/team.md` and `knowledge/decisions-needed.md`. Set `tico bot status set` to one line naming the summary.
 
 ## 2. Gather, from the record
 
-    hub task list --owner <support bot> --status open
-    hub task list --owner <support bot> --status waiting
-    hub update list --kind weekly --bot <support bot> --limit 2
-    hub file list
+    tico task list --owner <support bot> --status open
+    tico task list --owner <support bot> --status waiting
+    tico update list --kind weekly --bot <support bot> --limit 2
+    tico file list
 
 Read each support bot's latest published report: queue digests, QA review, escalations, onboarding board, retention and returns reports, feedback
 report. Where the support mailbox is connected, count arrivals and first replies with
@@ -56,11 +56,11 @@ Write `reports/YYYY-MM-DD-support-summary.md` in the shape of `knowledge/example
 headline, decisions needed, the numbers against target, the oldest waiting, repeats, coverage, routing
 proposals, what you could not read, sources. Then:
 
-    hub file publish reports/YYYY-MM-DD-support-summary.md
+    tico file publish reports/YYYY-MM-DD-support-summary.md
 
 ## 6. Finish
 
-Commit, then `hub task update <id> --status done --note`: the headline, the report path, the decisions
+Commit, then `tico task update <id> --status done --note`: the headline, the report path, the decisions
 asked for and any source you could not read. Always finish it: an open routine task absorbs the next.
 
 ## When a source fails

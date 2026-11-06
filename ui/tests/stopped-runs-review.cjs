@@ -57,7 +57,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       fixes: [{label: 'Open Runs', href: '#/settings', tab: 'runs'}],
       items: [{bot: 'vault', name: 'Vault', queued: 1, dead: 0, held: 0, oldest: '2026-10-26T03:39:09Z', oldest_minutes: 180,
         reason: 'quarantined', text: 'Vault (vault): 1 job queued, oldest 180 min; Quarantined: queued work waits for the quarantine to clear.',
-        fixes: [{label: 'Open bot settings', href: '#/bot/vault/more'}], fix: 'hub run list vault'}]};
+        fixes: [{label: 'Open bot settings', href: '#/bot/vault/more'}], fix: 'tico run list vault'}]};
     // Builder's work behind its stopped runs is Health's Stuck row too, its queue split as Pipeline splits it.
     const health = {audience: 'owner', attention: 2, checks: [stoppedCheck, quarantineCheck],
       computers: [{id: 'r1', label: 'Studio Mac', online: true, runtimes: []}], waiting: [],

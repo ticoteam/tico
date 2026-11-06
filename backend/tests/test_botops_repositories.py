@@ -224,7 +224,7 @@ def test_a_tick_under_all_ticked_repos_from_botops_is_a_confirm_card(api, botops
     assert card.status_code == 200 and card.json()["needs_confirm"] is True, card.text
     assert effective(api) == before
     assert _stored_card(api, card.json())["description"] == "ops: " + words + "."
-    err, shown = mcp(api, "hub_settings_set", {"key": "bot.repositories", "bot": "ops", "value": body}, ana["token"])
+    err, shown = mcp(api, "tico_settings_set", {"key": "bot.repositories", "bot": "ops", "value": body}, ana["token"])
     assert not err and shown["needs_confirm"] is True, shown
     post(api, f"assistant/actions/{card.json()['action']['id']}/confirm", {}, token="ana-test")
     assert {"full_name": "Acme/product", "access": "write", option: True} in effective(api)
@@ -319,7 +319,7 @@ def test_a_member_asking_botops_for_run_workflows_changes_nothing_and_is_told_wh
     assert refused.status_code == 403 and "owner or an admin" in refused.text, refused.text
     err, answer = mcp(
         api,
-        "hub_settings_set",
+        "tico_settings_set",
         {"key": "bot.repositories", "bot": "ops", "value": {"mode": "chosen", "chosen": [FLAG]}},
         cara["token"],
     )
@@ -342,7 +342,7 @@ def test_run_workflows_on_a_read_only_grant_says_write_comes_first_and_makes_no_
     }
     refused = act(api, ana, "PUT", "bots/ops/repositories", body)
     assert refused.status_code == 422 and "needs write access" in refused.text, refused.text
-    err, answer = mcp(api, "hub_settings_set", {"key": "bot.repositories", "bot": "ops", "value": body}, ana["token"])
+    err, answer = mcp(api, "tico_settings_set", {"key": "bot.repositories", "bot": "ops", "value": body}, ana["token"])
     assert err and "needs write access" in str(answer), answer
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM assistant_actions").fetchone()
@@ -353,7 +353,7 @@ def test_the_catalogue_puts_run_workflows_on_a_card_in_the_bots_own_words(api, b
     from backend.tests.test_mcp import call as mcp
 
     ana = turn(api, botops, person="ana-test", text="Tick Run workflows on product for ops")
-    err, shown = mcp(api, "hub_settings_show", {"key": "bot.repositories", "bot": "ops"}, ana["token"])
+    err, shown = mcp(api, "tico_settings_show", {"key": "bot.repositories", "bot": "ops"}, ana["token"])
     assert not err and shown["setting"]["class_when"] == {
         "class": "confirm",
         "body": {
@@ -370,7 +370,7 @@ def test_the_catalogue_puts_run_workflows_on_a_card_in_the_bots_own_words(api, b
     )
     err, card = mcp(
         api,
-        "hub_settings_set",
+        "tico_settings_set",
         {"key": "bot.repositories", "bot": "ops", "value": {"mode": "chosen", "chosen": [FLAG]}},
         ana["token"],
     )
@@ -380,7 +380,7 @@ def test_the_catalogue_puts_run_workflows_on_a_card_in_the_bots_own_words(api, b
     # Adding a grant with no tick is still direct, and keeps nothing it shouldn't.
     err, done = mcp(
         api,
-        "hub_settings_set",
+        "tico_settings_set",
         {
             "key": "bot.repositories",
             "bot": "ops",
@@ -440,7 +440,7 @@ def test_the_catalogue_classifies_a_repository_change_by_what_it_does_not_only_b
 
     def ask(value):
         err, answer = mcp(
-            api, "hub_settings_set", {"key": "bot.repositories", "bot": "ops", "value": value}, ana["token"]
+            api, "tico_settings_set", {"key": "bot.repositories", "bot": "ops", "value": value}, ana["token"]
         )
         assert not err, answer
         return answer
@@ -476,7 +476,7 @@ def test_turning_product_repositories_back_on_is_the_owners_card_and_an_admin_is
     ben = turn(api, botops, person="ben-test", text="Let ops create product repositories again")
     refused = act(api, ben, "PUT", "bots/ops/repositories", on)
     assert refused.status_code == 403 and "Only the Owner" in refused.text, refused.text
-    err, answer = mcp(api, "hub_settings_set", {"key": "bot.repositories", "bot": "ops", "value": on}, ben["token"])
+    err, answer = mcp(api, "tico_settings_set", {"key": "bot.repositories", "bot": "ops", "value": on}, ben["token"])
     assert err and "Only the Owner" in str(answer), answer
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM assistant_actions").fetchone()

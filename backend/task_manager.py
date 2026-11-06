@@ -174,8 +174,8 @@ def _quiet(c, at):
                     "own_blockers",
                     row,
                     f"waits only on its own quiet subtasks ({blockers}), quiet for " + _age(row["quiet_minutes"]),
-                    f"hub task get {row['id']}; if a subtask is finished: hub task close {blockers.split(', ')[0]} "
-                    f"--note \"<why>\"; if it is not needed: hub task relate {row['id']} "
+                    f"tico task get {row['id']}; if a subtask is finished: tico task close {blockers.split(', ')[0]} "
+                    f"--note \"<why>\"; if it is not needed: tico task relate {row['id']} "
                     f"{blockers.split(', ')[0]} --kind blocked_by --remove",
                 )
             )
@@ -186,8 +186,8 @@ def _quiet(c, at):
                     "quiet",
                     row,
                     "quiet for " + _age(row["quiet_minutes"]) + " with nothing it waits on" + decide,
-                    f"hub task get {row['id']}; if it is done: hub task close {row['id']} --note \"<what was done>\"; "
-                    f"if it waits on someone: hub task update {row['id']} --status waiting --note \"<on whom>\"",
+                    f"tico task get {row['id']}; if it is done: tico task close {row['id']} --note \"<what was done>\"; "
+                    f"if it waits on someone: tico task update {row['id']} --status waiting --note \"<on whom>\"",
                 )
             )
     return out
@@ -210,7 +210,7 @@ def _asks(c, at):
                     "ask_overdue",
                     task,
                     f"a question to {who} is past its deadline and still open",
-                    f"hub task get {task['id']}; one line for the department in Needs you, do not answer for {who}",
+                    f"tico task get {task['id']}; one line for the department in Needs you, do not answer for {who}",
                     stamp=task["id"],
                 )
             )
@@ -220,7 +220,7 @@ def _asks(c, at):
                     "ask_unanswered",
                     task,
                     f"a question to {who} has gone a business day unanswered",
-                    f"hub task get {task['id']}; one line for the department in Needs you, do not answer for {who}",
+                    f"tico task get {task['id']}; one line for the department in Needs you, do not answer for {who}",
                     stamp=task["id"],
                 )
             )
@@ -262,7 +262,7 @@ def _reviews(c):
                     "review_no_pr",
                     row,
                     f"{match[0]} ticket for {parent_id} with no linked pull request",
-                    f"hub task get {parent_id}; if its pull request is gone: hub task close {row['id']} "
+                    f"tico task get {parent_id}; if its pull request is gone: tico task close {row['id']} "
                     f"--note \"No pull request to review\"",
                 )
             )
@@ -283,7 +283,7 @@ def _reviews(c):
                     "review_duplicate",
                     extra,
                     f"a second open {name} ticket for {parent_id}; {first['id']} came first",
-                    f"hub task close {extra['id']} --note \"Duplicate of {first['id']}\"",
+                    f"tico task close {extra['id']} --note \"Duplicate of {first['id']}\"",
                 )
             )
     return out
@@ -311,7 +311,7 @@ def _merged(c, at):
                     "shipped",
                     row,
                     f"its pull request shipped in a release ({row['pr']}) but the ticket is still {row['status']}",
-                    f"hub task close {row['id']} --note \"Shipped: {row['pr']}\"",
+                    f"tico task close {row['id']} --note \"Shipped: {row['pr']}\"",
                 )
             )
         elif row["status"] != "ready":
@@ -320,7 +320,7 @@ def _merged(c, at):
                     "merged",
                     row,
                     f"its pull request merged ({row['pr']}) but the ticket is still {row['status']}",
-                    f"hub task get {row['id']}; if nothing else is left it is ready to ship: a person moves it",
+                    f"tico task get {row['id']}; if nothing else is left it is ready to ship: a person moves it",
                 )
             )
     return out
@@ -357,8 +357,8 @@ def _held(c):
                 "held",
                 None,
                 f"{bot['slug']} is {why}" + (f" ({detail[:120]})" if detail else ""),
-                f"hub task create --owner botops --title \"Look at the held bot {bot['slug']}\" "
-                f"--body \"It is held; check its last runs, then release it (hub bot release) or raise its budget.\"",
+                f"tico task create --owner botops --title \"Look at the held bot {bot['slug']}\" "
+                f"--body \"It is held; check its last runs, then release it (tico bot release) or raise its budget.\"",
                 owner="bot:" + row["bot"],
                 stamp=str(row["held_at"]),
             )
@@ -386,7 +386,7 @@ def _owner_review(c, at):
             None,
             f"{r['n']} interrupted run{'s' if r['n'] != 1 else ''} of {r['slug']} "
             f"waiting for its owner's review since {str(r['since'])[:16]} UTC; its tasks and routines wait meanwhile",
-            f"hub task create --owner botops --title \"Review the interrupted runs of {r['slug']}\" "
+            f"tico task create --owner botops --title \"Review the interrupted runs of {r['slug']}\" "
             f"--body \"Resume or dismiss them after checking what already happened.\"",
             owner="bot:" + r["bot_id"],
             stamp=f"{r['n']}",
@@ -415,8 +415,8 @@ def _duplicates(c):
                         "duplicate",
                         row,
                         f"same title, requester and owner as {seen[key]['id']}",
-                        f"hub task relate {row['id']} {seen[key]['id']} --kind duplicate_of; then "
-                        f"hub task close {row['id']} --note \"Duplicate of {seen[key]['id']}\"",
+                        f"tico task relate {row['id']} {seen[key]['id']} --kind duplicate_of; then "
+                        f"tico task close {row['id']} --note \"Duplicate of {seen[key]['id']}\"",
                     )
                 )
         else:
@@ -576,7 +576,7 @@ def report(c, auth, settings, at):
 
 
 def view(c, settings):
-    """What Settings and `hub task-manager` show: whether the bot is on, and each department's last check."""
+    """What Settings and `tico task-manager` show: whether the bot is on, and each department's last check."""
     from . import system_routines as SR
 
     chart = Chart(c, settings)

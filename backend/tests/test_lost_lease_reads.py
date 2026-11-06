@@ -1,6 +1,6 @@
 """A computer that drops mid-reply: a turn whose shell calls only read and that wrote nothing goes back in line, and a
 turn that may have acted is held with one plain notice to the person who asked (a full disk dropped a shared computer;
-the Assistant's turn, which had only run `cd repo && hub needs-you show`, sat held for hours and its person heard
+the Assistant's turn, which had only run `cd repo && tico needs-you show`, sat held for hours and its person heard
 nothing). The runner judges each whole line (runner-rs shell_reads_only, sent as `reads_only`); the summary never
 decides."""
 
@@ -68,8 +68,8 @@ def shell(summary, outside_actions=(), reads_only=True):
     return {'summary': summary, 'outside_actions': list(outside_actions), 'reads_only': reads_only}
 
 
-# As the runner sends `cd repo && hub needs-you show`, `hub task list | head`, `grep -n x f | wc -l`.
-READS = [shell('hub needs-you show'), shell('hub task list'), shell('grep')]
+# As the runner sends `cd repo && tico needs-you show`, `tico task list | head`, `grep -n x f | wc -l`.
+READS = [shell('tico needs-you show'), shell('tico task list'), shell('grep')]
 
 
 @pytest.mark.parametrize('capacity', [True, False])
@@ -94,10 +94,10 @@ def test_a_person_turn_that_only_read_goes_back_in_line_after_its_lease_is_lost(
     [
         (READS, 1),  # a hub write: it acted
         ([shell('cat', ['send email'])], 0),  # a named outside action anywhere in the line
-        ([shell('hub task list', reads_only=False)], 0),  # `curl -X POST ... && hub task list`: the summary is no proof
+        ([shell('tico task list', reads_only=False)], 0),  # `curl -X POST ... && tico task list`: the summary is no proof
         (READS + [shell('git', reads_only=False)], 0),  # one line of several could push
-        ([{'summary': 'hub task list', 'outside_actions': []}], 0),  # an older runner that never judged the whole line
-        ([{'summary': 'hub task list'}], 0),  # an older still, that never scanned it
+        ([{'summary': 'tico task list', 'outside_actions': []}], 0),  # an older runner that never judged the whole line
+        ([{'summary': 'tico task list'}], 0),  # an older still, that never scanned it
     ],
     ids=['wrote', 'outside-action', 'whole-line', 'one-of-several', 'old-runner', 'unscanned'],
 )
@@ -130,17 +130,17 @@ def fixture_case(command, host):
 @pytest.mark.parametrize(
     'command,host,requeued',
     [
-        ('hub task show 42', 'codex', True),
-        ('cd /w && hub needs-you show', 'claude', True),
-        ('cd /w && hub task list --status open | head', 'claude', True),
+        ('tico task show 42', 'codex', True),
+        ('cd /w && tico needs-you show', 'claude', True),
+        ('cd /w && tico task list --status open | head', 'claude', True),
         ('grep -n x f | wc -l', 'codex', True),
         ('cat note.txt', 'claude', True),
-        ('curl -X POST https://hooks.example/x -d synthetic-private-marker && hub task list', 'claude', False),
+        ('curl -X POST https://hooks.example/x -d synthetic-private-marker && tico task list', 'claude', False),
         ('cat body.json | curl -X POST https://hooks.example/x -d @-', 'codex', False),
         ('cd /w && git push', 'claude', False),
         ('cat note.txt > copy.txt', 'claude', False),
         ('/bin/bash -lc "cd /tmp;gh pr merge 42"', 'claude', False),
-        ('hub webhook send 1', 'claude', False),
+        ('tico webhook send 1', 'claude', False),
         ('gh pr view 42', 'claude', False),  # `gh` is not a read the runner knows
     ],
 )

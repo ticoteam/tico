@@ -353,7 +353,7 @@ class Settings:
     decisions_jev_usd_per_mtok_input: float = 0.042
     decisions_jev_usd_per_mtok_output: float = 0.0
     # Org rule checks (backend/org_rule_check.py): their own monthly USD cap, apart from Decide's, so checks and
-    # screening never spend each other's; the Decide level they ask at; how many `hub rules check` drafts one bot
+    # screening never spend each other's; the Decide level they ask at; how many `tico rules check` drafts one bot
     # may check in a UTC day; and how many checks run at once (past that, an output goes through unchecked, `busy`).
     rules_monthly_usd: float = 50.0
     rule_check_level: str = "medium"

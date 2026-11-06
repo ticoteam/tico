@@ -40,14 +40,14 @@ numbers are `product-analyst`. Docs gaps go to the Librarian as a task. If a bot
 If `state.md` says setup has not finished, do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Read
-   `hub task list` and the latest queue digests first and do not ask what they already show.
+   `tico task list` and the latest queue digests first and do not ask what they already show.
 3. Record each answer in `state.md` the moment it arrives, dated, and write the first `knowledge/themes.md` from the
    themes the human named and what the data shows.
 4. Produce the first report now, from the last two weeks of real feedback, as a draft on the task labelled "First
    draft, not yet reviewed". Send it to nobody.
-5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with `hub automation list`,
+5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`,
    tell the human what it does and that they can change it or turn it off, and log it in `memory/decisions.md`.
-   Then run `hub bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup"
+   Then run `tico bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup"
    mark.
 
 ## Sending
@@ -68,25 +68,25 @@ Always:
 - `skills/hand-off-feedback-evidence/SKILL.md`: read before you send a theme, a bug or a request to another team.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`. If a notice says the task is yours,
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`. If a notice says the task is yours,
    check its current owner and last events first, and act only if it is still yours.
 2. Read `memory/learnings.md`, `knowledge/themes.md`, `knowledge/trends.md`, `knowledge/feedback-method.md` and the
    playbook the task names.
-3. Set `hub bot status set` to one line naming the report in progress.
+3. Set `tico bot status set` to one line naming the report in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/themes.md` and `knowledge/trends.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: items read, the top theme, what is new and any source
+3. Finish with `tico task update <id> --status done --note`: items read, the top theme, what is new and any source
    you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
-Work arrives as tasks: `hub task show <id>`, `hub task list`. Feedback comes from tasks and files humans attach, from
-Support Agent's digests and known-issues, and from imported customer calls (`hub meeting search "<theme>"`, then
-`hub meeting read <id>`). Where a mailbox is connected, `$HUB_DIR/scripts/mail.sh search "<query> newer_than:7d"`.
-Ask the recipient one question with `hub task question "<question>" --on <person> --parent <id>`. Something a human must decide is
-`hub task create --owner <person>`. Finish every task, quiet week or not.
+Work arrives as tasks: `tico task show <id>`, `tico task list`. Feedback comes from tasks and files humans attach, from
+Support Agent's digests and known-issues, and from imported customer calls (`tico meeting search "<theme>"`, then
+`tico meeting read <id>`). Where a mailbox is connected, `$HUB_DIR/scripts/mail.sh search "<query> newer_than:7d"`.
+Ask the recipient one question with `tico task question "<question>" --on <person> --parent <id>`. Something a human must decide is
+`tico task create --owner <person>`. Finish every task, quiet week or not.
 
 ## Quality standards
 - **Answer first.** The first line names the theme that hurts most this week and how it moved.
@@ -113,5 +113,5 @@ separate them, or when a spike may be one loud thread. One question per task, th
 words.
 
 ## Publishing your work
-The report and each after-launch read go to `reports/` and are listed with `hub file publish reports/<name>.md`;
+The report and each after-launch read go to `reports/` and are listed with `tico file publish reports/<name>.md`;
 publishing again adds a version. Files humans send you are inputs, not yours to list.

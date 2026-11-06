@@ -496,7 +496,7 @@ def _check_hold_checks(c):
                 f"{since[:16].replace('T', ' ')} UTC); {title}. Every turn on it since then ({tries}) "
                 "stopped on the limit, and Tico retries it after every reset.",
                 f"BotOps: wait for {model}'s limit to reset; or switch the check model: {name} declines "
-                "this check and files it again on another model (hub task child --check-model); or drop "
+                "this check and files it again on another model (tico task child --check-model); or drop "
                 f"the check: {name} declines it. A declined check's queued turn is let go.",
             )
         )
@@ -534,7 +534,7 @@ def _release_approval_checks(c, settings):
                 f"The publish approval for {version} (commit {commit}) has been ready since "
                 f"{row['ready_since'][:16].replace('T', ' ')} UTC, {H.wait_words(row['age_s'])}, with no "
                 f"decision. It is {who}'s to decide; the release waits until then.",
-                f"{who}: approve or decline it in Needs you (or `hub approval show {row['id']}`). Tico does "
+                f"{who}: approve or decline it in Needs you (or `tico approval show {row['id']}`). Tico does "
                 "not decide it for anyone.",
             )
         )
@@ -704,7 +704,7 @@ def _bot_checks(c, settings=None):
                         f"A task worktree of {label} failed",
                         f"{label}: {error[:400]}",
                         (
-                            f"Run `hub task worktree add {r['repo']} --task {r['task_id']}` on the owner's current computer. "
+                            f"Run `tico task worktree add {r['repo']} --task {r['task_id']}` on the owner's current computer. "
                             "Unpushed work stayed on the retired computer."
                             if r['state'] == 'retired'
                             else "BotOps: save any unique work in that worktree on a branch, then remove its link so "
@@ -775,7 +775,7 @@ def _stop_checks(c):
                 f"{name}'s last {hold['fails']} runs each failed within a minute of starting, with "
                 f"{run_backoff.CLASS_WORDS.get(kind, run_backoff.CLASS_WORDS[run_backoff.OTHER])}. Held "
                 f"since {str(hold['held_at'])[:16]} UTC. Last error: {hold['error'] or 'none reported'}.",
-                f"BotOps: read {name}'s last runs, fix the cause, then release it (hub bot release {row.get('slug', bot)}). "
+                f"BotOps: read {name}'s last runs, fix the cause, then release it (tico bot release {row.get('slug', bot)}). "
                 "Tico also tries one run on its own at growing intervals and releases it when one completes. "
                 "Its queued work is kept.",
                 subject=kind,
@@ -796,7 +796,7 @@ def _stop_checks(c):
                 f"{hold['budget']}. Held since {str(hold['held_at'])[:16]} UTC. This looks like a runaway "
                 "loop, not normal work.",
                 f"BotOps: read {name}'s last runs for what keeps waking it, then release it "
-                f"(hub bot release {row.get('slug', bot)}) or raise its budget (hub bot budget {row.get('slug', bot)} --{hold['window']} N).",
+                f"(tico bot release {row.get('slug', bot)}) or raise its budget (tico bot budget {row.get('slug', bot)} --{hold['window']} N).",
                 subject=hold["window"],
                 severity=BAD,
             )
@@ -817,7 +817,7 @@ def _stop_checks(c):
                 "Each waits, then Tico tries it again on its own; the wait doubles with each failed try, "
                 "up to an hour. The server log has the traceback.",
                 f"BotOps: read the server log for the traceback and fix its cause. To retry the held runs "
-                f"now, release {name} (hub bot release {row.get('slug', bot)}); one that fails again is held with a longer "
+                f"now, release {name} (tico bot release {row.get('slug', bot)}); one that fails again is held with a longer "
                 "wait.",
                 severity=BAD,
             )
@@ -902,7 +902,7 @@ def _quiet_work_checks(c):
                 f"{label} was handed the next-run task {name} at {item['since'][:16]} UTC (run "
                 f"{str(item['run'] or '')[:8]}) and has not worked it since, with no time set to pick it "
                 "up again.",
-                f"{label}: work it, or say when to pick it up (hub task later {task['id']} --after <task> | "
+                f"{label}: work it, or say when to pick it up (tico task later {task['id']} --after <task> | "
                 "--at <time>). Anyone may press Run now on it to give it a run of its own.",
             )
         )
@@ -1138,7 +1138,7 @@ def report(c_factory, support, auth, settings, who, key):
     if filed and filed["approval_id"]:
         return {"signature": row["signature"], "approval": filed["approval_id"], "again": True}
     if not allowed:
-        # The person reads the report first: a `support` approval, sent with `hub support send --approval <id>`.
+        # The person reads the report first: a `support` approval, sent with `tico support send --approval <id>`.
         digest = hashlib.sha256(message.encode()).hexdigest()
         now = H.now()
         with store.transaction() as c:

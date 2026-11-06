@@ -35,12 +35,12 @@ The same history is available to signed-in users through the stable API and MCP:
   all product entries, independently of the current filter.
 - `POST /api/v2/changelog/read` with `{"ids":["release-0.3.0"]}` and an `Idempotency-Key`
   acknowledges only those known product entries for the caller. Unknown or future ids are ignored.
-- MCP `hub_changelog_list` accepts the same filters and defaults to product changes;
-  `hub_changelog_mark_read` accepts `ids` from that result. Listing does not mark anything read.
+- MCP `tico_changelog_list` accepts the same filters and defaults to product changes;
+  `tico_changelog_mark_read` accepts `ids` from that result. Listing does not mark anything read.
   For a catch-up request, list unread changes, show the user the summary, and acknowledge the
   entries shown when they ask to mark them read.
-- CLI: `hub changelog list --unread`, `hub changelog list --since-version 0.3.0`, and
-  `hub changelog mark-read release-0.3.0`.
+- CLI: `tico changelog list --unread`, `tico changelog list --since-version 0.3.0`, and
+  `tico changelog mark-read release-0.3.0`.
 
 ## Manual server update
 
@@ -88,7 +88,7 @@ only with the next server release.
 
 Health names computers that did not report a version and shows a newer computer's actual release separately.
 Computers lists team service status once, alongside the computer reports. Archived bots are left out of readiness.
-The MCP `hub_health_check` includes the same checks and fixes as Settings > Health, including watchers and queued work.
+The MCP `tico_health_check` includes the same checks and fixes as Settings > Health, including watchers and queued work.
 Computers report whether a rejected model key came from Credentials or the computer only after the server
 advertises support. After a server rollback, they omit that field and keep reporting readiness; a later server
 upgrade enables it again.
@@ -566,7 +566,7 @@ Bump `MIN_RUNNER_RELEASE` in the release that changes the runner/server contract
 Ship the server and runner image for that release together, and expect computers to move within a few minutes of
 the server's restart.
 
-Computers shows installed and wanted releases, update state and last error. `hub_computer_list` gives each computer's
+Computers shows installed and wanted releases, update state and last error. `tico_computer_list` gives each computer's
 releases and update state (`current`, `update_available`, `updating`, `failed`, `incompatible` or `unknown`) in one
-short row; `hub_computer_list computer=<label or id>` adds the last error.
-`hub_health_check` includes that Computer detail and service errors with the next step.
+short row; `tico_computer_list computer=<label or id>` adds the last error.
+`tico_health_check` includes that Computer detail and service errors with the next step.

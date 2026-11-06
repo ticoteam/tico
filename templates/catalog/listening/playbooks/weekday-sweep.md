@@ -11,11 +11,11 @@ result.
 
 ## 1. Read the watchlist first
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/watchlist.md`, before the first query. It holds the names, the queries, the phrases
 that matter, and the sources this sweep reads. Anything not on it is not this sweep's work.
-`hub market show <id>` for each organization this brief will name. The graph is what is true about them;
+`tico market show <id>` for each organization this brief will name. The graph is what is true about them;
 the watchlist is only what to search.
 
 ## 2. Run the queries
@@ -55,8 +55,8 @@ A section with nothing in it is absent, not empty with a note apologising for it
 
 ## 5. Hand over what needs someone
 
-    hub task create --owner content --parent <id>
-    hub task create --owner <person> --parent <id>
+    tico task create --owner content --parent <id>
+    tico task create --owner <person> --parent <id>
 
 One child task per real item, never one to show the sweep happened. Something worth writing about
 goes to the content bot with the link, the reason, and the angle; you never write the piece. A real
@@ -64,7 +64,7 @@ move or a thread a human should see goes to that human, under 200 words.
 
 ## 6. Finish the task
 
-Commit, then `hub task update <id> --status done --note`. With findings: one line each and the path
+Commit, then `tico task update <id> --status done --note`. With findings: one line each and the path
 to the digest. Without findings: one line naming the sources that returned and how many results you
 reviewed. Always finish it. A scheduled task left open absorbs the next occurrence and quietly stops
 the sweep.

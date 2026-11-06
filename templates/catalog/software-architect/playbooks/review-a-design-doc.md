@@ -24,7 +24,7 @@ the recommendation matches the findings, and the task note carries the recommend
 
 ## 1. Read it twice
 
-    hub task show <id>
+    tico task show <id>
 
 First for the problem, then for the solution. Read the parts of `knowledge/system-map.md` it touches and any ADR it
 contradicts or supersedes.
@@ -50,7 +50,7 @@ first finding.
 ## 4. Write the notes
 
 Write them in the shape above. Label each point blocking or non-blocking. Attach the file, commit it, and run
-`hub task update <id> --status done --note` with the recommendation and the one blocking question in the first line.
+`tico task update <id> --status done --note` with the recommendation and the one blocking question in the first line.
 
 ## 5. When the design is a rework
 

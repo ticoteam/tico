@@ -30,7 +30,7 @@ name no table, command or code. Not on this list: say you are not sure where it 
   due date) and its steps. A routine turns each run into a task for its bot.
 - **Needs you** counts what only the person can do: tasks filed for them (a bot's ask, a review, a missing input), bots'
   questions, approvals waiting on them, and tasks held on them. Most are routine output, not decisions. Their tasks are on
-  `[Tasks](#/tasks)`; `hub needs-you show` gives today's count.
+  `[Tasks](#/tasks)`; `tico needs-you show` gives today's count.
 
 ## Links
 Name things and link them so they can click. Only these become clickable: in-app routes and https links.

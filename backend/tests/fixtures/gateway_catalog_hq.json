@@ -419,9 +419,9 @@
    "price": "From $0.06 per 1M input tokens",
    "status": "live",
    "tools": [
-    "hub_decision_ask",
-    "hub_decision_readout",
-    "hub_decision_outcome"
+    "tico_decision_ask",
+    "tico_decision_readout",
+    "tico_decision_outcome"
    ],
    "details": [
     {
@@ -445,8 +445,8 @@
    "price": "Free addresses · $0.14 per 1,000 received",
    "status": "live",
    "tools": [
-    "hub_inbound_create_email",
-    "hub_inbound_wait"
+    "tico_inbound_create_email",
+    "tico_inbound_wait"
    ],
    "details": [
     {
@@ -506,7 +506,7 @@
    "price": "$0.00875 per search, plus tokens at $0.15 / $0.75 per 1M",
    "status": "live",
    "tools": [
-    "hub_gateway_search"
+    "tico_gateway_search"
    ],
    "details": [
     {
@@ -530,7 +530,7 @@
    "price": "$1.25 per 1,000 pages + tokens",
    "status": "live",
    "tools": [
-    "hub_gateway_fetch"
+    "tico_gateway_fetch"
    ],
    "details": [
     {
@@ -550,7 +550,7 @@
    "price": "Per image, at cost + 25%",
    "status": "live",
    "tools": [
-    "hub_gateway_image"
+    "tico_gateway_image"
    ],
    "details": [
     {
@@ -680,8 +680,8 @@
    "price": "Address $10 a month per state · Own box at cost + 25%",
    "status": "live",
    "tools": [
-    "hub_mail_list",
-    "hub_mail_read"
+    "tico_mail_list",
+    "tico_mail_read"
    ],
    "details": [
     {

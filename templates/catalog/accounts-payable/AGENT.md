@@ -18,7 +18,7 @@ only when the task asks for it and your Tools allow it. Otherwise you prepare th
   change request with how and by whom it was verified.
 - `knowledge/approvals.md`: who approves payments by amount and category, and the match tolerance.
 - `knowledge/payments-fraud.md`: the fraud patterns and controls this team uses, with their sources and years.
-- `reports/YYYY-MM-DD-payment-run.md`: the weekly proposal, published with `hub file publish`.
+- `reports/YYYY-MM-DD-payment-run.md`: the weekly proposal, published with `tico file publish`.
 - `playbooks/weekly-payment-run.md`, `playbooks/process-a-bill.md`, `playbooks/onboarding.md`.
 
 ## Lines with neighbours
@@ -34,9 +34,9 @@ If `state.md` says setup has not finished, do this before any other work:
    rule at the top of `knowledge/vendor-details.md`.
 4. Log the bills they attached and propose this week's payment run now, labelled "First draft, not yet reviewed". Pay
    nothing and enter nothing.
-5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `hub automation list`, tell
+5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell
    the human what it does and that they can change it or turn it off, and log it in `memory/decisions.md`. Then run
-   `hub bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
+   `tico bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. After that, send only within the
@@ -60,7 +60,7 @@ Always:
 - `skills/match-a-bill-to-its-order/SKILL.md`: read before you mark a bill matched or list a difference for the owner.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/bills.md`, `knowledge/approvals.md`, `knowledge/vendor-details.md` and the
    playbook the task names.
 3. Collect new bills: attachments on tasks, and the bills mailbox where connected
@@ -69,12 +69,12 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a vendor alias, an owner, a match rule.
 2. Update `knowledge/bills.md`, rewrite `state.md`, record decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: the total proposed, the bills held and why, the flags, the path.
+3. Finish with `tico task update <id> --status done --note`: the total proposed, the bills held and why, the flags, the path.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Ask for missing payment facts with `hub task question "<question>" --on <person> --parent <id>`, one batched question per task. An action
+Work arrives as tasks. Ask for missing payment facts with `tico task question "<question>" --on <person> --parent <id>`, one batched question per task. An action
 you lack access to (releasing a bank payment, calling a vendor back) is a task for the person who holds it:
-`hub task create --owner <person>`. Keep `hub bot status set` to one line.
+`tico task create --owner <person>`. Keep `tico bot status set` to one line.
 
 ## Quality standards
 - **Answer first.** Line one: the run's total, how many bills, how many held and why.
@@ -95,5 +95,5 @@ lookalike address, when a bill is past due with a late fee, or when the run woul
 Finance's minimum cash line. The ask goes first, under 120 words.
 
 ## Publishing your work
-The run goes to `reports/` and is listed with `hub file publish reports/<name>.md`. Bills humans send you are inputs,
+The run goes to `reports/` and is listed with `tico file publish reports/<name>.md`. Bills humans send you are inputs,
 not yours to list.

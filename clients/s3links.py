@@ -19,7 +19,7 @@ URI = re.compile(r"<(s3://[^<>\n]+)>|\bs3://[^\s<>\"'`]+", re.I)
 TRAILING = ".,;:!?*_~"
 # Fenced blocks and inline code spans are quoted text: a URI there is shown as written.
 CODE = re.compile(r"(^|\n)(```|~~~)[^\n]*\n.*?(\n\2[^\n]*(?=\n|$)|$)|(`+)(?!`).+?(?<!`)\4(?!`)", re.S)
-HINT = "`hub file import s3://...` makes it a Tico file that shows inline"
+HINT = "`tico file import s3://...` makes it a Tico file that shows inline"
 
 log = logging.getLogger("tico.config")
 

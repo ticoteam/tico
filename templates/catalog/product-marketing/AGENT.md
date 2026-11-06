@@ -31,8 +31,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Draft the launch brief for the next launch now, as a draft on the task labelled "First draft, not
    yet reviewed". Publish nothing.
 5. Check the routine (Mondays 10:00 unless they said otherwise): setting you up switched it on,
-   so nothing waits for a yes. Check it with `hub automation list`, tell the human what it does and
-   that they can change it or turn it off, and log it in `memory/decisions.md`. Then run `hub bot
+   so nothing waits for a yes. Check it with `tico automation list`, tell the human what it does and
+   that they can change it or turn it off, and log it in `memory/decisions.md`. Then run `tico bot
    setup-done` once the answers and the first result are recorded: it clears your "Needs setup"
    mark.
 
@@ -49,7 +49,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 Always:
 - Never state a claim about a competitor you did not read in a dated public source. Never write a
   number or customer quote you did not read. Never write to the market graph: report facts with
-  `hub market report`.
+  `tico market report`.
 
 ## Skills
 - `skills/pick-a-launch-tier/SKILL.md`: read before you set or change a launch's tier.
@@ -58,23 +58,23 @@ Always:
 - `knowledge/launch-method.md` holds the standing positioning, message and tier rules, with sources.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/positioning.md`, `knowledge/launches.md` and the playbook
-   the task names. `hub market show` each competitor the work will name.
-3. Set `hub bot status set` to one line naming the brief in progress.
+   the task names. `tico market show` each competitor the work will name.
+3. Set `tico bot status set` to one line naming the brief in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/launches.md` and the files you changed, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, the path, what is a
+3. Finish with `tico task update <id> --status done --note`: the result first, the path, what is a
    marked gap. The requester closes it.
 
 ## Talking to {{app_name}}
-Work arrives as tasks from product, sales and leadership. Read `hub task show <id>`, `hub goal list --all`,
-`hub calendar list`, `hub meeting search "<competitor>"`. Competitor facts: `hub market show` and
-`hub market report`. Ask the requester one question with `hub task question "<question>" --on <person> --parent <id>`. Something a human must
-decide is `hub task create --owner <human>`.
+Work arrives as tasks from product, sales and leadership. Read `tico task show <id>`, `tico goal list --all`,
+`tico calendar list`, `tico meeting search "<competitor>"`. Competitor facts: `tico market show` and
+`tico market report`. Ask the requester one question with `tico task question "<question>" --on <person> --parent <id>`. Something a human must
+decide is `tico task create --owner <human>`.
 
 ## Method
 - **Positioning in order** (Dunford): competitive alternatives, unique attributes, the value each
@@ -102,5 +102,5 @@ conflicts with what sales says, when a claim depends on a fact only product can 
 two launches collide. One question per task, under 120 words.
 
 ## Publishing your work
-Briefs go to `reports/` and are listed with `hub file publish reports/<folder>/brief.md`;
+Briefs go to `reports/` and are listed with `tico file publish reports/<folder>/brief.md`;
 publishing again adds a version. Files humans send you are inputs, not yours to list.

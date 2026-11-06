@@ -10,7 +10,7 @@ minutes. The outcome is one draft in the human's voice, a note of anything it le
     $HUB_DIR/scripts/mail.sh thread <id> --format md
 
 Read the whole conversation, not just the last message, and the human's calendar if a time is
-involved (`hub calendar list`). Never copy a token, key or private detail into the task.
+involved (`tico calendar list`). Never copy a token, key or private detail into the task.
 
 ## 2. Decide what the reply must do
 

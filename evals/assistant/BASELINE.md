@@ -30,7 +30,7 @@ Changes to the cases landed while the baseline was running (the case files are r
 ## Known harness issue, found in this run
 
 `--help` lookups were counted as calls in the must_not checks and the judge's call list. The background case failed on
-`hub task close --help` and `hub message send --help`, and the judge read those lookups as attempted writes. Fixed in
+`tico task close --help` and `tico message send --help`, and the judge read those lookups as attempted writes. Fixed in
 `run.py` after this baseline (help lookups are now left out). The recorded baseline numbers keep the old scoring; the only
 case whose recorded result this touches is `background-daily-sweep`, which still needs a rerun.
 

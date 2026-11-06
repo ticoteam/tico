@@ -1,6 +1,6 @@
 """GitHub keeps the pull requests attached to a task up to date; it never moves the task.
 
-A task carries its pull request as a link (`hub task link`). A link is information only: opening,
+A task carries its pull request as a link (`tico task link`). A link is information only: opening,
 merging or closing the PR, a release tag or a deploy changes the link, never the task's status or
 step. A person moves the task. The repository's webhook posts here signed with
 `TICO_GITHUB_WEBHOOK_SECRET`; nothing else on this path is trusted:
@@ -272,13 +272,13 @@ def _review_role(c, task, payload, role):
     )
 
 
-# The branch `hub task worktree add` names: tico/<the task's first 8 id characters>-<title slug>.
+# The branch `tico task worktree add` names: tico/<the task's first 8 id characters>-<title slug>.
 WORKTREE_BRANCH = re.compile(r"^tico/[0-9a-f]{8}-")
 
 
 def register_worktree_pr(c, pr):
     """A pull request whose head is a task worktree's branch in the same repository belongs to that task: its link is
-    registered here, so a worktree whose bot never ran `hub task link` still gets the link its release waits on.
+    registered here, so a worktree whose bot never ran `tico task link` still gets the link its release waits on.
     Returns the ids of the links it made; a fork's branch, another organization's repository or a branch no
     worktree holds registers nothing."""
     url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")

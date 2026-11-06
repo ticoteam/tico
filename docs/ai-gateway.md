@@ -259,8 +259,8 @@ Services today: **Decide** (live), **Inbox** email addresses (live) and numbers 
 **Images**, **SVG**, **Video**, **Signals**, **Digest**, **Transcribe** and **Mail** (live), with sending letters and email,
 enrichment and voice coming soon.
 A choice question (which of your labels fits) is a Decide question. Bots and agents read
-the same list with the `hub_gateway_catalog` tool and search the web with `hub_gateway_search` (`hub gateway catalog [query]`,
-`hub gateway search QUERY`, `hub gateway fetch URL`); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `hub_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
+the same list with the `tico_gateway_catalog` tool and search the web with `tico_gateway_search` (`tico gateway catalog [query]`,
+`tico gateway search QUERY`, `tico gateway fetch URL`); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `tico_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
 skill is `skills/gateway/SKILL.md`.
 
 ## API keys
@@ -301,7 +301,7 @@ curl https://updates.tico.team/v1/gateway/search -H "Authorization: Bearer <key>
 
 ## Images
 
-`hub gateway image PROMPT --category C --out PATH` makes an image through the Gateway and saves it. The categories:
+`tico gateway image PROMPT --category C --out PATH` makes an image through the Gateway and saves it. The categories:
 
 - **storyboard**: a fast model that keeps people and places from `--ref` images, for frames (about 4 to 8 US cents an image).
 - **photo**: for photographic images.
@@ -313,8 +313,8 @@ others beside it as `name-2.png`, `name-3.png`. Each image gets a sidecar `PATH.
 cost, the reference names and their sha256. An existing file is never overwritten.
 
 Each image is billed at what the image model costs plus 25%, from the same cap as the other Gateway services; the price
-varies with the model and size, so it is not one number. The catalog lists the service (`hub gateway catalog images`).
-Bots use the same thing with the `hub_gateway_image` tool, which runs on the computer and answers the saved paths, never
+varies with the model and size, so it is not one number. The catalog lists the service (`tico gateway catalog images`).
+Bots use the same thing with the `tico_gateway_image` tool, which runs on the computer and answers the saved paths, never
 the image bytes.
 When the Finance budget for Video production refuses at its limit and is used up for whoever asks (a bot or a person,
 by the team they are in), new images are refused with `video_budget_reached` until the budget is raised or its period

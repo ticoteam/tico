@@ -31,7 +31,7 @@ def test_no_leave_it_rejects_at_once_and_its_decider_adds_the_reason_afterwards(
         "proposal"
     ]
     assert (saved["decision_note"], saved["may_reason"]) == (REASON, False)
-    listed = rejected(api, goal_id=goal["id"])[p["id"]]  # what hub proposal list --status rejected prints
+    listed = rejected(api, goal_id=goal["id"])[p["id"]]  # what tico proposal list --status rejected prints
     assert (listed["decision_note"], listed["may_reason"]) == (REASON, False)
     # Through the new name of the route as well (backend/route_renames.py).
     other = propose(api, "goal_wording", {"title": "Raise activation to 70%"}, goal["id"])

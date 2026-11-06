@@ -7,7 +7,7 @@ launch lines are due. Nothing is filed or changed.
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Pull the repository. Then `state.md`, every spec in `specs/` not marked shipped, `knowledge/launch-checklist.md` and last
 week's review. Check whether last week's blocking questions were answered, and whether last week's launch lines
@@ -34,5 +34,5 @@ under "Left out" with its reason. Count the items you read and check the count a
 ## 5. Write and hand over
 
 Write `reports/YYYY-MM-DD-spec-review.md` in the shape of `knowledge/examples/spec-review.md`, then
-`hub file publish reports/YYYY-MM-DD-spec-review.md`. Commit, and `hub task update <id> --status done
+`tico file publish reports/YYYY-MM-DD-spec-review.md`. Commit, and `tico task update <id> --status done
 --note`: the headline, the blocking questions and their owners, and what you could not read.

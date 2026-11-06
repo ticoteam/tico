@@ -3,7 +3,7 @@
 A meeting holds three lists: **Doc updates**, **Tasks** and **Feature requests**, an outbox a
 person empties. They live in `meeting_items` beside the meeting rather than inside its notes, so
 they can be edited and pushed for as long as the meeting exists. A person adds an item, with or
-without the quote it came from; a push creates an ordinary hub task, never a card in another tool.
+without the quote it came from; a push creates an ordinary tico task, never a card in another tool.
 
 Only a person changes status: `proposed → pushed` happens through Push and nowhere else. Push is
 also the approval: a person pressed it.

@@ -12,7 +12,7 @@ Done when: `reports/YYYY-MM-DD-impact-<change>.md` is published, every number tr
 
 ## 1. State the change exactly
 
-    hub task show <id>
+    tico task show <id>
 
 Write it as: which plans, which prices or limits, from when, for new customers only or everyone. If any
 of these is open, lay out the variants side by side instead of guessing.
@@ -40,5 +40,5 @@ not interpret contracts.
 ## 5. Write
 
 `reports/YYYY-MM-DD-impact-<change>.md`: a one-line summary of the facts with no recommendation unless the
-task asks for one, the tables, the options, the unknowns, and what would reduce them. `hub file publish`,
+task asks for one, the tables, the options, the unknowns, and what would reduce them. `tico file publish`,
 commit, finish the task. The decision and every customer message are the owner's.

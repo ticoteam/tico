@@ -1,4 +1,4 @@
-"""`hub automation ...` and the hub_automation_* tools against the real API (clients/remotecli.py, clients/hubtools.py):
+"""`tico automation ...` and the tico_automation_* tools against the real API (clients/remotecli.py, clients/hubtools.py):
 the CLI and MCP run the same tool, so the same rights and the same payloads as the UI."""
 
 import json
@@ -74,7 +74,7 @@ def test_the_cli_creates_runs_edits_and_restores_as_the_ui_does(api, flow_file):
 
 def test_a_bot_without_rights_proposes_through_the_tool(api, flow_file):
     aid = cli(api, "ana-test", "create", "--file", str(flow_file))["id"]
-    proposed = hubtools.BY_NAME["hub_automation_update"]["fn"](
+    proposed = hubtools.BY_NAME["tico_automation_update"]["fn"](
         Client(api, as_bot(api, "finance")), {"id": aid, "steps": [], "summary": "Drop the wake"}
     )
     assert proposed["pending"] == 2
@@ -95,19 +95,19 @@ def test_botops_acts_with_the_askers_rights(api, botops):
 
     flow = {"name": "Ops", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"}, "steps": []}
     attempt = turn(api, botops, person="ana-test", text="Make ops an automation")
-    err, made = mcp(api, "hub_automation_create", flow, attempt["token"])
+    err, made = mcp(api, "tico_automation_create", flow, attempt["token"])
     assert not err and made["can_edit"], made
-    err, listed = mcp(api, "hub_automation_list", {}, attempt["token"])
+    err, listed = mcp(api, "tico_automation_list", {}, attempt["token"])
     assert not err and [a["id"] for a in listed["automations"] if not a["builtin"]] == [made["id"]]
     finish(api, botops, attempt)
     member = turn(api, botops, person="cara-test", text="Pause the ops automation")
-    err, refused = mcp(api, "hub_automation_update", {"id": made["id"], "enabled": False}, member["token"])
+    err, refused = mcp(api, "tico_automation_update", {"id": made["id"], "enabled": False}, member["token"])
     assert err, refused
 
 
 def test_the_cli_discards_a_proposal_and_lists_the_question_sets_and_the_guide(api, flow_file):
     aid = cli(api, "ana-test", "create", "--file", str(flow_file))["id"]
-    hubtools.BY_NAME["hub_automation_update"]["fn"](
+    hubtools.BY_NAME["tico_automation_update"]["fn"](
         Client(api, as_bot(api, "finance")), {"id": aid, "steps": [], "summary": "Drop the wake"}
     )
     assert [v["n"] for v in cli(api, "ana-test", "versions", aid, "--pending")["versions"]] == [2]
@@ -119,18 +119,18 @@ def test_the_cli_discards_a_proposal_and_lists_the_question_sets_and_the_guide(a
     sets = cli(api, "ana-test", "question-sets")["sets"]
     assert sets and all("@" in s["id"] for s in sets)
     guide = cli(api, "ana-test", "guide")["text"]
-    assert "hub automation create --file -" in guide and "`send_reply`" in guide and "{{" not in guide
+    assert "tico automation create --file -" in guide and "`send_reply`" in guide and "{{" not in guide
 
 
 def test_botops_sets_an_email_inboxs_send_switch_for_its_owner_only(api, botops):
     from backend.tests.test_mcp import call as mcp
 
     ana = turn(api, botops, person="ana-test", text="Turn off replies from my inbox")
-    err, out = mcp(api, "hub_inbox_send", {"inbox": "ana@acme.example", "send": False}, ana["token"])
+    err, out = mcp(api, "tico_inbox_send", {"inbox": "ana@acme.example", "send": False}, ana["token"])
     assert not err and out["send"] is False, out
     finish(api, botops, ana)
     cara = turn(api, botops, person="cara-test", text="Turn on Ana's replies")
-    err, refused = mcp(api, "hub_inbox_send", {"inbox": "ana@acme.example", "send": True}, cara["token"])
+    err, refused = mcp(api, "tico_inbox_send", {"inbox": "ana@acme.example", "send": True}, cara["token"])
     assert err, refused
     finish(api, botops, cara)
 

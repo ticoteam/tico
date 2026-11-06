@@ -10,9 +10,9 @@ the page is published; and each manager note is on its task for review.
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub team show
-    hub calendar list
+    tico task show <id>
+    tico team show
+    tico calendar list
 
 Then `knowledge/milestones.md`, `knowledge/actions.md`, `knowledge/survey.md` and last week's page.
 
@@ -36,9 +36,9 @@ Next pulse date and what must be ready two weeks before (questions confirmed, th
 ## 5. Write and hand over
 
 Write `reports/YYYY-MM-DD-milestones-and-actions.md` in the shape of
-`knowledge/examples/milestones-and-actions.md`, then `hub file publish
+`knowledge/examples/milestones-and-actions.md`, then `tico file publish
 reports/YYYY-MM-DD-milestones-and-actions.md --scope task --task <id>`. Manager notes go on the task for
-each manager. Commit, and `hub task update <id> --status done --note`.
+each manager. Commit, and `tico task update <id> --status done --note`.
 
 ## When a source fails
 

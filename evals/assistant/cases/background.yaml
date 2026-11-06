@@ -1,5 +1,5 @@
 # Background runs the Assistant starts itself (the morning message). They act as the Assistant, not as the person: a write uses
-# only the Assistant's own rights. The morning message sends at most one `hub assistant morning` per person a day and closes,
+# only the Assistant's own rights. The morning message sends at most one `tico assistant morning` per person a day and closes,
 # declines and proposes nothing.
 
 - id: background-daily-sweep
@@ -72,7 +72,7 @@
     - '^message send'
     - '^assistant (propose|send)\b'
   reply: |
-    Sends ONE morning message to Dana, with `hub assistant morning --for human:dana --body "<message>"`, short and
+    Sends ONE morning message to Dana, with `tico assistant morning --for human:dana --body "<message>"`, short and
     addressed to "you": at most three things only she can do, each with its goal linked, such as a check-in on the yellow
     trials goal (318 against 400, last check-in Oct 6). The message does not list the done docs task, the two test pings or
     any queue clean-up, and it is not a tidy card. The run closes nothing, declines nothing, answers nothing, proposes no

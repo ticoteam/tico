@@ -8,9 +8,9 @@ the first routine checked.
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub task list --status done
-    hub meeting search "customer" --since <two weeks ago>
+    tico task show <id>
+    tico task list --status done
+    tico meeting search "customer" --since <two weeks ago>
 
 Check what feedback you can already reach: Support Agent's digests, imported customer calls, a mailbox
 or channel in your access, files attached to the task. Do not ask what these already say. If you cannot
@@ -45,17 +45,17 @@ reviewed". Send it to nobody else.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will draft this report every Monday at 08:00 and send it only to you." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will draft this report every Monday at 08:00 and send it only to you." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

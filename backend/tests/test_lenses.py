@@ -125,7 +125,7 @@ def test_every_shipped_lens_loads_and_the_list_puts_strategy_first_and_hides_the
     assert get(api, "lenses?applies_to=nope", expected=422)["error"]["code"] == "validation"
 
 
-def test_a_draft_run_is_invisible_to_everyone_but_the_owner_in_the_api_and_hub_sql(api, model):
+def test_a_draft_run_is_invisible_to_everyone_but_the_owner_in_the_api_and_tico_sql(api, model):
     first, _ = two_bets(api)
     model["result"] = result(first["id"])
     strategy_token = with_strategy_bot(api)

@@ -806,11 +806,11 @@ def test_no_card_number_is_taken_stored_or_read_back(books):
             for k in _walk(output)
             if isinstance(k, str) and k.lower() in {"number", "card_number", "pan", "cvc", "cvv", "security_code"}
         }
-    for tool in ("hub_finance_card_fill", "hub_finance_search"):
+    for tool in ("tico_finance_card_fill", "tico_finance_search"):
         fields = set(hubtools.BY_NAME[tool]["inputSchema"]["properties"])
         assert not {"number", "card_number", "pan", "cvc", "cvv"} & fields
     with pytest.raises(APIError) as refused:
-        hubtools.BY_NAME["hub_finance_card_fill"]["fn"](
+        hubtools.BY_NAME["tico_finance_card_fill"]["fn"](
             None, {"card_id": coder, "merchant": "shop.example", "amount": 5_000}
         )
     assert refused.value.code == "not_available"

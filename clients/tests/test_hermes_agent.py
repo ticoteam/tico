@@ -437,7 +437,7 @@ class Doctor(Base):
     def seed_old_names(self):
         (self.profile / "SOUL.md").write_text("You are Scout.\nAlways use\nhub_say to reply.\n")
         (self.profile / "skills" / "triage").mkdir(parents=True)
-        (self.profile / "skills" / "triage" / "SKILL.md").write_text("Call `hub_docs_search` then hub_message_send.\n")
+        (self.profile / "skills" / "triage" / "SKILL.md").write_text("Call `hub_docs_search` then tico_message_send.\n")
         (self.profile / "cron").mkdir(exist_ok=True)
         jobs = self.profile / "cron" / "jobs.json"  # the tico-sync job is in it already: keep it, on one line
         data = json.loads(jobs.read_text()) if jobs.exists() else {}
@@ -755,13 +755,13 @@ class OpenClaw(Base):
                 "result": {"content": [{"type": "text", "text": '{"messages": [{"id": "m1"}]}'}], "isError": False},
             },
         )
-        code, out, err = self.run_cli("call", "--harness", "openclaw", "--profile", "claw", "hub_message_list", "{}")
+        code, out, err = self.run_cli("call", "--harness", "openclaw", "--profile", "claw", "tico_message_list", "{}")
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out), {"messages": [{"id": "m1"}]})
         sent = [r for r in self.hub.requests if r["path"] == "/api/v2/mcp"][0]
         self.assertEqual(sent["headers"]["authorization"], "Bearer " + TOKEN)
         self.assertEqual(sent["body"]["method"], "tools/call")
-        self.assertEqual(sent["body"]["params"], {"name": "hub_message_list", "arguments": {}})
+        self.assertEqual(sent["body"]["params"], {"name": "tico_message_list", "arguments": {}})
         self.assertTrue(sent["headers"]["user-agent"].startswith("tico-hermes-agent/"))
         self.run_cli(
             "call",
@@ -769,7 +769,7 @@ class OpenClaw(Base):
             "openclaw",
             "--profile",
             "claw",
-            "hub_message_send",
+            "tico_message_send",
             '{"to": "human:ana", "text": "On it."}',
         )
         self.assertEqual(
@@ -969,7 +969,7 @@ class SkillFile(unittest.TestCase):
         examples = re.findall(r"`(hub_[a-z_]+)`[^`]{0,40}`(\{[^`]*\})`", text)
         self.assertGreaterEqual(
             {name for name, _ in examples},
-            {"hub_message_mark_read", "hub_conversation_show", "hub_message_send", "hub_task_update"},
+            {"tico_message_mark_read", "tico_conversation_show", "tico_message_send", "tico_task_update"},
         )
         for name, example in examples:
             schema = hubtools.BY_NAME[name]["inputSchema"]

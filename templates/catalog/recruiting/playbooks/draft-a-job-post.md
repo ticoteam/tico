@@ -2,7 +2,7 @@
 
 Triggered by a task with a role brief. Budget 25 minutes.
 
-Inputs: the task's role brief, the team values in the docs (`hub doc search "values"`), `knowledge/wording.md`, and
+Inputs: the task's role brief, the team values in the docs (`tico doc search "values"`), `knowledge/wording.md`, and
 `knowledge/roles/<role>.md` if it exists.
 
 Outcome: one job post draft under 400 words that the hiring manager can use with one edit, the interview kit for the role,
@@ -15,8 +15,8 @@ post has passed `skills/check-a-job-post-before-it-goes-out/SKILL.md`.
 
 ## 1. Read the brief and the team
 
-    hub task show <id>
-    hub doc search "values"
+    tico task show <id>
+    tico doc search "values"
 
 If `knowledge/roles/<role>.md` exists, this run updates it. Do not start a second file for the same role.
 
@@ -50,7 +50,7 @@ follow-up and a four-level scoring guide. The same kit for every candidate. Save
 Attach the post, the kit and the gap list to the task. A post goes to a board or the careers page only when the task asks
 for it, a granted Tool allows it, and a person has turned mail sending on in Tico. Otherwise the draft stays on the task.
 
-    hub task update <id> --status done --note "..."
+    tico task update <id> --status done --note "..."
 
 The note holds the post's path, the gaps left for the manager, and what you could not read.
 

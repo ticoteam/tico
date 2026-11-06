@@ -3,7 +3,7 @@
 Some agents live on their maker's platform with no API, export or webhook for Tico to call: Grok
 Bot (xAI's cloud agents, any number per account), and Dots (OpenAI's) and Muse (Meta's), each one
 always-on agent per account. What they can do is call Tico's MCP tools as their person, on a routine. So the person
-links them with their own sign-in and the agent calls `hub_external_sync` (docs/external-agent-sync.md).
+links them with their own sign-in and the agent calls `tico_external_sync` (docs/external-agent-sync.md).
 Tico does the rest here:
 
 - A bot it has not seen becomes a bot with that provider's harness, placed under the person who

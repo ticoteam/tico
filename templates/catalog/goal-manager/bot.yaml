@@ -38,7 +38,7 @@ routines:
 
 # What this bot may touch. The KPI sources are tools the owner declares here (an analytics project, an API, a
 # read-only database) and grants a stored Credential for; `env:` names the variable, never the value. Without a declared tool a
-# KPI can only be computed from Tico itself (`hub sql`). The bot never edits this file: it files a task for
+# KPI can only be computed from Tico itself (`tico sql`). The bot never edits this file: it files a task for
 # the owner to add a source.
 # tools:
 #   - service: posthog

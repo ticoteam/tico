@@ -25,7 +25,7 @@ Steps:
    read in one sitting.
 8. Read the whole file as the bot would, with no other context. Mark each sentence it could act on wrongly, and fix or
    cut it.
-9. Run `hub bot check <slug>`, fix each failure, and commit with one line that says what changed.
+9. Run `tico bot check <slug>`, fix each failure, and commit with one line that says what changed.
 
 Checks before you finish:
 - Every line is true for this team. A guess is written as an open question in `knowledge/`, not as a rule.

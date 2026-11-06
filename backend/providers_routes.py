@@ -119,7 +119,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
     @app.get("/api/v2/gateway/catalog")
     def gateway_catalog(request: Request, query: str = ""):
         """The Gateway's lineup as an agent reads it: models, decisions and services, each with when to use it, its
-        price and its ids (`hub_gateway_catalog`). `query` keeps the entries it matches."""
+        price and its ids (`tico_gateway_catalog`). `query` keeps the entries it matches."""
         auth.domain(request.state.identity)
         with store.read() as c:
             gateway_page.catalog(c, settings)
@@ -127,7 +127,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
 
     @app.post("/api/v2/gateway/search")
     def gateway_search(request: Request, body: M.GatewaySearch):
-        """Web search through the Tico AI Gateway (`hub_gateway_search`), asked with the company's gateway key and, for a
+        """Web search through the Tico AI Gateway (`tico_gateway_search`), asked with the company's gateway key and, for a
         bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
         who = request.state.identity
         auth.domain(who)
@@ -157,7 +157,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
 
     @app.post("/api/v2/gateway/fetch")
     def gateway_fetch(request: Request, body: M.GatewayFetch):
-        """Read a web page or PDF through the Tico AI Gateway (`hub_gateway_fetch`), asked with the company's gateway key
+        """Read a web page or PDF through the Tico AI Gateway (`tico_gateway_fetch`), asked with the company's gateway key
         and, for a bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
         who = request.state.identity
         auth.domain(who)
@@ -189,7 +189,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
 
     @app.post("/api/v2/gateway/images")
     def gateway_images(request: Request, body: M.GatewayImage):
-        """Make an image through the Tico AI Gateway (`hub_gateway_image`), asked with the company's gateway key and, for a
+        """Make an image through the Tico AI Gateway (`tico_gateway_image`), asked with the company's gateway key and, for a
         bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
         who = request.state.identity
         auth.domain(who)

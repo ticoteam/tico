@@ -207,7 +207,7 @@ class DmGates(FakeSlack):
         self.assertEqual(self.audited, [])
 
     def test_an_onboarding_bot_or_one_whose_stage_tico_cannot_confirm_sends_nothing(self):
-        for stage in ("onboarding", None):  # None: no hub credential, or Tico unreachable
+        for stage in ("onboarding", None):  # None: no tico credential, or Tico unreachable
             self.stage = stage
             for argv in (
                 ["post", "--as", self.slug, "--channel", "#agents", "--text", "hi", "--json"],

@@ -80,7 +80,7 @@ def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):
         request = c.execute(
             "SELECT m.body, m.refs FROM update_queue q JOIN messages m ON m.id=q.message_id WHERE q.state='sent'"
         ).fetchone()
-        assert "hub_update_create" in request["body"] and "Finished since your last update" in request["body"]
+        assert "tico_update_create" in request["body"] and "Finished since your last update" in request["body"]
         assert c.execute("SELECT 1 FROM jobs WHERE bot_id=?", (first,)).fetchone(), "the request wakes the bot"
         updates.post(c, first, "- Shipped the pricing page", day="2026-09-29")
         second = updates.dispatch(c, MORNING)

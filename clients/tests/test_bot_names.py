@@ -1,6 +1,6 @@
-"""`hub bot check-names` (clients/bot_names.py): which old names it flags in a bot's own files, what --fix rewrites, and
+"""`tico bot check-names` (clients/bot_names.py): which old names it flags in a bot's own files, what --fix rewrites, and
 what it leaves alone. The fake bot holds the words it must not touch (an owner, a created field of another system, a
-status page, a `hub notice list`) next to the names it must change."""
+status page, a `tico notice list`) next to the names it must change."""
 
 import json
 import runpy
@@ -20,15 +20,15 @@ FILES = {
         "# Acme bot\n"
         "\n"
         "The owner decides. Nothing created yet; the hub status page is green.\n"
-        "Run `hub sql \"SELECT id, refs_json, created FROM tasks WHERE owner = 'x' AND state_json IS NULL\"` to read.\n"
-        "Tasks are `hub say hello`. `hub notice list` shows notices; `hub routine set --text-file p.txt` schedules.\n"
+        "Run `tico sql \"SELECT id, refs_json, created FROM tasks WHERE owner = 'x' AND state_json IS NULL\"` to read.\n"
+        "Tasks are `hub say hello`. `tico notice list` shows notices; `hub routine set --text-file p.txt` schedules.\n"
     ),
     "playbooks/check.md": (
         "Read the board:\n"
         "\n"
         "```sh\n"
-        "hub sql \"SELECT owner, created, started_at FROM tasks\"\n"
-        "hub sql \"SELECT count(*) AS created FROM tasks\"\n"
+        "tico sql \"SELECT owner, created, started_at FROM tasks\"\n"
+        "tico sql \"SELECT count(*) AS created FROM tasks\"\n"
         "hub meetings granola status\n"
         "```\n"
     ),
@@ -44,7 +44,7 @@ FILES = {
         "\"\"\"\n"
         "TOOLS = {\"hub\", \"docs\", \"web\"}\n"
     ),
-    "memory/notes.md": "`hub sql \"SELECT created FROM tasks\"`\n",
+    "memory/notes.md": "`tico sql \"SELECT created FROM tasks\"`\n",
     "knowledge/notes.md": "The Stripe `created` field is epoch seconds. Use `snoozed_until` never.\n",
 }
 
@@ -90,12 +90,12 @@ def test_fix_rewrites_the_unambiguous_names_only_and_a_second_run_finds_the_rest
 
     agent = (root / "AGENT.md").read_text()
     assert "SELECT id, refs, created_at FROM tasks WHERE owner = 'x' AND saved_state IS NULL" in agent
-    assert "Tasks are `hub message send hello`." in agent
-    assert "`hub notice list`" in agent and "`hub routine set --text-file p.txt`" in agent
+    assert "Tasks are `tico message send hello`." in agent
+    assert "`tico notice list`" in agent and "`hub routine set --text-file p.txt`" in agent
     check = (root / "playbooks/check.md").read_text()
     assert "SELECT owner, created_at, started_at FROM tasks" in check
     assert "count(*) AS created FROM" in check
-    assert "hub meeting granola status" in check
+    assert "tico meeting granola status" in check
     report = (root / "scripts/report.py").read_text()
     assert 'row["refs"]' in report and 'who.get("run_id")' in report
     assert "SELECT created_at FROM tasks" in report and "row.run_id" in report
@@ -156,11 +156,11 @@ def test_a_name_renamed_on_some_tables_is_found_with_its_tables_and_stays_where_
         tmp_path / "bot-acme",
         {
             "AGENT.md": (
-                "`hub sql \"SELECT owner FROM tasks\"`\n"
-                "`hub sql \"SELECT owner FROM meetings\"`\n"
-                "`hub sql \"SELECT m.from_actor, n.from_actor FROM messages m JOIN notes n ON n.id = m.id\"`\n"
-                "`hub sql \"SELECT due FROM tasks\"`\n"
-                "`hub sql \"SELECT ts FROM kpi_readings UNION SELECT ts FROM events\"`\n"
+                "`tico sql \"SELECT owner FROM tasks\"`\n"
+                "`tico sql \"SELECT owner FROM meetings\"`\n"
+                "`tico sql \"SELECT m.from_actor, n.from_actor FROM messages m JOIN notes n ON n.id = m.id\"`\n"
+                "`tico sql \"SELECT due FROM tasks\"`\n"
+                "`tico sql \"SELECT ts FROM kpi_readings UNION SELECT ts FROM events\"`\n"
             ),
             "scripts/read.py": (
                 "import sqlite3\n"
@@ -201,7 +201,7 @@ def test_a_name_renamed_on_some_tables_is_found_with_its_tables_and_stays_where_
     assert found[("scripts/read.py", 3, "from_actor")].new == "sender_id"
     assert found[("AGENT.md", 5, "ts")].new == "created_at or measured_at"
 
-    # One spelling and no table keeping it: due, in a `hub sql` call. Everything else needs a person.
+    # One spelling and no table keeping it: due, in a `tico sql` call. Everything else needs a person.
     assert sorted(key for key, f in found.items() if f.fixable) == [("AGENT.md", 4, "due")]
     bot_names.fix(root, list(found.values()))
     agent = (root / "AGENT.md").read_text()

@@ -8,7 +8,7 @@ counsel can settle. You never send either and never sign.
 
 ## 1. The pack
 
-    hub task show <id>
+    tico task show <id>
 
 - **Agenda**: approval of the last minutes, matters arising (last meeting's actions and their status), reports
   (the papers the owner names: finance, product, hiring), decisions, any other business.
@@ -16,11 +16,11 @@ counsel can settle. You never send either and never sign.
   Equity Manager's change log shows are missing (grants, issuances) and anything investors must consent to under `knowledge/board.md`.
 - **Papers**: ask each author on the task for their paper by 7 days before; list what is missing.
 - **Notice**: the date the notice must go under the bylaws, and a draft notice for the chair.
-Save `reports/packs/YYYY-MM-DD-<entity>-board.md`, mark it **Draft for counsel**, `hub file publish` it and put it on the task for the chair. Board messages to outsiders stay drafts until a person turns mail sending on in Tico.
+Save `reports/packs/YYYY-MM-DD-<entity>-board.md`, mark it **Draft for counsel**, `tico file publish` it and put it on the task for the chair. Board messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 2. The minutes
 
-After the meeting, from the imported recording (`hub meeting search "board"`, `hub meeting read <id>`) or
+After the meeting, from the imported recording (`tico meeting search "board"`, `tico meeting read <id>`) or
 the chair's notes on the task:
 - date, time, place or call, who attended and in what capacity, quorum under the bylaws;
 - conflicts of interest declared, and who did not vote;

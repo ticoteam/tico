@@ -56,7 +56,7 @@ NOTE_MAX = 2000
 # the read says so (truncated), in the response, the task and the rule_reads row.
 DOC_CHARS = 400_000
 # A document's text goes into Counsel's task only up to this many characters (a run's prompt budget). A longer one is
-# named by file and version, and Counsel reads it with `hub file read`.
+# named by file and version, and Counsel reads it with `tico file read`.
 TEXT_INLINE_MAX = 20_000
 ASK_MATCHES = 8
 STOP_WORDS = frozenset(
@@ -487,7 +487,7 @@ def read(c, auth, who, files, blobs, body, found):
         lines += [
             "",
             f"The document is {len(text)} characters, too long for this task. Its text is not here.",
-            f"Read the whole of this version with `hub file read {file_id} --version {number}` and work from that.",
+            f"Read the whole of this version with `tico file read {file_id} --version {number}` and work from that.",
             "",
             fence(f"Title: {title}"),
         ]
@@ -797,7 +797,7 @@ def private_suggestion(c, who, data):
 
 # Every call Counsel may make, as (methods, path under /api/v2/), and nothing else: an allowlist, so a transport added
 # later is not Counsel's until it is named here. It is what Counsel is offered and what runs it: its tools
-# (clients/hubtools.py COUNSEL_TOOLS: hub_rules_list/get/add, hub_file_read, hub_task_comment, hub_task_close) and the
+# (clients/hubtools.py COUNSEL_TOOLS: tico_rules_list/get/add, tico_file_read, tico_task_comment, tico_task_close) and the
 # calls they make, the MCP that carries them (each call inside comes back through here), `me` (which tools it is
 # offered), and what the computer running it asks with the run's own token (its task, sessions.rs task_closed; its
 # credentials, env.rs credential-runtime). Its runner's plumbing (claim, start, events, complete) is the runner's own

@@ -36,8 +36,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Produce the first weekly review now from the events named, labelled "First draft, not yet
    reviewed". Book, send and hand over nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -46,7 +46,7 @@ Draft messages to outsiders until a person turns mail sending on for this bot in
 These two need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
 - **Any money or commitment**: a registration, sponsorship, booth, venue, catering, swag or supplier.
 - **Handing event leads to sales**: include the context in
-  `hub task create --owner <seller>` per lead group.
+  `tico task create --owner <seller>` per lead group.
 
 Always:
 - Never put a visitor's details anywhere but the lead list on the task. Never count a badge scan as
@@ -58,19 +58,19 @@ Always:
 - `skills/score-an-event-after-it-ends/SKILL.md`: read for the results line of an event that has ended.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/calendar.md`, `knowledge/rules.md` and the playbook.
-3. Set `hub bot status set` to one line naming the event or review in progress.
+3. Set `tico bot status set` to one line naming the event or review in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/calendar.md` and `knowledge/results.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline, the path, what is late.
+3. Finish with `tico task update <id> --status done --note`: the headline, the path, what is late.
 
 ## Talking to {{app_name}}
-Read `hub calendar list`, `hub task list`, `hub team show` and, where connected, the CRM (read only).
-A question is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Act within the spend the task asks for and a granted Tool allows; outbound text stays a draft until a person turns mail sending on in Tico. Staffing asks go to people as `hub task create --owner <person>` only when the task asks for them.
+Read `tico calendar list`, `tico task list`, `tico team show` and, where connected, the CRM (read only).
+A question is `tico task question "<question>" --on <person> --parent <id>`, one open question per task. Act within the spend the task asks for and a granted Tool allows; outbound text stays a draft until a person turns mail sending on in Tico. Staffing asks go to people as `tico task create --owner <person>` only when the task asks for them.
 
 ## Method
 - **Goal in one number.** No event is booked, sponsored or put on the calendar without one. The decision is set out in
@@ -97,5 +97,5 @@ with no decision, when follow-up is overdue, or when an event is over budget. On
 in the first line.
 
 ## Publishing your work
-Briefs and reviews go to `reports/` and are listed with `hub file publish reports/<name>.md`;
+Briefs and reviews go to `reports/` and are listed with `tico file publish reports/<name>.md`;
 publishing again adds a version. Lead lists humans send you are inputs, not yours to list.

@@ -103,7 +103,7 @@ async function liveReply(browser) {
                              delivery:{run_id:'a1',mode:'next_turn'}}],
     execution:{job_id:'j1',message_id:'m1',bot:'coo',run_id:'a1',state:'running',label:'Working',
       text:'Keep the bot planned.\n\nI filed the build.',
-      parts:[{kind:'progress',text:'Keep the bot planned.',at:now},{kind:'tool',text:'Ran hub task create',at:now},
+      parts:[{kind:'progress',text:'Keep the bot planned.',at:now},{kind:'tool',text:'Ran tico task create',at:now},
              {kind:'reply',text:'I filed the build.',at:now}]}};
   await page.context().route('**/*',route=>{
     const url=new URL(route.request().url()),p=url.pathname;

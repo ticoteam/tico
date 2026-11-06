@@ -4,16 +4,16 @@ Runs once, on the first message or task you receive, while `state.md` says onboa
 finished. Budget 25 minutes. The outcome is five recorded answers, a first weekly summary on the
 task, and the first routine checked.
 
-Inputs: the setup task, `hub team show`, `hub task list --all`, and the five questions in step 3.
-Done when: `state.md` holds five dated answers; `knowledge/workstreams.md`, `knowledge/calendar.md` and `knowledge/routing.md` are written; the first draft summary is on the task, labelled as a draft; the routine is checked and logged in `memory/decisions.md`; `hub bot setup-done` has run.
+Inputs: the setup task, `tico team show`, `tico task list --all`, and the five questions in step 3.
+Done when: `state.md` holds five dated answers; `knowledge/workstreams.md`, `knowledge/calendar.md` and `knowledge/routing.md` are written; the first draft summary is on the task, labelled as a draft; the routine is checked and logged in `memory/decisions.md`; `tico bot setup-done` has run.
 
 ---
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub team show
-    hub task list --all
+    tico task show <id>
+    tico team show
+    tico task list --all
 
 See which marketing bots and humans exist and what they have reported lately. Do not ask what
 these already answer. If there are no marketing bots yet, the first draft is a short plan for which
@@ -48,8 +48,8 @@ reviewed". Nothing is shared and no task is created for anyone.
 ## 6. Check the routines
 
 Setting you up switched your first routine on. List your automations with
-`hub automation list --owner bot:marketing-lead`. If `weekly-marketing-summary` shows off, turn it on with
-`hub automation update <id> --enable`. Then turn on the two growth routines the same way: `weekly-numbers` and
+`tico automation list --owner bot:marketing-lead`. If `weekly-marketing-summary` shows off, turn it on with
+`tico automation update <id> --enable`. Then turn on the two growth routines the same way: `weekly-numbers` and
 `weekly-growth-meeting`, each by its id from that list.
 
 Tell the human in one line what they do: "I will draft this summary every Friday at 14:00 for you to review, refresh the
@@ -57,11 +57,11 @@ growth numbers every Monday at 07:00, and run the growth meeting every Monday at
 any of them any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to
-leave one off, adjust `knowledge/` and the routine to match (`hub automation update <id>`, with `--disable` to turn it off).
+leave one off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

@@ -392,7 +392,7 @@ def _release(c, bot, jobs):
             else "a notice"
         )
         lines.append(
-            f"- {what}: {where}; read them with `hub conversation show {conversation}`"
+            f"- {what}: {where}; read them with `tico conversation show {conversation}`"
             + (
                 f" (the oldest is from {first.get('created_at')}: page back with --before to reach it)"
                 if len(held) > 1

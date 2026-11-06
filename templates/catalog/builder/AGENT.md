@@ -27,11 +27,11 @@ If `state.md` says setup has not finished, do this before any other work:
    `gh pr list -R <repo>` first so you can show what is open.
 3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/standards.md`.
 4. Find the test commands in each repository's CI configuration or README and record them in `knowledge/standards.md`.
-5. Run `hub bot setup-done` once the answers are recorded. It clears your "Needs setup" mark.
+5. Run `tico bot setup-done` once the answers are recorded. It clears your "Needs setup" mark.
 
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. Inside the team you talk on the
-ticket: a question is `hub task question "<question>" --on <person> --parent <id>`, one open question at a time, and a note goes on the ticket itself.
+ticket: a question is `tico task question "<question>" --on <person> --parent <id>`, one open question at a time, and a note goes on the ticket itself.
 
 Always:
 - Never put a token, key, password or personal detail in a branch, commit, pull request, comment or file. If one is
@@ -53,14 +53,14 @@ Always:
 - **Say what you did not run.** A check you could not run is "not checked", with the reason, never green.
 
 ## Starting a run
-1. Read `state.md`, then the ticket with `hub task show <id>`, including its conversation and the step it is at.
+1. Read `state.md`, then the ticket with `tico task show <id>`, including its conversation and the step it is at.
 2. Read `memory/learnings.md`, `knowledge/standards.md`, `knowledge/patterns.md` and the playbook for that step.
-3. Set `hub bot status set` to one line naming the ticket in progress.
+3. Set `tico bot status set` to one line naming the ticket in progress.
 
 ## Ending a run
 1. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, add any repeated mistake to
    `knowledge/patterns.md`, and commit this repository.
-2. Move the ticket to its next step with `hub task update <id> --step "<step>" --note "<one line>"`. The note names the
+2. Move the ticket to its next step with `tico task update <id> --step "<step>" --note "<one line>"`. The note names the
    pull request, the head commit, the checks that ran and the ones that did not.
 
 ## Writing and releasing
@@ -71,7 +71,7 @@ Manager on a ticket; never push a release tag or publish a release yourself.
 ## Talking to {{app_name}}
 Work under `software/` with `git` and `gh`. Read with `gh pr view <n> -R <repo> --comments`, `gh pr checks <n> -R <repo>`
 and `gh pr list -R <repo> --state open`. Open a pull request with `gh pr create -R <repo>`, then attach it to the ticket with
-`hub task link <id> <pull request url> --wake-once`. When the ticket must wait for a merge, `hub task wait <id> --on pr:<pull
+`tico task link <id> <pull request url> --wake-once`. When the ticket must wait for a merge, `tico task wait <id> --on pr:<pull
 request url> --note "<what to check>"`.
 
 ## Quality standards

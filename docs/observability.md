@@ -249,7 +249,7 @@ flight recorder's background thread through autocommit reads, finished before th
 Opening Health or metrics reads recorded samples and does not trigger a page scan.
 
 Owners, admins and the team's bots read it at `GET /api/v2/system/metrics?minutes=60&section=all` (a bot's slow requests
-leave out who made them; `section`: any of `requests,slow,process,sql,db,events`), with `hub health metrics` or `hub_health_metrics`, and see the
+leave out who made them; `section`: any of `requests,slow,process,sql,db,events`), with `tico health metrics` or `tico_health_metrics`, and see the
 last hour under **Performance** on the Health page. `GET /api/v2/ops/timing` still answers with the last 300 requests per
 route since the start.
 

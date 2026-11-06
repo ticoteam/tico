@@ -728,7 +728,7 @@ def test_bot_public_text_and_comment_need_exact_single_use_approval(api):
 
 
 def test_the_cli_carries_public_and_the_approval_id_on_a_comment_and_its_edit(api, monkeypatch):
-    """`hub task comment --public --approval-id` and `hub task comment-edit --approval-id` reach the server's gate."""
+    """`tico task comment --public --approval-id` and `tico task comment-edit --approval-id` reach the server's gate."""
     from clients import remotecli
     from clients.hubcli import parser
     from backend.tests.test_tasks_board import bot_token
@@ -937,7 +937,7 @@ def test_requester_contacts_follow_task_privacy_and_teammates_can_remove_themsel
     from backend.tests.test_mcp import call
 
     failed, result = call(
-        api, 'hub_task_requester_save', {'id': task['id'], 'requester_id': external['id'], 'important': True}
+        api, 'tico_task_requester_save', {'id': task['id'], 'requester_id': external['id'], 'important': True}
     )
     assert not failed, result
     changed = get(api, 'tasks/' + task['id'] + '/requesters')['requesters'][0]

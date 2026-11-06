@@ -13,7 +13,7 @@ Steps:
 2. Check the topic. If the question touches pay, leave entitlements, discipline, performance, health, a complaint, harassment,
    immigration or a termination, or asks what a specific person is owed or allowed, it is routed. Do not answer, even partly.
 3. If the message seems to show distress or risk to someone, route it at once and stop. Do not reply to the person about it.
-4. Create the hand-off as a task for the named human (`hub task create --owner <person>`), with the question copied exactly as
+4. Create the hand-off as a task for the named human (`tico task create --owner <person>`), with the question copied exactly as
    received, the date it arrived, and the reference of the person who asked. Add no opinion, no summary and no suggested answer.
 5. Tell the requester in one line that the question has gone to the named human. Give no other detail.
 6. Keep nothing else about the question. Delete any copy you made in the working tree at the end of the run.

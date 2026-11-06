@@ -634,7 +634,7 @@ def test_search_pages_to_older_matches_with_before(monkeypatch, api):
     assert [m['message_id'] for m in first['messages']] == ['ses:m5:ibx_b', 'ses:m4:ibx_b']
     assert [m['message_id'] for m in second['messages']] == ['ses:m2:ibx_b', 'ses:m1:ibx_b'] and second['next'] is None
     # MCP takes the same continuation.
-    tool = hubtools.BY_NAME['hub_inbound_search']
+    tool = hubtools.BY_NAME['tico_inbound_search']
     assert 'before' in tool['inputSchema']['properties']
     again = tool['fn'](API(), {'q': 'Login', 'limit': 2, 'before': first['next']})
     assert again['messages'] == second['messages']
@@ -690,7 +690,7 @@ def test_stdio_mcp_wait_covers_server_deadline_without_changing_ordinary_timeout
                 'jsonrpc': '2.0',
                 'id': 1,
                 'method': 'tools/call',
-                'params': {'name': 'hub_inbound_wait', 'arguments': {'after': 0, 'timeout': 120}},
+                'params': {'name': 'tico_inbound_wait', 'arguments': {'after': 0, 'timeout': 120}},
             }
         )
         + '\n'
@@ -781,7 +781,7 @@ def _http_wait_probe(monkeypatch, *, deadline=False):
                     'jsonrpc': '2.0',
                     'id': 1,
                     'method': 'tools/call',
-                    'params': {'name': 'hub_inbound_wait', 'arguments': {'after': 0, 'timeout': 120}},
+                    'params': {'name': 'tico_inbound_wait', 'arguments': {'after': 0, 'timeout': 120}},
                 },
             )
             if deadline:
@@ -793,7 +793,7 @@ def _http_wait_probe(monkeypatch, *, deadline=False):
                         'jsonrpc': '2.0',
                         'id': 2,
                         'method': 'tools/call',
-                        'params': {'name': 'hub_inbound_cursor', 'arguments': {}},
+                        'params': {'name': 'tico_inbound_cursor', 'arguments': {}},
                     },
                 )
                 assert ordinary.status_code == 200 and not ordinary.json()['result']['isError']

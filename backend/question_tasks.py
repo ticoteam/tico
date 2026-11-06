@@ -1,6 +1,6 @@
 """Question tasks (spec D8): a bot's decision for a person is a task the person owns, with the question on it.
 
-`hub task question "<q>" --on <person>` (backend/media.py task_question) files it: under the bot's task when asked from
+`tico task question "<q>" --on <person>` (backend/media.py task_question) files it: under the bot's task when asked from
 one (a subtask the task is blocked on, as hubdb._ask_in_subtask files a card), else on its own. The question lives in
 the task's fields (`questions`, `if_no_answer`, `review`, `spend`; the migration names them), never in an ask message.
 Answering is the close: a pick, a Yes / No or a note closes it done with `answer` recorded, a decline closes it

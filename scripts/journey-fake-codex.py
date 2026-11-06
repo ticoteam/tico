@@ -5,7 +5,7 @@ part of the JSON-RPC protocol the runner's Codex host uses. Every turn is answer
 A thread is kept under CODEX_HOME, as the real CLI keeps its sessions, so resuming one this computer never started (or
 lost) fails as it does there. A prompt holding `journey-ask <nonce> [env=NAME] [worktree=TASK]` is answered with facts
 instead, on one line the journey reads: "journey-reply: <nonce> thread=<id> resumed=<yes|no> NAME=<sha256 prefix|missing>
-worktree=<ok|failed>". The worktree is added the way a bot's turn adds one, with `hub task worktree add` in the turn's
+worktree=<ok|failed>". The worktree is added the way a bot's turn adds one, with `tico task worktree add` in the turn's
 environment, from a local repository this fake makes once."""
 
 import hashlib

@@ -26,7 +26,7 @@ SMOKE = "Acme smoke"
 # Each entry sets arguments the schema alone cannot pick (a value that must exist or match a rule).
 OVERRIDES = {
     # A thread's audience defaults to its members, and every thread needs a title but a DM with one teammate (PR #2371).
-    "hub_thread_create": {"title": SMOKE},
+    "tico_thread_create": {"title": SMOKE},
 }
 # Values a string must match when its schema gives a pattern (the first candidate that matches is used).
 PATTERN_SAMPLES = ("1h", "30m", "never", "2d", "1", SMOKE)
@@ -83,13 +83,13 @@ def seeded(api):
 
 def seeds_for(tool, seeds):
     """The value a string argument gets, by its name and by the kind of object the tool is about."""
-    if tool.startswith("hub_task_") and tool != "hub_task_list":
+    if tool.startswith("tico_task_") and tool != "tico_task_list":
         return {"id": seeds["task"], "task_id": seeds["task"], "parent": seeds["task"]}
-    if tool.startswith(("hub_trigger_", "hub_relay_")):
+    if tool.startswith(("tico_trigger_", "tico_relay_")):
         return {"id": seeds["trigger"], "trigger": seeds["trigger"]}
-    if tool.startswith("hub_automation_"):
+    if tool.startswith("tico_automation_"):
         return {"id": seeds["automation"]}
-    if tool.startswith(("hub_message_", "hub_conversation_")):
+    if tool.startswith(("tico_message_", "tico_conversation_")):
         return {
             "id": seeds["conversation"],
             "conversation_id": seeds["conversation"],
@@ -209,23 +209,23 @@ def test_a_scripted_task_runs_over_mcp_from_create_to_done(api):
     """A multi-step task as an external agent would run it: create, comment, assign, complete, then read it back."""
     is_error, made = call(
         api,
-        "hub_task_create",
+        "tico_task_create",
         {"owner": "ben", "title": "Smoke: scripted MCP task", "body": "Check the release notes and say what changed."},
     )
     assert not is_error, made
     task_id = made["task"]["id"]
 
-    is_error, comment = call(api, "hub_task_comment", {"id": task_id, "text": "Started on the release notes."})
+    is_error, comment = call(api, "tico_task_comment", {"id": task_id, "text": "Started on the release notes."})
     assert not is_error, comment
 
-    is_error, moved = call(api, "hub_task_update", {"id": task_id, "owner": "ana", "status": "doing"})
+    is_error, moved = call(api, "tico_task_update", {"id": task_id, "owner": "ana", "status": "doing"})
     assert not is_error, moved
     assert moved["task"]["owner_id"] == "human:ana" and moved["task"]["status"] == "doing"
 
-    is_error, done = call(api, "hub_task_done", {"id": task_id, "note": "Release notes checked."})
+    is_error, done = call(api, "tico_task_done", {"id": task_id, "note": "Release notes checked."})
     assert not is_error, done
 
-    is_error, shown = call(api, "hub_task_show", {"id": task_id})
+    is_error, shown = call(api, "tico_task_show", {"id": task_id})
     assert not is_error, shown
     assert shown["task"]["status"] == "done"
     assert any("Started on the release notes." in str(c) for c in shown.get("comments", [shown]))

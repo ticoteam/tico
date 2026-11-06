@@ -32,7 +32,7 @@ const comments = [
 ];
 const events = [{id: 1, task_id: 't-docs', created_at: at(35), actor: 'bot:botops', field: 'status', old: 'open', new: 'doing', note: ''}];
 const execution = {job_id: 'j2', message_id: 'k2', bot: 'botops', run_id: 'a2', state: 'running', label: 'Working', text: '',
-  parts: [{kind: 'progress', text: 'Checking the API page.', at: at(1)}, {kind: 'tool', text: 'Ran hub task create', at: at(1)}]};
+  parts: [{kind: 'progress', text: 'Checking the API page.', at: at(1)}, {kind: 'tool', text: 'Ran tico task create', at: at(1)}]};
 
 async function run(viewport, shot) {
   const browser = await launch();
@@ -103,7 +103,7 @@ async function run(viewport, shot) {
     // The live run: "Working" and its newest step, opening to the steps so far.
     const live = thread.locator('.task-live');
     if (shot) await page.screenshot({path: shot});
-    assert.match(await live.innerText(), /BotOps is working…\s*Ran hub task create/);
+    assert.match(await live.innerText(), /BotOps is working…\s*Ran tico task create/);
     await live.locator('summary').click();
     await live.locator('.steps-list .step', {hasText: 'api page'}).waitFor();
     // Stop stops that run. Until it has ended the run moves on: the redraw shows its new step, keeps the steps read so
@@ -155,7 +155,7 @@ async function answered(viewport, shot) {
     const states = {
       idle: {comments: said, execution: null},
       queued: {comments: [...said, mine], execution: {...run, run_id: null, state: 'queued', label: 'Saved — queued'}},
-      running: {comments: [...said, mine], execution: {...run, state: 'running', label: 'Working', parts: [{kind: 'tool', text: 'Ran hub task show', at: at(0)}]}},
+      running: {comments: [...said, mine], execution: {...run, state: 'running', label: 'Working', parts: [{kind: 'tool', text: 'Ran tico task show', at: at(0)}]}},
       replied: {comments: [...said, mine, reply], execution: {...run, state: 'completed', label: 'Complete'}},
       failed: {comments: [...said, mine], execution: {...run, state: 'uncertain', label: 'Reply failed — your message is saved'}},
       botToBot: {comments: [...said, mine], execution: {...run, from_person: false, state: 'queued', label: 'Saved — queued'}},
@@ -207,8 +207,8 @@ async function answered(viewport, shot) {
     phase = 'running';
     await reread(page);
     await live.filter({hasText: 'Head of Engineering is working…'}).waitFor();
-    assert.match(await live.innerText(), /Ran hub task show/);
-    assert.equal(await live.getAttribute('aria-label'), 'Head of Engineering is working: Ran hub task show');
+    assert.match(await live.innerText(), /Ran tico task show/);
+    assert.equal(await live.getAttribute('aria-label'), 'Head of Engineering is working: Ran tico task show');
     if (shot) await page.screenshot({path: shot});
     phase = 'replied';
     await reread(page);

@@ -10,7 +10,7 @@ Steps:
 1. List each interview that ended before today. For each interviewer on its panel, record whether the scorecard is in, and
    when it was due (default: the end of the interview's working day).
 2. Nudge each late interviewer once, in one line: the candidate reference, the role, and the due time. Use
-   `hub message send <human> "..."`. One nudge a day per person.
+   `tico message send <human> "..."`. One nudge a day per person.
 3. A scorecard two working days late goes to the hiring manager, with the names only and no content of the scores.
 4. When every scorecard for a candidate is in, propose a 30-minute debrief slot for the panel. Use the build-three-real-slots
    method for the panel.

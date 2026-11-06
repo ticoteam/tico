@@ -1947,7 +1947,7 @@ impl Runner {
     }
 
     /// The pushes this turn made from its task's worktrees on this computer: those the claim named, and any the
-    /// turn added (`hub task worktree add`), which this computer's worktree list names by now.
+    /// turn added (`tico task worktree add`), which this computer's worktree list names by now.
     async fn task_pushes(&self, attempt: &Value, bot: &str, since: i64) -> Vec<Value> {
         let task = text_of(&attempt["task"]["id"]);
         if task.is_empty() {

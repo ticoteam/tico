@@ -46,10 +46,10 @@ def test_initialize_lists_every_tool_and_ignores_notifications(api):
     r = api.post("/api/v2/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=headers())
     assert r.status_code == 202 and r.content == b""
     tools = rpc(api, "tools/list")["result"]["tools"]
-    # A tool that reaches out to the internet (hub_doc_fetch) runs on the bot's computer, never here; the owner is offered
+    # A tool that reaches out to the internet (tico_doc_fetch) runs on the bot's computer, never here; the owner is offered
     # what a human may use (backend/tests/test_mcp_callers.py: the other callers).
     assert {t["name"] for t in tools} == {t["name"] for t in hubtools.listing(kind="owner")}
-    assert "hub_doc_fetch" not in {t["name"] for t in tools} and len(tools) > 100
+    assert "tico_doc_fetch" not in {t["name"] for t in tools} and len(tools) > 100
     assert all(t["inputSchema"]["type"] == "object" for t in tools)
     assert api.get("/api/v2/mcp", headers=headers()).status_code == 405
     assert (
@@ -94,7 +94,7 @@ def test_every_cli_command_has_a_tool_of_the_same_name():
     names = set()
     for action in hubcli.parser()._subparsers._group_actions:
         for word, sub in unique(action.choices):
-            names |= leaves(sub, "hub_" + word.replace("-", "_"))
+            names |= leaves(sub, "tico_" + word.replace("-", "_"))
     # Repository convenience commands select one of the explicit read/write MCP tools.
     for command, tools in hubtools.CLI_TOOL_ALIASES.items():
         if command in names:
@@ -105,38 +105,38 @@ def test_every_cli_command_has_a_tool_of_the_same_name():
 
 
 THREAD_READS = {
-    "hub_thread_list",
-    "hub_thread_show",
-    "hub_thread_search",
-    "hub_thread_members_list",
-    "hub_thread_home",
-    "hub_thread_dm",
-    "hub_thread_catch_up",
-    "hub_thread_bot_status",
+    "tico_thread_list",
+    "tico_thread_show",
+    "tico_thread_search",
+    "tico_thread_members_list",
+    "tico_thread_home",
+    "tico_thread_dm",
+    "tico_thread_catch_up",
+    "tico_thread_bot_status",
 }
 THREAD_WRITES = {
-    "hub_thread_create",
-    "hub_thread_post",
-    "hub_thread_reply",
-    "hub_thread_edit",
-    "hub_thread_sub",
-    "hub_thread_follow",
-    "hub_thread_unfollow",
-    "hub_thread_read",
-    "hub_thread_members_add",
-    "hub_thread_members_remove",
-    "hub_thread_update",
-    "hub_thread_link_slack",
-    "hub_thread_dm_group",
-    "hub_thread_react",
-    "hub_thread_unreact",
-    "hub_thread_open_earlier",
-    "hub_thread_task",
-    "hub_thread_delete",
-    "hub_thread_upload",
-    "hub_thread_slack_resume",
-    "hub_thread_pin",
-    "hub_thread_unpin",
+    "tico_thread_create",
+    "tico_thread_post",
+    "tico_thread_reply",
+    "tico_thread_edit",
+    "tico_thread_sub",
+    "tico_thread_follow",
+    "tico_thread_unfollow",
+    "tico_thread_read",
+    "tico_thread_members_add",
+    "tico_thread_members_remove",
+    "tico_thread_update",
+    "tico_thread_link_slack",
+    "tico_thread_dm_group",
+    "tico_thread_react",
+    "tico_thread_unreact",
+    "tico_thread_open_earlier",
+    "tico_thread_task",
+    "tico_thread_delete",
+    "tico_thread_upload",
+    "tico_thread_slack_resume",
+    "tico_thread_pin",
+    "tico_thread_unpin",
 }
 
 
@@ -148,13 +148,13 @@ def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
         assert schema["additionalProperties"] is False, name
         assert set(schema.get("required", [])) <= set(schema["properties"]), name
         assert ("operation_id" in schema["properties"]) == (name in THREAD_WRITES), name
-    assert "kind" not in tools["hub_thread_post"]["inputSchema"]["properties"]  # asks are gone: a post is a say
-    assert tools["hub_thread_update"]["inputSchema"]["properties"]["audience"]["enum"] == ["members", "team", "company"]
-    assert "with" in tools["hub_thread_list"]["inputSchema"]["properties"]
+    assert "kind" not in tools["tico_thread_post"]["inputSchema"]["properties"]  # asks are gone: a post is a say
+    assert tools["tico_thread_update"]["inputSchema"]["properties"]["audience"]["enum"] == ["members", "team", "company"]
+    assert "with" in tools["tico_thread_list"]["inputSchema"]["properties"]
 
 
 def test_link_slack_reaches_the_slack_bridge_and_an_unknown_thread_is_not_found(api):
-    isError, payload = call(api, "hub_thread_link_slack", {"thread": "t1", "channel": "#ops"})
+    isError, payload = call(api, "tico_thread_link_slack", {"thread": "t1", "channel": "#ops"})
     assert isError is True
     assert payload["error"] == "not_found"
 
@@ -181,21 +181,21 @@ class RecordingApi:
 def test_thread_tools_reach_the_routes_of_the_contract():
     recorder = RecordingApi()
     run = lambda name, args: hubtools.BY_NAME[name]["fn"](recorder, args)
-    run("hub_thread_home", {"actor": "bot:ops"})
-    run("hub_thread_list", {"with": "human:ben", "limit": 5})
-    run("hub_thread_dm_group", {"members": ["human:ana", "bot:coo"], "body": "Hi"})
-    run("hub_thread_dm_group", {"members": ["human:cara"]})
-    run("hub_thread_react", {"message_id": "m7", "emoji": ":+1:"})
-    run("hub_thread_unreact", {"message_id": "m7", "emoji": ":+1:"})
-    run("hub_thread_open_earlier", {"thread_id": "th1"})
-    run("hub_thread_task", {"message_id": "m7", "title": "Ship it", "owner": "bot:ops", "operation_id": "op1"})
-    run("hub_thread_pin", {"thread": "th1"})
-    run("hub_thread_unpin", {"thread": "th1"})
-    run("hub_thread_catch_up", {"limit": 5})
-    run("hub_thread_dm_group", {"members": ["human:ana", "bot:coo"], "title": "Launch"})
-    run("hub_thread_post", {"thread": "th1", "text": "Yes", "reply_to": "m7", "operation_id": "op2"})
-    run("hub_thread_show", {"thread": "th1", "flat": True})
-    run("hub_thread_bot_status", {"thread": "th1"})
+    run("tico_thread_home", {"actor": "bot:ops"})
+    run("tico_thread_list", {"with": "human:ben", "limit": 5})
+    run("tico_thread_dm_group", {"members": ["human:ana", "bot:coo"], "body": "Hi"})
+    run("tico_thread_dm_group", {"members": ["human:cara"]})
+    run("tico_thread_react", {"message_id": "m7", "emoji": ":+1:"})
+    run("tico_thread_unreact", {"message_id": "m7", "emoji": ":+1:"})
+    run("tico_thread_open_earlier", {"thread_id": "th1"})
+    run("tico_thread_task", {"message_id": "m7", "title": "Ship it", "owner": "bot:ops", "operation_id": "op1"})
+    run("tico_thread_pin", {"thread": "th1"})
+    run("tico_thread_unpin", {"thread": "th1"})
+    run("tico_thread_catch_up", {"limit": 5})
+    run("tico_thread_dm_group", {"members": ["human:ana", "bot:coo"], "title": "Launch"})
+    run("tico_thread_post", {"thread": "th1", "text": "Yes", "reply_to": "m7", "operation_id": "op2"})
+    run("tico_thread_show", {"thread": "th1", "flat": True})
+    run("tico_thread_bot_status", {"thread": "th1"})
     assert recorder.calls == [
         ("GET", "threads/home/bot:ops", {}),
         ("GET", "threads", {"with": "human:ben", "limit": 5}),
@@ -217,9 +217,9 @@ def test_thread_tools_reach_the_routes_of_the_contract():
 
 def test_a_group_dm_needs_at_least_one_member(api):
     tools = {t["name"]: t for t in rpc(api, "tools/list")["result"]["tools"]}
-    schema = tools["hub_thread_dm_group"]["inputSchema"]
+    schema = tools["tico_thread_dm_group"]["inputSchema"]
     assert schema["required"] == ["members"] and schema["properties"]["members"]["minItems"] == 1
-    isError, payload = call(api, "hub_thread_dm_group", {"members": []})
+    isError, payload = call(api, "tico_thread_dm_group", {"members": []})
     assert isError is True
     assert payload["error"] == "validation" and "members" in payload["detail"]
 
@@ -236,7 +236,7 @@ def test_task_update_status_choices_follow_the_api_and_bot_restrictions():
     statuses = tuple(status for status in get_args(literal) if status != "closed")
     assert hubcli.TASK_UPDATE_STATUSES == statuses
     assert hubtools.TASK_UPDATE_STATUSES == tuple(status for status in statuses if status != "ready")
-    schema = hubtools.BY_NAME["hub_task_update"]["inputSchema"]
+    schema = hubtools.BY_NAME["tico_task_update"]["inputSchema"]
     assert schema["properties"]["status"]["enum"] == list(hubtools.TASK_UPDATE_STATUSES)
     assert "ready" not in OWNER_STATUSES
     assert set(OWNER_STATUSES) <= set(hubtools.TASK_UPDATE_STATUSES)
@@ -264,11 +264,11 @@ def test_renamed_task_flags_still_take_their_older_names():
         hubtools.BY_NAME[name]["fn"](api, args)
         return api.bodies[-1].get("quiet", False)
 
-    for name in ("hub_task_update", "hub_task_done"):
+    for name in ("tico_task_update", "tico_task_done"):
         assert sent(name, {"brief": True}) is sent(name, {"quiet": True}) is True
         assert sent(name, {}) is False
-    assert sent("hub_task_close", {"wake": False}) is sent("hub_task_close", {"quiet": True}) is True
-    assert sent("hub_task_close", {"wake": True}) is sent("hub_task_close", {}) is False
+    assert sent("tico_task_close", {"wake": False}) is sent("tico_task_close", {"quiet": True}) is True
+    assert sent("tico_task_close", {"wake": True}) is sent("tico_task_close", {}) is False
     cli = hubcli.parser()
     assert cli.parse_args(["task", "update", "t1", "--quiet"]).brief is True
     assert cli.parse_args(["task", "done", "t1", "--quiet"]).brief is True
@@ -278,23 +278,23 @@ def test_renamed_task_flags_still_take_their_older_names():
 def test_tools_write_through_the_same_rules_as_http(api):
     r, msg, attempt = setup_attempt(api)
     token = attempt["token"]
-    err, me = call(api, "hub_whoami", token=token)
+    err, me = call(api, "tico_whoami", token=token)
     assert not err and me["actor"] == "bot:ops"
 
-    err, out = call(api, "hub_message_send", {"to": "ops", "text": "Talking to myself"}, token=token)
+    err, out = call(api, "tico_message_send", {"to": "ops", "text": "Talking to myself"}, token=token)
     assert err and out["error"] == "self"
 
     # A person's task opens with a plain ask, or it is refused with the rule and an example the bot can act on.
     wordy = " ".join(["word"] * 150)
-    err, out = call(api, "hub_task_create", {"owner": "ana", "title": "The thing", "body": wordy}, token=token)
+    err, out = call(api, "tico_task_create", {"owner": "ana", "title": "The thing", "body": wordy}, token=token)
     assert err and "Your ask to ana is 150 words" in json.dumps(out) and "Example:" in json.dumps(out)
     # Other writing problems on it are warnings: the task is made and the bot told how to improve.
     wordy = "Approve the thing? If yes, I'll ship it.\n\n" + wordy
     err, out = call(
-        api, "hub_task_create", {"owner": "ana", "title": "The thing", "body": wordy, "dry_run": True}, token=token
+        api, "tico_task_create", {"owner": "ana", "title": "The thing", "body": wordy, "dry_run": True}, token=token
     )
     assert not err and out["ok"] is True and any("verb" in w for w in out["warnings"])
-    err, out = call(api, "hub_task_create", {"owner": "ana", "title": "The thing", "body": wordy}, token=token)
+    err, out = call(api, "tico_task_create", {"owner": "ana", "title": "The thing", "body": wordy}, token=token)
     assert not err and out["task"]["owner_id"] == "human:ana" and any("words outside" in w for w in out["warnings"])
     wordy_task = out["task"]["id"]
     with api.app.state.store.read() as c:
@@ -305,22 +305,22 @@ def test_tools_write_through_the_same_rules_as_http(api):
 
     err, task = call(
         api,
-        "hub_task_create",
+        "tico_task_create",
         {"owner": "cpo", "title": "Review the runtime", "body": "Please.", "operation_id": "op-1"},
         token=token,
     )
     assert not err and task["task"]["owner_id"] == "bot:cpo"
     err, again = call(
         api,
-        "hub_task_create",
+        "tico_task_create",
         {"owner": "cpo", "title": "Review the runtime", "body": "Please.", "operation_id": "op-1"},
         token=token,
     )
     assert not err and again["task"]["id"] == task["task"]["id"]
 
-    err, shown = call(api, "hub_task_show", {"id": task["task"]["id"]}, token=token)
+    err, shown = call(api, "tico_task_show", {"id": task["task"]["id"]}, token=token)
     assert not err and shown["task"]["title"] == "Review the runtime"
-    err, many = call(api, "hub_task_show_many", {"ids": [task["task"]["id"], "no-such-task"]}, token=token)
+    err, many = call(api, "tico_task_show_many", {"ids": [task["task"]["id"], "no-such-task"]}, token=token)
     assert (
         not err
         and [t["title"] for t in many["tasks"]] == ["Review the runtime"]
@@ -328,23 +328,23 @@ def test_tools_write_through_the_same_rules_as_http(api):
     )
 
     # A bot reads its conversation back itself: the hub rebuilds nothing into a session.
-    err, page = call(api, "hub_conversation_show", {"conversation": msg["conversation_id"]}, token=token)
+    err, page = call(api, "tico_conversation_show", {"conversation": msg["conversation_id"]}, token=token)
     assert not err and page["conversation"]["id"] == msg["conversation_id"]
     assert [m["body"] for m in page["messages"]][0] == msg["body"]
     assert (page["has_more"], page["next_before"]) == (False, None)
 
-    err, listed = call(api, "hub_task_list", {"requester": "me"}, token=token)
+    err, listed = call(api, "tico_task_list", {"requester": "me"}, token=token)
     assert not err and sorted(t["id"] for t in listed["result"]) == sorted([task["task"]["id"], wordy_task])
 
-    err, out = call(api, "hub_task_close", {"id": task["task"]["id"], "note": "Not needed"}, token=token)
+    err, out = call(api, "tico_task_close", {"id": task["task"]["id"], "note": "Not needed"}, token=token)
     assert not err and out["task"]["status"] == "closed"
-    err, out = call(api, "hub_task_show", {"id": "no-such-task"}, token=token)
+    err, out = call(api, "tico_task_show", {"id": "no-such-task"}, token=token)
     assert err and out["error"] == "not_found" and out["retryable"] is False
 
 
 def test_tools_refuse_a_runner_credential_like_http_does(api):
     r = runner(api)
-    err, out = call(api, "hub_message_list", token=r["token"])
+    err, out = call(api, "tico_message_list", token=r["token"])
     assert err and out["error"] == "identity"
 
 
@@ -354,7 +354,7 @@ def test_validation_identifies_fields_and_never_echoes_invalid_values(api):
     error = response.json()["error"]
     assert error["code"] == "validation" and "body.title" in error["detail"] and error["retryable"] is False
     for name, arguments, field in [
-        ("hub_task_list", {"typo": "private-example-value"}, "typo"),
+        ("tico_task_list", {"typo": "private-example-value"}, "typo"),
     ]:
         failed, payload = call(api, name, arguments)
         assert failed and payload["error"] == "validation" and field in payload["detail"]
@@ -363,27 +363,27 @@ def test_validation_identifies_fields_and_never_echoes_invalid_values(api):
 
 def test_personal_token_api_bot_settings_and_archive_use_the_humans_rights(api):
     token = post(api, "me/tokens", {"label": "QA agent"})["token"]
-    err, out = call(api, "hub_api", {"method": "GET", "path": "me"}, token=token)
+    err, out = call(api, "tico_api", {"method": "GET", "path": "me"}, token=token)
     assert not err and out["actor"] == "human:ana"
-    err, out = call(api, "hub_bot_update", {"slug": "ops", "description": "QA requested change"}, token=token)
+    err, out = call(api, "tico_bot_update", {"slug": "ops", "description": "QA requested change"}, token=token)
     assert not err and "needs_confirm" not in out
     member = post(api, "me/tokens", {"label": "QA member"}, "cara-test")["token"]
     err, out = call(
-        api, "hub_api", {"method": "PUT", "path": "access/rules", "body": {"member_tokens": False}}, token=member
+        api, "tico_api", {"method": "PUT", "path": "access/rules", "body": {"member_tokens": False}}, token=member
     )
     assert err and out["error"] == "forbidden"
-    err, out = call(api, "hub_bot_archive", {"bot": "ops"}, token=token)
+    err, out = call(api, "tico_bot_archive", {"bot": "ops"}, token=token)
     assert not err and out["status"] == "archived" and "needs_confirm" not in out
 
 
 def test_assistant_tools_and_alias_always_use_the_token_humans_private_room(api):
     token = post(api, "me/tokens", {"label": "QA Assistant"})["token"]
-    err, own = call(api, "hub_assistant_read", token=token)
+    err, own = call(api, "tico_assistant_read", token=token)
     assert not err and own["room_id"]
     other = get(api, "assistant", "ben-test")
-    err, sent = call(api, "hub_assistant_send", {"text": "Help"}, token=token)
+    err, sent = call(api, "tico_assistant_send", {"text": "Help"}, token=token)
     assert not err and sent["message"]["conversation_id"] == own["room_id"]
-    err, sent = call(api, "hub_message_send", {"to": "assistant", "text": "Help"}, token=token)
+    err, sent = call(api, "tico_message_send", {"to": "assistant", "text": "Help"}, token=token)
     assert not err and sent["message"]["conversation_id"] == own["room_id"]
     post(api, "messages", {"to": "assistant", "text": "Help", "conversation_id": other["room_id"]}, token, expected=403)
     assert get(api, "assistant", "ben-test")["messages"] == other["messages"]
@@ -400,9 +400,9 @@ def test_malformed_mcp_params_are_json_rpc_errors(api, method, params):
 def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
     _, _, attempt = setup_attempt(api)
     ask = {"question": "Ship the September brief today?", "on": "ana", "operation_id": "q-1"}
-    err, out = call(api, "hub_task_question", ask, token=attempt["token"])
+    err, out = call(api, "tico_task_question", ask, token=attempt["token"])
     assert not err, out
-    err, again = call(api, "hub_task_question", ask, token=attempt["token"])
+    err, again = call(api, "tico_task_question", ask, token=attempt["token"])
     assert not err and again["task"]["id"] == out["task"]["id"], "a retry is the same question"
     # A question the person could not read is refused whole: no task is left behind.
     secret = post(
@@ -410,7 +410,7 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
     )
     err, refused = call(
         api,
-        "hub_task_question",
+        "tico_task_question",
         {"question": "Sign the settlement today?", "on": "ben", "private": True, "parent": secret["id"]},
         token=attempt["token"],
     )
@@ -419,7 +419,7 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
     with api.app.state.store.transaction() as c:
         restrict(c, "ops", people=["ana"])
     err, hidden = call(
-        api, "hub_task_question", {"question": "Renew the vendor contract today?", "on": "cara"}, token=attempt["token"]
+        api, "tico_task_question", {"question": "Renew the vendor contract today?", "on": "cara"}, token=attempt["token"]
     )
     assert err and hidden["error"] == "privacy"
     # With a file, the same refusal comes before any bytes are stored.
@@ -517,7 +517,7 @@ def test_a_private_run_cannot_put_its_work_to_someone_outside_it(api):
     attempt = claim(api, r)
     err, refused = call(
         api,
-        "hub_task_question",
+        "tico_task_question",
         {"question": "Move the design team under product?", "on": "ben", "private": True},
         token=attempt["token"],
     )
@@ -680,7 +680,7 @@ def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_p
     computers = eleven_computers(api)
     add_bots(api, [f"helper-with-a-long-name-{k:03d}" for k in range(300)], computers[5]["runner_id"])
     assert len(json.dumps(get(api, "computers"))) > 200_000  # the Computers page keeps everything
-    err, listing = call(api, "hub_computer_list")
+    err, listing = call(api, "tico_computer_list")
     assert not err and len(listing["computers"]) == 11
     assert len(json.dumps(listing)) < 8_000  # the budget for 11 computers
     rows = {row["label"]: row for row in listing["computers"]}
@@ -696,14 +696,14 @@ def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_p
     assert rows["Mac 05"]["bots"] == 303 and rows["Mac 01"]["bots"] == 3  # a count, not the names
     assert "repositories" not in rows["Mac 01"] and "AGENT.md" not in json.dumps(listing)
 
-    err, detail = call(api, "hub_computer_list", {"computer": "mac 04"})
+    err, detail = call(api, "tico_computer_list", {"computer": "mac 04"})
     assert not err and detail["label"] == "Mac 04" and len(json.dumps(detail)) <= hubtools.COMPUTER_DETAIL_CHARS
     assert len(detail["repositories"]) == hubtools.COMPUTER_PAGE and len(detail["readiness"]["bots"]) == 3
     assert detail["readiness"]["recent_errors"][0].startswith("2026-10-18T07:49")  # newest first
     assert detail["readiness"]["bots"]["bot-12"]["warnings"][0].startswith("AGENT.md is 41,000")
     assert detail["readiness"]["bots"]["bot-13"]["warnings"][0].endswith("… (cut)")  # one 50,000-character warning
     assert detail["readiness"]["runtimes"]["claude"]["models"][-1] == "… 10 more"  # catalogs inside a record
-    err, bots = call(api, "hub_computer_list", {"computer": detail["id"], "section": "bots"})
+    err, bots = call(api, "tico_computer_list", {"computer": detail["id"], "section": "bots"})
     assert (
         not err
         and len(json.dumps(bots)) <= hubtools.COMPUTER_DETAIL_CHARS
@@ -712,13 +712,13 @@ def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_p
     )
     cut = detail["truncated"]
     assert set(cut) == {"repositories", "recent_errors"} and cut["repositories"]["total"] == 30
-    err, rest = call(api, "hub_computer_list", {"computer": detail["id"], "section": "repositories", "offset": 20})
+    err, rest = call(api, "tico_computer_list", {"computer": detail["id"], "section": "repositories", "offset": 20})
     assert not err and [r["full_name"] for r in rest["items"]] == [f"acme/repo-{k}" for k in range(20, 30)]
     assert "more" not in rest and rest["total"] == 30
-    assert "hub_computer_list" in cut["recent_errors"]["more"]
-    err, busy = call(api, "hub_computer_list", {"computer": "Mac 05"})
+    assert "tico_computer_list" in cut["recent_errors"]["more"]
+    err, busy = call(api, "tico_computer_list", {"computer": "Mac 05"})
     assert not err and len(busy["bots"]) == 20 and busy["truncated"]["assigned"]["total"] == 303
-    err, rest = call(api, "hub_computer_list", {"computer": "Mac 05", "section": "assigned", "offset": 300})
+    err, rest = call(api, "tico_computer_list", {"computer": "Mac 05", "section": "assigned", "offset": 300})
     assert not err and len(rest["items"]) == 3 and "more" not in rest
     # A record no page size or cut can fit names how to read it instead of going over the ceiling.
     row = {"id": "c1", "label": "Odd", "readiness": {"bots": {"odd": {f"k{k}": k for k in range(20_000)}}}}
@@ -743,18 +743,18 @@ def test_a_member_reads_neither_a_computer_nor_a_bot_they_cannot_see_in_the_summ
     heavy_heartbeat(api, anas, ["coo"], 1)
     heavy_heartbeat(api, shared, ["ops", "finance"], 1)
     raw = get(api, "computers", "ben-test")
-    err, listing = call(api, "hub_computer_list", token="ben-test")
+    err, listing = call(api, "tico_computer_list", token="ben-test")
     assert not err and [row["label"] for row in listing["computers"]] == [row["label"] for row in raw["computers"]]
     assert [row["label"] for row in listing["computers"]] == ["Shared Mac"]
     assert listing["computers"][0]["bots"] == 1 and listing["computers"][0]["warnings"] == 3
-    err, detail = call(api, "hub_computer_list", {"computer": "Shared Mac"}, token="ben-test")
+    err, detail = call(api, "tico_computer_list", {"computer": "Shared Mac"}, token="ben-test")
     assert (
         not err
         and detail["bots"] == list(detail["readiness"]["bots"]) == ["ops"]
         and "finance" not in json.dumps(detail)
     )
-    assert call(api, "hub_computer_list", {"computer": "Ana Mac"}, token="ben-test")[0]
-    err, everything = call(api, "hub_computer_list", {"computer": "Shared Mac"})
+    assert call(api, "tico_computer_list", {"computer": "Ana Mac"}, token="ben-test")[0]
+    err, everything = call(api, "tico_computer_list", {"computer": "Shared Mac"})
     assert not err and set(everything["readiness"]["bots"]) == {"ops", "finance"}  # the owner still reads it
 
 
@@ -872,7 +872,7 @@ def test_a_raw_body_and_a_json_body_are_one_or_the_other():
 
 
 def test_a_query_field_named_path_reaches_the_query_string(api, door):
-    """`get(path, **query)` takes the URL path positionally, so a query field may be called `path` (`hub file approved
+    """`get(path, **query)` takes the URL path positionally, so a query field may be called `path` (`tico file approved
     <path>` asks file-approvals that way). The server answers from the query: no file has these bytes, so not approved,
     with the digest echoed back. A path it did not receive would be a 422 instead."""
     _, _, attempt = setup_attempt(api)

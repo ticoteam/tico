@@ -8,9 +8,9 @@ each with an engineer who has access. Nothing is sent outside the team.
 
 ## Inputs
 
-- The requested outcome: `hub task show <id>` and its conversation.
+- The requested outcome: `tico task show <id>` and its conversation.
 - `knowledge/delivery.md`: the repositories, engineer owners and checks already agreed.
-- `hub team show`: the engineer bots. Each bot's repository access comes from `hub bot repos <slug>`, not from the team view.
+- `tico team show`: the engineer bots. Each bot's repository access comes from `tico bot repos <slug>`, not from the team view.
 
 ## Steps
 
@@ -18,11 +18,11 @@ each with an engineer who has access. Nothing is sent outside the team.
 2. **Write the acceptance checks**, as in `skills/write-a-delivery-plan/SKILL.md`.
 3. **Map the repositories and areas**, each with its owner from `knowledge/delivery.md`. An area with no owner is a question, not a guess.
 4. **Create the parent task** with the outcome and its checks. It stays open until every required child is done.
-5. **Split it.** Create one child per repository or area with `hub task child`, carrying the repository, the expected
+5. **Split it.** Create one child per repository or area with `tico task child`, carrying the repository, the expected
    behaviour, the dependencies and the checks.
-6. **Assign each child** to an engineer bot with write access to its repository, checked with `hub bot repos <slug>`. If none has it, say so on the parent.
+6. **Assign each child** to an engineer bot with write access to its repository, checked with `tico bot repos <slug>`. If none has it, say so on the parent.
 7. **Order the dependencies.** Name any release step the children need as its own item on the parent.
-8. **Finish.** Write the plan as a comment on the parent with `hub task comment`, then `hub task update <id> --status done --note` for the request task, never the parent, which stays open until its children are done.
+8. **Finish.** Write the plan as a comment on the parent with `tico task comment`, then `tico task update <id> --status done --note` for the request task, never the parent, which stays open until its children are done.
 
 ## Output
 

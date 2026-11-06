@@ -93,7 +93,7 @@ Every PR this skill opens gets a second pair of eyes. Right after `gh pr create`
 the reviewer for the repo and stop:
 
 ```
-hub task create --owner <reviewer> --title "Review: <PR title>" \
+tico task create --owner <reviewer> --title "Review: <PR title>" \
   --body "<PR URL>. Done when: <the acceptance line from the task or issue>."
 ```
 

@@ -4,15 +4,15 @@ Schedule: Thursdays at 10:00 team time (routine `weekly-events-review`), after s
 coming, what is late, which follow-ups are due and what finished events returned. Nothing is booked
 or sent.
 
-Inputs: the task, `hub calendar list`, `knowledge/calendar.md`, `knowledge/rules.md`, `knowledge/results.md` and last week's review.
+Inputs: the task, `tico calendar list`, `knowledge/calendar.md`, `knowledge/rules.md`, `knowledge/results.md` and last week's review.
 Done when: the page is at `reports/YYYY-MM-DD-events.md`, every event in the next 90 days has a status, late items have owners, and the task note names what could not be read.
 
 ---
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub calendar list
+    tico task show <id>
+    tico calendar list
 
 Then `knowledge/calendar.md`, `knowledge/rules.md`, `knowledge/results.md` and last week's review.
 
@@ -37,5 +37,5 @@ conversations, meetings, pipeline, and cost per meeting. Write one line per even
 ## 5. Write and hand over
 
 Write `reports/YYYY-MM-DD-events.md` in the shape of `knowledge/examples/events-review.md`, then
-`hub file publish reports/YYYY-MM-DD-events.md`. Commit, and `hub task update <id> --status done
+`tico file publish reports/YYYY-MM-DD-events.md`. Commit, and `tico task update <id> --status done
 --note`: the headline, the path, what you could not read.

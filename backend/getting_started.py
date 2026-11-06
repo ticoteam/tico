@@ -156,7 +156,7 @@ def _next_bot(c, settings):
 
 def _first_output(c):
     """A starter bot has been onboarded: its onboarding is complete and a person has seen its first
-    result. The bot says so itself (`hub bot setup-done`), so this is what the database records."""
+    result. The bot says so itself (`tico bot setup-done`), so this is what the database records."""
     return c.execute(
         "SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
         "WHERE bc.onboarding_state='onboarded' AND b.state!='archived' LIMIT 1"

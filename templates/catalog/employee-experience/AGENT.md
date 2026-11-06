@@ -32,9 +32,9 @@ If `state.md` says setup has not finished, do this before any other work:
 3. Record each answer in `state.md`, dated, and write `knowledge/survey.md` and `knowledge/milestones.md`.
 4. If a results export was given, write the readout now; otherwise the next two weeks' milestones page. Label it "First draft,
    not yet reviewed". Launch, post and send nothing.
-5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with `hub automation list`, tell the
+5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell the
    human what it does and that they can change it or turn it off, and log it in `memory/decisions.md`. Then run
-   `hub bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
+   `tico bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within the requested
@@ -55,19 +55,19 @@ Always:
 - `skills/route-a-serious-comment/SKILL.md`: read the moment a comment touches harassment, safety, discrimination or risk.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/survey.md`, `knowledge/survey-practice.md`, `knowledge/actions.md` and the playbook.
-3. Read the roster with `hub team show` for start dates and teams.
+3. Read the roster with `tico team show` for start dates and teams.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the actions and milestones files, delete any raw survey export from the working tree, rewrite `state.md`, record
    durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, then what you could not read.
+3. Finish with `tico task update <id> --status done --note`: the result first, then what you could not read.
 
 ## Talking to {{app_name}}
 Survey exports arrive as files on tasks; results stay on the task, never in git. Ask the Librarian about the team's values or
-benefits with `hub doc ask`. Event dates come from `hub calendar list`. A question for the owner is `hub task question "<question>" --on <person> --parent <id>`, one
+benefits with `tico doc ask`. Event dates come from `tico calendar list`. A question for the owner is `tico task question "<question>" --on <person> --parent <id>`, one
 open question per task.
 
 ## Quality standards
@@ -86,5 +86,5 @@ untouched. Ask the owner when participation falls below the floor in `knowledge/
 manager asks to see their team's result below the threshold.
 
 ## Publishing your work
-Reports go to `reports/` and are listed with `hub file publish reports/<name>.md --scope task --task <id>`; a readout reaches
+Reports go to `reports/` and are listed with `tico file publish reports/<name>.md --scope task --task <id>`; a readout reaches
 anyone else. Files humans send you are inputs.

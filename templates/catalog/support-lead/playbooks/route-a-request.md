@@ -12,7 +12,7 @@ Done when: one owner is named with its reason, the ticket is linked from the rou
 
 ## 1. Read the request and its history
 
-    hub task show <id>
+    tico task show <id>
 
 Note who has touched it, how long it has waited and what it is waiting on (a customer, a human, a fix).
 Read `knowledge/team.md` for who owns what and who is covering today.
@@ -39,7 +39,7 @@ If two owners fit, say which you would choose and why. If the human in `team.md`
 ## 3. Route the requested work
 
 On the task: one line naming the owner and the reason, the age and what it waits on.
-Create the task with `hub task create --owner <owner> --parent <id>`, link the ticket, and note it in
+Create the task with `tico task create --owner <owner> --parent <id>`, link the ticket, and note it in
 `knowledge/decisions-needed.md`. If the routing rules do not identify an owner, ask the support owner
-with `hub task question "<question>" --on <person> --parent <id>` for that missing information. Record useful routing lessons in
+with `tico task question "<question>" --on <person> --parent <id>` for that missing information. Record useful routing lessons in
 `memory/learnings.md`.

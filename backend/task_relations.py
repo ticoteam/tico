@@ -8,7 +8,7 @@ A row says `from_task` stands in `kind` to `to_task`:
 - `duplicate_of`: from duplicates to.
 - `follow_up`: from was split off or followed up from to.
 
-`relate` is the only writer (the task page, `hub task relate`, the MCP tool and task create all
+`relate` is the only writer (the task page, `tico task relate`, the MCP tool and task create all
 come here), so the rules live in one place: who may change which end, no loops for `parent` and
 `blocks`, a private task only under or behind tasks its own parties can read, and a history row on
 both tasks. Reads filter the other end through the reader's task visibility, so a task someone

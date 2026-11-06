@@ -207,13 +207,13 @@ def approve_hint(settings, state):
     if not state["team_allows"]:
         return (
             "Approving stays the person's click on a card: the team's owner turned off assistants deciding "
-            "approvals (Settings > Humans). Tell them that in one sentence and propose a card (`hub assistant "
+            "approvals (Settings > Humans). Tell them that in one sentence and propose a card (`tico assistant "
             "propose`)"
         )
     return (
         "Approving is the person's click on a card until they let you decide approvals. Tell them in one sentence: "
         f"they can turn on “My assistant can decide approvals for me” in {where}. Then propose a card "
-        "(`hub assistant propose`)"
+        "(`tico assistant propose`)"
     )
 
 
@@ -237,7 +237,7 @@ def canonical(path):
 
 
 def catalogue_setting(method, path, body=None):
-    """Whether this write is one setting from the catalogue, exactly as `hub settings set` makes it (backend/settings_
+    """Whether this write is one setting from the catalogue, exactly as `tico settings set` makes it (backend/settings_
     catalog.py). Its class decides it in `require_direct_setting`. Two settings at once, or anything the catalogue does
     not list, is not one."""
     from . import settings_catalog
@@ -704,7 +704,7 @@ def approval_words(c, who, cited, assistant_bot, approval):
         raise Problem(
             "own_request",
             "You asked for this approval yourself, so it stays the person's click: propose it "
-            "on a card (`hub assistant propose`)",
+            "on a card (`tico assistant propose`)",
             403,
         )
     msg = H.message(c, cited) or {}
@@ -740,7 +740,7 @@ def approval_words(c, who, cited, assistant_bot, approval):
         raise Problem(
             "approve_not_asked",
             "Approving needs the person's yes to your read-back: post the list with "
-            "`hub approval read-back <id>...` as your reply and end the turn; their plain yes to it approves "
+            "`tico approval read-back <id>...` as your reply and end the turn; their plain yes to it approves "
             "exactly what it lists",
             403,
         )
@@ -753,7 +753,7 @@ def instruction(c, who, ref):
 
     def refuse(detail):
         raise Problem(
-            "on_behalf_of", detail + "; if they did not clearly ask, propose it (`hub assistant propose`)", 403
+            "on_behalf_of", detail + "; if they did not clearly ask, propose it (`tico assistant propose`)", 403
         )
 
     if who.via != "assistant" or who.confirmed or not who.attempt_id or not H.is_human(who.actor):
@@ -1595,7 +1595,7 @@ def create_proposal(
         if not found or found[2] == "person":
             raise Problem(
                 "operation",
-                "A setting on a card is one setting from the catalogue (`hub settings find`) "
+                "A setting on a card is one setting from the catalogue (`tico settings find`) "
                 "that is not the person's own to change in Settings",
                 422,
             )
@@ -2417,7 +2417,7 @@ def install(app, store, auth, mutate, onboarding):
                     raise Problem(
                         "own_request",
                         "You asked for this approval yourself, so it stays the person's "
-                        "click: propose it on a card (`hub assistant propose`)",
+                        "click: propose it on a card (`tico assistant propose`)",
                         403,
                     )
                 refuse_own_click(row)

@@ -3,7 +3,7 @@
 Roadmaps use tasks, types, labels, comments and parent relations. The Product roadmap type runs
 Suggested → Exploring → Spec → Approved → Building → Ready to ship → Shipped (or Declined); Engineering (or an existing Dev tickets
 type, as in [The software factory](software-factory.md)) uses the development flow. Tico knows these types by their
-role (`role` in `hub task types`: `product-roadmap` and `engineering`), not by the bot that manages them, so archiving
+role (`role` in `tico task types`: `product-roadmap` and `engineering`), not by the bot that manages them, so archiving
 that bot or handing the type to another keeps the roadmap and its Approved → Building → Shipped sync working. A type
 keeps its role when renamed. A type named Dev tickets gets the engineering role when it is created or renamed to that,
 even beside Engineering; both then count as a roadmap item's development work. An install from before roles gives them
@@ -77,7 +77,7 @@ link/script/iframe HTML.
 Suggestions create private Product roadmap tasks at Suggested, owned by the bot that receives suggestions,
 with the label and submitter's request. They queue quietly for that bot's next run and need team
 review before publication. The receiving bot is `suggestions_bot` in settings (an active bot's slug; owners and
-admins set it with `hub roadmap settings --suggestions-bot SLUG`), or **Automatic** when unset (`--automatic`, or
+admins set it with `tico roadmap settings --suggestions-bot SLUG`), or **Automatic** when unset (`--automatic`, or
 `null`): the first active or planned bot made from the Product Manager template, else an active bot made from the Head
 of Product (`product-lead`) template. While the chosen bot is not active (archived, paused, quarantined or planned)
 suggestions go to the Automatic bot; they never go to an archived bot. Reading the settings returns
@@ -140,10 +140,10 @@ a person. Publishing, public edits/replies, and attaching an enabled roadmap lab
 public task need a new approval each time. Owners/admins can relax this in Public roadmap settings. Moderation uses
 `POST /api/v2/tasks/{id}/comments/{comment_id}/moderate` with `action: hide|show|delete`.
 
-These routes also have hub MCP tools and CLI commands of the same names: `hub task requesters`, `hub task
-requester-save`, `hub task requester-remove`, `hub task publication-preview`, `hub task comment-moderate`, `hub
-roadmap tasks` and `hub roadmap settings` (flags change only the settings named). `hub api` reaches every route.
-`hub task create` takes `--public-title`/`--public-summary` beside `--visibility`, and `hub task update` supports
+These routes also have hub MCP tools and CLI commands of the same names: `tico task requesters`, `tico task
+requester-save`, `tico task requester-remove`, `tico task publication-preview`, `tico task comment-moderate`, `hub
+roadmap tasks` and `tico roadmap settings` (flags change only the settings named). `tico api` reaches every route.
+`tico task create` takes `--public-title`/`--public-summary` beside `--visibility`, and `tico task update` supports
 publication fields, size and approval id. `waits_on` / `waiting_on` still means blocked on someone (derived from open question tasks);
 requesters are independent. Nothing sends automatically; follow-ups require a person's request
 and the existing outbound send switch.

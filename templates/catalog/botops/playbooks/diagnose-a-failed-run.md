@@ -12,14 +12,14 @@ Done when: the one-sentence cause and its evidence are on the task, the smallest
 
 ## 1. Establish what actually happened
 
-If the task names no bot, find the failed run first (`hub automation recent-runs --range 24h --status failed`): each row
+If the task names no bot, find the failed run first (`tico automation recent-runs --range 24h --status failed`): each row
 names its routine and owner (`bot:<slug>`), and that owner is the bot to diagnose. Then read the record:
 
-    hub task show <id>
-    hub task list --owner <slug>
-    hub bot status list
-    hub automation list --owner bot:<slug>     # the routine, if the task came from one
-    hub automation runs <id>                   # its runs: fired, failed or held
+    tico task show <id>
+    tico task list --owner <slug>
+    tico bot status list
+    tico automation list --owner bot:<slug>     # the routine, if the task came from one
+    tico automation runs <id>                   # its runs: fired, failed or held
 
 Read the failed run's own task and its conversation before anything else. Most reports of "it did
 not run" are one of four things, and they look nothing alike once you have the record:
@@ -35,7 +35,7 @@ Never write that a run happened if it is not in the record. Absence of a record 
 
 ## 2. Check the bot itself
 
-    hub bot check <slug>
+    tico bot check <slug>
 
 This tells you whether the repository is in a state Tico will accept: instructions present
 and not the untouched template, a non-empty `## Owns`, `state.md` present, `bot.yaml` parsing
@@ -70,8 +70,8 @@ name. Never turn a bot off, change its status, or edit the product checkout.
 
 ## 5. Record it and finish
 
-    hub bot check <slug>
-    hub task update <id> --status done --note "..."
+    tico bot check <slug>
+    tico task update <id> --status done --note "..."
 
 Commit the repository you changed with a one line message. Add the check that would have caught this
 to `knowledge/checks.md`, and add the failure and its cause to `knowledge/fleet.md` under that bot,
@@ -87,5 +87,5 @@ computer". Put that on the task and finish it.
 
 ## Evidence for the task
 Publish the write-up a human should read instead of pasting it into the note:
-`hub file publish reports/<date>-<bot>-diagnosis.md`, and put the file's title in the task note. A
-Google Doc you made for it goes on the page with `hub file link <url> --title "..."`.
+`tico file publish reports/<date>-<bot>-diagnosis.md`, and put the file's title in the task note. A
+Google Doc you made for it goes on the page with `tico file link <url> --title "..."`.

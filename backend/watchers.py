@@ -2,7 +2,7 @@
 (docs/watchers.md, clients/watchers.py).
 
 The runner runs the program on the bot's computer and posts its events here (`POST /api/v2/runners/watchers`). The
-program holds no hub credential, so a program that is fed hostile text (a ticket, an issue) can do nothing but say
+program holds no tico credential, so a program that is fed hostile text (a ticket, an issue) can do nothing but say
 these three things about a key it names:
 
     task     a task for the bot, once per key

@@ -77,7 +77,7 @@ def test_streamed_task_versions_review_and_next_wake(api, monkeypatch):
                 )
             worker.process(row)
     # The bot asks the person about the second script version: a question task under its task, with that version
-    # under review (hub task question --review).
+    # under review (tico task question --review).
     asked = api.post(
         '/api/v2/task-questions',
         headers=headers(token),

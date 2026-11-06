@@ -1,4 +1,4 @@
-"""The one list of named events: routines (`on:`), rules (WHEN), outgoing webhook subscriptions, `hub event-types` and
+"""The one list of named events: routines (`on:`), rules (WHEN), outgoing webhook subscriptions, `tico event-types` and
 the docs all read it.
 
 An event is a dot name in a group (`task.done`) with a one-line description and an `example`: the `data` object of a

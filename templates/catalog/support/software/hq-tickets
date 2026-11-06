@@ -8,7 +8,7 @@
                                          carrying that Health Monitor signature
     hq-tickets show TK-XXXXXXXX          one ticket with its messages, and the diagnostics the person attached: a
                                          summary first, then the whole redacted bundle
-    hq-tickets payload TK-XXXXXXXX FILE  the JSON for `hub approval request --kind publish --payload-file`
+    hq-tickets payload TK-XXXXXXXX FILE  the JSON for `tico approval request --kind publish --payload-file`
     hq-tickets reply TK-XXXXXXXX FILE [--approval ID]
                                          post FILE as this bot's sending policy in Tico allows: On their own posts,
                                          Ask first needs a person's approval of these bytes for this ticket, Never
@@ -342,12 +342,12 @@ def payload(ticket_id, path):
 
 
 def approved(approval_id, ticket_id, data, run=subprocess.run):
-    """Refuse unless `hub approval show` says a human approved exactly this text for exactly this ticket."""
+    """Refuse unless `tico approval show` says a human approved exactly this text for exactly this ticket."""
     try:
         shown = run(["hub", "approval", "show", approval_id], capture_output=True, text=True, timeout=30)
         record = json.loads(shown.stdout[shown.stdout.index("{"):])
     except (OSError, ValueError, subprocess.SubprocessError):
-        raise Refused("could not read that approval with `hub approval show`") from None
+        raise Refused("could not read that approval with `tico approval show`") from None
     body = record.get("payload") or {}
     if record.get("decision") != "approved":
         raise Refused(f"approval {approval_id} is {record.get('decision') or 'not decided yet'}, not approved")

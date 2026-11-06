@@ -15,7 +15,7 @@ REPAIR = {
     "add a test that the store is never called on a refused upload.",
 }
 HEAD = "a2944b52a971f509b51b81d40db92c0207cab734"
-ROUTE = "ask them with `hub task question`, or have them file the subtask"
+ROUTE = "ask them with `tico task question`, or have them file the subtask"
 
 
 @pytest.fixture(autouse=True)

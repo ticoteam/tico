@@ -7,11 +7,11 @@ minutes. The outcome is one route applied within the requested work and Tools, w
 
 ## 1. Read the request
 
-    hub task show <id>
+    tico task show <id>
 
 Find what it is: a net-new lead, an existing account, a data problem, a proposal, a renewal or
 something for a human only. Look the account up in `knowledge/pipeline-rules.md`'s pipeline source and
-in `hub meeting search "<account>"` so you do not route a customer as a lead.
+in `tico meeting search "<account>"` so you do not route a customer as a lead.
 
 ## 2. Pick the owner
 
@@ -23,11 +23,11 @@ negotiation, or the prospect replied or asked about price, it belongs to a human
 
 ## 3. Propose
 
-On the task, in three lines: the owner, the reason, and what the owner should produce and by when. Ask with `hub task question "<question>" --on <person> --parent <id>` only when the intended role or owner is missing; otherwise carry out the requested work with your Tools.
+On the task, in three lines: the owner, the reason, and what the owner should produce and by when. Ask with `tico task question "<question>" --on <person> --parent <id>` only when the intended role or owner is missing; otherwise carry out the requested work with your Tools.
 
 ## 4. Carry out the requested work
 
-    hub task create --owner <slug> --title "<what and for whom>" --body "<the request, the account, the source>" --parent <id>
+    tico task create --owner <slug> --title "<what and for whom>" --body "<the request, the account, the source>" --parent <id>
 
 Record the routing and its source request in `knowledge/routing.md`. On a no, record the correction as a
-rule in `knowledge/routing.md` so the next proposal is right. `hub task update <id> --status done --note`.
+rule in `knowledge/routing.md` so the next proposal is right. `tico task update <id> --status done --note`.

@@ -289,7 +289,7 @@ def test_a_bot_creates_no_task_with_a_public_roadmap_label_and_is_told_the_way_t
 
 
 def test_the_cli_carries_the_approval_id_when_a_bot_adds_a_public_roadmap_label(api, monkeypatch):
-    """`hub task label --add roadmap --approval-id`: the way through a refused create names this command."""
+    """`tico task label --add roadmap --approval-id`: the way through a refused create names this command."""
     from clients import remotecli
     from clients.hubcli import parser
 

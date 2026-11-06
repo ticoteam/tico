@@ -50,7 +50,7 @@ async function integrationDetail(service, load, {base = TOOLS_ROUTE, head = '', 
   if (load !== INT_LOAD || !$('#int-detail')) return;
   // Another name for the same tool goes to its own; a page with no service (an older hub) stays put.
   if (page.service && page.service !== service) { location.replace(base + '/' + page.service + (location.hash.includes('?') ? '?' + location.hash.split('?')[1] : '')); return; }
-  // A query entry carries `sql`, or `mongo` for a MongoDB database; bots run either with `hub db`.
+  // A query entry carries `sql`, or `mongo` for a MongoDB database; bots run either with `tico db`.
   const queryText = q => q.sql ? q.sql.trim() : JSON.stringify(q.mongo, null, 2);
   const queryHtml = q => `<details class="int-query" data-query="${esc(q.id)}"><summary><span class="id">${esc(q.id)}</span><strong>${esc(q.title)}</strong>${q.database ? `<span class="pill">${esc(q.database)}</span>` : ''}<span class="desc">${esc(q.description || '')}</span></summary>
       <pre>${esc(queryText(q))}</pre>

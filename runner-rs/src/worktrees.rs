@@ -1355,7 +1355,7 @@ async fn run_registered_setup(
 }
 
 /// Check out and set up a worktree the server reserved for a waiting task (backend/worktree_waits.py,
-/// worktrees.prepare), as `hub task worktree add` does inside a turn, with the same records and proof: the bot
+/// worktrees.prepare), as `tico task worktree add` does inside a turn, with the same records and proof: the bot
 /// is idle, and the server wakes its task once this reports the worktree present. `repo` is the repository
 /// row (`full_name`, `machine_git`, `setup_command`, `default_branch`). Returns the checkout proof.
 pub async fn prepare(

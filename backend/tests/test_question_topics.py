@@ -7,7 +7,7 @@ from backend.tests.test_mcp import call
 
 
 def _ask(api, token, question, **extra):
-    err, out = call(api, "hub_task_question", {"question": question, "on": "ana", **extra}, token=token)
+    err, out = call(api, "tico_task_question", {"question": question, "on": "ana", **extra}, token=token)
     assert not err, out
     return out
 
@@ -217,7 +217,7 @@ def test_a_topic_key_in_any_script_is_kept_and_an_empty_one_is_refused(api):
     assert len({q["task"]["id"] for q in (budget, date, plain)}) == 3
     err, out = call(
         api,
-        "hub_task_question",
+        "tico_task_question",
         {"question": "Launch at all, really?", "on": "ana", "parent": work["id"], "topic": "--"},
         token=attempt["token"],
     )

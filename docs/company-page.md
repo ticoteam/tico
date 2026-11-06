@@ -145,11 +145,11 @@ here publishes an edition, changes transparency or adds a reader.
 
 | CLI | Tool | Shows |
 |---|---|---|
-| `hub company-page` | `hub_company_page` | Transparency, public address and last update |
-| `hub audiences list` | `hub_audiences_list` | Audiences, built in and added |
-| `hub editions list [--audience ID] [--status S]` | `hub_editions_list` | Editions, newest first |
-| `hub editions show ID` | `hub_editions_show` | One edition's text, status, checks and approval |
-| `hub readers list` | `hub_readers_list` | Readers (owners and admins only) |
+| `tico company-page` | `tico_company_page` | Transparency, public address and last update |
+| `tico audiences list` | `tico_audiences_list` | Audiences, built in and added |
+| `tico editions list [--audience ID] [--status S]` | `tico_editions_list` | Editions, newest first |
+| `tico editions show ID` | `tico_editions_show` | One edition's text, status, checks and approval |
+| `tico readers list` | `tico_readers_list` | Readers (owners and admins only) |
 
 The matching API is under `/api/v2` (`company-page`, `audiences`, `editions`, `readers`).
 

@@ -1,34 +1,34 @@
 # Databases
 
 Bots often need a number that lives in your own database: orders this week, signups by
-region, tickets waiting. `hub db` lets a bot ask for it with one read-only statement, without the
+region, tickets waiting. `tico db` lets a bot ask for it with one read-only statement, without the
 server or the bot ever holding a writable password. PostgreSQL, MySQL/MariaDB, MongoDB (Atlas) and
 SQLite files work out of the box; BigQuery and Snowflake are covered at the end.
 
 ```bash
-hub db list                                             # what this bot may use
-hub db warehouse "SELECT status, count(*) FROM orders GROUP BY 1"
-hub db warehouse --query revenue-by-month --param start=2026-01-01 --param end=2026-07-01
-hub db atlas find orders '{"status": "paid"}' --limit 20        # MongoDB: see "MongoDB Atlas" below
+tico db list                                             # what this bot may use
+tico db warehouse "SELECT status, count(*) FROM orders GROUP BY 1"
+tico db warehouse --query revenue-by-month --param start=2026-01-01 --param end=2026-07-01
+tico db atlas find orders '{"status": "paid"}' --limit 20        # MongoDB: see "MongoDB Atlas" below
 ```
 
-(`hub sql` is a different thing: read-only SQL over Tico's own database, [hub-sql.md](hub-sql.md).)
+(`tico sql` is a different thing: read-only SQL over Tico's own database, [hub-sql.md](hub-sql.md).)
 
 ## Where it runs, and why
 
-`hub db` runs on the computer that runs the bot, inside the run, not on the Tico server. The
+`tico db` runs on the computer that runs the bot, inside the run, not on the Tico server. The
 connection string is stored in Tico's Credentials and delivered only to a bot granted it, for one run.
 The server stores, decrypts and delivers it, so a compromised server could expose it; protect the
 [Credential key and backups](credential-vault.md#the-local-credential-key-and-backups). Actual database access depends on network reachability and the database role.
-The server authenticates the caller, keeps the audit trail and serves named queries; `hub db` executes on the computer, and
-there is no `hub_db` tool on the server's MCP endpoint for that reason.
+The server authenticates the caller, keeps the audit trail and serves named queries; `tico db` executes on the computer, and
+there is no `tico_db` tool on the server's MCP endpoint for that reason.
 
 Layers, in order of strength (MongoDB has its own list under [MongoDB Atlas](#mongodb-atlas)):
 
 1. **The database role**: a user that can only `SELECT`. This is the real boundary.
 2. **The session**: opened read-only (`BEGIN READ ONLY` on PostgreSQL, `SET SESSION TRANSACTION
    READ ONLY` on MySQL, `mode=ro` plus an authorizer on SQLite), so a role that was granted too
-   much still cannot write through `hub db`.
+   much still cannot write through `tico db`.
 3. **The statement**: one `SELECT`, `WITH`, `VALUES`, `SHOW` or `EXPLAIN`; no `INTO`, no second
    statement. This turns mistakes into clear messages; do not rely on it alone.
 4. **Limits**: a row cap (default 500, ceiling 10,000) and a statement timeout (default 20 s,
@@ -74,7 +74,7 @@ GRANT SELECT ON app.* TO 'tico_readonly'@'10.%';
 with `GRANT USAGE ON *.* TO ... WITH MAX_USER_CONNECTIONS 5`.) Restrict the host to the network
 your runner computers are on.
 
-SQLite: nothing to create; give the owner's user read access to the file. `hub db` opens it
+SQLite: nothing to create; give the owner's user read access to the file. `tico db` opens it
 `mode=ro`.
 
 ### 2. Store a Credential and grant it
@@ -93,8 +93,8 @@ bot's run. A stored `op://Team Bots/Warehouse read only/url` reference is resolv
 ([Credentials](credential-vault.md)).
 
 Existing installs migrate their old credential files into grants on upgrade. File import is a
-migration path, not setup for a new bot: `hub credential import DB_WAREHOUSE_URL --from-bot <bot>`
-imports an old own-file value, then `hub credential grant DB_WAREHOUSE_URL --to <bot>` grants it.
+migration path, not setup for a new bot: `tico credential import DB_WAREHOUSE_URL --from-bot <bot>`
+imports an old own-file value, then `tico credential grant DB_WAREHOUSE_URL --to <bot>` grants it.
 New runs do not load `secrets/<bot>.env` or `_shared.env` as a fallback.
 
 ### 3. Grant bots
@@ -106,7 +106,7 @@ Add a `tools:` entry to each bot's `bot.yaml` ([creating-bots.md](creating-bots.
 tools:
   - service: postgres            # postgres | mysql | sqlite
     identity: read-only role on the reporting replica
-    database: warehouse          # the name after `hub db`
+    database: warehouse          # the name after `tico db`
     can: [read]
     env: DB_WAREHOUSE_URL        # optional; this is the default for `warehouse`
     max_rows: 200                # optional: lower this bot's row cap
@@ -115,7 +115,7 @@ tools:
 ```
 
 A bot without the entry is refused even when it has the Credential grant. Both are needed. A human who
-runs `hub db` from their own shell (with their personal API token, see
+runs `tico db` from their own shell (with their personal API token, see
 [how-it-works.md](how-it-works.md)) is granted by having the connection string in their own
 environment.
 
@@ -131,13 +131,13 @@ personal data, gotchas) in the format every tool page has ([integrations/README.
 database, sql, params}`. Bind parameters as `:name`; `$1`, `$2` also work and mean the params in the
 order listed. A full example for a fictional team is in
 [templates/company-config/](../templates/company-config/). The page and query file are named after the
-database (`warehouse`), so `hub tool query-search warehouse revenue` searches and `hub db warehouse --query
+database (`warehouse`), so `tico tool query-search warehouse revenue` searches and `tico db warehouse --query
 <id>` runs.
 
 ### 5. Test with the doctor
 
 ```bash
-hub db doctor warehouse
+tico db doctor warehouse
 ```
 
 It checks the grant, that the credential is set, that it connects, that the session is read-only,
@@ -147,21 +147,21 @@ the bot to run it in a run, or as yourself:
 ```bash
 export HUB_API_URL=https://tico.acme.example HUB_TOKEN=tico_pt_...      # a personal API token
 export DB_WAREHOUSE_URL='postgresql://tico_readonly:...@replica.internal:5432/app'
-hub db doctor warehouse
+tico db doctor warehouse
 ```
 
 ## MongoDB Atlas
 
-`hub db` also reads MongoDB, and MongoDB Atlas is the case it is built for. A bot cannot send SQL or
+`tico db` also reads MongoDB, and MongoDB Atlas is the case it is built for. A bot cannot send SQL or
 a command: it picks one of five operations and passes Extended JSON.
 
 ```bash
-hub db atlas collections                                         # collections, with field names and types from a sample
-hub db atlas find orders '{"status": "paid"}' --projection '{"total": 1}' --sort '{"placed_at": -1}' --limit 20
-hub db atlas aggregate orders '[{"$match": {"status": "paid"}}, {"$group": {"_id": "$region", "n": {"$sum": 1}}}]'
-hub db atlas count orders '{"status": "paid"}'
-hub db atlas distinct orders status ['{"region": "eu"}']
-hub db atlas --query signups-since --param since=2026-09-01       # a named query (step 4 below)
+tico db atlas collections                                         # collections, with field names and types from a sample
+tico db atlas find orders '{"status": "paid"}' --projection '{"total": 1}' --sort '{"placed_at": -1}' --limit 20
+tico db atlas aggregate orders '[{"$match": {"status": "paid"}}, {"$group": {"_id": "$region", "n": {"$sum": 1}}}]'
+tico db atlas count orders '{"status": "paid"}'
+tico db atlas distinct orders status ['{"region": "eu"}']
+tico db atlas --query signups-since --param since=2026-09-01       # a named query (step 4 below)
 ```
 
 Input is Extended JSON in its relaxed form: plain JSON plus `{"$oid": "..."}` and
@@ -241,7 +241,7 @@ self-managed replica set works too: `mongodb://user:pass@host1:27017,host2:27017
 tools:
   - service: mongodb
     identity: Atlas user with the read role on app
-    database: atlas              # the name after `hub db`
+    database: atlas              # the name after `tico db`
     can: [read]
     env: DB_ATLAS_URL            # optional; this is the default for `atlas`
     max_rows: 200                # optional: lower this bot's document cap
@@ -283,7 +283,7 @@ the query file loads (op, collection, every `$param` declared). The full example
 ### 5. Test with the doctor
 
 ```bash
-hub db doctor atlas
+tico db doctor atlas
 ```
 
 It checks the grant, the credential, that it connects (and the server version), the read preference,
@@ -341,7 +341,7 @@ audit records the entry with `{"$param": ...}` left in and the parameter names, 
 | `credential: DB_X_URL is not set` | step 2: store the Credential with the exact Bot variable name and grant it to this bot; files and shell exports do not grant access |
 | `driver: the postgres driver is not installed` | `pip install 'psycopg[binary]'` (MySQL: `PyMySQL`) in the runner's environment; both are in `backend/requirements.txt` |
 | `timeout` | add a date window or an index, or lower the work; the limit is 20 s unless the entry raises `timeout_seconds` (ceiling 120 s) |
-| `read_only` | the statement wrote, or used `INTO`. `hub db` never writes |
+| `read_only` | the statement wrote, or used `INTO`. `tico db` never writes |
 | `refused: one statement per call` | remove the second statement; a trailing `;` is fine |
 | `audit: ... result is withheld` | Tico could not record the query; check the runner can reach Tico and retry |
 | connection refused / timed out | the database's firewall or security group does not allow the runner computer, or a VPN is down |
@@ -400,22 +400,22 @@ process, so restart the server after a change.
 3. A stored Credential for each `DB_<NAME>_URL`, granted to that bot and delivered for its run.
    Keep values out of git and out of the config repository.
 
-Named queries reach the runner over Tico's API at query time (`hub db <name> --query <id>` asks
+Named queries reach the runner over Tico's API at query time (`tico db <name> --query <id>` asks
 the server for the statement), so a query update is a server deploy only.
 
-**What stays upstream.** Tool pages for the services Tico has built-in support for, `hub db`, the driver setup and this
+**What stays upstream.** Tool pages for the services Tico has built-in support for, `tico db`, the driver setup and this
 guide. What belongs in your config is anything with a team name, host, table or human in it.
 Do not send upstream pull requests that contain them.
 
 ## BigQuery, Snowflake and other warehouses
 
-`hub db` speaks PostgreSQL, MySQL/MariaDB, MongoDB and SQLite. For a warehouse with its own CLI, keep the
+`tico db` speaks PostgreSQL, MySQL/MariaDB, MongoDB and SQLite. For a warehouse with its own CLI, keep the
 same shape by hand: stored Credentials granted to the bot, a read-only role or service account,
 a bot `tools:` entry, and a tool page in your private config saying how to call the CLI.
 Examples: `bq query --use_legacy_sql=false --maximum_bytes_billed=1000000000 --format=csv 'SELECT ...'`
 (a service account with only `roles/bigquery.dataViewer` and `roles/bigquery.jobUser`, and a
 billing cap) or `snowsql -o friendly=false -o output_format=csv -q 'SELECT ...'` (a role with only
 `SELECT` on a warehouse with a resource monitor). Snowflake and Redshift accept a PostgreSQL-like
-URL only in some setups; if yours does, `postgresql://` may work through `hub db` directly, but test
-it with `hub db doctor` first. A dedicated driver adapter for either is a good upstream contribution:
+URL only in some setups; if yours does, `postgresql://` may work through `tico db` directly, but test
+it with `tico db doctor` first. A dedicated driver adapter for either is a good upstream contribution:
 add a `run_<kind>` next to the others in `clients/dbquery.py` with its own read-only session.

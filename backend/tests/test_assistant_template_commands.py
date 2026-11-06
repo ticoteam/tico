@@ -27,7 +27,7 @@ EXPECTED_TO_EXIST = [
     ("assistant", "change", "restore"),
     ("approval", "list"),  # chris/approval-list
 ]
-# Flags the template uses that land with track B (chris/assistant-acts-as-you): `hub assistant propose --for` names the
+# Flags the template uses that land with track B (chris/assistant-acts-as-you): `tico assistant propose --for` names the
 # person of a background run's card. Remove this once that branch is merged.
 EXPECTED_FLAGS = ["--for"]
 
@@ -136,7 +136,7 @@ def test_every_hub_command_in_the_template_parses():
         if expected_to_exist(argv):
             pending.append(where)  # lands with chris/assistant-tools
             continue
-        # A bare mention ("`hub task create`" in prose, two words) only has to name a real command: a missing argument is fine.
+        # A bare mention ("`tico task create`" in prose, two words) only has to name a real command: a missing argument is fine.
         bare = len(argv) <= 2
         for option in variants(argv):
             error = parse_error(option, parser)

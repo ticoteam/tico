@@ -13,11 +13,11 @@ minutes. Nothing is posted.
 
 ## Steps
 
-1. **Read where things stand.** `hub task show <id>`, then the inputs above. Note which answers were posted and
+1. **Read where things stand.** `tico task show <id>`, then the inputs above. Note which answers were posted and
    whether the asker replied.
 2. **Sweep the channels.** For each channel in `knowledge/channels.md`, list new questions and older ones with no
    team reply. For each: link, date, the question in one line, and the language and SDK version if given.
-3. **Prepare the answers.** For each open question, find the answer in the docs (`hub doc search`, `hub doc ask`) and
+3. **Prepare the answers.** For each open question, find the answer in the docs (`tico doc search`, `tico doc ask`) and
    in the code. Write the reply: the fix, one line of why, the doc link. Run any code using
    `skills/test-a-code-sample/SKILL.md`, and name the version. Check the reply against `knowledge/do-not-say.md`.
    A requested reply is posted only when the task asks for it, a Tool allows it and a person has turned mail sending
@@ -28,7 +28,7 @@ minutes. Nothing is posted.
 5. **Propose one sample.** The theme with the highest count that a working example would answer. One paragraph: what
    it shows, the language, the rough effort. Write it only when the requester asked for it, with
    `playbooks/write-a-sample.md`.
-6. **Write and hand over.** Write the report, `hub file publish` it, commit, then close the task.
+6. **Write and hand over.** Write the report, `tico file publish` it, commit, then close the task.
 
 ## Output
 
@@ -48,5 +48,5 @@ minutes. Nothing is posted.
 - Every question in the window is listed as answered in draft, waiting for an engineer, or unreadable.
 - Each code answer names an SDK version and a run date, or says "not run".
 - Every friction theme has two or more linked threads.
-- The report is published with `hub file publish`, and the task is closed with `hub task update <id> --status done
+- The report is published with `tico file publish`, and the task is closed with `tico task update <id> --status done
   --note`. The note gives the report path and the number of questions still waiting.

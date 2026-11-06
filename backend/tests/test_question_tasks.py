@@ -1,4 +1,4 @@
-"""Question tasks (backend/question_tasks.py, spec D8): `hub task question` files a task the person owns with the
+"""Question tasks (backend/question_tasks.py, spec D8): `tico task question` files a task the person owns with the
 question on its fields and no ask message; answering closes it and the bot hears it once."""
 
 import json
@@ -12,7 +12,7 @@ from backend.tests.test_mcp import call
 
 
 def _ask(api, token, question, **extra):
-    err, out = call(api, "hub_task_question", {"question": question, "on": "ana", **extra}, token=token)
+    err, out = call(api, "tico_task_question", {"question": question, "on": "ana", **extra}, token=token)
     assert not err, out
     return out
 
@@ -107,8 +107,8 @@ def test_with_no_task_to_file_under_it_stands_alone(api):
 
 def test_a_bot_never_files_a_question_task_for_another_bot(api):
     _, _, attempt = setup_attempt(api)
-    err, out = call(api, "hub_task_question", {"question": "Is the export done?", "on": "coo"}, token=attempt["token"])
-    assert err and "DM" in str(out) and "hub message send" in str(out), out
+    err, out = call(api, "tico_task_question", {"question": "Is the export done?", "on": "coo"}, token=attempt["token"])
+    assert err and "DM" in str(out) and "tico message send" in str(out), out
     assert not _read(api, "SELECT 1 FROM tasks WHERE title='Is the export done?'")
 
 

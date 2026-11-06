@@ -1876,7 +1876,7 @@ def install_files(app, store, auth, blobs, mutate):
 
     @app.post("/api/v2/files/imports", openapi_extra=upload_doc)
     async def imported(request: Request):
-        """Bytes the bot's computer copied from an S3 object (`hub file import`), with its `source`
+        """Bytes the bot's computer copied from an S3 object (`tico file import`), with its `source`
         (s3://bucket/key) and `etag`. A changed etag is a new version. Video and audio stream, as uploads do."""
         if raw_media(request, imported=True):
             return await files.publish_stream(
@@ -1933,7 +1933,7 @@ def install_files(app, store, auth, blobs, mutate):
         digest: str = "",
         by: str = "human",
     ):
-        """Whether this exact file version is approved (`hub file approved`): by file id and version (the current one
+        """Whether this exact file version is approved (`tico file approved`): by file id and version (the current one
         without), or by a path in the bot's checkout and the SHA-256 of its bytes now; `by` whose verdicts count."""
         from . import file_reviews
 
@@ -1953,7 +1953,7 @@ def install_files(app, store, auth, blobs, mutate):
 
     @app.post("/api/v2/file-reviews")
     def file_review(request: Request, body: M.FileReview):
-        """A verdict given directly (`hub file review`): a bot reviewing another bot's file, or a person."""
+        """A verdict given directly (`tico file review`): a bot reviewing another bot's file, or a person."""
         from . import file_reviews
 
         who = request.state.identity

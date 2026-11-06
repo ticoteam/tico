@@ -206,7 +206,7 @@ def test_bot_needs_send_access_and_grants_are_audited(api, hq):
     grant(api, ident)
     row = quote(api, token=token)
     assert row["acting_bot_id"] == ident
-    assert not call(api, "hub_letter_send", {"letter_id": row["id"]}, token=token)[0]
+    assert not call(api, "tico_letter_send", {"letter_id": row["id"]}, token=token)[0]
     approved = fetch(api, row)
     approve(api, approved)
     assert fetch(api, row)["status"] == "submitted"
@@ -336,7 +336,7 @@ def test_bot_quotes_an_uploaded_pdf_through_the_existing_library_path(api, hq):
     grant(api, ident)
     failed, uploaded = call(
         api,
-        "hub_file_publish",
+        "tico_file_publish",
         {
             "name": "letter.pdf",
             "content_base64": base64.b64encode(L.render("A letter uploaded by a bot")).decode(),
@@ -638,7 +638,7 @@ def test_truncated_four_page_pdf_always_asks_even_for_a_known_address(api, hq):
     assert not complete and "Court filing" not in sampled
     failed, uploaded = call(
         api,
-        "hub_file_publish",
+        "tico_file_publish",
         {"name": "letter.pdf", "content_base64": base64.b64encode(data).decode(), "scope": "bot"},
         token=token,
     )
@@ -682,7 +682,7 @@ def test_delegated_reader_needs_its_own_letter_permission_on_every_surface(api, 
     get(api, "letters/" + row["id"], delegated, expected=404)
     get(api, "approvals/" + row["approval_id"], delegated, expected=403)
     get(api, row["proof"].removeprefix("/api/v2/"), delegated, expected=403)
-    assert call(api, "hub_letter_list", {}, token=delegated)[1]["items"] == []
+    assert call(api, "tico_letter_list", {}, token=delegated)[1]["items"] == []
     with api.app.state.store.read() as c:
         source = c.execute("SELECT source_blob_id FROM letters WHERE id=?", (row["id"],)).fetchone()[0]
         who = api.app.state.auth.identity_for_actor(c, "human:ana")
@@ -758,7 +758,7 @@ def external_thread_letter(api, audience, *, explicit=False):
     )
     failed, uploaded = call(
         api,
-        "hub_file_publish",
+        "tico_file_publish",
         {
             "name": "letter.pdf",
             "scope": "bot",

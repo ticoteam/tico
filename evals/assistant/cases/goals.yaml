@@ -585,7 +585,7 @@
     - '^message send'
     - '^assistant send'
   reply: |
-    Sends ONE morning message to Dana with `hub assistant morning --for human:dana --body`: short, addressed to "you", with
+    Sends ONE morning message to Dana with `tico assistant morning --for human:dana --body`: short, addressed to "you", with
     at most three things only she can do, each linked, led by the red Harbor goal that nobody is on (her call on who takes
     it, with its goal linked and 42,000 against 120,000). The stalled spring campaign task is the campaigns bot's to move: at
     most one comment on it for that bot, and it is never asked of Dana. The run sends no second message, closes nothing and
@@ -631,7 +631,7 @@
     - '^message send'
   reply: |
     A quiet day: the only goal is green, nothing is stuck and nothing needs her. The run sends NO morning message to Dana (no
-    `hub assistant morning` at all), closes nothing and proposes nothing. Its final reply is a short run record saying
+    `tico assistant morning` at all), closes nothing and proposes nothing. Its final reply is a short run record saying
     nothing was sent for her.
 
 - id: goals-morning-409-no-retry

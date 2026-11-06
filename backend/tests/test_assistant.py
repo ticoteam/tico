@@ -526,21 +526,21 @@ def test_the_assistants_tools_cite_the_message_for_it(api):
         spend = H.approval_request(c, "bot:ops", "spend", {"amount": 500, "account": "card", "what": "Ads"}, mine)["id"]
     r, attempt = assistant_turn(api, "ben-test", "Close the launch task and decline the ad spend")
     turn = Turn(attempt["token"])
-    declined = hubtools.BY_NAME["hub_approval_decline"]["fn"](
+    declined = hubtools.BY_NAME["tico_approval_decline"]["fn"](
         turn, {"id": spend, "note": "Not now", "on_behalf_of": "turn"}
     )
     assert declined["decision"] == "declined" and declined["decided_by_id"] == "human:ben"
-    assert "hub_approval_decline" in {t["name"] for t in hubtools.listing(kind="assistant")}
+    assert "tico_approval_decline" in {t["name"] for t in hubtools.listing(kind="assistant")}
     assert api.put("/api/v2/access/rules", json={"assistant_direct": False}, headers=headers()).status_code == 200
     with pytest.raises(APIError) as refused:
-        hubtools.BY_NAME["hub_task_close"]["fn"](turn, {"id": launch["id"]})
+        hubtools.BY_NAME["tico_task_close"]["fn"](turn, {"id": launch["id"]})
     assert refused.value.code == "confirm_required"
     assert api.put("/api/v2/access/rules", json={"assistant_direct": True}, headers=headers()).status_code == 200
-    closed = hubtools.BY_NAME["hub_task_close"]["fn"](
+    closed = hubtools.BY_NAME["tico_task_close"]["fn"](
         turn, {"id": launch["id"], "note": "As you asked", "on_behalf_of": "turn"}
     )
     assert closed["task"]["status"] == "closed"
-    assert "hub_task_close" in {t["name"] for t in hubtools.listing(kind="assistant")}
+    assert "tico_task_close" in {t["name"] for t in hubtools.listing(kind="assistant")}
 
 
 def test_a_cited_message_must_be_the_persons_own_recent_words_in_their_assistant_chat(api):

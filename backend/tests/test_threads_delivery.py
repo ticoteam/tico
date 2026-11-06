@@ -622,9 +622,9 @@ def test_retention_is_set_from_the_cli_and_the_tool(monkeypatch):
             calls.append((path, body))
             return {}
 
-    hubtools.BY_NAME["hub_thread_update"]["fn"](Api(), {"thread": "t1", "retention_days": 30})
-    hubtools.BY_NAME["hub_thread_update"]["fn"](Api(), {"thread": "t1", "retention_days": None})
-    hubtools.BY_NAME["hub_thread_update"]["fn"](Api(), {"thread": "t1", "title": "Plan"})
+    hubtools.BY_NAME["tico_thread_update"]["fn"](Api(), {"thread": "t1", "retention_days": 30})
+    hubtools.BY_NAME["tico_thread_update"]["fn"](Api(), {"thread": "t1", "retention_days": None})
+    hubtools.BY_NAME["tico_thread_update"]["fn"](Api(), {"thread": "t1", "title": "Plan"})
     assert [body for _, body in calls] == [{"retention_days": 30}, {"retention_days": None}, {"title": "Plan"}]
 
     parser = hubcli.build_parser() if hasattr(hubcli, "build_parser") else hubcli.parser()

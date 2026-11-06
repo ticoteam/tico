@@ -7,11 +7,11 @@ description: Sort an IT request into a category and a priority (P1, P2 or P3) by
 When to use: on every new IT request, before you write a fix or prepare an access change.
 
 Steps:
-1. Read the request as the requester wrote it, then `hub task show <id>`. Note the date it was filed and anything they
+1. Read the request as the requester wrote it, then `tico task show <id>`. Note the date it was filed and anything they
    already tried.
 2. Pick one category: account and access, device, network, software, or security. If two fit, pick the one that stops
    the person more.
-3. Count who is stopped: one person, a small group, or the team. Ask one question with `hub task question "<question>" --on <person> --parent <id>` only when the
+3. Count who is stopped: one person, a small group, or the team. Ask one question with `tico task question "<question>" --on <person> --parent <id>` only when the
    answer would change the priority.
 4. Set the priority:
    - P1: many people stopped, a suspected compromise (a login they did not make, a link that asked for a password, a lost

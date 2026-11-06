@@ -254,7 +254,7 @@ use that queue too. Pending work survives restarts, and an uncertain delivery ne
 - Week one: all three bots read and draft only (sending Never). Ana reviews drafts in Gmail and on the tasks. Week
   two, if the drafts are good: Influencer at Ask first, so Ana approves each send in Tico. A message bot sends on its
   own only once a person who manages it sets On their own (Settings > Bots > <bot> > Email sending, or
-  `hub email policy --bot <slug>`; docs/mail.md); Ana can also just send the draft herself.
+  `tico email policy --bot <slug>`; docs/mail.md); Ana can also just send the draft herself.
 
 ## Build order (about three working days of bot time)
 

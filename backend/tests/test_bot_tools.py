@@ -230,7 +230,7 @@ def test_a_manager_registers_a_tool_and_botops_gets_the_exact_entry(api):
     assert made["yaml"] in body and "- service: posthog" in body and "env: POSTHOG_KEY" in body
     assert "can: [read]" in body and "project: '340585'" in body
     assert "bot.yaml" in body and "never commit it" in body
-    assert "hub bot check ops" in body and "publishes its own repository" in body
+    assert "tico bot check ops" in body and "publishes its own repository" in body
     assert "commit and push" not in body and "scripts/preflight.sh" not in body
     # It is visible, pending, until the computer reports the entry.
     page = tools_of(api)

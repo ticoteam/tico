@@ -13,7 +13,7 @@ The Assistant acts for its person with the same entries and classes as BotOps (`
 person's own words in their own chat (the turn cites their message, as a task action does) while the owner's rule
 "Assistant acts without asking" is on; otherwise it too is a Confirm card in their chat.
 
-`hub settings find|show|set` (clients/hubtools.py) read it here; `set` asks `plan` for the exact request and makes it
+`tico settings find|show|set` (clients/hubtools.py) read it here; `set` asks `plan` for the exact request and makes it
 with the requester's rights, so the route's own checks still decide. backend/tests/test_settings_catalog.py fails when a
 Settings card writes to a route no entry covers.
 
@@ -113,7 +113,7 @@ def entry(key):
             "not_found",
             "No setting "
             + repr(key)
-            + (": did you mean " + ", ".join(near) + "?" if near else "; find one with `hub settings find <words>`"),
+            + (": did you mean " + ", ".join(near) + "?" if near else "; find one with `tico settings find <words>`"),
             404,
         )
     return e
@@ -349,7 +349,7 @@ def refusal(e, base=""):
 
 def raw_refusal(c, auth, who, method, path, body=None, base=""):
     """For a person's own write that its route refused (403), as BotOps or the Assistant made it for them: the line
-    `hub settings` gives for that setting (`refusal`), as `{"fix", "link", "who_may"}`, when the request is one entry's
+    `tico settings` gives for that setting (`refusal`), as `{"fix", "link", "who_may"}`, when the request is one entry's
     (or its route is only entries with the same who), that who is not everyone, and the entry's own check refuses this
     person too (so a refusal for another reason keeps the route's words); else None."""
     from .route_renames import new_path
@@ -686,7 +686,7 @@ def install(app, store, auth, settings):
                     why += WHO[e.who] + f" changes it{where}, so no card can carry it; ask one of them to open " + link
                 raise Problem("person_only", why, 422, extra={"link": link, "who_may": who_text(e)})
             if mine:
-                raise Problem("may", f"You may change {e.name} yourself: set it (`hub settings set`)", 409)
+                raise Problem("may", f"You may change {e.name} yourself: set it (`tico settings set`)", 409)
             chosen = settings_asks.who_to_ask(c, auth, settings, who, e, target, body.to or "")
             asker = settings_asks._name(c, who.actor)
             card = plan(

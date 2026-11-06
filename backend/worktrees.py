@@ -108,7 +108,7 @@ def recovery_prompt(c, task, bot):
             command = 'setup' if detail.get('checkout_state') in ('setup_running', 'setup_failed') else 'add'
             notes.append(
                 f"{RETIRED}: {row['repo']}, branch {row['branch']}. Before code work, run "
-                f"`hub task worktree {command} {shlex.quote(row['repo'])} --task {task['id']}`. "
+                f"`tico task worktree {command} {shlex.quote(row['repo'])} --task {task['id']}`. "
                 "This brings back published work on your current computer. Work that was not pushed "
                 "stayed on the retired computer; do not ask a person to restore this checkout first."
             )
@@ -398,7 +398,7 @@ def expire_pending(c, row, detail):
     detail['pending_expired'] = reason
     if wait := waits.preparing(c, row['id']):
         waits._finish(c, wait, 'failed', reason)
-    retry = ('hub task worktree setup ' if checked_out(detail) else 'hub task worktree add ') + (row['repo'] or '')
+    retry = ('tico task worktree setup ' if checked_out(detail) else 'tico task worktree add ') + (row['repo'] or '')
     if row.get('bot_state', 'active') == 'active':
         H._wake(
             c,
@@ -1108,7 +1108,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                 if why := start_refusal(c, task):
                     raise Problem('worktree_start', why, 409)
                 # A folder already checked out keeps its phase and proof: the registered setup command
-                # (`hub task worktree setup`, the one the expiry names) resumes it in place. Only a checkout that
+                # (`tico task worktree setup`, the one the expiry names) resumes it in place. Only a checkout that
                 # never got that far is queued again.
                 for key in ('pending_expired', 'error'):
                     detail.pop(key, None)

@@ -13,4 +13,4 @@ Triggered by a task asking what a raise would do to ownership. Budget 15 minutes
 1. Read the inputs and write down anything missing.
 2. Build each variant with `skills/build-a-round-scenario/SKILL.md`.
 3. Hand over. Terms and decisions belong to the human and their lawyer.
-4. Publish the report with `hub file publish`, then `hub task update <id> --status done --note`.
+4. Publish the report with `tico file publish`, then `tico task update <id> --status done --note`.

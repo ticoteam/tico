@@ -42,7 +42,7 @@ def ask(api, botops, person, key, value, **more):
     """`person` asks BotOps for a setting they may not change, then says yes to asking someone who can (each yes its
     own words: the same message twice starts no second run)."""
     attempt = turn(api, botops, person=person + "-test", text=f"Yes, ask an admin ({next(_SAID)})")
-    err, got = mcp(api, "hub_settings_ask", {"key": key, "value": value, **more}, attempt["token"])
+    err, got = mcp(api, "tico_settings_ask", {"key": key, "value": value, **more}, attempt["token"])
     finish(api, botops, attempt)
     return err, got
 
@@ -53,7 +53,7 @@ def test_a_members_yes_to_asking_an_admin_gives_an_admin_one_request_with_a_card
     changes until his tap, which runs as him; the task is then done, and Cara is told in her chat with BotOps."""
     before = times(api)
     cara = turn(api, botops, person="cara-test", text="Release at 09:30")
-    err, refused = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30"}, cara["token"])
+    err, refused = mcp(api, "tico_settings_set", {"key": "release.times", "value": "09:30"}, cara["token"])
     finish(api, botops, cara)
     assert err and refused["error"] == "forbidden", refused
     assert "Only the owner or an admin changes" in refused["detail"], refused
@@ -183,7 +183,7 @@ def test_two_people_asking_for_the_same_change_never_share_one_request(api, boto
     assert len(told(api, "ben", first["id"])) == 1
     # Ana's own waiting card for the same change is hers: nobody's ask adopts it.
     ana = turn(api, botops, person="ana-test", text="Make bots wait 5 days")
-    err, own = mcp(api, "hub_settings_set", {"key": "team.rules.go_ahead_days", "value": 5}, ana["token"])
+    err, own = mcp(api, "tico_settings_set", {"key": "team.rules.go_ahead_days", "value": 5}, ana["token"])
     finish(api, botops, ana)
     assert not err and own.get("needs_confirm"), own
     err, got = ask(api, botops, "ben", "team.rules.go_ahead_days", 5)
@@ -252,7 +252,7 @@ def test_a_bot_on_its_own_rights_cannot_ask_for_anyone(api, botops):
 
 def test_a_members_raw_refused_write_names_who_may_as_hub_settings_does(api, botops):
     """Build item 9. Through BotOps, a member's raw write to a setting that isn't theirs is refused in the catalogue's
-    words, as `hub settings set` gives them: a computer she doesn't operate gets no card her tap would fail ("a card,
+    words, as `tico settings set` gives them: a computer she doesn't operate gets no card her tap would fail ("a card,
     then refused"), and a trigger Ana made, whose route said only who may change it in its own words, names it too."""
     machine = runner(api)
     trigger = post(api, "triggers", {"name": "Ana's trigger"})["trigger"]
@@ -275,7 +275,7 @@ def test_a_members_raw_refused_write_names_who_may_as_hub_settings_does(api, bot
 
 def test_the_assistant_asks_an_admin_on_the_members_cited_yes_and_never_without_it(api, botops):
     """The same from Cara's Assistant: with her words cited, Ben gets the request and she is told in her Assistant
-    chat; without them, nothing is asked. The raw refusal of her release time names who may, as `hub settings` does."""
+    chat; without them, nothing is asked. The raw refusal of her release time names who may, as `tico settings` does."""
     from backend.tests.test_api import as_member
     from backend.tests.test_assistant import assistant_turn
     from backend.tests.test_settings_assistant import mcp as assistant_mcp
@@ -283,11 +283,11 @@ def test_the_assistant_asks_an_admin_on_the_members_cited_yes_and_never_without_
     as_member(api, "cara@acme.example")
     r, attempt = assistant_turn(api, "cara-test", "Yes, ask an admin to set the release to 09:30")
     token = attempt["token"]
-    err, got = assistant_mcp(api, "hub_settings_ask", {"key": "release.times", "value": "09:30"}, token)
+    err, got = assistant_mcp(api, "tico_settings_ask", {"key": "release.times", "value": "09:30"}, token)
     assert err and got["error"] == "on_behalf_of", got  # not cited: nothing asked
     assert not asks(api, "ben")
     err, got = assistant_mcp(
-        api, "hub_settings_ask", {"key": "release.times", "value": "09:30", "on_behalf_of": "turn"}, token
+        api, "tico_settings_ask", {"key": "release.times", "value": "09:30", "on_behalf_of": "turn"}, token
     )
     assert not err and got["asked"]["person"] == "human:ben", got
     [(task, card)] = asks(api, "ben")

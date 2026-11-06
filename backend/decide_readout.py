@@ -1,5 +1,5 @@
 """The weekly Decide readout: per question set, the window's calls, cost, model (Jev, Decide Medium or High, or the
-fallback) and answer spread, and the month's spend against the team's cap (`GET /api/v2/decisions/readout`, `hub decision readout`).
+fallback) and answer spread, and the month's spend against the team's cap (`GET /api/v2/decisions/readout`, `tico decision readout`).
 
 Plain code over the audit, no model: calls and models from the `judge.call` rows, cost from the `judge.spend` rows
 (`backend/judge.py` `metered` writes one after every paid call, so a batch or a nightly run counts each call it paid

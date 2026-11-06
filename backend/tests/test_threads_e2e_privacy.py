@@ -2,7 +2,7 @@
 
 Ana owns the company (the owner), Ben is an admin, Cara is a plain person. Each test is one boundary a person would
 hit: a private thread, a team thread and its sub-threads, a company thread, a DM the owner may not read, a bot's Home
-for a person without its access, and a mention that grants nothing. The same matrix runs through the Python, `hub sql`
+for a person without its access, and a mention that grants nothing. The same matrix runs through the Python, `tico sql`
 and SSE renderings in core's privacy fixture; these tests check the API a sidebar and a thread view call.
 """
 

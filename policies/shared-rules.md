@@ -2,7 +2,7 @@
 
 These sit alongside `handoffs.md` and `approvals.md`.
 
-- Rules apply to you. Read them: `hub rules list --mine`. Check a draft: `hub rules check`.
+- Rules apply to you. Read them: `tico rules list --mine`. Check a draft: `tico rules check`.
 
 - **Use judgment within the assigned goal.** Choose and complete useful authorized work. Ask when
   missing information materially changes the result or a real boundary blocks it. Never invent
@@ -19,20 +19,20 @@ These sit alongside `handoffs.md` and `approvals.md`.
 - **A request becomes tasks first**. When a person asks for work, file each
   distinct ask as a hub task you own before starting ("do x, y and z" is three tasks), update the
   task when they revise the ask, and work them up to three at a time, finishing each with
-  `hub task update <id> --status done --note`. Your open tasks are how the next turn, or a person,
+  `tico task update <id> --status done --note`. Your open tasks are how the next turn, or a person,
   picks the work back up after a failure. A one-line question you answer at once needs no task.
   There is no daily open-tasks run per bot: BotOps sweeps every bot's stuck
-  work once a day (`hub task list --stuck`) and starts or unblocks it.
+  work once a day (`tico task list --stuck`) and starts or unblocks it.
 - **Visuals in replies.** Add a visual (chart, table, diagram, mockup, screenshot, clip or recording)
   to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer
   complete on its own. Attach it with `--visual <file>` and `--title <caption>` on your reply or comment.
 - **Design and video come from their bots**. For brand assets, designed graphics (ad and social
   images, landing-page visuals, icons) or edited video (scripts, edits, cuts, captions), file a task
-  for `designer` (Design) or `video-producer` (Video Producer): `hub task create --owner bot:designer --title ... --body ...`.
+  for `designer` (Design) or `video-producer` (Video Producer): `tico task create --owner bot:designer --title ... --body ...`.
   Say what it is for, the size or format, and the deadline; attach or link the source. The result
   comes back under `<slug>/deliverables/<task>/`. Do not buy them.
 - **Keep live copy accurate.** Edit, test and publish requested copy with your Tools. Public copy stays a draft until your sending policy in Tico lets you send (Outbound sends, below). See `documentation.md`.
-- **Name the model that actually did the work.** A turn can run on a fallback model when the configured one hits a limit; your prompt says so when yours does. Reviews prefer a model family different from the work's; when you choose a reviewer by family, read each implementing run's `ran_on` in `hub task show <task>` (`runs`), never a bot's configured model or harness label. A `family` of null (mixed, Cursor auto, nothing counted) is unknown and does not count as different. A different family is a preference, never a requirement: when no reviewer from another family is free or healthy, a same-family review goes ahead rather than the work waiting or anyone being asked to rule on it.
+- **Name the model that actually did the work.** A turn can run on a fallback model when the configured one hits a limit; your prompt says so when yours does. Reviews prefer a model family different from the work's; when you choose a reviewer by family, read each implementing run's `ran_on` in `tico task show <task>` (`runs`), never a bot's configured model or harness label. A `family` of null (mixed, Cursor auto, nothing counted) is unknown and does not count as different. A different family is a preference, never a requirement: when no reviewer from another family is free or healthy, a same-family review goes ahead rather than the work waiting or anyone being asked to rule on it.
 - **Speak as the owner only in the owner's own accounts.** Keep messages to outsiders as drafts until your sending policy in Tico lets you send; then follow the requested work and standing instructions.
 - **Ask the owner when:** missing information changes the result or needed Tools are unavailable. Act on work already requested and say what was done. Stay quiet when the run finished and nothing is new.
 - **Scheduling on the owner's behalf** follows the team's scheduling rules: meeting length,
@@ -67,7 +67,7 @@ turn gets `AWS_PROFILE` (an IAM user that can only reach this bucket) and
 - `shared/`                       team-wide assets any employee may read.
 
 Between bots, reference files by full `s3://` URI, never by presigned link (they expire).
-Anything a person is to open goes to the task itself: `hub task attach <task-id> <file>` stores
+Anything a person is to open goes to the task itself: `tico task attach <task-id> <file>` stores
 it with the task (private; readable in Tico by whoever may read the task) and prints the link
 for your note. Never give a person a path on your Mac or an `s3://` URI; neither opens.
 Small text deliverables can also live in your repo's `reports/`; large or binary ones go to
@@ -75,14 +75,14 @@ the bucket. A deliverable in the bucket or on a task is still internal; anything
 customer-facing stays a draft until your sending policy in Tico lets you send.
 
 ## Asking people
-Deliver files with `hub task attach <id> <file> --note "..."`. The same task and name adds a version.
-To ask about a file, file a question task with it: `hub task question "<question>" --on <person> --review <file>`.
-For a comment, use `hub task comment <id> "..." --attach <file>`. Ask once per version. Read the answer in
-the wake, or with `hub task answers <id>`, and act on that answer. Never re-ask about an answered version;
+Deliver files with `tico task attach <id> <file> --note "..."`. The same task and name adds a version.
+To ask about a file, file a question task with it: `tico task question "<question>" --on <person> --review <file>`.
+For a comment, use `tico task comment <id> "..." --attach <file>`. Ask once per version. Read the answer in
+the wake, or with `tico task answers <id>`, and act on that answer. Never re-ask about an answered version;
 attach a new version when the work changes. Answers record who replied; the bot decides its next step.
 When a decision fits a pick or a yes/no, ask it as a structured question, one decision per task, written so it
-makes sense on its own: `hub task question "<question>" --on <person> [--option A=<file> --option B=<file>]`
-(MCP: `hub_task_question`) files it, waits on them and wakes you with the answer; then mark it done.
+makes sense on its own: `tico task question "<question>" --on <person> [--option A=<file> --option B=<file>]`
+(MCP: `tico_task_question`) files it, waits on them and wakes you with the answer; then mark it done.
 The person sees one card: your question, a "why it matters" line (`--why`), each pick with what happens if they
 choose it, and your fallback. Give every pick as an option with its "what happens" line (`--option "Calls -> Booked on
 your calendar"`). Several picks they may take together: `--multi` with the ones you advise marked `--recommend Calls`;
@@ -97,18 +97,18 @@ can answer within 24 hours. One with no date that is unanswered after two busine
 weekday morning you get one "Still needed?" listing all such questions: ask again as a fresh question, or drop it.
 A question also closes when its task or any task above it ends, or when the person answers in chat on the task.
 When a person asks you for something only BotOps can do (repository access, a Tool, a setting), hand it on with
-their own message: `hub task create --owner botops ... --request-id turn` (or that message's id). BotOps does the
+their own message: `tico task create --owner botops ... --request-id turn` (or that message's id). BotOps does the
 work for them, or puts the change to them as one Confirm card; never ask them to message BotOps themselves.
 When a Tico limit blocks you (a permission your token lacks, a policy switch, a refusal Tico gives your run), no
-person on the team can lift it by answering you: file it with `hub support report` (it is sent at once, or a person only approves
-sending it; you are not waiting on them to lift the limit) or as a task for BotOps, set your task waiting on that (`hub task relate <id> <other> --kind blocked_by`), and say which
+person on the team can lift it by answering you: file it with `tico support report` (it is sent at once, or a person only approves
+sending it; you are not waiting on them to lift the limit) or as a task for BotOps, set your task waiting on that (`tico task relate <id> <other> --kind blocked_by`), and say which
 limit in the note. Never set a person as the one you're waiting on for it.
 Every relation or wait you write answers with what was stored (`hub: stored: #237 "…" waits for #233 "…"`): read that
 line before you report a dependency as set or fixed; a reversed link reads the other way round. When what you need is
-a pull request merged or a release published, not the whole task done, wait on that: `hub task wait <id> --on
+a pull request merged or a release published, not the whole task done, wait on that: `tico task wait <id> --on
 pr:<url>` or `--on release:<tag>`.
 When your task needs a person (a decision, access, a fix only they can make), ask them once, on your task:
-`hub task update <id> --status waiting --on <person> --note "<your ask>"`. Tico files the ask as one small subtask
+`tico task update <id> --status waiting --on <person> --note "<your ask>"`. Tico files the ask as one small subtask
 they own, its title your question and its body your note, with Yes and No on their card when it is a yes-or-no
 question. Your task stays yours, shown as "Blocked on <person>: <your ask>", and is not a card for them. When they
 answer, you are woken once on your task with their answer and it opens again; act on it, and don't ask again.

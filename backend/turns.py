@@ -109,12 +109,15 @@ def build_steps(rows):
     return steps[:STEP_LIMIT]
 
 
-# A shell call's events name the program it runs (the runner's summary: `npm`, or `hub task close`), never its
+# A shell call's events name the program it runs (the runner's summary: `npm`, or `tico task close`), never its
 # arguments. These tool names are shells.
 SHELL_TOOLS = {"bash", "shell"}
 # The words a shell line may start with before its work (`cd web && npm test`, `export X=1 && npm test`). The runner
 # names the work past them; a summary stored by an older runner may still start with one.
 SETUP_WORDS = {"cd", "source", ".", "export", "env"}
+# The teamwork CLI's program word: `tico` now, `hub` for the release that forwards it (a stored or running bot may
+# still say `hub`). `tico-computer` is a different program and is not one of these.
+HUB_PROGRAMS = ("tico", "hub")
 # The programs a shell call may be labelled with on its own. The runner sends a shell line's first program (or `hub` and
 # its command path); a summary of any other shape, from a current or an older runner, is never shown.
 SHELL_PROGRAMS = {
@@ -207,14 +210,14 @@ HUB_PHRASES = {
 
 def hub_words(text):
     """A hub call's CLI words, lowercased and split on anything but letters and digits, from a shell summary
-    (`hub approval read-back`) or an MCP tool name (`mcp__hub__hub_approval_read_back`). None for any other tool."""
+    (`tico approval read-back`) or an MCP tool name (`mcp__tico__tico_approval_read_back`). None for any other tool."""
     words = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split()
     if words[:1] == ["mcp"]:
         words = words[1:]
-    if words[:1] != ["hub"]:
+    if words[:2] == ["tico", "computer"] or not words or words[0] not in HUB_PROGRAMS:
         return None
     words = words[1:]
-    if words[:1] == ["hub"]:  # an MCP tool named hub_<command>
+    if words[:1] and words[0] in HUB_PROGRAMS:  # an MCP tool named tico_<command> (or hub_<command>)
         words = words[1:]
     return words
 
@@ -244,7 +247,7 @@ def strip_setup(words):
         rest = words[1:]
         if words[0] in ("cd", "source", "."):
             # Its one argument (a directory or a file) is skipped unless it is the work itself: `cd npm` is npm.
-            if len(rest) > 1 and rest[0] != "hub" and rest[0] not in SHELL_PROGRAMS:
+            if len(rest) > 1 and rest[0] not in HUB_PROGRAMS and rest[0] not in SHELL_PROGRAMS:
                 rest = rest[1:]
         else:
             while rest and "=" in rest[0]:
@@ -257,11 +260,11 @@ def strip_setup(words):
 
 def shell_label(summary):
     """A shell call's label from its summary, or None when the summary is neither a hub command nor one program from
-    SHELL_PROGRAMS. A setup prefix (`cd web &&`) is skipped first, so `cd web && hub task list` reads as the hub command.
+    SHELL_PROGRAMS. A setup prefix (`cd web &&`) is skipped first, so `cd web && tico task list` reads as the hub command.
     A hub command's summary is `hub` and its command path (the runner checks the path against the CLI's command list):
     its phrase when it has one, else just `Ran hub`, since an old stored summary can hold argument words."""
     words = strip_setup(summary.split())
-    if words[:1] == ["hub"]:
+    if words[:1] and words[0] in HUB_PROGRAMS:
         phrase = hub_phrase(hub_words(" ".join(words)) or [])
         if phrase:
             return phrase

@@ -66,7 +66,7 @@
  "goal strategy-bot-decide": "ValueError: changes is a JSON list of changes: Expecting value: line 1 column 1 ",
  "goal strategy-bot-level3-offer": "forbidden",
  "goal strategy-bot-merge": "validation",
- "group update": "ValueError: Name the new group, or say which group to change: hub group update <",
+ "group update": "ValueError: Name the new group, or say which group to change: tico group update <",
  "growth channel update": "not_found",
  "growth cohort set": "validation",
  "inbound audience": "unknown_inbox",

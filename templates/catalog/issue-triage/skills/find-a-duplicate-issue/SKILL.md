@@ -17,7 +17,7 @@ Steps:
    related, not a duplicate.
 4. Compare on three things: the same trigger (the same action or input), the same visible result, and the same area. All
    three match: a duplicate candidate. Two of three: related.
-5. Score the match with the decision model the playbook names (`hub decision ask`). At 0.7 or above, propose "duplicate of
+5. Score the match with the decision model the playbook names (`tico decision ask`). At 0.7 or above, propose "duplicate of
    #n" and quote the sentence from each issue that shows the match. Between 0.5 and 0.7, propose "possibly related" and
    ask the requester. Below 0.5, propose nothing.
 6. Choose the canonical issue: the older one that already has the steps, the logs or the most discussion. Never propose

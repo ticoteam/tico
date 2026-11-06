@@ -178,7 +178,7 @@ def register(
     def waiting_for_permission(bot, wait):
         """The refusal for a bot whose repository could not be created because the GitHub App may not create
         repositories (backend/repo_waits.py): it points at the owner's Needs-you task with the two fixes, not at
-        `hub bot repo-create`, which would only hit the same missing permission. No placement is kept."""
+        `tico bot repo-create`, which would only hit the same missing permission. No placement is kept."""
         task_id = str(wait.get("task_id") or "")
         url = f"{settings.public_url}/#/task/{task_id}" if task_id and settings.public_url else ""
         where = (
@@ -191,7 +191,7 @@ def register(
             f"{bot} is waiting for its GitHub repository"
             + (f" {wait['repository']}" if wait.get("repository") else "")
             + f": {where}. "
-            f"Once either fix is in, Tico creates or finds it; then run `hub bot go-live {bot}` again",
+            f"Once either fix is in, Tico creates or finds it; then run `tico bot go-live {bot}` again",
             409,
             extra={"task_id": task_id, **({"task_url": url} if url else {})},
         )
@@ -260,7 +260,7 @@ def register(
                     elif missing is not None:
                         raise Problem(
                             "repository_missing",
-                            missing.detail.rstrip(".") + f". Then run `hub bot go-live {row['slug']}` again",
+                            missing.detail.rstrip(".") + f". Then run `tico bot go-live {row['slug']}` again",
                             409,
                         )
                     elif bot_repository(c, settings, bot):
@@ -270,7 +270,7 @@ def register(
                         raise Problem(
                             "repository_missing",
                             "It has no repository yet. Ask BotOps to build it "
-                            f"(`hub bot repo-create {row['slug']}`), then run `hub bot go-live {row['slug']}` again",
+                            f"(`tico bot repo-create {row['slug']}`), then run `tico bot go-live {row['slug']}` again",
                             409,
                         )
             done = finish_go_live(c, who, bot, body.setup)

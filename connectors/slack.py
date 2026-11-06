@@ -15,7 +15,7 @@ One Slack app serves the whole company. The token is `SLACK_BOT_TOKEN` in the ru
 
 Posting is gated in code, not in prompts:
   - the employee's bot.yaml (older: emp-<slug>/employee.yaml) must declare tools: service slack with `post` in `can`
-  - the channel must be on the company's Slack channel list (Settings > Tools > Slack, `hub slack channel list`)
+  - the channel must be on the company's Slack channel list (Settings > Tools > Slack, `tico slack channel list`)
     and that entry must allow bots to post (it does unless an owner or admin turned it off)
   - externally shared (Slack Connect) channels are refused: posting there is an outbound send
   - text over 4000 characters is refused
@@ -487,7 +487,7 @@ def bot_from_env():
 def hub_bot():
     """The bot this run's HUB_TOKEN belongs to, as the hub says (GET /api/v2/me), kept for the process. A bot's turn
     token or agent credential names its bot with or without HUB_BOT. "" for a person's token, for a token that is not
-    a bot's (a runner, a service key), and for a run with no hub credential (a person's terminal, Slack token only).
+    a bot's (a runner, a service key), and for a run with no tico credential (a person's terminal, Slack token only).
     A run with a hub credential that the hub cannot identify is refused: nothing can say whose scope applies."""
     if "hub_bot" in _CACHE:
         return _CACHE["hub_bot"]
@@ -548,7 +548,7 @@ def check_can_post(manifest, slug):
 
 def check_not_onboarding(slug):
     """An onboarding bot sends nothing to anyone but its manager until a person above it marks onboarding complete
-    (backend/lifecycle.py), so it neither posts nor DMs. A run that cannot ask Tico for its stage (no hub credential,
+    (backend/lifecycle.py), so it neither posts nor DMs. A run that cannot ask Tico for its stage (no tico credential,
     Tico unreachable) cannot show it is past onboarding, so it sends nothing either."""
     row = HUB_GET(f"bots/{slug}")
     stage = row.get("stage") if isinstance(row, dict) else None
@@ -746,7 +746,7 @@ def check_inbox_scope(manifest, slug):
 
 
 def _default_hub_get(path):
-    """One GET to the hub as this run, or None when the run has no hub credential or the hub cannot be reached.
+    """One GET to the hub as this run, or None when the run has no tico credential or the hub cannot be reached.
     Tests replace `HUB_GET`."""
     url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN")
     if not url or not token:
@@ -763,7 +763,7 @@ def _default_hub_get(path):
 
 HUB_GET = _default_hub_get
 CHANNELS_HINT = (
-    "The list is in Tico: Settings > Tools > Slack, or `hub slack channel list`. A bot run reads it from "
+    "The list is in Tico: Settings > Tools > Slack, or `tico slack channel list`. A bot run reads it from "
     "the hub with HUB_API_URL and HUB_TOKEN."
 )
 
@@ -824,7 +824,7 @@ def find_registry_channel(channels, ref):
         f"channel {ref!r} is not on the company's Slack channel list.",
         "Bots use only the channels listed in Settings > Tools > Slack. Adding one is an owner's or "
         "admin's call: ask BotOps, or an owner or admin runs "
-        "`hub slack channel add <channel> --reader <bot>`.",
+        "`tico slack channel add <channel> --reader <bot>`.",
     )
 
 

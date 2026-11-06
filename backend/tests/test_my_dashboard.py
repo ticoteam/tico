@@ -173,7 +173,7 @@ def test_home_builds_thread_attention_once_for_both_cards_and_rechecks_on_the_ne
 
 
 def test_its_writes_leave_events_that_name_nothing(api):
-    """The event log is the company's (the owner reads it whole, `hub sql` included): a write to My dashboard leaves
+    """The event log is the company's (the owner reads it whole, `tico sql` included): a write to My dashboard leaves
     its event and names no card, page, template or place, before or after the card is gone."""
     from backend.tests.test_api import headers
 

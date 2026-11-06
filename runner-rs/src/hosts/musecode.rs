@@ -1520,10 +1520,10 @@ mod tests {
         assert_eq!(
             tool_started(
                 "task.lifecycle.proposed",
-                &proposed("tool.mcp__hub__hub_task_list")
+                &proposed("tool.mcp__tico__tico_task_list")
             )
             .as_deref(),
-            Some("mcp__hub__hub_task_list")
+            Some("mcp__tico__tico_task_list")
         );
         assert_eq!(
             tool_started("task.lifecycle.proposed", &proposed("model.meta.response")),

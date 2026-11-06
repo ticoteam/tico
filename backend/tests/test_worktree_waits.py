@@ -321,7 +321,7 @@ def test_a_failed_preparation_wakes_once_with_the_reason(prepared):
         assert beat(api, [report]) == []
         waits.tick(api.app_state.store, 'Acme', force=True)
     woke = wakes(api, tid)
-    assert len(woke) == 1 and 'setup failed (exit 7)' in woke[0]['body'] and 'hub task worktree' in woke[0]['body']
+    assert len(woke) == 1 and 'setup failed (exit 7)' in woke[0]['body'] and 'tico task worktree' in woke[0]['body']
     assert rows(api, 'SELECT state FROM worktree_waits')[0]['state'] == 'failed'
 
 

@@ -476,7 +476,7 @@ def test_a_vault_that_cannot_be_opened_refuses_a_ticket_before_anything_reaches_
 
 
 # ----------------------------------------------------------------------------- a bot's report, approved by a person
-REPORT = "hub task update failed since 0.2.17 with: refused (version). Tried a fresh read; same error."
+REPORT = "tico task update failed since 0.2.17 with: refused (version). Tried a fresh read; same error."
 
 
 def as_bot(api, slug="coo"):
@@ -593,7 +593,7 @@ def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_appro
         row = c.execute("SELECT payload FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0]
         c.execute(
             "UPDATE approvals SET payload=? WHERE id=?",
-            (row.replace("hub task update", "hub task delete"), approval["id"]),
+            (row.replace("tico task update", "tico task delete"), approval["id"]),
         )
     r = send(api, bot, approval["id"])
     assert r.status_code == 409 and "hash" in r.json()["error"]["detail"]
@@ -671,19 +671,19 @@ def test_a_bot_reports_and_sends_over_mcp(environment, hq):  # noqa: F811  (the 
     drafts_only(api)
     as_bot(api)
     tools = {t["name"] for t in rpc(api, "tools/list", token="bot-coo")["result"]["tools"]}
-    assert {"hub_support_report", "hub_support_send"} <= tools
+    assert {"tico_support_report", "tico_support_send"} <= tools
     err, drafted = call(
-        api, "hub_support_report", {"message": "  " + REPORT.replace(". ", ".\r\n") + "\n"}, token="bot-coo"
+        api, "tico_support_report", {"message": "  " + REPORT.replace(". ", ".\r\n") + "\n"}, token="bot-coo"
     )
     assert not err, drafted
     assert "approve" in drafted["next"] and hq.seen == []
-    err, early = call(api, "hub_support_send", {"approval": drafted["approval"]}, token="bot-coo")
+    err, early = call(api, "tico_support_send", {"approval": drafted["approval"]}, token="bot-coo")
     assert err and hq.seen == []
     decide(api, drafted["approval"])
-    err, sent = call(api, "hub_support_send", {"approval": drafted["approval"]}, token="bot-coo")
+    err, sent = call(api, "tico_support_send", {"approval": drafted["approval"]}, token="bot-coo")
     assert not err, sent
     assert json.loads(hq.seen[-1].content)["message"] == REPORT.replace(". ", ".\n")  # what the person read
-    err, again = call(api, "hub_support_send", {"approval": drafted["approval"]}, token="bot-coo")
+    err, again = call(api, "tico_support_send", {"approval": drafted["approval"]}, token="bot-coo")
     assert not err and again["ticket"]["id"] == sent["ticket"]["id"] and len(hq.tickets) == 1
 
 
@@ -895,7 +895,7 @@ def test_each_filing_says_its_source_and_an_older_hq_still_gets_the_ticket(envir
 
 
 def test_the_botops_tool_says_botops_and_keeps_its_name_in_the_message(monkeypatch):
-    """Criterion 3: `hub support file` sends `source: botops` beside the `[BotOps] ` prefix older HQs read."""
+    """Criterion 3: `tico support file` sends `source: botops` beside the `[BotOps] ` prefix older HQs read."""
     from clients import hubtools
 
     calls = []

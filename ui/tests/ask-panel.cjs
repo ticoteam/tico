@@ -339,7 +339,7 @@ const words = text => text.trim().split(/\s+/).length;
     // Once it replies, the reply instead.
     state = {messages: [msg('w1', 'human:ben', 'Help me clear out my task list', ago(5))], sent: [], read: [], decided: [], answers: [], tickets: [], needs: [],
       execution: {job_id: 'j1', message_id: 'w1', bot_id: 'coo', state: 'running', label: 'Working', text: '', started_at: ago(4.3), parts: [
-        {kind: 'tool', text: 'Ran hub hub task list', at: ago(4)}, {kind: 'tool', text: 'Ran hub task bulk close', at: ago(1)}]}};
+        {kind: 'tool', text: 'Ran hub tico task list', at: ago(4)}, {kind: 'tool', text: 'Ran tico task bulk close', at: ago(1)}]}};
     ({page, errors} = await open(browser, {width: 1280, height: 900}, state));
     await page.locator('#ask-row').click();
     const working = page.locator('#ask-panel [data-ask-working]');
@@ -353,7 +353,7 @@ const words = text => text.trim().split(/\s+/).length;
     assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a redraw of the same chat leaves the thread be');
     assert.match(await working.innerText(), /^Working · 2\ds · Closing tasks$/);
     // A new step on the same chat: the thread stays too, the line names the step.
-    state.execution = {...state.execution, parts: [...state.execution.parts, {kind: 'tool', text: 'Ran hub task list', at: ago(0)}]};
+    state.execution = {...state.execution, parts: [...state.execution.parts, {kind: 'tool', text: 'Ran tico task list', at: ago(0)}]};
     await page.evaluate(() => ASK.refresh());
     assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a new step leaves the thread be');
     assert.match(await working.innerText(), /^Working · \d+s · Reading tasks$/);

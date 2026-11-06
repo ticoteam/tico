@@ -7,16 +7,16 @@ Inputs: the task, open tasks, the calendar, the Operations bots' published repor
 
 Done when: the five answers are in `state.md` under `## Answers`; `knowledge/duties.md`, `knowledge/vendors.md` and
 `knowledge/rhythm.md` exist, with a row for every duty ("needs an owner" where none was given); the first page is
-attached and labelled; the routine is checked and logged in `memory/decisions.md`; and `hub bot setup-done` has run.
+attached and labelled; the routine is checked and logged in `memory/decisions.md`; and `tico bot setup-done` has run.
 
 ---
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub task list --status open --status doing --status waiting
-    hub calendar list
-    hub doc search "renewal"
+    tico task show <id>
+    tico task list --status open --status doing --status waiting
+    tico calendar list
+    tico doc search "renewal"
 
 Check what you can already reach: the calendar, open tasks, the Operations bots' published reports, and a
 vendor mailbox if one is in your access. Do not ask what these already say. If you cannot read something,
@@ -50,17 +50,17 @@ task labelled "First draft, not yet reviewed". Draft one vendor follow-up if a t
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send you this page every Monday at 08:30, and a human sends anything to a vendor." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will send you this page every Monday at 08:30, and a human sends anything to a vendor." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

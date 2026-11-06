@@ -7,7 +7,7 @@ description: Choose and word the month's highlights (three to five) and lowlight
 When to use: after the metrics are checked and before the update is written. The story is what changed the numbers, in the team's own words, sourced.
 
 Steps:
-1. List the month's wins and misses from dated sources: `hub update list --kind weekly`, meeting notes, goal check-ins. Each candidate has a date and a source.
+1. List the month's wins and misses from dated sources: `tico update list --kind weekly`, meeting notes, goal check-ins. Each candidate has a date and a source.
 2. Remove anything on `knowledge/exclusions.md`. Keep a customer as "a studio chain" if the exclusion list says so.
 3. Rank by effect on the numbers or on the plan, not by how good it felt. Pick three to five highlights and one to three lowlights.
 4. Write each highlight as one sentence: what happened, the number it moved, and the date. Example form: "Signed the first three-location studio chain (2026-08-14)."

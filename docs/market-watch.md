@@ -16,7 +16,7 @@ changes. It is for the pages where a change is news: pricing, changelog, careers
   bet that cites the entity, or whose thesis wrong-if watches it, trips the fit check like any other market change
   ([Strategy](strategy.md#the-fit-check)). A rejected insight trips nothing.
 - Lines that are only numbers, dates or a copyright notice are ignored, so a changing year files nothing.
-- Pages are read on the server through the same guard as `hub doc fetch`: public addresses only, every redirect checked,
+- Pages are read on the server through the same guard as `tico doc fetch`: public addresses only, every redirect checked,
   5 MB and 20 seconds. A page that cannot be read is marked `error` or `blocked` on its watch; the others still run.
 
 Watches are never deleted. Stopping one ends it, and the same page can be watched again.
@@ -37,13 +37,13 @@ watches for each core competitor while it sets up the first map ([playbook](../t
 
 | Command | Does |
 |---|---|
-| `hub market watch add <entity id> <url> [--kind pricing]` | Watch a page of a market entity |
-| `hub market watch list [--entity <id>]` | The watched pages, with when each was checked and changed |
-| `hub market watch stop <id>` | Stop watching a page |
-| `hub market watch check` | Read the watched pages now, in the background |
+| `tico market watch add <entity id> <url> [--kind pricing]` | Watch a page of a market entity |
+| `tico market watch list [--entity <id>]` | The watched pages, with when each was checked and changed |
+| `tico market watch stop <id>` | Stop watching a page |
+| `tico market watch check` | Read the watched pages now, in the background |
 
-The same four are hub tools (`hub_market_watch_add`, `hub_market_watch_list`, `hub_market_watch_stop`,
-`hub_market_watch_check`).
+The same four are hub tools (`tico_market_watch_add`, `tico_market_watch_list`, `tico_market_watch_stop`,
+`tico_market_watch_check`).
 
 ## API
 

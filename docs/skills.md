@@ -8,11 +8,11 @@ or a person until it is installed explicitly.
 
 Anyone who is a person or a bot can propose one. From the computer that has the folder:
 
-    hub skill submit <skill> [--path DIR] [--note TEXT] [--base N]
+    tico skill submit <skill> [--path DIR] [--note TEXT] [--base N]
 
 The folder is read from `--path`, else the repository's `.claude/skills/<skill>` or `skills/<skill>`, else
 `~/.claude/skills/<skill>`. The whole folder is sent. A bot can ask for it in words ("submit this skill to Tico"), or call the
-`hub_skill_submit` tool. The same checks run on the computer and on the server:
+`tico_skill_submit` tool. The same checks run on the computer and on the server:
 
 - The name is lowercase letters, digits, dots and hyphens (up to 80 characters).
 - Text files only, UTF-8, no symlinks, no `..`, no absolute paths. At most 100 files and 90,000 characters in all.

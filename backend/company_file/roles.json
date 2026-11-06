@@ -1515,7 +1515,7 @@
    "department": "core",
    "lead": false,
    "core": true,
-   "summary": "Answers questions from the team's docs, for humans (Ask the Librarian on Docs) and for other bots and the Assistant (`hub doc ask`). It searches the internal docs, follows the linked docs (websites, Google Drive, Notion, GitHub) as far as it needs, cites every claim, says plainly when the docs do not say, and keeps a map of the docs up to date every day. When the owner gives it a website, a description or links on the Market page, it researches the market and builds the first market map, then keeps it current every day from what the team and other bots report.",
+   "summary": "Answers questions from the team's docs, for humans (Ask the Librarian on Docs) and for other bots and the Assistant (`tico doc ask`). It searches the internal docs, follows the linked docs (websites, Google Drive, Notion, GitHub) as far as it needs, cites every claim, says plainly when the docs do not say, and keeps a map of the docs up to date every day. When the owner gives it a website, a description or links on the Market page, it researches the market and builds the first market map, then keeps it current every day from what the team and other bots report.",
    "when": "Built-in: answers questions about the team from its docs, with a citation for every claim, and says plainly when the docs do not cover it.",
    "tags": [],
    "pains": [],

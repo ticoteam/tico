@@ -28,7 +28,7 @@ never:
   - "Open, investigate or conclude an employee relations case; a named human owns it"
 prerequisites:
   - tool: hub
-    why: "The roster and reporting lines (`hub team show`), goals (`hub goal list`) and review tasks are what packs and the cycle plan are built from."
+    why: "The roster and reporting lines (`tico team show`), goals (`tico goal list`) and review tasks are what packs and the cycle plan are built from."
     required: true
   - tool: docs
     why: "Optional. The review guidelines, rating scale and level expectations, read through the Librarian, anchor every pack and the calibration sheet."

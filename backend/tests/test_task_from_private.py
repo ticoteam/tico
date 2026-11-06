@@ -287,7 +287,7 @@ def test_outside_a_private_run_the_route_is_refused(api):
     "change,status,words",
     [
         ({"private": True}, 422, "A task from private work is company-visible: leave out --private"),
-        ({"owner": "human:cara"}, 403, "A task from private work is for a bot: ask a person with `hub task question`"),
+        ({"owner": "human:cara"}, 403, "A task from private work is for a bot: ask a person with `tico task question`"),
         (
             "company parent",
             403,

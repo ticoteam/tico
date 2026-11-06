@@ -2,7 +2,7 @@
 """Build the setup page's role list from the templates, and the copies Tico HQ serves suggestions from.
 
     backend/company_file/roles.json
-                          every role template the tico.team/setup page offers (`hub template list` less the helpers),
+                          every role template the tico.team/setup page offers (`tico template list` less the helpers),
                           with its summary and when to suggest it, for the setup page's draft engine
 
 With `--out DIR`, into DIR and nothing else (Tico HQ, in ticoteam/tico-services, has no templates; its sync job runs this
@@ -72,7 +72,7 @@ def _strings(value):
 
 
 def roles(documents):
-    """The setup page's role list: every card `hub template list` serves except the helpers, which sit outside the
+    """The setup page's role list: every card `tico template list` serves except the helpers, which sit outside the
     org chart. Built-in (`required`) cards are the `core` department and the assistant reads as "Assistant", as the
     page shows them. `tools` are the prerequisites besides hub; `recommend_when` leaves out `always`."""
     out = []

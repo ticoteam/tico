@@ -8,7 +8,7 @@ never send it and never sign it.
 
 ## 1. Confirm the final version
 
-    hub task show <id>
+    tico task show <id>
 
 The packet uses the exact version requested on the task: name the file and its date. Recheck any changed version against the requested terms; ask only if the intended version is unclear.
 
@@ -29,7 +29,7 @@ Put the packet on the task. A requested packet goes out with its file, recipient
 When the fully signed copy comes back on the task: check every signature block is complete and the dates are
 filled; list anything missing instead of filing. Then add a row to `knowledge/executed-index.md` (parties, kind,
 date signed, confidentiality period and its end date, where the file lives), commit, and
-`hub task update <id> --status done --note`.
+`tico task update <id> --status done --note`.
 
 ## Done when
 - The packet is saved in `reports/packets/`, published, and on the task, with the exact version named.

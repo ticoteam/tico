@@ -9,7 +9,7 @@ A webhook is one program posting a small message to another over HTTP. Tico does
 
 Incoming webhooks are a built-in row on Automations (**Incoming webhooks**), outgoing ones are on Tools (**Add tool → Outgoing webhook**,
 then a row each), and Through Tico Gateway is the **Webhooks** fold of the Tico Gateway card in Settings → Models. Everything there
-is also in `hub` and in the `hub_*` tools for bots and agents ([the table at the end](#the-commands)).
+is also in `hub` and in the `tico_*` tools for bots and agents ([the table at the end](#the-commands)).
 
 Step by step:
 [GitHub](webhooks-github.md), [Stripe](webhooks-stripe.md), [Zapier, Make and n8n](webhooks-zapier-make-n8n.md).
@@ -19,7 +19,7 @@ Step by step:
 Add a webhook on the Incoming tab, or:
 
 ```
-hub trigger create "GitHub issues" --id github
+tico trigger create "GitHub issues" --id github
 ```
 
 Tico shows the address once:
@@ -29,7 +29,7 @@ https://tico.example.com/api/v2/hooks/github/<secret>
 ```
 
 Give that address to the sender. It also accepts `POST /api/v2/hooks/github` with the header `Authorization: Bearer <secret>`. Tico
-keeps only a hash of the secret, so it cannot show the address again. **New secret** (`hub trigger rotate github`) makes a new
+keeps only a hash of the secret, so it cannot show the address again. **New secret** (`tico trigger rotate github`) makes a new
 address and stops the old one at once. A wrong id and a wrong secret get the same answer, 404.
 
 The word *trigger* in the CLI, the API and routines means the same thing as an incoming webhook.
@@ -49,7 +49,7 @@ The word *trigger* in the CLI, the API and routines means the same thing as an i
 
 By default anyone with the address can post. Turn on **Signing** and Tico checks every call, and refuses one that
 fails with 401 before anything starts. Tico makes a signing secret and shows it once, or you can paste the sender's own (at least
-16 characters). `hub trigger sign <id> --preset github` does the same; `--off` stops checking.
+16 characters). `tico trigger sign <id> --preset github` does the same; `--off` stops checking.
 
 Pick the preset that matches the sender:
 
@@ -75,7 +75,7 @@ Every call has a **type**, read from `type_from`: a header name (`X-GitHub-Event
 in the log, in the task (a `type:` line) and to rules.
 
 ```
-hub trigger update github --type-from /action
+tico trigger update github --type-from /action
 ```
 
 ### Limits and keeping
@@ -98,21 +98,21 @@ Under each webhook, **Recent calls** lists the last 50: accepted, refused (bad o
 again, with the delivery id and the type. Tico logs only calls to the right address, and at most 60 refusals an hour,
 so a stranger cannot fill the log.
 
-A refused call is listed under an id Tico made, which is its handle for `hub trigger delivery`. The sender's own id for it is
+A refused call is listed under an id Tico made, which is its handle for `tico trigger delivery`. The sender's own id for it is
 `sent_id`, and it stays out of the duplicate list, so the sender's next correctly signed try with that id is accepted. A refused
 call also shows its type, read from the header or pointer **type from** names even though the signature failed. Treat it as a
 label from a stranger.
 
 ```
-hub trigger deliveries github
-hub trigger delivery github <delivery>
+tico trigger deliveries github
+tico trigger delivery github <delivery>
 ```
 
 **View payload** shows one kept call. The body is whole. Headers that carry a credential show as `[redacted]`: `Authorization`,
 `Proxy-Authorization`, `Cookie`, `Set-Cookie` and any name with signature, token, secret, password, api-key or apikey in it.
 Other headers, such as `Idempotency-Key` and `Webhook-Id`, show as sent. A cookie is never kept.
 
-**Run again** (`hub trigger replay github <delivery>`) starts the routines and rules again for one kept call, as a new
+**Run again** (`tico trigger replay github <delivery>`) starts the routines and rules again for one kept call, as a new
 occurrence named `<delivery>:replay:<n>`. It does not count toward the hourly cap, and it is refused once the body has expired.
 A sender's own redelivery button usually reuses the same delivery id, which Tico treats as a duplicate for 30 days. Use Run
 again in Tico instead. Run again on a refused call is refused: use Recover below, which checks the call again under the current
@@ -124,7 +124,7 @@ A call refused for a bad signature is kept, body and headers, for the keep days 
 refusal was your mistake, such as a mistyped signing secret, fix the secret and run the refused calls again under it:
 
 ```
-hub trigger recover github --since 24
+tico trigger recover github --since 24
 ```
 
 `--since` is the hours to look back, 1 to 720 (24 by default). A call that passes now starts its routines and rules and keeps
@@ -140,7 +140,7 @@ The task or notice a bot gets holds the first 20,000 characters of the body, fen
 the bot did not write, not instructions. A longer body is read in parts:
 
 ```
-hub trigger delivery github <delivery> --part 2
+tico trigger delivery github <delivery> --part 2
 ```
 
 A bot may read a delivery only if it manages the webhook, a task made from the call is its own, or a notice from Tico naming the
@@ -161,7 +161,7 @@ person's rights, so a member can't change someone else's webhook through it. Del
 
 Two things listen to a webhook:
 
-- **An automation** with a Webhook trigger (Automations → New automation, or `hub automation create`; see
+- **An automation** with a Webhook trigger (Automations → New automation, or `tico automation create`; see
   [Routines](routines.md)). It runs on each call; `filters` on the trigger (such as `webhook.type`) keep it to some calls.
   Its steps read the call as `{{webhook.data}}`, `{{webhook.type}}` and `{{webhook.name}}`.
 - **A rule** on the event `webhook.received`, next.
@@ -173,7 +173,7 @@ made before Automations keep running from the **What wakes** automations, and th
 a call now, make an automation with a Webhook trigger, a filter on `webhook.type` and an action:
 
 ```
-hub automation create --file - <<'EOF'
+tico automation create --file - <<'EOF'
 {"name": "New GitHub issue", "owner": "bot:ops", "enabled": true,
  "trigger": {"type": "webhook", "id": "github",
              "filters": [{"field": "webhook.type", "op": "is", "value": "opened"}]},
@@ -188,7 +188,7 @@ call. A rule can match only on these two things, never on a field inside the bod
 **Then.** Four actions are available:
 
 - `wake_bot {bot, text}` leaves a notice in the bot's room and wakes it. The notice is your `text`, then the call's content
-  (fenced as data), then, when the body was cut, the line `The rest: hub trigger delivery ... --part 2`.
+  (fenced as data), then, when the body was cut, the line `The rest: tico trigger delivery ... --part 2`.
 - `send_webhook {webhook, type, data}` posts an event to one of your [outgoing endpoints](#outgoing). `type` should be a
   `custom.*` name.
 - `forward {webhook}` sends the call itself on to one of your outgoing endpoints: the body as it came is the event's `data`
@@ -221,7 +221,7 @@ an endpoint to send to). An *ignore* with no bot named stops the rules after it.
 sender posts it again.
 
 **What `rules` counts.** The answer to the sender (`rules`) and the call's row in the log count the rules whose action worked. A
-rule that failed is not counted, but it is kept: `hub trigger delivery <id> <delivery>` lists each rule's result as `rule_results`,
+rule that failed is not counted, but it is kept: `tico trigger delivery <id> <delivery>` lists each rule's result as `rule_results`,
 with `ok: false` and the reason (`cpo is planned`). A wake rule, or a `wake_bot` action, reaches a bot that exists and has been
 started. A bot that is still *planned* is not reached; a paused or quarantined bot keeps the message until it is back.
 
@@ -243,11 +243,11 @@ An address through Tico Gateway fixes that. It is a second address at Tico HQ th
 collects it from there. Make one from the **Through Tico Gateway** tab, or:
 
 ```
-hub trigger relay create github
+tico trigger relay create github
 ```
 
 It looks like `https://hooks.tico.dev/hr_<16 characters>/<secret>`, and like the first address it is shown once.
-`hub trigger relay rotate github` replaces it and `hub trigger relay delete github` removes it. The webhook's own address keeps
+`tico trigger relay rotate github` replaces it and `tico trigger relay delete github` removes it. The webhook's own address keeps
 working beside it. It needs the Tico Gateway connected in Settings → Models ([Tico AI Gateway](ai-gateway.md)).
 
 - Your server collects the calls every 15 seconds and treats each as if the sender had posted it here. Signature checks,
@@ -257,10 +257,10 @@ working beside it. It needs the Tico Gateway connected in Settings → Models ([
   back. A sender that waits for an answer gets HQ's, not your server's.
 - On a server Tico hosts, a call through the Gateway also wakes a server that is [asleep](#sleep-when-idle), if the address's
   **wake** switch is on. HQ keeps the switch and Tico shows it on the address (`wake`). Change it with
-  `hub relay set github --wake off`. The owner, an admin and whoever made the webhook can; BotOps can for them.
+  `tico relay set github --wake off`. The owner, an admin and whoever made the webhook can; BotOps can for them.
 - A server you run yourself can ask Tico to knock on an address of yours when a call has waited over a minute, so something you
-  run can turn it on: `hub relay wake-url set <https address>`. See [Wake on webhook](install.md#wake-on-webhook).
-- `hub relay status` shows the key, the addresses, the last collection and what waits. Health speaks when collecting has failed for
+  run can turn it on: `tico relay wake-url set <https address>`. See [Wake on webhook](install.md#wake-on-webhook).
+- `tico relay status` shows the key, the addresses, the last collection and what waits. Health speaks when collecting has failed for
   15 minutes or a call has waited over an hour. A rehearsal copy never collects.
 
 ## Outgoing
@@ -268,14 +268,14 @@ working beside it. It needs the Tico Gateway connected in Settings → Models ([
 An **endpoint** is an address Tico posts events to. Add one on the Outgoing tab, or:
 
 ```
-hub webhook create --name "Acme orders" --url https://hooks.example.com/tico --events 'task.*' 'custom.*'
+tico webhook create --name "Acme orders" --url https://hooks.example.com/tico --events 'task.*' 'custom.*'
 ```
 
 Tico shows the signing secret (`whsec_...`) once. Keep it where the receiver can read it.
 
 ### Choosing events
 
-`--events` takes event names, groups ending in `.*`, or `*` for everything. `hub event-types` lists every name with a
+`--events` takes event names, groups ending in `.*`, or `*` for everything. `tico event-types` lists every name with a
 description and an example (`--group task` narrows it). A few:
 
 | Group | Events |
@@ -301,7 +301,7 @@ A `POST` with this body:
  "links": {"app": "https://tico.example.com/#/task/t_1", "api": "https://tico.example.com/api/v2/tasks/t_1"}}
 ```
 
-`data` over 64 KB is cut. **Send example** (`hub webhook example <id> --type task.done`) posts a sample of any event to one
+`data` over 64 KB is cut. **Send example** (`tico webhook example <id> --type task.done`) posts a sample of any event to one
 endpoint, so you can build the receiver before real events come.
 
 ### Check the signature
@@ -356,12 +356,12 @@ app.post("/tico", express.raw({ type: "application/json" }), (req, res) => {
 
 A failed send is tried again after 5 seconds, 5 minutes, 30 minutes, 2 hours, 5 hours, 10 hours and 10 hours, each a little
 jittered. That is 8 tries over about 28 hours. After the last, the send is **failed**, the endpoint's Health shows it, and Needs
-you gets at most one task a day per endpoint. **Retry** (`hub webhook retry <id> <send>`) sends a failed, canceled or delivered one again now.
+you gets at most one task a day per endpoint. **Retry** (`tico webhook retry <id> <send>`) sends a failed, canceled or delivered one again now.
 
 Each try waits up to 30 seconds, and the answer is not read past 1 KB. An endpoint sends 600 an hour by default
 (`--rate-per-hour`); sends over that wait, and none are dropped. Tico keeps events and finished sends for 30 days.
 
-The send log (`hub webhook sends <id>`, `--state failed` to narrow) shows each send's state: ready, sending, delivered, failed,
+The send log (`tico webhook sends <id>`, `--state failed` to narrow) shows each send's state: ready, sending, delivered, failed,
 canceled or withheld.
 
 ### Only some events
@@ -370,8 +370,8 @@ An endpoint can narrow what it hears, beyond its event names, by **department** 
 or whoever acted) and **task type**:
 
 ```
-hub webhook update acme --departments sales --bots ops --task-types bug
-hub webhook update acme --no-filter
+tico webhook update acme --departments sales --bots ops --task-types bug
+tico webhook update acme --no-filter
 ```
 
 Each list left empty means all, and the lists combine: an event must pass every one that is set. An event with no task or bot in it
@@ -382,7 +382,7 @@ Each list left empty means all, and the lists combine: an event must pass every 
 An endpoint can send up to 10 headers of your own with every delivery, such as an API key the receiver wants:
 
 ```
-hub webhook update acme --header "X-Env: prod" --secret-header "X-Api-Key: the-value"
+tico webhook update acme --header "X-Env: prod" --secret-header "X-Api-Key: the-value"
 ```
 
 A **secret** header's value is sealed and never shown again (the endpoint lists it as set); `--secret-header "X-Api-Key"` alone keeps the value it
@@ -396,13 +396,13 @@ An endpoint whose attempts have all failed for 5 days is turned off. The five da
 errors after a quiet spell does not count. Tico keeps what was queued, shows the endpoint in Health, files one task for its owner
 and records the turn-off in History.
 
-Fix the address, then turn it on (`hub webhook enable <id>`, or Tools → Webhooks). The answer says how many sends gave up since
+Fix the address, then turn it on (`tico webhook enable <id>`, or Tools → Webhooks). The answer says how many sends gave up since
 the failing began. Two commands send again what was held back; both need the endpoint on and handle at most 500 at a time (`more`
 says to run it again):
 
 ```
-hub webhook recover acme --since 2026-10-20
-hub webhook replay acme --since 2026-10-20
+tico webhook recover acme --since 2026-10-20
+tico webhook replay acme --since 2026-10-20
 ```
 
 - **Recover** sends again every send that gave up since the date, with the same ids and bodies, so a receiver that kept the first
@@ -427,9 +427,9 @@ A copy of real data run in rehearsal mode ([Environments](environments.md)) send
 
 ### Custom events
 
-`hub webhook send <id> --type custom.deploy-done --data '{"app":"web"}'` sends your own event to one endpoint. A rule's
+`tico webhook send <id> --type custom.deploy-done --data '{"app":"web"}'` sends your own event to one endpoint. A rule's
 `send_webhook` does the same. The endpoint must list `custom.*` or that exact name when a bot sends. A send to a paused endpoint
-is refused (`hub webhook example` too); turn the endpoint back on first.
+is refused (`tico webhook example` too); turn the endpoint back on first.
 
 ### Rights
 
@@ -465,7 +465,7 @@ It never shows a value. Pick one:
 The same choice is on the command line. Changing the address needs the revision you read:
 
 ```
-hub webhook update acme --url https://hooks.example.org/tico --expected-revision 4 --credentials clear
+tico webhook update acme --url https://hooks.example.org/tico --expected-revision 4 --credentials clear
 ```
 
 Whoever may edit the endpoint decides: its creator, an admin or the owner. If BotOps makes the change for someone, it asks
@@ -483,8 +483,8 @@ seconds of it being up. The routine time and a sign-in on your account page wake
 are in [Account](account.md#sleep-when-idle):
 
 ```
-hub sleep status
-hub sleep set --hours 2
+tico sleep status
+tico sleep set --hours 2
 ```
 
 A server stopped because the balance ran out never starts on its own. An address that is not through Tico Gateway cannot wake a
@@ -501,27 +501,27 @@ Rules see each as the event `tico.notice`, with `type` set to `info`, `security`
 - **info**: leave BotOps a note.
 - **billing**: ask the owner.
 
-They are built in. `hub notice list` shows the notices. See also
+They are built in. `tico notice list` shows the notices. See also
 [Tico HQ](tico-hq.md).
 
 ## The commands
 
 | What | `hub` | Tool for bots and agents |
 |---|---|---|
-| List event names | `hub event-types [--group G]` | `hub_event_types` |
-| Incoming: list, add, show, change | `hub trigger list`, `create`, `show`, `update` | `hub_trigger_list`, `hub_trigger_create`, `hub_trigger_show`, `hub_trigger_update` |
-| Incoming: new secret, signing | `hub trigger rotate`, `sign` | `hub_trigger_rotate`, `hub_trigger_sign` |
-| Incoming: delete | `hub trigger delete <id>` | `hub_trigger_delete` |
-| Incoming: log, one call, run again | `hub trigger deliveries`, `delivery [--part n]`, `replay` | `hub_trigger_deliveries`, `hub_trigger_delivery`, `hub_trigger_replay` |
-| Incoming: run refused calls again | `hub trigger recover [--since hours]` | `hub_trigger_recover` |
-| Through Tico Gateway | `hub trigger relay create`, `rotate`, `delete`; `hub relay status`; `hub relay set --wake on\|off` | `hub_trigger_relay_create`, `hub_trigger_relay_rotate`, `hub_trigger_relay_delete`, `hub_relay_status`, `hub_relay_set` |
-| Automations on a webhook | `hub automation list`, `create`, `update`, `delete` | `hub_automation_list`, `hub_automation_create`, `hub_automation_update`, `hub_automation_delete` |
-| Outgoing: endpoints | `hub webhook list`, `create`, `show`, `update`, `rotate`, `pause`, `resume`, `delete` | `hub_webhook_list`, `hub_webhook_create`, `hub_webhook_show`, `hub_webhook_update`, `hub_webhook_rotate`, `hub_webhook_pause`, `hub_webhook_resume`, `hub_webhook_delete` |
-| Outgoing: send, log, retry, example | `hub webhook send`, `sends`, `retry`, `example` | `hub_webhook_send`, `hub_webhook_sends`, `hub_webhook_retry`, `hub_webhook_example` |
-| Outgoing: turn on, recover, replay | `hub webhook enable`, `recover --since`, `replay --since` | `hub_webhook_enable`, `hub_webhook_recover`, `hub_webhook_replay` |
-| Wake address for a server you run | `hub relay wake-url show`, `set <url>`, `off` | `hub_relay_wake_url_show`, `hub_relay_wake_url_set`, `hub_relay_wake_url_off` |
-| Sleep when idle | `hub sleep status`, `hub sleep set` | `hub_sleep_status`, `hub_sleep_set` |
-| Notices | `hub notice list` | `hub_notice_list` |
+| List event names | `tico event-types [--group G]` | `tico_event_types` |
+| Incoming: list, add, show, change | `tico trigger list`, `create`, `show`, `update` | `tico_trigger_list`, `tico_trigger_create`, `tico_trigger_show`, `tico_trigger_update` |
+| Incoming: new secret, signing | `tico trigger rotate`, `sign` | `tico_trigger_rotate`, `tico_trigger_sign` |
+| Incoming: delete | `tico trigger delete <id>` | `tico_trigger_delete` |
+| Incoming: log, one call, run again | `tico trigger deliveries`, `delivery [--part n]`, `replay` | `tico_trigger_deliveries`, `tico_trigger_delivery`, `tico_trigger_replay` |
+| Incoming: run refused calls again | `tico trigger recover [--since hours]` | `tico_trigger_recover` |
+| Through Tico Gateway | `tico trigger relay create`, `rotate`, `delete`; `tico relay status`; `tico relay set --wake on\|off` | `tico_trigger_relay_create`, `tico_trigger_relay_rotate`, `tico_trigger_relay_delete`, `tico_relay_status`, `tico_relay_set` |
+| Automations on a webhook | `tico automation list`, `create`, `update`, `delete` | `tico_automation_list`, `tico_automation_create`, `tico_automation_update`, `tico_automation_delete` |
+| Outgoing: endpoints | `tico webhook list`, `create`, `show`, `update`, `rotate`, `pause`, `resume`, `delete` | `tico_webhook_list`, `tico_webhook_create`, `tico_webhook_show`, `tico_webhook_update`, `tico_webhook_rotate`, `tico_webhook_pause`, `tico_webhook_resume`, `tico_webhook_delete` |
+| Outgoing: send, log, retry, example | `tico webhook send`, `sends`, `retry`, `example` | `tico_webhook_send`, `tico_webhook_sends`, `tico_webhook_retry`, `tico_webhook_example` |
+| Outgoing: turn on, recover, replay | `tico webhook enable`, `recover --since`, `replay --since` | `tico_webhook_enable`, `tico_webhook_recover`, `tico_webhook_replay` |
+| Wake address for a server you run | `tico relay wake-url show`, `set <url>`, `off` | `tico_relay_wake_url_show`, `tico_relay_wake_url_set`, `tico_relay_wake_url_off` |
+| Sleep when idle | `tico sleep status`, `tico sleep set` | `tico_sleep_status`, `tico_sleep_set` |
+| Notices | `tico notice list` | `tico_notice_list` |
 
 The API routes are under `/api/v2/triggers`, `/api/v2/webhooks`, `/api/v2/event-types`, `/api/v2/relay`, `/api/v2/hooks/wake-url` and `/api/v2/notices`,
 and in the OpenAPI file ([API](api.md)).

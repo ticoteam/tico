@@ -12,15 +12,15 @@ Steps:
    account", not "the account page works well". A first plan with more than six checks is probably two outcomes.
 3. List each repository or area the change touches. Take each owner from `knowledge/delivery.md`. An area with no owner
    is a question for the requester.
-4. Check access: read each candidate engineer bot's repository grants with `hub bot repos <slug>`. `hub team show` does not
+4. Check access: read each candidate engineer bot's repository grants with `tico bot repos <slug>`. `tico team show` does not
    list them; its `access` field is only your own access to each bot. Find an engineer bot with write access to each
    repository. If none has it, or you cannot read a bot's grants, still write the child, and say on the parent that
    access is needed.
 5. Create the parent task with the outcome and its acceptance checks. It stays open until every required child is done.
-6. Create one child per repository or area with `hub task child`. Each child carries the repository, the expected
+6. Create one child per repository or area with `tico task child`. Each child carries the repository, the expected
    behaviour, its dependencies and its checks.
 7. Order the dependencies: which child must merge before which. Name any release step as its own item on the parent.
-8. Assign each child to its engineer bot, and write the plan on the parent with `hub task comment`.
+8. Assign each child to its engineer bot, and write the plan on the parent with `tico task comment`.
 
 Checks before you finish:
 - Every acceptance check can be run or observed.

@@ -190,7 +190,7 @@ function taskOlderAsk(t) {
   const me = myActor();
   return !!me && !!t && !taskFinished(t) && t.status !== 'declined' && t.ask?.recipient_id === me && !!t.ask?.older && !taskNeedsViewer(t);
 }
-// The person a bot's waiting task names (`hub task update --status waiting --on <person>`), or ''.
+// The person a bot's waiting task names (`tico task update --status waiting --on <person>`), or ''.
 // Who a waiting task waits on: the person it names, or the one its reconnect card is for (backend/reconnects.py).
 function taskWaitingOn(t) {
   if (t?.status !== 'waiting') return '';

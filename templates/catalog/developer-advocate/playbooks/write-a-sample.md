@@ -9,13 +9,13 @@ documented API, for an engineer to review and merge. Nothing is pushed or publis
 ## Inputs
 
 - The task and the reader it names. If it names none, ask one question: who is the reader, and what job do they do?
-- The SDK version and the docs pages that cover the job (`hub doc search`).
+- The SDK version and the docs pages that cover the job (`tico doc search`).
 - The friction log entry the sample answers, if there is one.
 - The reviewer named in `knowledge/channels.md`.
 
 ## Steps
 
-1. **Pin the job.** `hub task show <id>`. One reader, one job: "a Python developer receives and verifies a booking
+1. **Pin the job.** `tico task show <id>`. One reader, one job: "a Python developer receives and verifies a booking
    webhook". Note the SDK version and the docs pages that cover it.
 2. **Write the smallest thing that works.** One file or a small folder: install, the environment variable for the key
    (never a real key), the code, and the expected output. Use the SDK's current public methods only. Handle the error
@@ -25,8 +25,8 @@ documented API, for an engineer to review and merge. Nothing is pushed or publis
 4. **Write the tutorial around it.** Steps a developer follows top to bottom: what you will build, prerequisites,
    numbered steps with the code, how to check it worked, what to try next. Second person, present tense.
 5. **Hand over.** Save to `samples/<topic>/`, commit, publish `tutorial.md` and `run.md` on the task with
-   `hub file publish <path>`, and run `hub task update <id> --status done --note` with the reviewer's name and the folder
-   path. `hub file publish` takes one file at a time and refuses folders, and code files such as `.py` are not on its
+   `tico file publish <path>`, and run `tico task update <id> --status done --note` with the reviewer's name and the folder
+   path. `tico file publish` takes one file at a time and refuses folders, and code files such as `.py` are not on its
    list, so the reviewer reads the code from the commit. Public publication uses your Tools and stays a draft until a
    person turns mail sending on in Tico.
 

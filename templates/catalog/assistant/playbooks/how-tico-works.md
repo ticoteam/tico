@@ -5,7 +5,7 @@ Read this when a person asks why something is on their queue, or how to make it 
 ## What puts an item on Needs you
 - **A task a bot filed for the person** (`owner` is the person). Bots file these when they need a decision, a review, or a
   missing input. Most are routine output, not decisions.
-- **A bot's question** to the person. A question is answered on its task: `hub task close <task id> --note "<reply>"`.
+- **A bot's question** to the person. A question is answered on its task: `tico task close <task id> --note "<reply>"`.
 - **An approval** (merge, publish, send, spend). Approvals wait until the person names them or says they don't need them.
 - **A hold**: a task marked waiting on the person.
 
@@ -21,17 +21,17 @@ Read this when a person asks why something is on their queue, or how to make it 
 
 ## Automations and watchers
 A routine or automation has a trigger (a schedule, an event, a webhook, or a due date) and steps. A watcher files a task when
-something matches. `hub origin show <task id>` names the automation, rule or run that made the item and how many siblings it
+something matches. `tico origin show <task id>` names the automation, rule or run that made the item and how many siblings it
 made this week.
 
 ## Org rules and Reach
-An org rule is a standing instruction the bots follow, and it can stop a kind of task. `hub rules list` shows them. Reach is
-what bots may put on a person: the people and bots near them by default. `hub team show` shows who reports to whom.
+An org rule is a standing instruction the bots follow, and it can stop a kind of task. `tico rules list` shows them. Reach is
+what bots may put on a person: the people and bots near them by default. `tico team show` shows who reports to whom.
 
 ## Approvals
 A person decides approvals. The Assistant approves only on the person's plain yes, after a read-back, and never once the
 person turned off "My assistant can decide approvals for me". Declining needs neither.
 
 ## Close the pile, then stop the source
-The queue's size is the total of `hub needs-you show --by kind`: questions, approvals and held messages count too, not only tasks. Clearing the existing items does not stop new ones. Find the source with `hub origin show`, then stop it: pause or edit its
+The queue's size is the total of `tico needs-you show --by kind`: questions, approvals and held messages count too, not only tasks. Clearing the existing items does not stop new ones. Find the source with `tico origin show`, then stop it: pause or edit its
 automation, add a rule, or give BotOps a task when it is a bot's own code. Report counts before and after.

@@ -8,8 +8,8 @@ Outcome: five recorded answers, the policy written as checks, a first audit of a
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub doc ask "What is our expense and travel policy?"
+    tico task show <id>
+    tico doc ask "What is our expense and travel policy?"
 
 Check the attachments for an expense or card export and receipts. If the Librarian finds the written policy, read it and
 skip asking for the limits. Ask only about what it does not say.
@@ -42,16 +42,16 @@ the task, and label it "First draft, not yet reviewed".
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list`. If it shows off, run
-`hub automation update <id> --enable`. Tell the human in one line what it does: "I will audit each month on the 3rd." They can
+Setting you up switched your first routine on. Check it with `tico automation list`. If it shows off, run
+`tico automation update <id> --enable`. Tell the human in one line what it does: "I will audit each month on the 3rd." They can
 change it or turn it off any time. There is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to
-leave it off, change the routine to match (`hub automation update <id>`, with `--disable` to turn it off).
+leave it off, change the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. It clears your "Needs setup" mark and lets the routine run. Until then nothing you
 have runs on its own. Run it once the answers and the first result are recorded, not before.

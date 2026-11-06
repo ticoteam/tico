@@ -9,7 +9,7 @@
 Stages, their movers, the owner and the budget come from pipeline.yaml at the repository root. A project is a folder per
 stage (projects/<slug>/<stage>/<asset>). An asset may have a provenance sidecar: the same file name with `.json` added,
 holding `cost_usd`. A self-moved stage is done when its folder holds a `.done` file. The budget raised by the owner is in
-projects/<slug>/budget.json. Approval is `hub file approved <path>`: exit 0 when approved, 1 when its answer says
+projects/<slug>/budget.json. Approval is `tico file approved <path>`: exit 0 when approved, 1 when its answer says
 `"approved": false`. Any other result stops the pipeline with an error, since a failed call also exits 1.
 Standard library only.
 """
@@ -181,7 +181,7 @@ def answer_of(text):
 
 
 def approval(asset, mover="owner"):
-    """(approved, detail) from `hub file approved --by`. Exit 0: approved. Exit 1 with an answer that says
+    """(approved, detail) from `tico file approved --by`. Exit 0: approved. Exit 1 with an answer that says
     `"approved": false`: not approved. Anything else raises Problem. The CLI also exits 1 when a call fails (Tico
     unreachable, an unexpected error), so the code alone is not a verdict: a failed call is never read as pending."""
     path = rel(asset)
@@ -189,19 +189,19 @@ def approval(asset, mover="owner"):
     try:
         done = subprocess.run(command, cwd=REPO, capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise Problem(f"hub file approved could not run for {path}: {exc}") from None
+        raise Problem(f"tico file approved could not run for {path}: {exc}") from None
     answer = answer_of(done.stdout)
     if done.returncode == 0:
         return True, answer
     if done.returncode == 1 and answer.get("approved") is False:
         return False, {}
     output = (done.stderr.strip() or done.stdout.strip())[-500:] or "no output"
-    raise Problem(f"hub file approved exited {done.returncode} for {path}, so its approval is unknown: {output}")
+    raise Problem(f"tico file approved exited {done.returncode} for {path}, so its approval is unknown: {output}")
 
 
 # ----------------------------------------------------------------------------- what to do next
 def question(task, person, text, files, extra=()):
-    """`hub task question`: one decision for a person, as its own task under the project task."""
+    """`tico task question`: one decision for a person, as its own task under the project task."""
     command = ["hub", "task", "question", text, "--on", person, "--parent", task]
     for path in files:
         command += ["--review", rel(path)]
@@ -219,7 +219,7 @@ def request(project, cfg, stage, files, task, owner):
         steps = [f"1. {shlex.join(['hub', 'file', 'publish', rel(f)])}" for f in files]
         lines = [f"Review each file for the {stage['id']} stage of {project.name}. Files, as <FILE@N> from step 1:"]
         lines += [f"- {rel(f)}: <FILE@N>" for f in files]
-        lines.append("Run for each one: hub file review <FILE@N> --approve|--changes --task <this task> [--note TEXT]")
+        lines.append("Run for each one: tico file review <FILE@N> --approve|--changes --task <this task> [--note TEXT]")
         create = [
             "hub",
             "task",

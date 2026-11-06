@@ -142,7 +142,7 @@ A task you requested for yourself closes when you mark it Done; Reopen works for
 The earlier completion stays in its history, while Goals and KPIs count it as active again.
 
 A bot's final answer to a reply appears under that update automatically. An acknowledgement such as
-"Thanks" needs only a short answer; it does not need a new task. `hub_update_reply` is for humans.
+"Thanks" needs only a short answer; it does not need a new task. `tico_update_reply` is for humans.
 
 **My Mac is asleep. What happens?**
 Your team's Tico server keeps running: everything is saved and other humans' bots keep answering. Bots on your
@@ -173,7 +173,7 @@ your own, and anyone's below you.
 **How do I add a routine?**
 **Automations → + New**: pick a Schedule (a cron in a time zone), an Event, a Webhook or Before a
 due date (a task N days before a date that repeats), then add a Bot turn step with the bot and the text it is told each time. A bot can set up
-its own with `hub automation create`. Details: [Routines](routines.md).
+its own with `tico automation create`. Details: [Routines](routines.md).
 
 **How do I change what a bot does?**
 Open **Bot → Instructions**, describe the change in **Request instruction changes**, and choose
@@ -206,8 +206,8 @@ lowest on the chart. A bot that manages others is asked once each of its direct 
 skipped, or 90 minutes after it was first held for them, whichever comes first. A report asked again after a failed
 run does not restart that wait. Its request carries its direct reports' updates
 and names anyone who had none. It writes its own update from its work and theirs. Its card does not list the updates
-it was written from; `hub update show` lists them as `inputs`, and you see only the ones you may read.
-**Redo** of a past day can include the managers above (`hub update redo --bot X --with-managers`).
+it was written from; `tico update show` lists them as `inputs`, and you see only the ones you may read.
+**Redo** of a past day can include the managers above (`tico update redo --bot X --with-managers`).
 
 **Your update.** Once your reports are in, your update is drafted and posts at once as yours. Tico writes the draft with one call to your company's own model, and that call gets only what
 everyone in the company can already see: your tasks that are not private and your goals; the status changes you made and the
@@ -228,7 +228,7 @@ to you); **Whole org** shows the whole chart, and
 **List** shows every update newest first. Only your direct reports' updates count on the **Updates** badge and
 carry a dot in the chart; updates further down are marked read as you see them, but never alert. People's updates are
 open to everyone on the team (not to external agents); a bot's are open to anyone who may read that bot. Bots read them with
-`hub update list` (`--scope direct` for just their direct reports).
+`tico update list` (`--scope direct` for just their direct reports).
 
 ## Steer, queue or defer
 
@@ -279,15 +279,15 @@ the same way with `GET` and `POST /api/v2/preferences/compose.send_way` (`{"valu
 `defer:<30m|1h|4h|24h|2d|7d|never>`). The CLI and API take the same words:
 
 ```bash
-hub chat send content "Skip the charts." --steer
-hub task comment <task-id> "Billing first." --defer 4h
-hub task create --owner content --title "Check the refund counts" --defer 2d
+tico chat send content "Skip the charts." --steer
+tico task comment <task-id> "Billing first." --defer 4h
+tico task create --owner content --title "Check the refund counts" --defer 2d
 ```
 
 `POST /api/v2/chat/<bot>`, `POST /api/v2/tasks/<id>/comments` and `POST /api/v2/tasks` take `delivery` (`steer`,
 `queue` or `defer`; no `steer` on a new task) and `defer_for` (`<n>m`, `<n>h`, `<n>d` up to two years, or `never`;
-defer only). The answer's `sent_as` (`delivery`, `until`) says how it went. The MCP tools `hub_chat_send`,
-`hub_message_send`, `hub_task_comment` and `hub_task_create` take the same fields.
+defer only). The answer's `sent_as` (`delivery`, `until`) says how it went. The MCP tools `tico_chat_send`,
+`tico_message_send`, `tico_task_comment` and `tico_task_create` take the same fields.
 
 A person's post in a bot's Home or a DM with a bot takes them too, as optional fields: `POST /api/v2/threads/<id>/messages`,
 `POST /api/v2/threads/dm` (with its first `body`) and `POST /api/v2/uploads/threads/<id>/messages` (form fields). A
@@ -303,10 +303,10 @@ wake the bot. Both wait for the bot's next run of any kind; `--defer <time>` set
 named, none for a message). Use your [personal token or external agent](connect-an-agent.md) for the CLI:
 
 ```bash
-hub note create content "Use the revised tone guide for the next draft." --defer 4h
-hub note list --to content --waiting
-hub note delete <note-id>
-hub task create --owner content --title "Draft the weekly post" \
+tico note create content "Use the revised tone guide for the next draft." --defer 4h
+tico note list --to content --waiting
+tico note delete <note-id>
+tico task create --owner content --title "Draft the weekly post" \
   --body "Use the deferred messages on this task." --defer
 ```
 
@@ -323,7 +323,7 @@ sent notes and notes between bots whose activity they may read.
 
 A deferred Task remains open with `next_run_waiting: true` until a run carries it. It then follows
 ordinary task states and needs a completion result. Close it with
-`hub task close <task-id> --note "Canceled before work began"` under the normal task permissions, or choose
+`tico task close <task-id> --note "Canceled before work began"` under the normal task permissions, or choose
 **Run now** on the task to start it sooner. Deferred does not mean delayed forever: its deadline starts a run. A deferred task is left alone until a run carries it.
 
 When a deferred task moves from Waiting back to Open, its existing queued notice can start its own run.
@@ -333,7 +333,7 @@ and worked it after the reopening, the queued notice does not start duplicate wo
 `task_next_run` while a deferral or carrier holds it. The normal automatic-start switch and task cap
 still apply, and only the requester, a person or BotOps may choose **Run now** early.
 
-The task shows where it stands, under **Deferred** on the task and as `deferred` in `hub task show`
+The task shows where it stands, under **Deferred** on the task and as `deferred` in `tico task show`
 (`quiet`, its older name, is still sent for one release):
 
 - **Eligible**: the bot's next run carries it.
@@ -342,13 +342,13 @@ The task shows where it stands, under **Deferred** on the task and as `deferred`
 - **Queued**: it has a run of its own, waiting or going (after **Run now**, or when its resume condition came true).
 
 A run that carries a task it will not do now says when to pick it up, rather than in its reply's words
-(`hub task later`; `hub task defer` and `hub_task_defer` are its older names and still work):
+(`tico task later`; `tico task defer` and `hub_task_defer` are its older names and still work):
 
 ```bash
-hub task later <task-id> --after <other-task>   # when that task is done or closed
-hub task later <task-id> --at 2026-10-20T09:00Z # at a time
-hub task later <task-id> --next-run             # with the next run, whatever starts it
-hub task later <task-id> --handled              # this run is done with it for now (MCP: hub_task_later)
+tico task later <task-id> --after <other-task>   # when that task is done or closed
+tico task later <task-id> --at 2026-10-20T09:00Z # at a time
+tico task later <task-id> --next-run             # with the next run, whatever starts it
+tico task later <task-id> --handled              # this run is done with it for now (MCP: tico_task_later)
 ```
 
 When the condition comes true the task gets one run of its own, as **Run now** gives it. A run that ends without
@@ -370,7 +370,7 @@ POST /api/v2/tasks                    {"owner":"bot:content","title":"Draft the 
 **Where do files go?**
 Files you attach to a task or a message are stored privately by your team's Tico server and the bot downloads them
 for that thread (up to ten files of 10 MB). A file a bot produces for you is attached to the
-task the same way (`hub task attach`) and linked from its note; open it from the task or the link
+task the same way (`tico task attach`) and linked from its note; open it from the task or the link
 while signed in. Other files a bot publishes are listed on its page under Files ([Files](files.md)); a bot's own
 record stays in its repo's `reports/`. Meeting transcripts come from the tools that made them ([Meetings](meetings.md)).
 
@@ -396,14 +396,14 @@ It starts when you add another computer in **Settings → Computers**. Without a
 computer clones the original repository using your own git access; a local checkout can be reused.
 Health names the repository and clone command if that fails. You can also ask BotOps to fix it.
 The branch picker opens the original or a person's branch. New tasks and messages to the original go to your active branch.
-Branches share instructions and repository lessons; `hub bot copy` creates an independent bot. See [Branches](creating-bots.md#branches).
+Branches share instructions and repository lessons; `tico bot copy` creates an independent bot. See [Branches](creating-bots.md#branches).
 
 ## Tags and release checklists
 
 Tags give related tasks a shared label, metadata and a Markdown checklist. A chip can show
 `release · Oct 2`; its key, such as `release-2026-10-02`, identifies that particular release.
 Click a tag chip to open its notes and tasks. The task filter uses tags. Existing label strings,
-`hub task label` and `--label` continue to use the same keys. Unknown keys create plain tags.
+`tico task label` and `--label` continue to use the same keys. Unknown keys create plain tags.
 
 Open **Settings > Tasks**, under **Task tags**, to create tags or templates. A template holds a reusable checklist and
 metadata defaults. Open it and choose a key under **Make a tag** to copy those defaults into a new
@@ -427,17 +427,17 @@ cat > release-checklist.md <<'CHECKLIST'
 - [ ] Smoke checks after deploy
 - [ ] Tell the team
 CHECKLIST
-hub tag create release-checklist --label release --template --markdown-file release-checklist.md
-hub tag create release-2026-10-02 --from-template release-checklist --metadata '{"date":"2026-10-02"}'
-hub task label <task-id> --add release-2026-10-02
-hub tag show release-2026-10-02
-hub tag update release-2026-10-02 --version 1 --markdown-file release-checklist.md
+tico tag create release-checklist --label release --template --markdown-file release-checklist.md
+tico tag create release-2026-10-02 --from-template release-checklist --metadata '{"date":"2026-10-02"}'
+tico task label <task-id> --add release-2026-10-02
+tico tag show release-2026-10-02
+tico tag update release-2026-10-02 --version 1 --markdown-file release-checklist.md
 ```
 
 The release bot can own an instance, gather the tasks going out, record checklist results and
 tell the teammate coordinating the release when it ships. Its tag-owner rights allow checklist
-edits; attaching tags still needs a task mover. Use `hub_tag_list`, `hub_tag_show`,
-`hub_tag_create` and `hub_tag_update` through MCP. Update calls include the current `version`;
+edits; attaching tags still needs a task mover. Use `tico_tag_list`, `tico_tag_show`,
+`tico_tag_create` and `tico_tag_update` through MCP. Update calls include the current `version`;
 a stale version returns `409 version_conflict` without overwriting the checklist.
 
 ## Task types and steps

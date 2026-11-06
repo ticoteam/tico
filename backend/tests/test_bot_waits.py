@@ -1,4 +1,4 @@
-"""A task waits on a bot's work through a blocker (`hub task wait <task> --on task:<its task>`), which holds the work
+"""A task waits on a bot's work through a blocker (`tico task wait <task> --on task:<its task>`), which holds the work
 while it is open and wakes the owner once with the outcome when it resolves. `--status waiting --on bot:<slug>` is
 refused (spec D9): a task waits on a person, and a bot asks a bot in a DM. Nothing about the task changes."""
 
@@ -69,8 +69,8 @@ def test_waiting_on_a_bot_is_refused_with_a_dm_and_changes_nothing(c):
             H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on=target, note="Waiting on it.")
         assert refused.value.rule == "waiting_on", refused.value
         said = str(refused.value)
-        assert "waits on a person, not a bot" in said and "hub message send" in said and "--needs-action" in said
-        assert f"hub task wait {task['id']} --on task:" in said
+        assert "waits on a person, not a bot" in said and "tico message send" in said and "--needs-action" in said
+        assert f"tico task wait {task['id']} --on task:" in said
         after = dict(H.task(c, task["id"]))
         assert {k: after[k] for k in ("status", "note", "version")} == {
             k: before[k] for k in ("status", "note", "version")
@@ -101,7 +101,7 @@ def test_api_bot_wait_is_refused_and_preserves_the_task(api):
     )
     assert response.status_code == 422, response.text
     assert response.json()["error"]["code"] == "waiting_on", response.text
-    assert "hub message send ops" in response.text and pre["id"] not in response.text
+    assert "tico message send ops" in response.text and pre["id"] not in response.text
     with api.app.state.store.read() as c:
         after = dict(H.task(c, task["id"]))
     assert {k: after[k] for k in ("status", "note", "version")} == {k: before[k] for k in ("status", "note", "version")}

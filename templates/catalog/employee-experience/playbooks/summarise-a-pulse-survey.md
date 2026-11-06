@@ -38,7 +38,7 @@ Open with last quarter's actions and whether they happened.
 
 ## 6. Write, attach and share
 
-Write `reports/YYYY-MM-DD-pulse-readout.md` and attach it to the task with `hub task attach <id> <file>`. Publish it with
-`hub file publish reports/YYYY-MM-DD-pulse-readout.md --scope task --task <id>`. Share it only with the audience the task names,
+Write `reports/YYYY-MM-DD-pulse-readout.md` and attach it to the task with `tico task attach <id> <file>`. Publish it with
+`tico file publish reports/YYYY-MM-DD-pulse-readout.md --scope task --task <id>`. Share it only with the audience the task names,
 within the requested work and your Tools. Ask the owner on the task only when the audience is missing. Add the requested actions to
 `knowledge/actions.md`. Delete the export from the working tree, commit, and finish the task.

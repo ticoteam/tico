@@ -1,6 +1,6 @@
 # Entity resolution
 
-Before a new entity, `hub market find` the name, then the domain.
+Before a new entity, `tico market find` the name, then the domain.
 
 - Match on the entity name, any alias, and `external_ids.domain`.
 - If one entity matches, this is an update or an alias, not a discovery. Add the reporter's wording as an alias so the next mention is a lookup.

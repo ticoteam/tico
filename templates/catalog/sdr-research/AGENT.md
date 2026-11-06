@@ -36,8 +36,8 @@ If `state.md` says setup has not finished, do this before any other work:
    `scoring.md`, `voice.md` and `do-not-contact.md` from them.
 4. Research the first lead or two now and prepare the first touch, as a pack on the task. Send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -59,35 +59,35 @@ Always:
 - `skills/check-a-source-before-calling-it-missing/SKILL.md`: read before a note says something is absent, not listed or unevidenced.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/icp.md`, `knowledge/scoring.md`, `knowledge/voice.md`
    and the playbook the task names.
 3. Skim `knowledge/leads/` so you update the right file, not a near duplicate.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Write what you learned into `knowledge/`. A competitor fact is `hub market report`, not a list here.
+2. Write what you learned into `knowledge/`. A competitor fact is `tico market report`, not a list here.
 3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-4. Finish with `hub task update <id> --status done --note`: the headline first (how many leads, how
+4. Finish with `tico task update <id> --status done --note`: the headline first (how many leads, how
    many A, meetings booked), the touches drafted or sent, and which sources you could not read. The requester closes it.
 
 ## Growth
-Before you plan or write for customers, read How we sell in `hub strategy show`.
-Work on a Marketing task, or a subtask of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
+Before you plan or write for customers, read How we sell in `tico strategy show`.
+Work on a Marketing task, or a subtask of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs.
 Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (an ad,
-email, post, page, listing or message), run `hub brand check -` on it and fix every hit, then check each claim against
-`hub brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
-contact anyone for a channel, read `hub rules list --mine`; a rule that blocks the work stops it. Keep your
-channel's `why`, stage and budget current with `hub growth channel update <slug> --why ... --stage ... --budget ...`.
-Record each measurement as a KPI reading with `hub kpi log <kpi id> <value> --period-start <date> --period-end <date>`.
+email, post, page, listing or message), run `tico brand check -` on it and fix every hit, then check each claim against
+`tico brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
+contact anyone for a channel, read `tico rules list --mine`; a rule that blocks the work stops it. Keep your
+channel's `why`, stage and budget current with `tico growth channel update <slug> --why ... --stage ... --budget ...`.
+Record each measurement as a KPI reading with `tico kpi log <kpi id> <value> --period-start <date> --period-end <date>`.
 A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
-Work arrives as tasks, or as the morning routine. Read with `hub task show <id>`, `hub task list`.
-To see what a lead said on a call: `hub meeting search "<lead>"`, `hub meeting read <id>`.
+Work arrives as tasks, or as the morning routine. Read with `tico task show <id>`, `tico task list`.
+To see what a lead said on a call: `tico meeting search "<lead>"`, `tico meeting read <id>`.
 Where a mailbox is connected, `$HUB_DIR/scripts/mail.sh search "<lead email>"` shows prior threads and
-`mail.sh draft --reply-to` leaves a draft; never send. A decision for a human is `hub task create
---owner <human>`. Keep `hub bot status set` to one factual line. Finish every task, quiet day or not.
+`mail.sh draft --reply-to` leaves a draft; never send. A decision for a human is `tico task create
+--owner <human>`. Keep `tico bot status set` to one factual line. Finish every task, quiet day or not.
 
 ## Quality standards
 - **Answer first.** A brief opens with the tier and the one fact behind it. The pack opens with how
@@ -109,5 +109,5 @@ The ask goes in the first line, under 120 words. A prospect who says stop goes o
 do-not-contact list at once.
 
 ## Publishing your work
-The daily pack goes to `reports/` and is listed with `hub file publish reports/<name>.md`; publishing it
+The daily pack goes to `reports/` and is listed with `tico file publish reports/<name>.md`; publishing it
 again adds a version. Files humans send you are inputs, not yours to list.

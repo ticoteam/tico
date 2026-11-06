@@ -27,7 +27,7 @@ rest as your release pace grows.
 The starter templates were written for a person-in-the-loop team: a reviewer drafts a review for a human to post,
 for example. Edit each bot's instructions to match its role here, or ask BotOps to do it. When reviewers
 are authorized to submit their own reviews, configure a [separate reviewer GitHub App](github-app.md#separate-identity-for-reviewers)
-and use `hub repo review` with the full reviewed head and `approve` or `changes`. Record the GitHub receipt on
+and use `tico repo review` with the full reviewed head and `approve` or `changes`. Record the GitHub receipt on
 the review task as well. Required GitHub approvals are dismissed on push, so a changed head needs a current
 approval before merge even when the team's task review policy allows a fixes-only delta.
 
@@ -69,7 +69,7 @@ approval before merge even when the team's task review policy allows a fixes-onl
 A bot PR on a General task, or any board with no check steps, uses the company's Dev ticket review pools too.
 Tico files `Review 1: PR #N` with the PR link and head, then Review 2 if the ticket flow has two reviews.
 The same pool rules pick the reviewer. A `qa` task also needs QA. Code and docs use the same route, including
-PRs that mix both. Owners can also file `hub task child <task> --owner <reviewer> --role review --title "PR #N"`.
+PRs that mix both. Owners can also file `tico task child <task> --owner <reviewer> --role review --title "PR #N"`.
 Add `--check-model` only when asking for a check on another model.
 
 Each PR head has one open request per review. Reviews match the full PR link: host, owner, repo and number.
@@ -124,7 +124,7 @@ ticket stays at its step with a Waiting tag.
 - **Changes nobody will see** skip In QA and QA Fixes.
 - **A failure after release** goes back to QA Fixes for a hotfix, or the Release Manager rolls back.
 - **Reviewers and Security only comment.** They never move a ticket: a reviewer or Security bot that tries is refused
-  and told to finish its review task with a verdict (`hub task done <id> --verdict approve|changes --head <sha>`). QA
+  and told to finish its review task with a verdict (`tico task done <id> --verdict approve|changes --head <sha>`). QA
   gives `pass` or `fail`. The Builder is woken once with the verdict and the head it judged, even while the ticket
   waits on someone else's open subtask; a verdict given while the ticket is Blocked moves it once the hold clears.
 - **One check per head.** A ticket has one open Review 1, Review 2 or QA subtask for a pull request head; a second request
@@ -157,11 +157,11 @@ ticket stays at its step with a Waiting tag.
   - a refused move Tico stopped retrying, or one rule refusing a ticket twice in a day with no retry pending;
   - an open pull request that conflicts, with its number and head.
 
-  It reads the list any time with `hub pipeline` (`exceptions`), and fixes the cause by hand: moves a ticket
-  (`hub task update <id> --step ...`), reassigns it (`--owner`) or closes a duplicate. People and tasks given to it
+  It reads the list any time with `tico pipeline` (`exceptions`), and fixes the cause by hand: moves a ticket
+  (`tico task update <id> --step ...`), reassigns it (`--owner`) or closes a duplicate. People and tasks given to it
   still wake it at once. Notes held for it wake nothing: its next run, whatever starts it, carries them, so a week of
   normal tickets is no turn at all.
-- **Bots move a ticket by its step** (`hub task update <id> --step "Review 1"`), not by its status. Several steps
+- **Bots move a ticket by its step** (`tico task update <id> --step "Review 1"`), not by its status. Several steps
   share a status, and setting a status lands on the first step that has it.
 
 ## The roadmap

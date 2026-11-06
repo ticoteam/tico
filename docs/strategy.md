@@ -50,7 +50,7 @@ removes a thing.
   The book holds the brand name (when it differs from the company's), the positioning line, voice traits (each with a do
   and a don't), tone by situation, the words to use and to avoid, naming rules, claims and proof, visual files (links to
   Library Files) and examples. It is versioned on its own and published by the owner; growth-facing bots get it in their
-  run context. `hub brand check` runs the cheap checks on a draft (avoided words, naming, `claims.never` phrases) and runs
+  run context. `tico brand check` runs the cheap checks on a draft (avoided words, naming, `claims.never` phrases) and runs
   no model, so a bot checks claims missing from the allowed list itself.
 - **Growth.** A place of cards (`#/growth`, under Company in the sidebar): each channel's spend, customers and
   retention by month, the economics, and **Sources**, where each number comes from, linked from the page. Marketing tasks are on the Tasks page, type Marketing.
@@ -58,7 +58,7 @@ removes a thing.
 - **Summary.** At most 400 characters, drafted from the bets and edited by the owner. It is the one line on top and the
   text every bot gets in its run context.
 - **Vision.** Stored, not shown on the page. The Goals page reads it from here and, when it is empty, reads the
-  summary instead. Setup no longer drafts one; one written earlier, or by the Strategy Bot or `hub strategy draft
+  summary instead. Setup no longer drafts one; one written earlier, or by the Strategy Bot or `tico strategy draft
   --vision`, is kept and published as before.
 - **Bets.** Three to five recommended, at most seven active. The page shows each bet's statement, edited in place,
   with its goals and health. **+ Bet** adds one, active while fewer than seven are (else proposed); × retires one
@@ -99,7 +99,7 @@ removes a thing.
      competitors miss, and why this team. This is where "how we win" lives, and it is the heart of the page.
   6. **How we sell** (`how`): where the next hundred customers come from, the motion the company sells with
      (self-serve, sales-led, partner, marketplace, local, community or e-commerce) and the playbooks behind it. Who
-     buys is Where we play. Bots read it with `hub strategy show`; it is not put into every run. A bot proposes a
+     buys is Where we play. Bots read it with `tico strategy show`; it is not put into every run. A bot proposes a
      change the way it proposes any strategy change, and the owner confirms it.
   7. **What we won't do** (`not`): required before publishing. A strategy with no trade-offs is a description.
 
@@ -148,16 +148,16 @@ through; how you know they want it; why now; why this team; what you understand 
 what stops a bigger company copying you; how you make money, and the price that breaks; where the next hundred
 customers come from; the bet most people would call wrong; what you won't do, and the request you turned down. Each is
 asked as a claim to confirm or strike. It is "in the style of", not theirs. The other guides
-became lenses; `hub strategy guides` and `GET /api/v2/strategy/guides` are deprecated and list the Default guide only.
+became lenses; `tico strategy guides` and `GET /api/v2/strategy/guides` are deprecated and list the Default guide only.
 
 ## Who may do what
 
 | | Read | Write the draft and bets | Publish |
 |---|---|---|---|
-| The owner | the draft and every version | yes, on the page or with `hub strategy draft` and `hub strategy bet` | yes, with a note |
+| The owner | the draft and every version | yes, on the page or with `tico strategy draft` and `tico strategy bet` | yes, with a note |
 | Any human on the team | the published versions | no | no |
 | The Strategy Bot | the published versions | no: it proposes, at every level, with one `strategy_draft` proposal the owner confirms | never |
-| Every other bot, and an external agent over MCP | the published versions (`hub strategy show`, `hub strategy summary`) | no | never |
+| Every other bot, and an external agent over MCP | the published versions (`tico strategy show`, `tico strategy summary`) | no | never |
 
 **The draft is the owner's.** `GET /strategy` returns `draft` only to the owner (`may_edit`); everyone else, every
 bot included, sees the published version. A bot never sees an unpublished "What we won't do". The draft carries a
@@ -193,11 +193,11 @@ Strategy is the Strategy Bot's first job ([Your Strategy Bot](strategy-bot.md#st
   active bet, each with `bet_id` set and a KPI that could serve as the bet's wrong-if. The Monday note names each
   active bet with no KPI-backed goal and each bet whose health is gray.
 
-The Librarian reads the strategy too: "Set up the market map" takes the team's website from `hub strategy show` when
+The Librarian reads the strategy too: "Set up the market map" takes the team's website from `tico strategy show` when
 its task has none, and when an insight contradicts an active bet the daily curate routine says so in its report and
 sends the Strategy Bot a note, so it can propose the entity as one of the bet's `cites`. The Librarian never writes the
 strategy ([Librarian](librarian.md#setting-up-the-market)). The optional Strategy Analyst template reads the bets from
-`hub strategy show` and plans each quarter against them; it keeps no strategy notes of its own.
+`tico strategy show` and plans each quarter against them; it keeps no strategy notes of its own.
 
 ## Setup
 
@@ -279,7 +279,7 @@ The server watches each active bet's wrong-if: a KPI reading crossing its thresh
 change to a cited market entity or page (from market events), or a sentence bet's check-by date passing. When one
 trips, once per bet per version, it files a task for the Strategy Bot, "Bet N: may be wrong", with the evidence.
 
-The Strategy Bot's `bet-tripped.md` playbook reads the bet, the evidence, the readings or `hub market show <id>`, and the
+The Strategy Bot's `bet-tripped.md` playbook reads the bet, the evidence, the readings or `tico market show <id>`, and the
 goals linked to the bet, and writes **one Decide card** for the owner: a `strategy_draft` proposal that retires the
 bet, rewrites it, or keeps it with a new wrong-if, with its pick and why in a few lines. It never edits goals. This
 runs at every level: at Passive the server still files the task, and the Strategy Bot only writes the card.
@@ -294,31 +294,31 @@ Librarian applies it to the entity.
 - **In context**, every turn once a version is published: `GET /strategy/summary` under **Team strategy**, about 500
   characters: the summary, one line per active bet with its wrong-if, then "version N". Nothing while no version is
   published.
-- **On request**: `hub strategy show` (the published page with bets, `goals_by_bet` and `health_by_bet`) and
-  `hub strategy summary`.
+- **On request**: `tico strategy show` (the published page with bets, `goals_by_bet` and `health_by_bet`) and
+  `tico strategy summary`.
 - Never the draft.
 
 ## `hub` and the API
 
 ```
-hub strategy show                       the published version: bets, goals_by_bet, health_by_bet (the draft too, for the owner)
-hub strategy summary                    the text every bot gets in context
-hub strategy draft [--summary S] [--vision V] [--section KEY=TEXT ...] [--extra KEY --title T --body B]
+tico strategy show                       the published version: bets, goals_by_bet, health_by_bet (the draft too, for the owner)
+tico strategy summary                    the text every bot gets in context
+tico strategy draft [--summary S] [--vision V] [--section KEY=TEXT ...] [--extra KEY --title T --body B]
                                         owner only; KEY is serve, sell, proof, now, know, how or not; "" clears a key
-hub strategy publish --note "<why>"     owner only
-hub strategy versions                   n, note, who published, when
-hub strategy diff <from> <to>           fields changed; bets added, retired, changed
-hub strategy bet add --statement S [--why W] [--rules-out R] [--wrong-if-kpi ID --wrong-if-direction above|below
+tico strategy publish --note "<why>"     owner only
+tico strategy versions                   n, note, who published, when
+tico strategy diff <from> <to>           fields changed; bets added, retired, changed
+tico strategy bet add --statement S [--why W] [--rules-out R] [--wrong-if-kpi ID --wrong-if-direction above|below
     --wrong-if-threshold N | --wrong-if-thesis MARKET_ID | --wrong-if-text TEXT] [--check-by DATE] [--cite MARKET_ID ...]
     [--status proposed|active] [--rank N]
-hub strategy bet update <id> [the same flags]      hub strategy bet retire <id>      (owner only)
-hub strategy guides                     deprecated; the Default guide only
-hub lens list|run|show|runs            see Lenses (lenses.md)
-hub goal create ... --bet <id>          hub goal update <id> --bet <id>
+tico strategy bet update <id> [the same flags]      tico strategy bet retire <id>      (owner only)
+tico strategy guides                     deprecated; the Default guide only
+tico lens list|run|show|runs            see Lenses (lenses.md)
+tico goal create ... --bet <id>          tico goal update <id> --bet <id>
 ```
 
-Every command has an MCP tool of the same name and arguments (`hub_strategy_show`, `hub_strategy_bet_add`,
-`hub_strategy_bet_update`, `hub_strategy_bet_retire` ...). The routes, under `/api/v2`:
+Every command has an MCP tool of the same name and arguments (`tico_strategy_show`, `tico_strategy_bet_add`,
+`tico_strategy_bet_update`, `tico_strategy_bet_retire` ...). The routes, under `/api/v2`:
 
 | Route | Who | What it does |
 |---|---|---|

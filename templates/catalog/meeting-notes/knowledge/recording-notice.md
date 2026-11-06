@@ -14,7 +14,7 @@ judgment. The team's own policy, and any counsel it uses, decide the rule for th
 ## What the write-up does
 
 - If the transcript, the meeting invite or the import record shows a recording notice, write up as normal.
-- If it shows none, or the notice is unclear, ask the human who ran the meeting once with `hub task question "<question>" --on <person> --parent <id>`, and stop
+- If it shows none, or the notice is unclear, ask the human who ran the meeting once with `tico task question "<question>" --on <person> --parent <id>`, and stop
   until they answer. Do not write the meeting up on the assumption that it was announced.
 - Record the answer in the task and in `knowledge/coverage.md`, so the same question is not asked for every meeting with
   the same people.

@@ -9,10 +9,10 @@ the caller and not by prompt text.
 - **The SQL page** (`#/sql`, under your email next to Credentials; the owner and admins, and the owner may limit it to
   the owner in Settings > People). Type, press
   ⌘↩, read the rows. The last query is remembered in the browser.
-- **`hub sql "<select>"`** from a bot run or from a computer. Prints an aligned table and a
+- **`tico sql "<select>"`** from a bot run or from a computer. Prints an aligned table and a
   trailing `N rows (M ms)` line; `--json` for the API response, `--csv` for CSV, `--max-rows N`
   to ask for fewer rows, `--param key=value` to bind `:key` (numbers bind as numbers). Inside a
-  run it is the bot. Outside a run, `hub sql` alone falls back to the computer's runner credential
+  run it is the bot. Outside a run, `tico sql` alone falls back to the computer's runner credential
   (`~/.config/tico/runner.json`) and queries as the human who registered the computer, so a
   script or an agent on Ana's Mac needs no browser session. From any other computer, a
   personal API token (Settings, Computers, API tokens; any human, unless the owner limits it to admins) makes
@@ -183,15 +183,15 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `bot_file_versions`, `bot_file_activity` | `file_id, version` or `file_id, action, actor, created_at` | versions and activity of visible Files |
 | `pages` | `file_id, cadence, as_of, replaced_by_id, archived, created_at, updated_at` | a bot's File published as a page: `file_id` is `bot_files.id`; `cadence`: none, daily, weekly, monthly; `as_of` is the date its data is from; `replaced_by` names the newer page, if any ([Pages](pages.md)) |
 | `cards` | `id, template, settings, title, made_by_id, created_at, updated_at, updated_by_id` | a built-in card: `template` is one of Tico's own templates and `settings` its checked settings. A card's numbers are worked out when it is read, for the reader, and are not stored ([Company](overview.md)) |
-| `learnings` | `id, integration, actor, text, created_at, deleted_at` | Tools: what bots and humans learned about a tool (`integration` is the stored column; `integrations/`, `hub tool learn`) |
-| `assistant_action_weekly`, `mcp_call_weekly` | `week, proposer, status, actions, share_pct` and `week, bot, tool, calls, errors, error_pct, avg_ms, max_ms` | read-only totals for the owner and a bot the owner grants them (API only: `PUT /api/v2/outcome-stats/readers/<slug>`; revoke with `read: false`): how Assistant and BotOps proposals settled (`status`: done, failed, canceled, expired ...) and how bot MCP tool calls went, per week. No row, text, id or person is in them; the underlying `assistant_actions` stays unreadable to a bot. The same bot may call `hub mcp stats` (no `--via`) |
+| `learnings` | `id, integration, actor, text, created_at, deleted_at` | Tools: what bots and humans learned about a tool (`integration` is the stored column; `integrations/`, `tico tool learn`) |
+| `assistant_action_weekly`, `mcp_call_weekly` | `week, proposer, status, actions, share_pct` and `week, bot, tool, calls, errors, error_pct, avg_ms, max_ms` | read-only totals for the owner and a bot the owner grants them (API only: `PUT /api/v2/outcome-stats/readers/<slug>`; revoke with `read: false`): how Assistant and BotOps proposals settled (`status`: done, failed, canceled, expired ...) and how bot MCP tool calls went, per week. No row, text, id or person is in them; the underlying `assistant_actions` stays unreadable to a bot. The same bot may call `tico mcp stats` (no `--via`) |
 
 Only the signed-in owner can grant or revoke access; personal API tokens and delegated Assistant or BotOps turns cannot.
 Delegated turns also cannot read these totals through the owner's role. Revocation removes the bot's access on its next
 request. Buckets are not suppressed: a count of one is visible, without the underlying proposal or person's identity.
-People's MCP calls are excluded from `mcp_call_weekly` and a granted bot's `hub mcp stats`. Assistant proposal
+People's MCP calls are excluded from `mcp_call_weekly` and a granted bot's `tico mcp stats`. Assistant proposal
 totals combine all owners by week, proposer and status; action routes and methods are not exposed.
-Tool names in the MCP totals and a granted bot's `hub mcp stats` are registered hub tool names; unknown names count as `other`.
+Tool names in the MCP totals and a granted bot's `tico mcp stats` are registered tico tool names; unknown names count as `other`.
 
 `sqlite_master` lists the rest (`SELECT name, sql FROM sqlite_master WHERE type='table'`).
 
@@ -250,9 +250,9 @@ Every run records what woke it (`attempts.trigger_kind`), its tokens, and whethe
   `comment` and `person_message`, the subtask, the routine, the worktree.
 - **`writes`**: the hub writes the run made with its own run token (a task change, comment, link, message,
   file, approval request), plus one for a reply Tico posted for it (to a person, or a reply to a bot's question). Reads and bookkeeping are not
-  writes: `hub sql`, opening a thread, marking messages read, its own status line, refusals and lint.
+  writes: `tico sql`, opening a thread, marking messages read, its own status line, refusals and lint.
   A git push from a worktree of the run's own task counts one per push: its runner reports them with the run's
-  result. A commit or pull request counts once Tico hears of it (`hub task link`, a task note, a push); a local
+  result. A commit or pull request counts once Tico hears of it (`tico task link`, a task note, a push); a local
   commit Tico never sees cannot be counted.
 - **`outcome`**: `acted` when `writes` is above zero; otherwise `no_change` when the run's task is still open
   as it ends (it looked, and nothing had moved) and `nothing_to_do` when there was no open task to act on (no
@@ -262,7 +262,7 @@ Every run records what woke it (`attempts.trigger_kind`), its tokens, and whethe
   `{task_id, outcome, from, to}`): `accepted` (closed, or `review` moved to `done`), `edited` (its title or body
   rewritten) or `overridden` (sent back to work, declined or handed to another owner). The first is the run's outcome;
   later moves add none. `SELECT json_extract(detail,'$.outcome') o, count(*) FROM events WHERE
-  action='turn.outcome' GROUP BY o`. A caller's own decision calls get the same from `hub decision outcome`
+  action='turn.outcome' GROUP BY o`. A caller's own decision calls get the same from `tico decision outcome`
   (`decision.outcome` events, target the `judge.call` event id).
 - **`did_nothing`**: 1 when `writes` is 0, else 0: the exact flag to measure against. It sees every write that
   reaches Tico with the run's token, and every push from its task's worktrees; a push from anywhere else (the
@@ -385,7 +385,7 @@ SELECT created_at, actor, json_extract(detail, '$.rows') AS rows, json_extract(d
 FROM events WHERE action='sql.query' ORDER BY created_at DESC LIMIT 20
 ```
 
-From a bot: `hub sql "SELECT ..." --param me=bot:seo`. From Ana's Mac: `scripts/hub sql "SELECT ..."`.
+From a bot: `tico sql "SELECT ..." --param me=bot:seo`. From Ana's Mac: `scripts/hub sql "SELECT ..."`.
 
 For a task's Slack notification status (Owner only):
 

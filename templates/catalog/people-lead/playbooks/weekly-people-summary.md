@@ -2,8 +2,8 @@
 
 Schedule: Mondays at 08:30 team time (routine `weekly-people-summary`), after setup. Also run by hand. Budget 35 minutes.
 
-Inputs: `knowledge/headcount-plan.md`, `knowledge/people-calendar.md`, `knowledge/routing.md`, last week's summary, `hub team show`,
-`hub calendar list`, the open people tasks, and each people bot's newest report.
+Inputs: `knowledge/headcount-plan.md`, `knowledge/people-calendar.md`, `knowledge/routing.md`, last week's summary, `tico team show`,
+`tico calendar list`, the open people tasks, and each people bot's newest report.
 
 Outcome: one confidential page for the named readers: hires against plan, who starts and leaves, what is due in the next 30
 days, what is blocked, and who should take what. Nothing is assigned, published or sent.
@@ -15,9 +15,9 @@ published on the task for its readers only. Follow `skills/write-a-people-summar
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub team show
-    hub calendar list
+    tico task show <id>
+    tico team show
+    tico calendar list
 
 Then `knowledge/headcount-plan.md`, `knowledge/people-calendar.md`, `knowledge/routing.md` and last week's summary. If last
 week named an action, check whether it happened and say so.
@@ -40,7 +40,7 @@ not done is bold and goes into "Needs a human".
 
 ## 5. What the people bots produced
 
-For each people bot in `hub team show`: its newest report and anything waiting on a human more than 5 days. One line each.
+For each people bot in `tico team show`: its newest report and anything waiting on a human more than 5 days. One line each.
 A bot you could not read is named.
 
 ## 6. Routing and hiring proposals
@@ -52,8 +52,8 @@ nothing.
 ## 7. Write and hand over
 
 Write `reports/YYYY-MM-DD-people-summary.md` in the shape of `knowledge/examples/people-summary.md`, then
-`hub file publish reports/YYYY-MM-DD-people-summary.md --scope task --task <id>`. Commit, and run
-`hub task update <id> --status done --note "..."`: the headline, the path, and what you could not read.
+`tico file publish reports/YYYY-MM-DD-people-summary.md --scope task --task <id>`. Commit, and run
+`tico task update <id> --status done --note "..."`: the headline, the path, and what you could not read.
 
 ## When a source fails
 

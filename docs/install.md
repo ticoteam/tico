@@ -595,11 +595,11 @@ minutes:
 Set it as the owner, with the Tico Gateway connected in Settings → Models:
 
 ```
-hub relay wake-url set https://wake.acme.example/start-tico
+tico relay wake-url set https://wake.acme.example/start-tico
 ```
 
-The answer shows a signing secret (`whsec_...`) once. Tico does not keep it. `hub relay wake-url show` shows the address, who set
-it and when; `hub relay wake-url off` stops the calls. The address must be public https with no user or password.
+The answer shows a signing secret (`whsec_...`) once. Tico does not keep it. `tico relay wake-url show` shows the address, who set
+it and when; `tico relay wake-url off` stops the calls. The address must be public https with no user or password.
 
 The call is signed as [Standard Webhooks](https://www.standardwebhooks.com) (`webhook-id`, `webhook-timestamp`,
 `webhook-signature`) with that secret. Check it before you start anything, so a stranger who finds the address cannot start your
@@ -633,7 +633,7 @@ signed in, the runner (the software on the computer) asks the server for that ke
 and signs in the way it would with a key you had typed there. Nobody copies a key between computers, and the key is in no log.
 For those model-key names, a blank **Bot variable name** is inferred automatically; an explicit variable takes precedence.
 Older name-only model keys also offer **Every computer (signs models in)**, and granting one fills the missing variable.
-Tool Credentials need a grant per bot; `hub_credential_grant` targets a bot.
+Tool Credentials need a grant per bot; `tico_credential_grant` targets a bot.
 
 Only that model credential comes this way: a bot's own credentials stay with that bot, and a computer never receives them.
 

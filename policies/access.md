@@ -35,8 +35,8 @@ Rules:
 - Calendar appointments are a team-wide capability for every bot, separate from Gmail access.
   Every address in `registry/people.yaml` may be read or scheduled through the guarded Hub tools
   or mail CLI; a Gmail `read_only: true` entry does not restrict calendar use:
-  `hub_calendar_list` reads the connector's bounded snapshot and `hub_calendar_schedule`
-  queues an audited provider action. `hub_calendar_status` must say `succeeded` before the bot
+  `tico_calendar_list` reads the connector's bounded snapshot and `tico_calendar_schedule`
+  queues an audited provider action. `tico_calendar_status` must say `succeeded` before the bot
   claims the event exists. `mail calendar add|list|get` is the direct audited path on the runner.
   Invitations may include guests outside the team (the owner can turn that off with
   `TICO_BLOCK_EXTERNAL_INVITES=1`, which limits bots to roster attendees). This standing grant does

@@ -66,7 +66,7 @@ def register(app, auth, mover, mutate, settings_admin, task_view):
     def task_defer(request: Request, tid: str, body: M.TaskDefer):
         """Say when a deferred task a run carried (or one still waiting for a run) is picked up again: after another
         task is done, at a time, or with the next run; or that the run handled it (backend/quiet_work.py). The task's
-        own bot, or a person (`hub task later`)."""
+        own bot, or a person (`tico task later`)."""
 
         def work(c):
             who = request.state.identity

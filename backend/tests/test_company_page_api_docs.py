@@ -39,7 +39,7 @@ def test_the_logo_and_the_preview_say_they_send_image_bytes_and_html_not_json(ap
 
 
 def test_the_cli_sends_an_outside_editions_who_for_a_rule_an_owner_adds_or_edits(monkeypatch):
-    """`hub rules add --outside-editions` is the Who the Company page's editions read; it must reach the API as that key."""
+    """`tico rules add --outside-editions` is the Who the Company page's editions read; it must reach the API as that key."""
     from clients import hubcli, remotecli
 
     sent = []

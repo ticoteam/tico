@@ -7,7 +7,7 @@ description: Turn one active bet from the Strategy page into a plain-words objec
 When to use: when drafting a quarterly plan objective, or checking a draft objective against the published strategy.
 
 Steps:
-1. Read `hub strategy show` for the published version: each active bet, what it rules out, and what would prove it wrong.
+1. Read `tico strategy show` for the published version: each active bet, what it rules out, and what would prove it wrong.
    If nothing is published, say so and mark the objective "unconfirmed".
 2. Pick the bet the objective serves. Write it as one sentence describing an outcome, in plain words. An activity is not an
    objective: "run three webinars" is an activity; "more trials convert to paid" is an outcome.
@@ -15,7 +15,7 @@ Steps:
    the owner under "Needs a decision".
 4. Name the bet and its id on the objective line. If it serves no active bet, mark it "serves no active bet" and write one
    sentence on why it belongs in the plan.
-5. Check whether the bet has a KPI-backed goal (`hub goal list --all`). If it has none, its health is gray. Draft a key result
+5. Check whether the bet has a KPI-backed goal (`tico goal list --all`). If it has none, its health is gray. Draft a key result
    that could measure it.
 
 Checks before you finish:

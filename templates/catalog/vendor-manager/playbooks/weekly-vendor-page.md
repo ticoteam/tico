@@ -4,22 +4,22 @@ Schedule: Tuesdays at 09:00 team time (routine `weekly-vendor-page`), after setu
 renewed or canceled by this page.
 
 Inputs: `knowledge/vendors.md`, `knowledge/renewal-practice.md`, open and waiting tasks that name a vendor, new contracts
-in `hub doc search "contract"`, and, where a mailbox is connected, renewal notices and first invoices from unknown
+in `tico doc search "contract"`, and, where a mailbox is connected, renewal notices and first invoices from unknown
 senders.
 
 Outcome: `reports/YYYY-MM-DD-vendors.md` in the shape of `knowledge/examples/vendor-page.md`: headline, urgent renewals,
 open renewals with a one-line call each, reviews due, gaps, and register changes.
 
 Done when: every contract in the register has a notice deadline with its clause, or "not on file"; every renewal inside
-90 days has a call; every gap has a line; the page is published with `hub file publish`; and the task note carries the
+90 days has a call; every gap has a line; the page is published with `tico file publish`; and the task note carries the
 headline and the counts.
 
 ---
 
 ## 1. Refresh the register
 
-    hub task show <id>
-    hub task list --status open --status waiting
+    tico task show <id>
+    tico task list --status open --status waiting
 
 Read new tasks tagged with a vendor name, new contracts since last week, and, where a mailbox is connected, renewal
 notices and first invoices from unknown senders. A vendor that is paid but not in the register is added with "found via
@@ -47,9 +47,9 @@ Write `reports/YYYY-MM-DD-vendors.md` in the shape of `knowledge/examples/vendor
 always-show amount in `knowledge/vendors.md` (default 5,000 a year) gets its full brief through
 `playbooks/renewal-brief.md`. Then publish it:
 
-    hub file publish reports/YYYY-MM-DD-vendors.md
+    tico file publish reports/YYYY-MM-DD-vendors.md
 
 ## 6. Finish
 
-Commit, then `hub task update <id> --status done --note` with the headline and the counts. A quiet week is one line, and
+Commit, then `tico task update <id> --status done --note` with the headline and the counts. A quiet week is one line, and
 the task is still finished.

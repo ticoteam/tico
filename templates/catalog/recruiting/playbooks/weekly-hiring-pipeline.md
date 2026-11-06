@@ -4,7 +4,7 @@ Schedule: Fridays at 10:00 team time (routine `weekly-hiring-pipeline`), after s
 30 minutes.
 
 Inputs: `knowledge/pipeline.md`, every `knowledge/roles/<role>.md` for an open role, last week's page, and the open hiring
-tasks (`hub task list --status open --status doing --status waiting`).
+tasks (`tico task list --status open --status doing --status waiting`).
 
 Outcome: one page for the hiring managers, in the shape of `knowledge/examples/hiring-pipeline.md`. It shows where each open
 role stands, who is waiting on a human past the agreed wait, which replies are ready to send, and which kits need work.
@@ -17,8 +17,8 @@ is published, and the task note carries the headline.
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub task list --status open --status doing --status waiting
+    tico task show <id>
+    tico task list --status open --status doing --status waiting
 
 Then read `knowledge/pipeline.md`, the role file for each open role, and last week's page.
 
@@ -39,8 +39,8 @@ the number of days. Managers read this line first.
   only when the task asks for it, a granted Tool allows it, and a person has turned mail sending on in Tico. The content of
   any decision belongs to the manager.
 - **Interviews.** For each candidate the manager moved to interview since last week, hand scheduling to
-  `recruiting-coordinator` with `hub task create --owner recruiting-coordinator`: role, reference, rounds, and the panel
-  from the role file. If that bot is not in `hub team show`, list the candidates for the hiring manager instead.
+  `recruiting-coordinator` with `tico task create --owner recruiting-coordinator`: role, reference, rounds, and the panel
+  from the role file. If that bot is not in `tico team show`, list the candidates for the hiring manager instead.
 
 ## 5. Check the kits
 
@@ -51,9 +51,9 @@ on the page.
 
 Write `reports/YYYY-MM-DD-hiring-pipeline.md` in the shape of `knowledge/examples/hiring-pipeline.md`, then:
 
-    hub file publish reports/YYYY-MM-DD-hiring-pipeline.md
+    tico file publish reports/YYYY-MM-DD-hiring-pipeline.md
 
-Close the task with `hub task update <id> --status done --note "..."`: the headline, the counts, and what you could not read.
+Close the task with `tico task update <id> --status done --note "..."`: the headline, the counts, and what you could not read.
 
 ## When a source fails
 

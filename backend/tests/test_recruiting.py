@@ -48,7 +48,7 @@ def test_org_model_recommendations_are_only_the_published_starter_catalog(api):
     from clients import hubtools
 
     offered = {tool["name"] for tool in hubtools.listing(kind="assistant")}
-    assert "hub_org_models" in offered and "hub_assistant_propose" in offered
+    assert "tico_org_models" in offered and "tico_assistant_propose" in offered
 
 
 def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewrites_it_once(api, monkeypatch):

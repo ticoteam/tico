@@ -10,7 +10,7 @@ other file.
 
 ## Publishing
 
-    hub page publish reports/weekly-review.html --title "Engineering weekly" --cadence weekly [--as-of 2026-10-27]
+    tico page publish reports/weekly-review.html --title "Engineering weekly" --cadence weekly [--as-of 2026-10-27]
         [--task ID] [--replaces PAGE]
 
 - **The same path again** adds a version of the same page.
@@ -23,14 +23,14 @@ other file.
   **Replaced by** and links here. An Assistant turn must be able to read and manage the older page as its person,
   and both pages must be filed on the request's task.
 
-A bot writes only its own pages. Over MCP the same tools are `hub_page_publish`, `hub_page_list`, `hub_page_show` and
-`hub_page_archive`.
+A bot writes only its own pages. Over MCP the same tools are `tico_page_publish`, `tico_page_list`, `tico_page_show` and
+`tico_page_archive`.
 
 Task turns receive up to ten pages filed on or pinned to the task and ten linked meetings, newest first, as ids,
-titles, versions and dates. `hub task context ID` (`hub_task_context`, `GET /api/v2/tasks/{id}/context`) reads that
+titles, versions and dates. `tico task context ID` (`tico_task_context`, `GET /api/v2/tasks/{id}/context`) reads that
 metadata list. It includes only sources the caller may read. A bot uses its own normal read rights in every turn,
-whether or not it is working on a task. The task supplies references; the bot pulls content with `hub file read ID`
-and `hub meeting read ID` (`--notes` for saved meeting notes).
+whether or not it is working on a task. The task supplies references; the bot pulls content with `tico file read ID`
+and `tico meeting read ID` (`--notes` for saved meeting notes).
 
 Each read checks current access; a task link or pin grants no additional access.
 
@@ -47,9 +47,9 @@ choose **Who can see it** in the full view: humans, groups (including their nest
 This only narrows the file's inherited visibility. A pin, task link, live block or embed never widens past it.
 The maintainer and page managers always pass the audience check. Only managers see the chosen names and lock icon.
 
-`hub page publish report.html --audience ben,group:legal,bot:analyst` sets it when publishing.
-`hub page access ID` shows it to managers; `hub page access ID --audience everyone` clears it.
-MCP uses `hub_page_publish`'s `audience` and `hub_page_access`. A new version keeps the setting unless publishing sets
+`tico page publish report.html --audience ben,group:legal,bot:analyst` sets it when publishing.
+`tico page access ID` shows it to managers; `tico page access ID --audience everyone` clears it.
+MCP uses `tico_page_publish`'s `audience` and `tico_page_access`. A new version keeps the setting unless publishing sets
 one. `PATCH /api/v2/pages/{id}` accepts the access audience object, or `null` to clear it. Everyone still needs access
 to where the page is filed. Restricted pages use a per-reader visual address, never the shared hosted copy.
 
@@ -90,7 +90,7 @@ the one person or bot viewing it. The page itself stays static: no script runs a
   `tasks_done_7d`, `first_response_min`, `approval_rate_30d`, `failed_runs_7d` or `cost_7d`, or its name. `period` is
   optional and must be the KPI's own window.
 - `<tico-kpi id="KPI_ID"></tico-kpi>`: a stored KPI, such as "Booked demos" ([KPIs](goals-and-kpis.md)). The id is in
-  `hub kpi list`. It shows the latest reading's value and unit, and its change on the reading closest to one cadence
+  `tico kpi list`. It shows the latest reading's value and unit, and its change on the reading closest to one cadence
   period before (the previous reading when the KPI has no cadence), such as `▲ 3 demos vs previous week`. `period`
   does not apply to `id`. Readings marked partial, and readings a correction replaced, are not used.
 
@@ -148,9 +148,9 @@ line, and opens in the file viewer's sandboxed preview. Pages have no scripts, s
 
 ## Archiving
 
-The maintainer bot, people who manage it, admins and the owner archive a page (`hub page archive ID`, or **Archive**
+The maintainer bot, people who manage it, admins and the owner archive a page (`tico page archive ID`, or **Archive**
 on the full view). An archived page leaves lists and search and still opens from a link. **Restore**
-(`hub page archive ID --restore`) or a new version brings it back. Versions are kept.
+(`tico page archive ID --restore`) or a new version brings it back. Versions are kept.
 
 ## API
 
@@ -173,7 +173,7 @@ totals, so a count never says what a reader cannot see.
 Managers get `audience` on single-page reads and writes, and a small `restricted` flag on summaries and cards.
 Other readers get neither field.
 
-`hub page list --task ID` and MCP's `hub_page_list` include both filed and linked pages with the same paging.
+`tico page list --task ID` and MCP's `tico_page_list` include both filed and linked pages with the same paging.
 
 **Who acts.** A bot publishes during its turn. Your Assistant makes task pages as you, recording its authenticated
 attempt alongside your authorship. People archive and restore. BotOps archives for a person with that

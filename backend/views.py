@@ -4090,7 +4090,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "path": "canonical cloud history",
                 "note": (
                     "Provider session files stay on the assigned Mac; the hub keeps the "
-                    "conversation, which the bot reads with `hub conversation show`."
+                    "conversation, which the bot reads with `tico conversation show`."
                 ),
                 "runs": [{"run": turn["id"], "issue": None} for turn, _ in rows],
                 "turns": turns,
@@ -4100,7 +4100,7 @@ def install_views(app, store, auth, mutate, task_view):
     def my_recent(request: Request, days: int = 7, limit: int = 10):
         """The bots I have been working with lately, most recent first, each with
         its live status, the last thing I said and the last thing it said, the conversation to read
-        on (`hub_conversation_show`), our open tasks and what it needs from me. `hub_bot_recent` over MCP, so an
+        on (`tico_conversation_show`), our open tasks and what it needs from me. `tico_bot_recent` over MCP, so an
         agent of mine (a Grok bot) can carry on where I left off."""
         who = request.state.identity
         human_only(who)
@@ -4224,7 +4224,7 @@ def install_views(app, store, auth, mutate, task_view):
     @app.get("/api/v2/needs-you/summary")
     def needs_summary_route(request: Request, limit: int = NEEDS_SUMMARY_ITEMS):
         """What the Needs you list holds, counted as the board counts it: the total, per kind and per bot, with each
-        bot's newest `limit` items (at most 10). `hub needs-you show` over MCP. A person only: the list is theirs."""
+        bot's newest `limit` items (at most 10). `tico needs-you show` over MCP. A person only: the list is theirs."""
         who = request.state.identity
         human_only(who)
         with store.read_transaction() as c:

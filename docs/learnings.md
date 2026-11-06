@@ -92,7 +92,7 @@ label `dream`, and its body is the instructions. Starting one takes the rights t
 the same checks as any task create; while one is open, starting again returns it (or 409 `busy`, without its
 questions, to someone who may not read the bot). Starting one also records a `dream.start` event on the task; that
 event, not the label, is what makes a task a dream, since anyone can label a task `dream`. It runs as a task turn with the
-bot's own model, and its session resumes after the question. The question is the task's one `hub_task_question`; ask
+bot's own model, and its session resumes after the question. The question is the task's one `tico_task_question`; ask
 ingest never judges it, since the person started the dream to be asked. They answer it in the panel, on the bot's
 page, where it shows until answered, or in Needs you; the answer wakes the bot as any answer does. While it works, the bot keeps
 the task note at one short line on what it is doing now, and the panel shows that line and how long the dream has run
@@ -223,4 +223,4 @@ unreported outcomes are retained before renewing a fingerprint while reporting i
 at most 100 receipts to `/v1/suggestions/outcomes`, containing only `suggestion_id` and `outcome` (`delivered`, `acted`, `dismissed`,
 `expired` or `condition_false`). Failed reporting keeps receipts unacknowledged for a later run. Both Gateway calls run
 outside write transactions. Privacy settings are owner-only at `GET/PUT /api/v2/system/suggestions` and discoverable
-through the existing `hub settings` and MCP settings catalogue.
+through the existing `tico settings` and MCP settings catalogue.

@@ -1155,7 +1155,7 @@ class WaitingWithDependency(HubCase):
         parked = H.task_update(self.conn, CMO, task['id'], status='waiting', note='Waiting on the vendor reply')
         self.assertEqual(parked['status'], 'waiting')
         self.assertIn('goes back to open', parked['warnings'][0])
-        self.assertIn('hub task create --parent', parked['warnings'][0])
+        self.assertIn('tico task create --parent', parked['warnings'][0])
 
     def test_a_note_only_wait_on_a_person_requested_task_warns(self):
         # Seen live: a person's task parked "waiting on BotOps's snapshot" that BotOps never heard of.
@@ -1498,7 +1498,7 @@ class WaitingWithDependency(HubCase):
             (None, f'Blocked on Ana Rivera: {plain}', None),
         )
         self.assertEqual(H.task(self.conn, after['asked_in']['id'])['body'], plain)
-        # An open question to them on the task already asks (`hub task question`): no note is needed.
+        # An open question to them on the task already asks (`tico task question`): no note is needed.
         asked = H.task_create(self.conn, ANA, 'Draft the launch post', '', CMO, private=False)
         question = QT.ask_plain(self.conn, CMO, ANA, 'Which date should it go out?', parent=asked)
         self.assertEqual(
@@ -1553,7 +1553,7 @@ class WaitingWithDependency(HubCase):
                 'id or hash: "8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f"',
             ),
             ("Merge PR #1555 with backend/hubdb.py?", 'file path: "backend/hubdb.py"'),
-            ("Merge PR #1555 with hub task update?", 'tool or field name: "hub task"'),
+            ("Merge PR #1555 with tico task update?", 'tool or field name: "tico task"'),
             ("Merge PR #1555? It failed with ValueError: bad date.", 'error output: "ValueError"'),
         ]:
             self.assertIn(failed, "; ".join(H.lint_person_ask(ask)), ask)

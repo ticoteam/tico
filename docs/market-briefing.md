@@ -26,7 +26,7 @@ The hub makes two built-in automations for the Librarian (see Automations):
 
 - **Market briefing**: daily at 07:00 team time. The Librarian's turn writes the briefing (a one-line title, then a
   bullet per point); the run's `post_update` step, `{"to": ["market", "updates"]}`, posts it as this week's briefing
-  and adds one line pointing at it to the Librarian's daily update. A daily briefing replaces the week's title and page; the items the Librarian tagged that week (`hub market briefing post --items-file`), the bets they touch and the answers (`--answers-file`) stay.
+  and adds one line pointing at it to the Librarian's daily update. A daily briefing replaces the week's title and page; the items the Librarian tagged that week (`tico market briefing post --items-file`), the bets they touch and the answers (`--answers-file`) stay.
 - **Market listening · <destination>**: one per listening destination the Librarian receives. Each match is a
   Librarian turn; the turn changes the graph through the market routes, never the match itself.
 
@@ -61,12 +61,12 @@ automation on the event `market.briefing` with a Strategy Bot turn that follows 
 
 | Command | Does |
 |---|---|
-| `hub market briefing post --week <2026-W44> --title <t> --body-file <f> [--items-file <items.json>] [--answers-file <answers.json>]` | Post or replace a week. Owner or Librarian |
-| `hub market briefing latest` | The newest briefing with its body and the bets it touches |
+| `tico market briefing post --week <2026-W44> --title <t> --body-file <f> [--items-file <items.json>] [--answers-file <answers.json>]` | Post or replace a week. Owner or Librarian |
+| `tico market briefing latest` | The newest briefing with its body and the bets it touches |
 
 `--items-file` is a JSON list of `{"text", "kind", "entity_ids"}`; `--answers-file` a JSON object of the answers, by
 key. Both commands are also hub tools
-(`hub_market_briefing_post`, `hub_market_briefing_latest`).
+(`tico_market_briefing_post`, `tico_market_briefing_latest`).
 
 ## API
 

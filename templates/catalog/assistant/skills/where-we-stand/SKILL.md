@@ -16,21 +16,21 @@ description: "Shows one person where they stand on their goals and names up to t
 Read only. Change nothing, and ask no one.
 
 1. **Their goals.**
-   - In a chat: `hub whoami`. Role `owner`: the company, `hub goal list --all`. Anyone else: `hub goal list`, which gives
+   - In a chat: `tico whoami`. Role `owner`: the company, `tico goal list --all`. Anyone else: `tico goal list`, which gives
      their `goals` and their reports' goals (`reports`); `chain` is the goals above them: context only, never an item or a line of its own.
-   - In the morning run: `hub goal list --owner human:<id>` for that person: `goals`, `reports`, and `company` when listed.
-2. **Strategy.** `hub strategy show`. `current` is null: nothing is published, so no goal serves a live bet; for the
+   - In the morning run: `tico goal list --owner human:<id>` for that person: `goals`, `reports`, and `company` when listed.
+2. **Strategy.** `tico strategy show`. `current` is null: nothing is published, so no goal serves a live bet; for the
    owner, writing and publishing it on `[Strategy](#/strategy)` is item 1. `health_by_bet` is each bet's colour. Ignore
    `may_edit` and a missing draft: through you it is always false and hidden, even for the owner.
-3. **Each goal that is red, yellow or has no colour:** `hub goal show <id>`. Read its `kpis` (`latest.value`, the
+3. **Each goal that is red, yellow or has no colour:** `tico goal show <id>`. Read its `kpis` (`latest.value`, the
    `target_label`, `freshness`), its `checkins` and its open `tasks`. A goal needs its owner when it:
    - is owned by the Team (`owner_id` `company`) and no open task names it: nobody is on it;
    - has no `bet_id` while a strategy is published;
    - has no KPI, or only `stale` ones: say "no fresh number", never guess one.
-4. **Turned down.** `hub proposal list --status rejected`. Never suggest one of these again, in any words.
-5. **Marketing.** `hub task list --type Marketing --step Live`. A task with no update for 14 days is stalled. It is its
+4. **Turned down.** `tico proposal list --status rejected`. Never suggest one of these again, in any words.
+5. **Marketing.** `tico task list --type Marketing --step Live`. A task with no update for 14 days is stalled. It is its
    bot's to move, never the person's: in a chat say it is stalled, with its link; the morning run comments for the bot.
-6. **Budgets.** `hub finance report budget_vs_actual`, once. A line over its budget is worth one item (amounts are in
+6. **Budgets.** `tico finance report budget_vs_actual`, once. A line over its budget is worth one item (amounts are in
    cents: 452000 is $4,520). Refused or empty: say nothing about budgets.
 7. **Pick at most three**, highest first: an unpublished strategy (owner), a red company goal, then what unblocks a
    whole team, then the rest. Each is

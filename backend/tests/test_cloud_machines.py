@@ -2139,7 +2139,7 @@ def test_replace_through_botops_waits_for_the_persons_confirmation(cloud, botops
     attempt = turn(cloud.api, botops, "ana-test", "Replace ops's cloud machine")
     failed, card = mcp(
         cloud.api,
-        "hub_settings_set",
+        "tico_settings_set",
         {"key": "bot.cloud_machine.replace", "bot": "ops", "value": {}, "on_behalf_of": "turn"},
         attempt["token"],
     )

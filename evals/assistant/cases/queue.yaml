@@ -92,7 +92,7 @@
     - '^message send'
   reply: |
     Stops the source, not just the symptom: it disables the Technical Writer's "Docs and release notes for each release"
-    automation (`hub automation update auto_docs_release --disable`), or adds a rule that stops it, and says so. It also
+    automation (`tico automation update auto_docs_release --disable`), or adds a rule that stops it, and says so. It also
     closes the open "Docs for vX" tasks that are already done, as Dana, in bulk. It says what it changed and how to turn the
     automation back on (undo). It does not message the Technical Writer or any bot about it, and does not refuse because the
     automation belongs to a bot. A short reply in a few lines, with the automation named.
@@ -113,8 +113,8 @@
         source: {kind: automation, id: auto_docs_release, name: "Docs and release notes for each release", trigger: "release.published"}
         siblings_this_week: 14
         stops:
-          - {fix: "Turn the automation off", command: "hub automation update auto_docs_release --disable --summary 'stop per-release docs tasks'"}
-          - {fix: "Or a rule that stops it", command: "hub rules add --text 'No per-release docs tasks for the owner' --who human:dana"}
+          - {fix: "Turn the automation off", command: "tico automation update auto_docs_release --disable --summary 'stop per-release docs tasks'"}
+          - {fix: "Or a rule that stops it", command: "tico rules add --text 'No per-release docs tasks for the owner' --who human:dana"}
     - match: '^automation list'
       out:
         automations:

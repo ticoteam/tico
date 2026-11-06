@@ -2040,12 +2040,144 @@ def settle_sql_sites(wave, report, write):
         report.sites["sql-scoped-skip"] = left
 
 
+# R1 (threads and tasks, one model; spec D12): the teamwork CLI is `tico` and `hub` is its older name. One pass over
+# every tracked text file, three exact rules:
+#   1. MCP tools: `hub_<name>` becomes `tico_<name>` for each tool in clients/hubtools.py TOOLS (exact names only, so
+#      `hub_url`, `hub_token` and the other identifiers that start with hub_ stay).
+#   2. The MCP server key: `mcp__hub__` becomes `mcp__tico__`.
+#   3. `hub <command>`, when the word after it is a top-level word of the CLI (`hub task list`). Outside code (backticks
+#      and fences) a word right after an article or determiner is prose ("the hub tools"), so it stays.
+# Not touched, by construction: `HUB_*` env names, module names (hubdb.py, hubcli.py, clients/tico.py), `hub.sqlite`,
+# `registry/hub-access.yaml`, `hub_url`, stored ids (`tool: hub`, `"tasks": "hub"`), the old spellings the RENAMED and
+# REMOVED tables answer (`hub say`, `hub_say`), and any path that has a slash or dot before `hub` (`scripts/hub`).
+R1_SKIP_FILES = ("CHANGELOG.md", "scripts/hub", "scripts/tico")  # scripts/hub and scripts/tico are written by hand
+R1_SKIP_DIRS = ("docs/history/", "backend/migrations/", "scripts/cleanup/")
+R1_DETERMINERS = {
+    "the", "a", "an", "your", "our", "its", "this", "that", "my", "their", "any", "every", "each", "one", "whole",
+    "company", "own", "old", "new", "same", "other",
+}
+R1_FENCE = re.compile(r"^\s*(```|~~~)")
+R1_SPAN = re.compile(r"`[^`\n]*`")
+R1_BEFORE_DETERMINER = re.compile(r"\b(" + "|".join(sorted(R1_DETERMINERS)) + r")\s+$", re.I)
+
+
+def r1_tool_names():
+    sys.path.insert(0, str(ROOT))
+    from clients import hubtools  # the registry as it is before the rename
+
+    names = {t["name"] for t in hubtools.TOOLS} | set(hubtools.SHELL_ONLY)
+    return sorted((n for n in names if n.startswith("hub_")), key=len, reverse=True)
+
+
+# A tool family, written with a wildcard or a prefix (`hub_finance_*`, `"hub_email_" + action`, `hub_needs_you_{step}`).
+# The families are the ones the tools use now; the old families (docs, files, meetings, routine, rule, ...) are the
+# RENAMED tables' keys and stay as they are.
+R1_FAMILIES = (
+    "finance|email|tool|human|needs_you|listening|automation|doc|file|meeting|webhook|thread|task|goal|kpi|proposal|pin|"
+    "card|alerts|recordings|inbound|relay|letter|conversation|message|trigger|bot|service_key|team|bot_status|listening_item"
+)
+R1_FAMILY_RE = re.compile(r"(?<![A-Za-z0-9])hub_(" + R1_FAMILIES + r")((?:_[a-z0-9]+)*)(?=_(?![a-z0-9])|\*)")
+R1_WILDCARD_RE = re.compile(r"(?<![A-Za-z0-9])hub_\*")
+
+
+def r1_top_words():
+    sys.path.insert(0, str(ROOT))
+    import argparse
+
+    from clients import hubcli
+
+    words = set()
+    for action in hubcli.parser()._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            words |= set(action.choices)
+    return sorted(words, key=len, reverse=True)
+
+
+def r1_rewrite(text, tools_re, cmd_re, counts, markdown):
+    """`text` with the three rules applied. `counts` gets one tally per rule that fired."""
+    out_lines, in_fence = [], False
+    for line in text.split("\n"):
+        if markdown and R1_FENCE.match(line):
+            in_fence = not in_fence
+            out_lines.append(line)
+            continue
+        spans = [(m.start(), m.end()) for m in R1_SPAN.finditer(line)]
+
+        def cmd(m):
+            pos = m.start()
+            code = in_fence or any(a <= pos < b for a, b in spans)
+            if not code and R1_BEFORE_DETERMINER.search(line[:pos]):
+                return m.group(0)  # prose: "the hub tools"
+            counts["command"] = counts.get("command", 0) + 1
+            return "tico"
+
+        def tool(m):
+            counts["tool"] = counts.get("tool", 0) + 1
+            return "tico_" + m.group(1)[4:]
+
+        line = cmd_re.sub(cmd, line)
+        line = tools_re.sub(tool, line)
+        line, families = R1_FAMILY_RE.subn(lambda m: "tico_" + m.group(1) + m.group(2), line)
+        if families:
+            counts["family"] = counts.get("family", 0) + families
+        line, wild = R1_WILDCARD_RE.subn("tico_*", line)
+        if wild:
+            counts["family"] = counts.get("family", 0) + wild
+        if "mcp__hub__" in line:
+            counts["mcp"] = counts.get("mcp", 0) + line.count("mcp__hub__")
+            line = line.replace("mcp__hub__", "mcp__tico__")
+        out_lines.append(line)
+    return "\n".join(out_lines)
+
+
+def r1_hub_to_tico(write):
+    """The R1 codemod. Returns (counts per rule, files changed); rewrites the files when `write`."""
+    names = r1_tool_names()
+    if not names:  # already renamed: an empty alternation would match at every position
+        raise SystemExit("no hub_ tool names left in the registry: the R1 rename has already run")
+    tools_re = re.compile(r"(?<![A-Za-z0-9])(" + "|".join(map(re.escape, names)) + r")(?![A-Za-z0-9_])")
+    cmd_re = re.compile(
+        r"(?<![A-Za-z0-9_./\-$~])hub(?= (" + "|".join(map(re.escape, r1_top_words())) + r")(?![A-Za-z0-9_-]))"
+    )
+    listed = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True).stdout
+    counts, changed = {}, []
+    for raw in listed.split(b"\0"):
+        rel = raw.decode()
+        if not rel or rel in R1_SKIP_FILES or rel.startswith(R1_SKIP_DIRS) or rel.endswith((".lock", ".sqlite")):
+            continue
+        path = ROOT / rel
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        if b"\0" in data or b"hub" not in data:
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        local = {}
+        fixed = r1_rewrite(text, tools_re, cmd_re, local, markdown=rel.endswith((".md", ".mdx")))
+        if fixed != text:
+            changed.append(rel)
+            for key, value in local.items():
+                counts[key] = counts.get(key, 0) + value
+            if write:
+                path.write_text(fixed, encoding="utf-8")
+    return counts, changed
+
+
 GATING = ("sql-scoped-skip", "key-scoped-skip", "js-scoped", "dup-key")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--wave", required=True, choices=WAVE_ORDER)
+    parser.add_argument("--wave", choices=WAVE_ORDER)
+    parser.add_argument(
+        "--hub-to-tico",
+        action="store_true",
+        help="R1: rename hub to tico (tools, the MCP key, hub <command>) in every tracked text file; --dry-run counts only",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="with --hub-to-tico: count and list, write nothing")
     parser.add_argument("--check", action="store_true", help="exit 1 if names from waves <= N remain in code")
     parser.add_argument("--only", nargs="*", help="limit to paths starting with these prefixes")
     parser.add_argument(
@@ -2054,6 +2186,15 @@ def main():
         help="write report-wave<N>.md without changing any file (a wave mapped but not applied)",
     )
     args = parser.parse_args()
+    if args.hub_to_tico:
+        counts, changed = r1_hub_to_tico(write=not args.dry_run)
+        for rel in changed:
+            print(rel)
+        print(f"hub-to-tico{' (dry run)' if args.dry_run else ''}: {len(changed)} files; " + ", ".join(
+            f"{key} {value}" for key, value in sorted(counts.items())))
+        return 0
+    if not args.wave:
+        parser.error("--wave is required unless --hub-to-tico is given")
     data, waves, keep_data = load(args.wave)
     keep = Keep(keep_data)
     if args.check:

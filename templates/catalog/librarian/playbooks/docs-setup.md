@@ -9,17 +9,17 @@ what the team knows.
 The outcome is a map (`the-map.md`) that covers every source in the task, and a note that says plainly what
 you read and what you could not. Nothing else counts as good.
 
-**Budget.** About 40 `hub doc fetch` calls in total. Aim to finish in about 15 minutes, never past 30.
+**Budget.** About 40 `tico doc fetch` calls in total. Aim to finish in about 15 minutes, never past 30.
 
 ---
 
 ## 1. See what you were given
 
 1. Read the task: the sources (title, address, source id) and the person's words.
-2. `hub doc link-list` shows each source and its status. A GitHub repository is `Preparing…` for a minute or two,
-   then its files are searchable with `hub doc search`; one marked "GitHub access needed" or "No docs found" is
+2. `tico doc link-list` shows each source and its status. A GitHub repository is `Preparing…` for a minute or two,
+   then its files are searchable with `tico doc search`; one marked "GitHub access needed" or "No docs found" is
    a gap to report, not to work around.
-3. `hub doc list` shows the internal docs. Imported files the person added since the task was filed count too.
+3. `tico doc list` shows the internal docs. Imported files the person added since the task was filed count too.
 
 The person's words may name places you cannot reach: a private Google Drive, a Notion workspace, an intranet.
 Do not guess what they hold. Each one is a line in `_librarian/missing.md` under "Sources I could not read",
@@ -47,7 +47,7 @@ source, the source stays the source.
 
 1. Rewrite `state.md` (what the docs cover, what is thin, which sources failed). Record anything durable about
    reading these kinds of sources in `memory/learnings.md`. Commit this repository.
-2. Finish the task: `hub task update <id> --status done --note "<the update>"`. The person reads this note.
+2. Finish the task: `tico task update <id> --status done --note "<the update>"`. The person reads this note.
    Under ten lines, sources by name and domain, not full links:
    - what you read: each source and how many pages or files;
    - what Docs now has: the map, and the topics it covers;

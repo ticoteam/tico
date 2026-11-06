@@ -162,8 +162,8 @@
         source: {kind: automation, id: auto_health_pings, name: "Check health runner queue ping", trigger: "every 6 hours"}
         siblings_this_week: 22
         stops:
-          - {fix: "Turn the automation off", command: "hub automation update auto_health_pings --disable --summary 'stop test pings'"}
-          - {fix: "Or a rule that stops it", command: "hub rules add --kind internal --text 'Check health test pings do not go into the owner queue' --who human:dana"}
+          - {fix: "Turn the automation off", command: "tico automation update auto_health_pings --disable --summary 'stop test pings'"}
+          - {fix: "Or a rule that stops it", command: "tico rules add --kind internal --text 'Check health test pings do not go into the owner queue' --who human:dana"}
     - match: '^automation (list|show)'
       out:
         automations:

@@ -172,7 +172,7 @@ def agreed(words, count):
 def not_agreed(detail):
     return Problem(
         "not_agreed",
-        detail + "; nothing was saved. Read it back again (`hub goal read-back`) and save on the owner's yes",
+        detail + "; nothing was saved. Read it back again (`tico goal read-back`) and save on the owner's yes",
         403,
     )
 

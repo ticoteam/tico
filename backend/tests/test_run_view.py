@@ -313,8 +313,8 @@ def test_the_task_page_follows_its_session_live_and_each_reply_keeps_its_steps(a
         machine,
         aid,
         [
-            ("tool", {"tool": "mcp__hub__task_create", "status": "started", "item_id": "c1"}),
-            ("tool", {"tool": "mcp__hub__task_create", "status": "completed", "item_id": "c1"}),
+            ("tool", {"tool": "mcp__tico__task_create", "status": "started", "item_id": "c1"}),
+            ("tool", {"tool": "mcp__tico__task_create", "status": "completed", "item_id": "c1"}),
         ],
     )
     live = get(api, f"tasks/{tid}")["execution"]
