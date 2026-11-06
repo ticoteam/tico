@@ -40,7 +40,7 @@ published port. Ordinary local installs still check their configured port.
 - It listens on loopback only. Started with `--host 0.0.0.0` it exits with an explanation. In the container it binds
   inside, and answers only requests addressed to `localhost`, so publish the port on `127.0.0.1` as above.
 - `--public-demo --url https://demo.example.com` serves other humans on purpose. Everyone is Ana, so a public
-  demo is read-only.
+  demo is read-only, and its strip reads **Read only demo**.
 
 Poking around is safe: changes go to a temporary database.
 
