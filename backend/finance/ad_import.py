@@ -1,5 +1,5 @@
 """The ad spend import: Google Ads' and Meta's own daily spend per campaign, read every 4 hours into fin_ad_spends, so
-an open month's ad budgets show live spend before the card statement posts (budgeting.py, "Live ad spend").
+ad budgets show live spend before the charges post (budgeting.py, "Live ad spend").
 
 It reads; it never books. Nothing here posts to the ledger or changes a posting: the card charge still books when the
 bank feed brings it, and the budget reads take care that the two are never counted together.
@@ -7,8 +7,9 @@ bank feed brings it, and the budget reads take care that the two are never count
 Each import belongs to one Google Ads or Meta Ads tool (backend/tool_services.py) and names which stored credentials
 hold each value the platform needs (`SLOTS`; credential ids, never values). Values are read from the vault at use time
 and never logged or kept; Google's refresh token is exchanged for an access token on every run and the access token is
-dropped with the run. A refused login (a failed token exchange, an API 401, Meta's error 190) sets the import to
-"reconnect"; any other failure to "failed" with what went wrong. Either way the spend already imported stays.
+dropped with the run. A refused login (Google's token exchange answering 400 invalid_grant, 401 or 403, an API 401,
+Meta's error 190) sets the import to "reconnect"; any other failure (unreachable, rate limited, a 5xx) to "failed" with
+what went wrong, and the next pass tries again. Either way the spend already imported stays.
 
 A run reads the accounts the login sees, upserts them (a new one is not assigned to a bot until a finance admin picks
 one), then each account's spend from `history_from` on the first run (or after `history_from` moves earlier) and the
@@ -55,7 +56,7 @@ META_WINDOW = 31                       # days per insights call (a long range pe
 TIMEOUT = 30
 TRIES = 4
 MAX_WAIT = 60.0
-META_SESSION = {190, 102}              # the token is expired, revoked or wrong
+META_SESSION = {190}                   # the token is expired, revoked or wrong: only this asks for a reconnect
 META_THROTTLE = {4, 17, 32, 613, 80000, 80003, 80004, 80014}
 
 # Which stored keys hold each value, by variable name (compared loosely: case and punctuation do not matter).
@@ -72,8 +73,8 @@ REQUIRED = {"google_ads": ("client_id", "client_secret", "refresh_token", "devel
 SLOT_LABEL = {"client_id": "Client ID", "client_secret": "Client secret", "refresh_token": "Refresh token",
               "developer_token": "Developer token", "login_customer_id": "Login customer ID",
               "customer_ids": "Customer IDs", "access_token": "Access token"}
-# Contacts the platforms' spend books under: a card charge from either is found by these too (budgeting.py).
-VENDOR = {"google_ads": "Google Ads", "meta_ads": "Meta"}
+# Contacts the platforms' spend books under: a line or hold filed under either is the platform's (budgeting.py).
+VENDOR = SA.VENDOR
 
 
 class Reconnect(Exception):
@@ -99,6 +100,7 @@ class Candidate:
     set_key: str
     tool_id: str
     created_at: str
+    var: str = ""                 # the variable it matched; "" for a key on the tool offered under every slot
 
 
 def _slot_of(platform: str, env: str, name: str) -> tuple[str, str] | None:
@@ -119,29 +121,39 @@ def _slot_of(platform: str, env: str, name: str) -> tuple[str, str] | None:
 def _set_key(name: str, var: str) -> str:
     """A credential's name without its variable: "Google Ads · GOOGLE_ADS_CLIENT_ID" -> "google ads",
     "GOOGLE_ADS_CLIENT_ID (analytics)" -> "(analytics)"."""
-    rest = re.sub(re.escape(var).replace("_", "[^A-Za-z0-9]?"), " ", name, flags=re.IGNORECASE)
+    rest = re.sub(re.escape(var).replace("_", "[^A-Za-z0-9]?"), " ", name, flags=re.IGNORECASE) if var else name
     return re.sub(r"[\s·:\-–—|]+", " ", rest).strip().casefold()
 
 
-def candidates(c: Any, platform: str) -> list[Candidate]:
-    """Every stored credential with a value whose variable (or name) is one the platform needs, oldest first. Names
-    and ids only; no value is read."""
+def candidates(c: Any, platform: str, tool_id: str = "") -> list[Candidate]:
+    """The stored credentials with a value that may hold each slot, oldest first: one whose variable is that slot's
+    (GOOGLE_ADS_CLIENT_ID for Client ID; case and punctuation do not matter), or one on the tool itself (`tool_id`),
+    under the slot its variable or name reads as, else under every slot. A key elsewhere whose variable is another one
+    holds no slot, whatever its name says. Names and ids only; no value is read."""
     out: list[Candidate] = []
     for r in c.execute("SELECT id, name, env, tool_id, created_at FROM credentials WHERE ciphertext IS NOT NULL "
                        "AND source<>'finance' ORDER BY created_at, id"):
-        hit = _slot_of(platform, str(r["env"] or ""), str(r["name"] or ""))
+        env, name, owner = str(r["env"] or ""), str(r["name"] or ""), str(r["tool_id"] or "")
+        hit = _slot_of(platform, env, "")
+        if hit is None and tool_id and owner == tool_id:
+            hit = _slot_of(platform, env, name)
+            if hit is None:
+                out += [Candidate(str(r["id"]), name, env, slot, _set_key(name, ""), owner, str(r["created_at"] or ""))
+                        for slot in SLOTS[platform]]
+                continue
         if hit is None:
             continue
         slot, var = hit
-        out.append(Candidate(str(r["id"]), str(r["name"] or ""), str(r["env"] or ""), slot,
-                             _set_key(str(r["name"] or ""), var), str(r["tool_id"] or ""), str(r["created_at"] or "")))
+        out.append(Candidate(str(r["id"]), name, env, slot, _set_key(name, var), owner, str(r["created_at"] or ""),
+                             var))
     return out
 
 
 def default_mapping(c: Any, platform: str, tool_id: str = "") -> dict[str, str]:
     """{slot: credential id} from one set, never a mix: the set holding the tool's own key first, then the set with the
-    most required slots, then one with no "(…)" suffix (the company's, not a bot's copy), then the oldest."""
-    found = candidates(c, platform)
+    most required slots, then one with no "(…)" suffix (the company's, not a bot's copy), then the oldest. A key on the
+    tool whose variable names no slot is left for a person to place."""
+    found = [x for x in candidates(c, platform, tool_id) if x.var]
     sets: dict[str, list[Candidate]] = {}
     for cand in found:
         sets.setdefault(cand.set_key, []).append(cand)
@@ -325,10 +337,12 @@ def google_token(http_: Http, secrets: Mapping[str, str]) -> str:
     token = str(_dict(reply.body).get("access_token") or "")
     if reply.status == 200 and token:
         return token
+    reason = str(_dict(reply.body).get("error") or f"HTTP {reply.status}")
+    if reply.status in (401, 403) or (reply.status == 400 and reason == "invalid_grant"):
+        raise Reconnect(f"Google refused the refresh token ({reason})")
     if reply.status is None:
         raise Failed("Google's sign-in could not be reached")
-    reason = str(_dict(reply.body).get("error") or f"HTTP {reply.status}")
-    raise Reconnect(f"Google refused the refresh token ({reason})")
+    raise Failed(f"Google's sign-in did not answer ({reason})")      # a 5xx, a rate limit: the next pass tries again
 
 
 class _Google:
@@ -454,7 +468,7 @@ class _Meta:
             code, message = _meta_error(reply)
             if reply.status is None:
                 raise Failed("Meta could not be reached")
-            if code in META_SESSION or reply.status == 401:
+            if code in META_SESSION:
                 raise Reconnect(f"Meta refused the access token ({message})")
             if reply.status != 200:
                 raise Failed(f"Meta: {message}")

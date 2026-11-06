@@ -315,6 +315,52 @@ def test_a_failed_token_exchange_asks_to_reconnect(books: Store):
     assert not net.urls("googleads.googleapis.com")
 
 
+def _down(*_: object) -> tuple[int, Any]:
+    raise urllib.error.URLError("unreachable")
+
+
+@pytest.mark.parametrize("answer,status", [
+    ((400, {"error": "invalid_grant"}), "reconnect"), ((401, {"error": "unauthorized_client"}), "reconnect"),
+    ((403, {"error": "access_denied"}), "reconnect"), ((400, {"error": "invalid_request"}), "failed"),
+    ((500, {"error": "internal_failure"}), "failed"), ((503, {}), "failed"), ((429, {"error": "rate_limited"}), "failed"),
+    (None, "failed"),
+])
+def test_only_a_refused_token_asks_to_reconnect(books: Store, answer: tuple[int, Any] | None, status: str):
+    """A 5xx, a rate limit or the network is tried again next pass (failed); only invalid_grant, 401 and 403 need a
+    person to connect again."""
+    iid, net = google(books)
+    net.on("POST", AI.TOKEN_URL, _down if answer is None else (lambda *_: answer))
+    assert AI.run(books, Vault(books), iid, now=AT, http_=http(net)).status == status
+    assert imp(books, "google-ads").status == status
+
+
+@pytest.mark.parametrize("answer,status", [
+    ((400, {"error": {"message": "Session has expired", "code": 190}}), "reconnect"),
+    ((400, {"error": {"message": "API session", "code": 102}}), "failed"),
+    ((400, {"error": {"message": "User request limit reached", "code": 17}}), "failed"),
+    ((401, {"error": {"message": "no code"}}), "failed"),
+    ((500, {"error": {"message": "unknown", "code": 1}}), "failed"),
+    (None, "failed"),
+])
+def test_only_metas_error_190_asks_to_reconnect(books: Store, answer: tuple[int, Any] | None, status: str):
+    iid, net, _ = meta(books)
+    net.on("GET", AI.GRAPH + "/me/adaccounts", _down if answer is None else (lambda *_: answer))
+    assert AI.run(books, Vault(books), iid, now=AT, http_=http(net)).status == status
+
+
+def test_a_run_asked_for_mid_pass_stays_asked_for(books: Store):
+    iid, net, _ = meta(books)
+    with books.transaction() as c:
+        SA.request_run(c, iid, "2026-10-15T12:00:05.000000Z")                    # clicked after the pass began at AT
+    assert AI.run(books, Vault(books), iid, now=AT, http_=http(net)).status == "ok"
+    kept = imp(books, "meta-ads")
+    assert kept.run_requested_at == "2026-10-15T12:00:05.000000Z" and AI.due(kept, "2026-10-15T12:01:00.000000Z")
+    later = "2026-10-15T12:10:00.000000Z"
+    assert AI.run(books, Vault(books), iid, now=later, http_=http(net)).status == "ok"
+    done = imp(books, "meta-ads")
+    assert done.run_requested_at is None and not AI.due(done, "2026-10-15T12:11:00.000000Z")
+
+
 def test_a_google_401_asks_to_reconnect(books: Store):
     iid, net = google(books)
     net.on("GET", AI.GOOGLE_ADS + "/customers:listAccessibleCustomers",
@@ -354,11 +400,41 @@ def test_the_picker_prefers_a_whole_set(books: Store):
 
 
 @pytest.mark.parametrize("env,name", [("META_ACCESS_TOKEN", "Meta"), ("meta_ads_access_token", ""),
-                                      ("", "FACEBOOK_ACCESS_TOKEN (rental-social-ad-owner)")])
+                                      ("FACEBOOK_ACCESS_TOKEN", "FACEBOOK_ACCESS_TOKEN (rental-social-ad-owner)")])
 def test_meta_tokens_are_found_by_any_of_their_names(books: Store, env: str, name: str):
     key(books, "m1", name or env, env, "v")
     with books.read() as c:
         assert AI.default_mapping(c, "meta_ads") == {"access_token": "m1"}
+
+
+def test_a_slot_takes_only_its_own_variable_or_a_key_on_the_tool(books: Store):
+    from backend.finance import ads as FAds
+    from backend.finance.core.errors import FinanceError
+    tool(books, "google-ads", "google-ads")
+    key(books, "right", "Google Ads · GOOGLE_ADS_CLIENT_ID", "GOOGLE_ADS_CLIENT_ID", "v")
+    key(books, "named", "GOOGLE_ADS_CLIENT_SECRET (old copy)", "OTHER_SECRET", "v")      # its name says so; its variable not
+    key(books, "stripe", "Stripe", "STRIPE_SECRET_KEY", "v")
+    key(books, "mine", "GOOGLE_ADS_CLIENT_SECRET (tool)", "CLIENT_SECRET", "v", tool_id="google-ads")
+    key(books, "loose", "Ads login", "TOKEN", "v", tool_id="google-ads")
+    with books.read() as c:
+        offered = {(x.slot, x.id) for x in AI.candidates(c, "google_ads", "google-ads")}
+        assert ("client_id", "right") in offered and ("client_secret", "mine") in offered
+        assert ("client_id", "loose") in offered and ("developer_token", "loose") in offered
+        assert not {x for x in offered if x[1] in ("named", "stripe")}
+        assert ("client_secret", "right") not in offered
+        assert AI.default_mapping(c, "google_ads", "google-ads") == {"client_secret": "mine"}
+    for slot, cid, ok in (("client_id", "right", True), ("client_secret", "named", False),
+                          ("client_secret", "stripe", False), ("client_secret", "right", False),
+                          ("refresh_token", "mine", True), ("developer_token", "loose", True)):
+        with books.transaction() as c:
+            if ok:
+                FAds.configure(c, OWNER, "google-ads", enabled=False, history_from=None, account_id=None,
+                               credentials={slot: cid}, at=AT)
+                assert SA.import_for(c, "google-ads").credentials[slot] == cid          # type: ignore[union-attr]
+            else:
+                with pytest.raises(FinanceError, match="Pick a"):
+                    FAds.configure(c, OWNER, "google-ads", enabled=False, history_from=None, account_id=None,
+                                   credentials={slot: cid}, at=AT)
 
 
 def test_the_store_answers_empty_without_its_tables(tmp_path):

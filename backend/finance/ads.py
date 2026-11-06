@@ -83,7 +83,7 @@ def view(c: sqlite3.Connection, viewer: str, tool_id: str, at: str | None = None
     start, _ = dates.month_bounds(dates.day(ctx.today))
     spent = SA.account_spend(c, tool_id, start.isoformat(), ctx.today)
     options: dict[str, list[Row]] = {}
-    for cand in AI.candidates(c, platform):
+    for cand in AI.candidates(c, platform, tool_id):
         options.setdefault(cand.slot, []).append({"id": cand.id, "name": cand.name})
     line = ctx.accounts.get(imp.account_id)
     return {
@@ -107,8 +107,8 @@ def view(c: sqlite3.Connection, viewer: str, tool_id: str, at: str | None = None
 def configure(c: sqlite3.Connection, viewer: str, tool_id: str, *, enabled: bool, history_from: str | None,
               account_id: str | None, credentials: dict[str, str | None] | None, at: str | None = None) -> Row:
     """Save a tool's import settings; switching it on asks for a run. Refused: a second enabled import on the
-    platform, a day that is not one, a line that is not an active expense line, a key that is not one the platform can
-    use, or switching on without the required keys or a line."""
+    platform, a day that is not one, a line that is not an active expense line, a key for a slot that is neither that
+    slot's variable nor on this tool (ad_import.candidates), or switching on without the required keys or a line."""
     ctx = _admin(c, viewer, at)
     platform, _ = _tool(c, tool_id)
     imp = _current(ctx, tool_id, platform)
@@ -126,18 +126,19 @@ def configure(c: sqlite3.Connection, viewer: str, tool_id: str, *, enabled: bool
         raise FinanceError(INVALID, "Pick an active expense line")
     mapping = dict(imp.credentials)
     if credentials is not None:
-        allowed = {cand.id: cand for cand in AI.candidates(c, platform)}
+        found = AI.candidates(c, platform, tool_id)
+        allowed = {(x.slot, x.id) for x in found} | {(s, x.id) for x in found if x.tool_id == tool_id
+                                                     for s in AI.SLOTS[platform]}
         for slot, cid in credentials.items():
             if slot not in AI.SLOTS[platform]:
                 raise FinanceError(INVALID, f"{SA.LABEL[platform]} has no {slot}")
             if not cid:
                 mapping.pop(slot, None)
-            elif cid in allowed or c.execute("SELECT 1 FROM credentials WHERE id=? AND ciphertext IS NOT NULL "
-                                                                    "AND source<>'finance'",
-                                             (cid,)).fetchone():
+            elif (slot, cid) in allowed:
                 mapping[slot] = cid
             else:
-                raise FinanceError(INVALID, "No such stored key")
+                raise FinanceError(INVALID, f"Pick a {AI.SLOT_LABEL[slot]} key: its variable is "
+                                            f"{AI.SLOTS[platform][slot][0]}, or it is on this tool")
     if enabled:
         if _elsewhere(c, tool_id, platform) is not None:
             raise FinanceError(CONFLICT, f"{SA.LABEL[platform]} spend already imports from another tool: switch "
