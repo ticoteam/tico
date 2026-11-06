@@ -1,9 +1,11 @@
 # Two tiers. Each push to a pull request runs only the cheap checks (plan, static) on free GitHub-hosted
 # Ubuntu runners, so a push costs no RunsOn minutes. Hosted runners cannot read RunsOn's cache, so those jobs start cold.
 # A merge queue group (the merge_group event, once per queue group) runs everything else on RunsOn Spot VMs in Tico's
-# own AWS account: the tests the group's merged change selects, the Rust and desktop checks, the macOS recorder tests
-# and the Linux Caddy image. The group selects from its own base and head. Static checks run in the group too: its merge
-# commit is the one that lands on main, and a migration timestamp can collide with a change queued ahead of it.
+# own AWS account: the tests the group's merged change selects, the slow tests its paths reach (SLOW_MAP in
+# scripts/pr_checks.py; Release validation runs them only on main otherwise), the Rust and desktop checks, the macOS
+# recorder tests and the Linux Caddy image. The group selects from its own base and head. Static checks run in the group
+# too: its merge commit is the one that lands on main, and a migration timestamp can collide with a change queued ahead
+# of it. A slow test that a change breaks fails its group, so the change is ejected from the queue instead of landing.
 # `checks` is the one required check. It fails when a job it needs failed or was cancelled; a skipped job passes. A draft
 # pull request runs nothing.
 # A skipped run proves nothing on its own: Tico reads a head whose every check was skipped as pending (backend/github.py
@@ -165,12 +167,23 @@ jobs:
         with:
           workspaces: runner-rs -> target
           shared-key: pr-conformance
+      - if: matrix.relay
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: relay-rs -> target
+          shared-key: pr-slow-relay
+      # The screen tests run the relay this checkout builds (backend/screen_binary.py). A debug build has the same build id
+      # as the release one, and it skips the release profile's LTO, so the job starts sooner.
+      - name: Build the screen relay for the slow tests
+        if: matrix.relay
+        working-directory: relay-rs
+        run: cargo build --locked && echo "TICO_SCREEN_RELAY_BIN=$PWD/target/debug/tico-screen-relay" >> "$GITHUB_ENV"
       - name: Run selected tests
         env:
           SUITE: ${{ matrix.suite }}
           TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py run "$SUITE"
-      - if: always() && (startsWith(matrix.suite, 'python-') || startsWith(matrix.suite, 'browser-') || matrix.suite == 'contracts')
+      - if: always() && (startsWith(matrix.suite, 'python-') || startsWith(matrix.suite, 'browser-') || matrix.suite == 'contracts' || matrix.suite == 'slow')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: results-${{ matrix.suite }}

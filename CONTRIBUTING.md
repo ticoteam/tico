@@ -30,8 +30,9 @@ npm run test:ui                                # the core browser scripts (CORE 
 Run both locally before you open a pull request. GitHub Actions lints the pull request again (the PR checks workflow), and the merge queue runs the selected
 tests on the merged result before a change lands, so a failure shows there too. The default run leaves out
 tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and the browser scripts outside the core
-list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run them, and the release check does. Run
-them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
+list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run them, and the release check does. The merge
+queue also runs the slow tests `SLOW_MAP` in `scripts/pr_checks.py` maps to the paths you changed
+(`python3 scripts/pr_checks.py slow --base origin/main` lists them). Run them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
 for one file, `node scripts/ui-tests.cjs <name>` for one browser script. If you touch `app/`, also run `cargo check`
 there.
 

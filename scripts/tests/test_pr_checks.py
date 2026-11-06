@@ -959,3 +959,134 @@ def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_sk
     assert exit_code({**passing, "tests": "failure"}) == 1
     assert exit_code({**passing, "caddy-linux": "cancelled"}) == 1
     assert exit_code({**passing, "plan": "skipped"}) == 0
+
+
+def test_slow_map_names_slow_tests_that_exist_and_its_globs_match_files():
+    import ast
+
+    assert len(set(checks.SLOW_NODES)) == len(checks.SLOW_NODES)
+    for node in checks.SLOW_NODES:
+        path, _, name = node.partition("::")
+        tree = ast.parse((ROOT / path).read_text())
+        module_slow = any(
+            isinstance(stmt, ast.Assign)
+            and any(getattr(target, "id", None) == "pytestmark" for target in stmt.targets)
+            and "mark.slow" in ast.unparse(stmt.value)
+            for stmt in tree.body
+        )
+        if not name:
+            assert module_slow, node
+            continue
+        functions = [stmt for stmt in tree.body if isinstance(stmt, ast.FunctionDef) and stmt.name == name]
+        assert len(functions) == 1, node
+        assert module_slow or any("mark.slow" in ast.unparse(d) for d in functions[0].decorator_list), node
+    for glob in checks.SLOW_MAP:
+        assert any(ROOT.glob(glob)), glob
+
+
+def test_a_change_runs_the_slow_tests_its_paths_reach_and_an_edited_slow_test_runs_itself(mapped):
+    claims = checks.SLOW_SCHEDULER_CLAIMS
+    expected = sorted({claims, checks.SLOW_ATTEMPTS, checks.SLOW_ATTEMPTS_SCALE})
+    assert checks.slow_tests(["backend/scheduler.py"]) == expected
+    assert checks.slow_tests(["backend/tests/test_scheduler.py"]) == [claims]
+    assert checks.slow_tests(["backend/tests/test_repositories.py"]) == [checks.SLOW_REPOSITORY_TOKENS]
+    assert checks.slow_tests(["docs/guide.md", "backend/unmapped.py"]) == []
+    assert checks.slow_tests(["backend/app.py"]) == sorted(checks.SLOW_NODES)
+    plan = checks.selection(["backend/scheduler.py"])
+    assert plan["slow"] == expected and plan["relay"] is False
+
+
+def test_slow_selection_is_empty_on_main_and_docs_and_everything_when_uncertain(mapped):
+    assert checks.selection(["backend/scheduler.py"], "push")["slow"] == []
+    assert checks.selection(["docs/images/none.png"])["slow"] == []
+    assert checks.selection(["pytest.ini"])["slow"] == sorted(checks.SLOW_NODES)
+    assert checks.selection([])["slow"] == sorted(checks.SLOW_NODES)
+
+
+def test_the_slow_job_builds_the_relay_only_for_the_screen_tests():
+    assert checks.slow_plan([]) == {"slow": [], "relay": False}
+    assert checks.slow_plan([checks.SLOW_REPOSITORY_TOKENS])["relay"] is False
+    assert checks.slow_plan(checks.slow_tests(["relay-rs/src/main.rs"])) == {
+        "slow": sorted(checks.SCREEN_TESTS),
+        "relay": True,
+    }
+
+
+def test_the_merge_queue_plan_adds_one_slow_job_with_its_relay_flag_and_none_without_nodes(tmp_path, monkeypatch):
+    picked = {
+        "python": [],
+        "browser": [],
+        "caddy": True,
+        "conformance": False,
+        "rust": [],
+        "contracts": False,
+        "slow": [checks.SLOW_SCHEDULER_CLAIMS],
+        "relay": False,
+        "reason": "measured dependency map",
+    }
+    monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
+    target = tmp_path / "plan.json"
+    jobs = checks.prepare("merge_group", "base", target)["matrix"]["include"]
+    assert jobs == [{"suite": "slow", "files": [checks.SLOW_SCHEDULER_CLAIMS], "relay": False}]
+    picked.update(slow=list(checks.SCREEN_TESTS), relay=True)
+    jobs = checks.prepare("merge_group", "base", target)["matrix"]["include"]
+    assert jobs == [{"suite": "slow", "files": list(checks.SCREEN_TESTS), "relay": True}]
+    picked.update(slow=[], relay=False)
+    assert checks.prepare("merge_group", "base", target)["matrix"]["include"] == [{"suite": "selection", "files": []}]
+
+
+def test_slow_nodes_run_in_one_process_and_name_only_their_selected_tests(tmp_path, monkeypatch):
+    target = tmp_path / "plan.json"
+    target.write_text(
+        json.dumps(
+            {
+                "python": [],
+                "browser": [],
+                "caddy": True,
+                "conformance": False,
+                "contracts": False,
+                "slow": [checks.SLOW_SCHEDULER_CLAIMS],
+                "matrix": {"include": [{"suite": "slow", "files": [checks.SLOW_SCHEDULER_CLAIMS], "relay": False}]},
+            }
+        )
+    )
+    monkeypatch.setattr(checks, "ROOT", tmp_path)
+    with pytest.raises(RuntimeError, match="existing file list"):
+        checks.run(target, "slow")
+    source(tmp_path, "backend/tests/test_scheduler.py", "")
+    calls = []
+    monkeypatch.setattr(
+        checks.subprocess, "run", lambda command, **kw: calls.append(command) or SimpleNamespace(returncode=1)
+    )
+    assert checks.run(target, "slow") == 1
+    assert calls == [
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-n",
+            "0",
+            *checks.PYTEST_FLAGS,
+            "-o",
+            "junit_family=xunit1",
+            "--junitxml=ci-results/slow.xml",
+            "-m",
+            "slow",
+            checks.SLOW_SCHEDULER_CLAIMS,
+        ]
+    ]
+
+
+def test_the_slow_job_builds_the_relay_before_its_tests_and_uploads_its_results():
+    steps = workflow_jobs()["jobs"]["tests"]["steps"]
+    build = next(s for s in steps if s.get("if") == "matrix.relay" and "cargo build --locked" in s.get("run", ""))
+    assert build["working-directory"] == "relay-rs"
+    assert "TICO_SCREEN_RELAY_BIN=$PWD/target/debug/tico-screen-relay" in build["run"]
+    assert "GITHUB_ENV" in build["run"]
+    names = [s.get("name", s.get("uses")) for s in steps]
+    assert names.index(build["name"]) < names.index("Run selected tests")
+    upload = next(s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact"))
+    assert "matrix.suite == 'slow'" in upload["if"]
