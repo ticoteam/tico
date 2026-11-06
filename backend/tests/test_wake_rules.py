@@ -37,9 +37,9 @@ def skips(c):
         "SELECT * FROM events WHERE action=? ORDER BY created_at, rowid", (W.SKIPPED,))]
 
 
-def parked_task(c, title="Build 2/9"):
+def parked_task(c, title="Build 2/9", blocker_title="Build 1/9"):
     """cpo's task, filed by ops, blocked by an open task of ops's."""
-    blocker = H.task_create(c, "bot:ops", "Build 1/9", "First", "bot:ops")
+    blocker = H.task_create(c, "bot:ops", blocker_title, "First", "bot:ops")
     task = H.task_create(c, "bot:ops", title, "Second", "bot:cpo")
     c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
               (blocker["id"], task["id"], H.now()))
@@ -304,13 +304,14 @@ def test_each_always_wake_case_is_never_filtered_even_on_a_parked_task_by_its_ow
     setup(api)
     with api.app.state.store.transaction() as c:
         for n, (kind, refs, body, key) in enumerate(cases):
-            task, _ = parked_task(c, title=f"Build case {n}")
+            task, _ = parked_task(c, title=f"Build case {n}", blocker_title=f"Build 1/9 case {n}")
             actor = "human:ana" if key == "person" else H.KEEPER
             cause = "human:ana" if key == "person" else "bot:cpo"
             assert W.always_wakes(c, actor, "bot:cpo", kind, refs, body, cause) == key, body
             assert W.rule_for(c, actor, "bot:cpo", kind, {**refs, "task": task["id"]}, body, task, cause) is None, body
 
 
+@pytest.mark.parametrize("parked_on", ["blocked_by", "wake_once"])
 def test_a_reply_the_parked_bot_waits_on_wakes_it(api, parked_on):
     # A plain reply passes bot_to_bot.can_wait as urgent; the parked rule must not then hold it.
     setup(api)
