@@ -1078,11 +1078,15 @@ def record(c, message, conv):
     if in_audience and not message.get("recipient_id") and not _is_backfill(refs):
         c.execute("UPDATE conversations SET last_unread_seq=MAX(last_unread_seq,?) WHERE id=?",
                   (message.get("seq") or 0, thread["id"]))
-    _follow(c, thread["id"], author, "posted", message.get("seq"))
+    on_task = audience_of(root_of(c, thread)) == "task"
+    if not on_task:
+        # Posting in a task's thread makes no follower: a task's followers are its owner and whoever chose to
+        # (backend/task_followers.py).
+        _follow(c, thread["id"], author, "posted", message.get("seq"))
     # Every write fans out the same way (mentions, DM members, the Home's owner, sub-thread repliers, outside
     # destinations) under the same loop guard, legacy writers (runner replies, old routes) included. A task comment's
     # mentions are the task rules' (hubdb.mentioned_people, task bots), so a legacy write in a task thread leaves them.
-    if posting is None and audience_of(root_of(c, thread)) == "task":
+    if posting is None and on_task:
         in_audience = []
     woken = deliver(c, thread, message, in_audience, posting, warnings)
     if woken and not message.get("recipient_id") and not _is_backfill(refs):

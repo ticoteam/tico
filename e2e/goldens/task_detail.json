@@ -415,6 +415,14 @@
       "done_at": "<time>",
       "due_at": null,
       "external_requesters": 0,
+      "followers": [
+        {
+          "actor": "bot:ops",
+          "actor_name": "ops",
+          "notify": "live",
+          "reason": "owner"
+        }
+      ],
       "from_person": "human:ana",
       "goal_id": null,
       "holds": [],

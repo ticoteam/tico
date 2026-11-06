@@ -65,6 +65,7 @@ CLI_TOOL_ALIASES = {
     "hub_rules_due_list": ("hub_rules_due",), "hub_rules_due_add": ("hub_rules_due_set",),
     "hub_rules_read": ("hub_rules_get", "hub_rules_read"),   # `hub rules read <id>` or, with --from, a document
     "hub_task_child": ("hub_task_child_create",),
+    "hub_task_unfollow": ("hub_task_follow",),    # `hub task unfollow` is hub_task_follow with unfollow
     "hub_automation_show": ("hub_automation_get",), "hub_automation_inbox": ("hub_inbox_send",),
     "hub_repo_tick": ("hub_repo_update",), "hub_repo_untick": ("hub_repo_update",),
     "hub_bot_repos": ("hub_bot_repos_get", "hub_bot_repos_set"),
@@ -703,6 +704,7 @@ def tag_update(api, args):
        "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only its requester, owner and readers see it; bot defaults also apply"},
        "readers": {"type": "array", "items": {"type": "string"}, "description": "Private: who else sees it: human:<id>, bot:<slug> or group:<id>"},
+        "follow": {"type": "boolean"},   # the filer follows it too (docs/tasks.md, Followers)
        "from_private": {"type": "boolean", "default": False,
                         "description": "From a run on your own private task with no person on it: a company-visible "
                                        "task for a bot, carrying only its own words (no 12 words copied from the private "
@@ -756,7 +758,7 @@ def task_create(api, args):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model",
                   "check_role", "visibility", "public_title", "public_summary", "from_private", "model", "effort",
-                  "harness", "check_back_at", "check_back_note", "readers"):
+                  "harness", "check_back_at", "check_back_note", "readers", "follow"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
@@ -1413,6 +1415,23 @@ def task_readers_add(api, args):
       {"id": TASK_ID, "readers": READERS}, required=("id", "readers"), writes=True)
 def task_readers_remove(api, args):
     return api.post(f"tasks/{args['id']}/readers", {"remove": list(args["readers"])}, key=_key(args))
+
+
+FOLLOW_LEVEL = {"type": "string", "enum": ["live", "mentions", "digest", "muted"]}
+
+
+@tool("hub_task_followers", "Who follows a task, at what level.", {"id": TASK_ID}, required=("id",))
+def task_followers(api, args):
+    return api.get(f"tasks/{args['id']}/followers")
+
+
+@tool("hub_task_follow", "Follow a task, set your level, or unfollow. `who`: someone else, if you may change the task.",
+      {"id": TASK_ID, "level": FOLLOW_LEVEL, "who": _s("human:<id> or bot:<slug>"), "unfollow": {"type": "boolean"}},
+      required=("id",), writes=True)
+def task_follow(api, args):
+    body = {"following": not args.get("unfollow"), **({"notify": args["level"]} if args.get("level") else {}),
+            **({"actor": args["who"]} if args.get("who") else {})}
+    return api.call("PUT", f"tasks/{args['id']}/followers", body, key=_key(args))
 
 
 @tool("hub_task_relate", "Relate another task to this one, read as `id kind task`: parent (task is its "
@@ -8072,6 +8091,7 @@ ASSISTANT_HIDDEN = frozenset({
     "hub_credential_grant", "hub_credential_revoke", "hub_credential_delete", "hub_credential_set", "hub_credential_import",
     "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_call_token",
     "hub_sql", "hub_support_file", "hub_support_report", "hub_support_send", "hub_trigger_sign", "hub_message_redact",
+    "hub_task_followers",   # task show carries followers
     "hub_tool_call",
     "hub_task_readers_list",  # hub_task_show has the readers; the Assistant's listing is near its size cliff
     "hub_tool_check",         # hub_tool_index has each tool's status; Check now is on the tool's page. Same cliff.

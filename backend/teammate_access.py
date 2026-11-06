@@ -851,6 +851,17 @@ class Known:
             self._strangers = hidden(self.c, self.viewer, "see", KINDS, self.auth)
         return self._strangers
 
+    def unseen_of(self, actors):
+        """Which of these actors the viewer may not see, read for just them: cheaper than `strangers` for a short
+        list on a page that must not grow with the company."""
+        actors = [a for a in dict.fromkeys(actors) if a]
+        if self._strangers is not None:
+            return {a for a in actors if a in self._strangers}
+        role = getattr(self.viewer, "role", "")
+        if not actors or role not in ("human", "bot") or is_admin(self.c, self.viewer, self.auth):
+            return set()
+        return {a for a, levels in levels_many(self.c, self.viewer, actors, self.auth).items() if not levels["see"]}
+
     def seen(self, actors):
         """`actors` as someone not in their conversation may be told of them."""
         return [a for a in actors if a not in self.strangers]
