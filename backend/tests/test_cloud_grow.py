@@ -4,12 +4,15 @@ runs (grown or a person's) drains it, so its runner takes no new turn, and once 
 again at that size. A turn is never cut. Live case: the shared machine ran out of disk (0.2 GB free), dropped, and 29
 running turns expired. HQ is a fake client (backend/tests/test_cloud_machines.py) offering HQ's sizes with disk."""
 
+import math
+
 import pytest
 
 from backend import cloud_machines as CM, performance
 from backend.store import H
 from backend.tests import test_cloud_machines as TCM
 from backend.tests.test_api import api, headers, post, ready  # noqa: F401
+from backend.tests.test_health import health_of
 from backend.tests.test_cloud_machines import claim_on, cloud, enrolled, events, facts, machine_row, work  # noqa: F401
 
 GB = 1024 ** 3
@@ -82,9 +85,10 @@ def grow(cloud, monkeypatch):  # noqa: F811
     cloud.manager.synced = None
     cloud.tick()
 
-    def full(free_gb, total_gb=51, rid=None):
+    def full(free_gb, total_gb=51, rid=None, at=None):
+        """The runner's one-minute disk point at `at` (the clock now, rounded up: taken after anything this tick did)."""
         rid = rid or cloud.row()["runner_id"]
-        at = int(cloud.at[0])
+        at = math.ceil(cloud.at[0]) if at is None else at
         with cloud.store.transaction() as c:
             c.execute("INSERT OR REPLACE INTO perf_points(runner_id,span,created_at,n,cpu,cpu_max,disk_free,disk_total) "
                       "VALUES(?,?,?,1,10,10,?,?)", (rid, performance.MINUTE, at, int(free_gb * GB), int(total_gb * GB)))
@@ -120,7 +124,7 @@ def test_a_full_disk_grows_the_machine_once_its_turn_finishes_and_the_turn_is_ne
     grow.tick(1)                                                # the queued work starts it again, at the new size
     assert grow.hq.calls[-1] == ("start", "m1", "large")
     after = grow.row()
-    assert after["machine_size"] == "large" and after["size"] == "large" and after["grow_note"].startswith("Grew to")
+    assert after["machine_size"] == "large" and after["size"] == "large" and after["grow_note"] == ""
     # Started at the new size: the old disk reading no longer moves it.
     grow.hq.calls.clear()
     grow.tick(1)
@@ -203,9 +207,17 @@ def test_a_size_hq_refuses_at_the_restart_goes_back_and_is_not_grown_to_again(gr
     grow.hq.calls.clear()
     grow.tick(1)                                               # starts again at its own size, not at the refused one
     assert grow.hq.calls[-1] == ("start", "m1", None)
+    grow.tick(1)
     grow.full(0.2)
     grow.tick(1)
     assert grow.row()["size"] == "default" and grow.row()["problem"] == "disk_full"
+    view = post(grow.api, "bots/ops/cloud-machine", {"always_on": False})["cloud_machine"]
+    assert view["grow_note"] and "cpu_cap" not in view["grow_note"]
+    # HQ's CPU cap may pass: an hour on, it is asked again.
+    grow.tick(CM.GROW_RETRY)
+    grow.full(0.2)
+    grow.tick(1)
+    assert grow.row()["size"] == "large"
 
 
 def test_a_size_a_person_chooses_while_it_runs_waits_for_the_turn_then_restarts_at_it(grow):
@@ -246,3 +258,114 @@ def test_the_disk_read_is_the_runners_newest_minute_and_only_a_fresh_one(grow):
     with grow.store.read() as c:
         assert performance.latest_disks(c, [rid], grow.at[0])[rid]["free_bytes"] == int(0.5 * GB)
         assert performance.latest_disks(c, [rid], grow.at[0] + performance.DISK_FRESH_S + 60) == {}
+
+
+def test_a_reading_from_before_the_restart_does_not_grow_it_again(grow):
+    """The reviewer's case: the low reading lands on the tick that stops it, and the restart at Large comes a second
+    later. That reading is of the old disk: it neither grows Large to XLarge nor warns on Health."""
+    computer = enrolled(grow)
+    ready(grow.api, computer, ["ops"])
+    with grow.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+    grow.full(0.2)
+    grow.hq.calls.clear()
+    grow.tick(1)                                               # grows and, with nothing out, stops on the same look
+    assert grow.row()["size"] == "large" and grow.hq.actions() == ["stop"]
+    work(grow, text="Another thing")
+    grow.tick(1)
+    assert grow.hq.calls[-1] == ("start", "m1", "large")
+    for _ in range(3):
+        grow.tick(1)
+    assert grow.row()["size"] == "large" and grow.hq.actions().count("stop") == 1
+    assert len(events(grow, "cloud_machine.grew")) == 1
+    _, checks = health_of(grow.api)
+    assert "disk:" + computer["runner_id"] not in checks
+    # A reading after the start that still shows the old 51 GB disk: not resized, said so, and no second grow.
+    grow.full(0.2)
+    grow.tick(1)
+    row = grow.row()
+    assert row["size"] == "large" and row["problem"] == "disk_full" and "not resized" in row["grow_note"]
+
+
+def test_hq_starting_it_at_another_size_keeps_that_size_without_another_drain(grow, monkeypatch):
+    computer = enrolled(grow)
+    ready(grow.api, computer, ["ops"])
+    with grow.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+    start = grow.hq.start
+    monkeypatch.setattr(grow.hq, "start", lambda machine_id, size=None: start(machine_id, None))
+    grow.full(0.2)
+    grow.tick(1)
+    work(grow, text="Another thing")
+    grow.tick(1)
+    row = grow.row()
+    assert row["machine_size"] == "default" and row["size"] == "default" and row["grow_refused_size"] == "large"
+    grow.hq.calls.clear()
+    grow.tick(1)
+    grow.full(0.2)
+    grow.tick(1)
+    assert "stop" not in grow.hq.actions() and grow.row()["problem"] == "disk_full"
+
+
+def test_a_stop_refused_during_the_drain_is_on_health_and_gives_up_after_three(grow):
+    computer = enrolled(grow)
+    ready(grow.api, computer, ["ops"])
+    with grow.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+    grow.hq.fail["stop"] = [CM.Refused("conflict", 409) for _ in range(3)]
+    grow.full(0.2)
+    grow.tick(1)
+    assert grow.row()["size"] == "large" and grow.row()["grow_note"] == CM.STOP_REFUSED
+    with grow.store.read() as c:
+        assert "Stop refused" in CM.health(c, grow.store.settings)["summary"]
+    assert claim_on(grow, computer, "ops")["paused"] == CM.RESIZE_HELD
+    for _ in range(2):
+        grow.tick(CM.BACKOFF_MAX)
+    row = grow.row()
+    assert grow.hq.actions().count("stop") == 3 and row["size"] == "default" and row["grow_refused_size"] == "large"
+    assert not CM.resizing(row) and row["drain_started_at"] is None
+    assert claim_on(grow, computer, "ops").get("paused") is None
+
+
+def test_a_smaller_disk_is_refused_and_the_same_choice_again_keeps_a_refusal(grow):
+    computer = enrolled(grow)
+    ready(grow.api, computer, ["ops"])
+    with grow.store.transaction() as c:
+        CM.save(c, "ops", size="large", machine_size="large", grow_refused_size="xlarge")
+    grow.hq.machines["m1"]["size"] = "large"
+    shrink = grow.api.post("/api/v2/bots/ops/cloud-machine", json={"size": "default"}, headers=headers())
+    assert shrink.status_code == 422 and shrink.json()["error"]["code"] == "too_small"
+    assert grow.row()["size"] == "large"
+    post(grow.api, "bots/ops/cloud-machine", {"size": "large"})                  # the same size again
+    post(grow.api, "bots/ops/cloud-machine", {"grow_storage": True})
+    post(grow.api, "bots/ops/cloud-machine", {"grow_storage": True})             # and the same switch again
+    with grow.store.transaction() as c:
+        CM.save(c, "ops", grow_refused_size="xlarge")
+    post(grow.api, "bots/ops/cloud-machine", {"grow_storage": True})
+    assert grow.row()["grow_refused_size"] == "xlarge"
+    post(grow.api, "bots/ops/cloud-machine", {"size": "xlarge"})                 # a real change clears it
+    assert grow.row()["grow_refused_size"] is None
+    # The shared machine refuses a shrink the same way.
+    with grow.store.transaction() as c:
+        CM.ensure_shared(c)
+        CM.save(c, CM.SHARED, size="large", machine_size="large", state="stopped", machine_id="m9")
+    refused = grow.api.post("/api/v2/cloud-machines/shared", json={"size": "small"}, headers=headers())
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "too_small"
+
+
+def test_health_says_nothing_of_a_stopped_machines_disk(grow):
+    computer = enrolled(grow)
+    ready(grow.api, computer, ["ops"])
+    rid = computer["runner_id"]
+    post(grow.api, "bots/ops/cloud-machine", {"grow_storage": False})
+    grow.full(1)
+    _, checks = health_of(grow.api)
+    assert "disk:" + rid in checks                              # running and full: said
+    with grow.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+    grow.at[0] = grow.row()["active_at"] + 300
+    grow.tick()
+    assert grow.row()["state"] == "stopped"
+    grow.full(1)
+    _, checks = health_of(grow.api)
+    assert "disk:" + rid not in checks

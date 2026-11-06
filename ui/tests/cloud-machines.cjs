@@ -1,6 +1,6 @@
 // A bot's cloud machine in Settings (ui/app/cloud-machines.js, backend/cloud_machines.py):
 //  - on Tico Cloud the Computer select offers Shared and Own cloud machine, and never a cloud machine's computer;
-//  - a bot on its own machine has Size, Pause after, Always on and Grow storage automatically (on by default), held
+//  - a bot on its own machine has Size, Pause after, Always on and Grow storage (on by default), held
 //    until Save bot, which posts each to /cloud-machine after the definition; Pause after is off while Always on is
 //    checked; HQ's sizes, with their disks, replace the plain names once read;
 //  - a bot on the shared machine shows the company's Size, Always on and Grow storage, posted to /cloud-machines/shared;
@@ -117,6 +117,13 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(await editor.locator('[data-bot-cloud-size] option').evaluateAll(options =>
       options.map(o => o.textContent.match(/(\d+) GB disk/)[1])), ['51', '51', '111', '251'], 'each size shows its disk');
     assert.equal(await editor.locator('[data-bot-cloud-grow]').isChecked(), true, 'storage grows unless turned off');
+    assert.deepEqual(await editor.locator('[data-bot-cloud-size] option:disabled').count(), 0, 'Default can go to any size');
+    // Grown to Large, a size with less disk is off: a disk cannot shrink.
+    assert.deepEqual(await page.evaluate(() => {
+      const box = document.createElement('select');
+      box.innerHTML = cloudSizeOptions(CLOUD_SIZES, 'large', 'large');
+      return [...box.options].filter(o => o.disabled).map(o => o.value);
+    }), ['small', 'default']);
     if (process.env.TICO_UI_SHOTS) {
       fs.mkdirSync(process.env.TICO_UI_SHOTS, {recursive: true});
       const grow = editor.locator('[data-bot-cloud-grow]');

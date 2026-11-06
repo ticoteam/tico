@@ -41,8 +41,8 @@ function cloudSizeLabel(size) {
   const disk = size.disk_gb ? ` · ${size.disk_gb} GB disk` : '';
   return `${cloudSizeName(size.name)} · ${size.cpu} CPU · ${size.memory_gb} GB${disk} · $${hourly}/h`;
 }
-// "Running · Default · $0.42 this month · 3 starts", then a size waiting for the restart, and the last word on growing
-// ("Grew to Large: disk was 96% full"); a problem replaces the state.
+// "Running · Default · $0.42 this month · 3 starts", then a size waiting for the restart, and a grow note only while it
+// needs someone ("Disk 96% full: XLarge is the largest size"); a problem replaces the state.
 function cloudMachineStatus(m) {
   const parts = [m.problem || CLOUD_STATES[m.state] || m.state, cloudSizeName(m.machine_size || m.size)];
   if (m.cost_month_usd) parts.push(`$${Number(m.cost_month_usd).toFixed(2)} this month`);
@@ -64,7 +64,7 @@ function cloudMachineFacts(machine) {
   if (!m) return '';
   return m.shared ? `Cloud machine · ${cloudSizeName(m.size)}` : `Cloud machine · ${empName(m.bot)} · ${cloudSizeName(m.size)}`;
 }
-// The bot editor's rows under Computer: its machine's size, Pause after, Always on and Grow storage automatically, all
+// The bot editor's rows under Computer: its machine's size, Pause after, Always on and Grow storage, all
 // held until Save bot (`stage`). The shared machine's are the company's: only owners and admins change them. Always on
 // never pauses, so Pause after is off while it is on.
 function cloudMachineRowHTML(e) {
@@ -75,17 +75,15 @@ function cloudMachineRowHTML(e) {
   const what = scope === 'shared' ? 'the shared cloud machine' : `${esc(e.display_name)}'s cloud machine`;
   const pauseOff = (may || m.always_on) ? 'disabled' : '';
   return `<div class="sb-row" data-bot-cloud-row><span>Size</span><div class="rel-line">
-      <select class="settings-inline-select" data-bot-cloud-size="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${esc(m.size)}" aria-label="Size of ${what}" ${may}>
-        ${names.map(size => `<option value="${esc(size.name)}" ${size.name === m.size ? 'selected' : ''}>${esc(cloudSizeLabel(size))}</option>`).join('')}
+      <select class="settings-inline-select" data-bot-cloud-size="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${esc(m.size)}" data-machine-size="${esc(m.machine_size || '')}" aria-label="Size of ${what}" ${may}>
+        ${cloudSizeOptions(names, m.size, m.machine_size)}
       </select>
       <label class="bot-editor-check"><input type="checkbox" data-bot-cloud-always="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.always_on}" ${m.always_on ? 'checked' : ''} ${may}> Always on</label>
+      <label class="bot-editor-check"><input type="checkbox" data-bot-cloud-grow="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.grow_storage !== false}" ${m.grow_storage !== false ? 'checked' : ''} ${may}> Grow storage</label>
     </div><span></span></div>
     <div class="sb-row"><span>Pause after</span><div class="rel-line">
       <input type="number" min="5" max="1440" step="1" class="settings-inline-select" data-bot-cloud-pause="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.pause_minutes}" value="${m.pause_minutes}" aria-label="Pause after, in minutes, for ${what}" ${pauseOff}>
       <span class="muted">min</span>
-    </div><span></span></div>
-    <div class="sb-row"><span></span><div class="rel-line">
-      <label class="bot-editor-check"><input type="checkbox" data-bot-cloud-grow="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.grow_storage !== false}" ${m.grow_storage !== false ? 'checked' : ''} ${may}> Grow storage automatically</label>
     </div><span></span></div>
     <div class="sb-sub" data-bot-cloud-status>${esc(cloudMachineStatus(m))}</div>
     ${scope === 'own' && settingsIsAdmin() && (m.runner_id || !['none', 'deleted'].includes(m.state) || (m.state === 'deleted' && m.problem)) ? `<div class="sb-row"><span></span><div>
@@ -97,8 +95,12 @@ async function cloudMachineMount(rows, slug) {
   const select = rows?.querySelector(`[data-bot-cloud-size="${CSS.escape(slug)}"]`); if (!select) return;
   const sizes = await cloudMachineSizes();
   if (!sizes.length || !select.isConnected) return;
-  const value = select.value;
-  select.innerHTML = sizes.map(size => `<option value="${esc(size.name)}" ${size.name === value ? 'selected' : ''}>${esc(cloudSizeLabel(size))}</option>`).join('');
+  select.innerHTML = cloudSizeOptions(sizes, select.value, select.dataset.machineSize);
+}
+// A size with less disk than the machine has now is off: a disk cannot shrink.
+function cloudSizeOptions(sizes, value, machineSize) {
+  const floor = sizes.find(size => size.name === machineSize)?.disk_gb || 0;
+  return sizes.map(size => `<option value="${esc(size.name)}" ${size.name === value ? 'selected' : ''} ${size.disk_gb && size.disk_gb < floor ? 'disabled' : ''}>${esc(cloudSizeLabel(size))}</option>`).join('');
 }
 // One change to a cloud machine: the bot's (`/bots/<bot>/cloud-machine`), or the shared one's for a control whose
 // scope is shared. It moves no revision, so the next held row keeps the one it has.

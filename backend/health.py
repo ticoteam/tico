@@ -2259,13 +2259,17 @@ def view(c, who, settings, auth, github, config):
         cloud_disks = disk_words(c)                     # a cloud machine grows to a bigger size instead
         for computer in computers:
             disk = computer.get("disk") or {}
+            cloud = cloud_disks.get(computer["id"])
+            if cloud is not None:
+                # A cloud machine's own reading since it last started; none when it rests or has not read since.
+                disk = {**disk, **cloud["disk"]} if cloud["disk"] and computer["id"] not in resting_ids else {}
             total, free = disk.get("total_bytes"), disk.get("free_bytes")
             if isinstance(total, int) and total > 0 and isinstance(free, int) and 1 - free / total > .85:
                 cleanup = disk.get("cleanup") or {}
                 done = (f" Its own clean-up at {cleanup.get('at', '')[11:16]} UTC freed "
                         f"{(cleanup.get('freed_bytes') or 0) / 1024**3:.1f} GB; what is left is not safe for it to remove."
                         if cleanup.get("still_low") else "")
-                advice = cloud_disks.get(computer["id"]) or (
+                advice = (cloud or {}).get("advice") or (
                     "Free space on this computer; for Docker, run `docker image prune -a` to remove unused images. "
                     "The update retries when space frees.")
                 checks.append(_check("disk:" + computer["id"], "Disk space", "warn",

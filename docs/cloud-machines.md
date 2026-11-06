@@ -65,23 +65,28 @@ cloud machine" under Computer).
 ## Size and Grow storage automatically
 
 HQ offers four sizes: Small and Default have a 51 GB disk, Large 111 GB and XLarge 251 GB. Settings shows each size's
-disk. HQ resizes a machine only when it starts it, so a size chosen while the machine runs (by a person, or by
-growing) drains it first: its runner takes no new turn ("restarts at a new size once its turns finish"), and once no
-turn is out and no update is under way it stops, Always on too, and starts again at the new size. Work queued
-meanwhile runs after the restart. A turn is never cut; a drain still waiting after 30 minutes is on Health.
+disk. A disk cannot shrink, so a size with less disk than the machine has now is refused (422 `too_small`) and is off
+in Settings; replace the machine to start smaller. HQ resizes a machine only when it starts it, so a size chosen while
+the machine runs (by a person, or by growing) drains it first: its runner takes no new turn ("restarts at a new size
+once its turns finish"), and once no turn is out and no update is under way it stops, Always on too, and starts again
+at the new size. Work queued meanwhile runs after the restart. A turn is never cut; a drain still waiting after 30
+minutes is on Health. A stop HQ refuses is on Health at once ("Stop refused"); after three refused stops the machine
+runs on at its size, takes work again, and the new size is tried again an hour later.
 
-**Grow storage automatically** is on by default. The company sets it for the shared machine
+**Grow storage** (Settings, next to Always on) is on by default. The company sets it for the shared machine
 (`grow_storage` on `POST /api/v2/cloud-machines/shared`); an own machine follows the company until its bot chooses
-(`grow_storage` on `POST /api/v2/bots/{bot}/cloud-machine`). When it is on and the runner's newest disk reading (its
-one-minute performance point, at most 10 minutes old) shows under 15% or under 10 GB free, the machine is set to the
-next size with more disk (Default to Large to XLarge) and restarts at it as above. The row says
-"Grew to Large: disk was 96% full", and the event is `cloud_machine.grew`.
+(`grow_storage` on `POST /api/v2/bots/{bot}/cloud-machine`). When it is on and the runner's newest disk reading shows
+under 15% or under 10 GB free, the machine is set to the next size with more disk (Default to Large to XLarge) and
+restarts at it as above (event `cloud_machine.grew`). Only a reading taken since the machine last started counts (one
+from before a restart is of the old disk), at most 10 minutes old.
 
-It never goes past the largest size or the company's CPU cap at HQ. When it cannot grow (already the largest, over
-the cap, or HQ refused that size at the start), the machine is marked **Disk nearly full** with the reason, on Health,
-until the disk has room again (`cloud_machine.grow_blocked`). A size HQ refuses goes back to the size it runs at, and
-is not tried again until a person changes the size or the switch. Health's disk check for a cloud machine's computer
-reads the same fresh reading and says what happens next.
+It never goes past the largest size or the company's CPU cap at HQ (counting the size other machines are restarting
+at). When it cannot grow (the largest size, over the cap, a size HQ refused, or a disk that did not grow with its size:
+"disk not resized"), the machine is marked **Disk nearly full** with the reason, on Health, until the disk has room
+again (`cloud_machine.grow_blocked`). A size HQ refuses at the start goes back to the size the machine runs at. HQ's
+CPU cap, or HQ starting it at another size, is tried again after an hour; any other refusal waits until a person
+changes the size or the switch (the same value again changes nothing). Settings shows the note only while it needs
+someone. Health's disk check for a cloud machine uses the same reading and says nothing of a stopped machine.
 
 ## Tico support
 

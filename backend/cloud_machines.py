@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS cloud_machines(
  problem TEXT NOT NULL DEFAULT '', problem_at TEXT, wake_key TEXT, woke_at REAL,
  enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated_at TEXT, stop_until REAL,
  start_asked_at REAL, create_asked_at REAL, grow_storage INTEGER, grow_note TEXT NOT NULL DEFAULT '',
- grow_refused_size TEXT, drain_started_at REAL);
+ grow_refused_size TEXT, drain_started_at REAL, grow_blocked_until REAL);
 CREATE TABLE IF NOT EXISTS cloud_machine_codes(
  code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created_at TEXT NOT NULL, replacement_for TEXT);
 """
@@ -166,8 +166,12 @@ UPDATE_SPREAD_S = 600            # update wakes spread over this long after a re
 GROW_FREE_PCT = 15               # a disk under this much free (percent), or under GROW_FREE_GB, grows (`low_disk`)
 GROW_FREE_GB = 10
 DRAIN_WARN = 30 * 60             # a resize still waiting for turns to finish this long is on Health; it never cuts them
+GROW_RETRY = 60 * 60             # a size refused for now (HQ's CPU cap, a stop that kept failing) is tried again after this
+STOP_TRIES = 3                   # stops refused in a row before a resize gives up and lets the machine run at its size
+STOP_REFUSED = "Stop refused"    # grow_note while a resize's stop is refused (Health says so; the drain still holds)
 # HQ's refusals of a start that are about the size it asked for: the next start goes at the size the machine has.
 SIZE_REFUSALS = ("cpu_cap", "plan_required", "too_small", "invalid_size")
+SIZE_RETRIES = ("cpu_cap",)      # of those, the ones that may pass later (GROW_RETRY); the rest hold until a person acts
 # A claim refusal that only says the machine's last report is stale: a stopped machine is woken for it, and its
 # runner reports afresh (the guard keeps a refusal that stays from waking it again).
 STALE = ("readiness_unknown", "not_ready", "isolation_unknown", "lane_held", "maintaining")
@@ -607,20 +611,39 @@ def bigger(offered, name):
     return min(up, key=lambda s: (s["disk_gb"], s["cpu"]))["name"] if up else None
 
 
-def grow_plan(current, disk, offered, caps, others_cpu):
+def fresh_disk(current, disk):
+    """`disk` (latest_disks' reading) if it was taken since the machine last started (`woke_at`), else None: a reading
+    from before a restart at a bigger size is of the old disk."""
+    if not disk or current.get("woke_at") and (disk.get("at") or 0) < current["woke_at"]:
+        return None
+    return disk
+
+
+def unresized(current, disk, offered):
+    """Whether reading `disk` is clearly smaller than the disk of the size HQ says the machine runs at: HQ changed the
+    size but the disk did not grow with it."""
+    here = next((s for s in offered if s["name"] == current["machine_size"]), None)
+    return bool(here and here.get("disk_gb") and disk["total_bytes"] < 0.8 * here["disk_gb"] * 1e9)
+
+
+def grow_plan(current, disk, offered, caps, others_cpu, at=0):
     """(size, why, full) for a running machine row `current` whose storage grows, from its runner's newest disk reading
     `disk`: `size` the next one with more disk to grow to, or None; `why` the words for a machine that cannot grow (the
     largest offered, or past HQ's CPU cap with `others_cpu` the CPUs of the company's other running machines, or a size
-    HQ refused before), else None; `full` the disk's percent used. (None, None, None) while the disk has room, and while
-    a size is already waiting for the restart. Pure."""
+    HQ refused before and not yet due again, or a disk that did not grow with its size), else None; `full` the disk's
+    percent used. (None, None, None) while the disk has room, and while a size is already waiting for the restart. Pure:
+    the clock is `at`."""
     if not low_disk(disk) or resizing(current):
         return None, None, None
     full = round(100 * (1 - disk["free_bytes"] / disk["total_bytes"]))
     here = current["machine_size"] or current["size"]
+    if unresized(current, disk, offered):
+        return None, f"Disk {full}% full: disk not resized to {cloud_size_name(here)}", full
     target = bigger(offered, here)
     if target is None:
         return None, f"Disk {full}% full: {cloud_size_name(here)} is the largest size", full
-    if target == current.get("grow_refused_size"):
+    until = current.get("grow_blocked_until")
+    if target == current.get("grow_refused_size") and not (until and at >= until):
         return None, f"Disk {full}% full: Tico refused {cloud_size_name(target)}", full
     cpu = next(s["cpu"] for s in offered if s["name"] == target)
     if type(caps.get("max_cpu")) is int and others_cpu + cpu > caps["max_cpu"]:
@@ -633,10 +656,11 @@ def cloud_size_name(name):
 
 
 def others_cpu(c, key):
-    """The CPUs of the company's running machines other than `key`, by the size HQ last said each has."""
+    """The CPUs of the company's running machines other than `key`: the size HQ last said each has, or the one it
+    restarts at when that is bigger."""
     by = {s["name"]: s["cpu"] for s in sizes(c)}
-    return sum(by.get(r["machine_size"], 0) for r in c.execute(
-        "SELECT machine_size FROM cloud_machines WHERE bot<>? AND state IN ('starting','running')", (key,)))
+    return sum(max(by.get(r["machine_size"], 0), by.get(r["size"], 0)) for r in c.execute(
+        "SELECT size,machine_size FROM cloud_machines WHERE bot<>? AND state IN ('starting','running')", (key,)))
 
 
 def pause_after(current):
@@ -1391,15 +1415,15 @@ class Manager:
             return current                              # (HQ may still list a machine whose runner reports as starting)
         from .performance import latest_disks
         with self.store.read() as c:
-            disk = latest_disks(c, [current["runner_id"]], at).get(current["runner_id"])
+            disk = fresh_disk(current, latest_disks(c, [current["runner_id"]], at).get(current["runner_id"]))
             on = grows(current, None if key == SHARED else row(c, SHARED))
-            target, why, full = grow_plan(current, disk, sizes(c), listed_caps(c), others_cpu(c, key)) if on \
+            target, why, full = grow_plan(current, disk, sizes(c), listed_caps(c), others_cpu(c, key), at) if on \
                 else (None, None, None)
         if target is None and why is None:
             if current["problem"] != "disk_full" or resizing(current):
                 return current
             with self.store.transaction() as c:                 # room again, or growing turned off
-                save(c, key, problem="", problem_at=None)
+                save(c, key, problem="", problem_at=None, grow_note="")
                 return row(c, key)
         with self.store.transaction() as c:
             live = row(c, key)
@@ -1407,7 +1431,7 @@ class Manager:
                     or live["problem"] not in ("", "disk_full"):
                 return live                                 # a person's change, or a problem that says more
             if target:
-                save(c, key, size=target, grow_note=f"Growing to {cloud_size_name(target)}: disk {full}% full",
+                save(c, key, size=target, grow_note="",
                      **({"problem": "", "problem_at": None} if live["problem"] == "disk_full" else {}))
                 H.event(c, H.KEEPER, "cloud_machine.grew", key, {"from": live["machine_size"], "to": target,
                                                                  "disk_pct": full})
@@ -1514,14 +1538,11 @@ class Manager:
             fields.update(active_at=at, heartbeat_at=at, wake_key=woke_for, woke_at=at)
             if resize and machine["size"] != resize:
                 # HQ started it at another size: keep that, or every look would drain it to ask again.
-                fields.update(size=machine["size"], grow_refused_size=resize,
-                              grow_note=f"Tico kept it at {cloud_size_name(machine['size'])}")
-            elif resize and current["grow_note"].startswith("Growing to "):
-                fields["grow_note"] = "Grew to " + current["grow_note"][len("Growing to "):].replace(
-                    ": disk ", ": disk was ", 1)
+                fields.update(size=machine["size"], grow_refused_size=resize, grow_blocked_until=at + GROW_RETRY,
+                              grow_note=f"Couldn't change to {cloud_size_name(resize)}")
         if action == "stop" and resizing(current):
             # Stopped to resize: its next want is fresh, even one it was woken for before the drain held it.
-            fields.update(wake_key=None, drain_started_at=None)
+            fields.update(wake_key=None, drain_started_at=None, grow_note="")
         with self.store.transaction() as c:
             if action == "create":
                 # Enrollment may have arrived while HQ answered. Both recovery paths read it under the write lock.
@@ -1585,7 +1606,17 @@ class Manager:
             # The size, not the start: start again now at the size it has, and grow no more to the one refused.
             fields.update(size=current["machine_size"], grow_refused_size=current["size"], next_try_at=None,
                           failures=0, problem="", problem_at=None,
-                          grow_note=f"Couldn't change to {cloud_size_name(current['size'])} ({refused.code})")
+                          grow_blocked_until=at + GROW_RETRY if refused.code in SIZE_RETRIES else None,
+                          grow_note=f"Couldn't change to {cloud_size_name(current['size'])}")
+        if action == "stop" and resizing(current) and "failures" in fields:
+            if fields["failures"] >= STOP_TRIES:
+                # HQ keeps refusing the stop: run on at the size it has, its runner takes work again, and the size
+                # is tried again after GROW_RETRY.
+                fields.update(size=current["machine_size"], grow_refused_size=current["size"], next_try_at=None,
+                              failures=0, drain_started_at=None, grow_blocked_until=at + GROW_RETRY,
+                              grow_note=f"Couldn't change to {cloud_size_name(current['size'])}")
+            else:
+                fields["grow_note"] = STOP_REFUSED
         with self.store.transaction() as c:
             save(c, key, **fields)
             if refused.status == 402 and current["problem"] != "out_of_credit" or (
@@ -1674,6 +1705,15 @@ def view(c, bot, settings=None):
     return shown(bot, found.get(bot), assigned, found.get(SHARED))
 
 
+def shown_note(current):
+    """The grow note people see, only while it asks something of them: the disk is nearly full and cannot grow, or a
+    size was refused and is not due again yet."""
+    until = current.get("grow_blocked_until")
+    if current["problem"] == "disk_full" or current.get("grow_refused_size") and not (until and now() >= until):
+        return current.get("grow_note") or ""
+    return ""
+
+
 def machine_view(current, shared=None):
     """A machine row as people see it: the size the next start uses (`size`), the one HQ last said it has, Always on,
     its Pause after (the effective minutes, PAUSE_MINUTES when none is set), Grow storage automatically (`grow_storage`,
@@ -1686,7 +1726,7 @@ def machine_view(current, shared=None):
                 "starts_month": 0, "runner_id": None, "problem": ""}
     return {"size": current["size"], "always_on": bool(current["always_on"]),
             "pause_minutes": current["pause_minutes"] or PAUSE_MINUTES,
-            "grow_storage": grows(current, shared), "grow_note": current.get("grow_note") or "",
+            "grow_storage": grows(current, shared), "grow_note": shown_note(current),
             "resizing": resizing(current), "state": current["state"],
             "machine_size": current["machine_size"], "cost_month_usd": round(current["cost_month_usd"] or 0, 2),
             "starts_month": current["starts_month"], "runner_id": current["runner_id"],
@@ -1737,14 +1777,11 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
         fields.update(placement=placement, wake_key=None)
     if "wake_key" in fields and not before["deleting"] and before["problem"] != "no_enroll":
         fields["problem"] = ""
-    if size is not None:
-        fields.update(size=size, grow_refused_size=None)
+    fields.update(size_fields(c, before, size, grow_storage))
     if always_on is not None:
         fields["always_on"] = int(always_on)
     if pause_minutes is not None:
         fields["pause_minutes"] = pause_minutes
-    if grow_storage is not None:
-        fields.update(grow_storage=int(grow_storage), grow_refused_size=None)
     save(c, bot, **fields)
     after = row(c, bot)
     if after["mode"] == "cloud" and after["placement"] == "shared":
@@ -1762,6 +1799,25 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
         key: after[key] for key in ("mode", "placement", "size", "always_on", "pause_minutes", "grow_storage")
         if after[key] != before[key]})
     return view(c, bot, execution.store.settings)
+
+
+def size_fields(c, before, size, grow_storage):
+    """A person's size and Grow storage choice as row fields. A real change of either clears a refused size (it may be
+    asked again); the same value again changes nothing. A size with less disk than the machine has is refused: a disk
+    cannot shrink, so HQ would refuse the restart."""
+    fields = {}
+    if size is not None and size != before["size"]:
+        disk = {s["name"]: s.get("disk_gb") for s in sizes(c)}
+        have = before["machine_size"] if before["machine_size"] and before["state"] not in DEAD else None
+        if have and disk.get(size) and disk.get(have) and disk[size] < disk[have]:
+            raise Problem("too_small", f"{cloud_size_name(size)} has less disk than this machine has now "
+                                       f"({disk[have]} GB). A disk cannot shrink.", 422)
+        fields.update(size=size)
+    if grow_storage is not None and int(grow_storage) != before["grow_storage"]:
+        fields.update(grow_storage=int(grow_storage))
+    if fields:
+        fields.update(grow_refused_size=None, grow_blocked_until=None, grow_note="")
+    return fields
 
 
 def shared_view(c):
@@ -1783,14 +1839,11 @@ def change_shared(c, auth, who, size=None, always_on=None, pause_minutes=None, g
     ensure_shared(c)
     before = row(c, SHARED)
     fields = {"changed_by": who.actor}
-    if size is not None:
-        fields.update(size=size, grow_refused_size=None)
+    fields.update(size_fields(c, before, size, grow_storage))
     if always_on is not None:
         fields["always_on"] = int(always_on)
     if pause_minutes is not None:
         fields["pause_minutes"] = pause_minutes
-    if grow_storage is not None:
-        fields.update(grow_storage=int(grow_storage), grow_refused_size=None)
     save(c, SHARED, **fields)
     after = row(c, SHARED)
     H.event(c, who.actor, "cloud_machine.changed", SHARED, {
@@ -1854,7 +1907,8 @@ def deleted(c, current, actor, changed_by=None, details=None):
          stopped_at=None, cost_month_usd=0, starts_month=0, last_error="", active_at=None, heartbeat_at=None,
          ttl_s=None, next_try_at=None, failures=0, problem="no_enroll" if fails >= ENROLL_TRIES else "",
          problem_at=H.now() if fails >= ENROLL_TRIES else None, wake_key=None, woke_at=None,
-         enroll_by=None, stop_until=None, start_asked_at=None,
+         enroll_by=None, stop_until=None, start_asked_at=None, grow_note="", grow_refused_size=None,
+         drain_started_at=None, grow_blocked_until=None,
          changed_by=current["changed_by"] if changed_by is None else changed_by)
     H.event(c, actor, "cloud_machine.deleted", key, {"machine": current["machine_id"], **(details or {})})
 
@@ -1949,21 +2003,30 @@ def machine_name(c, key):
 
 
 def disk_words(c):
-    """{computer id: what Health's disk check says to do} for each cloud machine's computer: the restart at a bigger size
-    under way, why it cannot grow, or how to let it."""
-    shared = row(c, SHARED)
+    """{computer id: {"disk", "advice"}} for each cloud machine's computer, for Health's disk check: `disk` its reading
+    since it last started, or None to say nothing (stopped, or nothing read since a restart: an older reading is of
+    the old disk); `advice` what happens next or why it cannot grow, and how to let it."""
+    from .performance import latest_disks
+    shared, offered, found = row(c, SHARED), sizes(c), rows(c)
+    disks = latest_disks(c, [m["runner_id"] for m in found.values() if m["runner_id"]])
     out = {}
-    for key, current in rows(c).items():
+    for key, current in found.items():
         if not current["runner_id"]:
             continue
-        if resizing(current):
-            out[current["runner_id"]] = f"It restarts at {cloud_size_name(current['size'])} once its turns finish."
+        disk = fresh_disk(current, disks.get(current["runner_id"])) if current["state"] in ON else None
+        if disk is None:
+            advice = ""
+        elif unresized(current, disk, offered):
+            advice = f"Its disk was not resized to {cloud_size_name(current['machine_size'])}. Free space on it."
+        elif resizing(current):
+            advice = f"It restarts at {cloud_size_name(current['size'])} once its turns finish."
         elif current["problem"] == "disk_full":
-            out[current["runner_id"]] = f"{current['grow_note'] or 'It cannot grow'}. Free space on it."
+            advice = f"{current['grow_note'] or 'It cannot grow'}. Free space on it."
         elif grows(current, None if key == SHARED else shared):
-            out[current["runner_id"]] = "It grows to a bigger size at the next look."
+            advice = "It grows to a bigger size at the next look."
         else:
-            out[current["runner_id"]] = "Turn on Grow storage automatically, or choose a bigger size."
+            advice = "Turn on Grow storage, or choose a bigger size."
+        out[current["runner_id"]] = {"disk": disk, "advice": advice}
     return out
 
 
@@ -1986,6 +2049,9 @@ def health(c, settings=None):
     for key, current in sorted(rows(c).items()):
         if current["problem"] == "disk_full" and current["state"] in ON:
             lines.append(f"{machine_name(c, key)}: {current['grow_note'] or PROBLEMS['disk_full']}.")
+        elif resizing(current) and current["grow_note"] == STOP_REFUSED:
+            lines.append(f"{machine_name(c, key)}: Stop refused. It restarts at {cloud_size_name(current['size'])} once "
+                         f"Tico stops it (try {current['failures']} of {STOP_TRIES}).")
         elif resizing(current) and current["drain_started_at"] and now() - current["drain_started_at"] >= DRAIN_WARN:
             lines.append(f"{machine_name(c, key)}: waiting {int(now() - current['drain_started_at']) // 60} minutes for "
                          f"its turns to finish before it restarts at {cloud_size_name(current['size'])}.")
