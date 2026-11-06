@@ -1191,7 +1191,7 @@ class Store:
         # which on a large install cost more than most reads themselves.
         self.pooled = _pooled(self.factory)
         self.pool, self.pool_file, self.pool_lock = [], None, threading.Lock()
-        weakref.finalize(self, _close_idle, self.pool)
+        self._pool_finalizer = weakref.finalize(self, _close_idle, self.pool)
         # In-process writers queue before BEGIN instead of competing in SQLite's busy-handler sleeps.
         # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
         self.writer = WriterGate()
@@ -2523,7 +2523,14 @@ class Store:
         except sqlite3.Error:
             c.tainted = True
         with self.pool_lock:
-            if not c.tainted and c.pool_file == self.pool_file and len(self.pool) < POOL_IDLE:
+            # Once the store is freed, its finalizer has closed the idle connections: one given back after that would
+            # wait in a dead pool, open, until the garbage collector frees it (and warns).
+            if (
+                self._pool_finalizer.alive
+                and not c.tainted
+                and c.pool_file == self.pool_file
+                and len(self.pool) < POOL_IDLE
+            ):
                 self.pool.append(c)
                 return
         c.close()
