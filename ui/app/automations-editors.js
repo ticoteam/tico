@@ -138,7 +138,9 @@ const auStepPick = (t, ed) => ed?.stepPick ?? (t.filters || []).find(f => f.fiel
 function auStepChoices(t) {
   const typeId = (t.filters || []).find(f => f.field === 'event.data.type_id')?.value;
   const seen = new Map();
-  (typeId ? TASK_TYPES.filter(x => x.id === typeId) : TASK_TYPES).forEach(x => (x.steps || []).forEach(st => seen.has(st.id) || seen.set(st.id, st.name)));
+  (typeId ? TASK_TYPES.filter(x => x.id === typeId) : TASK_TYPES).forEach(x => {
+    (x.steps || []).forEach(st => { if (!seen.has(st.id)) seen.set(st.id, st.name); });
+  });
   return [...seen];
 }
 function auTriggerFields(t, ed) {

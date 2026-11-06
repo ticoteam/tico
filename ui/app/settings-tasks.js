@@ -59,10 +59,12 @@ async function taskAutomationSettingsLoad() {
       TASK_AUTOMATION_TYPE = event.target.value;
       void taskAutomationSettingsLoad();
     };
-    host.querySelectorAll('[data-task-add-action]').forEach(button => button.onclick = () => {
-      const trigger = {type: 'event', name: button.dataset.taskAddAction,
-        filters: selected ? [{field: 'event.data.type_id', op: 'is', value: selected}] : []};
-      void taskAutomationAddAction(trigger, typeName);
+    host.querySelectorAll('[data-task-add-action]').forEach(button => {
+      button.onclick = () => {
+        const trigger = {type: 'event', name: button.dataset.taskAddAction,
+          filters: selected ? [{field: 'event.data.type_id', op: 'is', value: selected}] : []};
+        void taskAutomationAddAction(trigger, typeName);
+      };
     });
   } catch (error) { host.textContent = error.message; }
 }

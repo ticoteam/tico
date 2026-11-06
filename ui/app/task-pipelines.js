@@ -202,7 +202,9 @@ async function renderTaskTypes() {
       ${mover && type.id !== 'general' ? `<button class="ghost" type="button" data-edit-type="${esc(type.id)}">Edit</button>` : ''}</div>`).join('')
       + (mover ? '<button class="primary" type="button" data-new-type>New type</button>' : '');
     host.querySelectorAll('[data-edit-type]').forEach(button => button.onclick = () => taskTypeEditor(TASK_TYPES.find(type => type.id === button.dataset.editType)));
-    host.querySelectorAll('[data-add-action]').forEach(button => button.onclick = () => taskTypeAddAction(TASK_TYPES.find(type => type.id === button.dataset.addAction)));
+    host.querySelectorAll('[data-add-action]').forEach(button => {
+      button.onclick = () => taskTypeAddAction(TASK_TYPES.find(type => type.id === button.dataset.addAction));
+    });
     const add = host.querySelector('[data-new-type]'); if (add) add.onclick = () => taskTypeEditor();
   } catch (error) { host.textContent = error.message; }
 }
