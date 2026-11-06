@@ -1,6 +1,6 @@
-# Tico's own release windows (docs/releasing.md#release-windows). A window opens at 14:30 and 22:00 UTC (07:30 and
-# 15:00 in Los Angeles in daylight time, 06:30 and 14:00 in standard time) and stays open until a vX.Y.Z release is
-# published after it. Nothing is stored: each run works the window out from GitHub (scripts/release_train.py).
+# Tico's own release windows (docs/releasing.md#release-windows). Windows open at 07:30, 14:00 and 20:30 Los Angeles
+# time on weekdays, and at 07:30 and 15:00 on weekends, and stay open until a vX.Y.Z release is published after them.
+# Nothing is stored: each run works the window out from GitHub (scripts/release_train.py).
 #   - At the open (schedule) or on a manual run: promote canary (Tico Team) to stable (TIDY) when the bake gate passes.
 #   - While open, on the open, on every push to main, whenever a Release validation run finishes, and every 20 minutes as
 #     a backstop for a missed event (at :05, :25 and :45; it never opens a window or promotes): ship the first green
@@ -17,14 +17,21 @@ name: Release window
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch' && format('Release window (manual, {0})', github.actor)
   || github.event_name == 'schedule' && github.event.schedule == '5-59/20 * * * *' && 'Release window check'
-  || github.event_name == 'schedule' && 'Release window opens'
+  || github.event_name == 'schedule' && format('Release window (scheduled {0})', github.event.schedule)
   || github.event_name == 'workflow_run' && format('Release window: {0}', github.event.workflow_run.display_title)
   || format('Release window: push {0}', github.sha) }}
 
 on:
   schedule:
-    - cron: '30 14 * * *'
-    - cron: '0 22 * * *'
+    # Every UTC time a window starts at, under PDT or PST. A cron that is not a real window's start (the off-season
+    # twin of another) does what a push does; scripts/release_train.py decides which ones open a window.
+    - cron: '30 3 * * *'         # 20:30 PDT, the evening before
+    - cron: '30 4 * * *'         # 20:30 PST, the evening before
+    - cron: '30 14 * * *'        # 07:30 PDT
+    - cron: '30 15 * * *'        # 07:30 PST
+    - cron: '0 21 * * *'         # 14:00 PDT
+    - cron: '0 22 * * *'         # 14:00 PST, and 15:00 PDT at weekends
+    - cron: '0 23 * * *'         # 15:00 PST at weekends
     - cron: '5-59/20 * * * *'    # backstop: a step in an open window if an event was missed; never opens one
   push:
     branches: [main]
