@@ -63,7 +63,8 @@ RELEASE_TRAILER = re.compile(r"^Changelog-Release:[ \t]*v?(\d+\.\d+\.\d+)[ \t]*$
 # past 16 x 540 s (Oct 23: 3,300 one-worker seconds; Nov 5: 39,900), so every full run's shards took 11-14 minutes.
 WORKERS = 4
 JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 300))
-SETUP_SECONDS = {"python": 45, "browser": 70}  # measured boot, checkout and warm install
+# Measured boot, checkout and warm install; "slow" is an estimate (boot, install, the cached relay build).
+SETUP_SECONDS = {"python": 45, "browser": 70, "slow": 90}
 MAX_JOBS = int(os.environ.get("TICO_CI_MAX_JOBS", 64))
 # Python jobs pass the release gate's own flags: restore a worker-local schema snapshot instead of migrating a fresh
 # database for every API test (about half of each file's time), and hand out at most two tests at a time so expensive
@@ -757,111 +758,67 @@ SMOKE_SCRIPT = "sign-in-redirect"
 CADDY_INPUTS = ("Dockerfile", ".dockerignore", "compose.yaml", "compose.screen-relay.yaml", "docker/", "relay-rs/")
 CADDY_ROOTS = ("backend/caddy_assets.py", "backend/tests/test_caddy_container.py")
 UI_RUNNER = "scripts/ui-tests.cjs"
-# Slow tests that Release validation runs on main. A merge queue group runs the ones a change's paths reach: SLOW_MAP
-# maps a path glob to the node ids a change to it exercises (read from each test's imports and calls). A slow test's own
-# file always selects it, since the default run leaves slow tests out. The shared core (the app factory, the store and
-# the API helpers every slow test boots) reaches all of them.
-SLOW_PAGE_LEAK = (
-    "backend/tests/test_page_audience_review3.py::"
-    "test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletion"
-)
-SLOW_REPOSITORY_TOKENS = (
-    "backend/tests/test_repositories.py::test_missing_repo_does_not_take_own_or_computer_tokens_down"
-)
-SLOW_SCHEDULER_CLAIMS = (
-    "backend/tests/test_scheduler.py::test_idle_claims_do_not_take_the_write_lock_and_never_starve_leases"
-)
-SLOW_SQL_SCALE = (
-    "backend/tests/test_sql_scale.py::test_bot_and_member_reads_stay_under_five_seconds_on_production_sized_history"
-)
-SLOW_ATTEMPTS = "backend/tests/test_attempt_contention.py::test_100_attempt_routes_during_heartbeat_and_scheduler"
-SLOW_ATTEMPTS_SCALE = "backend/tests/test_attempt_contention_scale.py::test_busy_install_routes"
-SLOW_RELEASE_SHARDS = (
-    "scripts/tests/test_release_checks.py::test_three_default_shards_collect_exactly_the_single_default_run"
-)
-# The screen tests are module-level slow and need the relay binary: the slow job builds it only when one is selected.
-SCREEN_TESTS = (
-    "backend/tests/test_screen.py",
-    "backend/tests/test_screen_relay_contract.py",
-    "backend/tests/test_screen_relay_ingress.py",
-)
-RELAY_TESTS = SCREEN_TESTS
-SLOW_NODES = (
-    SLOW_PAGE_LEAK,
-    SLOW_REPOSITORY_TOKENS,
-    SLOW_SCHEDULER_CLAIMS,
-    SLOW_SQL_SCALE,
-    SLOW_ATTEMPTS,
-    SLOW_ATTEMPTS_SCALE,
-    *SCREEN_TESTS,
-    SLOW_RELEASE_SHARDS,
-)
-SLOW_MAP = {
-    "backend/app.py": SLOW_NODES,
-    "backend/store.py": SLOW_NODES,
-    "backend/tests/test_api.py": SLOW_NODES,
-    "backend/counsel.py": (SLOW_PAGE_LEAK,),
-    "backend/org_rules.py": (SLOW_PAGE_LEAK,),
-    "backend/events.py": (SLOW_PAGE_LEAK, SCREEN_TESTS[0]),
-    "backend/files.py": (SLOW_PAGE_LEAK,),
-    "backend/pages.py": (SLOW_PAGE_LEAK,),
-    "backend/rules.py": (SLOW_PAGE_LEAK,),
-    "backend/approval*.py": (SLOW_PAGE_LEAK,),
-    "backend/file_reviews.py": (SLOW_PAGE_LEAK,),
-    "backend/assistant.py": (SLOW_PAGE_LEAK,),
-    "backend/auth.py": (SLOW_PAGE_LEAK,),
-    "backend/hubdb*.py": (SLOW_PAGE_LEAK,),
-    "backend/task_review.py": (SLOW_PAGE_LEAK,),
-    "backend/task_privacy.py": (SLOW_PAGE_LEAK, SLOW_SQL_SCALE, SLOW_ATTEMPTS),
-    "backend/tests/test_pages.py": (SLOW_PAGE_LEAK,),
-    "backend/tests/test_files.py": (SLOW_PAGE_LEAK,),
-    "backend/tests/test_counsel.py": (SLOW_PAGE_LEAK,),
-    "backend/tests/test_org_rules.py": (SLOW_PAGE_LEAK,),
-    "backend/tests/test_page_audience*.py": (SLOW_PAGE_LEAK,),
-    "backend/tests/test_events.py": (SLOW_PAGE_LEAK,),
-    "backend/tests/test_assistant.py": (SLOW_PAGE_LEAK,),
-    "backend/tests/test_file_reviews.py": (SLOW_PAGE_LEAK,),
-    "backend/github_app.py": (SLOW_REPOSITORY_TOKENS,),
-    "backend/repositories.py": (SLOW_REPOSITORY_TOKENS,),
-    "backend/bot_settings.py": (SLOW_REPOSITORY_TOKENS,),
-    "backend/health.py": (SLOW_REPOSITORY_TOKENS, SLOW_ATTEMPTS),
-    "backend/tests/test_github_app.py": (SLOW_REPOSITORY_TOKENS,),
-    "backend/sql.py": (SLOW_SQL_SCALE,),
-    "backend/read_deps.py": (SLOW_SQL_SCALE,),
-    "backend/privacy_index.py": (SLOW_SQL_SCALE,),
-    "backend/scheduler.py": (SLOW_SCHEDULER_CLAIMS, SLOW_ATTEMPTS, SLOW_ATTEMPTS_SCALE),
-    "backend/execution.py": (SLOW_SCHEDULER_CLAIMS, SLOW_ATTEMPTS, SLOW_ATTEMPTS_SCALE),
-    "backend/fleet_runner_routes.py": (SLOW_SCHEDULER_CLAIMS, SLOW_ATTEMPTS, SLOW_ATTEMPTS_SCALE),
-    "backend/routines.py": (SLOW_SCHEDULER_CLAIMS,),
-    "backend/batch_work.py": (SLOW_SCHEDULER_CLAIMS,),
-    "backend/threads.py": (SLOW_SCHEDULER_CLAIMS,),
-    "backend/flight.py": (SLOW_ATTEMPTS, SLOW_ATTEMPTS_SCALE),
-    "backend/worktrees.py": (SLOW_ATTEMPTS, SLOW_ATTEMPTS_SCALE),
-    "backend/enqueue.py": (SLOW_ATTEMPTS, SLOW_ATTEMPTS_SCALE),
-    "backend/maintenance_health.py": (SLOW_ATTEMPTS,),
-    "backend/tests/test_attempt_contention.py": (SLOW_ATTEMPTS_SCALE,),
-    "backend/screen*.py": SCREEN_TESTS,
-    "backend/tests/test_screen_relay_contract.py": SCREEN_TESTS,
-    "relay-rs/*": SCREEN_TESTS,
-    "scripts/release_checks.py": (SLOW_RELEASE_SHARDS,),
-    "scripts/pr_checks.py": (SLOW_RELEASE_SHARDS,),
-}
+# Slow tests (marked `slow`: absent from the default run, and run by the release gate) that a merge queue group runs. A
+# slow test is selected exactly as a default test is: its file is a candidate when the dependency map reaches it (the
+# "slow" list of selection(), the same files as "python"), and collection keeps the candidates that hold a slow test
+# (prepare). SLOW_EXEMPT (scripts/pr_slow_exempt.json) names the slow files a group does not run, each with its reason:
+# Docker, a binary or the network the queue lacks, a skip that would hide a gap, or a job that already runs the file for
+# the same change. check_slow_exempt keeps that list honest on every push.
+SLOW_EXEMPT = "scripts/pr_slow_exempt.json"
 
 
-def slow_tests(changed):
-    """The slow tests a change to these paths reaches, as node ids: SLOW_MAP's globs and each test's own file."""
-    picked = set()
-    for name in changed:
-        for glob, nodes in SLOW_MAP.items():
-            if fnmatch.fnmatchcase(name, glob):
-                picked.update(nodes)
-    picked.update(node for node in SLOW_NODES if node.split("::", 1)[0] in changed)
-    return sorted(picked)
+def slow_exempt(root=ROOT):
+    """Slow test files a merge queue group does not run, each with the reason it cannot."""
+    exempt = json.loads((root / SLOW_EXEMPT).read_text())
+    if not isinstance(exempt, dict) or not all(
+        isinstance(name, str) and isinstance(reason, str) and reason.strip() for name, reason in exempt.items()
+    ):
+        raise RuntimeError(f"{SLOW_EXEMPT} maps each test file to a non-empty reason")
+    return exempt
 
 
-def slow_plan(nodes):
-    """The slow job's node ids, and whether it builds the screen relay (only the screen tests need it)."""
-    return {"slow": sorted(nodes), "relay": any(node.split("::", 1)[0] in RELAY_TESTS for node in nodes)}
+def slow_marked(tree):
+    """Whether a parsed test module marks a test slow: a pytestmark (module or class), or a slow mark on a function, a
+    class or a parametrized case. A static reading for the exempt list; collection decides what the queue runs."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(getattr(target, "id", None) == "pytestmark" for target in node.targets):
+            if "mark.slow" in ast.unparse(node.value):
+                return True
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if any("mark.slow" in ast.unparse(decorator) for decorator in node.decorator_list):
+                return True
+    return False
+
+
+def check_slow_exempt(root=ROOT):
+    """Problems with the exempt list: an entry that is not a test file in this checkout, or one with no slow test left
+    (its exemption is stale and comes out with the change that removed the mark)."""
+    problems = []
+    for name in slow_exempt(root):
+        path = root / name
+        if not is_test(name) or not path.is_file():
+            problems.append(f"{name}: not a test file in this checkout")
+        elif not slow_marked(ast.parse(path.read_bytes())):
+            problems.append(f"{name}: no test in it is marked slow, so its exemption is stale")
+    return problems
+
+
+def collect_slow(files=None, root=ROOT):
+    """Slow test counts per file as pytest collects them: `-m slow` over these files (None: the whole suite)."""
+    if files is not None and not files:
+        return Counter()
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0", "-m", "slow", *(files or [])],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode not in (0, 5):  # 5: none of these files holds a slow test
+        raise RuntimeError("Slow collection failed:\n" + result.stdout[-4000:] + result.stderr[-4000:])
+    return Counter(
+        line.split("::", 1)[0] for line in result.stdout.splitlines() if "::" in line and not line.startswith(" ")
+    )
 
 
 def unread(name):
@@ -890,7 +847,8 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     """None means the full default suite; an empty list means explicitly unaffected.
 
     A pull request or a merge queue group (base to head) runs the default tests that use a changed file
-    (DependencyMap) and, of the browser scripts that do, the core ones the full suite runs; a UI change runs its
+    (DependencyMap), the slow test files the same map reaches (`slow`, narrowed to the slow ones by collection in
+    prepare) and, of the browser scripts that do, the core ones the full suite runs; a UI change runs its
     mapped scripts or all of them. A docs page, CHANGELOG.md or a GitHub file runs the tests that read it
     (read_only); a CI input adds a short browser smoke (CI_INPUTS). `added` names the new files (None: any may be
     new) and `core` the core browser scripts (None: read from scripts/ui-tests.cjs)."""
@@ -899,7 +857,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         "browser": None,
         "caddy": True,
         "contracts": True,
-        **slow_plan(SLOW_NODES),
+        "slow": None,  # every slow test the map reaches (None), less the exempt list
         "reason": "full default suite",
     }
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
@@ -910,7 +868,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     )
     full["rust"] = rust
     if event not in ("pull_request", "merge_group"):
-        return {**full, **slow_plan([]), "conformance": runner, "reason": "main runs the full default suite"}
+        return {**full, "slow": [], "conformance": runner, "reason": "main runs the full default suite"}
     if not changed:
         return {**full, "conformance": runner, "reason": "empty diff: full default suite", "uncertain": ["empty diff"]}
     changed = [n for n in changed if not unread(n)]
@@ -943,7 +901,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             "rust": [],
             "caddy": False,
             "contracts": False,
-            **slow_plan([]),
+            "slow": [],
             "reason": "documentation that no test or script reads",
         }
     data = [n for n in changed if read_only(n) and not graph.code(n)]
@@ -972,7 +930,8 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         "rust": rust,
         "caddy": caddy,
         "contracts": contracts,
-        **slow_plan(slow_tests(changed)),
+        # The test files the map reaches: the same list as "python". prepare() keeps the ones with a slow test.
+        "slow": python,
         "reason": "measured dependency map",
     }
 
@@ -1034,16 +993,16 @@ def weights(counts, timings, fallback=1.0):
     return {n: known.get(n, counts[n] * seconds_per_test) for n in counts}
 
 
-def job_count(seconds, kind):
-    """VMs needed for `seconds` of one-worker test time to finish near JOB_SECONDS each."""
-    per_job = WORKERS * max(JOB_SECONDS - SETUP_SECONDS[kind], 30)
+def job_count(seconds, kind, workers=WORKERS):
+    """VMs needed for `seconds` of one-worker test time to finish near JOB_SECONDS each, at `workers` per VM."""
+    per_job = workers * max(JOB_SECONDS - SETUP_SECONDS[kind], 30)
     return max(1, min(MAX_JOBS, math.ceil(seconds / per_job)))
 
 
-def groups(counts, timings, total=None, kind="python", fallback=1.0):
+def groups(counts, timings, total=None, kind="python", fallback=1.0, workers=WORKERS):
     seconds = weights(counts, timings, fallback)
     if total is None:
-        total = job_count(sum(seconds.values()), kind)
+        total = job_count(sum(seconds.values()), kind, workers)
     out, loads = [[] for _ in range(total)], [0.0] * total
     for name in sorted(counts, key=lambda n: (-seconds[n], n)):
         i = min(range(total), key=lambda i: (loads[i], i))
@@ -1121,8 +1080,20 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
         jobs.append({"suite": "conformance", "files": [CONFORMANCE], "crates": picked["rust"]})
     if picked["contracts"]:
         jobs.append({"suite": "contracts", "files": list(CONTRACT_TESTS)})
-    if picked.get("slow"):
-        jobs.append({"suite": "slow", "files": picked["slow"], "relay": picked.get("relay", False)})
+    slow_loads, slow_reached = [], []
+    if picked.get("slow", []) != []:  # None: a full run, every slow test the map could reach
+        reached = collect_slow(picked["slow"])
+        exempt = slow_exempt()
+        slow_reached = sorted(name for name in reached if name in exempt)
+        slow_counts = Counter({name: n for name, n in reached.items() if name not in exempt})
+        picked["slow"] = sorted(slow_counts)
+        slow_split, slow_loads = groups(slow_counts, timings, kind="slow", workers=1)
+        if slow_loads and max(slow_loads) + SETUP_SECONDS["slow"] > 1.5 * JOB_SECONDS:
+            print(
+                f"::warning::A slow VM is planned for {max(slow_loads) + SETUP_SECONDS['slow']:.0f}s against the "
+                f"{JOB_SECONDS:.0f}s target: split the file or move it to the exempt list"
+            )
+        jobs += [{"suite": f"slow-{i + 1}", "files": files} for i, files in enumerate(slow_split) if files]
     # Actions rejects an empty matrix. Keep an explicit successful selection job
     # for documented no-test changes, without invoking bare pytest.
     if not jobs:
@@ -1130,8 +1101,9 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
     plan = {
         **picked,
         "changed": changed,
+        "slow_exempt": slow_reached,
         "matrix": {"include": jobs},
-        "estimated_seconds": loads,
+        "estimated_seconds": loads + slow_loads,
         "timed_files": len(set(counts) & timings.keys()),
     }
     Path(output).write_text(json.dumps(plan, indent=2) + "\n")
@@ -1176,7 +1148,8 @@ def run(plan_path, suite):
         command = ["node", "scripts/ui-tests.cjs", "-j", str(WORKERS), *files]
         env = {**os.environ, "TICO_UI_TIMINGS": str(ROOT / "ci-results" / f"{suite}.json")}
     else:
-        # A node id names its file before the "::"; slow nodes are the only ones with a test name after it.
+        serial = suite.startswith("slow-")
+        # A node id names its file before the "::"; a file may carry one.
         if not files or any(not (ROOT / f.split("::", 1)[0]).is_file() for f in files):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")
         command = [
@@ -1186,13 +1159,13 @@ def run(plan_path, suite):
             "-q",
             "-n",
             # One process for slow tests: the wall-clock budget tests among them must not share a CPU with a sibling.
-            "0" if suite == "slow" else str(WORKERS),
+            "0" if serial else str(WORKERS),
             *PYTEST_FLAGS,
             "-o",
             "junit_family=xunit1",
             f"--junitxml=ci-results/{suite}.xml",
         ]
-        if suite in ("conformance", "contracts", "slow"):
+        if suite in ("conformance", "contracts") or serial:
             command += ["-m", "slow"]
         command += files
     (ROOT / "ci-results").mkdir(exist_ok=True)
@@ -1202,6 +1175,9 @@ def run(plan_path, suite):
         cases = list(ET.parse(ROOT / "ci-results" / f"{suite}.xml").iter("testcase"))
         if not any(t.find("skipped") is None for t in cases):
             raise RuntimeError("A Python job must pass at least one test, not skip every test")
+        skipped = [t.get("name", "") for t in cases if t.find("skipped") is not None]
+        if suite.startswith("slow-") and skipped:
+            print(f"::warning::{len(skipped)} slow test(s) skipped in {suite}: {', '.join(skipped[:10])}")
     return result.returncode or rust
 
 
@@ -1303,9 +1279,10 @@ def main():
     execute = sub.add_parser("run")
     execute.add_argument("suite")
     execute.add_argument("--plan", default="ci-plan.json")
-    slow = sub.add_parser("slow", help="print the slow tests a change selects, as the merge queue runs them")
+    slow = sub.add_parser("slow", help="print the slow test files a change reaches, before collection confirms them")
     slow.add_argument("--base", default="origin/main")
     slow.add_argument("--head", default="HEAD")
+    sub.add_parser("slow-check", help="check the exempt list: real test files, each with a reason and a slow test")
     sub.add_parser("durations")
     sub.add_parser("receipt")
     args = parser.parse_args()
@@ -1319,7 +1296,12 @@ def main():
             base=args.base,
             added=changed_files(args.base, args.head, only="A"),
         )
-        print(json.dumps({"reason": picked["reason"], "slow": picked["slow"], "relay": picked["relay"]}, indent=2))
+        print(json.dumps({"reason": picked["reason"], "candidates": picked["slow"], "exempt": slow_exempt()}, indent=2))
+    elif args.action == "slow-check":
+        problems = check_slow_exempt()
+        for problem in problems:
+            print(f"::error::{SLOW_EXEMPT}: {problem}")
+        return 1 if problems else 0
     elif args.action == "durations":
         measured = durations(Path("ci-results").glob("python-*.xml"), Path("ci-results").glob("browser-*.json"))
         if not measured:

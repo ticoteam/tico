@@ -98,7 +98,7 @@ jobs:
         run: bash scripts/rust_checks.sh
 
   relay:
-    # The screen relay's debug build: what the slow job's relay step restores when a queue group selects a screen test.
+    # The screen relay's debug build: what the slow jobs' relay step restores when a queue group runs slow tests.
     runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache
     timeout-minutes: 30
     steps:
