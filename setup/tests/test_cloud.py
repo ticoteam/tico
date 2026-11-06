@@ -27,9 +27,12 @@ class FakeCli:
             if flag in argv:
                 import os
                 path = argv[argv.index(flag) + 1]
-                self.user_data, self.mode = open(path).read(), os.stat(path).st_mode & 0o777
+                with open(path) as f:
+                    self.user_data = f.read()
+                self.mode = os.stat(path).st_mode & 0o777
         if "--rules-file" in argv:
-            self.rules = json.load(open(argv[argv.index("--rules-file") + 1]))
+            with open(argv[argv.index("--rules-file") + 1]) as f:
+                self.rules = json.load(f)
         best = max((k for k in self.replies if argv[:len(k)] == list(k)), key=len, default=None)
         return self.replies[best] if best else Cli(0, "")
 

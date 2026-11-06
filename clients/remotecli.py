@@ -855,7 +855,11 @@ def run(args, who=None):
         if sub == "page":
             if not args.body_file:
                 return client.get("market/pages/" + args.name)
-            text = sys.stdin.read() if args.body_file == "-" else open(args.body_file).read()
+            if args.body_file == "-":
+                text = sys.stdin.read()
+            else:
+                with open(args.body_file) as f:
+                    text = f.read()
             return post("market/pages/" + args.name, {"body": text})
         unverified = []
         for item in args.unverified or []:
