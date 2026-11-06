@@ -5,7 +5,7 @@
    opens the rail: amount by month, warn at, at limit, owner. Shown to the owner and whoever holds finance.budgets
    (finTabShown). Platform, pace_end, spent_from and as_of come from ad platform imports; a read without them draws
    those cells blank.
-   Reads: GET /api/v2/finance/budgets?at=, /finance/pnl (the lines' names), /finance/reports/budget_vs_actual (a
+   Reads: GET /api/v2/finance/budgets?at=&limit=500, /finance/pnl (the lines' names), /finance/reports/budget_vs_actual (a
    budget's amount by month). Writes: budget_create and budget_update through POST /api/v2/finance/actions.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -25,7 +25,10 @@ function finBudgetsPage() {
       <span class="spacer"></span>${caps.may('finance.budgets') ? '<button type="button" class="primary" data-fin-bud-add>+ Budget</button>' : ''}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-bud">${skelRows(6, {dot: false})}</div>`, '', 'Selected budget');
   const body = $('#fin-body');
-  body.querySelector('[data-fin-month]').onchange = ev => { if (ev.target.value) { B.month = ev.target.value; void finBudLoad(); } };
+  body.querySelector('[data-fin-month]').onchange = ev => {
+    if (!ev.target.value || ev.target.value === B.month) return;
+    B.month = ev.target.value; finBudReset(); void finBudLoad();
+  };
   body.querySelector('[data-fin-q]').oninput = ev => { B.q = ev.target.value.trim().toLowerCase(); finBudDraw(); };
   body.onclick = ev => {
     if (ev.target.closest('[data-fin-bud-add]')) { finBudAdd(); return; }
@@ -44,13 +47,22 @@ function finBudgetsPage() {
   void finBudLoad();
 }
 
+// A new month: the table empties at once and edits wait for its rows (finBudEditable finds none until they are in).
+function finBudReset() {
+  const state = FIN.bud;
+  Object.assign(state, {read: null, rows: [], kids: new Map(), hist: null});
+  const box = $('#fin-bud'); if (box) box.innerHTML = skelRows(6, {dot: false});
+  finRail('');
+}
+const FIN_BUD_LIMIT = 500;   // the most one read returns (GET /finance/budgets limit)
+
 async function finBudLoad() {
   const state = FIN.bud, load = ++state.load, caps = finCaps(), B = FIN_BUD;
   const [a, z] = finMonthBounds(B.month), today = finToday();
   // This month reads as of today; any other as of its first day (the version in effect then).
   const at = B.month === today.slice(0, 7) ? today : a;
   const view = caps.company ? 'company' : 'expenses';
-  const [bud, pnl] = await Promise.allSettled([get(`/v2/finance/budgets?at=${at}${finAs()}`, {fresh: true}),
+  const [bud, pnl] = await Promise.allSettled([get(`/v2/finance/budgets?at=${at}&limit=${FIN_BUD_LIMIT}${finAs()}`, {fresh: true}),
     get(`/v2/finance/pnl?period=month&start=${a}&end=${z}&view=${view}${finAs()}`, {fresh: true})]);
   if (FIN?.bud !== state || state.load !== load || !$('#fin-bud')) return;
   if (bud.status === 'rejected') { $('#fin-bud').innerHTML = finFail(bud.reason); finRail(''); return; }
@@ -147,7 +159,7 @@ function finBudDraw() {
   }).join('');
   const head = `<tr><th>Budget</th><th>Platform</th><th class="fin-n">Budget / mo${finExcl(state.read)}</th><th class="fin-n">Spent</th><th>Used</th><th class="fin-n">Pace by ${FIN_MON[m - 1]} ${last}</th><th class="fin-n">Warn at</th></tr>`;
   box.innerHTML = !state.rows.length ? finNote('No budgets yet.') : !rows ? finNote('No budgets match.')
-    : `<table class="fin-t fin-bud-t"><thead>${head}</thead><tbody>${rows}</tbody></table>`;
+    : `<table class="fin-t fin-bud-t"><thead>${head}</thead><tbody>${rows}</tbody></table>${state.read.more ? finNote(`Showing the first ${FIN_BUD_LIMIT}`) : ''}`;
 }
 
 function finBudRail() {

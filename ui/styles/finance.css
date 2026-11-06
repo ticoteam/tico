@@ -148,6 +148,8 @@
 .fin-radios{display:flex;flex-direction:column;gap:8px;margin:0;padding:0;border:0;min-width:0}
 .fin-radios legend{margin-bottom:6px;padding:0;font-size:var(--t-sm);color:var(--muted)}
 .fin-radios label.fin-check{white-space:normal}
+.fin-paste{display:contents}
+.fin-paste[hidden]{display:none}
 .fin-src-t tr[data-fin-src] td:first-child{padding-left:18px}
 .fin-ind{padding-left:calc(var(--d,0) * 16px)}
 .fin-acc-t td{white-space:normal}

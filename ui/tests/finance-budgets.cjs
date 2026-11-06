@@ -63,8 +63,8 @@ const budget = (id, name, amount, actual, extra = {}, ads = {}) => ({id, name, p
 const asOf = new Date(Date.now() - 3600e3).toISOString();
 const ad = (platform, pace) => ({platform, state: {pace_end: pace, spent_from: 'mixed', as_of: asOf}});
 const BUDGETS = [
-  budget('b-mkt', 'Marketing', 900000, 159000),
-  budget('b-rental', 'Rental Marketing Manager', 600000, 128000, {team: 'rental', parent_id: 'b-mkt'}),
+  budget('b-mkt', 'Marketing', 900000, 159000, {}, {state: {pace_end: 880000}}),
+  budget('b-rental', 'Rental Marketing Manager', 600000, 128000, {team: 'rental', parent_id: 'b-mkt'}, {state: {pace_end: 640000}}),
   budget('b-rental-g', 'Rental Google Ad Owner', 300000, 52000, {team: 'rental', teammate: 'bot:rental-google', vendor: 'Google Ads', parent_id: 'b-rental'}, ad('google_ads', 260000)),
   budget('b-rental-m', 'Rental Social Ad Owner', 300000, 76000, {team: 'rental', teammate: 'bot:rental-social', vendor: 'Meta Ads', parent_id: 'b-rental'}, ad('meta_ads', 380000)),
   budget('b-consumer', 'Consumer Marketing Manager', 300000, 250000, {team: 'consumer', parent_id: 'b-mkt'}),
@@ -81,11 +81,12 @@ const TOOLS = {mercury: {tool: {id: 'mercury', name: 'Mercury', service: 'mercur
   {id: 'k-merc', name: 'Mercury', preview: 'sec…9z2', access_level: 'read_write', stored: true}]},
 gads: {tool: {id: 'gads', name: 'Google Ads', service: 'google-ads'}, keys: []}};
 
-async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/budgets', plain = false} = {}) {
+async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/budgets', plain = false, more = false} = {}) {
   const person = people.find(p => p.id === viewer);
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
   const config = {company_name: 'Acme Lights'};
-  const writes = [], reads = [];
+  // hub.connFail: connects to fail; hub.indexFail: the tool index read fails; hub.hold: {at, wait} holds that read.
+  const writes = [], reads = [], hub = {connFail: 0, indexFail: false, hold: null};
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -111,17 +112,23 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     const denied = () => json({error: {code: 'denied', detail: 'Not in your view'}}, 403);
     if (p === '/api/v2/finance/access') return json(access(viewer));
     if (p === '/api/v2/finance/pnl') return json(pnl(url));
-    if (p === '/api/v2/finance/budgets') return viewer === 'cara' ? denied() : json({budgets: plain ? BUDGETS.map(plainRow) : BUDGETS, more: false, on: url.searchParams.get('at'), excluded: false});
+    if (p === '/api/v2/finance/budgets') {
+      if (viewer === 'cara') return denied();
+      if (hub.hold && url.searchParams.get('at') === hub.hold.at) await hub.hold.wait;
+      return json({budgets: plain ? BUDGETS.map(plainRow) : BUDGETS, more, on: url.searchParams.get('at'), excluded: false});
+    }
     if (p === '/api/v2/finance/reports/budget_vs_actual') {
       const cols = columns(url.searchParams.get('start'), url.searchParams.get('end'));
       return json({kind: 'budget_vs_actual', columns: cols, budgets: BUDGETS.map(b => ({id: b.id, budget: cols.map((c, i) => b.state.amount == null ? null : b.state.amount - (i < 3 ? 50000 : 0))}))});
     }
     if (p === '/api/v2/finance/sources') return viewer === 'ana' ? json({groups: []}) : denied();
     if (p === '/api/v2/finance/balance-sheet') return json({assets: [], liabilities: [], equity: []});
-    if (p === '/api/v2/tool-index') return json(TOOL_INDEX);
+    if (p === '/api/v2/tool-index') return hub.indexFail ? json({error: {code: 'unavailable', detail: 'Tools are down'}}, 503) : json(TOOL_INDEX);
     if (p.startsWith('/api/v2/api-tools/') && method === 'GET') return TOOLS[p.split('/').pop()] ? json(TOOLS[p.split('/').pop()]) : json({error: {code: 'not_found'}}, 404);
-    if (p === '/api/v2/api-tools' && method === 'POST') return json({id: 'stripe', name: body.name, service: body.service, base_url: 'https://api.stripe.com', auth_scheme: '', check_path: '', delivery: 'proxy'});
-    if (/^\/api\/v2\/api-tools\/[^/]+\/keys$/.test(p) && method === 'POST') return json({id: 'k-stripe', name: body.name, preview: 'rk_…xyz', access_level: body.access_level, stored: true});
+    if (p === '/api/v2/api-tools' && method === 'POST') return json({id: body.service, name: body.name, service: body.service, base_url: 'https://api.stripe.com', auth_scheme: '', check_path: '', delivery: 'proxy'});
+    if (/^\/api\/v2\/api-tools\/[^/]+\/keys$/.test(p) && method === 'POST') return json({id: 'k-' + p.split('/')[4], name: body.name, preview: 'rk_…xyz', access_level: body.access_level, stored: true});
+    if (method === 'DELETE' && p.startsWith('/api/v2/api-tools/')) return json({});
+    if (p === '/api/v2/finance/connections' && method === 'POST' && hub.connFail > 0) { hub.connFail--; return json({error: {code: 'invalid', detail: 'The key was refused'}}, 422); }
     if (p === '/api/v2/finance/connections' && method === 'POST') return json({action_id: 'act-c', kind: 'connection_create', status: 'committed', code: null, reason: null, approver: null, result: {}});
     if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run) return json({status: 'committed', kind: body.kind, action_id: '', approver: null, reason: '', dry_run: true, result: {}, impact: {}});
     if (p === '/api/v2/finance/actions' && method === 'POST') return json({action_id: 'act-' + writes.length, kind: body.kind, status: 'committed', code: null, reason: null, approver: null, result: {}});
@@ -130,7 +137,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
   await page.goto('http://tico-ui.test/' + hash);
   await page.waitForFunction(() => typeof S !== 'undefined' && S.me && (S.emps || []).length);
   await page.locator('#fin-head [data-fin-tab]').first().waitFor();
-  return {page, errors, writes, reads};
+  return {page, errors, writes, reads, hub};
 }
 
 const tabs = page => page.locator('#fin-head [data-fin-tab]').allInnerTexts();
@@ -174,6 +181,8 @@ async function shot(page, name) {
       assert.equal(await row(page, 'b-rental-m').locator('.pill.waiting').innerText(), '$3,800', tag + ': pace past the amount is amber');
       assert.equal(await row(page, 'b-rental-g').locator('.pill').count(), 0, tag + ': pace under the amount is plain');
       assert.equal((await cell(page, 'b-rental-g', 5).innerText()).trim(), '$2,600', tag + ': the pace');
+      assert.equal(await row(page, 'b-rental').locator('.pill.waiting').innerText(), '$6,400', tag + ': a team row\'s pace, amber past its amount');
+      assert.equal((await cell(page, 'b-mkt', 5).innerText()).trim(), '$8,800', tag + ': a line row\'s pace');
       assert.match(await cell(page, 'b-rental-g', 3).getAttribute('title'), /^Platform data as of /, tag + ': Spent says when the platform data is from');
       // Used: green, amber at warn, red at the amount.
       assert.equal(await row(page, 'b-consumer-g').locator('.fin-bar-m.warn').count(), 1, tag + ': used past warn at is amber');
@@ -223,10 +232,22 @@ async function shot(page, name) {
       await dlg.waitFor({state: 'detached'});
       assert.deepEqual(sent(writes).at(-1), {kind: 'budget_create', payload: {name: 'Consumer Google Ad Owner', period: 'month', account_id: 'a-6400', amount: 120000,
         warn_pct: 90, effective_from: thisMonth + '-01', parent_id: 'b-mkt', teammate: 'bot:consumer-google', vendor: 'Meta Ads'}}, tag + ': + Budget sends budget_create');
-      // Another month: read as of its first day; a past month's amounts don't edit.
-      await page.locator('[data-fin-month]').fill(lastMonth);
-      await page.locator('[data-fin-month]').dispatchEvent('change');
-      await settled(() => reads.includes(`/api/v2/finance/budgets?at=${lastMonth}-01`));
+      // Another month: the table empties at once, read as of its first day; a past month's amounts don't edit.
+      const month = async m => { await page.locator('[data-fin-month]').fill(m); await page.locator('[data-fin-month]').dispatchEvent('change'); };
+      let release;
+      hub.hold = {at: lastMonth + '-01', wait: new Promise(r => { release = r; })};
+      await month(lastMonth);
+      await settled(() => reads.includes(`/api/v2/finance/budgets?at=${lastMonth}-01&limit=500`));
+      assert.equal(await page.locator('tr[data-fin-bud]').count(), 0, tag + ': the old month\'s rows go while the new one loads');
+      assert.equal(await page.locator('#fin-rail').innerText(), '', tag + ': and its rail');
+      // Back to this month before last month's read is in: the late answer doesn't replace this month's rows.
+      await month(thisMonth);
+      await page.locator('td[data-fin-bud-amt]').first().waitFor();
+      release();
+      await new Promise(r => setTimeout(r, 300));
+      assert.ok(await page.locator('td[data-fin-bud-amt]').count() > 0, tag + ': a late answer for an older month is dropped');
+      hub.hold = null;
+      await month(lastMonth);
       await page.waitForFunction(() => document.querySelector('tr[data-fin-bud]') && !document.querySelector('td[data-fin-bud-amt]'));
       assert.equal(await page.locator('td[data-fin-bud-amt]').count(), 0, tag + ': a past month is read only');
       assert.deepEqual(errors, [], tag + ': no page errors');
@@ -235,8 +256,9 @@ async function shot(page, name) {
     // A read without the ad platform fields (main before the ad spend import): those cells are blank.
     {
       const tag = 'without platform fields';
-      const {page, errors} = await open(browser, {plain: true});
+      const {page, errors} = await open(browser, {plain: true, more: true});
       await row(page, 'b-rental-g').waitFor();
+      assert.equal(await page.locator('#fin-bud .fin-note').innerText(), 'Showing the first 500', tag + ': a read cut at 500 says so');
       assert.equal(await page.locator('#fin-bud .pill').count(), 0, tag + ': no pace pills');
       assert.equal((await cell(page, 'b-rental-g', 1).innerText()).trim(), '', tag + ': no platform');
       assert.equal((await cell(page, 'b-rental', 1).innerText()).trim(), 'team', tag + ': a team row still says team');
@@ -279,14 +301,16 @@ async function shot(page, name) {
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
-    // Sources: a Tools key for Mercury, a pasted Stripe key stored on Tools, Brex listed, Google Ads to its tool page.
+    // Sources: a Tools key for Mercury (or a new one pasted), a pasted Stripe key stored on Tools and taken off again
+    // when the connect fails, Brex when Tools can't be read and then with a pasted key, Google Ads to its tool page.
     {
       const tag = 'sources';
-      const {page, errors, writes} = await open(browser, {hash: '#/finance/sources'});
+      const {page, errors, writes, reads, hub} = await open(browser, {hash: '#/finance/sources'});
       const pick = async name => {
         await page.locator('[data-fin-connect]').click();
         await page.locator(`#fin-connect [data-fin-connect-item="${name}"]`).click();
       };
+      const indexReads = () => reads.filter(r => r === '/api/v2/tool-index').length;
       await page.locator('[data-fin-connect]').click();
       assert.deepEqual(await page.locator('#fin-connect [role=menuitem]').allInnerTexts(), ['Mercury', 'Brex', 'Stripe', 'QuickBooks', 'Xero', 'Google Ads', 'Meta Ads'], tag + ': the menu');
       await page.locator('[data-fin-connect]').click();
@@ -294,28 +318,60 @@ async function shot(page, name) {
       const dlg = page.locator('dialog.fin-dlg');
       await dlg.locator('input[name=key]').first().waitFor();
       assert.equal(await dlg.locator('legend').innerText(), 'Use the Mercury key from Tools', tag + ': offers the Tools keys');
-      assert.deepEqual(await dlg.locator('label.fin-check').allInnerTexts(), ['Mercury · Read · ••••a1f', 'Mercury · Read and write · ••••9z2'], tag + ': one radio per key');
-      assert.equal(await dlg.locator('input[name=token]').count(), 0, tag + ': no paste with a key on Tools');
-      await shot(page, 'sources-connect-desktop');
+      assert.deepEqual(await dlg.locator('label.fin-check').allInnerTexts(), ['Mercury · Read · ••••a1f', 'Mercury · Read and write · ••••9z2', 'Paste a new key'], tag + ': one radio per key, then paste');
+      assert.equal(await dlg.locator('input[name=token]').isVisible(), false, tag + ': the paste field waits for its radio');
       assert.equal(await dlg.locator('input[name=key]:checked').getAttribute('value'), 'k-merc', tag + ': the Read and write key is picked first');
+      await dlg.locator('input[name=key][value=""]').check();
+      assert.equal(await dlg.locator('input[name=token]').isVisible(), true, tag + ': Paste a new key shows the field');
+      assert.equal(await dlg.locator('select[name=level]').inputValue(), 'read_write', tag + ': Mercury pastes start Read and write');
+      await shot(page, 'sources-connect-desktop');
       await dlg.locator('input[name=key][value="k-merc-r"]').check();
+      assert.equal(await dlg.locator('input[name=token]').isVisible(), false, tag + ': a key hides it again');
       await dlg.locator('input[name=key][value="k-merc"]').check();
       await dlg.locator('[type=submit]').click();
       await dlg.waitFor({state: 'detached'});
       const posts = writes.filter(w => w[0] === 'POST');
       assert.deepEqual(posts.at(-1).slice(1), ['/api/v2/finance/connections', {provider: 'mercury', credential_id: 'k-merc', name: 'Mercury'}], tag + ': connects with the key picked');
       assert.equal(posts.some(w => w[1].startsWith('/api/v2/credentials') || w[1].startsWith('/api/v2/api-tools')), false, tag + ': nothing stored');
-      // Stripe has no tool: the pasted key goes on a new Stripe tool, then connects.
+      // Stripe has no tool: paste only, Read by default. The first connect fails: the key and its new tool go again.
+      const before = writes.length;
+      hub.connFail = 1;
       await pick('stripe');
       await dlg.locator('input[name=token]').fill('rk_live_abcdefghijklmnop');
+      assert.equal(await dlg.locator('input[name=key]').count(), 0, tag + ': no radios with no key on Tools');
+      assert.equal(await dlg.locator('select[name=level]').inputValue(), 'read', tag + ': Stripe pastes start Read');
+      const index1 = indexReads();
+      await dlg.locator('[type=submit]').click();
+      await dlg.locator('[data-error]:not([hidden])').waitFor();
+      assert.deepEqual(writes.slice(before).map(w => w[0] + ' ' + w[1]), ['POST /api/v2/api-tools', 'POST /api/v2/api-tools/stripe/keys', 'POST /api/v2/finance/connections',
+        'DELETE /api/v2/api-tools/stripe/keys/k-stripe', 'DELETE /api/v2/api-tools/stripe'], tag + ': a failed connect takes the key and its tool off Tools');
+      assert.ok(indexReads() > index1, tag + ': Tools read again before storing');
+      assert.equal(writes.find(w => w[1] === '/api/v2/api-tools/stripe/keys')[2].access_level, 'read', tag + ': stored at the level picked');
+      // The retry reads Tools again and stores it afresh.
+      const retry = writes.length, index2 = indexReads();
       await dlg.locator('[type=submit]').click();
       await dlg.waitFor({state: 'detached'});
-      const after = writes.filter(w => w[0] === 'POST').slice(posts.length).map(w => w[1]);
-      assert.deepEqual(after, ['/api/v2/api-tools', '/api/v2/api-tools/stripe/keys', '/api/v2/finance/connections'], tag + ': stored on Tools, then connected');
-      const made = writes.find(w => w[1] === '/api/v2/api-tools')[2], key = writes.find(w => w[1] === '/api/v2/api-tools/stripe/keys')[2];
-      assert.deepEqual(made, {name: 'Stripe', service: 'stripe'}, tag + ': a Stripe tool');
-      assert.equal(key.access_level, 'read_write', tag + ': its Read and write key');
+      assert.ok(indexReads() > index2, tag + ': a retry reads Tools again');
+      assert.deepEqual(writes.slice(retry).map(w => w[0] + ' ' + w[1]), ['POST /api/v2/api-tools', 'POST /api/v2/api-tools/stripe/keys', 'POST /api/v2/finance/connections'], tag + ': stored again, then connected');
+      assert.deepEqual(writes.find(w => w[1] === '/api/v2/api-tools')[2], {name: 'Stripe', service: 'stripe'}, tag + ': a Stripe tool');
       assert.deepEqual(writes.at(-1)[2], {provider: 'stripe', credential_id: 'k-stripe', name: 'Stripe'}, tag + ': connects with the new key');
+      // Brex while Tools can't be read: an error, not a paste that could store a second key.
+      hub.indexFail = true;
+      const brex = writes.length, index3 = indexReads();
+      await pick('brex');
+      await settled(() => indexReads() > index3);
+      assert.equal(await dlg.count(), 0, tag + ': no dialog when Tools can\'t be read');
+      assert.equal(await page.locator('.toast', {hasText: 'Tools are down'}).count(), 1, tag + ': the error shows');
+      hub.indexFail = false;
+      await pick('brex');
+      await dlg.locator('input[name=token]').fill('brex_token_123');
+      assert.equal(await dlg.locator('select[name=level]').inputValue(), 'read', tag + ': Brex pastes start Read');
+      await dlg.locator('select[name=level]').selectOption('read_write');
+      await dlg.locator('[type=submit]').click();
+      await dlg.waitFor({state: 'detached'});
+      assert.deepEqual(writes.slice(brex).map(w => w[1]), ['/api/v2/api-tools', '/api/v2/api-tools/brex/keys', '/api/v2/finance/connections'], tag + ': Brex stored on Tools, then connected');
+      assert.equal(writes.at(-2)[2].access_level, 'read_write', tag + ': at the level picked');
+      assert.deepEqual(writes.at(-1)[2], {provider: 'brex', credential_id: 'k-brex', name: 'Brex'}, tag + ': connects Brex');
       assert.deepEqual(errors, [], tag + ': no page errors');
       // Google Ads: its tool page.
       await pick('google-ads');

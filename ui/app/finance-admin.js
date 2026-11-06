@@ -182,58 +182,70 @@ async function finSrcMap(sel) {
   } catch (e) { toast(e.message, true); sel.disabled = false; sel.value = r.account?.id || ''; }
 }
 // The sources that connect with a key: Mercury and Brex (banks and cards) and Stripe (revenue).
-const FIN_KEY_SOURCES = {mercury: {name: 'Mercury', secret: 'API token', paste: 'Paste the token'},
-  brex: {name: 'Brex', secret: 'API token', paste: 'Paste the token'},
-  stripe: {name: 'Stripe', secret: 'Restricted key', paste: 'Paste the key', hint: 'rk_live_…'}};
+// A pasted key's level starts at what Finance needs from the service: Mercury payments need Read and write; Stripe and
+// Brex are read.
+const FIN_KEY_SOURCES = {mercury: {name: 'Mercury', secret: 'API token', paste: 'Paste the token', level: 'read_write'},
+  brex: {name: 'Brex', secret: 'API token', paste: 'Paste the token', level: 'read'},
+  stripe: {name: 'Stripe', secret: 'Restricted key', paste: 'Paste the key', hint: 'rk_live_…', level: 'read'}};
 // Ad platforms: their spend import is set up on the platform's tool page (Tools), not here.
 const FIN_AD_SOURCES = {'google-ads': 'Google Ads', 'meta-ads': 'Meta Ads'};
 const finService = s => String(s || '').trim().toLowerCase().replace(/_/g, '-');
 // The reader's tools for a service (GET /api/v2/tool-index, its API tools) and each one's keys (GET /api-tools/{id}).
+// A failed read throws: guessing "no tools" would store a second copy of a key already there.
 async function finServiceTools(service, withKeys = true) {
   const idx = await get('/v2/tool-index', {fresh: true});
   const rows = (idx?.rows || []).filter(r => r.kind === 'api' && finService(r.service) === service);
   const tools = rows.map(r => ({id: String(r.id).replace(/^api:/, ''), name: r.name, href: r.href, keys: []}));
   if (!withKeys) return tools;
-  const found = await Promise.allSettled(tools.map(t => get('/v2/api-tools/' + encodeURIComponent(t.id), {fresh: true})));
-  found.forEach((r, i) => { if (r.status === 'fulfilled') tools[i].keys = r.value?.keys || []; });
+  const found = await Promise.all(tools.map(t => get('/v2/api-tools/' + encodeURIComponent(t.id), {fresh: true})));
+  found.forEach((r, i) => { tools[i].keys = r?.keys || []; });
   return tools;
 }
+const FIN_LEVELS = [['read', 'Read'], ['read_write', 'Read and write']];
 // "Mercury · Read and write · ••••a1f": the key's tool, level and the end of its preview when the reader may see it.
 const finKeyLabel = (tool, key) => [tool.name, key.access_level === 'read' ? 'Read' : 'Read and write',
   String(key.preview || '').includes('…') ? '••••' + String(key.preview).split('…').pop() : ''].filter(Boolean).join(' · ');
 
-// Connect a source with a key: the reader picks one of the service's Tools keys; with none on Tools, a pasted key is
-// stored as one (finStoreKey). Then POST /api/v2/finance/connections tests it and maps the accounts (Mercury also takes
-// the approver who approves payments in Mercury). The key never comes back.
+// Connect a source with a key: one of the service's Tools keys (a Read and write one picked first), or a new one
+// pasted, which is stored on Tools at the level chosen (finStoreKey). Then POST /api/v2/finance/connections tests it
+// and maps the accounts (Mercury also takes the approver who approves payments in Mercury). A pasted key whose
+// connect fails is taken off Tools again, so a retry starts clean. The key never comes back.
 async function finConnectKey(provider) {
   const src = FIN_KEY_SOURCES[provider];
-  let tools = [];
-  try { tools = await finServiceTools(provider); } catch { tools = []; }
+  let tools;
+  try { tools = await finServiceTools(provider); } catch (e) { toast(e?.message || 'Tools could not be read', true); return; }
   const keys = tools.flatMap(t => t.keys.filter(k => k.stored).map(k => ({tool: t, key: k})));
+  const pick = Math.max(0, keys.findIndex(({key}) => key.access_level === 'read_write'));
+  const radios = keys.length ? `<fieldset class="fin-radios"><legend>Use the ${esc(src.name)} key from Tools</legend>${keys.map(({tool, key}, i) =>
+    `<label class="fin-check"><input type="radio" name="key" value="${esc(key.id)}"${i === pick ? ' checked' : ''}>${esc(finKeyLabel(tool, key))}</label>`).join('')}
+    <label class="fin-check"><input type="radio" name="key" value="">Paste a new key</label></fieldset>` : '';
+  const paste = `<div class="fin-paste" data-fin-paste${keys.length ? ' hidden' : ''}><label>${esc(src.secret)}<input name="token" type="password" autocomplete="off" spellcheck="false"${src.hint ? ` placeholder="${esc(src.hint)}"` : ''}></label>
+    <label>Level<select name="level">${FIN_LEVELS.map(([v, l]) => `<option value="${v}"${v === src.level ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>`;
   const approver = provider === 'mercury' ? '<label>Approver email<input name="approver" type="email" autocomplete="off" spellcheck="false"></label>' : '';
-  if (keys.length) {
-    // A Read and write key is picked first: Mercury payments and Stripe refunds need it.
-    const pick = Math.max(0, keys.findIndex(({key}) => key.access_level === 'read_write'));
-    finDialog('Connect ' + src.name, `<fieldset class="fin-radios"><legend>Use the ${esc(src.name)} key from Tools</legend>${keys.map(({tool, key}, i) =>
-      `<label class="fin-check"><input type="radio" name="key" value="${esc(key.id)}"${i === pick ? ' checked' : ''}>${esc(finKeyLabel(tool, key))}</label>`).join('')}</fieldset>${approver}`,
-    'Connect', async form => {
-      const id = form.querySelector('input[name=key]:checked')?.value;
-      if (!id) throw new Error('Pick a key');
-      await finConnectWith(provider, id, form);
-    });
-    return;
-  }
-  // A retry after a failed connect reuses the stored key (its value changed if the paste was), so one try stores one.
-  let cred = null, stored = '';
-  finDialog('Connect ' + src.name, `<label>${esc(src.secret)}<input name="token" type="password" required autocomplete="off" spellcheck="false"${src.hint ? ` placeholder="${esc(src.hint)}"` : ''}></label>${approver}`,
-    'Connect', async form => {
-      const token = form.elements.token.value.trim();
-      if (!token) throw new Error(src.paste);
-      if (!cred) { cred = await finStoreKey(provider, token, tools); stored = token; }
-      else if (token !== stored) { await finRestoreKey(cred, token); stored = token; }
-      await finConnectWith(provider, cred.id, form);
-      form.elements.token.value = '';
-    });
+  // A key kept in the vault (a reader who may not change Tools): a retry reuses it, as before Tools.
+  let kept = null, keptToken = '';
+  const dlg = finDialog('Connect ' + src.name, radios + paste + approver, 'Connect', async form => {
+    const id = form.querySelector('input[name=key]:checked')?.value || '';
+    if (id) { await finConnectWith(provider, id, form); return; }
+    const token = form.elements.token.value.trim(), level = form.elements.level.value;
+    if (!token) throw new Error(src.paste);
+    if (kept) {
+      if (token !== keptToken) { await finRestoreKey(kept, token); keptToken = token; }
+      await finConnectWith(provider, kept.id, form);
+      return;
+    }
+    // Read again: a failed try, or someone else, may have changed the service's keys since the dialog opened.
+    const made = await finStoreKey(provider, token, level, await finServiceTools(provider));
+    if (made.vault) { kept = made; keptToken = token; }
+    try { await finConnectWith(provider, made.id, form); }
+    catch (e) { if (!made.vault) await finUnstoreKey(made); throw e; }
+  });
+  const form = dlg.querySelector('form'), box = form.querySelector('[data-fin-paste]');
+  form.addEventListener('change', ev => {
+    if (ev.target.name !== 'key') return;
+    box.hidden = !!ev.target.value;
+    if (!box.hidden) form.elements.token.focus();
+  });
 }
 async function finConnectWith(provider, credentialId, form) {
   const name = FIN_KEY_SOURCES[provider].name, body = {provider, credential_id: credentialId, name};
@@ -246,29 +258,36 @@ async function finConnectWith(provider, credentialId, form) {
   if (FIN?.src) void finSrcLoad();
   if (FIN?.bs) void finBsLoad();
 }
-// A pasted key lands on Tools: on the service's first tool with no Read and write key, else on a new tool for it. A
-// reader who may not change Tools stores it in the vault for Finance alone, as before. {id, tool} or the credential.
-async function finStoreKey(provider, token, tools) {
+// A pasted key lands on Tools at its level: on the service's first tool with no key at that level (one key per level),
+// else on a new tool. A reader who may not change Tools stores it in the vault for Finance alone, as before.
+// {id, tool, made} (made: the tool is new) or the credential with vault set.
+async function finStoreKey(provider, token, level, tools) {
   const name = FIN_KEY_SOURCES[provider].name;
+  let tool = tools.find(t => !t.keys.some(k => k.access_level === level)), made = false;
   try {
-    let tool = tools.find(t => !t.keys.some(k => k.access_level === 'read_write'));
     if (!tool) {
-      const made = await post('/v2/api-tools', {name, service: provider});
-      if (!made?.id) throw new Error('The key was not stored');
-      tool = {id: made.id};
+      const row = await post('/v2/api-tools', {name, service: provider});
+      if (!row?.id) throw new Error('The key was not stored');
+      tool = {id: row.id}; made = true;
     }
-    const key = await post(`/v2/api-tools/${encodeURIComponent(tool.id)}/keys`, {name, value: token, access_level: 'read_write'});
+    const key = await post(`/v2/api-tools/${encodeURIComponent(tool.id)}/keys`, {name, value: token, access_level: level});
     if (!key?.id) throw new Error('The key was not stored');
-    return {id: key.id, tool: tool.id};
+    return {id: key.id, tool: tool.id, made};
   } catch (e) {
+    if (made) await finUnstoreKey({tool: tool.id, made});
     if (e?.status !== 403) throw e;
   }
   const cred = await post('/v2/credentials', {name, kind: 'token', secret: token, username: '', env: '', source: 'finance'});
   if (!cred?.id) throw new Error('The key was not stored');
-  return cred;
+  return {...cred, vault: true};
+}
+// Undo finStoreKey after a failed connect: the key, then the tool when it was made for it. Best effort: a removal
+// that fails leaves the key on Tools, where it shows.
+async function finUnstoreKey({id, tool, made}) {
+  try { if (id) await writeRequest('DELETE', `/v2/api-tools/${encodeURIComponent(tool)}/keys/${encodeURIComponent(id)}`); } catch { /* shown on Tools */ }
+  try { if (made) await writeRequest('DELETE', `/v2/api-tools/${encodeURIComponent(tool)}`); } catch { /* shown on Tools */ }
 }
 async function finRestoreKey(cred, token) {
-  if (cred.tool) { await patch(`/v2/api-tools/${encodeURIComponent(cred.tool)}/keys/${encodeURIComponent(cred.id)}`, {value: token}); return; }
   const name = cred.name || 'Key';
   const r = await post('/v2/credentials/' + encodeURIComponent(cred.id), {name, kind: 'token', secret: token, username: '', env: '',
     source: 'finance', ...(cred.revision ? {expected_revision: cred.revision} : {})});
