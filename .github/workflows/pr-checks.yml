@@ -1,12 +1,15 @@
 # Read-only PR checks, including slow MCP/CLI/golden contracts on affected changes in a parallel contracts job.
 # Main keeps the full default suite and contracts; Release validation is independent.
 # Jobs run on RunsOn spot VMs in Tico's own AWS account. Fork PRs stay on GitHub-hosted runners so outside code
-# never runs on our machines.
+# never runs on our machines. A draft pull request runs nothing: every job is skipped (GitHub counts a skipped required
+# check as passed, and a draft cannot merge), marking it ready for review runs the checks, and converting it back to a
+# draft cancels a run in progress.
 name: PR checks
 
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   push:
     branches: [main]
 
@@ -22,6 +25,7 @@ concurrency:
 
 jobs:
   plan:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 12
     outputs:
@@ -143,6 +147,7 @@ jobs:
     # Every PR: pinned ruff against its baseline (no new findings or suppressions), pyright on the boundary modules,
     # migration names, the UI's generated API types and the runner wire contract. Seconds each; tools are pinned.
     name: static checks
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 12
     steps:
@@ -185,6 +190,7 @@ jobs:
     # rustfmt and clippy -D warnings (scripts/rust_checks.sh), when a crate it checks changed. Always reported, so it
     # can be required: a PR without Rust changes passes it in seconds.
     name: rust lint
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
@@ -216,6 +222,7 @@ jobs:
   recorder-changes:
     # Tico Recorder changed (recorder/): its macOS tests run below. Always reported, so it can be required.
     name: recorder changed
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 5
     outputs:
@@ -317,7 +324,7 @@ jobs:
     # Failed runs keep their timing receipt, but a canceled run (a superseded pull request push) ends here: a final
     # job queued after the cancellation can wait for a runner that never comes, holding the newer head's run pending
     # in the same concurrency group.
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && !github.event.pull_request.draft }}
     needs: [plan, tests, caddy-linux, static, rust-lint, recorder-changes, recorder]
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below,

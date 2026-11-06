@@ -206,9 +206,12 @@ Run tests on your computer while you work. On pull requests to main, the PR chec
 that a measured static dependency map says use a changed file: what each tracked file imports (transitively), runs
 by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data files, folders it lists or globs). The
 Caddy image job runs only when a change reaches the image inputs or `backend/caddy_assets.py`; otherwise the plan
-compiles the changed files and runs the Dockerfile's import check itself. Conftest, `pytest.ini`, workflows,
-dependencies, `docs/` (except `docs/images` and `docs/history`), CHANGELOG.md, the selector, and deleted or
-unparsable files fall back to the full default Python suite and core browser scripts. Main pushes always run that full default suite, and a newer main push never
+compiles the changed files and runs the Dockerfile's import check itself. A `docs/` page, CHANGELOG.md or a GitHub
+file runs the tests that read it (by path, folder or listing) and the tests of the code that reads it, not everything
+that imports that code. A change to how the checks run (the PR checks workflow, `scripts/ci_install.sh`, the browser
+system packages) runs the tests that read it and one short core browser script, and a workflow change also builds the
+Caddy image. Conftest, `pytest.ini`, dependency pins and deleted or unparsable files fall back to the full default
+Python suite and core browser scripts. A draft pull request runs no checks; marking it ready for review does. Main pushes always run that full default suite, and a newer main push never
 cancels an earlier one; only a pull request's superseded run is canceled. Runner/harness changes also run
 slow conformance on the Rust runner and all its fake harnesses; UI changes select their browser scripts, including
 imported-history for chat changes, or every browser script when the UI mapping is uncertain.
