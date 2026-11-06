@@ -938,16 +938,14 @@ def task_ask(api, args):
     return api.post(f"tasks/{args['id']}/ask", {"text": args["text"]}, key=_key(args))
 
 
-@tool("hub_task_question", "Put one decision to a person as a small task, in one call: a pick between 2 to 6 "
-      "options (an option may carry an image or file) or, with no options, Yes / No. The task is yours and waits on "
-      "them; asked from a run on one of your tasks it is filed under that task. Their answer wakes you and you mark it "
-      "done. One decision per task; write the question so it makes sense on its own. Each option says what happens "
-      "if it is picked (`then`); several picks (`multi`) mark the ones you recommend; the question, `why` and each option's "
-      "label, description and then line carry no ids, paths, tool names or error output (put those in `body`, shown under Details), or the ask is "
-      "refused with what to fix. The person’s asking criteria can also refuse it as ask_refused; nothing is created. "
-      "Post progress as an update. One open question per topic: "
-      "asked again while your earlier one on the same topic (same `topic`, else the same parent task) still waits on "
-      "them, it updates that one (`folded: true`) instead of adding a second; give a different decision its own topic.",
+@tool("hub_task_question", "Put one decision to a person as a task they own, in one call: a pick between 2 to 6 "
+      "options (an option may carry an image or file) or, with no options, Yes / No. Asked from a run on one of your "
+      "tasks it is that task's subtask and your task is blocked on it; their answer closes it and you hear it once. "
+      "Never to a bot: ask a bot in a DM. One decision, readable on its own. Each option says what happens if picked "
+      "(`then`); several picks (`multi`) mark the ones you recommend; no ids, paths, tool names or error output outside "
+      "`body`, or it is refused with what to fix, as the person's asking criteria may (ask_refused). One open question "
+      "per topic: asked again while your earlier one on the same topic (same `topic`, else the same parent) is open, "
+      "it updates that one (`folded: true`).",
       {"question": _s("The question, readable with no other context", maxLength=300),
        "on": _s("The person who decides: their id"),
        "why": _s("One plain line on why it matters, shown under the question", maxLength=200),

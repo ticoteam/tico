@@ -232,7 +232,7 @@ def test_a_question_reaches_one_person(api):
     asked = post(api, "task-questions", {"question": "Ship the zip fix in the next release?", "on": "ben",
                                          "parent": row["id"], "options": [{"label": "Yes", "then": "Go with Yes"}, {"label": "No", "then": "Go with No"}]},
                  attempt["token"])
-    assert asked["task"]["requester_id"] == "human:ben" and asked["task"]["private"]
+    assert asked["task"]["owner_id"] == "human:ben" and asked["task"]["private"]   # the person owns a question task
     assert readers(api, row["id"]) == {"ben"} and readers(api, asked["task"]["id"]) == {"ben"}
     r = api.post("/api/v2/task-questions", json={"question": "Or should Cara decide?", "on": "cara",
                                                    "parent": row["id"], "options": [{"label": "Yes", "then": "Go with Yes"}, {"label": "No", "then": "Go with No"}]},

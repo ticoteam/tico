@@ -4659,6 +4659,7 @@ export type ReviewSettings = {
 export type ReviewTarget = {
   comment?: string | null;
   file?: string | null;
+  task?: string | null;
   version?: number | null;
 };
 
@@ -5422,6 +5423,7 @@ export type TakeRecommendation = {
 
 export type Task = {
   acceptance_criteria?: Array<string>;
+  answer?: Record<string, unknown> | null;
   body?: string;
   check_back?: {
   at: string;
@@ -5441,6 +5443,7 @@ export type Task = {
   external_requesters?: number;
   holds: Array<TaskHold>;
   id: string;
+  if_no_answer?: Record<string, unknown> | null;
   important_requesters?: number;
   internal_requesters?: number;
   labels: Array<string>;
@@ -5453,6 +5456,7 @@ export type Task = {
   private?: boolean;
   public_summary?: string;
   public_title?: string;
+  questions?: Array<Record<string, unknown>> | null;
   readers?: Array<string>;
   relations?: Record<string, Array<{
   direction: string;
@@ -5464,8 +5468,10 @@ export type Task = {
   requester_count?: number;
   requester_id: string;
   requester_name?: string;
+  review?: Record<string, unknown> | null;
   roles?: Record<string, Array<string>>;
   size?: number | null;
+  spend?: Record<string, unknown> | null;
   status: string;
   step?: TaskStep | null;
   step_id?: string | null;

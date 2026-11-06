@@ -91,7 +91,8 @@ def answer(server, token, me, tid, now, text):
     if mine:
         q = mine[0]
         if q["ask"]:
-            ok(server, "POST", f"tasks/{q['task']}/answers", {"target": {"comment": q["id"]}, **choose(q["ask"], text)}, token)
+            target = q["ask"].get("target") or {"comment": q["id"]}
+            ok(server, "POST", f"tasks/{q['task']}/answers", {"target": target, **choose(q["ask"], text)}, token)
         else:
             ok(server, "POST", f"messages/{q['id']}/answer", {"text": text}, token)
         return True

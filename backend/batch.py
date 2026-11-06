@@ -518,6 +518,17 @@ def _apply_decide(c, auth, who, item, r, boards):
         H.task_comment(c, who.actor, ident, said)
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
         return f"Told {H.actor_name(c, row['owner_id'])}: {_clip(said, 120)}"
+    from . import question_tasks
+    asked = H.task(c, ident)
+    if decision in ("approve", "done", "answer") and question_tasks.is_open(asked) and \
+            question_tasks.may_answer(c, auth, who, asked):
+        # A question task: the answer is its close. A Yes, or a note naming an option, is that pick, with its spend
+        # approval and file verdicts (question_tasks.close_by_label); any other note is the answer as said (closed).
+        picked = question_tasks.close_by_label(c, auth, who, asked, text)
+        if not picked:
+            H.task_update(c, who.actor, ident, status="done", note=text or None)
+        c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
+        return f"Answered {H.actor_name(c, row['requester_id'])}: {_clip(text or ('Yes.' if picked else 'Done.'), 120)}"
     if decision in ("approve", "decline"):
         status = "done" if decision == "approve" else "declined"
         note = text or ("Approved." if decision == "approve" else "Declined.")

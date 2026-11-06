@@ -106,6 +106,13 @@ def questions(detail, bot):
                               "created_at": m["created_at"], "open": not m.get("answers")})
     for q in found:
         q["open"] = q["open"] and q["id"] not in replied
+    task = detail.get("task") or {}
+    if task.get("questions") and task.get("requester_id") == "bot:" + bot and _person(task.get("owner_id")):
+        # A question task: the question rides on the task the person owns, open until they close it.
+        found.append({"id": task["id"], "task": task["id"], "to": task["owner_id"],
+                      "ask": {"questions": task["questions"], "target": {"task": task["id"]}},
+                      "created_at": task.get("asked_at") or task["created_at"],
+                      "open": task.get("status") not in SETTLED_ASK})
     return found
 
 

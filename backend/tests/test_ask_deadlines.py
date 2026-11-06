@@ -114,8 +114,8 @@ def test_a_bot_puts_its_default_on_a_question_and_a_past_or_far_deadline_is_refu
                     "if_no_answer": {"do": "Yes", "kind": "reversible", "by": by.isoformat()}},
                     token=attempt["token"])
     assert not err, out
-    with api.app.state.store.read() as c:
-        refs = H.message(c, out["question"]["id"])["refs"]
+    refs = out["question"]["refs"]
+    assert out["task"]["if_no_answer"] == refs["if_no_answer"]
     assert refs["if_no_answer"] == {"do": "Yes", "kind": "reversible", "by": f"{by.astimezone(timezone.utc):%Y-%m-%dT%H:%M:%S}.000000Z"}
     err, out = call(api, "hub_task_question", {"question": "Archive the August drafts?", "on": "ana",
                     "if_no_answer": {"do": "Yes", "kind": "reversible", "by": "2020-01-01T00:00:00Z"}},

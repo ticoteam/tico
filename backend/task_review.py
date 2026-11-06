@@ -267,10 +267,66 @@ def reply_answer(c, auth, who, asked, text, warn=""):
                     turn_id=who.attempt_id)
 
 
+def checked_answers(questions, refs, body):
+    """A structured answer checked against the question as stored (`questions` by id, the ask's `refs`): every question
+    answered with its own labels, or the Other text where a question takes it. Returns (the answer with each question
+    keyed, the unticked labels of several picks: the "not this one"s). A comment ask and a question task check alike."""
+    if body.dismiss:
+        if body.answers or body.other:
+            raise Problem("validation", "Dismiss does not include answers or other text", 422)
+    else:
+        if refs.get("asked_again_at") and set(questions) - set(body.answers):
+            # A question the bot reworded in place (question_tasks.fold) is answered only by naming its current
+            # question id, so a pick or an Other made on the earlier wording never settles the new one.
+            raise Problem("changed", "The question was reworded after you opened it: read the new wording and answer "
+                          "again", 409)
+        if set(body.answers) - set(questions):
+            raise Problem("validation", "Unknown question id", 422)
+        missing = set(questions) - set(body.answers)
+        if missing and (not body.other or any(not questions[qid].get("other", True) for qid in missing)):
+            raise Problem("validation", "Answer every question", 422)
+        # The page omits unselected questions when its shared Other text answers them.
+        body = body.model_copy(update={"answers": {qid: body.answers.get(qid, []) for qid in questions}})
+        for qid, question in questions.items():
+            labels = body.answers[qid]
+            allowed = {o["label"] for o in question["options"]}
+            if len(set(labels)) != len(labels) or set(labels) - allowed or (not question.get("multi") and len(labels) > 1):
+                raise Problem("validation", "Choose valid labels for each question", 422)
+            if not labels and not (body.other and question.get("other", True)):
+                raise Problem("validation", "Choose an option or supply an allowed other answer", 422)
+        # Other text is allowed when at least one question offers a free-text answer.
+        if body.other and not any(q.get("other", True) for q in questions.values()):
+            raise Problem("validation", "Other text is not allowed for this question", 422)
+    # Several picks answered with some left unticked: the bot hears each of those as "not this one" (the card's
+    # Send ticked), the note saying what instead.
+    passed = {} if body.dismiss else {qid: [o["label"] for o in q["options"] if o["label"] not in body.answers[qid]]
+                                      for qid, q in questions.items() if q.get("multi") and body.answers[qid]}
+    return body, passed
+
+
+def answer_words(name, questions, body, passed, subject=None):
+    """What an answer says, for the bot that asked: "Ana answered "<question>": A." (`subject` names a file version
+    under review), before any Other text."""
+    if body.dismiss:
+        return f"{name} dismissed the question on {subject}." if subject else f"{name} dismissed the question."
+    if subject and len(questions) == 1 and list(body.answers.values()) == [["Approve"]]:
+        return f"{name} approved {subject}."
+    text = " ".join(f'{name} answered "{readable_text(q["question"])}": {", ".join(readable_text(label) for label in body.answers[qid]) or "Other"}.'
+                    + (f' Not this one: {", ".join(readable_text(label) for label in passed[qid])}.' if passed.get(qid) else "")
+                    for qid, q in questions.items())
+    return text + (f" File: {subject}." if subject else "")
+
+
 def answer_task(c, auth, who, task_id, body, wake, warn=""):
     """A structured answer. `warn` (an org rule's Warn) opens the answer comment its readers get; the answer itself
     (its picks and Other text) is recorded as given."""
     H._writer(c, who.actor, task_id=task_id)
+    if body.target.task:
+        # A question task (backend/question_tasks.py): the answer is its close.
+        if body.target.task != task_id:
+            raise Problem("not_found", "Question not found on this task", 404)
+        from . import question_tasks
+        return question_tasks.answer(c, auth, who, task_id, body, warn)
     mark = H.jobs_mark(c)
     comment_rights(c, auth, who, task_id)
     target = body.target.model_dump(exclude_none=True)
@@ -296,49 +352,11 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
     wake = wake or H.is_bot(asked["sender_id"]) and (
         asked["recipient_id"] == who.actor or H.task(c, task_id).get("waiting_on") == who.actor)
     questions = {q["id"]: q for q in asked["refs"]["questions"]}
-    if body.dismiss:
-        if body.answers or body.other:
-            raise Problem("validation", "Dismiss does not include answers or other text", 422)
-    else:
-        if asked["refs"].get("asked_again_at") and set(questions) - set(body.answers):
-            # A question the bot reworded in place (hubdb.fold_question) is answered only by naming its current
-            # question id, so a pick or an Other made on the earlier wording never settles the new one.
-            raise Problem("changed", "The question was reworded after you opened it: read the new wording and answer "
-                          "again", 409)
-        if set(body.answers) - set(questions):
-            raise Problem("validation", "Unknown question id", 422)
-        missing = set(questions) - set(body.answers)
-        if missing and (not body.other or any(not questions[qid]["other"] for qid in missing)):
-            raise Problem("validation", "Answer every question", 422)
-        # The page omits unselected questions when its shared Other text answers them.
-        body = body.model_copy(update={"answers": {qid: body.answers.get(qid, []) for qid in questions}})
-        for qid, question in questions.items():
-            labels = body.answers[qid]
-            allowed = {o["label"] for o in question["options"]}
-            if len(set(labels)) != len(labels) or set(labels) - allowed or (not question["multi"] and len(labels) > 1):
-                raise Problem("validation", "Choose valid labels for each question", 422)
-            if not labels and not (body.other and question["other"]):
-                raise Problem("validation", "Choose an option or supply an allowed other answer", 422)
-        # Other text is allowed when at least one question offers a free-text answer.
-        if body.other and not any(q["other"] for q in questions.values()):
-            raise Problem("validation", "Other text is not allowed for this question", 422)
-    # Several picks answered with some left unticked: the bot hears each of those as "not this one" (the card's
-    # Send ticked), the note saying what instead.
-    passed = {} if body.dismiss else {qid: [o["label"] for o in q["options"] if o["label"] not in body.answers[qid]]
-                                      for qid, q in questions.items() if q.get("multi") and body.answers[qid]}
+    body, passed = checked_answers(questions, asked["refs"], body)
     by = H.human(c, H.actor_id(who.actor)) if H.is_human(who.actor) else H.bot(c, H.actor_id(who.actor))
     name = readable_text((by or {}).get("name") or H.actor_id(who.actor))
     subject = f'"{readable_text(version["name"])}" v{body.target.version}' if version else "the question"
-    if body.dismiss:
-        text = f"{name} dismissed the question on {subject}." if version else f"{name} dismissed the question."
-    elif version and len(questions) == 1 and list(body.answers.values()) == [["Approve"]]:
-        text = f"{name} approved {subject}."
-    else:
-        text = " ".join(f'{name} answered "{readable_text(q["question"])}": {", ".join(readable_text(label) for label in body.answers[qid]) or "Other"}.'
-                        + (f' Not this one: {", ".join(readable_text(label) for label in passed[qid])}.' if passed.get(qid) else "")
-                         for qid, q in questions.items())
-        if version:
-            text += f" File: {subject}."
+    text = answer_words(name, questions, body, passed, subject if version else None)
     if body.other:
         text += " " + body.other
     if warn:
