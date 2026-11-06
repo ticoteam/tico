@@ -14,6 +14,7 @@ import pytest
 from backend import ask_ingest as A
 from backend import call_slots as CS
 from backend import hubdb as H
+from backend import task_holds as TH
 from backend.tests.test_api import unrelated_task_managers
 from backend.tests.test_task_readers import run_on
 from backend.tests.test_task_readers import task as private_task
@@ -470,7 +471,8 @@ def test_the_decisions_readout_counts_refusals_and_reconciles_their_calls(gate):
     readout = get(api, "judge/readout")
     [row] = [r for r in readout["sets"] if r["set"] == A.QUESTION_SET]
     assert row["calls"] == 2
-    assert row["gate"] == {"outcomes": {A.SENT_BACK: 1, A.THROUGH: 1}, "let_through": 0}
+    assert row["gate"] == {"outcomes": {A.SENT_BACK: 1, A.THROUGH: 1}, "failed_open_reasons": {}, "let_through": 0}
+    assert "outcomes: sent_back 1, through 1; let through 0" in readout["text"]
     assert row["reconcile"]["landed"] == 2 and row["reconcile"]["unexplained"] == 0
 
 
@@ -1524,6 +1526,381 @@ def test_a_replayed_structured_question_judges_the_same_lines(gate):
     assert model_text(model).endswith("Recommended: Nov 10\n\nTell me which date.")
     assert model.calls[-1]["label"] and '"mode": "replay"' in str(calls(api)[-1])
     assert all("Recommended" not in str(row) and "Tell me" not in str(row) for row in calls(api))
+
+
+# ---- why each fail-open passed --------------------------------------------------------------------------------------
+
+def test_the_readout_says_why_each_fail_open_passed(gate, monkeypatch):
+    api, model, token = gate
+    model.clear = 0.5                                       # between the 0.3 and 0.7 bands: unsure, below_threshold
+    for n in range(3):
+        file(api, token, f"Venue question {n}", "Which venue?")
+    model.clear = 0.95
+    real_ask = A._ask
+    monkeypatch.setattr(A, "_ask", lambda calls, engine, state, questions, label: (None, None))   # no answer, no error
+    file(api, token, "Caterer question", "Which caterer?")
+    monkeypatch.setattr(A, "_ask", real_ask)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, "human:ana", "Plan the November launch", "", "human:ben", lint=False)
+        tid = c.execute("SELECT id FROM tasks WHERE title='Plan the November launch'").fetchone()[0]
+
+    def ends_during_the_call(state, questions, label=None):   # the item it covers ends while the judge is asked
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE tasks SET status='done', done_at=? WHERE id=?", (H.now(), tid))
+        return model(state, questions, label)
+
+    model.covered = "November launch"
+    api.app.state.judge = ends_during_the_call                                 # covered_gone
+    file(api, token, "Plan the November launch, dates", "Nov 3 or Nov 10?")
+    api.app.state.judge = model
+    readout = get(api, "judge/readout")
+    [row] = [r for r in readout["sets"] if r["set"] == A.QUESTION_SET]
+    assert row["gate"] == {"outcomes": {A.FAILED_OPEN: 5}, "let_through": 0,
+                           "failed_open_reasons": {"below_threshold": 3, "covered_gone": 1, "no_answer": 1}}
+    assert "outcomes: failed_open 5; let through 0" in readout["text"]
+    assert "failed open, by reason: below_threshold 3, covered_gone 1, no_answer 1" in readout["text"]
+    out = json.dumps(readout)                                                  # no item text, asker or person
+    assert "Venue question" not in out and "Caterer" not in out and "November" not in out and "human:ben" not in out
+
+
+def test_with_no_fail_open_the_reasons_are_empty_and_the_counts_are_as_before(gate):
+    api, model, token = gate
+    plate(api, 15)
+    assert_refused(api, api.post("/api/v2/tasks", json={"owner": "ben", "title": "Pick the launch date",
+                                                         "body": "Two dates: Nov 3 or Nov 10. Which one?"},
+                                 headers=headers(token)))                 # refused, not a fail-open
+    readout = get(api, "judge/readout")
+    [row] = [r for r in readout["sets"] if r["set"] == A.QUESTION_SET]
+    assert row["gate"] == {"outcomes": {A.SENT_BACK: 1}, "failed_open_reasons": {}, "let_through": 0}
+    assert "failed open" not in readout["text"]
+
+
+# ---- the load a replay judges a past time at -----------------------------------------------------------------------
+
+def stamp(hour, minute=0):
+    """A timestamp on 2026-11-02, in the store's format."""
+    return f"2026-11-02T{hour:02d}:{minute:02d}:00.000000Z"
+
+
+@pytest.fixture
+def ben_off(api):
+    """Ben's filter off: the bots' tasks and questions reach his plate unjudged, so a plate can be built to any load."""
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "off", "budget": 10, "chores_budget": 5, "criteria": []})
+    return api, bot_token(api, "ops")
+
+
+def ask_ben(api, token, text):
+    r = api.post("/api/v2/messages", json={"to": "ben", "text": text, "kind": "ask"}, headers=headers(token))
+    assert r.status_code == 200, r.text
+
+
+def at_eight(c):
+    """Ben's open tasks and the bots' questions to him all asked at 08:00, so the plate is what it is at 10:00."""
+    c.execute("UPDATE tasks SET created_at=? WHERE owner_id='human:ben'", (stamp(8),))
+    c.execute("UPDATE messages SET created_at=? WHERE recipient_id='human:ben' AND kind='ask'", (stamp(8),))
+
+
+def test_a_replay_at_ten_counts_the_plate_the_live_gate_counts(ben_off):
+    api, token = ben_off
+    plate(api, 5)                                           # 5 open tasks
+    for n in range(30):
+        ask_ben(api, token, f"Question {n}?")               # 30 open bot questions
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+    with api.app.state.store.read() as c:
+        assert A.load(c, "human:ben") == 35            # the live gate's count
+        assert A.load_at(c, "human:ben", stamp(10)) == 35
+
+
+def test_a_task_snoozed_past_the_replay_time_is_left_out(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        TH.put(c, tid, "snoozed", stamp(8), until_at=stamp(12), by_id="human:ben", reason="")
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(10)) == 4
+
+
+def test_a_snooze_released_after_the_replay_time_still_counts_as_open_then(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        TH.put(c, tid, "snoozed", stamp(8), until_at=stamp(12), by_id="human:ben", reason="")
+        TH.release(c, tid, "snoozed", stamp(11))                # ended at eleven, after the replay at ten
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(10)) == 4        # it was snoozed at ten, so it is left out then
+
+
+def test_a_snooze_set_after_the_replay_time_does_not_count_as_open_then(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        TH.put(c, tid, "snoozed", stamp(9), until_at=stamp(12), by_id="human:ben", reason="")
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(8, 30)) == 5    # not yet snoozed at half past eight
+        assert A.load_at(c, "human:ben", stamp(10)) == 4       # snoozed by ten
+
+
+def test_a_snooze_set_again_counts_from_the_first_set_time(ben_off, monkeypatch):
+    """A snooze set again keeps one open hold (task_holds.put moves its set time), so the replay reads the task's
+    snooze history: snoozed from the first set, not only from the set that moved it."""
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        monkeypatch.setattr(H, "now", lambda: stamp(8))
+        H.TS.snooze(c, "human:ben", tid, stamp(12))
+        monkeypatch.setattr(H, "now", lambda: stamp(9))
+        H.TS.snooze(c, "human:ben", tid, stamp(13))
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(8, 30)) == 4    # snoozed by the first set, before the second
+        assert A.load_at(c, "human:ben", stamp(9, 30)) == 4    # and by the second, which moved the date
+        assert A.load_at(c, "human:ben", stamp(13, 30)) == 5   # the second date has come
+
+
+def test_a_snooze_set_again_then_released_is_open_from_the_first_set(ben_off, monkeypatch):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        monkeypatch.setattr(H, "now", lambda: stamp(8))
+        H.TS.snooze(c, "human:ben", tid, stamp(12))
+        monkeypatch.setattr(H, "now", lambda: stamp(9))
+        H.TS.snooze(c, "human:ben", tid, stamp(12, 30))
+        monkeypatch.setattr(H, "now", lambda: stamp(11))
+        H.TS.unsnooze(c, "human:ben", tid)
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(8, 30)) == 4    # open then, from the first set
+        assert A.load_at(c, "human:ben", stamp(10)) == 4       # still open at ten
+        assert A.load_at(c, "human:ben", stamp(11, 30)) == 5   # ended at eleven
+
+
+def test_a_snooze_set_at_the_replay_instant_is_open_then(ben_off):
+    """The snooze counts from the instant it was set, as the live plate does: created at ten, it is open at ten."""
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        TH.put(c, tid, "snoozed", stamp(10), until_at=stamp(12), by_id="human:ben", reason="")
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(9, 59)) == 5    # not yet set a minute before
+        assert A.load_at(c, "human:ben", stamp(10)) == 4       # set at ten: left out at ten
+
+
+def test_a_snooze_set_at_the_replay_instant_by_the_history_is_open_then(ben_off, monkeypatch):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        monkeypatch.setattr(H, "now", lambda: stamp(10))
+        H.TS.snooze(c, "human:ben", tid, stamp(12))
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(9, 59)) == 5
+        assert A.load_at(c, "human:ben", stamp(10)) == 4
+
+
+def test_a_snooze_ended_at_the_replay_instant_is_not_open_then(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        TH.put(c, tid, "snoozed", stamp(8), until_at=stamp(12), by_id="human:ben", reason="")
+        TH.release(c, tid, "snoozed", stamp(10))                # ended at the instant of the replay: not open then
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(10)) == 5
+
+
+def delivered_for_ben(api, monkeypatch, asked_at):
+    """A bot's task Ben requested, done at half past eight, and the bot's question to Ben asked at `asked_at` (its
+    acceptance question once done, when asked after it). Returns the task's id."""
+    question = {"questions": [{"id": "read", "header": "Notes", "question": "Does the launch note read right?",
+                               "multi": False, "other": True,
+                               "options": [{"label": "Yes", "description": ""}, {"label": "No", "description": ""}]}],
+                "who": "human:ben"}
+    with api.app.state.store.transaction() as c:
+        monkeypatch.setattr(H, "now", lambda: stamp(8))
+        tid = H.task_create(c, "human:ben", "Ship the launch notes", "", "bot:ops", lint=False)["id"]
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (stamp(8), tid))
+        monkeypatch.setattr(H, "now", lambda: stamp(8, 30))
+        H.task_update(c, "bot:ops", tid, status="done", note="Shipped.")
+        monkeypatch.setattr(H, "now", lambda: asked_at)
+        ask = H.task_comment(c, "bot:ops", tid, "Does the launch note read right?", wake=False, ask=question)
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (asked_at, ask["id"]))
+    return tid
+
+
+def test_a_done_task_keeps_its_requesters_acceptance_question_open_then(ben_off, monkeypatch):
+    """The live read keeps a done task's unanswered acceptance question to its requester; the replay keeps it too."""
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+    tid = delivered_for_ben(api, monkeypatch, stamp(9))
+    with api.app.state.store.read() as c:
+        assert tid in {t["id"] for t in H.tasks_asked_of(c, "human:ben")}
+        assert A.load_at(c, "human:ben", stamp(10)) == 6       # the five open tasks, and the acceptance question
+
+
+def test_a_question_asked_before_the_task_was_done_is_not_its_acceptance_question(ben_off, monkeypatch):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+    delivered_for_ben(api, monkeypatch, stamp(8, 15))          # asked before the half past eight it was done
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(10)) == 5
+
+
+def wait_on_ben(api):
+    """A bot's task waiting on Ben from quarter to nine, set up as the declined-wait test above does."""
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, "human:ana", "Bot asks Ben", "", "bot:ops", lint=False)
+        tid = c.execute("SELECT id FROM tasks WHERE title='Bot asks Ben'").fetchone()[0]
+        c.execute("UPDATE tasks SET created_at=?, status='waiting', waiting_on='human:ben' WHERE id=?", (stamp(8), tid))
+        for field, old, new in (("status", "open", "waiting"), ("waiting_on", None, "human:ben")):
+            c.execute("INSERT INTO history_events(id,subject_type,subject_id,created_at,actor_id,kind,old,new,note) "
+                      "VALUES(?,'task',?,?,?,?,?,?,?)", (H.new_id(), tid, stamp(8, 45), "bot:ops", field, old, new, ""))
+    return tid
+
+
+def test_a_snooze_released_after_the_replay_time_hides_the_wait_then(ben_off):
+    api, token = ben_off
+    tid = wait_on_ben(api)
+    with api.app.state.store.transaction() as c:
+        TH.put(c, tid, "snoozed", stamp(9), until_at=stamp(12), by_id="bot:ops", reason="")
+        TH.release(c, tid, "snoozed", stamp(11))                # ended at eleven, after the replay at ten
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(10)) == 0        # snoozed at ten, so the wait is left out
+
+
+def test_a_snooze_set_after_the_replay_time_does_not_hide_the_wait_then(ben_off):
+    api, token = ben_off
+    tid = wait_on_ben(api)
+    with api.app.state.store.transaction() as c:
+        TH.put(c, tid, "snoozed", stamp(9, 30), until_at=stamp(12), by_id="bot:ops", reason="")
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(9, 15)) == 1    # the wait stood, not yet snoozed at quarter past nine
+        assert A.load_at(c, "human:ben", stamp(10)) == 0       # snoozed by ten
+
+
+def test_a_wait_snoozed_twice_is_hidden_from_the_first_set(ben_off, monkeypatch):
+    api, token = ben_off
+    tid = wait_on_ben(api)
+    with api.app.state.store.transaction() as c:
+        monkeypatch.setattr(H, "now", lambda: stamp(9))
+        H.TS.snooze(c, "bot:ops", tid, stamp(12))
+        monkeypatch.setattr(H, "now", lambda: stamp(9, 30))
+        H.TS.snooze(c, "bot:ops", tid, stamp(13))
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(8, 50)) == 1    # the wait stood, not yet snoozed
+        assert A.load_at(c, "human:ben", stamp(9, 15)) == 0    # snoozed by the first set, before the second moved it
+        assert A.load_at(c, "human:ben", stamp(9, 45)) == 0
+        assert A.load_at(c, "human:ben", stamp(13, 30)) == 1   # the second date has come: the wait stands again
+
+
+def test_a_question_answered_before_the_replay_time_is_not_counted(ben_off):
+    api, token = ben_off
+    ask_ben(api, token, "Answered at nine?")
+    ask_ben(api, token, "Still open at ten?")
+    ask_ben(api, token, "Asked at half past ten?")
+    with api.app.state.store.read() as c:
+        qid = c.execute("SELECT id FROM messages WHERE body='Answered at nine?'").fetchone()[0]
+    r = api.post("/api/v2/messages", json={"to": "ops", "text": "Nov 3.", "kind": "say", "in_reply_to": qid},
+                 headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET created_at=? WHERE recipient_id='human:ben' AND kind='ask'", (stamp(8),))
+        c.execute("UPDATE messages SET created_at=? WHERE body='Asked at half past ten?'", (stamp(10, 30),))
+        c.execute("UPDATE messages SET created_at=? WHERE in_reply_to=?", (stamp(9), qid))
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT answered_by_id FROM messages WHERE id=?", (qid,)).fetchone()[0], "the answer is linked"
+        assert A.load_at(c, "human:ben", stamp(10)) == 1       # only the one still open at ten
+
+
+def test_a_product_lane_task_is_left_out_of_the_replay_load_as_live(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, "human:ana", "Roadmap item", "", "human:ben", lint=False)
+        c.execute("UPDATE tasks SET lane='product' WHERE title='Roadmap item'")     # an old row, on the retired lane
+        at_eight(c)
+    with api.app.state.store.read() as c:
+        assert A.load(c, "human:ben") == 5            # the live gate leaves the product backlog off
+        assert A.load_at(c, "human:ben", stamp(10)) == 5
+
+
+def stamp_status(c, tid, status, at):
+    """Stamp the status changes that set `status` (the test's store writes them at the real clock)."""
+    c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=? AND kind='status' "
+              "AND new=?", (at, tid, status))
+
+
+def test_a_task_declined_before_the_replay_time_is_left_out_of_the_replay_load(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        H.task_update(c, "human:ben", tid, status="declined")
+        stamp_status(c, tid, "open", stamp(8))
+        stamp_status(c, tid, "declined", stamp(9))
+    with api.app.state.store.read() as c:
+        assert A.load(c, "human:ben") == 4                    # the live plate leaves a declined task off
+        assert A.load_at(c, "human:ben", stamp(10)) == 4      # so does the replay at ten
+        assert A.load_at(c, "human:ben", stamp(8, 30)) == 5   # but it was open at half past eight
+
+
+def test_a_task_waiting_on_the_person_then_declined_is_left_out_of_the_replay_load(ben_off):
+    api, token = ben_off
+    plate(api, 2)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, "human:ana", "Bot asks Ben", "", "bot:ops", lint=False)
+        tid = c.execute("SELECT id FROM tasks WHERE title='Bot asks Ben'").fetchone()[0]
+        at_eight(c)
+        c.execute("UPDATE tasks SET created_at=?, status='waiting', waiting_on='human:ben' WHERE id=?", (stamp(8), tid))
+        for field, old, new in (("status", "open", "waiting"), ("waiting_on", None, "human:ben")):
+            c.execute("INSERT INTO history_events(id,subject_type,subject_id,created_at,actor_id,kind,old,new,note) "
+                      "VALUES(?,'task',?,?,?,?,?,?,?)", (H.new_id(), tid, stamp(8, 45), "bot:ops", field, old, new, ""))
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:ops", tid, status="declined")
+        stamp_status(c, tid, "declined", stamp(9))
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(8, 50)) == 3   # two plate items and the wait, at ten to nine
+        assert A.load_at(c, "human:ben", stamp(10)) == 2      # the wait was declined by ten
+        assert A.load(c, "human:ben") == 2                    # and the live plate agrees
+
+
+def test_a_pending_approval_counts_in_the_replay_load_only_while_it_is_undecided(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        rows = [("apr-open", "human:ben", None, stamp(9), stamp(9), None),          # pending from nine
+                ("apr-decided", "human:ben", "approved", stamp(9), stamp(9), stamp(9, 30)),
+                ("apr-later", "human:ben", None, stamp(10, 30), stamp(10, 30), None),   # asked at half past ten
+                ("apr-other", "human:ana", None, stamp(8), stamp(8), None)]           # someone else's
+        for aid, owner, decision, created, ready, decided in rows:
+            c.execute("INSERT INTO approvals(id,kind,task_id,message_id,payload,payload_hash,requested_by_id,decision,"
+                      "decided_at,created_at,ready_since,decision_owner) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (aid, "publish", None, None, "{}", aid, "bot:ops", decision, decided, created, ready, owner))
+    with api.app.state.store.read() as c:
+        assert A.load(c, "human:ben") == 7                    # five plate items and the two pending approvals
+        assert A.load_at(c, "human:ben", stamp(11)) == 7      # by eleven the same two are pending
+        assert A.load_at(c, "human:ben", stamp(10)) == 6      # at ten the one asked at half past is not yet
+        assert A.load_at(c, "human:ben", stamp(9, 15)) == 7   # at quarter past nine, the one decided at half past
+        assert A.load_at(c, "human:ben", stamp(8, 30)) == 5   # nothing was asked yet at half past eight
 
 
 # Rollback is per write path, not per kind: every path refuses an own-work ask, and a status line is refused (with its fix) on create.
