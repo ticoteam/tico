@@ -35,6 +35,7 @@ mod credential_imports;
 mod credential_migration;
 mod declared_access;
 mod device_id;
+mod disk_clean;
 mod env;
 mod events;
 mod drive;

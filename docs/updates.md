@@ -120,7 +120,8 @@ Each line is a venv (its `pyvenv.cfg`) or a user-install folder built by another
 
 ## Disk space
 
-Health warns when a computer reports that its disk is over 85% full. Free space on that computer; for a Docker install,
+Health warns when a computer reports that its disk is over 85% full. A computer low on disk first cleans up what is safe
+by itself ([Task worktrees](worktrees.md#low-disk)), and the warning names what that freed. Free space on that computer; for a Docker install,
 `docker image prune -a` removes unused images. This can remove a cached rollback image, so the previous release may
 need to be pulled again if you later roll back. Disk-space update failures say what ran out and retry when free space
 increases, including while the server and computers are on different releases. Older computers that do not report disk

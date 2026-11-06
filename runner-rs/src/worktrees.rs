@@ -1122,7 +1122,7 @@ fn rebuildable(dir: &Path) -> bool {
 }
 
 /// Folders under `dir` to delete and git checkouts to consider, never through a symlink and at most six levels down.
-fn scratch(dir: &Path, depth: u32, caches: &mut Vec<PathBuf>, checkouts: &mut Vec<PathBuf>) {
+pub(crate) fn scratch(dir: &Path, depth: u32, caches: &mut Vec<PathBuf>, checkouts: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let path = entry.path();
@@ -1587,9 +1587,23 @@ fn server_lacks_checkout_fields(e: &ApiError) -> bool {
         && ["extra", "unknown field", "unexpected field", "not permitted"].iter().any(|m| d.contains(m))
 }
 
-fn closed(row: &Value) -> bool {
+pub(crate) fn closed(row: &Value) -> bool {
     let d = detail(row);
     ["done", "closed", "declined"].contains(&text_of(&row["task_status"]).as_str()) || row["bot_state"] == "archived" || crate::util::truthy(d.get("delete_requested"))
+}
+
+/// Remove actions for every finished task's worktree the server already asked to clean up and has not given up on,
+/// that no queued action names: what a low disk retries at once (Worktrees::expedite).
+pub(crate) fn urgent_removals(rows: &[Value], queued: &[Value]) -> Vec<Value> {
+    let named: HashSet<String> = queued.iter().map(|a| text_of(&a["link_id"])).collect();
+    rows.iter()
+        .filter(|r| {
+            let d = detail(r);
+            closed(r) && r["state"] != "removed" && crate::util::truthy(d.get("cleanup_requested"))
+                && !crate::util::truthy(d.get("cleanup_gave_up")) && !named.contains(&text_of(&r["id"]))
+        })
+        .map(|r| json!({"link_id": r["id"], "action": "remove", "branch": r["branch"], "path": r["path"], "task_id": r["task_id"], "repo": r["repo"], "owner": r["owner"]}))
+        .collect()
 }
 
 /// What the manager needs from the runner: whether a bot's turn could be in a task's worktree, the bot's
@@ -1600,6 +1614,8 @@ pub trait Host: Send + Sync + 'static {
     fn vault(&self, bot: &str) -> Vec<String>;
     fn retain_vault(&self, owners: &HashSet<String>);
     fn repositories(&self) -> Option<Arc<repositories::Repositories>>;
+    /// Whether any bot's turn on `task` is running here (a reviewer's too): the disk clean-up leaves its folder.
+    fn task_busy(&self, _task: &str) -> bool { false }
 }
 
 #[derive(Default)]
@@ -1621,11 +1637,21 @@ pub struct Worktrees {
     pending: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Bots whose worktree maintenance is running: no claim names them meanwhile.
     pub maintaining: Mutex<HashSet<String>>,
+    /// The disk is low (disk_clean.rs): the next pass removes every finished task's worktree the server asked to
+    /// clean up, without this computer's own retry wait.
+    urgent: std::sync::atomic::AtomicBool,
 }
 
 impl Worktrees {
     pub fn new(workspace: &Path, client: Client) -> Worktrees {
-        Worktrees { workspace: workspace.to_path_buf(), client, inner: Mutex::new(Inner::default()), pending: Mutex::new(None), maintaining: Mutex::new(HashSet::new()) }
+        Worktrees { workspace: workspace.to_path_buf(), client, inner: Mutex::new(Inner::default()), pending: Mutex::new(None), maintaining: Mutex::new(HashSet::new()), urgent: Default::default() }
+    }
+
+    /// Remove finished tasks' worktrees now: the next pass (started here unless one is running) retries each
+    /// cleanup the server asked for, past this computer's backoff, through the usual preservation in `act`.
+    pub fn expedite(self: &Arc<Self>, host: Arc<dyn Host>) {
+        self.urgent.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.poll(host, &[]);
     }
 
     /// Queue the heartbeat reply's actions and start a pass if none is running; the last reports meanwhile.
@@ -1655,10 +1681,18 @@ impl Worktrees {
         }
     }
 
-    pub async fn sync(self: Arc<Self>, host: Arc<dyn Host>, actions: Vec<Value>) {
+    pub async fn sync(self: Arc<Self>, host: Arc<dyn Host>, mut actions: Vec<Value>) {
         adopt_task_states(&self.workspace);
         let Ok(reply) = self.client.get("runners/me/worktrees").await else { return };
         let mut rows: Vec<Value> = reply["worktrees"].as_array().cloned().unwrap_or_default();
+        let urgent: HashSet<String> = if self.urgent.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            let extra = urgent_removals(&rows, &actions);
+            let ids = extra.iter().map(|a| text_of(&a["link_id"])).collect();
+            actions.extend(extra);
+            ids
+        } else {
+            HashSet::new()
+        };
         let owners: HashSet<String> = rows.iter().map(|r| text_of(&r["owner"]).trim_start_matches("bot:").to_string()).collect();
         host.retain_vault(&owners);
         let ids: HashSet<String> = rows.iter().map(|r| text_of(&r["id"])).collect();
@@ -1682,7 +1716,7 @@ impl Worktrees {
             }
             let explicit_retry = !generation.is_empty()
                 && self.inner.lock().unwrap().cleanup_retry_generations.get(&link) != Some(&generation);
-            if !explicit_retry && self.inner.lock().unwrap().retry.get(&link).is_some_and(|(at, _)| Instant::now() < *at) {
+            if !explicit_retry && !urgent.contains(&link) && self.inner.lock().unwrap().retry.get(&link).is_some_and(|(at, _)| Instant::now() < *at) {
                 continue;
             }
             let owner = text_of(&row["owner"]);

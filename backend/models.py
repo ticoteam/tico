@@ -1304,6 +1304,24 @@ class DiskReadiness(Contract):
     free_bytes: int = Field(ge=0)
 
 
+class DiskCleanupClass(Contract):
+    # tmp, home_cache, finished_task_cache, git or idle_task_cache (runner-rs/src/disk_clean.rs Class)
+    kind: str = Field(max_length=40)
+    count: int = Field(ge=0)
+    bytes: int = Field(ge=0)
+
+
+class DiskCleanupReadiness(Contract):
+    """The last clean-up the computer ran by itself on a low workspace volume (runner-rs/src/disk_clean.rs)."""
+    at: str = Field(max_length=40)
+    free_before_bytes: int = Field(ge=0)
+    free_after_bytes: int = Field(ge=0)
+    low_bytes: int = Field(ge=0)
+    freed_bytes: int = Field(ge=0)
+    classes: list[DiskCleanupClass] = Field(default_factory=list, max_length=10)
+    still_low: StrictBool = False
+
+
 class ContainerExecReadiness(Contract):
     """A throwaway container start on the computer (runner-rs/src/readiness_extra.rs)."""
     ok: StrictBool
@@ -1367,6 +1385,8 @@ class StructuredReadiness(Contract):
     worktree_recovery: bool | None = None
     schema_version: Literal[1] = 1
     disk: DiskReadiness | None = None
+    # Sent once the computer has cleaned up a low disk by itself; an older server's 422 drops it for ten minutes.
+    disk_cleanup: DiskCleanupReadiness | None = None
     # Bots run as their own user here (runner-rs/src/isolation.rs), so a Tico model may run (backend/models_preset.py).
     isolated: bool | None = None
     # Not isolated, but a Tico cloud machine: one company's trust group, whose Tico models run on the runner's relay
@@ -1394,7 +1414,7 @@ class StructuredReadiness(Contract):
         data = handler(self)
         if data.get("disk") is None:
             data.pop("disk", None)
-        for field in ("container_exec", "github_auth", "browser_launch", "engine", "screen", "appdriver"):
+        for field in ("disk_cleanup", "container_exec", "github_auth", "browser_launch", "engine", "screen", "appdriver"):
             if data.get(field) is None:
                 data.pop(field, None)
         if not data.get("recent_errors"):

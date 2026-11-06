@@ -29,6 +29,7 @@ Do each fix as the human, with their rights. Do not ask first.
 | Failing runs | `playbooks/diagnose-a-failed-run.md`; fix instructions in the bot's repository if that is the cause |
 | A Hermes bot that is not reporting in, or archived and still reporting | `playbooks/connect-a-hermes-profile.md` |
 | A computer is offline | nothing you can do: say which one, and that its bots wait for it |
+| A computer low on disk | the section below; do the safe clean-up without asking |
 | A computer is holding work to update | nothing to fix: it updates by itself once the turns Health names end. Say which turns, read it once and end the run (`AGENT.md` rule 10); never watch it or stop a turn for the person |
 | Waiting on a usage limit, and the person says the plan is renewed | `hub api POST /api/v2/bots/<bot>/limit/retry` (clears every bot limited on that runtime and computer) |
 | Stopped after refusing something | `hub api POST /api/v2/bots/<bot>/quarantine/clear` only after you read why |
@@ -49,6 +50,21 @@ Only when the requester asked you to take it live (`AGENT.md`: turning a bot on 
    - `state` active: it is live. `placed` true: it is on a computer. `setup_started`: its setup has begun.
    - `state` `waiting_for_repository`: its computer is fetching the repository, and Tico turns it on by itself once the computer has it. Do not run go-live again.
 3. If `routine_armed` is set, say which routine is now on: going live turns the bot's first routine on.
+
+### A computer low on disk
+
+The computer cleans up by itself when its workspace runs low: finished tasks' worktrees (unsaved work is saved or the
+tree kept), build caches, temp files untouched for a day, package caches. Health names what its last clean-up freed.
+Never ask a person about those, and never wait for one while the disk fills.
+
+If it is still low and you run on that computer, remove the same things yourself now, never through a symlink and
+never inside a folder a running turn uses: `/tmp` entries untouched for 24 hours, files older than a day in
+`~/.cache/pip`, `~/.cache/uv`, `~/.cache/go-build`, `~/.cache/yarn` and `~/.npm/_cacache`, and `target/` and
+`node_modules/` in finished tasks' folders under `$HUB_WORKSPACE/tasks/`. Then run `hub health check` again.
+
+Ask a person only for what is outside that list (Docker images, files owned by root or another user, a bot's
+repository, a worktree with unsaved work, browsers in `~/.cache/ms-playwright`): one Needs you item naming each
+folder and its size, after the safe part is done.
 
 ### A missing repository
 

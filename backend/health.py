@@ -186,7 +186,10 @@ def _computers(c, runners_online, settings, limits=None):
         rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in since, "last_seen_at": r["last_seen_at"],
                      "resting": r["id"] in resting and r["id"] not in since,
                      "platform": r["platform"] or "", "update": runner_versions.view(fleet.get(r["id"])),
-                     "disk": document.get("disk"),
+                     # The last clean-up the computer ran by itself rides on its disk row (runner-rs/src/disk_clean.rs).
+                     "disk": ({**document["disk"], "cleanup": document["disk_cleanup"]}
+                              if isinstance(document.get("disk"), dict) and isinstance(document.get("disk_cleanup"), dict)
+                              else document.get("disk")),
                      "owner_id": r["owner_id"], "container_exec": document.get("container_exec"),
                      "github_auth": document.get("github_auth"), "browser_launch": document.get("browser_launch"),
                      "engine": document.get("engine"),
@@ -2240,9 +2243,13 @@ def view(c, who, settings, auth, github, config):
             disk = computer.get("disk") or {}
             total, free = disk.get("total_bytes"), disk.get("free_bytes")
             if isinstance(total, int) and total > 0 and isinstance(free, int) and 1 - free / total > .85:
+                cleanup = disk.get("cleanup") or {}
+                done = (f" Its own clean-up at {cleanup.get('at', '')[11:16]} UTC freed "
+                        f"{(cleanup.get('freed_bytes') or 0) / 1024**3:.1f} GB; what is left is not safe for it to remove."
+                        if cleanup.get("still_low") else "")
                 checks.append(_check("disk:" + computer["id"], "Disk space", "warn",
                                      f"{computer['label']}: disk is {100 * (1 - free / total):.0f}% full "
-                                     f"({free / 1024**3:.1f} GB free). Free space on this computer; for Docker, run "
+                                     f"({free / 1024**3:.1f} GB free).{done} Free space on this computer; for Docker, run "
                                      "`docker image prune -a` to remove unused images. The update retries when space frees.",
                                      [_fix("Open Computers", "#/settings", "devices")]))
             # Diagnostics only: an overload is shown here and on the computer's Performance page; nothing acts on it.

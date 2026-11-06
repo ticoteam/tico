@@ -255,6 +255,28 @@ def test_a_bot_reads_computers_and_failed_runs_without_admin_detail(environment)
     assert api.get("/api/v2/health/issues", headers=signed_in("qa-bot")).status_code == 200
 
 
+def test_a_low_disk_check_names_the_computers_own_clean_up(environment):
+    """The runner reports the clean-up it ran by itself (runner-rs/src/disk_clean.rs); the server takes the field and
+    the disk warning says what it freed, for the bot and person who look next."""
+    from backend.models import StructuredReadiness
+    api = environment()
+    runner = enrolled(api)
+    gb = 1024 ** 3
+    cleanup = {"at": "2026-11-06T08:03:00+00:00", "free_before_bytes": gb // 5, "free_after_bytes": 2 * gb,
+               "low_bytes": 15 * gb, "freed_bytes": 2 * gb, "still_low": True,
+               "classes": [{"kind": "tmp", "count": 4, "bytes": gb}, {"kind": "finished_task_cache", "count": 2, "bytes": gb}]}
+    report = StructuredReadiness.model_validate({"schema_version": 1, "runtimes": {}, "bots": {},
+                                                 "disk": {"total_bytes": 100 * gb, "free_bytes": 2 * gb},
+                                                 "disk_cleanup": cleanup}).model_dump()
+    assert report["disk_cleanup"]["classes"][0] == {"kind": "tmp", "count": 4, "bytes": gb}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
+                  (H.now(), json.dumps(report), runner))
+    body, checks = health_of(api)
+    assert "freed 2.0 GB" in checks["disk:" + runner]["summary"]
+    assert body["computers"][0]["disk"]["cleanup"]["freed_bytes"] == 2 * gb
+
+
 def test_a_local_credential_key_that_is_not_backed_up_is_a_warning_or_a_note():
     from types import SimpleNamespace
 

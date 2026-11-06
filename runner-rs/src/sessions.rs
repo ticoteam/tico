@@ -1004,6 +1004,10 @@ impl crate::worktrees::Host for Lanes {
     fn repositories(&self) -> Option<Arc<Repositories>> {
         Some(self.repositories.clone())
     }
+
+    fn task_busy(&self, task: &str) -> bool {
+        !task.is_empty() && self.attempts.lock().unwrap().values().any(|(_, _, turn_task)| turn_task == task)
+    }
 }
 
 async fn hold(lock: Lock, lost: &AtomicBool) -> Result<OwnedMutexGuard<()>, String> {
