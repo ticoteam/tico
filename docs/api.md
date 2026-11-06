@@ -72,7 +72,6 @@ The operation groups below are generated from the committed spec's tags. After r
 | Cards and pins | Tico's built-in cards and where pages and cards are pinned: the Dashboard, team pages, bot sidebars and tasks ([guide](overview.md)). A card shows each reader only what they may see. |
 | Model subscriptions | The company's saved model logins and keys, given to computers per runtime. A value is sent only to add or reconnect one; no answer carries it. |
 | Slack links | A thread's link to a Slack channel, both ways ([guide](slack.md)): asked for by an admin, checked by the gateway, then active, suspended or refused. Admins only. |
-| Memory tidy | Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks. |
 | Threads | Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages in a thread. A thread the viewer may not read answers 404, never 403. |
 | Feedback | A person's 👍 or 👎 on a message, task or approval a bot made, with an optional reason: a 👎 can tell the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves out feedback on what the caller cannot read. |
 | Company page | The public page for the company's updates: its audiences, the editions each one reads, the stats the page shows, the readers who sign in to it, and the logo ([guide](company-page.md)). |
@@ -88,8 +87,8 @@ The operation groups below are generated from the committed spec's tags. After r
 Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).
 
 `GET /api/v2/needs-you` returns `plate_count` in every response: count-only (`count=1`), unchanged,
-selected ids, full list and pages. It counts unique task, question, waiting, approval, ask, stale and
-memory_tidy items on the signed-in person across all boards, excluding tasks in `folded_task_ids`.
+selected ids, full list and pages. It counts unique task, question, waiting, approval, ask and stale
+items on the signed-in person across all boards, excluding tasks in `folded_task_ids`.
 Thread and update attention are excluded. `count` retains the broader attention total used by the
 desktop poll. Both counts describe the whole list, including unread pages. Live `needs` events also
 carry `plate_count`; a client subtracts any plate items it still holds that were just answered locally.
