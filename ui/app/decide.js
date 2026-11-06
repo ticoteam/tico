@@ -376,7 +376,7 @@ function decideFeedbackKey(c) {
   const it = c.it, bot = a => String(a || '').startsWith('bot:');
   if (c.type === 'approve') return bot(it.requester_id) ? fbKey('approval', it.id) : '';
   if (c.type === 'ask') return bot(it.requester_id) ? fbKey('message', it.message_id || it.id) : '';
-  if (c.type === 'pick') return bot(it.ask?.sender_id) && it.ask?.id ? fbKey('message', it.ask.id) : '';
+  if (c.type === 'pick') return it.ask?.question_task ? fbTaskKey(it) : bot(it.ask?.sender_id) && it.ask?.id ? fbKey('message', it.ask.id) : '';
   if (c.type === 'task') return fbTaskKey(it);
   return '';
 }
@@ -393,7 +393,7 @@ function decidePaintBody(st) {
 }
 // Showing a question on its card reads it: a loose one by itself, a task's through the task (hub-v2.js taskAsksRead).
 function decideAskRead(it) {
-  if (!askToMe(it?.ask) || it.ask.read_at) return;
+  if (!askToMe(it?.ask) || it.ask.read_at || it.ask.question_task) return;   // a question task has no message to read
   if (it.kind !== 'ask') return taskAsksRead(it.id, it.ask.id);
   if (ASKS_SENT.read.has(it.id)) return;
   ASKS_SENT.read.add(it.id);

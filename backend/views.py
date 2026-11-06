@@ -1831,8 +1831,10 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 # The Strategy Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs
                 # you.
                 item["merged"] = [t for t in merged[row["id"]] if t in can_see]
-            if ask and ask.get("recipient_id") == who.actor and H.ask_older(ask):
-                ask["stale"] = True      # its one-click Clarify (backend/clarify_asks.py) shows on the card
+            if ask and ask.get("recipient_id") == who.actor and not ask.get("question_task") and H.ask_older(ask):
+                # Its one-click Clarify (backend/clarify_asks.py) shows on the card. A question task has none: it goes
+                # back to its bot on its date (backend/still_needed.py).
+                ask["stale"] = True
             items.append(item)
     for msg in privacy.readable_messages(c, privacy.actor(who), H.loose_asks_to(c, who.actor)):
         msg["refs"] = H._json(msg.get("refs"), {}) or {}

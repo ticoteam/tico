@@ -532,6 +532,12 @@ def _apply_decide(c, auth, who, item, r, boards):
         H.task_close(c, who.actor, ident, note=text)
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
         return f"Closed: {item['title']}"
+    from . import question_tasks
+    if question_tasks.is_open(H.task(c, ident)) and row["owner_id"] == who.actor:
+        # A question task: the answer is its close, a note naming an option picks it (question_tasks.closed).
+        H.task_update(c, who.actor, ident, status="done", note=text or None)
+        c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
+        return f"Answered {H.actor_name(c, row['requester_id'])}: {_clip(text or 'Done.', 120)}"
     ask = H.unanswered_ask(c, row, actor=privacy.actor(who))
     if ask and ask.get("recipient_id") == who.actor:
         H.answer(c, who.actor, ask["id"], text)

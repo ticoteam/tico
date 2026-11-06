@@ -543,12 +543,14 @@ class ReviewTarget(Contract):
     comment: ID | None = None
     file: ID | None = None
     version: Annotated[int, Field(strict=True, ge=1)] | None = None
+    # A question task (backend/question_tasks.py): the task itself, whose answer closes it.
+    task: ID | None = None
 
     @model_validator(mode="after")
     def one_target(self):
-        if not ((self.comment is not None and self.file is None and self.version is None)
-                or (self.comment is None and self.file is not None and self.version is not None)):
-            raise ValueError("Target is {comment} or {file, version}")
+        given = (self.comment is not None, self.file is not None, self.version is not None, self.task is not None)
+        if given not in ((True, False, False, False), (False, True, True, False), (False, False, False, True)):
+            raise ValueError("Target is {comment}, {file, version} or {task}")
         return self
 
 

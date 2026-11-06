@@ -590,6 +590,28 @@ arrived since stays on the card.
 ### The question card
 
 Decide and the task's **Needs you** box show the same question card: the same text, picks, and buttons.
+
+#### Question tasks
+
+`hub task question "<question>" --on <person>` (MCP `hub_task_question`) files a **question task**: a task the person
+owns, with the question stored on the task itself (its picks, the recommended pick, what happens if nobody answers,
+files under review, and a spend). The bot sends no separate question message. Asked from one of the bot's own tasks,
+the question task is that task's subtask, and the bot's task is blocked on it. Otherwise it is a task on its own for
+that person. A bot never files a question task for another bot: the request is refused and points the bot to a direct
+message instead.
+
+Answering closes the question task, and the answer stays on it:
+
+- A pick, Yes or No, or a note closes it **Done** and records the answer.
+- Declining closes it **Declined**.
+- Done or Declined from the task itself, Decide's buttons, or the Assistant counts as an answer too. A note that names
+  an option ("Yes." or "Yes. Ship it Friday") picks that option.
+
+The bot hears the answer once, on its own task, or as the question task's requester when there is no parent.
+The question card draws a question task the same way it draws a question message. The same topic rule applies too:
+one open question task per topic per person. A question task closes on its date the way a question message does (see
+[When nobody answers a bot's ask](#when-nobody-answers-a-bots-ask)): the default goes ahead as the answer, or the
+task closes and the bot hears why.
 The header names the real asker, or **Tico** for a system check. It shows the question's age, such as
 "asked 3 days ago", and **holds up:** with the parent task or roadmap item's title.
 The question comes next, followed by **Why it matters:**.

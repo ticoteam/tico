@@ -71,7 +71,9 @@ from datetime import datetime, timedelta, timezone
 
 from .batch_work import isolated
 from .store import H
+from . import question_tasks
 from . import sources as SRC
+from . import task_relations as TR
 
 WAKE = "task_roundup"
 EVENT = "task_roundup.sent"
@@ -478,12 +480,21 @@ def _asks_back(c, slug, actor, at):
     for when, ask_id in found:
         key = _key("ask", slug, ask_id)
         ask = c.execute("SELECT id, body, recipient_id, refs, conversation_id FROM messages WHERE id=?", (ask_id,)).fetchone()
-        if not ask or _mark(c, key) is not None:
+        card = None if ask else H.task(c, ask_id)
+        if card and question_tasks.is_question(card):
+            # A question task sent back (still_needed.send_back): named as the task it was asked from, else itself.
+            ask = question_tasks.as_ask(card)
+        elif not ask:
+            continue
+        if _mark(c, key) is not None:
             continue
         who = H.actor_name(c, ask["recipient_id"]) or H.actor_id(ask["recipient_id"])
         # The task the question is about, as the message names it (its refs, else its task conversation): a question
         # asked from a Home room names its task in refs only.
-        tid = H.message_task_id({"refs": H._json(ask["refs"], {})}, H.conversation(c, ask["conversation_id"]))
+        if card:
+            tid = TR.parent_of(c, card["id"]) or card["id"]
+        else:
+            tid = H.message_task_id({"refs": H._json(ask["refs"], {})}, H.conversation(c, ask["conversation_id"]))
         task = H.task(c, tid) if tid else None
         # A task the bot may not read by every rule (H.bot_reads_task) is named nowhere, as the late lines are.
         if task and not H.bot_reads_task(c, actor, task):

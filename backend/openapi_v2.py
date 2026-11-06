@@ -283,7 +283,8 @@ STABLE = [
     ("/api/v2/tasks/{tid}/files", "post", "Tasks", "attachTaskFile", "Attach a file; the same name adds a version", "TaskFileResult"),
     ("/api/v2/tasks/{tid}/comments", "get", "Tasks", "listTaskComments", "Comments and questions with their answers", "TaskComments"),
     ("/api/v2/tasks/{tid}/answers", "get", "Tasks", "listTaskAnswers", "Structured answers, oldest first", "TaskAnswers"),
-    ("/api/v2/tasks/{tid}/answers", "post", "Tasks", "answerTaskQuestion", "Answer or dismiss a comment or file version question", "TaskAnswerResult"),
+    ("/api/v2/tasks/{tid}/answers", "post", "Tasks", "answerTaskQuestion", "Answer or dismiss a comment or file version question, or a question task "
+     "({task}: the answer closes it done, a dismiss declined)", "TaskAnswerResult"),
     ("/api/v2/tasks/{tid}/comments", "post", "Tasks", "commentOnTask", "Comment on a task", "CommentResult"),
     ("/api/v2/inbound/tasks", "post", "Tasks", "upsertInboundTask",
      "Another system's work as it is now, by its own key: files, updates, closes or reopens one task (service key only; "
@@ -826,6 +827,16 @@ SCHEMAS = {
                 cover={"oneOf": [obj({"url": "s", "width": {"type": ["integer", "null"]},
                                       "height": {"type": ["integer", "null"]}}), {"type": "null"}]},
                 open_asks={"type": "integer", "description": "Questions on this task with no answer or dismissal"},
+                questions={"type": ["array", "null"], "items": {"type": "object"},
+                           "description": "A question task's question (a bot's decision for the person who owns it): "
+                           "each {id, question, why, options [{label, then, description, recommended, file}], multi}; "
+                           "null on any other task. Answered with POST /tasks/{id}/answers and target {task}"},
+                if_no_answer={"type": ["object", "null"], "description": "A question task's default: {do, kind, by}"},
+                review={"type": ["object", "null"], "description": "A question task's files under review: {files, "
+                        "pick, attachments}"},
+                spend={"type": ["object", "null"], "description": "A question task's spend, approved by picking its label"},
+                answer={"type": ["object", "null"], "description": "A question task's answer once closed: {answers, "
+                        "other, dismiss, by, at, text}; null while open"},
                 type_id={"type": ["string", "null"]}, step_id={"type": ["string", "null"]},
                 step_since={"type": "string", "description": "A Dev ticket at a working step (In Progress, a Fixes "
                             "step): when it entered that step or came back to work; absent otherwise"},

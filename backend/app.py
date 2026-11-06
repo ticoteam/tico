@@ -48,6 +48,7 @@ from . import counsel
 from . import thread_api
 from . import step_age
 from . import task_holds
+from . import question_tasks
 from . import runs
 from . import bot_stops, turn_budgets, proposals, task_caps, reach
 from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
@@ -1273,7 +1274,8 @@ def create_app(settings=None):
         if c is not None:
             row = task_holds.with_holds(c, row)
             H.hydrate_task_tags(c, [row])
-        value = {"id": row["id"], "short_id": row["id"][:8], **row, "acceptance_criteria": json.loads(row.get("acceptance", "[]")),
+        value = {"id": row["id"], "short_id": row["id"][:8], **row, **question_tasks.fields(row),
+                 "acceptance_criteria": json.loads(row.get("acceptance", "[]")),
                  "labels": H.task_labels(row), "lane": row.get("lane") or "company",
                  "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
         value["readers"] = H.task_readers(row) if value["private"] else []
@@ -1326,6 +1328,8 @@ def create_app(settings=None):
             if routine:
                 value.update(routine_id=routine['schedule_id'])
             asks = H.open_task_asks(c, row, actor=privacy.actor(who))
+            if question_tasks.is_open(row):
+                asks = [question_tasks.as_ask(row), *asks]    # a question task is its own ask
             value.update({"origin_actor": H.task_origin(c, row), "ask": next(iter(asks), None), "open_asks": len(asks)})
             if who is not None and visible_sql != "1":
                 value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
@@ -3952,6 +3956,12 @@ def create_app(settings=None):
         views.human_only(who)
         def work(c):
             asked = H.message(c, body.ask)
+            if not asked:
+                # A question task (backend/question_tasks.py): the card's ask is the task itself.
+                row = H.task(c, body.ask)
+                if row and question_tasks.is_question(row):
+                    auth.task(c, who, row["id"])
+                    return question_tasks.take_recommendation(c, auth, who, row, body.version)
             if not asked or asked["kind"] != "ask":
                 raise Problem("not_found", "Question not found", 404)
             auth.conversation(c, who, asked["conversation_id"], write=True)

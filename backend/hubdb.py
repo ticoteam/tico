@@ -1132,9 +1132,14 @@ def sourced_text(text, sources=(), refs=None):
 
 
 def answer_question(conn, target):
-    """The stored question behind either kind of structured answer target."""
+    """The stored question behind any kind of structured answer target: a comment ask, a file version's, or a
+    question task (backend/question_tasks.py) read as an ask."""
     if target.get("comment"):
         return message(conn, target["comment"])
+    if target.get("task"):
+        from . import question_tasks
+        row = task(conn, target["task"])
+        return question_tasks.as_ask(row) if question_tasks.is_question(row) else None
     row = conn.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=?",
                        (target.get("file"), target.get("version"))).fetchone()
     return message(conn, row[0]) if row and row[0] else None
@@ -6338,6 +6343,11 @@ def open_tasks_asks(conn, task_rows, *, actor):
         if id(ask) in shown:
             ask["refs"] = _json(ask.get("refs"), {}) or {}
             out[tid].append(ask)
+    # A question task (backend/question_tasks.py) is its own ask, first: the reader of the task reads its question.
+    from . import question_tasks
+    for row in task_rows:
+        if question_tasks.is_open(row):
+            out[row["id"]].insert(0, question_tasks.as_ask(row))
     return out
 
 
@@ -7441,6 +7451,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     notify_requester = wake_others and status in ("done", "declined") and actor != row["requester_id"]
     if note is not None and not notify_requester and not quiet:
         _mirror_task_note(conn, actor, after, note)
+    if status in ("done", "declined") and row["status"] != status and row.get("questions"):
+        # A question task closed by a status write (Decide's Yes / No, the Assistant): its note is the answer.
+        from . import question_tasks
+        question_tasks.closed(conn, actor, row, status, note)
     # A person finishing a subtask under a bot's task: the bot hears it once, on the parent.
     if after["status"] == "done" and row["status"] != "done" and not after.get("verdict"):
         # A check finished with no verdict moves its ticket like one with changes (backend/verdict_moves.py).
