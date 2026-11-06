@@ -21,6 +21,7 @@ someone screens it again. A proposal is never `screened` without a model answer.
 question set version is reused instead of paying again; a new question set version sends pending proposals back to be
 screened (approved versions are not re-gated). Events name the proposal, the skill and the outcome, never a file's text.
 """
+import difflib
 import json
 import logging
 import re
@@ -28,7 +29,6 @@ import threading
 import time
 import uuid
 
-from clients import botcopy
 from clients import judge as J
 from clients import skills as bundles
 from . import screening
@@ -143,10 +143,22 @@ def _fenced(path, text):
 
 def full_diff(before, after):
     """The unified diff of every changed file, uncut: the state must hold all of it or the screen is `oversize`."""
-    old = {item["path"]: item["content"].encode("utf-8") for item in before}
-    new = {item["path"]: item["content"].encode("utf-8") for item in after}
-    return "".join(botcopy.unified(rel, old.get(rel), new.get(rel), cut=None)
+    old = {item["path"]: item["content"] for item in before}
+    new = {item["path"]: item["content"] for item in after}
+    return "".join(_unified(rel, old.get(rel), new.get(rel))
                    for rel in sorted(set(old) | set(new)) if old.get(rel) != new.get(rel))
+
+
+def _unified(rel, before, after):
+    """One file's unified diff. A last line with no newline is marked as git marks it, so it never runs into the next
+    line (clients/botcopy.py `unified` joins them)."""
+    def lines(text):
+        out = (text or "").splitlines(keepends=True)
+        if out and not out[-1].endswith("\n"):
+            out[-1] += "\n\\ No newline at end of file\n"
+        return out
+    return "".join(difflib.unified_diff(lines(before), lines(after), "a/" + rel if before is not None else "/dev/null",
+                                        "b/" + rel if after is not None else "/dev/null"))
 
 
 def build_state(name, description, files, base_files, patterns):

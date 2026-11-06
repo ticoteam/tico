@@ -259,7 +259,7 @@ def test_an_update_is_screened_with_its_diff_against_the_base(api):
     engine = Engine()
     drain(api, engine)
     diff = engine.calls[0]["state"]["diff"]
-    assert "-Sort the inbox by urgency.\n+Sort the inbox by urgency, then by sender.\n" in diff
+    assert "\n-Sort the inbox by urgency.\n" in diff and "\n+Sort the inbox by urgency, then by sender.\n" in diff
     assert latest(api, pid)["base_version_id"] == row(api, pid)["base_version_id"] is not None
 
 
