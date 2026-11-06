@@ -47,6 +47,7 @@ RELEASES, TASK_MANAGER = "Release Manager > Settings > Releases", "Task Manager 
 SYSTEM_JOBS = "#/automations/system-jobs"
 INBOUND, TEXTS, MAIL = (INBOXES + " > Settings > " + s for s in ("Email", "Texts", "Letters in"))
 MODELS = "Settings > AI models"
+GATEWAY_WEBHOOKS = MODELS + " > Tico Gateway > Webhooks"
 
 _RULE_NAMES = {
     "assistant_direct": ("Assistant acts without asking", "confirm", ""),
@@ -327,32 +328,31 @@ ENTRIES = TEAM_RULES + [
       value="json", card="#/bot/task-manager/settings"),
     S("task_manager.off", "Task Manager off", TASK_MANAGER, "owner", "direct", "POST",
       "task-manager/turn-off", value="json", card="#/bot/task-manager/settings"),
-    # Webhooks: `incoming`, `outgoing` and `gateway` are the Webhooks tab's own parts, which ui/app/router.js opens from
-    # `#/settings/webhooks/<part>` before the catalogue's generic `#/settings/<tab>/<card>` branch: rename them
-    # together.
-    S("webhooks.incoming.create", "New incoming trigger", HOOKS + " > Incoming", "anyone", "direct", "POST", "triggers",
-      value="json", card=_card("webhooks", "incoming"), words="webhook incoming"),
-    S("webhooks.incoming", "Incoming trigger", HOOKS + " > Incoming", "creator", "direct", "POST", "triggers/{id}",
-      value="json", card=_card("webhooks", "incoming"), words="webhook incoming keep days hourly"),
-    S("webhooks.incoming.signing", "Incoming trigger signing", HOOKS + " > Incoming", "creator", "person", "POST",
-      "triggers/{id}/signing", value="json", card=_card("webhooks", "incoming"),
+    # Catalogue searches open the Connections summary card. The older Webhooks addresses remain aliases in router.js;
+    # its incoming, outgoing and Gateway links continue to open their current homes.
+    S("webhooks.incoming.create", "New incoming webhook", HOOKS + " > Incoming", "anyone", "direct", "POST", "triggers",
+      value="json", card=_card("connections", "settings-webhooks"), words="webhook incoming"),
+    S("webhooks.incoming", "Incoming webhook", HOOKS + " > Incoming", "creator", "direct", "POST", "triggers/{id}",
+      value="json", card=_card("connections", "settings-webhooks"), words="webhook incoming keep days hourly"),
+    S("webhooks.incoming.signing", "Incoming webhook signing", HOOKS + " > Incoming", "creator", "person", "POST",
+      "triggers/{id}/signing", value="json", card=_card("connections", "settings-webhooks"),
       why="A signing secret is typed in Settings, never passed through a bot"),
-    S("webhooks.incoming.rotate", "Rotate an incoming trigger's address", HOOKS + " > Incoming", "creator", "confirm",
+    S("webhooks.incoming.rotate", "Rotate an incoming webhook address", HOOKS + " > Incoming", "creator", "confirm",
       "POST",
-      "triggers/{id}/rotate", value="json", card=_card("webhooks", "incoming")),
-    S("webhooks.incoming.delete", "Delete an incoming trigger", HOOKS + " > Incoming", "creator", "confirm", "POST",
-      "triggers/{id}/delete", value="json", card=_card("webhooks", "incoming")),
-    S("webhooks.gateway.wake", "Gateway wake", HOOKS + " > Gateway", "creator", "confirm", "POST",
-      "triggers/{id}/relay/wake", "wake", card=_card("webhooks", "gateway")),
+      "triggers/{id}/rotate", value="json", card=_card("connections", "settings-webhooks")),
+    S("webhooks.incoming.delete", "Delete an incoming webhook", HOOKS + " > Incoming", "creator", "confirm", "POST",
+      "triggers/{id}/delete", value="json", card=_card("connections", "settings-webhooks")),
+    S("webhooks.gateway.wake", "Gateway wake", GATEWAY_WEBHOOKS, "creator", "confirm", "POST",
+      "triggers/{id}/relay/wake", "wake", card=_card("models", "wh-gateway")),
     # Both answer with a signing secret shown only then, which a Confirm card's tap never shows (it keeps the status).
-    S("hooks.wake_url", "Gateway wake URL", HOOKS + " > Gateway", "owner", "person", "PUT", "hooks/wake-url", "url",
-      "text", _card("webhooks", "gateway"),
+    S("hooks.wake_url", "Gateway wake URL", GATEWAY_WEBHOOKS, "owner", "person", "PUT", "hooks/wake-url", "url",
+      "text", _card("models", "wh-gateway"),
       why="Setting the Gateway wake URL shows its signing secret once, in Settings"),
     S("webhooks.outgoing.create", "New outgoing webhook", HOOKS + " > Outgoing", "anyone", "person", "POST", "webhooks",
-      value="json", card=_card("webhooks", "outgoing"),
+      value="json", card=_card("connections", "settings-webhooks"),
       why="A new outgoing webhook shows its signing secret once, in Settings"),
     S("webhooks.outgoing", "Outgoing webhook", HOOKS + " > Outgoing", "creator", "confirm", "POST", "webhooks/{id}/update",
-      value="json", card=_card("webhooks", "outgoing")),
+      value="json", card=_card("connections", "settings-webhooks")),
     # Listening
     S("listening.destination", "Listening destination", "Strategy > Market > Listening", "owner", "confirm", "PUT",
       "listening/destinations/{id}", value="json", card="#/strategy/market/listening"),

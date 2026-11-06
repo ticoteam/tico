@@ -262,6 +262,8 @@ const settingsCanMakeTokens = () => S.me?.can_create_tokens ?? settingsIsAdmin()
 function pageSettings() {
   clearInterval(SETTINGS_TRANSITION_TIMER);
   if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { location.hash = SETTINGS_TAB === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools'; SETTINGS_TAB = 'general'; return; }
+  // A saved Webhooks or Triggers tab opens its former first view at the new Incoming webhooks home.
+  if (['webhooks', 'triggers'].includes(SETTINGS_TAB)) { location.replace(WH_INCOMING_ROUTE); return; }
   // A repeat visit to the page already on screen (a refresh, a same-route redraw) keeps it: rebuilding
   // it would snap back to the default group and drop whatever is half typed in a form.
   const built = $('#settings-tabs');
@@ -316,9 +318,9 @@ function pageSettings() {
       <section class="card" id="settings-tags-card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>`)}
     ${pane('connections', `<div id="settings-repos"><section class="card repos-card" id="set-repos">${skelRows(3, {card: true, dot: false})}</section></div>
-      <div id="settings-webhooks"><section class="card"><header><h2>Webhooks</h2><div class="theme-seg" id="settings-webhooks-view" role="radiogroup" aria-label="Webhooks">${WH_TABS.map(([k, wide, narrow]) =>
-        `<button type="button" role="radio" data-wh-tab="${k}" aria-checked="${k === WH.tab}">${narrow ? `<span class="sb-wide">${wide}</span><span class="sb-narrow">${narrow}</span>` : wide}</button>`).join('')}</div></header>
-        <div id="set-webhooks">${skelRows(2, {card: true, dot: false})}</div></section></div>
+      <div id="settings-webhooks"><section class="card"><header><h2>Webhooks</h2></header>
+        <p class="settings-card-line">Incoming webhooks start work here, outgoing webhooks send events to other services, and Tico Gateway can relay an incoming webhook.</p>
+        <p><a href="#/automations/webhooks">Open incoming webhooks</a> · <a href="#/tools/webhooks">Open outgoing webhooks</a> · <a href="#/settings/webhooks/gateway">Open Tico Gateway</a></p></section></div>
       ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
       <section class="card" id="settings-tools-link"><header><h2>Tools &amp; Credentials</h2></header>
         <p class="settings-card-line">The tools bots use and the credentials they sign in with have their own page. <a href="#/tools">Open Tools &amp; Credentials</a></p></section>`)}
@@ -410,6 +412,7 @@ function settingsShow(tab, {group: picked = false} = {}) {
   const place = settingsPlace(tab);
   if (tab === 'runs') SETTINGS_HISTORY_VIEW = 'runs';   // the Runs page moved here
   if (!SETTINGS_REVEAL && place.reveal) SETTINGS_REVEAL = place.reveal;
+  if (SETTINGS_REVEAL === '#wh-gateway') WH_OPEN_GATEWAY = true;
   const home = !picked && SETTINGS_REVEAL ? $(SETTINGS_REVEAL)?.closest('[data-settings-group]') : null;
   const group = home?.dataset.settingsGroup || place.group;
   // Group names come from the navigation; recheck access in case this person's role just changed. A card drawn
@@ -457,7 +460,7 @@ function settingsShow(tab, {group: picked = false} = {}) {
   if (on('bots')) load(renderSettingsStrategyBot());
   if (on('limits')) load(SETTINGS_DATA.loaded && renderSettingsSpendLimits(), renderTeamBudgets(), SETTINGS_DATA.loaded && renderSettingsTurnLevels(), $('#settings-billing') && renderSettingsBilling());
   if (on('tasks')) load(roadmapSettingsMount(), askFilterSettingsLoad());
-  if (on('connections')) load(!formBusy($('#settings-repos')) && renderSettingsRepos(), !formBusy($('#settings-webhooks')) && renderSettingsWebhooks());
+  if (on('connections')) load(!formBusy($('#settings-repos')) && renderSettingsRepos());
   if (on('policies')) {
     const privacy = $('#settings-privacy'), storage = $('#settings-storage'), company = $('#settings-company');
     load(privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(), company && settingsIsAdmin() && renderSettingsCompany(),

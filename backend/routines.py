@@ -52,7 +52,7 @@ def require_trigger(c, event):
     """A routine may listen for a webhook only while its trigger exists (backend/triggers.py)."""
     from . import triggers
     if event and event.startswith(triggers.EVENT) and not triggers.exists(c, event):
-        raise ValueError(f"No trigger {event[len(triggers.EVENT):]}; add it in Settings > Webhooks first")
+        raise ValueError(f"No trigger {event[len(triggers.EVENT):]}; add it in Automations › Incoming webhooks first")
 
 
 def _moved(c, sid):

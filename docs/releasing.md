@@ -568,7 +568,7 @@ leaves the other installs untouched, and the bot asks the owner what to do next.
 
 Setup, once:
 
-- **Write on the repository.** An owner or admin ticks the repository in Settings → Repositories and gives the bot
+- **Write on the repository.** An owner or admin ticks the repository in Settings → General → Repositories and gives the bot
   write on it: `hub bot repos <slug> --chosen <owner>/<repo>:write` (list the bot's other chosen repositories in the
   same command; `--chosen` replaces them), or the same in the bot's settings ([Repositories](repositories.md)).
 - **An update key per install.** The owner of each install, the team's own included, runs

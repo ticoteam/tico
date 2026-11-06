@@ -610,12 +610,13 @@ def install(app, store, auth, settings):
             mine = may(c, auth, who, e, target)
             if e.kind == "person":
                 why = (e.why or f"{e.name} is changed only by the person themselves") + ": "
+                where = " in Settings" if e.card.startswith("#/settings") else ""   # webhooks live on Automations, Tools
                 if mine:
-                    why += "you change it yourself in Settings, at " + link
+                    why += f"you change it yourself{where}, at " + link
                 elif e.who == "self":
-                    why += "each person changes it for themselves in Settings, so no one can be asked for it"
+                    why += f"each person changes it for themselves{where}, so no one can be asked for it"
                 else:
-                    why += (WHO[e.who] + " changes it in Settings, so no card can carry it; ask one of them to open "
+                    why += (WHO[e.who] + f" changes it{where}, so no card can carry it; ask one of them to open "
                             + link)
                 raise Problem("person_only", why, 422, extra={"link": link, "who_may": who_text(e)})
             if mine:

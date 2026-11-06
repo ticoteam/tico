@@ -149,7 +149,8 @@ function providersDefaultsHTML(view, owner) {
   </form>`;
 }
 // One line: whether the Gateway is connected, this month's spend against its cap, and the switch. Below it what
-// GET /v2/gateway adds for owners and admins (settings-gateway.js), and the key and address behind Advanced (read-only for anyone but the owner).
+// GET /v2/gateway adds for owners and admins (settings-gateway.js), the key and address behind Advanced (read-only for
+// anyone but the owner), and Webhooks: incoming webhooks' Gateway addresses, drawn when opened (settings-webhooks.js).
 function providersGatewayCardHTML(view, gateway, owner, overview) {
   const [tone, line] = gateway ? gatewayStatusLine(gateway) : ['', ''];
   return `<div class="models-gw models-gw-head">
@@ -158,7 +159,8 @@ function providersGatewayCardHTML(view, gateway, owner, overview) {
         aria-label="Use Tico Gateway as fallback"><span>Use as fallback</span></label>
       ${helpBubble('Used when a computer has no subscription, or a plan runs out.')}</div>
     ${gatewayOverviewHTML(overview)}
-    ${gateway ? `<details class="models-adv" data-gateway-advanced><summary>Advanced</summary>${gatewayHTML(gateway, owner)}</details>` : ''}`;
+    ${gateway ? `<details class="models-adv" data-gateway-advanced><summary>Advanced</summary>${gatewayHTML(gateway, owner)}</details>` : ''}
+    <details class="models-adv" data-gateway-webhooks><summary>Webhooks</summary><div id="wh-gateway"></div></details>`;
 }
 // The Gateway toggle saves the models preset at once, with the providers and model as they are.
 function providersToggleWire() {
@@ -189,8 +191,11 @@ async function renderSettingsProviders(gatewaySaved = false) {
       settingsIsAdmin() ? get('/v2/gateway', {fresh: true}).catch(() => null) : null]);
     if (!el.isConnected) return;
     if (drawCard) {
-      const folds = ['advanced', 'services-row'], open = folds.filter(k => card.querySelector(`[data-gateway-${k}]`)?.open);
+      const folds = ['advanced', 'services-row', 'webhooks'], open = folds.filter(k => card.querySelector(`[data-gateway-${k}]`)?.open);
       card.innerHTML = providersGatewayCardHTML(view, gateway, owner, overview);
+      const hooks = card.querySelector('[data-gateway-webhooks]');
+      hooks.addEventListener('toggle', () => { if (hooks.open) void whMount('gateway'); });
+      if (WH_OPEN_GATEWAY) { WH_OPEN_GATEWAY = false; open.push('webhooks'); }   // a link to the Webhooks fold (settingsShow)
       for (const k of open) { const fold = card.querySelector(`[data-gateway-${k}]`); if (fold) fold.open = true; }
       card.closest('section').dataset.drawn = '';
       if (gateway) gatewayWire(gateway);

@@ -1,4 +1,4 @@
-/* ui/app/settings-repositories.js — Settings > Repositories, and a bot's Repositories in its settings
+/* ui/app/settings-repositories.js — Settings > General › Repositories, and a bot's Repositories in its settings
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -83,6 +83,7 @@ async function renderSettingsRepos(fresh) {
   try { REPOS = fresh || await get('/v2/repositories'); }
   catch (error) { host.innerHTML = `<div class="err">${esc(error.message)}</div>`; return; }
   if (!$('#set-repos')) return;
+  host.dataset.drawn = '';   // a link to the card (SETTINGS_REPOS_CARD) scrolls once it is filled in
   const admin = settingsIsAdmin(), dis = admin ? '' : ` disabled title="${REPO_LOCKED}"`, owner = S.me?.role === 'owner';
   if (!REPOS.github_connected) {
     host.innerHTML = `<header><h2>Repositories</h2></header><p class="repos-line">The GitHub App is not connected; bots use their computers' own GitHub sign-in.${owner ? ` <a href="#/tools/github" data-repos-connect>Connect GitHub</a>`

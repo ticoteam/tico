@@ -294,7 +294,7 @@ story, with the CLI, is on [Webhooks](webhooks.md).
 ## Outgoing webhooks
 
 Tico posts an event to an address you choose when something happens: a task is made, finishes or is blocked; an approval is
-asked or decided; a bot is held or fails; a release is published; and more. Add them in Settings → Webhooks → Outgoing, or use
+asked or decided; a bot is held or fails; a release is published; and more. Add them in Tools → Add tool → Outgoing webhook, or use
 the API, `hub webhook` or the `hub_webhook_*` tools ([Webhooks](webhooks.md#outgoing)).
 
 ```

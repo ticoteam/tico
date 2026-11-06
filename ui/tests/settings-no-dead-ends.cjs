@@ -19,12 +19,13 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 // Names the router or settingsShow takes besides the tabs and their aliases (ui/app/router.js, settingsShow).
-const SPECIAL = ['models', 'providers', 'tags', 'types', 'triggers', 'runs', 'roadmap', 'subscriptions',
+const SPECIAL = ['models', 'providers', 'tags', 'types', 'runs', 'roadmap', 'subscriptions',
   'storage', 'team', 'company', 'assistant', 'privacy'];
 // Old names that leave Settings: Listening moved to Strategy › Market (ui/app/redesign.js; redesign-shell.cjs checks it),
 // the old Strategy Bot address opens its card in Bots, and Inboxes'
 // old addresses redirect to Tools (ui/app/tools.js toolsRoute; checked below).
-const MOVED = ['listening', 'inboxes', 'inbox', 'google', 'mailboxes', 'inbound', 'company-inbox', 'email-phone', 'mail'];
+const MOVED = ['listening', 'inboxes', 'inbox', 'google', 'mailboxes', 'inbound', 'company-inbox', 'email-phone', 'mail',
+  'triggers', 'webhooks'];
 // Every #/settings/<name> address written in the UI's sources.
 function settingsLinks() {
   const ui = path.join(__dirname, '..');
