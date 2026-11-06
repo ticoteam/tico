@@ -6035,7 +6035,7 @@ def task_ask_recipient(conn, actor, row, ask):
 @private_task_write
 def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=None, answer_to=None, answer_text=None,
                  public=False, approval_id=None, way=None, defer_for=None, delegate=None, reach=None,
-                 people_notified=False):
+                 people_notified=False, to=None):
     """A comment on a task: one message in the task's thread, tagged with the task, from whoever wrote it. It goes as
     any post there does (threads.post): to whom it addresses (its @mentions, the author it replies to) and to the
     task's followers, each by its way and their level (threads.plan). `way` (steer, queue, or defer until `defer_for`)
@@ -6044,7 +6044,10 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     `people_notified`: a Defer never that binds the bots only (a reader who may not wake them: people are notified as
     their level says). `delegate`: whether a person's comment delegates the task to the bots it wakes (default: `wake`;
     only one who may direct the task does). `reach`: the bot's Identity when this is its own write through the API, so
-    whoever the comment reaches is checked against the bot's reach as a thread post is (reach.check_thread)."""
+    whoever the comment reaches is checked against the bot's reach as a thread post is (reach.check_thread). `to`: the
+    bot it is written to besides (a relayed answer, strategy_merge); a reviewer's verdict on a task a bot filed goes to
+    that bot, whose task the result returns to (say, _deliver_subtask_result). Both keep their routing until question
+    tasks (step 6)."""
     _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
@@ -6075,7 +6078,7 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         # The answer goes back to the bot that asked, which may be neither the owner nor the requester.
         asker = (message(conn, answer_to) or {}).get("sender_id")
         target = (asker if is_bot(asker) and asker != actor and _actor_exists(conn, asker) and bot_reads_task(conn, asker, row)
-                  else None)
+                  else answer_target(conn, actor, row))
         msg = answer(conn, actor, answer_to, text, comment_refs=refs, comment_target=target or actor,
                      classify_text=answer_text)
     else:
@@ -6086,8 +6089,12 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         # A system line is addressed to the task's owner bot, and so is a comment on a task with no thread of its own
         # (filed into a shared chat, which has no task followers): everyone else is reached as in any thread.
         owner = row["owner_id"]
-        to = owner if ((actor == KEEPER or not task_followers.thread_id(conn, row)) and is_bot(owner) and owner != actor
-                       and task_private_readable(conn, owner, row)) else None
+        to = to or (owner if ((actor == KEEPER or not task_followers.thread_id(conn, row)) and is_bot(owner)
+                              and owner != actor and task_private_readable(conn, owner, row)) else None)
+        if to is None and is_bot(actor):
+            to = _verdict_to(conn, actor, row, text, refs)
+        if to == actor or (to and not task_private_readable(conn, to, row)):
+            to = None
         if reach is not None:
             from . import reach as R
             R.check_thread(conn, reach, conv["id"], text)
@@ -6121,6 +6128,26 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         from . import ask_ingest
         ask_ingest.on_reply(conn, actor, task_id, text, text_sources=refs.get("body_sources", []))
     return msg
+
+
+def _verdict_to(conn, actor, row, text, refs):
+    """The bot a reviewer's verdict comment goes to: the bot that filed the review under its own task, so the result
+    returns there once (say, _deliver_subtask_result). None for any other comment."""
+    from .wake_rules import VERDICT_FIELDS
+    requester = row.get("requester_id")
+    if (actor != row["owner_id"] or not is_bot(requester) or requester == actor or refs.get("quiet")
+            or not VERDICT_FIELDS.search(str(text or ""))):
+        return None
+    parent = _subtask_result_parent(conn, row)
+    return requester if parent and parent["owner_id"] == requester else None
+
+
+def answer_target(conn, actor, row):
+    """Whom an answer to a person's question goes to (their routing until question tasks, step 6): the first bot among
+    the task's owner, requester and origin, else the first person among them, else no one."""
+    others = [a for a in dict.fromkeys([row["owner_id"], row["requester_id"], task_origin(conn, row)])
+              if a and a not in (actor, KEEPER) and task_private_readable(conn, a, row)]
+    return next((a for a in others if is_bot(a)), None) or (others[0] if others else None)
 
 
 def comment_way_refs(way, defer_for=None):

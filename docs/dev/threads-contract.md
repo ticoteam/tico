@@ -382,7 +382,10 @@ post's transaction, plus outside destinations linked to the thread (`slack:<chan
   `queue` (notified). Defer never notifies no person follower and defers every bot follower, but reaches the addressed
   queued; when it is only the default for a reader off the task (`refs.send_people`), it binds the bots alone and people
   are notified as their level says. A deferred `to_actor` the list leaves out (a task's owner bot, on a task filed into
-  a shared chat) is deferred all the same, with its deadline. On a task's own thread the first bot given a turn is the message's `to_actor` (its job, ride-along and
+  a shared chat) is deferred all the same, with its deadline, and the bot a message is written to (a DM's, a Home's)
+  takes a Defer never as a Defer: only the other bots it addresses are queued. Until question tasks (step 6) an answer
+  to a person's question goes to the task's first bot (owner, requester, origin), a reviewer's verdict to the bot that
+  filed the review, and the Strategy Bot's relayed answer to the bot that asked. On a task's own thread the first bot given a turn is the message's `to_actor` (its job, ride-along and
   `task_delegations` key off it); every other woken bot gets a carrier (§4.4).
 - `GET /api/v2/threads/{thread_id}/reach` (`threads.reaches`) answers the same list for a message not yet sent, given
   `text`, `delivery`, `defer_for` and `in_reply_to`, writing nothing.

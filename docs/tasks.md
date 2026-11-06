@@ -931,6 +931,9 @@ bot that filed a task is not woken by a comment unless it follows the task or is
 the way it was sent (Conversation, below): a live bot follower is steered, queued or deferred, a live person
 follower is notified, and a follower at `mentions` or `muted` gets only a comment that @mentions them or replies to
 them. **Defer never** reaches no follower, but still reaches whom it @mentions, queued.
+Until questions become tasks of their own, three replies keep their old routing: an answer to a person's question
+goes to the task's first bot (owner, requester, origin), a reviewer's verdict goes to the bot that filed the review
+(the result returns once to that bot's task), and the Strategy Bot's relayed answer goes to the bot that asked.
 
 A comment with no way named is a **Steer** (the API, CLI and MCP alike), or a Defer with no deadline from someone not on
 the task (not its owner, requester or a mover), so a reader never spends a bot's turns on a task that is not theirs;

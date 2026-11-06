@@ -1054,6 +1054,10 @@ def _refs_of(message):
 def record(c, message, conv):
     """After the insert: revision history, mentions, the deliveries beyond the primary one, wakes, follows and the loop
     guard. A carrier records nothing (it is how a delivery starts a run)."""
+    return _atomic(c, "threads_record", lambda: _record(c, message, conv))
+
+
+def _record(c, message, conv):
     refs = _refs_of(message)
     if refs.get("carries"):
         return {}
@@ -1298,9 +1302,9 @@ def plan(c, thread, author, *, found=(), in_reply_to=None, way=None, defer_for=N
 
     Modes by way (None is Steer): a bot gets `steer`, `queue` or `defer` (until `defer_for`; a task's thread defaults
     to 24h, a chat to never), a person `queue` (notified). Defer never notifies no follower and defers every follower
-    bot, but still reaches the addressed, queued. `people_notified` (refs.send_people): the Defer never was the
-    default for a reader who may not wake the task's bots, so it binds the bots only and people are notified as their
-    level says. Asks and answers on a task reach no follower (they keep their own routing until question tasks).
+    bot, but still reaches the addressed, queued (the bot it is written to defers: `deliver`). `people_notified`
+    (refs.send_people): the Defer never was the default for a reader who may not wake the task's bots, so it binds the
+    bots only and people are notified as their level says. Asks and answers on a task reach no follower (they keep their own routing until question tasks).
     Every recipient but the @mentioned (already checked) must still read the thread, and a private task."""
     root = root or root_of(c, thread)
     audience = audience_of(root)
@@ -1345,14 +1349,19 @@ def plan(c, thread, author, *, found=(), in_reply_to=None, way=None, defer_for=N
             mode = "digest"
         elif not actor.startswith("bot:"):
             mode = None if never and reason == "follower" and not people_notified else "queue"
-        elif never and reason != "follower":
-            mode = "queue"
+        elif never and reason not in ("follower", "dm", "home"):
+            mode = "queue"          # a DM's or a Home's own bot takes the Defer never as a Defer
         else:
             mode = way or "steer"
         if mode:
             out.append({"actor": actor, "reason": reason, "mode": mode,
                         "defer_for": defer_for if mode == "defer" else None})
     return out
+
+
+def plan_defer_for(root, defer_for):
+    """A Defer's deadline: the one it named, else a task's thread 24h and a chat never (`plan`)."""
+    return defer_for or ("24h" if audience_of(root) == "task" else "never")
 
 
 def _follower_rows(c, thread_id):
@@ -1373,9 +1382,10 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
     # starts what it should, hubdb.notice).
     replay = _is_backfill(refs) or (posting is None and (message.get("kind") == "notice" or author == H.KEEPER))
     way, defer_for = message_way(refs)
+    system = _is_backfill(refs) or system_line(message, posting)
     reached = plan(c, thread, author, found=in_audience, in_reply_to=message.get("in_reply_to"), way=way,
                    defer_for=defer_for, kind=message.get("kind"), primary=primary,
-                   system=_is_backfill(refs) or system_line(message, posting), root=root, exclude=message["id"],
+                   system=system, root=root, exclude=message["id"],
                    people_notified=bool(refs.get("send_people")))
     seq = (message.get("seq") or 1) - 1
     out = []
@@ -1385,6 +1395,10 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
         # takes the way, and a Defer keeps its deadline (a task's comment defaults to 24h, as on its own thread).
         entry = {"actor": primary, "reason": "addressed", "mode": "defer",
                  "defer_for": defer_for or ("24h" if refs.get("task") else "never")}
+    elif entry and way == "defer" and primary.startswith("bot:") and entry["mode"] == "queue":
+        # The bot it is written to (a DM's, a Home's) takes the Defer, Defer never too: only the others it addresses
+        # are queued past a Defer never.
+        entry = {**entry, "mode": "defer", "defer_for": entry["defer_for"] or plan_defer_for(root, defer_for)}
     if entry:
         reason = entry["reason"]
         if primary.startswith("human:") and reason in ("follower", "digest"):
@@ -1405,7 +1419,9 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
             sent = _deliver_person(c, thread, root, message, primary, reason, replay, warnings)
             if sent:
                 out.append(sent)
-        elif primary.startswith("human:"):
+        elif primary.startswith("human:") and not system:
+            # A person written to keeps the thread (a bot's DM with them: its read mark and unread); a system line
+            # makes no row.
             _follow(c, thread["id"], primary, FOLLOWS.get(reason, "joined"), seq, root)
         elif reason in FOLLOWS:
             _follow(c, thread["id"], primary, FOLLOWS[reason], seq, root)
@@ -2165,9 +2181,27 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
     thread = thread_row(c, thread_id) if thread_id else start
     on_task = H.message_task_id({"refs": refs}, thread)
     with H.refusal_task(on_task):
-        return _post(c, principal, thread_id, body, kind=kind, refs=refs, parent_message_id=parent_message_id,
-                     to_actor=to_actor, via=via, origin=origin, checked=checked, attachments=attachments,
-                     start=start, in_reply_to=in_reply_to, reach=reach)
+        return _atomic(c, "threads_post", lambda: _post(
+            c, principal, thread_id, body, kind=kind, refs=refs, parent_message_id=parent_message_id, to_actor=to_actor,
+            via=via, origin=origin, checked=checked, attachments=attachments, start=start, in_reply_to=in_reply_to,
+            reach=reach))
+
+
+def _atomic(c, name, write):
+    """`write()` inside the caller's transaction, or, on a connection with none (a script, a legacy writer on a raw
+    connection), inside one of its own that it commits: a read snapshot taken on the way (live_privacy.sources begins
+    one when none is open) must never leave the connection in an open transaction that its later writes vanish into."""
+    if c.in_transaction:
+        return write()
+    c.execute(f"SAVEPOINT {name}")
+    try:
+        out = write()
+    except BaseException:
+        c.execute(f"ROLLBACK TO {name}")
+        c.execute(f"RELEASE {name}")
+        raise
+    c.execute(f"RELEASE {name}")
+    return out
 
 
 def _post(c, principal, thread_id, body, *, kind, refs, parent_message_id, to_actor, via, origin, checked,
