@@ -507,8 +507,8 @@ def _move_wait(conn, task_id, on):
         return
     said = str(row.get("note") or "").strip()
     if H.is_human(on):
-        name = H.person_name(conn, on)
-        if said.startswith(H.BLOCKED_ON.format(name=name, ask="")):
+        # The note a wait set: "Blocked on <name>: <ask>", the name as it was then.
+        if said.startswith("Blocked on ") and ": " in said:
             said = said.split(": ", 1)[1]
         asked = any(a["recipient_id"] == on for a in H.open_task_asks(conn, row))
         if H.is_bot(row["owner_id"]) and not asked and not H._waits_on(conn, row, on):

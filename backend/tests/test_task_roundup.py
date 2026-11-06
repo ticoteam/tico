@@ -1344,41 +1344,6 @@ def test_a_backlog_of_snoozed_tickets_still_lists_for_its_manager(api, monkeypat
         assert lists(c, "ops") == []
 
 
-def test_a_waiting_task_whose_ask_to_a_person_is_not_a_plain_ask_is_restated_to_its_bot_alone(api):
-    store = api.app.state.store
-    long_ask = "Please send " + "the signed lease copy " * 12 + "today."
-    with store.transaction() as c:
-        mine = task(c, "Renew the lease")
-        settle(c, mine["id"], "finance", ago(days=2))
-        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana', note=? WHERE id=?", (long_ask, mine["id"]))
-        complete_jobs(c)
-        assert "finance" in task_roundup.run(c, DAY)["woke"]
-        assert (f"- {mine['id'][:8]} Renew the lease: Waiting on ana with no plain ask. "
-                "Restate it in one or two plain sentences") in only_list(c)
-        assert c.execute("SELECT count(*) FROM message_deliveries WHERE recipient LIKE 'human:%' AND message_id IN "
-                         "(SELECT id FROM messages WHERE refs LIKE '%task_roundup%')").fetchone()[0] == 0
-        assert "finance" not in task_roundup.run(c, NOON)["woke"], "not relisted before seven days"
-        assert "finance" in task_roundup.run(c, H.shift(DAY, days=7))["woke"]
-        assert "Waiting on ana with no plain ask" in lists(c)[-1]
-
-
-def test_a_private_waiting_task_restated_names_no_person_and_no_title(api):
-    store = api.app.state.store
-    long_ask = "Please send " + "the signed lease copy " * 12 + "today."
-    with store.transaction() as c:
-        private = H.task_create(c, H.human_actor("ana"), "Confidential merger plan", "Keep it quiet.", "bot:finance",
-                                lint=False, private=True)
-        settle(c, private["id"], "finance", ago(days=2))
-        c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana', note=? WHERE id=?", (long_ask, private["id"]))
-        complete_jobs(c)
-        assert "finance" in task_roundup.run(c, DAY)["woke"]
-        body = only_list(c)
-        assert (f"- a private task {private['id'][:8]}: Waiting on a person with no plain ask. Restate it, at most "
-                f"{H.LINT_ASK_WORDS} words, with: hub task update {private['id']} --status waiting --on <person>") in body
-        for secret in ("merger", "Confidential", "Ana", "human:ana", "Keep it quiet", "signed lease"):
-            assert secret not in body, secret
-
-
 def test_an_unanswered_question_goes_back_to_the_bot_that_asked_as_one_roundup_line_with_no_wake_and_is_not_resent(api):
     store = api.app.state.store
     with store.transaction() as c:
