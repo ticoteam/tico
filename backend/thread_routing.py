@@ -244,8 +244,16 @@ def drain(store, primary=None):
 
 
 def _worker(store):
+    # One run of Thread routing per pass, in Settings > Routines and on its Automations row; the tick starts a pass only
+    # when a message waits, so a quiet pass is rare and folds into the last row.
+    from . import system_routines as SR
     try:
-        drain(store)
+        with SR.recording(store, "thread_routing") as run:
+            woken = drain(store)
+            run.did(SR.count_words(len(woken), "bot woken", "bots woken") if woken else "Nobody to wake",
+                    quiet=not woken)
+    except Exception as exc:  # noqa: BLE001 - recorded as the run's failure; the next kick tries again
+        LOG.warning("Thread routing pass failed: %s", type(exc).__name__)
     finally:
         _running.release()
 

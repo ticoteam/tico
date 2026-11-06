@@ -444,6 +444,9 @@ class Alerts:
                             enqueue(c, ident, "bot_stuck", task["id"], "stuck:" + task["id"] + ":" + task["updated_at"])
 
     def run(self):
+        # One pass is one run of Personal alerts (Settings > Routines, Automations); a pass with nothing to send folds.
+        from . import system_routines as SR
+        run = SR.Run("personal_alerts").did("Nothing to send", quiet=True)
         try:
             self.collect()
             with self.store.read() as c:
@@ -452,9 +455,13 @@ class Alerts:
                                               (H.now(),))]
             for ident in ids:
                 self.dispatch(ident)
-        except Exception:
+            if ids:
+                run.did(SR.count_words(len(ids), "alert tried", "alerts tried"))
+        except Exception as exc:
+            run.error = SR.failure_words(exc)
             logging.getLogger("tico.alerts").exception("Personal alert worker failed")
         finally:
+            SR.write(self.store, run)
             self.worker_lock.release()
 
     def tick(self):

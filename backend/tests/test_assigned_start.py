@@ -785,3 +785,23 @@ def test_a_bot_whose_only_candidate_is_waiting_has_no_runs_read(api, monkeypatch
         found = [row['id'] for row, *_ in A.unstarted(c, H.now())]
     assert found == ['fleet-t-00001']
     assert read == [['fleet-01']]
+
+
+def test_only_a_new_changed_or_cleared_hold_is_a_change_not_its_refresh(api, clock):
+    # Queue check (backend/scheduler.py) counts these: a refresh of the same hold every REFRESH_SECONDS is a quiet run.
+    task_bot(api, lanes=True)
+    new_task(api, 'Held task')
+    set_cap(api, 0)
+    store = api.app.state.store
+
+    def changes():
+        with store.transaction() as c:
+            return [queue_refusals.apply(c, change) for change in queue_refusals.pending(c, store.settings, H.now(), [])]
+    assert changes() == [True], 'a new hold'
+    assert changes() == [], 'nothing to refresh yet'
+    clock[0] = H.shift(clock[0], seconds=queue_refusals.REFRESH_SECONDS + 1)
+    with store.transaction() as c:
+        c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
+    assert changes() == [False], 'the same hold, refreshed'
+    set_cap(api, 1)
+    assert changes() == [True], 'cleared'
