@@ -86,9 +86,10 @@ belongs to one company, so it can have the helper.
 ## When a machine can't start
 
 When a bot's cloud machine can't start, the problem replaces the machine's state. It shows on the bot's page under
-**Computer**, on the work queued for the bot, and on the Health page. General's Health line opens that page, and its
-address still works. Health names each active bot whose machine has a problem, whether or not work is queued, and
-lists queued work that is stuck. *code* is the reason HQ or the server gives.
+**Computer**, on the work queued for the bot, and on the Health page (in Settings; its old address still opens it).
+When the bot has queued work and its machine is not connected to this server, Health lists that work as stuck if the
+machine has a problem, or if the work has waited over 15 minutes for the machine to start. A bot with no queued work
+is not named there. *code* is the reason HQ or the server gives.
 
 | Shown as | Means |
 |---|---|
