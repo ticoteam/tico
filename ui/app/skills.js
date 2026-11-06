@@ -157,12 +157,12 @@ function skillsElsewhereHTML(rows) {
 }
 // A table's whole row opens its first link.
 function skillsRowLinks(box) {
-  const tbody = box.querySelector('tbody'); if (!tbody) return;
-  tbody.onclick = ev => {
+  // Every table's body: Directory has Suggestions above its own (rows without a link do nothing).
+  box.querySelectorAll('tbody').forEach(tbody => { tbody.onclick = ev => {
     if (ev.target.closest('a, button, input, select')) return;
     const href = ev.target.closest('tr')?.querySelector('a[href]')?.getAttribute('href');
     if (href) location.hash = href;
-  };
+  }; });
 }
 
 async function skillsProposals(body, run) {
