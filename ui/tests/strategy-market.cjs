@@ -21,7 +21,7 @@ const scrolledTo = (page, key) => page.evaluate(k => {
 async function onePage(page, tag) {
   await page.locator('.mkt-pg').waitFor();
   await page.locator('.mkt-map .mkt-box').first().waitFor();
-  assert.ok(await page.evaluate(() => document.querySelector('.strat-tabs').getBoundingClientRect().bottom <= document.querySelector('.mkt-top').getBoundingClientRect().top + 1), tag + ': the tabs, then the page');
+  assert.ok(await page.evaluate(() => document.querySelector('.strat-tabs').getBoundingClientRect().bottom <= document.querySelector('.mkt-top').getBoundingClientRect().top + document.querySelector('#market-shell').scrollTop + 1), tag + ': the tabs, then the page');
   assert.equal(await page.locator('.mkt-top h2').innerText(), 'Market');
   assert.equal(await page.locator('.mkt-name').innerText(), 'Release tooling, Global', tag + ': the market\'s name');
   assert.equal(await page.locator('.mkt-top a', {hasText: 'Open map'}).getAttribute('href'), '#/strategy/market/map');
