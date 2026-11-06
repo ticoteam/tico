@@ -1,9 +1,11 @@
-// A fake of the Mailboxes routes (backend/mailboxes.py) for ui/tests/mailboxes.cjs and ui/tests/mailbox.cjs.
+// A fake of the Google mailboxes routes (backend/mailboxes.py) for the inbox pages under Tools (ui/tests/inboxes.cjs,
+// ui/tests/mailbox.cjs).
 // answer(path, method, body) gives the JSON a route answers ({status, body} for a refusal), or undefined for any other
 // path. `fake.state` holds the mailboxes, their accesses and routines; every write is kept in `fake.writes` as
 // {method, path, body}. `fake.admin` is whether the caller is an admin; `fake.me` the caller's person id.
 const box = (id, address, over = {}) => ({id, address, provider: 'google_workspace', kind: 'personal', person_id: null,
-  person_name: '', connection: 'workspace', status: 'active', state: 'connected', level: 'none', routines: [], ...over});
+  person_name: '', connection: 'workspace', status: 'active', state: 'connected', level: 'none', routines: [],
+  used_by: {people: 0, bots: 0, names: []}, synced_at: null, newest_epoch: null, sync: '', sync_error: '', ...over});
 exports.box = box;
 
 exports.mailboxesFake = ({admin = true, me = 'ana'} = {}) => {
@@ -82,8 +84,10 @@ exports.mailboxesFake = ({admin = true, me = 'ana'} = {}) => {
   return fake;
 };
 
-// Opens `hash` (Settings > Mailboxes, or one mailbox's page) on a fresh page over `fake` and a google-fake hub `google`,
-// signed in as fake.me: an owner when fake.admin, a member otherwise. Waits for `ready`.
+// Opens `hash` (Tools, one inbox's page or Tools › Settings) on a fresh page over `fake` and a google-fake
+// hub `google`, signed in as fake.me: an owner when fake.admin, a member otherwise. Waits for `ready`. The other kinds'
+// routes answer empty unless `extra(path, method, body, url)` answers them (undefined passes); `mail` maps a mailbox
+// address to its GET /v2/mail/messages list; `skip` starts with first run skipped; `theme` sets data-theme.
 const fs = require('node:fs');
 const {html, uiFile} = require('./page.cjs');
 const {unrouted} = require('./routes.cjs');
@@ -100,10 +104,32 @@ const SHELL = {
   '/api/v2/models': {models: [], harnesses: []},
   '/api/v2/me/tokens': {tokens: []},
 };
-exports.open = async (browser, fake, google, {hash = '#/settings/mailboxes', ready, width = 1440, automations = {}} = {}) => {
-  const page = await browser.newPage({viewport: {width, height: 900}, serviceWorkers: 'block'});
+const EMPTY = {
+  '/api/v2/inbound/inboxes': () => ({inboxes: [], next: null, configured: true, last_synced_at: null, error: '', gaps: []}),
+  '/api/v2/inbound/phone-requests': () => ({phone_requests: [], next: null}),
+  '/api/v2/inbound/messages': () => ({messages: [], next: null}),
+  '/api/v2/postal/addresses': () => ({addresses: [], orders: [], prices: {}}),
+  '/api/v2/postal/items': () => ({items: [], next: null}),
+  '/api/v2/postal/intake': () => ({intake: null}),
+  '/api/v2/automations': () => ({automations: []}),
+  '/api/v2/tool-index': () => ({rows: [], counts: {}}),
+};
+// A TICO_SHOTS screenshot once the route's fade has ended, in the theme its name says ('' keeps the page's own).
+exports.shot = async (page, file, theme = '') => {
+  if (!process.env.TICO_SHOTS) return;
+  if (theme) await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), theme);
+  await page.evaluate(() => Promise.all(document.getAnimations()
+    .filter(a => a.effect?.getComputedTiming().endTime !== Infinity).map(a => a.finished.catch(() => {}))));
+  await page.screenshot({path: `${process.env.TICO_SHOTS}/${file}`, fullPage: true, animations: 'disabled'});
+};
+exports.open = async (browser, fake, google, {hash = '#/tools', ready, width = 1440, height = 900, automations = {},
+  extra = () => undefined, mail = {}, skip = false, theme = ''} = {}) => {
+  const page = await browser.newPage({viewport: {width, height}, serviceWorkers: 'block'});
   const seen = {errors: []};
   page.on('pageerror', error => seen.errors.push(error.message));
+  await page.addInitScript(skip => {
+    try { if (skip) localStorage.setItem('tico.inboxes.skip', '1'); } catch { /* storage off */ }
+  }, skip);
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -113,6 +139,9 @@ exports.open = async (browser, fake, google, {hash = '#/settings/mailboxes', rea
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const raw = request.postData(), body = raw ? JSON.parse(raw) : null;
+    const more = extra(p, method, body, url);
+    if (more?.status && more.body) return json(more.body, more.status);
+    if (more !== undefined) return json(more);
     if (p === '/api/me') return json({id: fake.me, role: fake.admin ? 'owner' : 'human', name: fake.me, email: `${fake.me}@acme.example`,
       cloud: true, registered: true, config});
     if (p.startsWith('/api/v2/mailboxes')) {
@@ -131,11 +160,24 @@ exports.open = async (browser, fake, google, {hash = '#/settings/mailboxes', rea
       const answer = google.answer(p, request.url(), method, body);
       if (answer !== undefined) return json(answer);
     }
+    if (p === '/api/v2/org') return json({bots: [{id: 'support-bot', slug: 'support-bot', display_name: 'Support bot'}], humans: []});
+    if (p.endsWith('/sending-policy') || p.endsWith('/email-sending-policy')) {
+      if (method !== 'GET') fake.writes.push({method, path: p, body});
+      return json({company: {}, inbox: {}, bot: {}, legacy_automation_count: 0,
+        effective: {mode: 'ask_first', what: 'replies_only', to: 'anyone', daily_cap: 50, mailbox_daily_cap: 200,
+          company_daily_cap: 1000, pacing_seconds: 10, undo_seconds: 120, ask_new_address: true, ask_attachments: true,
+          ask_many_recipients: true, ask_legal_money: true, who_can_ok: 'bot_managers', approvers: [], sources: {mode: 'company'}}});
+    }
+    if (p === '/api/v2/email/sends') return json({sends: [], next_cursor: null});
+    if (p === '/api/v2/mail/messages') return json({messages: structuredClone(mail[url.searchParams.get('mailbox')] || [])});
+    if (method === 'GET' && p in EMPTY) return json(EMPTY[p]());
     if (p in SHELL) return json(SHELL[p]);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
   await page.goto(`https://tico-ui.test/${hash}`);
+  // Set once the document exists: an init script runs before <html> does.
+  if (theme) await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), theme);
   if (ready) await page.locator(ready).first().waitFor();
   return {page, seen};
 };

@@ -50,7 +50,7 @@ input.people-switch:checked{background:var(--ink)}input.people-switch:checked::b
 input.people-switch:checked::before{transform:translateX(14px)}
 input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-list-card>header{align-items:center}
-.people-head,.people-row{display:grid;grid-template-columns:minmax(0,1fr) 120px 100px 36px;align-items:center;gap:var(--s3)}
+.people-head,.people-row{display:grid;grid-template-columns:minmax(0,1fr) 120px 100px 72px 36px;align-items:center;gap:var(--s3)}
 .people-head{padding:0 0 6px;border-bottom:1px solid var(--line);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .people-list{list-style:none;margin:0;padding:0}
 .people-row{padding:10px 0;border-bottom:1px solid var(--line)}
@@ -63,8 +63,11 @@ input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-role{font-size:var(--t-base)}.people-role[data-role=owner]{font-weight:600}
 .people-cell-signin{display:flex;align-items:center;gap:8px}
 .people-switch-label{display:none;font-size:var(--t-base);color:var(--muted)}
+.people-cell-recorder{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}.people-cell-recorder.is-old{color:var(--wait-ink)}
+.people-recorder-label{display:none}
 .people-cell-more{position:relative;display:flex;justify-content:flex-end;gap:var(--s1)}
-.people-more{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.people-more{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;overflow:hidden;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.people-more .nav-icon{width:20px;height:20px;font-size:20px}
 .people-more:hover,.people-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
 .people-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:30;min-width:180px;padding:var(--s1);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 8px 24px rgba(0,0,0,.16)}
 .people-menu[hidden]{display:none}
@@ -91,7 +94,8 @@ button.people-danger{background:var(--fail);color:var(--surface)}
   .people-mode{align-self:stretch}.people-mode button{flex:1;padding:8px 6px}
   .people-add{flex-wrap:wrap}.people-add input[name=email]{flex:1 1 100%}
   .people-head{display:none}
-  .people-row{grid-template-columns:auto minmax(0,1fr) 36px;grid-template-areas:"who who more" "role signin signin";row-gap:6px}
+  .people-row{grid-template-columns:auto minmax(0,1fr) 36px;grid-template-areas:"who who more" "role signin signin" "recorder recorder recorder";row-gap:6px}
+  .people-cell-recorder{grid-area:recorder;padding-left:42px}.people-cell-recorder:empty{display:none}.people-recorder-label{display:inline}
   .people-who{grid-area:who}.people-cell-role{grid-area:role;padding-left:42px}.people-cell-signin{grid-area:signin}.people-cell-more{grid-area:more}
   .people-row.is-left{grid-template-areas:"who more"}
   .people-switch-label{display:inline}
@@ -819,10 +823,21 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .gw-table .num{text-align:right;font-variant-numeric:tabular-nums}
 .gw-table .gw-bots-word{display:none}
 .gw-table code{font-size:var(--t-sm);margin-right:4px;white-space:nowrap}
+.gw-status-cell{white-space:nowrap}
 .gw-status-cell[data-status=live]{color:var(--ok)}
 .gw-status-cell:not([data-status=live]){color:var(--muted)}
 .gw-table .gw-note{color:var(--muted)}
 .gw-table .gw-open{text-align:right;white-space:nowrap}
+.gw-table .gw-sub{display:block;color:var(--muted);font-size:var(--t-xs);font-weight:400}
+.gw-table .gw-word{display:none}
+.gw-table .gw-ctx{white-space:nowrap}
+.gw-same{margin:8px 0 12px;font-size:var(--t-sm)}
+.gw-table tr.gw-has-details td{border-bottom:0;padding-bottom:2px}
+.gw-table .gw-details-row td{padding-top:0}
+.gw-details{display:flex;flex-wrap:wrap;gap:2px 18px;margin:0;font-size:var(--t-xs)}
+.gw-details div{display:flex;gap:6px;min-width:0}
+.gw-details dt{color:var(--muted);white-space:nowrap}
+.gw-details dd{margin:0;min-width:0;overflow-wrap:anywhere}
 @media (max-width:640px){
   .gw-table thead{display:none}
   .gw-table tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 0;border-bottom:1px solid var(--line)}
@@ -832,6 +847,16 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
   .gw-table .gw-bots-word{display:inline}
   .gw-table .gw-model,.gw-table .gw-tools,.gw-table .gw-price,.gw-table .gw-note{grid-column:1 / -1;color:var(--muted)}
   .gw-table .gw-open{grid-column:2;grid-row:1}
+  .gw-table tbody tr.gw-has-details{border-bottom:0;padding-bottom:2px}
+  .gw-table tbody tr.gw-details-row{padding-top:0}
+  .gw-table .gw-details-row td{grid-column:1 / -1}
+  .gw-table .gw-word{display:inline}
+  .gw-table.gw-levels .gw-ctx{grid-column:2;grid-row:1;text-align:right;color:var(--muted)}
+  .gw-table.gw-levels .gw-model{grid-column:1;grid-row:2;color:var(--ink)}
+  .gw-table.gw-levels .gw-price{grid-column:2;grid-row:2;text-align:right;color:var(--ink)}
+  .gw-table.gw-levels .gw-fast{grid-column:1;grid-row:3}
+  .gw-table.gw-levels .gw-fast-price{grid-row:3}
+  .gw-table.gw-others .gw-price{grid-column:2;grid-row:1;text-align:right}
 }
 .settings-tier{display:grid;gap:8px;min-width:0}
 .settings-tier-row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;min-width:0}
@@ -856,7 +881,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .settings-denied{margin:0 0 12px;padding:8px 12px;border-radius:6px;background:var(--surface2);color:var(--ink)}
 .bot-editor-pending{margin:8px 0 0;font-size:var(--t-sm);color:var(--wait-ink)}
 .settings-confirm{max-width:min(440px,calc(100vw - 32px))}
-/* Settings > Mail (ui/app/settings-mail.js) */
+/* Letters in, in Settings > Inboxes (ui/app/inboxes-letters.js) */
 .pm-table{width:100%;border-collapse:collapse;font-size:var(--t-sm)}
 .pm-table td,.pm-table th{padding:7px 10px 7px 0;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
 .pm-table th{color:var(--muted);font-weight:500}
@@ -906,7 +931,8 @@ section.card>header .settings-head-act{margin-left:auto}
 .subs-owner{color:var(--muted)}
 .subs-count{color:var(--muted)}.subs-count .nav-icon{font-size:15px;vertical-align:-3px;margin-right:4px}
 .subs-usage{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}.subs-usage-w{min-width:2.4em}
-.subs-bar{display:inline-block;width:48px;height:4px;border-radius:2px;background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
+.subs-bar{display:inline-block;width:28px;height:4px;border-radius:2px;background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
+.subs-reset{white-space:nowrap}.subs-reset::before{content:'·';margin-right:6px;opacity:.6}
 .subs-bar b{display:block;height:100%;background:var(--ok)}.subs-bar.warn b{background:var(--wait)}.subs-bar.bad b{background:var(--fail)}
 .subs-more-cell{width:1%;text-align:right}
 .subs-more{min-height:var(--ctl-sm);padding:0 8px;line-height:1}
@@ -958,7 +984,7 @@ section.card>header .settings-head-act{margin-left:auto}
   .models-row select,.models-row input[type=text],.models-row input[type=url],.models-row input[type=password]{max-width:none}
   .subs-pick{max-width:160px}
 }
-/* Settings > Mailboxes' Connection card (ui/google-connect.js): Whole company or Each person signs in. */
+/* The Connection card in Inboxes > Settings > Email (ui/google-connect.js): Whole company or Each person signs in. */
 .google-card{display:grid;gap:10px;min-width:0;padding:0 0 16px}
 .google-card+.google-card{border-top:1px solid var(--line);padding-top:16px}
 .google-card h3{margin:0;font-size:var(--t-base);font-weight:600}
@@ -991,7 +1017,7 @@ section.card>header .settings-head-act{margin-left:auto}
 .google-may-always{flex:none;width:13px}
 .google-mode{align-self:flex-start;margin-bottom:12px;max-width:100%;flex-wrap:wrap}
 .google-connected{margin:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-/* Settings > Mailboxes (ui/app/mailboxes.js) and one mailbox (ui/app/mailbox.js). */
+/* Google mailboxes in Settings > Inboxes (ui/app/inboxes-email.js). */
 #mailboxes-top header{flex-wrap:wrap;gap:4px 12px}
 .mb-mine p{margin:0 0 6px;overflow-wrap:anywhere}
 .mb-form{display:grid;gap:8px;min-width:0;margin-bottom:12px}

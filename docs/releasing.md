@@ -37,6 +37,12 @@ nothing is sent.
 pull request merged in the release repository; prereleases excepted). It wakes each ticket's QA owner (tickets
 tagged `qa` only: the post-release tests), leaves each ticket a quiet "Shipped in vX.Y.Z" note, and files the
 Technical Writer ONE task for the release, "Docs for vX.Y.Z: N tickets", listing each ticket with its pull request.
+Private tickets are counted but not named. The writer skips them; their owners handle any docs for changes people see.
+The writer links its open PR on that General task. Tico sends it through the company's ticket review pools
+(Review 1, then Review 2 if configured), recording each verdict at the PR head. A push needs a new review.
+Current-head approvals and green checks wake the writer to merge under the repo's rules, or send the merge to
+an existing repo writer when the writer lacks access. Changes and a needed rebase return to the writer.
+Older open bot PRs enter this same route at a limited rate; Health names PRs waiting over 24 hours without a review.
 It is separate from the release command's "Release notes for vX.Y.Z" task. Docs and release notes are not part of
 the pre-release checklist. Only the owner, a person who moves Dev tickets, the Release Manager and the bot that
 manages the Dev tickets type run `hub release now`. Routines can run `on: release_published` for one task per release.
@@ -119,7 +125,7 @@ Per install, in this order:
 1. **Stop the writers.** Stop the server; nothing else writes to the database. Runners and the Mac app reach an install
    only through its API (each keeps its own state file, not the hub database), so the server stop is the stop.
    Work in progress is picked up afterwards: a job whose lease runs out is recovered, and a webhook send caught
-   mid-delivery returns to ready after two minutes. Docker: `docker compose stop server`. Mac: `scripts/tico -e acme server stop`.
+   mid-delivery returns to ready after two minutes. Docker: `docker compose stop server`. Mac: `scripts/tico-computer -e acme server stop`.
 2. **Take the consistent backup while stopped.** The checkpoint copies every page of the database into a new private
    file and checks that the copy is complete, without an integrity scan, so it is quick enough to run with the server down:
 
@@ -138,7 +144,7 @@ Per install, in this order:
    tico-release.json`), so a rollback knows what each bot was on.
 4. **Start the new release.** Docker: set `TICO_TAG=vX.Y.Z` in `.env`, then `docker compose pull && docker compose up -d`.
    Mac: check out `vX.Y.Z` in the install's checkout (`git -C <checkout> checkout vX.Y.Z`) and restart it with
-   `scripts/tico -e acme server restart`. On start, preflight accepts schema 71 and newer, then the rename files run in
+   `scripts/tico-computer -e acme server restart`. On start, preflight accepts schema 71 and newer, then the rename files run in
    order, each in its own transaction with its `schema_migrations` row. A database that has both an old and a new name
    of one column is refused, not guessed at (`RenameConflict`). A failed migration leaves the file at the schema it had,
    and the server does not start on it.
@@ -271,12 +277,27 @@ frozen can check that candidate without changing it. The candidate's `scripts/re
 It can also run one slice of the gate (`--part product|browser|python|desktop`, with `--shard K/N` splitting the Python test
 files, or the browser scripts, into N groups balanced by the times in `scripts/test-timings.json`; refresh the browser
 times with `--record-browser-timings` from a validation's browser logs). The hosted workflow selects product, four browser
-shards, 24 Python shards and desktop. Every part starts with the candidate and runs its setup while the Linux
-binaries build; each waits for them before its tests. Only product needs the images and waits for the image builds;
+shards, 28 Python shards and desktop. Every part starts with the candidate and runs its setup while the Linux
+binaries build. Product, desktop and Python shards 1–2 wait for those binaries; the other shards start their tests
+immediately. Only product needs the images and waits for the image builds;
 without `--part`, the command runs the whole gate, with desktop only where the Linux app builds. The desktop
 part runs the Tauri app's tests on Linux, among them a company app updating from a feed this candidate publishes
 (`scripts/app_release.py`) and serves (`backend/downloads.py`) behind a hub session: it must find, download, verify and
 install the update. It does not cover the macOS or Windows installers.
+Python tests marked `alone` run without workers after their shard's parallel tests pass, so wall-clock budgets do not
+compete with other pytest workers. Both passes share one check and contribute to its JUnit report and shard timings.
+Python shard planning reads candidate files using pytest.ini's discovery settings (pytest defaults when absent),
+conftest collection ignores and selection ignores, without importing pytest or collecting the suite on each VM.
+Recorded seconds determine weights; an unrecorded file uses its source test-function count (at least one) times
+recorded seconds per estimated test. Sorted paths break ties, so every VM computes the same plan and every candidate
+file belongs to exactly one shard. Native test files occupy shards 1–2. Markers still select tests at execution:
+release includes slow tests and excludes Docker isolation, while default/PR shards use `not slow`.
+The coverage guard (`scripts/release_checks.py --check-shard-coverage --release`) collects the release selection once
+on `python-1`, immediately after Python setup while the native Linux binaries are building. This uses its roughly
+two-minute binary wait rather than adding collection to the critical Python shards. PR planning reuses its existing
+default collection in `scripts/pr_checks.py`, before affected-file filtering, so the guard adds no collection or job.
+Both guards fail if a collected file is missing from the filesystem plan; extra empty or deselected candidates are
+allowed. The existing no-test-passed check still rejects a release shard that proves nothing.
 Beside the gate, eight `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into eight
 groups by `evals/factory/timings.json`. A failed check fails the release; NOTE lines
 (tickets over 24 h, a step over 12 h) go in the job summary for the Release Manager to read.
@@ -474,6 +495,16 @@ it (with a Rust cache, so only the app crate recompiles) and the files are added
 updater manifest last. A failed desktop build leaves the server release published and the Release run red; rerun the
 workflow from the tag (Run workflow, `desktop` checked) once it is fixed. The app's version is the release's
 (v0.3.6 → app 0.3.6, including any prerelease suffix), stamped from the tag at build time.
+
+The comparison excludes desktop tests (`app/tests/`, the vendored GLib's `tests/` and `benches/`),
+`app/src/testdata/` and Markdown docs anywhere under `app/`. Recorder follows the same carry-forward rule with
+`recorder/`, `scripts/app_release.py` and `.github/workflows/recorder.yml` as its inputs and
+`recorder-latest.json` as its manifest. Recorder tests (`recorder/tests/` and the `cfg(test)`-only
+`src/network_tests.rs`, `src/stream_tests.rs` and `src/app/tests.rs`), `recorder/bench/`, `recorder/ui/preview/`
+and Markdown docs anywhere under `recorder/` do not trigger an update. `recorder/CHANGES.md` still counts because
+it supplies updater notes. Changes to shipped Rust code, `ui/app`, configuration, icons, dependencies, packaging
+or those build workflows still build new apps. A missing previous updater manifest or the manual `desktop`
+override also forces a build.
 
 Because the files arrive a few minutes after the release, a hub that looks for them in that window finds none and asks
 again a minute later. A hub accepts an app version older than its own release when the files are that release's assets.

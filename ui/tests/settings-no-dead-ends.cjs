@@ -7,8 +7,9 @@
 //    shows its tab's own, picking another tab follows without a history step, a reload reopens it, and a redraw
 //    (route() called again, as a status change does) keeps Settings and the tab; the old Rules and Routines
 //    addresses open System;
-//  - Mailboxes: the old Google and Inbox addresses (Google's sign-in returns to #/settings/inbox) open it, and one
-//    mailbox's page has its own address (#/settings/mailboxes/<id>) that a redraw keeps and the tab leaves;
+//  - Inboxes moved to Tools: the old Google and Inbox addresses (Google's sign-in returns to #/settings/inbox) open
+//    Tools › Settings at Email, the old Mailboxes one Tools' mail, and an old inbox address its page under Tools,
+//    which a redraw and a reload keep;
 //  - a first visit opens General; a tab this person can't see opens General with "That page is for admins", and an
 //    unknown one opens General without it.
 const {chromium} = require('playwright');
@@ -19,11 +20,12 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 // Names the router or settingsShow takes besides the tabs and their aliases (ui/app/router.js, settingsShow).
-const SPECIAL = ['models', 'providers', 'tags', 'types', 'triggers', 'runs', 'roadmap', 'company-inbox', 'subscriptions',
+const SPECIAL = ['models', 'providers', 'tags', 'types', 'triggers', 'runs', 'roadmap', 'subscriptions',
   'storage', 'team', 'company', 'assistant', 'privacy'];
 // Old names that leave Settings: Listening moved to Strategy › Market (ui/app/redesign.js; redesign-shell.cjs checks it),
-// and the old Strategy Bot address only redirects to its tab (ui/app/router.js), so no link is drawn to it.
-const MOVED = ['listening', 'ceo'];
+// the old Strategy Bot address only redirects to its tab (ui/app/router.js), so no link is drawn to it, and Inboxes'
+// old addresses redirect to Tools (ui/app/tools.js toolsRoute; checked below).
+const MOVED = ['listening', 'ceo', 'inboxes'];
 
 // Every #/settings/<name> address written in the UI's sources.
 function settingsLinks() {
@@ -159,24 +161,22 @@ const address = page => page.evaluate(() => location.hash);
       await context.close();
     }
     {
-      // Mailboxes: the old addresses open it, and one mailbox's page keeps its own address until the tab is picked.
-      const {page, context, errors} = await open(browser, {hash: '#/settings/inbox'});
-      await page.waitForFunction(() => SETTINGS_TAB === 'mailboxes' && location.hash === '#/settings/mailboxes');
-      await go(page, '#/settings/google');
-      assert.equal(await address(page), '#/settings/mailboxes');
-      await page.locator('#set-mailboxes a[href="#/settings/mailboxes/mb1"]').click();
-      await page.waitForFunction(() => location.hash === '#/settings/mailboxes/mb1' && SETTINGS_TAB === 'mailboxes');
-      await page.locator('#set-mailbox h2', {hasText: 'support@acme.example'}).waitFor();
-      assert.equal(await selected(page), 'mailboxes');
+      // Inboxes moved to Tools: its old addresses (and Google's sign-in return) open their Tools pages, one inbox's page
+      // keeps its address through a redraw and a reload, and Settings has no Inboxes tab.
+      const {page, context, errors} = await open(browser);
+      assert.equal(await page.locator('#settings-tabs [data-settings-tab=inboxes]').count(), 0, 'no Inboxes tab');
+      for (const [from, want] of [['#/settings/inbox', '#/tools/settings/email'], ['#/settings/google', '#/tools/settings/email'],
+                                  ['#/settings/mailboxes', '#/tools?show=mail'], ['#/settings/inboxes/mailbox/mb1', '#/tools/mailbox/mb1']]) {
+        await page.evaluate(h => { location.hash = h; }, from);
+        await page.waitForFunction(w => location.hash === w, want).catch(() => assert.fail(`${from} leads to ${want}`));
+      }
+      await page.locator('#inbox-head h1', {hasText: 'support@acme.example'}).waitFor();
+      assert.equal(await page.locator('#side a[data-nav="tools"].cur').count(), 1, 'Tools is current');
       await page.evaluate(() => route());
-      assert.deepEqual(await page.evaluate(() => [S.route, SETTINGS_TAB, location.hash]), ['#/settings', 'mailboxes', '#/settings/mailboxes/mb1']);
+      assert.equal(await address(page), '#/tools/mailbox/mb1', 'a redraw keeps the inbox');
       await page.reload();
-      await page.locator('#set-mailbox h2', {hasText: 'support@acme.example'}).waitFor();
-      assert.equal(await address(page), '#/settings/mailboxes/mb1', 'a reload reopens the mailbox');
-      await page.locator('#settings-tabs [data-settings-tab=mailboxes]').click();
-      await page.waitForFunction(() => location.hash === '#/settings/mailboxes');
-      await page.locator('#set-mailboxes [data-mb-list]:not([hidden])').waitFor();
-      assert.equal(await page.locator('#set-mailbox').isHidden(), true);
+      await page.locator('#inbox-head h1', {hasText: 'support@acme.example'}).waitFor();
+      assert.equal(await address(page), '#/tools/mailbox/mb1', 'a reload reopens the inbox');
       assert.deepEqual(errors, []);
       await context.close();
     }

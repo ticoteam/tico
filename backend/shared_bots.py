@@ -243,6 +243,8 @@ def cascade_archive(c, actor, source):
         config["branch_previous_status"] = state
         config["status"] = "archived"
         c.execute("UPDATE bots SET state='archived' WHERE id=?", (slug,))
+        from . import pages
+        pages.forget_audience_member(c, actor, "bots", slug)
         BS.write(c, slug, config)
         c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (slug,))
         H.event(c, actor, "bot.branch_archived", slug, {"source": source, "previous": state})
@@ -308,6 +310,8 @@ def retire_assignments(c):
         if row["state"] != "archived" or config.get("status") != "archived":
             config["status"] = "archived"
             c.execute("UPDATE bots SET state='archived' WHERE id=?", (bot,))
+            from . import pages
+            pages.forget_audience_member(c, H.KEEPER, "bots", bot)
             BS.write(c, bot, config)
             c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         H.setup_finished(c, bot, archived=True)
@@ -329,6 +333,7 @@ def retire_assignments(c):
                 except H.Refused:
                     pass
             c.execute("UPDATE tasks SET owner_id=?,updated_at=? WHERE id=?", (owner, H.now(), task_id))
-            from . import task_run_models
+            from . import task_followers, task_run_models
             task_run_models.moved(c, H.KEEPER, task_id)
+            task_followers.owner_moved(c, H.task(c, task_id), "bot:" + bot, owner)
             H._wake(c, H.task(c, task_id), owner, f"Open: {title}", {"news": "assignment"})

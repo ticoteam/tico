@@ -1,7 +1,7 @@
 """Budgets: what Strategy › Budget shows, set the way an owner sets them, after every run is in (so it is the last
 section). A monthly limit on the whole team, limits on a few groups and bots, one group and one bot near a limit, the
 run budgets (a team default and two bots' own), and the task budget Settings › Tasks keeps (the team default, and
-Ana's own, filter On).
+Ana's own, checks On).
 
 A limit is sized from what its bots spent before the build, through the same spend the hub counts (backend/usage_limits.py):
 a comfortable one sits well under it in every window, a near one at about 86% of the window it is set on. The near
@@ -30,9 +30,9 @@ CONTENT = {
     "runs_team": {"turns_per_hour": 60, "turns_per_day": 500},
     "runs_bots": {"support": {"turns_per_hour": 120, "turns_per_day": 1200},
                   "sdr": {"turns_per_hour": 20, "turns_per_day": 150}},
-    # What bots may put on a person (backend/ask_ingest.py): the team default, and Ana's own with the filter On.
-    "tasks_team": {"mode": "on", "budget": 12, "chores_budget": 4},
-    "tasks_ana": {"mode": "on", "budget": 8, "chores_budget": 3},
+    # What bots may put on a person (backend/ask_ingest.py): the team default, and Ana's own with the checks On.
+    "tasks_team": {"mode": "on", "budget": 12},
+    "tasks_ana": {"mode": "on", "budget": 8},
 }
 
 

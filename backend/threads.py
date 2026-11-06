@@ -52,6 +52,7 @@ import re
 import secrets
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from . import people as P
 from . import read_cache
@@ -1077,11 +1078,15 @@ def record(c, message, conv):
     if in_audience and not message.get("recipient_id") and not _is_backfill(refs):
         c.execute("UPDATE conversations SET last_unread_seq=MAX(last_unread_seq,?) WHERE id=?",
                   (message.get("seq") or 0, thread["id"]))
-    _follow(c, thread["id"], author, "posted", message.get("seq"))
+    on_task = audience_of(root_of(c, thread)) == "task"
+    if not on_task:
+        # Posting in a task's thread makes no follower: a task's followers are its owner and whoever chose to
+        # (backend/task_followers.py).
+        _follow(c, thread["id"], author, "posted", message.get("seq"))
     # Every write fans out the same way (mentions, DM members, the Home's owner, sub-thread repliers, outside
     # destinations) under the same loop guard, legacy writers (runner replies, old routes) included. A task comment's
     # mentions are the task rules' (hubdb.mentioned_people, task bots), so a legacy write in a task thread leaves them.
-    if posting is None and audience_of(root_of(c, thread)) == "task":
+    if posting is None and on_task:
         in_audience = []
     woken = deliver(c, thread, message, in_audience, posting, warnings)
     if woken and not message.get("recipient_id") and not _is_backfill(refs):
@@ -1664,7 +1669,7 @@ def notes_for_run(c, bot, conv, run_class):
     against its source first (revalidate_notes). Reads past a run's own batch, so private notes that wait for their own
     thread's turn never hide the ones this run may carry."""
     fits, left = [], []
-    for item in revalidate_notes(c, bot, H.notes_waiting(c, H.actor_id(bot), limit=NOTES_READ)):
+    for item in revalidate_notes(c, bot, H.notes_waiting(c, H.actor_id(bot), limit=NOTES_READ, unheld=True)):
         if not note_fits_run(c, item, conv, run_class):
             left.append(item)
         elif len(fits) < NOTES_PER_RUN:
@@ -1745,7 +1750,10 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     elif way == "defer":
         refs["quiet"] = True
     author = message.get("sender_id") or ""
-    body = body or f"{author} in this thread: {message.get('body') or ''}"
+    from .files import page_references
+    sources = (H._json(message.get("refs"), {}) or {}).get("body_sources", [])
+    body, refs = H.sourced_text(body or f"{author} in this thread: {message.get('body') or ''}",
+                               [*sources, *({"file": fid} for fid in sorted(page_references(message, c)))], refs)
     legacy = c.execute("SELECT legacy_audience FROM messages WHERE id=?", (message["id"],)).fetchone()
     dumped, created = H._dump(refs), _now()
     c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,created_at,"
@@ -1760,9 +1768,10 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
 def _defer_note(c, message, bot):
     """A deferred delivery rides to the bot's next run as a quiet note, as bot_to_bot.hold leaves one."""
     try:
+        body, refs = H.sourced_text(str(message.get("body") or "")[:2000], refs={"message_id": message["id"]})
         c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES(?,?,?,?,?,?)",
                   (_new_id(), message.get("sender_id") or H.KEEPER, bot,
-                   str(message.get("body") or "")[:2000], _now(), message["id"]))
+                   body, _now(), refs["message_id"]))
     except Exception:  # noqa: BLE001, S110 - a bare hub database has no notes table
         pass
 
@@ -1957,6 +1966,17 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
 
     `reach`: the post is a bot's own write through the API, so whoever it reaches must be in the bot's reach
     (backend/reach.py check_post); a run's reply to what woke it, and a held post a person sends anyway, are not."""
+    H.check_message_refs(refs)
+    thread = thread_row(c, thread_id) if thread_id else start
+    on_task = H.message_task_id({"refs": refs}, thread)
+    with H.refusal_task(on_task):
+        return _post(c, principal, thread_id, body, kind=kind, refs=refs, parent_message_id=parent_message_id,
+                     to_actor=to_actor, via=via, origin=origin, checked=checked, attachments=attachments,
+                     start=start, in_reply_to=in_reply_to, reach=reach)
+
+
+def _post(c, principal, thread_id, body, *, kind, refs, parent_message_id, to_actor, via, origin, checked,
+          attachments, start, in_reply_to, reach):
     actor, v = _actor_of(principal)
     if origin and origin.get("origin_id") and start is not None:
         raise Problem("start", "A replicated message posts into a linked thread", 422)
@@ -1987,6 +2007,7 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
             raise Problem("not_found", "Thread not found", 404)
         if not can_post(c, v, thread):
             raise Problem("forbidden", "You can read this thread but not post in it", 403)
+    H._message_writer(c, actor, {"refs": refs}, thread)
     if origin and origin.get("origin_id"):
         duplicate = _duplicate(c, origin, thread)
         if duplicate is not None:
@@ -2107,8 +2128,8 @@ def _emit_message_held(c, thread, actor, verdict):
 def _write_open(c, actor, text, thread, kind, refs, target, in_reply_to=None):
     """A message addressed to nobody (or to an outside destination): the guards hubdb.say runs that do not need a
     recipient, then the same insert."""
-    H._writer(c, actor)
-    on_task = refs.get("task") or thread.get("task_id")
+    on_task = H.message_task_id({"refs": refs}, thread)
+    H._writer(c, actor, task_id=on_task)
     H.path_mentioned(c, actor, "task note" if on_task else "message", text, on_task)
     return H._write_message(c, actor, target, text, thread, kind, refs, in_reply_to, None)
 
@@ -2189,6 +2210,7 @@ def _create_plan(c, principal, *, title="", audience="members", audience_group_i
     if audience == "task":
         if not task_id or (v is not None and not _task_readable(c, v, task_id)):
             raise Problem("not_found", "Task not found", 404)
+    H._writer(c, actor, task_id=task_id)
     if audience in ("company", "team") and v is not None and not v.is_person:
         raise Problem("forbidden", "A bot starts members threads; a person makes them public", 403)
     resolved = []
@@ -2366,9 +2388,14 @@ def search(c, v, query, *, limit=20, before=None):
     found = thread_search.search(c, query, thread_sql=readable_sql(c, v, "cv"), message_sql=message_sql(c, v, "m"),
                                  readable=lambda m: message_readable(c, v, m), limit=limit, before=before)
     known = v.known(c)
-    hits = [{**hit, "sender_id": known.message({"sender_id": hit["sender_id"],
-                                                 "conversation_id": hit["thread_id"]})["sender_id"]}
-            for hit in found["hits"]]
+    refs_of = {r[0]: r[1] for r in c.execute(
+        "SELECT id, refs FROM messages WHERE id IN (%s)" % ",".join("?" * len(found["hits"])),
+        [h["message_id"] for h in found["hits"]])} if found["hits"] else {}
+    hits = []
+    for hit in found["hits"]:     # the sender's `source` needs the message's refs (a keeper line's kind)
+        shown = known.message({"sender_id": hit["sender_id"], "conversation_id": hit["thread_id"],
+                               "refs": H._json(refs_of.get(hit["message_id"]), {}) or {}})
+        hits.append({**hit, "sender_id": shown["sender_id"], "source": shown["source"]})
     return {**found, "hits": hits}
 
 
@@ -2487,6 +2514,7 @@ def sub_thread(c, principal, parent_message_id):
     found = c.execute("SELECT id FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()
     if found:
         return thread_row(c, found[0])
+    H._message_writer(c, actor, parent_message, parent)
     import sqlite3
     try:
         c.execute("SAVEPOINT threads_sub_thread")
@@ -2547,6 +2575,7 @@ def react(c, principal, message_id, emoji):
     """Add the principal's reaction. Idempotent: the same emoji twice is one reaction. Returns the message's
     reactions."""
     actor, message = _reactable(c, principal, message_id)
+    H._message_writer(c, actor, message, thread_row(c, message["conversation_id"]))
     emoji = str(emoji or "").strip()
     if not emoji or len(emoji) > MAX_EMOJI or any(ch.isspace() for ch in emoji):
         raise Problem("emoji", "A reaction is one emoji or a short :name:", 422)
@@ -2565,6 +2594,7 @@ def react(c, principal, message_id, emoji):
 def unreact(c, principal, message_id, emoji):
     """Remove the principal's own reaction (a no-op when there is none). Returns the message's reactions."""
     actor, message = _reactable(c, principal, message_id)
+    H._message_writer(c, actor, message, thread_row(c, message["conversation_id"]))
     emoji = str(emoji or "").strip()
     gone = c.execute("DELETE FROM message_reactions WHERE message_id=? AND actor=? AND emoji=?",
                      (message["id"], actor, emoji)).rowcount
@@ -2597,6 +2627,7 @@ def _require_thread(c, principal, thread_id):
     row = require(c, v, thread_id) if v is not None else thread_row(c, thread_id)
     if row is None:
         raise Problem("not_found", "Thread not found", 404)
+    H._writer(c, actor, task_id=row.get("task_id"))
     return actor, v, row
 
 
@@ -2721,7 +2752,7 @@ def members(c, v, thread_id, *, cursor=None, limit=100):
 
 def follow(c, v, thread_id, *, notify="live"):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
-    row = require(c, v, thread_id)
+    _, _, row = _require_thread(c, v, thread_id)
     if notify not in NOTIFY:
         raise Problem("notify", "notify is live, mentions, digest or muted", 422)
     now = _now()
@@ -2736,7 +2767,7 @@ def follow(c, v, thread_id, *, notify="live"):
 
 def unfollow(c, v, thread_id):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
-    row = require(c, v, thread_id)
+    _, _, row = _require_thread(c, v, thread_id)
     c.execute("UPDATE thread_followers SET following=0, updated_at=? WHERE thread_id=? AND actor=?",
               (_now(), row["id"], v.actor))
     _event(c, v.actor, "thread.unfollowed", row["id"], {})
@@ -2821,7 +2852,7 @@ def update(c, principal, thread_id, *, title=None, archived=None):
 def mark_read(c, v, thread_id, seq):
     """Advance the viewer's read mark in this thread (max wins: another device may be ahead)."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
-    row = require(c, v, thread_id)
+    _, _, row = _require_thread(c, v, thread_id)
     seq = min(max(int(seq or 0), 0), int(row.get("last_seq") or 0))
     return {"thread_id": row["id"], "last_read_seq": _read_to(c, row, v.actor, seq)}
 
@@ -2855,15 +2886,22 @@ def task_opened(c, conversation, actor, requester, notice):
         _insert_delivery(c, message, requester, row, root_of(c, row), "none", "member")
 
 
-def mark_all_read(c, v, thread_id):
-    """Read up to now in the thread and every sub-thread under it."""
+def mark_all_read(c, v, thread_id, ago_ms=None):
+    """Read up to now in the thread and every sub-thread under it; with `ago_ms`, only what was written by then."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
     path = row.get("path") or f"/{row['id']}/"
+    by = None
+    if ago_ms:
+        by = (datetime.now(timezone.utc) - timedelta(milliseconds=ago_ms)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     n = 0
     for sub in c.execute("SELECT id, last_seq FROM conversations WHERE path LIKE ? ESCAPE '\\'",
                          (path.replace("%", "\\%").replace("_", "\\_") + "%",)).fetchall():
-        mark_read(c, v, sub["id"], sub["last_seq"])
+        seq = sub["last_seq"]
+        if by:
+            seq = c.execute("SELECT COALESCE(MAX(seq),0) FROM messages WHERE conversation_id=? AND created_at<=?",
+                            (sub["id"], by)).fetchone()[0]
+        mark_read(c, v, sub["id"], seq)
         n += 1
     return {"threads": n}
 
@@ -2999,7 +3037,7 @@ def unread_dms(c, v, *, limit=50):
 
 
 # ----------------------------------------------------------------------------- C5: edit and delete
-def _own_say(c, actor, v, message_id):
+def _own_say(c, actor, v, message_id, *, check_writer=True):
     message = H.message(c, message_id)
     if not message:
         raise Problem("not_found", "Message not found", 404)
@@ -3009,6 +3047,9 @@ def _own_say(c, actor, v, message_id):
         raise Problem("forbidden", "Only its author changes a message", 403)
     if message.get("kind") not in EDITABLE_KINDS or (message.get("refs") or {}).get("carries"):
         raise Problem("kind", "Asks, answers and notices cannot be changed", 422)
+    if check_writer:
+        thread = thread_row(c, message["conversation_id"])
+        H._message_writer(c, actor, message, thread)
     return message
 
 

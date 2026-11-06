@@ -1,10 +1,9 @@
 """Check health (backend/maintenance_steps/check_health.py) and the Tico bug path (backend/maintenance_health.py).
 
-Each run reads the code checks, the production checks, the Health page's warn and bad checks and the mail asks, and files
+Each run reads the code checks, the production checks, the Health page's warn and bad checks, and files
 what they find as the tags say: an urgent problem at once, a noisy one on its second run. One BotOps task per problem however
 many computers have it: a repeat adds to its count, a problem that clears gets a cleared comment that wakes BotOps, and a task
-BotOps closed is opened again when the problem returns. A mail ask gets one approval, which turns mail sending on when a person
-approves it. A Tico bug goes to the Tico team once (a comment when it comes back worse), or as a support approval a person reads
+BotOps closed is opened again when the problem returns. A Tico bug goes to the Tico team once (a comment when it comes back worse), or as a support approval a person reads
 first while the team rule is off. Check health never writes to a person.
 """
 
@@ -21,9 +20,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from backend import (bot_settings as BS, diagnostics, health, hosted_updates, invariants, mail_settings,
+from backend import (bot_settings as BS, diagnostics, health, hosted_updates, invariants,
                      maintenance as M, maintenance_health as MH, maintenance_limits as L,
-                     providers, replication, routines, support)
+                     providers, replication, routines, support, task_check_backs, task_roundup)
 from backend.enqueue import enqueue_stored
 from backend.maintenance_steps import check_health
 from backend.store import H, Problem
@@ -40,10 +39,9 @@ SECRET_BOT = "acme-payroll-bot"
 
 @pytest.fixture
 def readers(monkeypatch):
-    """Only the findings a test sets: the Health page, the production checks and the mail asks read nothing here."""
+    """Only the findings a test sets: the Health page and the production checks read nothing here."""
     monkeypatch.setattr(health, "view", lambda c, *a, **k: {"checks": []})
     monkeypatch.setattr(invariants, "CHECKS", [])
-    monkeypatch.setattr(mail_settings, "alerts", lambda c: [])
     monkeypatch.setattr(hosted_updates, "notice", lambda *a, **k: {})
     monkeypatch.setattr(replication, "status", lambda *a, **k: {})
 
@@ -318,45 +316,11 @@ def test_no_person_gets_a_task_from_check_health(environment, readers, code_find
     assert len(tasks) == 2 and {t["owner_id"] for t in tasks} == {"bot:botops"}
 
 
-def test_a_mail_ask_is_one_botops_task_and_one_approval_that_a_restart_does_not_repeat(environment, readers, monkeypatch):
-    api, _ = built(environment)
-    monkeypatch.setattr(mail_settings, "alerts", lambda c: [("coo", {"outbound_send": True, "forward_to": []})])
-    run(api)
-    assert botops_tasks(api) == []                              # a noisy check files on its second run
-    run(api)
-    (task,) = botops_tasks(api)
-    assert task["title"] == "Health: Mail sending needs a person's approval"
-    (approval,) = open_approvals(api, "mail_alert")
-    assert registry(api, check_health.MAIL_CHECK)["approvals"] == {"coo": approval["id"]}
-    run(api)                                                    # the next run, as after a restart: kept, not raised again
-    assert [a["id"] for a in open_approvals(api, "mail_alert")] == [approval["id"]] and len(botops_tasks(api)) == 1
-
-
-def test_a_mail_approval_that_fails_to_raise_is_tried_again_on_the_next_run(environment, readers, monkeypatch):
-    api, _ = built(environment)
-    monkeypatch.setattr(mail_settings, "alerts", lambda c: [("coo", {"outbound_send": True, "forward_to": []})])
-    real, attempts = H.approval_request, []
-
-    def flaky(c, actor, kind, payload, **kw):
-        if kind == "mail_alert":
-            attempts.append(kind)
-            if len(attempts) == 1:
-                raise RuntimeError("the approval store is down")
-        return real(c, actor, kind, payload, **kw)
-
-    monkeypatch.setattr(H, "approval_request", flaky)
-    run(api)
-    run(api)                                                    # the task is filed; its approval fails once
-    assert botops_tasks(api) and open_approvals(api, "mail_alert") == []
-    run(api)                                                    # the next run raises it
-    assert len(open_approvals(api, "mail_alert")) == 1 and len(attempts) == 2
-
-
 def test_a_health_page_warning_is_filed_through_the_same_lifecycle(environment, readers, monkeypatch):
     api, _ = built(environment)
     page = [{"id": "disk:acme-mac", "label": "Disk space", "status": "warn", "summary": "92% full.",
              "fixes": [{"label": "Free space"}]},
-            {"id": "mail_sending", "label": "Mail sending", "status": "warn", "summary": "Waiting.", "fixes": []},
+            {"id": "invariant", "label": "Invariants", "status": "warn", "summary": "Read separately.", "fixes": []},
             {"id": "backups", "label": "Backups", "status": "ok", "summary": "", "fixes": []}]
     monkeypatch.setattr(health, "view", lambda c, *a, **k: {"checks": page})
     run(api)
@@ -1167,6 +1131,23 @@ def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment,
         found = {f["check_id"]: f for f in MH.findings(c, api.app.state.store.settings)}
     assert found["runner_outdated"]["severity"] == severity
 
+
+@pytest.mark.parametrize("reason", ["will be recovered automatically on the next update",
+                                  "cannot recover: 1 changed file; commit or stash it first: app.py",
+                                  "switch it to main to follow releases"])
+def test_branch_blocks_give_botops_the_branch_and_its_recovery_or_refusal(environment, monkeypatch, reason):
+    monkeypatch.setenv("TICO_VERSION", "0.4.45")
+    api, runner = built(environment)
+    error = "the checkout is on branch tico/b427e9ee-fix-runner; " + reason
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), runner["runner_id"]))
+        c.execute("INSERT INTO runner_versions(runner_id,release,update_state,update_error,reported_at) "
+                  "VALUES(?,?,'blocked',?,?) ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,"
+                  "update_state=excluded.update_state,update_error=excluded.update_error",
+                  (runner["runner_id"], "0.4.40", error, H.now()))
+        found = next(f for f in MH.findings(c, api.app.state.store.settings) if f["check_id"] == "runner_outdated")
+    assert error in found["detail"] and found["fix"] == error
+
 def test_event_stream_counts_drops_and_not_the_ones_a_server_restart_caused(environment, readers, monkeypatch):
     api, runner = built(environment)
     monkeypatch.setattr(diagnostics.RING, "started", "2026-01-10T23:00:00Z")      # this process: far from the lines
@@ -1565,6 +1546,46 @@ def test_another_maintenance_wake_for_botops_in_the_same_run_holds_health(enviro
     with store.transaction() as c:
         c.execute("UPDATE maintenance_runs SET finished_at=? WHERE id=?", (H.now(), run_id))
     assert run(api)["woke"] == 1 and wake_marker(api) is None
+
+
+def test_find_stuck_sends_botops_its_list_and_health_wakes_on_the_next_run(environment, code_findings, clock, monkeypatch):
+    api, _ = built(environment)
+    store, auth = api.app.state.store, api.app.state.auth
+    monkeypatch.setattr(M, "_start", lambda store, auth, run_id, only, wait: M._execute(store, auth, run_id, only))
+    code_findings[:] = [item("push_stuck", key="push_stuck:A")]
+    with store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key NOT IN ('collect','find_stuck','check_health')")
+        follow_up = H.task_create(c, H.KEEPER, "Chase the quote", "Check whether the quote came in.",
+                                  H.bot_actor(MH.BOTOPS), lint=False, quiet_notice=True)["id"]
+        task_check_backs.set_time(c, H.task(c, follow_up), H.shift(H.now(), hours=-40), "Check the quote",
+                                  actor=H.bot_actor(MH.BOTOPS), at=H.shift(H.now(), hours=-42))
+
+    first = M.get_run(store, M.tick(store, auth, clock.at))
+    steps = {s["step"]: s for s in first["steps"]}
+    assert first["ok"] == 1, first
+    assert steps["find_stuck"]["woke"] == 1 and MH.BOTOPS in steps["find_stuck"]["details"]["woken"]
+    assert steps["check_health"]["woke"] == 0
+    health_task = registry(api, "push_stuck")["task"]
+    assert wake_marker(api) == [health_task] and wake_jobs(api) == []
+    with store.read() as c:
+        (body,) = [r[0] for r in c.execute(
+            "SELECT m.body FROM messages m JOIN jobs j ON j.message_id=m.id "
+            "WHERE j.bot_id=? AND m.body LIKE ?", (MH.BOTOPS, task_roundup.HEADING + "%"))]
+        assert follow_up[:8] in body and "Check the quote" in body
+        assert H.task(c, follow_up)["check_back_at"] is None
+        assert c.execute("SELECT count(*) FROM events WHERE action=? AND target=?",
+                         (L.BOT_ACTION, MH.BOTOPS)).fetchone()[0] == 1
+
+    clock.at += timedelta(hours=1)
+    second = M.get_run(store, M.tick(store, auth, clock.at))
+    steps = {s["step"]: s for s in second["steps"]}
+    assert second["ok"] == 1, second
+    assert steps["find_stuck"]["status"] == "skipped" and steps["find_stuck"]["reason"] == "not due"
+    assert steps["check_health"]["woke"] == 1 and wake_marker(api) is None
+    assert [job["task"] for job in wake_jobs(api)] == [health_task]
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action=? AND target=?",
+                         (L.BOT_ACTION, MH.BOTOPS)).fetchone()[0] == 2
 
 
 def test_a_grouped_wake_on_a_shared_task_hides_a_private_tasks_title_and_id(environment, readers, code_findings, monkeypatch):

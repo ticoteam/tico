@@ -28,11 +28,11 @@ from .migrations import renames
 
 
 # The trash keeps `owner` and `requester` until the second release; an audience clause names the tasks table's columns.
-READABLE = "(SELECT *, owner AS owner_id, requester AS requester_id FROM task_trash)"
+READABLE = "(SELECT *, task_id AS id, owner AS owner_id, requester AS requester_id FROM task_trash) tasks"
 TRASH = """CREATE TABLE IF NOT EXISTS task_trash(
  task_id TEXT PRIMARY KEY, number INTEGER, title TEXT, requester TEXT, owner TEXT, status TEXT,
  private INTEGER NOT NULL DEFAULT 1, deleted_at TEXT NOT NULL, deleted_by TEXT NOT NULL,
- rows TEXT NOT NULL, purged_at TEXT, guest TEXT)"""
+ rows TEXT NOT NULL, purged_at TEXT, readers TEXT)"""
 # The files attached when a deleted task was made, kept past a purge: no foreign key, the task is gone.
 TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
  task_id TEXT NOT NULL, blob_id TEXT NOT NULL, PRIMARY KEY(task_id, blob_id))"""
@@ -42,7 +42,7 @@ TASK_ROWS = ("history_events", "task_links", "task_tags", "task_delegations", "t
              "task_check_back_wakes",
              "service_key_tasks", "task_roles", "task_assets", "task_requesters", "task_milestone_waits",
              "task_check_models", "task_run_models", "task_holds", "meeting_task_links",
-             "maintenance_listings", "maintenance_handoffs")
+             "maintenance_listings", "maintenance_handoffs", "quarantine_holds")
 # A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's
 # history is the shared history table's task rows (backend/migrations/0064_history_events.py).
 TASK_KEYS = {"history_events": ("subject_id", "subject_type='task'")}
@@ -69,7 +69,7 @@ MESSAGE_ROWS = (("message_assets", "message_id"), ("slack_posts", "message_id"),
                 ("task_file_reviews", "comment_id"), ("task_file_reviews", "ask_message_id"))
 CONVERSATION_ROWS = (("slack_digests", "conversation_id"), ("slack_threads", "conversation_id"))
 # Rows that point at the task but belong to something else, by their key: restored only if still unset.
-POINTERS = (("market_insights", "id", "filed_task"),)
+POINTERS = (("market_insights", "id", "filed_task"), ("meeting_items", "id", "proposed_task_id"))
 LINKS = ("conversation_id",)
 # Trash rows written before task_relations kept a task's parent and blocker on the task row itself.
 LEGACY_LINKS = {"parent_id": ("parent", False), "blocked_by": ("blocks", True)}
@@ -89,10 +89,9 @@ HANDLED = {"tasks": set(LEGACY_LINKS) | {k for cols in LEGACY_HOLDS.values() for
 
 
 def ensure(c):
+    # A private task's readers (hubdb "a private task's readers") see it in the trash as its two parties do
+    # (auth.task_sql); migration 20261105213649_task_readers gave an older trash the column.
     c.execute(TRASH)
-    # A private task's guest (hubdb.task_reach) sees it in the trash as its two parties do (auth.task_sql).
-    if "guest" not in _columns(c, "task_trash"):
-        c.execute("ALTER TABLE task_trash ADD COLUMN guest TEXT")
     c.execute(TRASH_ASSETS)
     c.execute("CREATE INDEX IF NOT EXISTS task_trash_assets_blob ON task_trash_assets(blob_id)")
     # A task deleted before this table existed has its attachments only in its trash row. Only the rows that
@@ -284,10 +283,10 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
             convs, msgs = [], []
         task = rows["tasks"][0]
         c.execute("INSERT INTO task_trash(task_id,number,title,requester,owner,status,private,deleted_at,"
-                  "deleted_by,rows,guest) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                  "deleted_by,rows,readers) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                   (tid, task.get("number"), task["title"], task["requester_id"], task["owner_id"], task["status"],
                    task.get("private", 1) if task.get("private") is not None else 1, now, actor,
-                   json.dumps({"rows": rows, "pointers": pointers}, default=str), task.get("guest")))
+                   json.dumps({"rows": rows, "pointers": pointers}, default=str), task.get("readers")))
         for table, column in MESSAGE_ROWS:
             _delete(c, table, column, msgs)
         for table, column in CONVERSATION_ROWS:
@@ -392,7 +391,17 @@ def _current(snap):
         table, key, column = spec.split(".")
         table = renames.current_table(table)
         pointers[f"{table}.{renames.current_column(table, key)}.{renames.current_column(table, column)}"] = keys
-    return {**snap, "rows": _history_rows(renames.current_rows(snap.get("rows") or {})), "pointers": pointers}
+    return {**snap, "rows": _guest_rows(_history_rows(renames.current_rows(snap.get("rows") or {}))), "pointers": pointers}
+
+
+def _guest_rows(rows):
+    """A task trashed while it had a `guest` (before its reader list) comes back with that person as its reader."""
+    for task in rows.get("tasks") or ():
+        if isinstance(task, dict) and "guest" in task:
+            guest = task.pop("guest")
+            if guest and not task.get("readers"):
+                task["readers"] = json.dumps([guest])
+    return rows
 
 
 def _history_rows(rows):

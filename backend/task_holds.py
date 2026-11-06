@@ -111,7 +111,7 @@ def holds(conn, row):
 
 def _task_hold(conn, row, kind, other):
     """A child or blocker as a hold. A private one is named by neither title nor owner: the reason is shown to everyone
-    who reads the task (its guest and its parties' managers too), and not all of them read the other task."""
+    who reads the task (its readers and its parties' managers too), and not all of them read the other task."""
     from . import hubdb as H
     if H.task_private(conn, other):
         return {"kind": "private", "on": None, "what": "a private task"}
@@ -180,6 +180,8 @@ def refresh(conn, task_id, cleared=None, at=None):
         conn.execute("UPDATE tasks SET note=? WHERE id=?", (note, task_id))
         task_blocked.bump(conn, row)
         H._task_event(conn, task_id, H.KEEPER, "note", row.get("note"), note, "")
+        from . import check_pools, verdict_moves
+        check_pools.safely(conn, verdict_moves.resumed, task_id)
         return "open"
     text = f"{LEFT}: {cleared}" if cleared else NOTHING
     if cleared or row.get("blocked_kind") != "stranded" or (row.get("blocked_reason") or "").startswith("Waiting on"):

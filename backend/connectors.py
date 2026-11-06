@@ -191,6 +191,7 @@ class MailMessage(M.Contract):
     rule_hits: list = Field(default_factory=list, max_length=100)
     # Set by the computer from its copy of the owner's sends (connectors/mail/db.py). None from a computer that predates it.
     known_sender: bool | None = None
+    send_facts: dict[str, str] = Field(default_factory=dict, max_length=5)
 
     # A field over its cap is cut, not refused: the batch is never acknowledged, so one refused
     # message came back first on every retry and stopped its mailbox's copy for hours. Only the
@@ -418,7 +419,7 @@ def install_connectors(app, store, execution, mutate):
             return {"ok": not failing}
         return mutate(request, body, work)
 
-    CALENDAR_OFF = ("The company turned Create and change calendar events off in Tico (Settings > Google > What Tico "
+    CALENDAR_OFF = ("The company turned Create and change calendar events off in Tico (Tools > Settings > Email > What Tico "
                     "may do), so Tico will not add the event")
 
     @app.post("/api/v2/connectors/calendar/actions/claim")
@@ -555,6 +556,10 @@ def install_connectors(app, store, execution, mutate):
             calendar_allowed(c, who, address, person, change=True)
             if not workspace.permissions(c)["change_calendar"]:
                 raise Problem("company_off", CALENDAR_OFF, 403)
+            if body.attendees:
+                from .email_sending import effective
+                if effective(c, address, H.actor_id(who.actor) if who.role == "bot" else "")["mode"] == "never":
+                    raise Problem("policy", "Never blocks this inbox's invitations", 403)
             start = instant(body.start)
             if start.astimezone(timezone.utc) < datetime.now(timezone.utc):
                 raise Problem("start", "Calendar appointments must start in the future", 422)
@@ -613,7 +618,7 @@ def install_connectors(app, store, execution, mutate):
                 "synced_at": row["synced_at"] if row else None,
                 "error": row["error"] if row else None,
             })
-        # What Tico may do (Settings > Google), which the mail CLI the runner runs checks every write against
+        # What Tico may do (Tools), which the mail CLI the runner runs checks every write against
         # (connectors/mail/policy.py runner_company): it reads it here, over the runner's own registration.
         return {"mailboxes": mailboxes, "batch": MAIL_BATCH,
                 "retention_days": store.settings.mail_retention_days, "company": company}
@@ -662,6 +667,11 @@ def install_connectors(app, store, execution, mutate):
                      encode(message.rule_hits), now))
                 _mail_fts(c, body.mailbox, message.msg_id, message.subject, message.body,
                           message.from_addr, " ".join(message.to))
+                c.execute("UPDATE mail_messages SET send_facts=? WHERE mailbox=? AND msg_id=?",
+                          (encode({key: str(message.send_facts.get(key) or "")[:4096 if key == "delivery-status" else 1000] for key in
+                                   ("auto-submitted", "precedence", "return-path", "message-id", "delivery-status")}), body.mailbox, message.msg_id))
+                from .email_sending import record_bounces
+                record_bounces(c, body.mailbox, message.from_addr, message.body + "\n" + message.send_facts.get("delivery-status", "")[:4096])
                 if fresh:
                     automations.on_mail(c, body.mailbox, message, watch)
             for msg_id in body.deleted:

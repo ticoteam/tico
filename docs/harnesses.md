@@ -222,15 +222,13 @@ The current OpenAI and Claude choices, reviewed 2026-10-03, are:
 | Claude Code (Anthropic) | Fable 5.1 | `claude-fable-5-1` | 2026-09-01 |
 | Claude Code (Anthropic) | Haiku 5.5 | `claude-haiku-5-5` | 2026-10-07 |
 | Codex (OpenAI) | Sol 6.1 | `gpt-6.1-sol` | 2026-09-29 |
-| Codex (OpenAI) | Terra 6.1 | `gpt-6.1-terra` | 2026-10-26 |
 | Codex (OpenAI) | Luna 6 | `gpt-6-luna` | 2026-09-22 |
 
 Release dates: [Claude release notes](https://platform.claude.com/docs/en/release-notes/overview)
 and [OpenAI changelog](https://developers.openai.com/api/docs/changelog).
 The offered effort levels are low, medium, high, xhigh and max, supported by the existing runner
 adapters and documented for [Claude](https://platform.claude.com/docs/en/build-with-claude/effort),
-[Sol 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-sol),
-[Terra 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-terra) and
+[Sol 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-sol) and
 [Luna 6](https://developers.openai.com/api/docs/models/gpt-6-luna).
 Astra, Sol 6 and Opus 5 remain readable for existing configurations but cannot be newly selected.
 No existing bot is migrated automatically.
@@ -269,6 +267,13 @@ If a choice cannot be saved, the row or editor shows the reason. A saved task mo
 to the bot's own model, with the task context length and any task effort that model takes; the task history records why.
 A task's own model ([Choosing the model a task runs on](tasks.md#choosing-the-model-a-task-runs-on)) falls back to the
 bot's task model first, then to the bot's own model. A review or check subtask keeps its check model.
+
+A bot whose **Task model** is not offered yet keeps that model, and its tasks still run on it, when you change
+**Task context length** or save the same model again. Settings lists a held model's **Task effort** choices only
+while a bot's own model or the team default is that model. Otherwise that field is disabled for a bot whose
+**Task model** it is. A save that sends only an effort or a context length keeps the model too.
+Terra 6.1 (`gpt-6.1-terra`) is one such model. Choosing it for a bot that does not have it saved is refused, and
+so is choosing another model that is not offered yet.
 
 #### A warning about a cheaper task model
 

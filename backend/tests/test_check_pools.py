@@ -915,3 +915,55 @@ def test_the_other_company_rule_is_saved_shown_and_cleared_without_touching_the_
     kind = set_other_company(api, task, "In QA", None)
     step = next(s for s in kind["steps"] if s["name"] == "In QA")
     assert "other_company" not in step["flow"] and step["flow"]["on_fail"] == "QA Fixes"
+
+
+def test_scheduler_retries_an_offline_pool_once_when_a_member_comes_online(api):
+    from datetime import timedelta
+    from backend.scheduler import Scheduler
+    team(api, seen=H.shift(H.now(), minutes=-10))
+    task = ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a"], limit=1)
+    assert move(api, task).status_code == 200
+    assert checks(api, task) == []
+    [wait] = get(api, "tasks/" + task["id"])["task"]["check_waits"]
+    assert "online" in wait["reason"]
+    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
+    at = H.parse_ts(H.now())
+    scheduler.tick(at)
+    assert checks(api, task) == []
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (H.now(),))
+    result = scheduler.tick(at + timedelta(minutes=1))
+    assert not any("check_pool_retry" in failure for failure in result["failures"])
+    [check] = checks(api, task)
+    assert check["owner_id"] == "bot:rev-a"
+    scheduler.tick(at + timedelta(minutes=2))
+    Scheduler(api.app.state.store, api.app.state.execution).tick(at + timedelta(minutes=3))
+    with api.app.state.store.read() as c:
+        assert H.TR.child_ids(c, task["id"]) == [check["id"]]
+        assert c.execute("SELECT state,child_id FROM check_waits WHERE id=?", (wait["id"],)).fetchone()[:] == ("filed", check["id"])
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_filed'",
+                         (task["id"],)).fetchone()[0] == 1
+
+
+def test_periodic_pool_retry_bounds_each_pass(api):
+    team(api, seen=H.shift(H.now(), minutes=-10))
+    first = ticket(api, RECEIPT)
+    with api.app.state.store.transaction() as c:
+        second = H.task_create(c, "human:ana", "Another change", "Build it.", "bot:cpo", type=first["type_id"], step="In Progress")
+        original = next(p for p in H.task_links(c, first["id"]) if p["kind"] == "pr")
+        link = H.task_link(c, "human:ana", second["id"], original["url"])
+        c.execute("UPDATE task_links SET state=?,checks=?,mergeable=?,detail=? WHERE id=?",
+                  (original["state"], original["checks"], original["mergeable"], original["detail"], link["id"]))
+        c.execute("UPDATE tasks SET note=? WHERE id=?", (RECEIPT, second["id"]))
+    tasks = [first, second]
+    for task in tasks:
+        set_pool(api, task, "Review 1", ["rev-a"])
+        assert move(api, task).status_code == 200
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (H.now(),))
+    assert len(check_pools.retry(api.app.state.store, limit=1)) == 1
+    assert sum(len(checks(api, task)) for task in tasks) == 1
+    assert len(check_pools.retry(api.app.state.store, limit=1)) == 1
+    assert sum(len(checks(api, task)) for task in tasks) == 2
+    assert check_pools.retry(api.app.state.store) == []

@@ -336,7 +336,7 @@ ALTER TABLE growth_settings ADD COLUMN verdict_win_pct REAL NOT NULL DEFAULT 60;
                                                      "ORDER BY position, id")],
                          [name for _, name, _ in MT.STEPS])
         self.assertEqual(tuple(conn.execute("SELECT name, status FROM task_steps WHERE id='idea-scaling'").fetchone()),
-                         ("Scaling", "doing"))
+                         ("Working", "doing"))
 
 
 class RegistrySync(HubCase):
@@ -1037,11 +1037,11 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(needs(), 1)
         H.answer(self.conn, ANA, question['id'], 'Friday')
         self.assertEqual(needs(), 0)
-        # A bot's private task to itself reaches the one person it asks, its guest (Dev 172), and no second one.
+        # A bot's private task to itself reaches the one person it asks, a reader (Dev 172), and no second one.
         secret = H.task_create(self.conn, CMO, 'Review the payroll export', '', CMO, private=True)
         H.task_update(self.conn, CMO, secret['id'], status='waiting', waiting_on='ben',
                       note='Approve the payroll export? If yes, I will send it.')
-        self.assertEqual(H.task(self.conn, secret['id'])['guest'], H.human_actor('ben'))
+        self.assertEqual(H.task_readers(H.task(self.conn, secret['id'])), [H.human_actor('ben')])
         self.refused('private', H.task_update, self.conn, CMO, secret['id'], status='waiting', waiting_on='ana',
                      note='Approve the payroll export? If yes, I will send it.')
         # A person's private task still stays with its two parties.

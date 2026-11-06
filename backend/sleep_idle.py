@@ -59,7 +59,8 @@ STREAM = "/api/v2/events"        # an open stream says nothing about a person be
 # Outgoing sends: a row waiting for its next try (`next_attempt_at`, NULL = now) keeps the server up only when that try is
 # near; one Svix-style retry ten hours away must not. `sending` always does.
 SENDS = {"slack_posts": "state IN ('ready','retry','rate_limited')",
-         "webhook_sends": "state IN ('ready')"}
+         "webhook_sends": "state IN ('ready')",
+         "personal_alerts": "state='pending'"}
 NO_KEY = "Connect the Tico Gateway in Settings > Gateway first: Sleep when idle asks Tico with its key."
 NOT_HOSTED = "Sleep when idle is only for servers Tico hosts."
 now = time.time                  # tests' controlled clock
@@ -159,6 +160,9 @@ def routine_times(c, at):
     if table(c, "maintenance_runs") and (due := maintenance.next_due(c, when)) is not None:
         out.append(due.timestamp())
     out.extend(later_sends(c, at))
+    if table(c, "alert_preferences"):
+        from . import personal_alerts
+        out.extend(personal_alerts.future_deadlines(c, at))
     # A deferred item's deadline wakes its bot like a schedule (backend/delivery.py); one past is due now.
     from . import delivery
     if table(c, "deferrals") and (due := epoch(delivery.next_due(c))) is not None:
@@ -411,8 +415,9 @@ class SleepIdle:
                 pass
             if stop.is_set():
                 return
+            from . import system_routines as SR    # each look is one run of Sleep when idle (Settings > Routines)
             try:
-                await asyncio.to_thread(self.tick)
+                await asyncio.to_thread(SR.pass_of, self.store, "sleep_idle", self.tick)
             except Exception:
                 pass                                # the next look tries again; the failure is in the state row
 

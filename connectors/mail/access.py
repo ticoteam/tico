@@ -6,7 +6,7 @@ credential is: a bot's turn token, a person's own token (their Assistant is them
 What Tico may do (oauth.company_allows). Read gives `read`; Read and write gives:
   - `read`: read messages and download attachments, and
   - `organize`: label, archive, mark read, star, triage, run mail rules, unsubscribe;
-  - `draft`, `send`: write a draft, send one (sending keeps its own approvals, connectors/mail/policy.py);
+  - `draft`, `send`: write a draft, queue one (Tico's sending policy decides every send, connectors/mail/policy.py);
   - `schedule`: change calendar events.
 No handle holds every verb: the owner has no bypass. `bot.yaml` (`tools:` gmail entries) can only narrow a bot's answer:
 `read_only: true` keeps it to reading, and `draft`/`send` count only when its `can:` lists them.
@@ -30,7 +30,7 @@ CALENDAR_ACTIONS = {"calendar_read": "read", "calendar_schedule": "schedule"}
 # Commands that only move a message around inside the mailbox: they need `organize`.
 STATE_VERBS = {"label": "organize", "archive": "organize", "mark_read": "organize", "star": "organize",
                "triaged": "organize", "rules": "organize"}
-ASK = ("Who may use a mailbox is set in Tico: Settings > Mailboxes > Who can use this mailbox (its person, or an admin "
+ASK = ("Who may use a mailbox is set in Tico: Tools > the mailbox > Who can use it (its person, or an admin "
        "for a shared inbox, decides).")
 
 # Set by the commands that carry out what the server leased this computer (mail-action, connector-event): only then
@@ -50,21 +50,6 @@ def where(slug):
     """`<repo folder>/<manifest>` as a message names it: bot-<slug>/bot.yaml, or emp-<slug>/employee.yaml for an older bot."""
     p = manifest_path(slug)
     return f"{p.parent.name}/{p.name}"
-
-
-def forward_to(manifest):
-    """The addresses the owner lists as this bot's forward targets: `forward_to:` in bot.yaml (a list, or one
-    comma-separated string), lowercased, one of each. Mail to them needs no per-message approval once
-    `outbound_send` is on (docs/mail.md, "Turning sending on")."""
-    raw = (manifest or {}).get("forward_to")
-    if isinstance(raw, str):
-        raw = raw.replace(";", ",").split(",")
-    out = []
-    for item in raw if isinstance(raw, (list, tuple)) else []:
-        addr = str(item or "").strip().lower()
-        if "@" in addr and " " not in addr and addr not in out:
-            out.append(addr)
-    return out
 
 
 def employee(slug=None, env=None):
@@ -349,7 +334,7 @@ def resolve(slug, mailbox=None, verb="read", manifest=None, roster=None):
         level = "Read" if held[addr]["level"] == "read" else "Read and write"
         raise Refused(f"{slug} may {', '.join(verbs) or 'nothing'} on {addr} ({level}), not {need}.",
                       "Organizing, drafts and sends need Read and write on the mailbox and the company's What Tico "
-                      "may do (Settings > Mailboxes). " + ASK)
+                      "may do (Tools > Settings > Email). " + ASK)
     return addr, verbs
 
 

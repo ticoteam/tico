@@ -43,6 +43,12 @@ function peopleMenu(p, view) {
   if (owner && p.owner && p.id === S.me?.id) items.push('<button type="button" role="menuitem" data-person-act="email">Change my sign-in email</button>');
   return items.join('');
 }
+// The Tico Recorder this person used last (backend/recorder_installs.py): its version, or nothing.
+function peopleRecorderCell(r) {
+  if (!r?.version) return '<div class="people-cell-recorder"></div>';
+  const seen = r.last_seen_at ? `Last seen ${ago(r.last_seen_at)}` : '';
+  return `<div class="people-cell-recorder${r.update_available ? ' is-old' : ''}" data-recorder-version title="${esc([seen, r.update_available ? 'Update available' : ''].filter(Boolean).join(' · '))}"><span class="people-recorder-label">Recorder </span><span class="tnum">${esc(r.version)}</span></div>`;
+}
 function peopleRow(p, view) {
   const owner = S.me?.role === 'owner', menu = peopleMenu(p, view), local = !!S.config?.local;
   const invited = view?.invites?.[p.id];
@@ -56,6 +62,7 @@ function peopleRow(p, view) {
     <div class="people-cell-role">${role}</div>
     ${p.owner ? '<div class="people-cell-signin"><span class="muted" title="The owner can always sign in">Always</span></div>'   /* the owner's own sign-in is not a switch */
       : `<label class="people-cell-signin">${peopleSwitch('data-person-signin', p.can_sign_in, locked, local ? 'Sign-in access when configured' : 'Can sign in')}<span class="people-switch-label">${local ? 'When configured' : 'Can sign in'}</span></label>`}
+    ${peopleRecorderCell(view?.recorders?.[p.id])}
     <div class="people-cell-more">${menu ? `<button class="people-more" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button><div class="people-menu" role="menu" hidden>${menu}</div>` : ''}</div>
   </li>`;
 }
@@ -70,9 +77,13 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape') peop
 async function renderSettingsPeople() {
   const el = $('#set-people'); if (!el) return;
   try {
-    const view = await get('/v2/access');
+    // HQ's switch for Tico support on cloud machines comes with it (ui/app/cloud-machines.js), null off Tico Cloud.
+    const [view, support] = await Promise.all([get('/v2/access'), cloudSupportRead()]);
     if (!el.isConnected) return;   // Settings redrew while this loaded
     const owner = S.me?.role === 'owner', home = view.home_domain || '', added = PEOPLE_ADDED;
+    // Only the owner changes it; anyone else on this page sees it read-only.
+    const supportLabel = 'Tico support can reach our cloud machines';
+    const supportLine = support ? `<label class="people-line">${peopleSwitch('id="people-cloud-support"', support.on, !owner, supportLabel)}<span>${supportLabel}</span></label>` : '';
     PEOPLE_ADDED = '';                                     // the reminder shows once, right after the add
     const mode = PEOPLE_MODE || (view.directory ? 'sync' : 'manual');
     const active = view.people.filter(p => !p.left), left = view.people.filter(p => p.left);
@@ -103,16 +114,16 @@ async function renderSettingsPeople() {
       <section class="card people-list-card">
         <header><h2>People</h2><span class="muted tnum">${active.length}</span></header>
         ${owner ? '' : settingsWhoCanHTML('roles')}
-        <div class="people-head" aria-hidden="true"><span>Person</span><span>Role</span><span>${S.config?.local ? 'Sign-in access' : 'Can sign in'}</span><span></span></div>
+        <div class="people-head" aria-hidden="true"><span>Person</span><span>Role</span><span>${S.config?.local ? 'Sign-in access' : 'Can sign in'}</span><span>Recorder</span><span></span></div>
         <ul class="people-list">${active.map(p => peopleRow(p, view)).join('')}</ul>
         ${left.length ? `<details class="people-left"><summary>Left <span class="tnum">${left.length}</span></summary><ul class="people-list">${left.map(p => `<li class="people-row is-left" data-person="${esc(p.id)}">
           <div class="people-who">${personAvatar(p, 32)}<div class="people-id"><div class="people-name">${esc(p.name)}</div><div class="people-email">${esc(p.email || 'No email')}</div></div></div>
           <div class="people-cell-more">${owner && p.removable ? '<button class="ghost danger-text" type="button" data-person-act="remove">Remove</button>' : ''}<button class="ghost" type="button" data-person-act="restore">Restore</button></div></li>`).join('')}</ul></details>` : ''}
         <label class="people-line people-limit">Bot limit per member<input id="member-bot-limit" type="number" inputmode="numeric" min="0" max="1000" value="${esc(String(view.member_bot_limit))}"></label>
-        ${owner ? `<div class="people-rules">${PEOPLE_RULES.map(([key, label]) => `<label class="people-line">${peopleSwitch(`data-rule="${key}"`, view.rules?.[key] !== false, false, label)}<span>${label}</span></label>`).join('')}
+        ${owner ? `<div class="people-rules">${PEOPLE_RULES.map(([key, label]) => `<label class="people-line">${peopleSwitch(`data-rule="${key}"`, view.rules?.[key] !== false, false, label)}<span>${label}</span></label>`).join('')}${supportLine}
           <label class="people-line"><span>Days a bot waits before it goes ahead (reversible, internal steps; sends, spending and deletes always wait)</span><input type="number" min="1" max="14" step="1" data-rule-days="go_ahead_days" value="${esc(String(view.rules?.go_ahead_days ?? 3))}" aria-label="Days a bot waits before it goes ahead"></label>
           <label class="people-line"><span>Reports a manager may create a week (BotOps asks; over the limit, the person above decides)</span><input type="number" min="0" max="50" step="1" data-rule-count="report_creates_per_week" value="${esc(String(view.rules?.report_creates_per_week ?? 3))}" aria-label="Reports a manager may create a week"></label>
-          <label class="people-line"><span>Reports a manager may archive or restore a week</span><input type="number" min="0" max="50" step="1" data-rule-count="report_archives_per_week" value="${esc(String(view.rules?.report_archives_per_week ?? 3))}" aria-label="Reports a manager may archive or restore a week"></label></div>` : ''}
+          <label class="people-line"><span>Reports a manager may archive or restore a week</span><input type="number" min="0" max="50" step="1" data-rule-count="report_archives_per_week" value="${esc(String(view.rules?.report_archives_per_week ?? 3))}" aria-label="Reports a manager may archive or restore a week"></label></div>` : supportLine ? `<div class="people-rules">${supportLine}</div>` : ''}
       </section>`;
     if (mode === 'sync' && owner) window.mountDirectorySync?.($('#directory-sync'), renderSettingsPeople);   // ui/directory-sync.js
     if (owner) void peopleFromSetup($('#people-from-setup'));
@@ -212,6 +223,32 @@ async function renderSettingsPeople() {
       void change(() => allow(view.allowed.filter(e => e !== x), view.allowed_domains.filter(d => d !== x)), `Removed ${x}`, button.closest('.people-extras'));
     });
     el.querySelectorAll('[data-rule]').forEach(box => box.onchange = () => change(() => put('/v2/access/rules', {[box.dataset.rule]: box.checked}), 'Saved', box));
+    // A lost answer may still have reached HQ: read its state again before showing the result.
+    const supportSwitch = $('#people-cloud-support');
+    if (supportSwitch && owner) supportSwitch.onchange = async () => {
+      const on = supportSwitch.checked;
+      settingsFieldClear(supportSwitch);
+      supportSwitch.disabled = true;
+      try {
+        // Each press is a new choice; only this write's automatic retries share its key.
+        const answer = await put('/v2/cloud-machines/support', {on}, newRequestId());
+        cloudSupportSet(answer);
+        supportSwitch.checked = answer?.on === true;
+        toast('Saved');
+      } catch (error) {
+        const stale = error.body?.error?.code === 'stale_revision' && typeof error.body.error.on === 'boolean';
+        let current = await cloudSupportRead({fresh: true});
+        if (!current && stale) {
+          current = {available: true, on: error.body.error.on, machines: []};
+          cloudSupportSet(current);
+        }
+        if (error.signature) pendingWrites.delete(error.signature);
+        supportSwitch.checked = current?.on === true;
+        supportSwitch.indeterminate = !current;
+        const message = stale ? 'A newer change already reached Tico HQ.' : error.message;
+        settingsFieldError(supportSwitch, current ? message : `${message} Could not read the switch. Open Settings again to retry.`);
+      } finally { supportSwitch.disabled = !CLOUD_SUPPORT.view; }
+    };
     el.querySelectorAll('[data-rule-days]').forEach(box => box.onchange = () => {
       const days = Math.round(Number(box.value));
       if (days >= 1 && days <= 14) change(() => put('/v2/access/rules', {[box.dataset.ruleDays]: days}), 'Saved', box);

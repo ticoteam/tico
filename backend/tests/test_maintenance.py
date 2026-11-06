@@ -47,10 +47,11 @@ def inline(store, auth, run_id, only, wait):
 
 
 def test_the_steps_run_in_one_fixed_order_and_the_api_lists_them_so(api):
-    assert M.ORDER == ("collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream")
+    assert M.ORDER == ("collect", "clean_up", "find_stuck", "check_health", "learn", "suggest", "update", "dream")
     assert [s["key"] for s in get(api, "maintenance")["steps"]] == list(M.ORDER)
-    assert next(s for s in get(api, "maintenance")["steps"] if s["key"] == "update")["old_timer"] is False
-    assert next(s for s in get(api, "maintenance")["steps"] if s["key"] == "learn")["old_timer"] is False
+    assert all("old_timer" not in s for s in get(api, "maintenance")["steps"]), "every step runs in the run"
+    suggest = next(s for s in get(api, "maintenance")["steps"] if s["key"] == "suggest")
+    assert suggest["consent"] is False, "Suggest is live and waits for consent"
 
 
 def test_each_frequency_is_due_on_its_own_clock():
@@ -91,7 +92,7 @@ def test_run_now_runs_every_step_in_order_like_a_scheduled_run(api):
     assert steps["find_stuck"]["status"] == "ran" and cursor(store, "find_stuck"), "Find stuck is live"
     assert steps["learn"]["status"] == "off", "learn is off by default"
     assert steps["check_health"]["status"] == "ran"
-    assert steps["suggest"]["reason"] == "on its old timer"
+    assert steps["suggest"]["status"] == "skipped" and steps["suggest"]["reason"] in ("Needs Tico Gateway", "Privacy consent is off")
     assert steps["dream"]["status"] in ("ran", "skipped")
     assert run["finished_at"] and run["ok"] == 1, run
 
@@ -341,8 +342,6 @@ def test_a_step_only_run_now_runs_that_step_even_when_it_is_not_due(api, monkeyp
     assert run["steps"][0]["status"] == "ran" and run["steps"][0]["reason"] == "stubbed", "not due, but Run now runs it"
     run, _ = M.run_now(store, auth, "human:ana", step="learn", wait=True)
     assert run["steps"][0]["status"] == "off", "a step switched off stays off"
-    run, _ = M.run_now(store, auth, "human:ana", step="suggest", wait=True)
-    assert run["steps"][0]["status"] == "skipped" and run["steps"][0]["reason"] == "on its old timer"
 
 
 def test_a_plain_run_now_keeps_the_due_rules(api, monkeypatch):
@@ -512,3 +511,33 @@ def test_a_saved_roundup_preset_sets_how_often_find_stuck_runs_and_an_inherited_
     assert find_stuck({"task_roundup": {"preset": "bogus"}}) == ("custom", 6, "hours"), "an unknown preset keeps the default"
     saved = _migrated_rows({"task_roundup": {"on": False, "preset": "daily"}}, {})["find_stuck"]
     assert saved == (0, "day", None, None), "the switch and the cadence both carry over"
+
+
+def test_the_replaced_jobs_mirrors_are_retired_once():
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[1] / "migrations" / "20261105214334_retire_replaced_job_mirrors.py"
+    spec = importlib.util.spec_from_file_location("retire_mirrors", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with sqlite3.connect(":memory:") as c:
+        c.execute("CREATE TABLE automations(id TEXT PRIMARY KEY,builtin INTEGER,flow TEXT,enabled INTEGER,deleted_at TEXT,"
+                  "updated_at TEXT)")
+        c.execute("CREATE TABLE automation_runs(id TEXT PRIMARY KEY,automation_id TEXT,status TEXT,finished_at TEXT)")
+        mirror = lambda key, readonly=1: json.dumps({"readonly": readonly, "trigger": {"name": "tico.builtin.job." + key}})
+        for aid, key, readonly in (("a", "auto_dream", 1), ("b", "cleanup", 1), ("c", "stall_triage", 1),
+                                   ("d", "memory_tidy", 1), ("e", "cleanup", 0)):
+            c.execute("INSERT INTO automations VALUES(?,1,?,1,NULL,'then')", (aid, mirror(key, readonly)))
+        c.execute("INSERT INTO automation_runs VALUES('r1','a','queued',NULL)")
+        c.execute("INSERT INTO automation_runs VALUES('r2','b','ok','then')")
+        c.execute("INSERT INTO automation_runs VALUES('r3','d','queued',NULL)")
+        migration.up(c)
+        gone = {r[0] for r in c.execute("SELECT id FROM automations WHERE deleted_at IS NOT NULL AND enabled=0")}
+        assert gone == {"a", "b", "c"}, "only the replaced jobs' read-only mirrors"
+        runs = dict(c.execute("SELECT id, status FROM automation_runs"))
+        assert runs == {"r1": "skipped", "r2": "ok", "r3": "queued"}
+        when = c.execute("SELECT deleted_at FROM automations WHERE id='a'").fetchone()[0]
+        migration.up(c)
+        assert c.execute("SELECT deleted_at FROM automations WHERE id='a'").fetchone()[0] == when, "a second run changes nothing"
+    with sqlite3.connect(":memory:") as c:
+        migration.up(c)   # a file with no automations yet

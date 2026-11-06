@@ -25,24 +25,25 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, time, timedelta, timezone
 
-from . import learnings, updates
-from .maintenance_steps import check_health, clean_up, collect, dream, find_stuck, learn, update
+from . import learnings, suggestions, updates
+from .maintenance_steps import check_health, clean_up, collect, dream, find_stuck, learn, suggest, update
 from .store import H, Problem
 from .updates import START_HOUR, ZONE
+from . import sources as SRC
 
 LOG = logging.getLogger("tico.maintenance")
 REGISTRY_KEY = "maintenance"      # registry_metadata: the run's schedule, pause and monthly cap
-ORDER = ("collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream")
+STEP_SOURCES = {"find_stuck": "stuck-check", "check_health": "check-health"}   # what a step's keeper lines are
+# Find stuck gets the shared BotOps wake first; Check health keeps a refused wake for the next run.
+ORDER = ("collect", "clean_up", "find_stuck", "check_health", "learn", "suggest", "update", "dream")
 NAMES = {"collect": "Collect", "clean_up": "Clean up", "check_health": "Check health", "find_stuck": "Find stuck",
          "learn": "Learn", "suggest": "Suggest", "update": "Update", "dream": "Dream"}
 EVERY_RUN = ("collect", "clean_up", "check_health")   # "How often" is every run, and fixed (Find stuck is custom: every 6 hours)
-OLD_TIMER = ("suggest",)   # still on their own timers until their track lands
 LIVE = {"collect": collect.run, "clean_up": clean_up.run, "check_health": check_health.run, "find_stuck": find_stuck.run,
-        "learn": learn.run, "update": update.run, "dream": dream.run}
+        "learn": learn.run, "suggest": suggest.run, "update": update.run, "dream": dream.run}
 SCHEDULES = {"hourly": 1, "2h": 2, "3h": 3, "6h": 6, "12h": 12, "daily": 0}
 MAX_BOTS_STEPS = ("find_stuck", "dream")          # the steps that take "Most bots per run"
 STATUSES = ("ran", "skipped", "failed", "pending")
-OLD_TIMER_REASON = "on its old timer"
 ABANDONED_MINUTES = 30          # a live run with no heartbeat this long is abandoned
 HEARTBEAT_SECONDS = 60
 WINDOW_BACK = timedelta(days=1)    # a step that has never moved its cursor looks back this far
@@ -217,10 +218,10 @@ def _receipt(c, actor, key):
 
 def run_now(store, auth, actor, step=None, wait=False, key=None):
     """Run now (POST /api/v2/maintenance/run, `hub maintenance run`): one run, claimed like a scheduled one. A plain run keeps
-    the due rules. `step` runs only that step, due or not (a switched off step stays off, and a step on its old timer is
-    skipped). A run already live is returned as it is, so Run now and the schedule give one run. With an Idempotency-Key
-    (`key`), the request leaves a receipt, and a repeat of the key returns the run that first request started or joined,
-    even once that run has finished or been recovered, and starts nothing. Returns (run, started)."""
+    the due rules. `step` runs only that step, due or not (a switched off step stays off). A run already live is returned
+    as it is, so Run now and the schedule give one run. With an Idempotency-Key (`key`), the request leaves a receipt, and
+    a repeat of the key returns the run that first request started or joined, even once that run has finished or been
+    recovered, and starts nothing. Returns (run, started)."""
     if step is not None and step not in ORDER:
         raise Problem("invalid", f"No such Maintenance step: {step}", 422)
     now = H.now()
@@ -274,8 +275,6 @@ def _steps(store, auth, run_id, only, tally):
         row = steps[key]
         if not row["enabled"]:
             plan[key] = ("off", "switched off")
-        elif key in OLD_TIMER:
-            plan[key] = ("skipped", OLD_TIMER_REASON)
         elif only is None and not due(row, at):  # a step-only Run now runs that step whether or not it is due
             plan[key] = ("skipped", "not due")
         elif key == "update" and at.astimezone(ZONE).hour < START_HOUR:
@@ -359,7 +358,7 @@ def _run_step(store, auth, run_id, key, row, window_start, now, cap, tally):
     ctx = {"run_id": run_id, "step_id": row_id, "window_start": window_start, "window_end": now, "settings": row, "now": now,
            "cap": cap, "store": store, "auth": auth}
     try:
-        with store.read() as c:
+        with SRC.writing_as(STEP_SOURCES.get(key, "maintenance")), store.read() as c:
             result = _normal(LIVE[key](c, ctx))
     except Exception as exc:
         LOG.exception("maintenance step %s failed", key)
@@ -371,8 +370,8 @@ def _run_step(store, auth, run_id, key, row, window_start, now, cap, tally):
             c.execute("UPDATE maintenance_runs SET cost_usd=cost_usd+? WHERE id=?", (result["cost_usd"], run_id))
             return
         _finish_row(c, row_id, result)
-        if key == "dream" and result["status"] == "skipped" and result["details"].get("limited"):
-            # A wake refused before Dream can attempt a start leaves it due on a later run of the same day.
+        if result["status"] == "skipped" and result["details"].get("limited"):
+            # A limited skip defers the attempt, leaving the step due on a later run.
             c.execute("UPDATE maintenance_steps SET last_started_at=? WHERE key=? AND last_started_at=?",
                       (row["last_started_at"], key, now))
         if result["status"] == "ran":
@@ -563,11 +562,13 @@ def listing(c, settings, auth, who):
         step = steps[key]
         rows.append({"key": key, "name": NAMES[key], "enabled": bool(step["enabled"]), "frequency": step["frequency"],
                      "custom_every": step["custom_every"], "custom_unit": step["custom_unit"],
-                     "max_bots": step["max_bots"], "fixed": key in EVERY_RUN, "old_timer": key in OLD_TIMER,
+                     "max_bots": step["max_bots"], "fixed": key in EVERY_RUN,
                      "last_started_at": step["last_started_at"], "last_ran_at": step["last_ran_at"],
                      "cursor_at": step["cursor_at"]})
         if key == "learn":
             rows[-1]["stats"] = learnings.beta_stats(c)
+        if key == "suggest":
+            rows[-1]["consent"] = suggestions.privacy(c, settings)["share_stats_for_suggestions"]
     last = c.execute("SELECT id FROM maintenance_runs ORDER BY started_at DESC LIMIT 1").fetchone()
     live = live_run(c, H.now())
     return {"settings": {**cfg, "monthly_cap_usd_in_effect": budget_cap(c, settings)},

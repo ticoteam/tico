@@ -7,11 +7,14 @@ import functools
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import yaml
+import pytest
 
 from clients import catalog
+from clients import manifest, repo_safety
 from clients.routines import validate_schedules
 
 CARD = """template: assistant
@@ -113,6 +116,20 @@ class Materialize(unittest.TestCase):
         self.assertIn("already exists", str(caught.exception))
         self.assertIn("A turn happened here.", (path / "state.md").read_text())
 
+    def test_a_workspace_ancestor_cannot_point_into_the_install(self):
+        install = Path(self.tmp.name) / "install"
+        install.mkdir()
+        self.workspace.parent.mkdir(parents=True)
+        self.workspace.symlink_to(install, target_is_directory=True)
+        with patch.object(repo_safety, "ROOT", install):
+            with self.assertRaisesRegex(ValueError, "inside the Tico install"):
+                self.make()
+            other_case = install.with_name("INSTALL")
+            if other_case.exists():
+                with self.assertRaisesRegex(ValueError, "inside the Tico install"):
+                    repo_safety.outside_installation(other_case / "new")
+        self.assertEqual(list(install.iterdir()), [])
+
     def test_a_bot_given_another_bots_old_slug_is_built_in_the_folder_the_server_recorded(self):
         # A renamed bot still works in bot-coo; the new bot named coo was given bot-coo-<part of its id>.
         first = self.make()
@@ -140,6 +157,51 @@ class Refresh(unittest.TestCase):
 
     def refresh(self):
         return catalog.refresh("assistant", self.path, NAMES, directory=self.catalog)
+
+    @pytest.mark.slow
+    def test_a_bot_root_or_named_folder_cannot_resolve_into_the_install(self):
+        alias = self.path.parent / "bot-alias"
+        alias.symlink_to(self.path, target_is_directory=True)
+        with patch.object(repo_safety, "ROOT", self.path):
+            for path in (self.path, alias):
+                with self.assertRaisesRegex(ValueError, "inside the Tico install"):
+                    catalog.refresh("assistant", path, NAMES, directory=self.catalog)
+            with self.assertRaisesRegex(ValueError, "inside the Tico install"):
+                manifest.folder_dir(alias.parent, alias.name)
+
+    @pytest.mark.slow
+    def test_a_refresh_refuses_an_outside_file_directory_or_stamp_link_before_any_write(self):
+        outside = Path(self.tmp.name) / "outside"
+        outside.mkdir()
+        (outside / "fleet.md").write_text("Keep me.\n")
+        (self.template / "AGENT.md").write_text("Updated instructions.\n")
+        before = (self.path / "AGENT.md").read_text()
+        for rel, destination in (("playbooks/fleet.md", outside / "fleet.md"),
+                                 (catalog.STAMP, outside / "new-stamp"), ("playbooks", outside)):
+            path = self.path / rel
+            backup = path.with_name(path.name + ".saved")
+            path.rename(backup)
+            path.symlink_to(destination)
+            with self.assertRaisesRegex(ValueError, "outside the bot repo"):
+                self.refresh()
+            self.assertEqual((self.path / "AGENT.md").read_text(), before)
+            self.assertEqual((outside / "fleet.md").read_text(), "Keep me.\n")
+            self.assertFalse((outside / "new-stamp").exists())
+            path.unlink()
+            backup.rename(path)
+
+    @pytest.mark.slow
+    def test_refresh_replaces_an_inside_file_link_without_writing_its_target(self):
+        kept = self.path / "knowledge/kept.md"
+        kept.write_text("Keep my notes.\n")
+        path = self.path / "playbooks/fleet.md"
+        path.unlink()
+        path.symlink_to("../knowledge/kept.md")
+        (self.template / "playbooks/fleet.md").write_text("New fleet rules.\n")
+        self.assertEqual(self.refresh(), ["playbooks/fleet.md"])
+        self.assertFalse(path.is_symlink())
+        self.assertEqual(path.read_text(), "New fleet rules.\n")
+        self.assertEqual(kept.read_text(), "Keep my notes.\n")
 
     def test_a_changed_template_file_wins_and_the_rest_stays_the_bots(self):
         (self.path / "playbooks" / "fleet.md").write_text("Improved by the bot.\n")
@@ -177,9 +239,9 @@ class StarterBots(unittest.TestCase):
             folder, where = self.directory / name, f"template {name}"
             card = read_catalog(self.directory)[name]
             self.assertIs(card["first_routine"]["draft_only"], True, where)
-            self.assertNotIn("approval_required", card, f"{where}: sending uses outbound_send")
+            self.assertNotIn("approval_required", card, f"{where}: sending follows the sending policy")
             manifest = yaml.safe_load((folder / "bot.yaml").read_text())
-            self.assertIs(manifest["outbound_send"], False, where)
+            self.assertNotIn("outbound_send", manifest, where)    # sending is the server's policy, never bot.yaml
             routines = validate_schedules(manifest.get("routines") or [], lambda rel: (folder / rel).read_text())
             self.assertTrue(all(r["enabled"] is False for r in routines), where)     # a bot with no routines has none to arm
             for access in manifest["tools"]:
@@ -223,34 +285,6 @@ class BotOpsStopsOnARefusal(unittest.TestCase):
                 if "sleep" in line.lower():
                     self.assertRegex(line.lower(), r"\b(never|no)\b", f"{path.name}: {line}")
 
-
-class FundraisingManagerAsksForEveryInvestorMessage(unittest.TestCase):
-    """Turning mail sending on does not let the Fundraising Manager write to an investor: each message waits for a
-    person's yes on it, or the person sends it, and no draft carries terms."""
-
-    folder = catalog.ROOT / "templates/catalog/fundraising-manager"
-
-    def text(self, name):
-        return " ".join((self.folder / name).read_text().split())
-
-    def test_every_investor_message_needs_a_person_even_with_sending_on(self):
-        sending = self.text("AGENT.md").split("## Sending", 1)[1].split("##", 1)[0]
-        for rule in ("Every message to an investor or a prospective investor is a draft, even with mail sending on",
-                     "a reply on their own thread", "`hub approval request --kind send`",
-                     "Send it only after a person approves it, and only as approved",
-                     "a changed draft needs a new yes", "to send themselves",
-                     "Never state, offer or agree terms in any draft",
-                     "no valuation, amount, allocation or date for the round",
-                     "Draft messages to other outsiders until a person turns mail sending on"):
-            self.assertIn(rule, sending)
-        self.assertNotIn("Draft messages to outsiders until", sending)
-        card = yaml.safe_load((self.folder / "card.yaml").read_text())
-        self.assertTrue(any("investor" in line and "even with mail sending on" in line for line in card["never"]))
-        self.assertIn("in a message or a draft", " ".join(card["never"]))
-        prep = self.text("playbooks/meeting-prep.md")
-        self.assertIn("Leave terms out, even ones you have been given", prep)
-        for name in ("AGENT.md", "card.yaml", *(f"playbooks/{p.name}" for p in (self.folder / "playbooks").glob("*.md"))):
-            self.assertNotIn("I never send to an investor myself", self.text(name), name)
 
 
 if __name__ == "__main__":

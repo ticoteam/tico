@@ -195,6 +195,20 @@ def _connector(c, auth, who, rid, *, states=None):
     return row
 
 
+def _participant(c, auth, who, rid):
+    human_only(who)
+    auth.domain(who)
+    row = _require_read(c, auth, who, rid)
+    if row["state"] not in ("live", "paused"):
+        raise Problem("meeting_state", "Sharing requires a live or paused meeting", 409)
+    if who.actor != row["owner_actor"] and not c.execute(
+            "SELECT 1 FROM live_meeting_access WHERE meeting_id=? AND actor=? UNION ALL "
+            "SELECT 1 FROM live_meeting_humans WHERE meeting_id=? AND actor=?",
+            (rid, who.actor, rid, who.actor)).fetchone():
+        raise Problem("forbidden", "Join this live meeting before adding teammates", 403)
+    return row
+
+
 # Called as hook(c, rid, reply, who) inside a bot's reply's transaction, so a thread that a call projects to gets the
 # reply or nothing. backend/calls.py registers its projection here; a hook may raise to refuse the whole reply.
 REPLY_HOOKS = []
@@ -1387,7 +1401,10 @@ def install_live_meetings(app, store, auth, write):
     def change_access(request: Request, rid: str, body: LiveMeetingAccess):
         who = request.state.identity
         def work(c):
-            row = _connector(c, auth, who, rid, states=("live", "paused"))
+            row = _participant(c, auth, who, rid)
+            if who.actor != row["owner_actor"] and (body.visibility is not None or any(
+                    "human:" + H.actor_id(person) != who.actor for person in body.remove)):
+                raise Problem("forbidden", "Only the person who connected this meeting can change visibility or remove others", 403)
             added, removed = [], []
             for person in body.add:
                 actor = "human:" + H.actor_id(person)
@@ -1400,8 +1417,6 @@ def install_live_meetings(app, store, auth, write):
                     added.append(actor)
             for person in body.remove:
                 actor = "human:" + H.actor_id(person)
-                if actor == row["owner_actor"]:
-                    continue
                 gone = c.execute("DELETE FROM live_meeting_access WHERE meeting_id=? AND actor=?", (rid, actor)).rowcount
                 gone += c.execute("DELETE FROM live_meeting_humans WHERE meeting_id=? AND actor=?", (rid, actor)).rowcount
                 if gone:
@@ -1413,15 +1428,13 @@ def install_live_meetings(app, store, auth, write):
                 # Implicit team participation cannot expand the newly private audience.
                 c.execute("DELETE FROM live_meeting_humans WHERE meeting_id=? AND actor<>? AND actor NOT IN "
                           "(SELECT actor FROM live_meeting_access WHERE meeting_id=?)", (rid, row["owner_actor"], rid))
-                for bot in c.execute("SELECT bot FROM live_meeting_bots WHERE meeting_id=? AND joined_by<>?",
-                                     (rid, row["owner_actor"])).fetchall():
-                    for turn in c.execute("SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? "
-                                          "AND status IN ('pending','claimed')", (rid, bot["bot"])).fetchall():
-                        _finish_pass(c, rid, turn, "meeting_access_revoked")
-                c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND joined_by<>?", (rid, row["owner_actor"]))
+            from . import meeting_audience
+            meeting_audience.revoke_live(c, rid)
             if added or removed or visibility != row["visibility"]:
                 _event(c, rid, "meeting.access", {"visibility": visibility, "added": added, "removed": removed,
                                                    "changed_by": who.actor})
+            if who.actor in removed:
+                return {"id": rid, "left": True}
             return _view(c, auth, who, rid)
         if body.visibility is not None:
             app.state.meeting_frames.stop(rid)
@@ -1486,16 +1499,7 @@ def install_live_meetings(app, store, auth, write):
     def attach_bots(request: Request, rid: str, body: AttachBots):
         who = request.state.identity
         def work(c):
-            human_only(who)
-            auth.domain(who)
-            meeting = _require_read(c, auth, who, rid)
-            if meeting["visibility"] == "private" and who.actor != meeting["owner_actor"]:
-                raise Problem("forbidden", "Only the person who connected a private meeting can attach bots", 403)
-            if meeting["state"] not in ("live", "paused"):
-                raise Problem("meeting_state", "Bots can only be attached to a live or paused meeting", 409)
-            if not c.execute("SELECT 1 FROM live_meeting_humans WHERE meeting_id=? AND actor=?",
-                             (rid, who.actor)).fetchone():
-                raise Problem("forbidden", "Join this live meeting before attaching bots", 403)
+            _participant(c, auth, who, rid)
             attached, added = [], []
             for slug in body.bots:
                 bot_id = (H.resolve_bot(c, slug) or {}).get("id", slug)
@@ -1529,15 +1533,14 @@ def install_live_meetings(app, store, auth, write):
             meeting = _require_read(c, auth, who, rid)
             if meeting["state"] not in ("live", "paused"):
                 raise Problem("meeting_state", "Bots can only be removed from a live or paused meeting", 409)
-            if not c.execute("SELECT 1 FROM live_meeting_humans WHERE meeting_id=? AND actor=?",
-                             (rid, who.actor)).fetchone():
-                raise Problem("forbidden", "Join this live meeting before removing bots", 403)
             bot_id = (H.resolve_bot(c, slug) or {}).get("id", slug)
-            membership = c.execute("SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot=?",
+            membership = c.execute("SELECT joined_by FROM live_meeting_bots WHERE meeting_id=? AND bot=?",
                                    (rid, bot_id)).fetchone()
             if not membership:
                 return {"id": rid, "bot": bot_id, "removed": False, "canceled_turns": [],
                         "event_id": _meeting(c, rid)["next_event_id"]}
+            if who.actor not in (meeting["owner_actor"], membership["joined_by"]):
+                raise Problem("forbidden", "Only the connector or the person who attached this bot can remove it", 403)
             turns = c.execute("SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? "
                               "AND status IN ('pending','claimed') ORDER BY created_at,id", (rid, bot_id)).fetchall()
             canceled = []
@@ -1672,11 +1675,18 @@ def install_live_meetings(app, store, auth, write):
             if not chunks:
                 raise Problem("transcript", "A live meeting needs transcript text before finalization", 409)
             duration_ms = max(chunk["end_ms"] for chunk in chunks)
+            participants = []
+            for member in c.execute("SELECT actor FROM live_meeting_access WHERE meeting_id=? UNION "
+                                    "SELECT actor FROM live_meeting_humans WHERE meeting_id=?",
+                                    (rid, rid)):
+                person = H.human(c, H.actor_id(member[0])) if H.is_human(member[0]) else None
+                if person and person.get("email"):
+                    participants.append(person["email"])
             body_import = MeetingImport(title=row["title"], started_at=row["started_at"],
                                         duration_seconds=duration_ms / 1000, source="tico-live", external_id=rid,
                                         transcript=[{"speaker": chunk["speaker"], "start_ms": chunk["start_ms"],
                                                      "end_ms": chunk["end_ms"], "text": chunk["text"]}
-                                                    for chunk in chunks], review="pending")
+                                                    for chunk in chunks], participants=participants, review="pending")
             result = app.state.import_meeting(c, who, body_import, [], live_client=row["client"])
             imported_id = result["id"]
             c.execute("UPDATE live_meetings SET imported_meeting_id=?,updated_at=? WHERE id=?",
@@ -1703,6 +1713,13 @@ def install_live_meetings(app, store, auth, write):
                 c.execute("UPDATE live_meetings SET state='ended',ended_at=?,updated_at=? WHERE id=?",
                           (H.now(), H.now(), rid))
                 _end_open_turns(c, rid)
+            c.execute("UPDATE live_meetings SET discarded_at=? WHERE id=?", (H.now(), rid))
+            # A deleted recording kept on its computer leaves no task associations in Tico.
+            c.execute("DELETE FROM meeting_task_links WHERE meeting_id=? AND EXISTS "
+                      "(SELECT 1 FROM media_control WHERE meeting_id=? AND deleted_at IS NOT NULL)",
+                      (row["imported_meeting_id"], row["imported_meeting_id"]))
+            from . import meeting_audience
+            meeting_audience.revoke_live(c, rid)
             for table in ("live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_chat_routes",
                           "live_meeting_chat", "live_meeting_windows", "live_meeting_events"):
                 c.execute(f"DELETE FROM {table} WHERE meeting_id=?", (rid,))

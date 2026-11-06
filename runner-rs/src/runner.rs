@@ -51,6 +51,8 @@ pub struct Runner {
     pub active: Mutex<HashSet<String>>,
     /// Workers preparing or running, including one whose lease lapsed while its process still runs.
     pub places: Mutex<HashSet<String>>,
+    /// Fresh Linux memory readings hold preparation at 85% until below 80%, independently of diagnostics.
+    pub(crate) memory_hold: Mutex<bool>,
     /// One push or history publish at a time on this computer.
     pub push_lock: tokio::sync::Mutex<()>,
     pub sign_in: crate::signin::SignIn,
@@ -156,6 +158,7 @@ impl Runner {
             socket: None,
             active: Mutex::new(HashSet::new()),
             places: Mutex::new(HashSet::new()),
+            memory_hold: Mutex::new(false),
             push_lock: tokio::sync::Mutex::new(()),
             sign_in: crate::signin::SignIn::new(&projects_dir),
             publish_notes: Mutex::new(HashMap::new()),
@@ -571,12 +574,12 @@ impl Runner {
                     *self.restart_since.lock().unwrap() = crate::util::iso(&json!(now.as_secs())).as_str().map(String::from);
                     log("Tico runner: restart requested; restarting when no turn is running");
                 } else if !self.restart_refused.swap(true, Ordering::SeqCst) {
-                    log("Tico runner: restart requested, but nothing would start this runner again; run `scripts/tico install` once, or restart it by hand");
+                    log("Tico runner: restart requested, but nothing would start this runner again; run `scripts/tico-computer install` once, or restart it by hand");
                 }
             }
         }
         let dir = &self.state.directory;
-        // scripts/tico status reads the heartbeat file's mtime.
+        // scripts/tico-computer status reads the heartbeat file's mtime.
         if let Ok(f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("heartbeat")) {
             let _ = f.set_modified(std::time::SystemTime::now());
         }
@@ -693,7 +696,7 @@ pub fn readiness_candidates(assignments: &[Value]) -> Vec<Value> {
 }
 
 /// Whether a supervisor starts the runner again when it exits (service.py supervised): launchd sets
-/// XPC_SERVICE_NAME to the job's label, the systemd user unit `scripts/tico install` writes sets TICO_SYSTEMD_UNIT,
+/// XPC_SERVICE_NAME to the job's label, the systemd user unit `scripts/tico-computer install` writes sets TICO_SYSTEMD_UNIT,
 /// and TICO_SUPERVISED=1 covers any other supervisor (the Docker runner, runit).
 fn supervised() -> bool {
     let var = |k: &str| std::env::var(k).unwrap_or_default();
@@ -997,6 +1000,7 @@ impl Runner {
             if follower.blocks_claims(!workers.is_empty()).await {
                 return Ok(()); // an update is due or under way: the updater restarts this runner once nothing runs
             }
+            if !follower.draining() { self.drain.end(); } // a timed-out drain can release claims in this tick
         }
         // Programs bots declare in `watchers:` (crate::watchers); a failure is logged and never stops the runner.
         let assignments = self.assignments_seen();

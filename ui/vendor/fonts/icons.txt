@@ -19,6 +19,7 @@ balance
 block
 bolt
 bug_report
+build
 calendar_month
 call
 call_end
@@ -105,6 +106,7 @@ monitoring
 more_horiz
 new_releases
 newspaper
+open_in_full
 open_in_new
 paid
 palette
@@ -140,6 +142,7 @@ settings_suggest
 shield_person
 shopping_cart
 smart_toy
+sms
 south
 star
 sticky_note_2

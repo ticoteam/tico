@@ -150,6 +150,22 @@ def test_a_confirm_setting_from_botops_is_a_card_and_nothing_changes(api, botops
     finish(api, botops, ana)
 
 
+def test_mail_access_through_botops_waits_for_the_persons_confirmation(api, botops):
+    ana = turn(api, botops, person="ana-test", text="Let Ops read our physical mail")
+    err, missing = mcp(api, "hub_settings_set", {"key": "mail.access.bot", "bot": "ops", "value": "read"},
+                       ana["token"])
+    assert err and "--id" in str(missing), missing
+    err, card = mcp(api, "hub_settings_set", {"key": "mail.access.bot", "id": "all", "bot": "ops", "value": "read"},
+                    ana["token"])
+    assert not err and card["needs_confirm"] is True, card
+    assert card["action"]["path"] == "/api/v2/postal/addresses/all/grants/bot/ops"
+    assert get(api, "postal/addresses/all/grants")["grants"] == []
+    finish(api, botops, ana)
+    post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, "ana-test")
+    grant = get(api, "postal/addresses/all/grants")["grants"][0]
+    assert (grant["grantee_id"], grant["granted_by_id"]) == ("ops", "human:ana")
+
+
 def test_a_person_only_setting_gets_the_reason_and_the_cards_link(api, botops):
     person_only = next(e for e in ENTRIES if e.kind == "person" and not e.target)
     ana = turn(api, botops, person="ana-test", text="Change it for me")

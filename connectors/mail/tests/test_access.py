@@ -72,7 +72,7 @@ class Server(Tree):
     def test_nothing_from_tico_is_nothing_whatever_bot_yaml_declares(self):
         with self.assertRaises(Refused) as e:
             access.resolve("influencer", ANA, "read")
-        self.assertIn("Settings > Mailboxes", e.exception.hint)
+        self.assertIn("Tools > the mailbox > Who can use it", e.exception.hint)
         self.assertEqual(access.readable_mailboxes("influencer"), [])
 
     def test_read_reads_and_nothing_else(self):

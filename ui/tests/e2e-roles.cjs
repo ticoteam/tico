@@ -2,12 +2,12 @@
 // the people and bots that make them in the product:
 //   T1  public: the engineering-lead bot's, everyone reads it.
 //   P1  private, person-only: Omar asked for it, Dana owns it (its parties are Omar and Dana).
-//   P2  private, bot-only: release-manager asks, builder-claude owns it, and Gina is brought in as the guest by a
+//   P2  private, bot-only: release-manager asks, builder-claude owns it, and Gina is brought in as a reader by a
 //       subtask builder-claude hands her.
 // Priya is the bot manager: she is above builder-claude on the org chart (the seed `priya-leads` puts engineering-lead
 // under her). Task reads follow the org chart, not co-ownership (docs/tasks.md "Managers acting on tasks").
 // Expected: Dana sees all three (she is above the bots and a party to P1); Omar sees T1 and P1; Priya sees T1 and P2
-// (a manager reads a bot report's private tasks, but nothing else private); Gina sees T1 and P2 (the guest). A private
+// (a manager reads a bot report's private tasks, but nothing else private); Gina sees T1 and P2 (a reader). A private
 // task a teammate may not read is refused by the hub, and the page does not open it. Runs on a phone and a desktop.
 const assert = require('node:assert/strict');
 const {journey, open, go, must, call, assertClean, expectFailure, t, SEEDS} = require('./support/e2e.cjs');
@@ -34,7 +34,7 @@ journey('e2e-roles', async ({hub, browser, phone}) => {
     const line = await call(hub, 'dana', 'POST', 'reach/lines', {sender, receiver, per_day: null});
     assert.ok(line.status === 200 || line.status === 409, `the line ${sender} -> ${receiver}: ${line.status}`);
   }
-  const P2 = idOf(await must(hub, 'release-manager', 'POST', 'tasks', {title: TITLES.P2, body: 'Bots, a manager and a guest.',
+  const P2 = idOf(await must(hub, 'release-manager', 'POST', 'tasks', {title: TITLES.P2, body: 'Bots, a manager and a reader.',
     owner: 'builder-claude', private: true}, 'the bot-only private task'));
   await must(hub, 'builder-claude', 'POST', 'tasks', {title: 'Gina checks the cut', body: 'Gina is brought in here.',
     owner: 'gina', private: true, relations: [{task: P2, kind: 'parent'}]}, 'builder-claude brings Gina in');

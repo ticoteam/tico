@@ -80,16 +80,14 @@ const SETTINGS_TAB_KEY = 'tico.settings.tab';
 let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY) || 'general'; } catch { return 'general'; } })();
 // The address the shown tab writes (settingsAddress) so it can be copied, bookmarked or shared; route() reads it as Settings.
 let SETTINGS_ADDRESS = '';
-// The mailbox Settings > Mailboxes shows on its own page (#/settings/mailboxes/<id>, ui/app/mailbox.js); '' is the list.
-let MAILBOX_OPEN = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'repos', 'tasks', 'mailboxes',
-  'inbound', 'mail', 'system',
+const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'repos', 'tasks', 'system',
   'webhooks', 'health', 'history', 'gateway', 'billing'];
 // System was Rules (wake rules, now automations) and before that Routines; chat: the old Chat tab; providers and
-// subscriptions: what is the Models tab now; limits: its turn levels.
-const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos', google: 'mailboxes', inbox: 'mailboxes', 'email-phone': 'inbound',
+// subscriptions: what is the Models tab now; limits: its turn levels. Inboxes (and Mailboxes, Email & Phone and Mail
+// before it) moved to Tools; their addresses redirect there (ui/app/tools.js toolsRoute).
+const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos',
   rules: 'system', routines: 'system', recurring: 'system', chat: 'models', providers: 'models', subscriptions: 'models',
   limits: 'models', 'turn-levels': 'models'};
 // Cards that moved from Computers to Models: an old link to one (the settings catalogue's) opens Models.
@@ -99,7 +97,8 @@ let SETTINGS_TRANSITION_TIMER = null;
 // A section a link points into (an old tab's name, settingsShow); it scrolls there once drawn.
 let SETTINGS_REVEAL = '';
 // The old tabs that are now sections of General.
-const SETTINGS_GENERAL = {team: '#settings-team', company: '#settings-company', assistant: '#settings-assistant-pane', privacy: '#settings-privacy', storage: '#settings-storage'};
+const SETTINGS_GENERAL = {team: '#settings-team', company: '#settings-company', assistant: '#settings-assistant-pane', privacy: '#settings-privacy', storage: '#settings-storage',
+  notifications: '#settings-notifications', alerts: '#settings-notifications'};
 const settingsReveal = selector => {
   if (!selector || SETTINGS_REVEAL !== selector) return;
   SETTINGS_REVEAL = ''; $(selector)?.scrollIntoView({block: 'start'});
@@ -198,7 +197,7 @@ function settingsConfirm({title, text, ok = 'Confirm', danger = true}) {
 const settingsCanMakeTokens = () => S.me?.can_create_tokens ?? settingsIsAdmin();
 function pageSettings() {
   clearInterval(SETTINGS_TRANSITION_TIMER);
-  if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { SETTINGS_TAB = 'general'; location.hash = INTEGRATIONS; return; }
+  if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { location.hash = SETTINGS_TAB === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools'; SETTINGS_TAB = 'general'; return; }
   // A repeat visit to the page already on screen (a refresh, a same-route redraw) keeps it: rebuilding
   // it would snap back to the default tab and drop whatever is half typed in a form.
   const built = $('#settings-tabs');
@@ -213,10 +212,7 @@ function pageSettings() {
       <button type="button" data-settings-tab="models" role="tab">Models</button>
       <button type="button" data-settings-tab="repos" role="tab">Repositories</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
-      <button type="button" data-settings-tab="mailboxes" role="tab">Mailboxes</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
-        <button type="button" data-settings-tab="inbound" role="tab">Email &amp; Phone</button>
-        <button type="button" data-settings-tab="mail" role="tab">Mail</button>
         <button type="button" data-settings-tab="system" role="tab">System</button>
         <button type="button" data-settings-tab="webhooks" role="tab">Webhooks</button>
         <button type="button" data-settings-tab="health" role="tab">Health<span class="hl-alert" data-hl-alert hidden></span></button>
@@ -244,6 +240,7 @@ function pageSettings() {
         ${settingsCanManageBot(botRow(assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
       </div></header><div id="settings-assistant-approvals"></div></section>
       <div id="settings-assistant"></div>
+      <div id="settings-notifications"></div>
       ${S.me?.role === 'owner' ? `<section class="card" id="settings-privacy"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-storage"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
     </div>
@@ -290,9 +287,6 @@ function pageSettings() {
       <section class="card" id="settings-roadmaps"></section>
       <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>
-    <div class="settings-pane" id="settings-inbound" role="tabpanel" hidden><section class="card" id="set-inbound"></section></div>
-    <div class="settings-pane" id="settings-mail" role="tabpanel" hidden><div id="set-mail">${skelRows(3, {card: true, dot: false})}</div></div>
-    <div class="settings-pane" id="settings-mailboxes" role="tabpanel" hidden><div id="set-mailboxes"></div></div>
     <div class="settings-pane" id="settings-history" role="tabpanel" hidden><section class="card"><header><h2>History</h2>
       <div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="log">Log</button><button type="button" role="radio" data-history-view="runs">Runs</button>${S.me?.role === 'owner' ? '<button type="button" role="radio" data-history-view="changes">Changes</button>' : ''}</div></header>
       <div id="set-log"></div>
@@ -313,7 +307,7 @@ function pageSettings() {
   });
   $('#settings-tabs').onclick = event => {
     const button = event.target.closest('[data-settings-tab]');
-    if (button) { MAILBOX_OPEN = ''; settingsShow(button.dataset.settingsTab); }
+    if (button) settingsShow(button.dataset.settingsTab);
   };
   // Opening More on a phone shows its tabs at the end of the scrolling row, or the current one when it is in More.
   $('#settings-more').addEventListener('toggle', event => {
@@ -349,7 +343,7 @@ function pageSettingsThemeBind() {
   };
 }
 function settingsShow(tab) {
-  if (tab === 'credentials' || tab === 'cloud') { location.hash = INTEGRATIONS; return; }
+  if (tab === 'credentials' || tab === 'cloud') { location.hash = tab === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools'; return; }
   tab = SETTINGS_ALIAS[tab] || tab;
   if (tab === 'tags' || tab === 'types') tab = 'tasks'; // Saved links keep working.
   if (tab === 'triggers') tab = 'webhooks';             // Settings > Triggers became Webhooks
@@ -366,11 +360,14 @@ function settingsShow(tab) {
   // A tab this person can't see (an admin's link, a role just lost) opens General and says why.
   SETTINGS_DENIED = !shown && SETTINGS_TABS.includes(tab) && tab !== 'general';
   SETTINGS_TAB = shown ? tab : 'general';
+  // HQ may have changed while Settings was closed, or a previous read may have failed.
+  if (['people', 'devices'].includes(SETTINGS_TAB))
+    void cloudSupportRead({fresh: true}).then(() => { if (settingsMachinesVisible()) renderSettingsMachines(); });
   const denied = $('#settings-denied');
   if (denied) denied.hidden = !SETTINGS_DENIED;
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
   settingsAddress();
-  if (['health', 'history', 'system', 'webhooks', 'inbound', 'mail', 'gateway', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
+  if (['health', 'history', 'system', 'webhooks', 'gateway', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
   const tasks = $('#settings-tasks');
   if (tasks) tasks.hidden = SETTINGS_TAB !== 'tasks';
   tabs.forEach(button => {
@@ -405,7 +402,8 @@ function settingsShow(tab) {
         // The owner's one click when the team has no Assistant (ui/assistant.js): restore it or add it.
         owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
         privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
-        company && settingsIsAdmin() && renderSettingsCompany(), owner && renderSettingsBotReports()]).then(() => settingsReveal(SETTINGS_REVEAL));
+        company && settingsIsAdmin() && renderSettingsCompany(), owner && renderSettingsBotReports(),
+        !formBusy($('#settings-notifications')) && settingsNotificationsRender()]).then(() => settingsReveal(SETTINGS_REVEAL));
     }
   }
   const peoplePane = $('#settings-people');
@@ -416,12 +414,6 @@ function settingsShow(tab) {
   if (gatewayPane) { gatewayPane.hidden = SETTINGS_TAB !== 'gateway'; if (SETTINGS_TAB === 'gateway') void renderSettingsGateway(); }
   const healthPane = $('#settings-health');
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
-  const inboundPane = $('#settings-inbound');
-  if (inboundPane) { inboundPane.hidden = SETTINGS_TAB !== 'inbound'; if (SETTINGS_TAB === 'inbound') void inboundMount(); }
-  const mailPane = $('#settings-mail');
-  if (mailPane) { mailPane.hidden = SETTINGS_TAB !== 'mail'; if (SETTINGS_TAB === 'mail' && !formBusy(mailPane)) void renderSettingsMail(); }
-  const mailboxesPane = $('#settings-mailboxes');
-  if (mailboxesPane) { mailboxesPane.hidden = SETTINGS_TAB !== 'mailboxes'; if (SETTINGS_TAB === 'mailboxes') void renderSettingsMailboxes(); }
   const reposPane = $('#settings-repos');
   if (reposPane) { reposPane.hidden = SETTINGS_TAB !== 'repos'; if (SETTINGS_TAB === 'repos' && !formBusy(reposPane)) void renderSettingsRepos(); }
   const system = $('#settings-system');
@@ -434,8 +426,7 @@ function settingsShow(tab) {
 // It replaces the entry: no hashchange, no new history step.
 function settingsAddress() {
   if (S.route !== SETTINGS) return;
-  SETTINGS_ADDRESS = `${SETTINGS}/${SETTINGS_TAB}${SETTINGS_TAB === 'history' ? settingsHistoryQuery() : ''}${
-    SETTINGS_TAB === 'mailboxes' && MAILBOX_OPEN ? '/' + MAILBOX_OPEN : ''}`;
+  SETTINGS_ADDRESS = `${SETTINGS}/${SETTINGS_TAB}${SETTINGS_TAB === 'history' ? settingsHistoryQuery() : ''}`;
   if (location.hash !== SETTINGS_ADDRESS) history.replaceState(history.state, '', SETTINGS_ADDRESS);
 }
 // On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.
@@ -527,17 +518,34 @@ async function renderSettingsBotReports() {
     catch (e) { box.checked = !box.checked; settingsFieldError(box, e.message); }
   };
 }
-// Settings > General > Privacy: the one switch for the anonymous usage count, and a new random install ID (PRIVACY.md).
+// Settings > General > Privacy: usage counting and explicit consent for Gateway suggestions (PRIVACY.md).
 async function renderSettingsPrivacy() {
   const host = $('#set-privacy');
   if (!host) return;
-  let v;
-  try { v = await get('/v2/system/usage-count'); } catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  let v, suggestions;
+  try { [v, suggestions] = await Promise.all([get('/v2/system/usage-count'), get('/v2/system/suggestions')]); }
+  catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   if (!host.isConnected) return; // Settings redrew while this was loading; the new card draws itself
   const forced = v.off_by && v.off_by !== 'setting';
   host.innerHTML = `<label class="privacy-row"><input type="checkbox" id="privacy-count"${v.enabled ? ' checked' : ''}${forced ? ' disabled' : ''}> Help count active installs</label>
     <p class="settings-cell-note">${forced ? (v.off_by === 'demo' ? 'Always off in the demo. ' : `Turned off by ${esc(v.off_by)}. `) : ''}A random ID, the version and three yes/no activity flags. <a href="${esc(v.doc)}" target="_blank" rel="noopener noreferrer">What is sent</a></p>
-    <p class="settings-cell-note">${v.install_id ? `Install ID: <code>${esc(v.install_id)}</code> <button class="ghost" type="button" id="privacy-reset">Reset install ID</button>` : 'No install ID yet: one is made the first time the count is sent.'}</p>`;
+    <p class="settings-cell-note">${v.install_id ? `Install ID: <code>${esc(v.install_id)}</code> <button class="ghost" type="button" id="privacy-reset">Reset install ID</button>` : 'No install ID yet: one is made the first time the count is sent.'}</p>
+    <label class="privacy-row"><input type="checkbox" id="privacy-suggestions"${suggestions.share_stats_for_suggestions ? ' checked' : ''}${suggestions.available ? '' : ' disabled'}> Share stats for suggestions</label>
+    <label class="privacy-row"><input type="checkbox" id="privacy-outcomes"${suggestions.report_suggestion_outcomes ? ' checked' : ''}${suggestions.available ? '' : ' disabled'}> Report suggestion outcomes</label>`;
+  host.querySelector('#privacy-suggestions').onchange = async ev => {
+    const box = ev.target, enabled = box.checked;
+    if (enabled && !await settingsConfirm({title: 'Share stats for suggestions?', ok: 'Share stats',
+      text: 'Sends counts only, never message text, to Tico.'})) { box.checked = false; return; }
+    box.disabled = true;
+    try { await put('/v2/system/suggestions', {share_stats_for_suggestions: enabled}); toast('Saved'); void renderSettingsPrivacy(); }
+    catch (e) { box.disabled = false; box.checked = !enabled; settingsFieldError(box, e.message); }
+  };
+  host.querySelector('#privacy-outcomes').onchange = async ev => {
+    const box = ev.target, enabled = box.checked;
+    box.disabled = true;
+    try { await put('/v2/system/suggestions', {report_suggestion_outcomes: enabled}); toast('Saved'); void renderSettingsPrivacy(); }
+    catch (e) { box.disabled = false; box.checked = !enabled; settingsFieldError(box, e.message); }
+  };
   host.querySelector('#privacy-count').onchange = async ev => {
     try { await put('/v2/system/usage-count', {enabled: ev.target.checked}); toast('Saved'); void renderSettingsPrivacy(); }
     catch (e) { ev.target.checked = !ev.target.checked; settingsFieldError(ev.target, e.message); }

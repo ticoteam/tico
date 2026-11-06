@@ -289,8 +289,7 @@ def test_every_source_writes_its_topic(api):
             write(c)
             return {(row["topic"], row["kind"]) for row in c.execute("SELECT * FROM changes WHERE seq>?", (before,))}
     aid, cid = attempt["id"], msg["conversation_id"]
-    approval = post(api, "approvals", {"kind": "send", "payload": {"to": "x@acme.example", "cc": [], "subject": "Hi",
-                                                                   "body_sha256": "a" * 64, "mailbox": "work"}},
+    approval = post(api, "approvals", {"kind": "publish", "payload": {"url": "https://acme.example/draft", "content_sha256": "a" * 64}},
                     token=attempt["token"])
     task = post(api, "tasks", {"owner": "ben", "title": "Coverage", "body": "Please."})
     assert logged(lambda c: c.execute("UPDATE tasks SET title='Covered' WHERE id=?", (task["id"],))) == {
@@ -331,7 +330,11 @@ def test_every_source_writes_its_topic(api):
     # Every trigger defined is installed, so a source cannot quietly drop out.
     with store.read() as c:
         installed = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'changes_%'")}
-    assert installed == {name for name, *_ in E.TRIGGERS}
+        tables = {row[0]: {r[1] for r in c.execute(f"PRAGMA table_info({row[0]})")}
+                  for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert installed == {name for name, _, table, *_ in E.TRIGGERS if table in tables
+                         and all(need.split('.')[0] in tables and ('.' not in need or need.split('.')[1] in tables[need.split('.')[0]])
+                                 for need in E.NEEDS.get(name, ()))}
 
 
 def test_the_log_is_installed_idempotently_and_follows_its_definitions(api, monkeypatch):

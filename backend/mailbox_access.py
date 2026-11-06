@@ -368,9 +368,9 @@ def action_refusal(c, owner, mailbox, action, args=None, *, queued=False):
     words = {"organize": "organize", "draft": "write drafts in", "send": "send from"}
     address = str(mailbox or "").strip().lower()
     if level(c, owner, mailbox) == "read_write":
-        return (f"Tico may not {words[need]} {address}: it is off in Settings > Google > What Tico may do")
+        return (f"Tico may not {words[need]} {address}: it is off in Tools > Settings > Email > What Tico may do")
     return (f"the automation's owner may not {words[need]} {address} "
-            "(Settings > Mailboxes: Who can use this mailbox)")
+            f"(Tools > {address} > Who can use it)")
 
 
 # ---------------------------------------------------------------------------------------------------- changes

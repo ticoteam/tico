@@ -54,7 +54,7 @@ def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(a
         return roster(c)
 
     monkeypatch.setattr(views, "_roster", counted)
-    expected, guests, counts = set(), set(), {}
+    expected, readers, counts = set(), set(), {}
 
     def open_read():
         statements, before = [], len(builds)
@@ -73,9 +73,9 @@ def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(a
                 if n % 3 == 0:
                     expected.add(row["id"])
                 elif n % 3 == 2:
-                    c.execute("UPDATE tasks SET guest='human:cara' WHERE id=?", (row["id"],))
+                    c.execute("UPDATE tasks SET readers=json_array('human:cara') WHERE id=?", (row["id"],))
                     expected.add(row["id"])
-                    guests.add(row["id"])
+                    readers.add(row["id"])
         conn, statements, built = open_read()
         try:
             assert ids(conn) == expected
@@ -95,7 +95,7 @@ def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(a
         assert ids(held) == expected
         fresh, _, _ = open_read()
         try:
-            assert ids(fresh) == guests
+            assert ids(fresh) == readers
         finally:
             fresh.close()
     finally:
@@ -396,6 +396,114 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
         assert query(api, f'SELECT id FROM {table} WHERE id=:id LIMIT 1', world['attempt']['token'],
                      params={'id': 'attempt-public'})['rows'] == [['attempt-public']]
         assert checked in ([], ['message-public'])
+
+
+def test_fast_sql_gates_skip_python_callbacks_and_keep_the_privacy_fallback(api, world, monkeypatch):
+    from backend import sql as S
+
+    store, room = api.app.state.store, world['coo_task']['conversation_id']
+    with store.transaction() as c:
+        messages = [H.say(c, 'human:ben', 'human:ana', 'Synthetic history', conversation_id=room, refs=refs)['id']
+                    for refs in (None, {}, {'task': world['coo_task']['id']})]
+        fallback = H.say(c, 'human:ben', 'human:ana', 'Synthetic escaped refs', conversation_id=room,
+                         refs={'task': world['coo_task']['id'], 'note': 'say "hi"'})['id']
+        c.execute('UPDATE messages SET conversation_id=? WHERE id=(SELECT j.message_id FROM jobs j '
+                  'JOIN attempts a ON a.job_id=j.id WHERE a.id=?)', (room, world['attempt']['id']))
+        # Exercise the SQL gates even when the stored provenance index has not caught up yet.
+        c.execute('DELETE FROM read_index')
+
+    callbacks, create_function = [], S.ReadConnection.create_function
+
+    def register(conn, name, arity, fn, **kwargs):
+        kind = name.split('_privacy_')[-1]
+        if kind in ('message', 'attempt', 'settled_message', 'settled_attempt'):
+            def counted(*args):
+                callbacks.append(args[0])
+                return fn(*args)
+            return create_function(conn, name, arity, counted, **kwargs)
+        return create_function(conn, name, arity, fn, **kwargs)
+
+    monkeypatch.setattr(S.ReadConnection, 'create_function', register)
+    for token in (world['attempt']['token'], 'ben-test'):
+        callbacks.clear()
+        assert query(api, 'SELECT count(*) FROM messages WHERE id IN (?,?,?)', token,
+                     params=messages)['rows'] == [[3]]
+        assert query(api, 'SELECT id FROM attempts WHERE id=?', token,
+                     params=[world['attempt']['id']])['rows'] == [[world['attempt']['id']]]
+        assert callbacks == []
+        assert query(api, 'SELECT id FROM messages WHERE id=?', token, params=[fallback])['rows'] == [[fallback]]
+        assert callbacks == [fallback]
+
+
+def test_every_guarded_view_prepares_for_each_caller(api, world):
+    """A deep message predicate must not break unrelated SQL reads while building the request's views."""
+    from dataclasses import replace
+    from backend import sql as S
+    from backend.auth import Identity
+
+    store, auth = api.app.state.store, api.app.state.auth
+    callers = [Identity('human:ana', 'owner'), Identity('human:ben', 'human'),
+               Identity('bot:ops', 'bot', attempt_id=world['attempt']['id']),
+               replace(Identity('human:ana', 'owner'), task_actor='bot:ops')]
+    for who in callers:
+        statements = []
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, who, trace=statements.append)
+            try:
+                views = [match[1] for statement in statements
+                         if (match := re.match(r'CREATE TEMP VIEW "(\w+)" AS', statement))
+                         and not match[1].startswith(conn.private_prefix)]
+                assert {'messages', 'attempts', 'jobs'} <= set(views)
+                for view in views:
+                    conn.execute(f'SELECT * FROM "{view}" LIMIT 0').fetchall()
+            finally:
+                conn.close()
+
+
+def test_page_message_gate_skips_plain_refs_and_keeps_review_permissions(api, world, monkeypatch):
+    from backend import sql as S
+    from backend.tests.test_page_audience import edit
+    from backend.tests.test_pages import page
+
+    made = page(api, world['attempt'])
+    assert made.status_code == 200, made.text
+    fid = made.json()['page']['file_id']
+    edit(api, fid, {'people': ['ana']}, token='ana-test')
+    assert api.get('/api/v2/pages/' + fid, headers=headers('cara-test')).status_code == 404
+    store, room = api.app.state.store, world['coo_task']['conversation_id']
+    with store.transaction() as c:
+        plain = [H.say(c, 'human:ben', 'human:ana', 'Synthetic plain', conversation_id=room, refs=refs)['id']
+                 for refs in (None, {}, {'task': world['coo_task']['id']})]
+        reviews = []
+        for refs in [{'target': fid}, {'answer': {'file': fid}}, {'review': [fid]}, {'body_sources': [{'file': fid}]}]:
+            reviews.append(H.say(c, 'human:ben', 'human:ana', 'Synthetic review', conversation_id=room, refs=refs)['id'])
+        # SQLite reads the first duplicate key and Python the last; escaped keys must also reach Python.
+        for raw in ('{"target":null,"target":' + json.dumps(fid) + '}',
+                    '{"t\\u0061rget":' + json.dumps(fid) + '}'):
+            mid = H.say(c, 'human:ben', 'human:ana', 'Synthetic encoded review', conversation_id=room)['id']
+            c.execute('UPDATE messages SET refs=? WHERE id=?', (raw, mid))
+            reviews.append(mid)
+
+    called, register = [], S.ReadConnection.create_function
+
+    def counted(conn, name, arity, fn, **kwargs):
+        if name.endswith('_privacy_page_message'):
+            def check(refs):
+                called.append(refs)
+                return fn(refs)
+            return register(conn, name, arity, check, **kwargs)
+        return register(conn, name, arity, fn, **kwargs)
+    monkeypatch.setattr(S.ReadConnection, 'create_function', counted)
+
+    def count(ids, token):
+        marks = ','.join('?' for _ in ids)
+        return query(api, f'SELECT count(*) FROM messages WHERE id IN ({marks})', token, params=ids)['rows']
+
+    assert count(plain, 'cara-test') == [[3]]
+    assert called == []
+    for token, expected in (('cara-test', 0), ('ana-test', len(reviews))):
+        assert count(reviews, token) == [[expected]]
+    assert called
 
 
 def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, world, monkeypatch):
@@ -826,8 +934,9 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
                 found = S.run(conn, 'SELECT * FROM tasks ORDER BY id', [], 5000, 20)
                 actual = json.dumps([dict(zip(found['columns'], row)) for row in found['rows']], sort_keys=True)
                 assert actual == expected
-                with pytest.raises(__import__("sqlite3").DatabaseError):
-                    conn.execute('SELECT * FROM "' + conn.private_prefix + 'visible_tasks"').fetchall()
+                for name in ('visible_tasks', 'known_tasks', 'plain_refs'):
+                    with pytest.raises(__import__("sqlite3").DatabaseError):
+                        conn.execute('SELECT * FROM "' + conn.private_prefix + name + '"').fetchall()
             finally:
                 conn.close()
     for who in callers:

@@ -130,7 +130,7 @@ def groups(world):
 @seed("connection")
 def connection(world):
     """A tool the Engineering Lead's computer reports (the runner's heartbeat): Acme Billing, read and refund, so
-    Library › Tools lists it in use, with writes."""
+    Tools lists it in use, with writes."""
     row = {"ready": True, "runtime": "claude", "model": "claude-opus-5-5", "repository_present": True,
            "configuration_valid": True, "problems": []}
     bots = {slug: {**row, **({"tools": [{"service": "acme-billing", "identity": "Acme billing account",
@@ -272,3 +272,113 @@ def priya_leads(world):
     harness places bots on the chart (harness.py), since the bot definition route does not take a hand-set reports_to."""
     with world.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='priya' WHERE bot='engineering-lead'")
+
+
+# ---------------------------------------------------------------------------------------------- Tools
+VENDOR_HOST = "api.close.example"       # Close CRM at a made-up address: the vendor below answers it, nothing else can
+VENDOR_IP = "93.184.215.14"              # a public address for the name, so the proxy's egress check passes; never dialed
+TOOL_KEYS = {"close-read-test-0001": "read", "close-full-test-0002": "read_write"}   # made-up; ui/tests/e2e-tools.cjs
+
+
+def _vendor(request):
+    """Close's API as far as the journey calls it: Basic with the key as the user; /api/v1/me/ for the check,
+    /api/v1/lead/ to list (GET) or make (POST, refused for a read key). Anything else is a 401 or a 404."""
+    import base64
+    import httpx
+    kind, _, value = request.headers.get("authorization", "").partition(" ")
+    try:
+        key = base64.b64decode(value).decode().rstrip(":") if kind.lower() == "basic" else ""
+    except ValueError:
+        key = ""
+    level = TOOL_KEYS.get(key)
+    if level is None:
+        return httpx.Response(401, json={"error": "Unauthorized"})
+    if request.url.path == "/api/v1/me/" and request.method == "GET":
+        return httpx.Response(200, json={"id": "user_test", "email": "dana@acme.example"})
+    if request.url.path == "/api/v1/lead/":
+        if request.method == "GET":
+            return httpx.Response(200, json={"data": [{"id": "lead_1", "display_name": "Northwind Traders"}],
+                                             "has_more": False})
+        return httpx.Response(403 if level == "read" else 201, json={"id": "lead_2"} if level != "read" else {})
+    return httpx.Response(404, json={"error": "Not found"})
+
+
+@seed("tools")
+def tools(world):
+    """Tools with real data (ui/tests/e2e-tools.cjs). Close CRM, its known service at VENDOR_HOST, on the proxy with a
+    Read and write key; the Engineering Lead at Read and Omar at Read and write. One run of the Lead's, as a runner runs
+    it, takes its proxy token from credential-runtime and makes two calls through the proxy: a GET (sent) and a POST
+    (refused: at Read with only the full key, only GET goes through). Then a read key is added, the Lead's Read moves to
+    it, and Dana runs Check now. And Ledger export: a key with no address, on computers, so under Needs you.
+    The vendor runs in this process: the proxy's transport (app.state.tool_proxy_transport) and the check's send
+    (api_tools.send_check), the two test seams, answer as _vendor, and egress.resolve gives VENDOR_HOST a public address,
+    so the product's own checks run unchanged, nothing leaves the machine, and nothing in the product is switched for
+    the test. The patches go when the world does."""
+    import base64
+    import ipaddress
+    from urllib.parse import urlsplit
+    import httpx
+    from backend import api_tools, egress
+    from .harness import DANA, LEAD_ID, OMAR_ID, CLAUDE_ID
+
+    world.patch(egress, "resolve", lambda real: lambda host: [ipaddress.ip_address(VENDOR_IP)] if host == VENDOR_HOST
+                else real(host))
+
+    def check(url, headers, params):
+        egress.check(url)                                       # what the real send refuses, this one refuses too
+        return _vendor(httpx.Request("GET", url, headers=headers, params=params)).status_code
+    world.patch(api_tools, "send_check", lambda _real: check)
+    world.app.state.tool_proxy_transport = httpx.MockTransport(_vendor)
+
+    read, full = TOOL_KEYS
+    tid = _ok(world.api("post", "/api/v2/api-tools", {"name": "Close CRM", "service": "close-crm",
+                                                       "base_url": "https://" + VENDOR_HOST, "check_path": "/api/v1/me/"},
+                        who=DANA), "Close CRM")["id"]
+    base = f"/api/v2/api-tools/{tid}"
+    _ok(world.api("post", base + "/keys", {"name": "Full key", "value": full, "access_level": "read_write"}, who=DANA),
+        "full key")
+    for subject, level in ((f"bot:{LEAD_ID}", "read"), (f"human:{OMAR_ID}", "read_write")):
+        _ok(world.api("put", f"{base}/access/{subject}", {"level": level}, who=DANA), subject)
+
+    _ok(world.api("post", "/api/v2/tasks", {"title": "Pull this week's leads", "body": "From Close CRM.",
+                                             "owner": LEAD_ID}, who=DANA), "task")
+    answers = {}
+
+    def act(token, attempt):
+        held = _ok(world.api("get", "/api/v2/credential-runtime", who=token), "credential-runtime")["credentials"]
+        item = next(i for i in held if i.get("url_env"))
+        proxy = urlsplit(item["proxy_url"]).path
+        auth = {"Authorization": "Basic " + base64.b64encode((item["value"] + ":").encode()).decode()}
+        answers["get"] = world.client.get(proxy + "/api/v1/lead/?query=open&_limit=25", headers=auth).status_code
+        answers["post"] = world.client.post(proxy + "/api/v1/lead/", headers=auth, json={"name": "Contoso"}).status_code
+    if world.turn(LEAD_ID, act=act) is None:
+        raise RuntimeError("the Engineering Lead's turn did not run")
+    if answers != {"get": 200, "post": 403}:
+        raise RuntimeError(f"the proxied calls answered {answers}")
+
+    _ok(world.api("post", base + "/keys", {"name": "Read key", "value": read, "access_level": "read",
+                                           "expires_on": "2027-06-30"}, who=DANA), "read key")
+    _ok(world.api("put", f"{base}/access/bot:{LEAD_ID}", {"level": "read"}, who=DANA), "the Lead's Read")
+    _ok(world.api("post", base + "/check", who=DANA), "Check now")
+
+    ledger = _ok(world.api("post", "/api/v2/api-tools", {"name": "Ledger export"}, who=DANA), "Ledger export")["id"]
+    _ok(world.api("post", f"/api/v2/api-tools/{ledger}/keys", {"name": "Key", "value": "ledger-test-0003",
+                                                               "access_level": "read_write"}, who=DANA), "ledger key")
+    _ok(world.api("put", f"/api/v2/api-tools/{ledger}/access/bot:{CLAUDE_ID}", {"level": "read_write"}, who=DANA),
+        "builder-claude on Ledger export")
+
+
+@seed("assistant")
+def assistant(world):
+    """The Assistant (bot coo) on the install, as onboarding makes it, and the template routines it has never had: its
+    daily sweep (backend/onboarding.py ensure_builtin_routines, the same call as the startup path). Dana owns it, so her
+    Automations list shows the sweep; the routine is an automation at once (redesign_migration.adopt)."""
+    from backend import bot_settings as BS
+    from .harness import DANA_ID
+    with world.store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('coo', 'coo', 'Coo', 'active')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot, team, owner_id) VALUES('coo', '', ?)", (DANA_ID,))
+        BS.write(c, "coo", {"name": "Coo", "status": "active", "template": "assistant"})
+        made = world.app.state.onboarding.ensure_builtin_routines(c)
+    if made != [("coo", "daily-sweep")]:
+        raise RuntimeError(f"the Assistant's daily sweep was not made: {made}")

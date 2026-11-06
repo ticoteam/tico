@@ -5,7 +5,7 @@
 'use strict';
 
 const PAGE_ROUTE = '#/page/', RD_FILES = '#/library/files';
-// A card shows the top of the page at the card's width, cut at its size's height; full follows the page's own height.
+// A card shows the top of the page at the card's width and its size's fixed height; full follows the page's own height.
 const PAGE_SIZES = {small: 180, medium: 320, large: 520};
 const PAGE_FULL_MIN = 240;
 
@@ -19,10 +19,12 @@ const pageBotName = x => {
   return bot && botRow(bot) ? botDisplayName(bot) : x.bot_name || bot || '';
 };
 // `link: false` inside a card that is itself a link: the replacing page's title without its own link.
+const pageLockHTML = p => p.restricted ? '<span class="nav-icon pg-lock" aria-label="Restricted">lock</span> ' : '';
 function pageStatusHTML(p, {link = true} = {}) {
+  const lock = pageLockHTML(p);
   if (p.replaced_by_id) {
     const title = esc(p.replaced_by_title || 'a newer page');
-    return `<div class="pg-status pg-replaced">Replaced by ${link ? `<a href="${esc(pageHref(p.replaced_by_id))}">${title}</a>` : title}</div>`;
+    return `<div class="pg-status pg-replaced">${lock}Replaced by ${link ? `<a href="${esc(pageHref(p.replaced_by_id))}">${title}</a>` : title}</div>`;
   }
   const stale = Number.isInteger(p.stale_days);
   const by = String(p.updated_by || '');
@@ -32,7 +34,7 @@ function pageStatusHTML(p, {link = true} = {}) {
   if (Number.isInteger(p.version)) parts.push('v' + p.version);
   if (p.cadence && p.cadence !== 'none') parts.push(esc(p.cadence));
   if (p.as_of) parts.push('data from ' + esc(pageDay(p.as_of)));
-  return `<div class="pg-status${stale ? ' pg-stale' : ''}" title="${esc(fmt(p.updated_at))}">${parts.join(' · ')}</div>`;
+  return `<div class="pg-status${stale ? ' pg-stale' : ''}" title="${esc(fmt(p.updated_at))}">${lock}${parts.join(' · ')}</div>`;
 }
 
 // ----------------------------------------------------------------- the card
@@ -40,7 +42,17 @@ function pageStatusHTML(p, {link = true} = {}) {
 // (visualPageSrc, ui/app/visual-cards.js) applies where that build has it.
 // visualPageSrc (ui/app/visual-cards.js): null when this window can't frame it, e.g. an older desktop app.
 const pageSrc = p => p.src ? visualPageSrc(p.src) : null;
-function pageFrame(p, src, height) {
+// The frame's address says where the page is drawn: the server's height reporter (backend/visuals.py) reads
+// `#tico-view=card|full&tico-size=<size>` into <html data-tico-view data-tico-size>, so a page's own CSS can draw a
+// compact widget in a card. A fragment changes no signature, cache key or audience check, and follows a redirect.
+// A desktop app that checks frame addresses (visualOrigin) refuses a fragment unless it says visualView
+// (app/src/visual_origin.rs view_marker): older ones get the bare address, so the page draws, without its card layout.
+const pageViewSrc = (src, size) => {
+  const bare = src.split('#')[0], features = window.ticoNativeFeatures || [];
+  if (features.includes('visualOrigin') && !features.includes('visualView')) return bare;
+  return `${bare}#tico-view=${size === 'full' ? 'full' : 'card'}&tico-size=${size}`;
+};
+function pageFrame(p, src, height, size) {
   const f = document.createElement('iframe');
   f.className = 'page-frame';
   // Set before the frame joins the page, as a message's visual page is (VISUAL_PAGE_SANDBOX): the only script it runs
@@ -48,18 +60,22 @@ function pageFrame(p, src, height) {
   f.setAttribute('sandbox', VISUAL_PAGE_SANDBOX);
   f.setAttribute('credentialless', '');
   f.referrerPolicy = 'no-referrer';
+  // A card is a fixed window onto the page's top: nothing scrolls inside it.
+  if (size !== 'full') f.setAttribute('scrolling', 'no');
   f.title = p.title || 'Page';
   f.style.height = height + 'px';
-  f.src = src;
+  f.src = pageViewSrc(src, size);
   return f;
 }
 // pageCard(page, {size}): one card holding the page's status line and the framed page (or an Open card, the status
-// under its title, when there is no address). Tapping a card opens the page full size; `full` is that full size, where
-// the status line sits under the view's own title. `page` is GET /api/v2/pages/{id}'s page.
+// under its title, when there is no address). A card is a widget: the page at its own height up to the card's size,
+// faded at the bottom when the page runs on, and the whole card one tap that opens the page full size, as its expand icon does.
+// `full` is that full size, where the status line sits under the view's own title. `page` is GET
+// /api/v2/pages/{id}'s page.
 window.pageCard = function pageCard(page, {size = 'medium'} = {}) {
-  const full = size === 'full', cap = PAGE_SIZES[size] || PAGE_SIZES.medium;
+  const full = size === 'full', named = full ? 'full' : PAGE_SIZES[size] ? size : 'medium', cap = PAGE_SIZES[named];
   const el = document.createElement('article');
-  el.className = `pg-card pg-${full ? 'full' : PAGE_SIZES[size] ? size : 'medium'}`;
+  el.className = `pg-card pg-${named}`;
   el.dataset.page = page.file_id;
   const src = pageSrc(page);
   if (!src) {
@@ -76,27 +92,42 @@ window.pageCard = function pageCard(page, {size = 'medium'} = {}) {
   el.innerHTML = pageStatusHTML(page);
   const box = document.createElement('div');
   box.className = 'pg-box';
-  const frame = pageFrame(page, src, full ? PAGE_FULL_MIN : cap);
+  // A page measures at least its frame, so a card's frame starts at 1px and the page says its own height; the box
+  // keeps the card's size until it does (pg-sized).
+  const frame = pageFrame(page, src, full ? PAGE_FULL_MIN : 1, named);
   frame.pageCap = full ? 0 : cap;
   box.append(frame);
-  if (!full) {
-    const tap = document.createElement('a');
-    tap.className = 'pg-tap'; tap.href = pageHref(page.file_id);
-    tap.setAttribute('aria-label', 'Open ' + (page.title || 'page'));
-    box.append(tap);
-  }
   el.append(box);
+  if (!full) {
+    const href = pageHref(page.file_id);
+    const tap = document.createElement('a');
+    tap.className = 'pg-tap'; tap.href = href;
+    tap.setAttribute('aria-label', 'Open ' + (page.title || 'page'));
+    const expand = document.createElement('a');
+    expand.className = 'pg-expand'; expand.href = href;
+    expand.setAttribute('aria-label', 'Open full screen'); expand.title = 'Open full screen';
+    expand.innerHTML = '<span class="nav-icon" aria-hidden="true">open_in_full</span>';
+    el.append(tap, expand);
+  }
   return el;
 };
-// The height a page reports (backend/visuals.py REPORTER), from a page frame's own window only: a card takes it up to
-// its cut, so a short page leaves no blank; the full view takes it whole.
+// The height a page reports (backend/visuals.py REPORTER), from a page frame's own window only. A card takes the page's
+// height up to its size and fades its bottom when the page is taller; the full view takes the height whole.
 window.addEventListener('message', ev => {
   const n = ev.data && typeof ev.data === 'object' ? ev.data.ticoVisualHeight : undefined;
   if (typeof n !== 'number' || !Number.isFinite(n) || !ev.source) return;
   const frame = [...document.querySelectorAll('iframe.page-frame')].find(x => x.contentWindow === ev.source);
   if (!frame) return;
-  const h = Math.max(24, Math.min(Math.ceil(n), VISUAL_PAGE_MAX));
-  frame.style.height = (frame.pageCap ? Math.min(h, frame.pageCap) : Math.max(h, PAGE_FULL_MIN)) + 'px';
+  const h = frame.pageHeight = Math.max(24, Math.min(Math.ceil(n), VISUAL_PAGE_MAX));
+  if (frame.pageCap) {
+    const box = frame.parentElement;
+    // A page sized by the screen (100vh) says next to nothing from its 1px frame: it fills the card.
+    const fills = !box.classList.contains('pg-sized') && Math.ceil(n) < 24;
+    frame.style.height = (fills ? frame.pageCap : Math.min(h, frame.pageCap)) + 'px';
+    box.classList.add('pg-sized');
+    box.classList.toggle('pg-cut', !fills && h > frame.pageCap);
+  }
+  else frame.style.height = Math.max(h, PAGE_FULL_MIN) + 'px';
 });
 
 // ----------------------------------------------------------------- the full view, #/page/<id>
@@ -127,9 +158,41 @@ function pageFullDraw(state) {
   const root = $('#pg-view');
   if (!root) return;
   const pinned = state.pinned.map(x => `<a href="${esc(pagePlaceHref(x.place))}">${esc(x.label)}</a>`).join(' · ');
-  root.innerHTML = `<header class="pg-head"></header><div class="pg-body"></div>${pinned ? `<p class="pg-pinned">Pinned to ${pinned}</p>` : ''}`;
+  root.innerHTML = `<header class="pg-head"></header>${state.can.manage ? `<div class="pg-access"><span>Who can see it</span><button class="ghost" type="button" data-pg-audience>${esc(pagesAudienceText(state.page.audience))}</button></div>` : ''}<div class="pg-body"></div>${pinned ? `<p class="pg-pinned">Pinned to ${pinned}</p>` : ''}`;
   pageFullHead(state);
+  const access = root.querySelector('[data-pg-audience]');
+  if (access) access.onclick = () => void pagesEditAudience(state);
   pageFullBody(state);
+}
+const pagesAudienceText = audience => !audience || audience.everyone ? "Everyone who can see where it's filed" : accessLevelText(audience);
+async function pagesEditAudience(state) {
+  try {
+    const result = await get('/v2/groups');
+    const level = state.page.audience || accessEveryone();
+    await accessEditor({name: state.page.title, singleAudience: true,
+      initialData: {see: level, read: level, write: level, teams: Array.isArray(result) ? result : result.groups || []},
+      save: audience => patch('/v2/pages/' + encodeURIComponent(state.id), {audience: audience.everyone ? null : audience}),
+      after: saved => { if (PG === state) { state.page = saved.page; pageFullDraw(state); } }});
+  } catch (error) { toast(error.message, true); }
+}
+function pagesAccessRefresh() {
+  getForget();
+  // Remove the held content immediately; each open surface reads again with current permissions.
+  document.querySelectorAll('.pg-card, .vcard[data-kind="page"]').forEach(card => card.remove());
+  for (const entry of VIEW_FILES.values()) {
+    if (entry.url) URL.revokeObjectURL(entry.url);
+    else entry.promise.then(item => URL.revokeObjectURL(item.url)).catch(() => {});
+  }
+  VIEW_FILES.clear();
+  if (VIEW?.items.some(item => item.fileId && item.kind === 'html')) $('#doc-viewer')?.close();
+  if (PG) void pageFullView(PG.id);
+  if (LF) void lfLoad();
+  if (TASK_CHAT) {
+    const dialog = TASK_CHAT.dialog;
+    if (dialog.tpEl) { dialog.tpEl.tpCards = new Map(); void taskPagesLoad(dialog); }
+    taskChatLive(TASK_CHAT);
+  }
+  if (!PG && !LF && !TASK_CHAT) void route();
 }
 // A pin's place (backend/cards.py) as the app's address.
 function pagePlaceHref(place) {
@@ -162,7 +225,7 @@ async function pageFullBody(state) {
   if (current && card.querySelector('iframe')) { body.replaceChildren(card); return; }
   card.querySelector('.pg-open')?.remove();
   delete card.pageData;                         // this view draws its own frame again (nativeVisualRepaint)
-  if (!current) card.querySelector('.pg-status').textContent = `v${state.shown} · an older version`;
+  if (!current) card.querySelector('.pg-status').innerHTML = pageLockHTML(p) + `v${state.shown} · an older version`;
   const box = document.createElement('div');
   box.className = 'pg-box pg-preview';
   box.innerHTML = skelRows(4);
@@ -207,7 +270,24 @@ function taskPagesAdopt(d, task) {
   d.tpEl = slot; slot.dataset.task = id;
   slot.innerHTML = `<header class="tp-head"><span class="lbl">Pages</span><div class="tp-actions"><button type="button" class="ghost" data-tp-link hidden>Link page</button></div></header>
     <div class="tp-picker" hidden><div class="tp-search"><input type="search" placeholder="Search pages" aria-label="Search pages" autocomplete="off">
-      <button type="button" class="ghost" data-tp-close aria-label="Close page picker">Close</button></div><div class="tp-results" aria-live="polite"></div></div><div class="tp-pages"></div>`;
+      <button type="button" class="ghost" data-tp-close aria-label="Close page picker">Close</button></div><div class="tp-results" aria-live="polite"></div></div>
+    <form class="tp-make" hidden>${ldotHTML({state: 'still', size: 20})}<input type="text" aria-label="Describe the page" placeholder="Describe the page" maxlength="8000" required><button type="submit" class="primary">Make page</button></form>
+    <p class="tp-error err" role="alert" hidden></p><div class="tp-making" role="status" hidden></div><div class="tp-pages"></div>`;
+  const make = $('.tp-make', slot), prompt = $('input', make), error = $('.tp-error', slot);
+  make.onsubmit = async ev => {
+    ev.preventDefault();
+    if (slot.tpSending || ['making', 'update_required'].includes(slot.tpMaking?.state) || !prompt.value.trim()) return;
+    slot.tpSending = true; $('button', make).disabled = true; error.hidden = true;
+    try {
+      const r = await post('/v2/tasks/' + encodeURIComponent(id) + '/make-page', {text: prompt.value.trim()});
+      if (d.tpEl !== slot) return;
+      if (r.held) throw new Error('Not sent');
+      make.reset();
+      taskPageMakeDraw(d, {state: 'making', conversation_id: r.message.conversation_id});
+      await taskPageMakeLoad(d);
+    } catch (e) { if (d.tpEl === slot) { error.textContent = e.message; error.hidden = false; } }
+    finally { slot.tpSending = false; $('button', make).disabled = ['making', 'update_required'].includes(slot.tpMaking?.state); }
+  };
   const picker = $('.tp-picker', slot), input = $('input', picker), results = $('.tp-results', picker);
   $('[data-tp-link]', slot).onclick = () => { picker.hidden = false; input.focus(); };
   $('[data-tp-close]', slot).onclick = () => { picker.hidden = true; $('[data-tp-link]', slot).focus(); };
@@ -239,11 +319,47 @@ function taskPagesAdopt(d, task) {
     } catch (e) { toast(e.message, true); }
     finally { slot.tpBusy = false; button.disabled = false; }
   };
-  d.tpOff = liveOn('tasks', e => {
+  const refresh = () => { if (d.open && d.tpEl === slot) void taskPagesLoad(d); };
+  const offs = [liveOn('tasks', e => {
     if (d.open && d.tpEl === slot && (e.kinds || [e.kind]).includes('files') && String(e.id) === id)
-      liveSoon('task-pages:' + d.id + ':' + id, () => { if (d.open && d.tpEl === slot) void taskPagesLoad(d); }, 200);
-  });
+      liveSoon('task-pages:' + d.id + ':' + id, refresh, 200);
+  }), liveOn('runs', e => {
+    if (['making', 'update_required'].includes(slot.tpMaking?.state) && e.conversation_id === slot.tpMaking.conversation_id)
+      liveSoon('task-pages:' + d.id + ':' + id, refresh, 200);
+  }), liveOn('reset', refresh)];
+  const poll = liveFallback(() => { if (['making', 'update_required'].includes(slot.tpMaking?.state)) refresh(); }, 5000);
+  d.tpOff = () => { offs.forEach(off => off()); slot.tpFollow?.(); clearInterval(poll); };
   void taskPagesLoad(d);
+}
+function taskPageMakeDraw(d, status) {
+  const slot = d.tpEl;
+  if (!slot) return;
+  const pending = ['making', 'update_required'].includes(status?.state);
+  const cid = pending ? status.conversation_id : null;
+  if (slot.tpFollowCid !== cid) {
+    slot.tpFollow?.(); slot.tpFollow = cid ? liveFollow(cid) : null; slot.tpFollowCid = cid;
+  }
+  slot.tpMaking = status;
+  const card = $('.tp-making', slot);
+  card.hidden = !status || status.state === 'made';
+  card.innerHTML = status?.state === 'making' ? 'Making page…' : status?.state === 'update_required'
+    ? 'Update this computer to make pages · <button type="button" class="ghost" data-tp-retry>Retry</button>'
+    : 'Not made · <a href="#/assistant">Open chat</a>';
+  const retry = $('[data-tp-retry]', card);
+  if (retry) retry.onclick = async () => {
+    retry.disabled = true;
+    try { await taskPageMakeLoad(d); }
+    catch (e) { toast(e.message, true); }
+    finally { retry.disabled = false; }
+  };
+  $('button', $('.tp-make', slot)).disabled = slot.tpSending || pending;
+}
+async function taskPageMakeLoad(d) {
+  const slot = d.tpEl;
+  if (!slot) return;
+  const seq = slot.tpMakeSeq = (slot.tpMakeSeq || 0) + 1;
+  const r = await get('/v2/tasks/' + encodeURIComponent(slot.dataset.task) + '/make-page', {fresh: true});
+  if (d.tpEl === slot && seq === slot.tpMakeSeq) taskPageMakeDraw(d, r.make_page);
 }
 async function taskPagesLoad(d) {
   const slot = d.tpEl;
@@ -255,6 +371,7 @@ async function taskPagesLoad(d) {
     const pins = (r.pins || []).filter(x => x.page && !x.page.replaced_by_id && !x.page.archived);
     slot.hidden = !r.can_link && !pins.length;
     $('[data-tp-link]', slot).hidden = !r.can_link;
+    $('.tp-make', slot).hidden = !r.can_link;
     const kept = slot.tpCards || new Map(), cards = new Map();
     for (const pin of pins) {
       const key = JSON.stringify([pin.page, pin.size, pin.can_unpin]);
@@ -273,6 +390,7 @@ async function taskPagesLoad(d) {
     }
     slot.tpCards = cards;
     $('.tp-pages', slot).replaceChildren(...[...cards.values()].map(x => x.el));
+    if (r.can_link) await taskPageMakeLoad(d);
   } catch (e) { if (d.tpEl === slot) toast(e.message, true); }
 }
 

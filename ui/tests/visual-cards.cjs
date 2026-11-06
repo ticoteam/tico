@@ -84,6 +84,11 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     // The snapshot as the server sends it: each read signs every visual's address afresh (gen), as on a live update.
     const messages = [...MESSAGES];
     let hold = null, gen = 1;
+    const refreshId = 'file-' + 'a'.repeat(24), expires = Math.floor(Date.now() / 1000) + 3600;
+    const token = fields => Buffer.from(JSON.stringify(fields)).toString('base64url') + '.fixture';
+    const legacySrc = VIS + token(['human:ana', refreshId, 1, '', expires]);
+    const freshSrc = VIS + token(['human:ana', refreshId, 1, '', expires, '']);
+    let pageReads = 0;
     const signed = () => gen === 1 ? messages : messages.map(m => ({...m, refs: {...m.refs, attachments: m.refs.attachments.map(a => a.src ? {...a, src: `${a.src}.${gen}`} : a)}}));
     page.on('pageerror', e => { if (!/sandboxed/i.test(e.message)) errors.push(e.message); });
     const threads = threadsFake({bot: 'designer', messages: () => signed()});
@@ -94,6 +99,8 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       if (url.hostname === 'outside.test') return route.fulfill({contentType: 'text/html', body: '<p>Outside</p>'});
       if (url.hostname === 'visuals.test') {
         visualReqs.push({path: p, cookie: req.headers().cookie || ''});
+        if (url.href === legacySrc) return route.fulfill({status: 404, body: ''});
+        if (url.href === freshSrc) return route.fulfill({contentType: 'text/html', body: server.pages.short});
         const id = p.replace('/visuals/tok-', '').replace(/\.\d+$/, '');
         if (hold && id === 'f-chart') await hold;
         const headers = {'Cross-Origin-Resource-Policy': 'cross-origin', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff'};
@@ -117,6 +124,9 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       if (p === '/api/issues') return json([]);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/events') { held.push(route); return; }      // live events (ui/app/live.js), held open
+      if (p === '/api/v2/pages/' + refreshId) return json({page: {file_id: refreshId, title: 'Refreshed page',
+        version: 1, updated_at: now, bot_id: 'designer', src: ++pageReads === 1 ? legacySrc : freshSrc}, pinned: []});
+      if (p === '/api/v2/files/' + refreshId + '/versions') return json({versions: []});
       const answer = threads(p, url, req.method());
       if (answer !== undefined) return json(answer);
       if (p === '/api/v2/tasks' && req.method() === 'GET') return json({tasks: [task], next_offset: null});
@@ -476,6 +486,49 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     await c1.locator('figure.vcard[data-kind="image"] [data-vcard-act="open"]').click();
     assert.deepEqual(await page.evaluate(() => [$('#task-modal').tfOpen?.id, $('#task-modal').tfOpen?.n]), ['f-chart', 1]);
     await noSideways('task');
+
+    // ---- pinned pages are widgets (ui/app/pages.js pageCard): the page at its own height up to the size, with nothing
+    // scrolling inside, its frame told it is in a card at that size (the reporter sets data-tico-view from the
+    // fragment), a fade only when the page runs on, and an expand icon that opens the full view
+    await page.evaluate(() => $('#task-modal')?.close());
+    const widgets = await page.evaluate(([vis, refreshId]) => {
+      const box = document.createElement('div');
+      box.id = 'widgets'; box.style.cssText = 'position:fixed;top:0;left:0;z-index:9999;width:min(320px,100vw);background:var(--bg)';
+      const at = new Date().toISOString();
+      for (const [id, size] of [['f-tall', 'small'], ['f-clamp', 'small'], [refreshId, 'large']])
+        box.append(pageCard({file_id: id, title: 'Widget ' + id, version: 1, updated_at: at, bot_id: 'designer', src: vis + 'tok-' + id}, {size}));
+      document.body.append(box);
+      return [...box.querySelectorAll('iframe.page-frame')].map(f => [f.getAttribute('src'), f.getAttribute('scrolling')]);
+    }, [VIS, refreshId]);
+    assert.deepEqual(widgets, [[VIS + 'tok-f-tall#tico-view=card&tico-size=small', 'no'], [VIS + 'tok-f-clamp#tico-view=card&tico-size=small', 'no'],
+      [VIS + 'tok-' + refreshId + '#tico-view=card&tico-size=large', 'no']], `${label}: a card's frame says card and its size`);
+    await page.waitForFunction(() => [...document.querySelectorAll('#widgets .pg-card')].slice(0, 2).every(c => c.querySelector('iframe').pageHeight), null, {timeout: 5000});
+    const drawn = await page.evaluate(() => [...document.querySelectorAll('#widgets .pg-card')].slice(0, 2).map(c => {
+      const b = c.querySelector('.pg-box');
+      return [Math.round(b.getBoundingClientRect().height), Math.round(c.querySelector('iframe').getBoundingClientRect().height), b.classList.contains('pg-cut'),
+        getComputedStyle(b, '::after').content !== 'none'];
+    }));
+    assert.deepEqual(drawn, [[180, 180, true, true], [120, 120, false, false]], `${label}: a card is as tall as its page up to its size, faded only when cut`);
+    const expand = page.locator('#widgets .pg-card').nth(2).locator('a.pg-expand');
+    assert.equal(await expand.getAttribute('aria-label'), 'Open full screen');
+    assert.equal(await page.locator('#widgets .pg-card').nth(2).locator('a.pg-tap').count(), 1, `${label}: the whole card stays a tap target`);
+    await noSideways('widgets');
+
+    // A page left open with an obsolete five-field address gets a fresh six-field address on reload. It is opened from
+    // a card's expand icon, and the full view's frame says full.
+    const rejected = page.waitForResponse(r => r.url() === legacySrc);
+    await expand.click();
+    await page.waitForFunction(id => location.hash === '#/page/' + id, refreshId, {timeout: 5000});
+    await page.evaluate(() => document.querySelector('#widgets')?.remove());
+    assert.equal((await rejected).status(), 404);
+    assert.equal(await page.locator('#pg-view iframe.page-frame').getAttribute('src'), legacySrc + '#tico-view=full&tico-size=full');
+    assert.equal(await page.locator('#pg-view iframe.page-frame').getAttribute('scrolling'), null, `${label}: the full view is not a card`);
+    const reminted = page.waitForResponse(r => r.url() === freshSrc);
+    await page.reload();
+    assert.equal((await reminted).status(), 200);
+    assert.equal(await page.locator('#pg-view iframe.page-frame').getAttribute('src'), freshSrc + '#tico-view=full&tico-size=full');
+    assert.equal(pageReads, 2, `${label}: reload requests a fresh page address`);
+    assert.equal(JSON.parse(Buffer.from(freshSrc.slice(VIS.length).split('.')[0], 'base64url')).length, 6);
 
     // ---- nothing reached outside; visuals never carried the app's cookie
     await page.waitForTimeout(300);

@@ -10,7 +10,7 @@ access:
     identity: owner@example.com  # the account it acts as; omit when not an identity
     can: [read, draft]            # verbs, see below
     env: GMAIL_CREDENTIALS        # secret that connects it; the app shows connected / not connected
-    note: "send needs outbound_send: true"
+    note: "send also needs Tico's sending policy to allow it"
 ```
 
 Verbs: `read`, `draft` (prepare but never send or publish), `send`, `post`, `write`, `spend`, `use`
@@ -20,7 +20,7 @@ Rules:
 - Every bot implicitly has Tico tasks, its own prefix in the S3 bucket, and read/write
   access to its own `bot-<slug>` GitHub repository, including its branches and pull requests.
   Do not list them. Access to another bot's or a product repository still needs a declaration.
-- Messages to outsiders (`send`, `post`, `publish`) stay drafts while `outbound_send` is false. When it is true, act within the requested work and the declared Tools. An approval does not turn sending on. Spending follows the requested budget and Tools; it does not depend on the send switch.
+- Messages to outsiders (`send`, `post`, `publish`) follow the bot's sending policy in Tico (Settings > Bots > <bot> > Email sending: On their own, Ask first or Never), never a line in `bot.yaml`. Every email goes through Tico's send queue, which decides it; under Ask first a person approves it in Tico. Act within the requested work and the declared Tools. Spending follows the requested budget and Tools; it does not depend on the sending policy.
 - The secret named in `env` lives in `~/tico-work/secrets/<slug>.env` on the machine that runs
   the team. If it is missing, the app shows "not connected" and the bot should ask via
   `needs-human` rather than improvise.

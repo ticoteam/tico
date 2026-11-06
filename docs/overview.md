@@ -29,7 +29,7 @@ in the sidebar tree; its arrow still folds it) is the same grid for one group. B
 | `person:<id>` | That person only (My dashboard) | That person, or BotOps and the Assistant acting for them |
 
 A Dashboard nobody arranged shows Tasks by status, Done per week, Needs you and Latest pages for the company; a team page
-shows the first three for its team; the Growth page shows its five growth cards (see [growth.md](growth.md)). The first
+shows the first three for its team; the Growth page shows its default growth cards (see [growth.md](growth.md)). The first
 change saves them as real pins. Arranging: drag a card by its grip, and its
 ⋯ menu edits it, resizes it (small, medium, large) or removes it; **Add card** and **Add page** add one. On a phone the
 grid is one column.
@@ -53,7 +53,7 @@ grid is one column.
 | Growth funnel | The five funnel stages' KPIs, their conversion, and the North Star | none |
 | Growth channels | Each channel's new customers, CAC and LTV:CAC for the month, with its open tests | count (1 to 20) |
 | Growth retention | Cohort retention at 30, 90 and 180 days | months (3 to 12) |
-| Growth board | Open marketing tests by stage: Testing, Scaling, Idea | count per lane (1 to 5) |
+| Growth board | Open marketing tests by stage: Live, Working, In development, On deck | count per lane (1 to 5) |
 
 The growth cards go on the Growth page only; a growth card at any other place is refused.
 

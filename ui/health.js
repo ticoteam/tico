@@ -79,9 +79,9 @@ function hlCheckHtml(check) {
 const hlReportHtml = report => report && window.supportOn?.() && window.reportThisHTML ? window.reportThisHTML(report) : '';
 
 function hlCredentialFix(source) {
-  if (source === 'credentials') return 'Replace the model key in <a href="#/credentials">Credentials</a>';
+  if (source === 'credentials') return 'Replace the model key in <a href="#/tools/keys?show=credentials">Tools > Keys</a>';
   if (source === 'computer') return 'Update the computer-local key or sign in again';
-  return 'If the key is stored in <a href="#/credentials">Credentials</a>, replace it there; otherwise update the computer-local key or sign in again';
+  return 'If the key is stored in <a href="#/tools/keys?show=credentials">Tools > Keys</a>, replace it there; otherwise update the computer-local key or sign in again';
 }
 
 function hlComputerHtml(machine) {
@@ -167,9 +167,10 @@ async function hlReportFinding(button) {
 }
 
 // A bot's queue as Pipeline splits it (backend/health.py `_queue_words`): work that can start, work behind an interrupted
-// run nobody reviewed, and work held on purpose.
+// run nobody reviewed, refusal-count holds, and work held on purpose.
 function hlQueueWords(row) {
   return [row.queued ? `${row.queued} queued` : '', row.dead ? `${row.dead} behind an interrupted run` : '',
+    row.quarantine_held ? `${row.quarantine_held} held after repeated refusals; resumes after cooldown` : '',
     row.held ? `${row.held} held on purpose` : ''].filter(Boolean);
 }
 

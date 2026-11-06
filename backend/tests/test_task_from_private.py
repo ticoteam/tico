@@ -6,7 +6,7 @@ import pytest
 from backend import task_privacy as privacy
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_task_guest import dry_run, refused, run_on, task
+from backend.tests.test_task_readers import dry_run, refused, run_on, task
 from backend.tests.test_task_sealed_child import ROUTE, carry, run_for, sees
 from backend.tests.test_tasks_board import bot_token
 

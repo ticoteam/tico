@@ -68,7 +68,7 @@ def _task_rows(c, ids):
     for start in range(0, len(missing), 500):
         chunk = missing[start:start + 500]
         found = {row[0]: row for row in c.execute(
-            "SELECT id,private,owner_id,requester_id,guest FROM tasks WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk)}
+            "SELECT id,private,owner_id,requester_id,readers FROM tasks WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk)}
         for tid in chunk:
             known[tid] = found.get(tid)
     return {tid: known[tid] for tid in ids}
@@ -317,6 +317,13 @@ def prime_messages(c, messages):
     and answer, their rooms and meeting provenance, and the runs behind them together, so a long task's comments are
     not a few queries per comment."""
     messages = [dict(m) for m in messages]
+    if has_letters(c) and read_cache.cache(c) is not None:
+        for part in H.chunks(sorted({m["id"] for m in messages if m.get("id")})):
+            found = {row["approval_message_id"]: row for row in c.execute(
+                "SELECT l.*,a.message_id AS approval_message_id FROM approvals a JOIN letters l "
+                "ON l.id=json_extract(a.payload,'$.letter_id') WHERE a.kind='letter' "
+                f"AND a.message_id IN ({','.join('?' * len(part))})", part)}
+            read_cache.prime(c, LETTER_MESSAGE_SQL, {(mid,): found.get(mid) for mid in part})
     refs = [H._json(m.get("refs"), {}) or {} for m in messages]
     # The walks read each message's parents by id, and on a long task those are mostly the page's own messages,
     # given here as views: they are read as stored with the rest of their ancestry.
@@ -373,6 +380,25 @@ def readable(c, actor, ids):
                for row in rows.values())
 
 
+def make_page_actor(c, actor, message):
+    """The Assistant reads its person's own Make page request with that person's rights."""
+    message = dict(message or {})
+    refs = H._json(message.get("refs"), {}) or {}
+    if (not isinstance(refs, dict) or not isinstance(actor, str) or not actor.startswith("bot:")
+            or actor != message.get("recipient_id")
+            or not isinstance(refs.get("make_page"), dict) or refs.get("assistant") is not True
+            or refs.get("via") or message.get("deleted_at")):
+        return actor
+    from . import rooms
+    room = H.conversation(c, message.get("conversation_id")) or {}
+    owner = room.get("owner_id")
+    if (room.get("scope") == "personal" and room.get("room_key") == rooms.ASSISTANT_ROOM
+            and not room.get("closed_at") and owner == message.get("sender_id")
+            and str(owner).startswith("human:")):
+        return owner
+    return actor
+
+
 def message_readable(c, actor, message, current=False):
     """`current`: `message` is its full messages row, read in this snapshot (a join's `m.*`)."""
     snapshot(c)
@@ -383,10 +409,16 @@ def message_readable(c, actor, message, current=False):
     message = stored or message
     if message.get("deleted_at") or message.get("deleted"):
         return False
+    if has_letters(c) and message.get("id"):
+        letter = read_cache.one(c, LETTER_MESSAGE_SQL, (message["id"],))
+        if letter and not letter_content_readable(c, actor, letter):
+            return False
     from . import threads
     if not threads.legacy_gate(c, actor, message):
         return False
     carried = H._json(message.get("refs"), {}) or {}
+    if not page_message_readable(c, actor, carried):
+        return False
     if isinstance(carried, dict) and carried.get("carries") and message.get("sender_id") == H.KEEPER:
         # A carrier (threads._carrier) copies the words of the message it carries: it is read as that message.
         source = H.message(c, carried["carries"], include_deleted=True)
@@ -468,10 +500,14 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
                 return False
             if not readable(c, reader, tasks):
                 return False
+            if not page_message_readable(c, reader, H._json(stored.get("refs"), {}) or {}):
+                return False
         except Problem:
             return False
         message = {key: value for key, value in stored.items() if key not in INTERNAL_MESSAGE_COLUMNS}
+        from .files import readable_page_refs
         message["refs"] = H._json(stored["refs"], {}) or {}
+        message = readable_page_refs(c, None, who, message, task_id=task_id)
         if max_bytes and len(visible) < limit:
             size += len(json.dumps(message, default=str).encode())
             if visible and size > max_bytes:
@@ -565,6 +601,11 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
             principal = "bot:" + hosted["bot_id"]
         if isinstance(attempt, dict) and attempt.get("bot_id"):
             principal = "bot:" + attempt["bot_id"]
+        if aid:
+            origin = read_cache.one(c, "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                                    "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (aid,))
+            principal = make_page_actor(c, principal, origin)
+        if isinstance(attempt, dict) and attempt.get("bot_id"):
             if not attempt_readable(c, principal, attempt.get("id")):
                 raise Problem("privacy", "This execution is no longer available", 403)
     if (who.role == "runner" and principal == who.actor and isinstance(payload, dict)
@@ -587,6 +628,10 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
     if principal != checked_for and not meeting_sources(c).readable(principal, meeting_sources(c).references(payload)):
         raise Problem("privacy", "This response contains a meeting you can no longer read", 403)
     if isinstance(payload, dict):
+        if isinstance(payload.get("letter_id"), str) and "approval_hash" in payload:
+            letter = c.execute("SELECT * FROM letters WHERE id=?", (payload["letter_id"],)).fetchone() if has_letters(c) else None
+            if not letter or not letter_content_readable(c, principal, letter):
+                raise Problem("privacy", "This letter is no longer readable", 403)
         key = payload.get("key")
         if isinstance(key, str) and key.startswith("report:") and not message_readable(c, principal, H.message(c, key[7:])):
             raise Problem("privacy", "This report is no longer available", 403)
@@ -690,28 +735,28 @@ def private_execution(c, who):
                 any(H.task_private(c, _task(c, tid)) for tid in attempt_tasks(c, who.attempt_id))))
 
 
-def question_party(c, who, person, parent=None, guest=None):
+def question_party(c, who, person, parent=None, reach=None):
     """Whether `person` may be the other party of a private task a bot's run files to put a question to them
     (backend/media.py task_question): they must already read every private task the run carries, and the parent.
-    Being a party gives them nothing they could not read before, beyond the parent `guest` names (guest_for)."""
-    if parent and not _reads(c, person, parent, guest):
+    Being a party gives them nothing they could not read before, beyond the parent `reach` names (reach_for)."""
+    if parent and not _reads(c, person, parent, reach):
         return False
-    return not who.attempt_id or all(_reads(c, person, H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE id=?", (tid,)), guest)
+    return not who.attempt_id or all(_reads(c, person, H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE id=?", (tid,)), reach)
                                      for tid in attempt_tasks(c, who.attempt_id))
 
 
-def _reads(c, actor, row, guest=None):
-    """`actor` reads `row`, counting the guest a write is about to bring in, (task id, person), as already there."""
-    return H.task_private_readable(c, actor, row) or bool(row and guest and guest == (row["id"], actor))
+def _reads(c, actor, row, reach=None):
+    """`actor` reads `row`, counting the reader a write is about to bring in, (task id, person), as already there."""
+    return H.task_private_readable(c, actor, row) or bool(row and reach and reach == (row["id"], actor))
 
 
-def guest_for(c, who, person, parent):
+def reach_for(c, who, person, parent):
     """(parent id, person) when a bot's hand-off to `person` under `parent`, a private task with no person on it that
-    the bot owns, makes them its guest (hubdb.task_reach); None when it does not; Problem when it is refused.
+    the bot owns, makes them its reader (hubdb.task_reach); None when it does not; Problem when it is refused.
 
     The hand-offs are a subtask for them and a question to them (backend/media.py); waiting on them is hubdb's.
-    Outside private work a hand-off the guest rules refuse only for what is above the task goes on as before,
-    without a guest: the person gets the subtask alone. A second, different person is refused either way."""
+    Outside private work a hand-off the reach rules refuse only for what is above the task goes on as before,
+    without a reader: the person gets the subtask alone. A second, different person is refused either way."""
     if not (parent and who.role == "bot" and not who.via and who.actor == parent["owner_id"]
             and H.is_bot(parent["requester_id"]) and H.is_human(person) and H.task_private(c, parent)
             and not H.task_private_readable(c, person, parent)):
@@ -719,7 +764,7 @@ def guest_for(c, who, person, parent):
     refusal = H.task_reach_refusal(c, who.actor, parent, person)
     if refusal is None:
         return parent["id"], person
-    if parent.get("guest") or private_execution(c, who):
+    if any(H.is_human(r) for r in H.task_readers(parent)) or private_execution(c, who):
         raise Problem("privacy", refusal, 403)
     return None
 
@@ -735,7 +780,8 @@ COPIED_WORDS = 12
 
 
 def _person_on(row):
-    return next((row[k] for k in ("requester_id", "owner_id", "guest") if row.get(k) and H.is_human(row[k])), None)
+    named = [row.get("requester_id"), row.get("owner_id")] + H.task_readers(row)
+    return next((p for p in named if p and H.is_human(p)), None)
 
 
 def _person_name(c, person):
@@ -863,7 +909,7 @@ def from_private(c, who, owner, parent):
     """The private tasks a company-visible task filed from private work must keep out of its words: its parent and every
     private task the run carries. Problem when the route is not open to this create: switched off, not a bot's own
     run on private task work, a parent that is not private, a private task the filer neither owns nor manages the owner
-    of (a guest or reader only), or a person on one or above it (named, with the route to them, as for a sealed one)."""
+    of (a reader only), or a person on one or above it (named, with the route to them, as for a sealed one)."""
     if not FROM_PRIVATE:
         raise Problem("privacy", COMPANY_REFUSAL, 403)
     if not (who.role == "bot" and not who.via and not getattr(who, "task_actor", "") and who.attempt_id
@@ -962,7 +1008,7 @@ def require_create(c, who, private, owner, parent, actor=None, title=None, body=
                    texts=(), related=()):
     """The privacy refusals of a task create (app.task_create), in one place so its dry-run gives the create's own
     words. `who` is the caller as authenticated, `actor` the identity the task is filed as (a delegated person).
-    Returns guest_for's (parent id, person) for the create to make with hubdb.task_reach, or None.
+    Returns reach_for's (parent id, person) for the create to make with hubdb.task_reach, or None.
     `from_private_work`: a company-visible task filed from private work (from_private), whose words (`texts`, every
     other text it keeps) are checked here; `related` are the ids of the tasks it is related to besides its parent."""
     if from_private_work:
@@ -977,25 +1023,36 @@ def require_create(c, who, private, owner, parent, actor=None, title=None, body=
     execution = private_execution(c, who)
     if execution and private is False:
         raise Problem("privacy", COMPANY_REFUSAL, 403)
-    guest = guest_for(c, who, owner, parent)
+    reach = reach_for(c, who, owner, parent)
     if execution:
-        kept = None if guest else sealed_for(c, who, owner, parent)
+        kept = None if reach else sealed_for(c, who, owner, parent)
         if kept is not None:
             sealed_words(kept, title, body)
-        require_destination(c, who, owner, None, {}, guest=guest, sealed={r["id"] for r in kept or ()})
-        require_destination(c, who, actor or who.actor, None, {}, guest=guest)
-    return guest
+        require_destination(c, who, owner, None, {}, reach=reach, sealed={r["id"] for r in kept or ()})
+        require_destination(c, who, actor or who.actor, None, {}, reach=reach)
+    return reach
 
 
 def require_wait(c, who, row, waiting_on):
     """A private run's `--status waiting --on <person>` puts its ask in front of that person (hubdb._ask_in_subtask) and,
-    on a private task with no person on it, makes them its guest: so they must read every private task the run carries,
+    on a private task with no person on it, makes them its reader: so they must read every private task the run carries,
     as for a subtask or a question to them (require_create, question_party). Checked in the write's own transaction."""
     person = H.resolve_actor(c, str(waiting_on or "").strip()) if waiting_on else None
     if not person or not H.is_human(person) or not private_execution(c, who):
         return
-    guest = None if H.task_private_readable(c, person, row) else (row["id"], person)
-    require_destination(c, who, person, None, {}, guest=guest)
+    reach = None if H.task_private_readable(c, person, row) else (row["id"], person)
+    require_destination(c, who, person, None, {}, reach=reach)
+
+
+def require_readers(c, who, task_id, readers, shared):
+    """A bot adds readers within its reach (reach.check), and a private run only those who read every private task it
+    carries, the task they are added to counted as read (as require_wait). `readers` are the ones being added;
+    `shared` is the task reach counts them as sharing with the bot: the task itself, or a new task's parent."""
+    from . import reach
+    for reader in readers:
+        reach.check(c, who, reader, "task", task_id=shared)
+        if private_execution(c, who):
+            require_destination(c, who, reader, None, {}, reach=(task_id, reader) if task_id else None)
 
 
 def public_message(c, message):
@@ -1016,8 +1073,26 @@ def require_batch(c, who, row):
             require_message(c, who, H.message(c, row["message_id"]))
 
 
+PAGE_MESSAGE_KEYS = ("target", "answer", "review", "body_sources")
+
+
+def page_message_readable(c, actor, refs):
+    """Generated file-review messages carry names in prose as well as structured refs."""
+    return isinstance(refs, dict) and page_content_readable(c, actor, [refs.get(key) for key in PAGE_MESSAGE_KEYS])
+
+
+def page_content_readable(c, actor, payload):
+    from . import files, teammate_access
+    if not files.page_references(payload, c):
+        return True
+    principals = actor if isinstance(actor, (tuple, list, set)) else [actor]
+    return all(viewer is not None and not files.page_ref_denials(c, None, viewer, payload)
+               for principal in principals if (viewer := teammate_access._viewer_for(c, principal)) is not None)
+
+
 def content_readable(c, actor, payload):
-    return (meeting_sources(c).readable(actor, meeting_sources(c).references(payload))
+    return (page_content_readable(c, actor, payload)
+            and meeting_sources(c).readable(actor, meeting_sources(c).references(payload))
             and readable(c, actor, references(c, payload)))
 
 
@@ -1155,18 +1230,18 @@ def _tag_readable(c, who, row, linked, attached):
     linked = set(linked)
     for detail in attached:
         linked.update(references(c, detail))
-    # The parties row (id, private, owner, requester, guest) is all task_readable reads; no body is loaded.
+    # The parties row (id, private, owner, requester, readers) is all task_readable reads; no body is loaded.
     parties = _task_rows(c, linked) if linked and not row.get("is_template") else {}
     return (not linked or bool(row.get("is_template")) or
             any(task_readable(c, who, parties[tid]) for tid in linked)) and content_readable(c, actor(who), row)
 
 
-def require_destination(c, who, to, conversation_id, refs, reply=None, guest=None, sealed=()):
-    """Refuse a write whose audience cannot read every private task it carries. `guest` is the (task id, person) the
-    write itself makes a guest (guest_for), counted as already made so a dry-run refuses what the write would.
+def require_destination(c, who, to, conversation_id, refs, reply=None, reach=None, sealed=()):
+    """Refuse a write whose audience cannot read every private task it carries. `reach` is the (task id, person) the
+    write itself makes a reader (reach_for), counted as already made so a dry-run refuses what the write would.
     `sealed` are the private tasks a sealed subtask for `to` keeps from it (sealed_for): `to` need not read those.
     A private subtask's words may go to its parent's readers when every party of the subtask reads the parent
-    (hubdb.subtask_flows_up): a guest's answer comes back to the task it was asked for."""
+    (hubdb.subtask_flows_up): a reached person's answer comes back to the task it was asked for."""
     conv = H.conversation(c, conversation_id) if conversation_id else None
     if conv and conv.get("audience") and private_execution(c, who):
         # A native thread's readers are its audience, not its participants list: a private run writes into it only as
@@ -1194,7 +1269,7 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, guest=Non
     target = (refs or {}).get("task") if isinstance(refs, dict) else None
     target = _task(c, target) if isinstance(target, str) else None
     for row in private:
-        if all(_reads(c, actor, row, guest) for actor in audience if not (actor == to and row["id"] in sealed)):
+        if all(_reads(c, actor, row, reach) for actor in audience if not (actor == to and row["id"] in sealed)):
             continue
         if not (target and H.subtask_flows_up(c, row, target) and all(_reads(c, actor, target) for actor in audience)):
             raise Problem("privacy", "Private task content stays with its requester and current owner", 403)
@@ -1216,7 +1291,7 @@ APPROVALS_SQL = ("SELECT m.*, a.task_id AS approval_task{by} FROM approvals a JO
 # A long-lived bot's finished company tasks are most of its rows and change nothing.
 STATUS_TASKS_SQL = "(status IN (%s) OR private IS NOT 0)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
 # The columns `status` reads of them: never the bodies, which were megabytes a status page on a real install.
-STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,guest,waiting_on"
+STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,readers,waiting_on"
 
 
 def status_tasks_sql(match):
@@ -1340,6 +1415,72 @@ BLOB_FILES_SQL = ("SELECT f.task_id,f.scope,v.attempt_id FROM bot_files f "
                   "OR v.poster_blob_id=? OR v.thumb_blob_id=?")
 BLOB_MESSAGES_SQL = "SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id WHERE a.blob_id=?"
 BLOB_TRASHED_SQL = "SELECT 1 FROM task_trash_assets WHERE blob_id=?"
+LETTER_BLOBS_SQL = ("SELECT original_blob_id,task_id,attempt_id,thread_id,source_provenance,requested_by,acting_bot_id "
+                    "FROM letters l WHERE source_blob_id=? OR "
+                    "EXISTS (SELECT 1 FROM letter_proofs p WHERE p.letter_id=l.id AND p.blob_id=?)")
+LETTER_MESSAGE_SQL = ("SELECT l.* FROM approvals a JOIN letters l ON l.id=json_extract(a.payload,'$.letter_id') "
+                      "WHERE a.kind='letter' AND a.message_id=?")
+
+
+def letter_content_readable(c, principals, row):
+    from . import letters
+    from .auth import bot_identity
+    for principal in principals if isinstance(principals, tuple) else (principals,):
+        if H.is_bot(principal):
+            try:
+                bot_identity(c, principal)
+            except Problem:
+                return False
+            if not letters.bot_reader(c, principal, row):
+                return False
+    return blob_readable(c, principals, row["source_blob_id"])
+
+
+def has_letters(c):
+    # Privacy also runs while upgrading older schemas, before the Letters tables exist.
+    return read_cache.value(c, "privacy_letters_table", lambda: bool(c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='letters'").fetchone()))
+
+
+def letter_blob_readable(c, principals, row, seen, memo):
+    from . import letters
+    from .auth import bot_identity
+    for principal in principals if isinstance(principals, tuple) else (principals,):
+        if H.is_bot(principal):
+            try:
+                bot_identity(c, principal)
+            except Problem:
+                return False
+            if not letters.bot_reader(c, principal, row):
+                return False
+    sources = H._json(row["source_provenance"], {}) or {}
+    tasks = set(sources.get("tasks", [])) | ({row["task_id"]} if row["task_id"] else set())
+    attempts = set(sources.get("attempts", [])) | ({row["attempt_id"]} if row["attempt_id"] else set())
+    rooms = set(sources.get("threads", [])) | ({row["thread_id"]} if row["thread_id"] else set())
+    if not readable(c, principals, tasks):
+        return False
+    if any(not attempt_readable(c, principals, aid, memo) for aid in attempts):
+        return False
+    if rooms:
+        from . import threads
+        for cid in rooms:
+            room = H.conversation(c, cid)
+            for principal in principals if isinstance(principals, tuple) else (principals,):
+                try:
+                    viewer = (threads.Viewer(None, bot_identity(c, principal)) if H.is_bot(principal)
+                              else threads.actor_viewer(c, principal))
+                except Problem:
+                    return False
+                viewers = [viewer] if viewer else []
+                if viewer and H.is_bot(principal) and not viewer.who.agent:
+                    # A stored proof keeps the original bot run's thread grant, with current task privacy.
+                    for aid in attempts:
+                        attempt = read_cache.one(c, "SELECT bot_id FROM attempts WHERE id=?", (aid,))
+                        if attempt and "bot:" + attempt["bot_id"] == principal:
+                            viewers.append(threads.Viewer(None, bot_identity(c, principal, attempt_id=aid)))
+                if not any(threads.denial(c, candidate, room) is None for candidate in viewers):
+                    return False
+    return not row["original_blob_id"] or blob_readable(c, principals, row["original_blob_id"], seen, memo)
 
 
 def prime_blobs(c, bids):
@@ -1406,6 +1547,36 @@ def _prime_blob_links(c, bids):
         read_cache.prime_rows(c, BLOB_FILES_SQL, {(bid, bid, bid): files[bid] for bid in part})
         read_cache.prime_rows(c, BLOB_MESSAGES_SQL, {(bid,): messages[bid] for bid in part})
         read_cache.prime(c, BLOB_TRASHED_SQL, {(bid,): (1,) if bid in trashed else None for bid in part})
+        from . import postal_mail
+        scans = {bid: [] for bid in part}
+        for row in c.execute(f"SELECT * FROM mail_items WHERE blob_id IN ({marks})", part):
+            scans[row["blob_id"]].append(row)
+        read_cache.prime_rows(c, postal_mail.SCANS_SQL, {(bid,): scans[bid] for bid in part})
+        if has_letters(c):
+            links = {bid: [] for bid in part}
+            rows = c.execute("SELECT original_blob_id,task_id,attempt_id,thread_id,source_provenance,requested_by,acting_bot_id,"
+                "source_blob_id AS bid FROM letters "
+                f"WHERE source_blob_id IN ({marks}) UNION ALL SELECT l.original_blob_id,l.task_id,l.attempt_id,"
+                "l.thread_id,l.source_provenance,l.requested_by,l.acting_bot_id,p.blob_id AS bid "
+                f"FROM letter_proofs p JOIN letters l ON l.id=p.letter_id WHERE p.blob_id IN ({marks})",
+                part * 2)
+            rooms = set()
+            for row in rows:
+                links[row["bid"]].append(row)
+                frozen = H._json(row["source_provenance"], {}) or {}
+                task_ids.update(frozen.get("tasks", []))
+                attempt_ids.update(frozen.get("attempts", []))
+                rooms.update(frozen.get("threads", []))
+                if row["original_blob_id"]:
+                    parent_ids.add(row["original_blob_id"])
+                if row["task_id"]:
+                    task_ids.add(row["task_id"])
+                if row["attempt_id"]:
+                    attempt_ids.add(row["attempt_id"])
+                if row["thread_id"]:
+                    rooms.add(row["thread_id"])
+            H.prime_conversations(c, rooms)
+            read_cache.prime_rows(c, LETTER_BLOBS_SQL, {(bid, bid): links[bid] for bid in part})
     return parent_ids, task_ids, attempt_ids, message_rows
 
 
@@ -1414,12 +1585,24 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
     `memo` is attempt_tasks' cache for one read transaction. Only linkage rows are cached
     for blobs: a cycle or depth refusal depends on this walk, not just the blob."""
     snapshot(c)
+    # A scan's explicit Read grant exempts only that principal from its private task's attachment fence.
+    # Every other principal still passes the normal provenance checks below.
+    from . import postal_mail
+    principals = actor if isinstance(actor, tuple) else (actor,)
+    principals = tuple(person for person in principals if not postal_mail.scan_granted(c, person, bid))
+    if not principals:
+        return True
+    actor = principals[0] if len(principals) == 1 else principals
     seen = set() if seen is None else seen
     if bid in seen:
         return True
     if len(seen) >= 100:
         return False
     seen.add(bid)
+    if has_letters(c):
+        for row in read_cache.rows(c, LETTER_BLOBS_SQL, (bid, bid)):
+            if not letter_blob_readable(c, actor, row, seen, memo):
+                return False
     for parent in read_cache.rows(c, BLOB_PARENTS_SQL, (bid, bid)):
         if not blob_readable(c, actor, parent[0], seen, memo):
             return False
@@ -1446,6 +1629,30 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
 
 def event_readable(c, actor, event):
     event = dict(event)
+    if has_letters(c):
+        letter = None
+        if str(event.get("action", "")).startswith("letter."):
+            letter = c.execute("SELECT * FROM letters WHERE id=?", (event.get("target"),)).fetchone()
+        elif str(event.get("action", "")).startswith("approval."):
+            letter = c.execute("SELECT l.* FROM approvals a JOIN letters l ON l.id=json_extract(a.payload,'$.letter_id') "
+                "WHERE a.kind='letter' AND a.id=?", (event.get("target"),)).fetchone()
+        if letter and not letter_content_readable(c, actor, letter):
+            return False
+    from . import files, teammate_access
+    principals = actor if isinstance(actor, (tuple, list, set)) else [actor]
+    for principal in principals:
+        viewer = teammate_access._viewer_for(c, principal)
+        if viewer is not None and not files.page_event_readable(c, None, viewer, event.get("target"), event.get("detail")):
+            return False
+    detail = H._json(event.get("detail"), {}) or {}
+    if str(event.get("action", "")).startswith("alerts.") and event["action"] != "alerts.company_cap":
+        recipient = actor[0] if isinstance(actor, tuple) else getattr(actor, "actor", actor)
+        if recipient != event.get("actor"):
+            return False
+        # Old accepted events without task provenance fail closed; their alert target alone carries no permission.
+        if event["action"] == "alerts.accepted" and detail.get("kind") != "test":
+            if not detail.get("task_id") or not _task(c, detail["task_id"]):
+                return False
     meetings = meeting_sources(c)
     if not meetings.readable(actor, meetings.references(H._json(event.get("detail"), {}) or {})):
         return False

@@ -151,6 +151,11 @@ class TakeRecommendation(Contract):
     version: Annotated[int, Field(strict=True, ge=1)] | None = None     # the card's task version: a changed task is refused
 
 
+class AsksSeen(Contract):
+    """Questions to the person that their Needs you now shows (POST /api/v2/needs-you/seen)."""
+    asks: Annotated[list[Annotated[StrictStr, Field(min_length=1, max_length=100)]], Field(max_length=200)]
+
+
 class StaleDecision(Contract):
     """A person's answer to one row of their Stale tickets card (backend/stale_review.py): accept or skip. Accept names
     the task version the row showed (409 version_conflict once the task changed), as a change by hand does."""
@@ -194,7 +199,11 @@ class TaskBlocker(Contract):
     endpoint: str = Field(min_length=1, max_length=200)
 
 
+ReaderName = Annotated[str, Field(min_length=1, max_length=200)]
+
+
 class TaskCreate(Contract):
+    live_meeting_id: ID | None = None
     visibility: Literal['public', 'private'] | None = None
     # Publishing at creation needs explicit public text; the internal title and body are never copied.
     public_title: str | None = Field(default=None, max_length=300)
@@ -229,7 +238,11 @@ class TaskCreate(Contract):
     number: TaskNumber | None = None
     # Who else is on the task, by role: {role: [actors]} (backend/task_roles.py).
     roles: dict[str, list[str]] | None = None
-    # A bot's own subtask run on another model, `<runtime>[:<model>]`, as a review or a check (backend/check_models.py).
+    # Who else sees a private task: people, bots and group:<id>s (hubdb.set_task_readers).
+    readers: list[ReaderName] = Field(default_factory=list, max_length=50)
+    # The filer follows it too (backend/task_followers.py); its owner follows anyway.
+    follow: StrictBool = False
+    # With a model, the bot's own check session; review alone is a normal review child.
     check_model: str | None = Field(default=None, max_length=120)
     check_role: Literal["review", "check"] | None = None
     # The model a bot-owned task's runs use, with its effort and harness (backend/task_run_models.py). No model is the
@@ -239,6 +252,15 @@ class TaskCreate(Contract):
     harness: ID | None = None
     # A company-visible task a private task's owning bot files from that work, in its own words (task_privacy.from_private).
     from_private: StrictBool = False
+
+    @model_validator(mode="after")
+    def review_child(self):
+        if self.check_role == "review" and self.check_model is None:
+            if not any(r.kind == "parent" for r in self.relations):
+                raise ValueError("A review is a child task: choose its parent")
+            if not re.match(r"^review\s+[12](?:\s*:|$)", self.title.strip(), re.I):
+                self.title = "Review 1: " + self.title
+        return self
 
 
 class TaskRunModel(Contract):
@@ -560,6 +582,24 @@ class TaskComment(Contract):
 class TaskAskResolve(Contract):
     # The person's words from where they answered; without them the asker withdraws the question.
     quote: Annotated[StrictStr, Field(min_length=1, max_length=4000)] | None = None
+
+
+class TaskReaders(Contract):
+    """Who else sees a private task (hubdb.set_task_readers): add and remove people, bots and group:<id>s."""
+    add: list[ReaderName] = Field(default_factory=list, max_length=50)
+    remove: list[ReaderName] = Field(default_factory=list, max_length=50)
+
+
+class TaskReaderList(Contract):
+    """The whole reader list of a private task, replacing what it had."""
+    readers: list[ReaderName] = Field(default_factory=list, max_length=50)
+
+
+class TaskFollower(Contract):
+    """Follow or unfollow a task (backend/task_followers.py): yourself, or `actor` when you may change the task."""
+    actor: ReaderName | None = None
+    following: StrictBool = True
+    notify: Literal["live", "mentions", "digest", "muted"] | None = None
 
 
 class TaskLink(Contract):
@@ -1215,18 +1255,17 @@ class ToolUpdate(Contract):
 
 
 class MailRequest(Contract):
-    """What a bot's bot.yaml asks for its mail (runner-rs/src/declared_access.rs `mail_request`): a request only. The
-    server-held setting (backend/mail_settings.py) decides; Health says when the two differ."""
+    """What a bot's bot.yaml says of its mail, as its computer still reports it (runner-rs/src/declared_access.rs
+    `mail_request`). Accepted and ignored: sending is the server's sending policy alone (backend/email_sending.py)."""
     outbound_send: bool = False
     forward_to: list[Annotated[str, Field(max_length=320)]] = Field(default_factory=list, max_length=20)
 
 
 class MailSettingsUpdate(Contract):
-    """A person's change to a bot's mail sending (backend/mail_settings.py). Only what is sent changes.
-    `from_request` takes what the bot's bot.yaml asks, as its computer last reported it."""
+    """A person's change to a bot's mail sending (backend/mail_settings.py): its sending policy mode. `forward_to` is
+    accepted empty only, for older callers: forward targets are retired."""
     outbound_send: bool | None = None
     forward_to: list[Annotated[str, Field(max_length=320)]] | None = Field(default=None, max_length=20)
-    from_request: bool = False
 
 
 class BotReadiness(GoalReadiness):
@@ -1325,6 +1364,7 @@ class StructuredReadiness(Contract):
     worktrees: bool | None = None
     # Prepares a worktree reserved for a waiting task while its bot is idle (backend/worktree_waits.py).
     worktree_waits: bool | None = None
+    worktree_recovery: bool | None = None
     schema_version: Literal[1] = 1
     disk: DiskReadiness | None = None
     # Bots run as their own user here (runner-rs/src/isolation.rs), so a Tico model may run (backend/models_preset.py).
@@ -1442,8 +1482,8 @@ class Heartbeat(Contract):
         "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1",
         "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1", "source_continue_v1",
         "turns_at_once_v1", "private_lanes_v1", "model_subscriptions_v1", "browser_exit_v1",
-        "model_subscription_activation_v1", "model_connect_v1", "threads_v1", "memory_tidy_packets_v1"]] = Field(
-        default_factory=list, max_length=20)
+        "model_subscription_activation_v1", "model_connect_v1", "threads_v1", "memory_tidy_packets_v1",
+        "harness_allocation_v1", "make_page"]] = Field(default_factory=list, max_length=32)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -2089,6 +2129,11 @@ class UsageCount(Contract):
     enabled: bool
 
 
+class SuggestionSettings(Contract):
+    share_stats_for_suggestions: StrictBool | None = None
+    report_suggestion_outcomes: StrictBool | None = None
+
+
 class StrategyBotChecks(Contract):
     on: bool
 
@@ -2309,12 +2354,16 @@ class LoadSnapshot(Contract):
 
 
 class StartPlace(Contract):
+    # A real process allocated to this turn stays admitted even if its own memory raises the computer's load.
+    harness_allocated: bool = False
     # The reasons runner-rs reports while a claimed turn gives its computer place back (execute.rs wait_before_start).
-    waiting: Literal["", "shared login", "pre-start requirements", "Docker turn user"] = ""
+    waiting: str = Field(default="", max_length=40,
+                         pattern=r"^(?:|shared login|pre-start requirements|Docker turn user|computer busy: memory (?:100|[1-9]?[0-9])%)$")
 
 
 class Started(Contract):
     thread_id: ID
+    harness_allocated: bool = False
     load_snapshot: LoadSnapshot | None = None
 
 
@@ -2654,6 +2703,10 @@ class AssistantMessage(Contract):
     page: AssistantPage | None = None
 
 
+class MakePage(Contract):
+    text: Annotated[str, Field(min_length=1, max_length=8000)]
+
+
 class AssistantUpload(Contract):
     """A message with files in a person's Assistant chat (POST /api/v2/uploads/assistant/messages)."""
     text: Annotated[str, Field(min_length=1, max_length=8000)]
@@ -2689,6 +2742,12 @@ class AssistantAction(Contract):
     body: dict = Field(default_factory=dict)
     # The Assistant's own background run puts the card in this person's Assistant chat (`for`); otherwise it is the caller's.
     for_person: Annotated[str, Field(min_length=1, max_length=200)] | None = Field(default=None, alias="for")
+
+
+class AssistantMorning(Contract):
+    """The Assistant's one morning message to a person, in their own Assistant chat (backend/assistant.py morning)."""
+    for_person: Annotated[str, Field(min_length=1, max_length=200)] = Field(alias="for")
+    body: Annotated[str, Field(min_length=1, max_length=2000)]
 
 
 class InboxOnly(Contract):
@@ -3145,7 +3204,7 @@ class GrowthSettingsUpdate(Contract):
     margin_pct: float | None = Field(default=None, ge=0, le=100)
 
 
-# Settings > Mailboxes (backend/mailboxes.py): connect a mailbox, and who can use it.
+# Tools (backend/mailboxes.py): connect a mailbox, and who can use it.
 MailboxLevel = Literal["read", "read_write"]
 
 

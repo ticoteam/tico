@@ -48,12 +48,12 @@ class Clock:
 
 
 @contextlib.contextmanager
-def fixed(clock):
+def fixed(clock, namespace=NAMESPACE):
     """Time, ids and secrets that repeat, restored afterwards."""
     counter = itertools.count()
 
     def digest():
-        return hashlib.sha256(f"{NAMESPACE}:{next(counter)}".encode()).hexdigest()
+        return hashlib.sha256(f"{namespace}:{next(counter)}".encode()).hexdigest()
 
     from . import inbound, threads, usage_limits
     saved = (hubdb.now, hubdb.new_id, hubdb.uuid7, threads.uuid7, secrets.token_urlsafe, secrets.token_hex, uuid.uuid4,
@@ -65,7 +65,7 @@ def fixed(clock):
     # Spend windows (an hour, a day) are read on the demo's clock too, so two builds of one `now` save the same limits
     # whichever side of an hour the machine's clock is on.
     usage_limits.clock = lambda: clock.at
-    hubdb.new_id = lambda: str(uuid.uuid5(NAMESPACE, str(next(counter))))
+    hubdb.new_id = lambda: str(uuid.uuid5(namespace, str(next(counter))))
     # Time-ordered ids (messages, deliveries) and the product's own random ids for threads and calls.
     hubdb.uuid7 = threads.uuid7 = lambda: str(uuid.UUID(hex=digest()[:32]))
     uuid.uuid4 = lambda: uuid.UUID(hex=digest()[:32])
@@ -402,6 +402,8 @@ class Builder:
                 "transcript": turns, "notes": entry["notes"], "review": entry.get("review", "live")})
             items = {}
             for section, text, detail, quote, at in entry["items"]:
+                if section == "task":
+                    detail = {"body": quote or text, **detail}
                 items[text] = self.call("POST", f"/api/meetings/{result['id']}/items",
                                         {"section": section, "text": text, "detail": detail, "quote": quote, "at_ms": at})["item"]["id"]
             for text in entry.get("push", ()):
@@ -411,8 +413,6 @@ class Builder:
                 if entry.get("send_status") and sent.get("task"):
                     self.write(lambda c: hubdb.task_update(c, "bot:" + entry["send_to"], sent["task"], status=entry["send_status"],
                                                            note="Reading the call for follow-ups."))
-            for actor, text, at in entry["comments"]:
-                self.call("POST", f"/api/meetings/{result['id']}/comments", {"text": text, "at_ms": at})
         self.granola()
 
     def granola(self):
@@ -729,6 +729,8 @@ class Builder:
         # owner already had (backend/profiles.py).
         from . import profiles as Profiles
         self.write(lambda c: Profiles.migrate(c, tell=False))
+        from .demo_sections import services
+        services.mail_access(self)
 
         def work(c):
             c.execute("UPDATE messages SET delivered_at=created_at WHERE delivered_at IS NULL AND recipient_id LIKE 'bot:%'")

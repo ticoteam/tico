@@ -340,7 +340,7 @@ def test_an_automation_action_needs_its_owner_s_level_now(api):
         assert MA.action_refusal(c, "person:cara", CARA, "archive") is None
         assert MA.action_refusal(c, "person:cara", CARA, "send") is None
         coo = bot(c, "coo")
-        assert "Settings > Mailboxes" in MA.action_refusal(c, "bot:" + coo, CARA, "label")
+        assert "Tools > cara@acme.example > Who can use it" in MA.action_refusal(c, "bot:" + coo, CARA, "label")
         MA.grant(c, "person:cara", row["id"], "bot", coo, "read")
         assert MA.action_refusal(c, "bot:" + coo, CARA, "archive")
         MA.grant(c, "person:cara", row["id"], "bot", coo, "read_write")

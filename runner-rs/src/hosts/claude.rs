@@ -401,6 +401,7 @@ struct ToolCall {
 }
 
 struct Shared {
+    allocation: super::Allocation,
     bot: String,
     cmd: Vec<String>,
     tx: Events,
@@ -448,6 +449,7 @@ pub async fn note_version(cmd: &[String], version: &str) {
 impl ClaudeHost {
     pub fn new(bot: &str, cmd: Vec<String>, tx: Events) -> ClaudeHost {
         ClaudeHost(Arc::new(Shared {
+            allocation: super::Allocation::default(),
             bot: bot.into(),
             cmd,
             tx,
@@ -516,6 +518,10 @@ impl ClaudeHost {
         if let Some(r) = reader {
             let _ = tokio::time::timeout(STOP_TIMEOUT + Duration::from_secs(1), r).await;
         }
+    }
+
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.0.allocation.track(turn);
     }
 
     pub fn alive(&self) -> bool {
@@ -684,6 +690,7 @@ impl ClaudeHost {
             command.env(crate::reap::tests::ARGS, Value::Array(args).to_string());
         }
         let mut child = command.spawn()?;
+        self.0.allocation.mark();
         let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &turn_env(&t.settings));
         Ok((child, stderr, reaping))
     }
@@ -2476,9 +2483,8 @@ mod feature_tests {
         let exe = root.join("claude");
         let log = root.join("spawns.log");
         std::fs::write(&exe, format!("#!/bin/sh\necho \"$*\" >> '{}'\necho '2.1.300 (Claude Code)'\necho '--autocompact'\n", log.display())).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-        (vec![exe.display().to_string()], log)
+        // Read the script through the shell so parallel forks cannot hold its writable inode open at exec.
+        (vec!["/bin/sh".into(), exe.display().to_string()], log)
     }
 
     fn runs(log: &std::path::Path) -> usize {
@@ -2493,6 +2499,7 @@ mod feature_tests {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         // The probe passes the version as `installed_version` reads it, which is what a turn's start is keyed by too.
         let version = installed_version(&cmd, "--version").await;
+        assert_eq!(version, "2.1.300 (Claude Code)\n--autocompact", "the version probe runs the fixture");
         let read = runs(&log);
         note_version(&cmd, &version).await;
         assert_eq!(runs(&log), read + 1, "a new version is read once, for --help");

@@ -390,7 +390,8 @@ def relate(conn, actor, task_id, other_id, kind="related", remove=False, mover=N
     """Add (or with `remove`, take off) one relation between two tasks. Returns True when it changed
     something; adding what is already there changes nothing."""
     H = _H()
-    H._writer(conn, actor)
+    H._writer(conn, actor, task_id=task_id)
+    H._writer(conn, actor, task_id=other_id)
     from_id, to_id, kind = normalize(str(task_id or "").strip(), str(other_id or "").strip(), kind)
     if kind not in KINDS:
         H.refuse(conn, actor, "kind", f"a relation is {'|'.join(KINDS)}, not {kind}")
@@ -472,7 +473,7 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
     under a task it is party to or works, never its own ancestor). A task under a private parent
     becomes private."""
     H = _H()
-    H._writer(conn, actor)
+    H._writer(conn, actor, task_id=child_id)
     row = _task(conn, actor, child_id)
     H._task_private_writer(conn, actor, row)
     mover = _mover(conn, actor, mover)
@@ -482,6 +483,9 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
         _need_mover(conn, actor, "parent")
     old = parent_of(conn, child_id)
     new = str(parent_id or "").strip() or None
+    for ident in (old, new):
+        if ident:
+            H._writer(conn, actor, task_id=ident)
     if new == old:
         return False
     if old and not mover:
@@ -546,7 +550,7 @@ def _check_blocker(conn, actor, row, blocker_id):
     if H.task_private(conn, block) and (not H.task_private(conn, row) or not all(
             H.task_private_readable(conn, party, block) for party in (row["owner_id"], row["requester_id"]))
     ) and not H.subtask_flows_up(conn, block, row):
-        # Its own subtask for its guest may block it: the guest's answer comes back to it (hubdb.subtask_flows_up).
+        # Its own subtask for its reader may block it: the reader's answer comes back to it (hubdb.subtask_flows_up).
         H.refuse(conn, actor, "private", "A private dependency requires the same private audience")
     # No loop: the blocker must not already wait, directly or through others, on this task.
     loop = conn.execute("WITH RECURSIVE ahead(id) AS (SELECT to_task FROM task_relations WHERE from_task=? "
@@ -597,7 +601,8 @@ def _tell_requester(conn, actor, row, blocker):
 def add_blocker(conn, actor, task_id, blocker_id, mover=None, note=""):
     """`blocker_id` blocks `task_id`. A task may wait on several."""
     H = _H()
-    H._writer(conn, actor)
+    H._writer(conn, actor, task_id=task_id)
+    H._writer(conn, actor, task_id=blocker_id)
     row = _task(conn, actor, task_id)
     H._task_private_writer(conn, actor, row)
     mover = _mover(conn, actor, mover)
@@ -626,7 +631,8 @@ def add_blocker(conn, actor, task_id, blocker_id, mover=None, note=""):
 
 def remove_blocker(conn, actor, task_id, blocker_id, mover=None, note="", keeper_note=None):
     H = _H()
-    H._writer(conn, actor)
+    H._writer(conn, actor, task_id=task_id)
+    H._writer(conn, actor, task_id=blocker_id)
     row = _task(conn, actor, task_id)
     if actor != H.KEEPER:
         H._task_private_writer(conn, actor, row)

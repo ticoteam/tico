@@ -174,5 +174,21 @@ file, never a bare `s3://` URI: `hub` rewrites one to its view URL when the serv
 A page is an HTML file you keep current for people to look at (a weekly review, a scan, a plan):
 `hub page publish reports/weekly.html --title "..." --cadence weekly [--as-of YYYY-MM-DD] [--task ID]`. It runs no
 script and loads nothing from elsewhere; charts are inline SVG. Put the headline and key numbers first: a card shows
-the top. Size it by its content, never 100vh. Tico shows when it was last updated. `hub file search` finds files
-by their text.
+the top. Size it by its content, never 100vh except the card rule below. Tico shows when it was last updated.
+`hub file search` finds files by their text.
+
+## Widget view
+A page pinned to a sidebar, the Dashboard or a team page shows as a card, and opens full size on a tap. In a card Tico
+sets `data-tico-view=card` and `data-tico-size` (small, medium or large) on `<html>`; at full size it sets `full`.
+Pages are dark, like the app: a dark background, light text, chart colours that read on dark. A page that sets no
+background gets Tico's dark one. Design for the small card (180 px tall) first: a headline and one or two numbers. `[data-tico-size=medium]` and
+`large` show more. A number that should stay current is `<tico-kpi bot="<your slug>" name="tasks_done_7d">`, or a
+business KPI by its id (`<tico-kpi id="...">`, from `hub kpi list`). The full guide and the KPI names are in Tico
+`docs/pages.md`, "Widget view" and "Live blocks".
+
+```css
+.card-only { display: none; }
+[data-tico-view=card] .full-only { display: none; }
+[data-tico-view=card] .card-only { display: block; }
+[data-tico-view=card] body { height: 100vh; overflow: hidden; }
+```

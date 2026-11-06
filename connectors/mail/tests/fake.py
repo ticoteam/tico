@@ -51,6 +51,7 @@ def message(mid="m1", thread=None, headers=None, body=None, parts=None,
 class _Req:
     def __init__(self, fn):
         self.fn = fn
+        self.headers = {}
 
     def execute(self):
         return self.fn()
@@ -177,6 +178,17 @@ class _Labels:
 class _Messages:
     def __init__(self, s):
         self.s = s
+
+    def send(self, userId="me", body=None, **kwargs):
+        def go():
+            self.s._maybe_fail(None)
+            rec = _Drafts(self.s)._make({"message": body})
+            self.s.drafts_by_id.pop(rec["id"])
+            m = self.s.store[rec["message"]["id"]]
+            m["labelIds"] = ["SENT"]
+            self.s.sent.append({"id": m["id"], "threadId": m["threadId"], "raw": body["raw"]})
+            return {"id": m["id"], "threadId": m["threadId"]}
+        return _Req(go)
 
     def list(self, userId="me", q=None, labelIds=None, maxResults=100, pageToken=None):
         def go():
@@ -401,7 +413,10 @@ class FakeCalendarService:
                 raise Boom(409, "calendar event already exists")
             if not (body or {}).get("id"):
                 self._next += 1
-            ev = dict(body or {}, id=eid, sendUpdates=sendUpdates, **kwargs)
+            ev = dict(body or {}, id=eid, etag='"' + eid + '"', sendUpdates=sendUpdates, **kwargs)
+            if ev.get("conferenceData"):
+                ev["hangoutLink"] = "https://meet.google.com/abc-defg-hij"
+                ev["conferenceData"]["createRequest"]["status"] = {"statusCode": "success"}
             self.created_events[eid] = ev
             self.events_by_calendar.setdefault(calendarId, []).append(ev)
             return ev
@@ -414,12 +429,33 @@ class FakeCalendarService:
             return self.created_events[eventId]
         return _Req(go)
 
+    def patch(self, calendarId="primary", eventId=None, body=None, sendUpdates="none", **kwargs):
+        def go():
+            event = self.created_events.get(eventId)
+            if event is None:
+                raise Boom(404, "calendar event not found")
+            if request.headers.get("If-Match") != event.get("etag"):
+                raise Boom(412, "calendar event changed")
+            event.update(body or {})
+            event.update(sendUpdates=sendUpdates, **kwargs)
+            event["etag"] += "-patched"
+            if event.get("conferenceData"):
+                event["hangoutLink"] = "https://meet.google.com/abc-defg-hij"
+                event["conferenceData"]["createRequest"]["status"] = {"statusCode": "success"}
+            return event
+        request = _Req(go)
+        return request
+
     def delete(self, calendarId="primary", eventId=None, sendUpdates="none"):
         def go():
+            if request.headers.get("If-Match") and request.headers["If-Match"] != self.created_events.get(eventId, {}).get("etag"):
+                raise Boom(412, "calendar event changed")
             self.created_events.pop(eventId, None)
+            self.events_by_calendar[calendarId] = [event for event in self.events_by_calendar.get(calendarId, []) if event.get("id") != eventId]
             self.deleted.append(eventId)
             return {}
-        return _Req(go)
+        request = _Req(go)
+        return request
 
 
 # ---------------------------------------------------------------- Tico's mail access answer

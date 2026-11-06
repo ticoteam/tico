@@ -276,12 +276,16 @@ class CredentialCipher:
             c.execute('INSERT INTO credential_keys VALUES(?,?,?)', ('v1', LOCAL, check))
         return key
 
-    def kms_key(self, c, row):
+    def kms_client(self):
         if self.kms is None:
             import boto3
             from botocore.config import Config
             # Called inside write transactions: fail in seconds, not botocore's 60 s timeouts and retries.
             self.kms = boto3.client('kms', config=Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2}))
+        return self.kms
+
+    def kms_key(self, c, row):
+        self.kms_client()
         if row and row['kms_key'] == LOCAL:
             # Credentials saved before a KMS key was set: wrap the same key with KMS, so nothing is re-encrypted.
             key = self.local_key(c, row)
@@ -315,6 +319,26 @@ class CredentialCipher:
             raise
         except Exception:
             raise Problem('vault_unavailable', 'Credential encryption is temporarily unavailable', 503) from None
+
+    def prepare(self, store):
+        """Load an existing key before a write; KMS unwrap/rewrap I/O stays outside the store's writer."""
+        while self.cached is None:
+            with store.read_transaction() as c:
+                row = c.execute("SELECT * FROM credential_keys WHERE id='v1'").fetchone()
+                if not row:
+                    return
+                if not self.key_id or row['kms_key'] != LOCAL:
+                    self.key(c)
+                    return
+                key = self.local_key(c, row)
+            wrapped = self.kms_client().encrypt(KeyId=self.key_id, Plaintext=key,
+                                                EncryptionContext=CONTEXT)['CiphertextBlob']
+            with store.transaction() as c:
+                changed = c.execute("UPDATE credential_keys SET kms_key=?,wrapped_key=? "
+                                    "WHERE id='v1' AND kms_key=? AND wrapped_key=?",
+                                    (self.key_id, wrapped, row['kms_key'], row['wrapped_key'])).rowcount
+            if changed:
+                self.cached = key
 
     def warm(self, store):
         """Unwrap a stored KMS key once at start, outside any transaction, so the first write that needs it does not
@@ -453,6 +477,8 @@ class Vault:
                   (cid,name,body.username,body.kind,model_env(name,body.kind,body.env),preview,ciphertext,nonce,body.source,now,now,who.actor,who.actor,
                    int(member)))
         H.event(c,who.actor,'credential.updated' if old else 'credential.created',cid,{'secret_changed':secret is not None})
+        from . import api_tools
+        api_tools.ensure_tool(c, who, cid)        # a tool's key shows on Tools however it was stored
         return self.brief(self.row(c,cid))
 
     def manages_bot(self, c, who, subject):
@@ -589,7 +615,7 @@ def record_use(c,actor,action,cid,detail,windowed):
 
 def last_used(c,cid):
     """`last_used_at` (when) and `last_used_by` (the bot's slug; empty when a computer took it for no one bot, a model
-    key) for Library › Tools: the newest use of the credential, from credential_uses."""
+    key) for Tools: the newest use of the credential, from credential_uses."""
     row=c.execute('SELECT used_at,bot FROM credential_uses WHERE credential_id=? ORDER BY used_at DESC LIMIT 1',(cid,)).fetchone()
     if not row:
         return {'last_used_at':None,'last_used_by':''}
@@ -668,6 +694,8 @@ def install_credentials(app,store,delegate=None,propose=None):
                 c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)',
                           (gid,cid,subject,who.actor,now))
                 H.event(c,who.actor,'credential.migrated',cid,{'env':item.env,'bot':bot,'grant':gid})
+                from . import api_tools
+                api_tools.ensure_tool(c,who,cid,from_computer=True)   # already in use from the computer
             if first:
                 pending.remove(bot)
                 c.execute('UPDATE registry_metadata SET value=? WHERE key=?',(encode(pending),FILE_MIGRATION))
@@ -805,8 +833,18 @@ def install_credentials(app,store,delegate=None,propose=None):
             validate_identity(c,who)
             values=[]
             held=granted(c,who.actor)
+            # A proxied tool's key stays here: the run gets a token for the proxy instead (backend/tool_proxy.py).
+            from . import tool_proxy
+            proxied=tool_proxy.proxied_tools(c)
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):
                 if row['ciphertext'] is not None and row['id'] in held:
+                    tool=proxied.get(row['tool_id'])
+                    if tool is not None:
+                        values.append(tool_proxy.runtime_item(c,vault,store.settings,row,tool,who.actor,
+                                                              attempt=who.attempt_id,agent=bool(who.agent)))
+                        record_use(c,who.actor,'credential.proxied',row['id'],{'attempt':who.attempt_id or None,'tool':tool['id']},
+                                   windowed=bool(who.attempt_id))
+                        continue
                     values.append({'id':row['id'],'name':row['name'],'env':row['env'],'kind':row['kind'],**vault.reveal(c,who,row['id'])})
             # Never the Tico AI Gateway's key: a run reaches it through its runner (runner-gateway-credentials below).
             # The company subscriptions its claim handed it, for this run only (backend/model_subscriptions.py).
@@ -854,8 +892,15 @@ def install_credentials(app,store,delegate=None,propose=None):
             placed(c)
             values=[]
             held=granted(c,'bot:'+bot)
+            from . import tool_proxy
+            proxied=tool_proxy.proxied_tools(c)
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):
                 if row['ciphertext'] is not None and row['env'] and row['id'] in held:
+                    tool=proxied.get(row['tool_id'])
+                    if tool is not None:
+                        values.append(tool_proxy.runtime_item(c,vault,store.settings,row,tool,'bot:'+bot,runner=who.runner_id))
+                        record_use(c,who.actor,'credential.proxied',row['id'],{'bot':bot,'runner':who.runner_id,'use':'watcher','tool':tool['id']},windowed=True)
+                        continue
                     values.append({'id':row['id'],'env':row['env'],'kind':row['kind'],'value':vault.cipher.decrypt(c,row)})
                     record_use(c,who.actor,'credential.sent_to_computer',row['id'],{'bot':bot,'runner':who.runner_id,'use':'watcher'},windowed=True)
             return {'credentials':values}

@@ -671,11 +671,12 @@ def channel_names(ctx):
 
 
 def marketing_tasks(ctx):
-    """The open marketing tasks the reader may read, each with its stage (idea, testing or scaling), owner and channel
-    slugs, most recently updated first (backend/marketing_tasks.py: the Idea, Testing and Scaling steps)."""
+    """The open marketing tasks the reader may read, each with its stage (idea, building, testing or scaling), owner
+    and channel slugs, most recently updated first (backend/marketing_tasks.py: the On deck, In development, Live and
+    Working steps)."""
     from . import marketing_tasks as MT
     def make():
-        steps = {MT.step_id(key): key for key in ("idea", "testing", "scaling")}
+        steps = {MT.step_id(key): key for key in ("idea", "building", "testing", "scaling")}
         marks = ",".join("?" * len(steps))
         found = {}
         for r in ctx.c.execute(
@@ -696,8 +697,8 @@ def marketing_tasks(ctx):
 
 def growth_channels(ctx, s):
     """Each live channel's new customers and CAC for the picked month, its LTV:CAC carried back, its last six months of
-    new customers, and up to three of its open marketing tasks (Scaling, then Testing, then Idea). Unknown comes last,
-    when it has a row that month."""
+    new customers, and up to three of its open marketing tasks (Working, then Live, In development and On deck). Unknown
+    comes last, when it has a row that month."""
     from . import growth as G
     nums = ctx.growth(GROWTH_MONTHS)
     live = [ch for ch in nums["channels"] if ch["slug"] != G.UNKNOWN]
@@ -706,7 +707,7 @@ def growth_channels(ctx, s):
     month = ctx.month
     cal = months_between(nums["months"][0], month) if nums["months"] else [month]
     tasks = {}
-    rank = {"scaling": 0, "testing": 1, "idea": 2}
+    rank = {"scaling": 0, "testing": 1, "building": 2, "idea": 3}
     for task in sorted(marketing_tasks(ctx), key=lambda t: rank[t["stage"]]):
         for slug in task["channels"]:
             tasks.setdefault(slug, []).append({"id": task["id"], "title": task["title"], "stage": task["stage"]})
@@ -739,10 +740,11 @@ def growth_retention(ctx, s):
 
 
 def growth_board(ctx, s):
-    """Open marketing tasks by stage: Testing, Scaling, then Idea, each lane's count and its newest few."""
+    """Open marketing tasks by stage: Live, Working, In development, then On deck; each lane's count and newest few."""
     tasks, names = marketing_tasks(ctx), channel_names(ctx)
     lanes = []
-    for stage, label in (("testing", "Testing"), ("scaling", "Scaling"), ("idea", "Idea")):
+    for stage, label in (("testing", "Live"), ("scaling", "Working"), ("building", "In development"),
+                         ("idea", "On deck")):
         mine = [t for t in tasks if t["stage"] == stage]
         lanes.append({"stage": stage, "label": label, "count": len(mine),
                       "cards": [{"id": t["id"], "title": t["title"], "owner_id": t["owner_id"],
@@ -923,6 +925,8 @@ def require_manage(ctx, place):
             "bot": "The bot and the people who manage it arrange its sidebar",
             "task": "A task's people arrange what is pinned to it",
             "person": "Only its person arranges My dashboard"}[kind], 403)
+    if kind == "task":
+        H._writer(ctx.c, ctx.who.actor, task_id=ident)
     return kind, ident
 
 
@@ -1023,26 +1027,26 @@ def place_view(ctx, place, timings=None):
     prime_pins(ctx, pins)
     cache = ctx.memo("file_cache", dict)
     prep = (time.perf_counter() - started) * 1000
-    shown, costs = [], {}
+    shown, costs, total = [], {}, 0
     for pin in pins:
         began = time.perf_counter()
         view = pin_view(ctx, pin, cache)
         ms = (time.perf_counter() - began) * 1000
+        total += ms
         if not view:
-            # A pin the caller can't read still costs its access check.
-            name = "hidden"
-        elif "card" in view:
+            continue
+        if "card" in view:
             template = view["card"]["template"]
             # Only built-in kinds enter the header, never a card's title or id.
             template = template if template in TEMPLATES else "unknown"
             name = re.sub(r"[^a-z0-9-]+", "-", template.lower()).strip("-") or "unknown"
         else:
             name = "page"
-        if view:
-            shown.append(view)
+        view["position"] = len(shown)
+        shown.append(view)
         costs[name] = costs.get(name, 0) + ms
     if timings is not None:
-        timings.update(prep=prep, cards=sum(costs.values()), kinds=costs)
+        timings.update(prep=prep, cards=total, kinds=costs)
     if kind == "task":
         by_id = {p["id"]: p for p in pins}
         for pin in shown:
@@ -1108,6 +1112,8 @@ def size_of(value):
 
 
 def file_activity(c, fid, actor, action, place):
+    row = c.execute("SELECT task_id FROM bot_files WHERE id=?", (fid,)).fetchone()
+    H._writer(c, actor, task_id=row["task_id"] if row else None)
     c.execute("INSERT INTO bot_file_activity(file_id,actor,action,created_at,detail) VALUES(?,?,?,?,?)",
               (fid, actor, action, H.now(), encode({"place": place})))
 
@@ -1177,6 +1183,8 @@ def drop_pin(ctx, pin):
 
 def add_pin(ctx, place, item, size="medium", position=None):
     kind, ident = require_view(ctx, place)
+    if kind == "task":
+        H._writer(ctx.c, ctx.who.actor, task_id=ident)
     if kind == "task" and item.startswith("page:"):
         if not may_link(ctx, kind, ident):
             raise Problem("forbidden", "You cannot link pages here", 403)
@@ -1224,6 +1232,8 @@ def remove_pin(ctx, pid):
     if not may_unpin(ctx, pin, kind, ident):
         raise Problem("forbidden", "Only whoever pinned it, the task's owner or requester, or the org owner unpins it"
                       if kind == "task" else "You cannot unpin here", 403)
+    if kind == "task":
+        H._writer(ctx.c, ctx.who.actor, task_id=ident)
     if kind == "bot":
         from . import bot_task_tabs as T
         T.remove_widget(ctx, ident, pin["item"])
@@ -1323,6 +1333,10 @@ def edit_card(ctx, cid, title=None, settings=None):
     row = card_or_404(ctx, cid)
     if not may_edit_card(ctx, row):
         raise Problem("forbidden", "Whoever arranges the places it is pinned to changes a card", 403)
+    for place in card_places(ctx, row):
+        kind, _, ident = place.partition(":")
+        if kind == "task":
+            H._writer(ctx.c, ctx.who.actor, task_id=ident)
     fields = {}
     if title is not None:
         fields["title"] = title.strip()
@@ -1341,6 +1355,10 @@ def remove_card(ctx, cid):
     row = card_or_404(ctx, cid)
     if not may_edit_card(ctx, row):
         raise Problem("forbidden", "Whoever arranges the places it is pinned to removes a card", 403)
+    for place in card_places(ctx, row):
+        kind, _, ident = place.partition(":")
+        if kind == "task":
+            H._writer(ctx.c, ctx.who.actor, task_id=ident)
     private = on_person_place(card_places(ctx, row))
     for pin in [dict(r) for r in ctx.c.execute("SELECT * FROM pins WHERE item=?", ("card:" + cid,))]:
         kind, ident = parse(ctx, pin["place"])

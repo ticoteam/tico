@@ -40,6 +40,69 @@ def legacy_message(api, tid, *, body="Private legacy comment"):
         return conv, H.message(c, msg["id"])
 
 
+def test_participant_permission_is_never_reused_for_another_tasks_content(api, monkeypatch):
+    from backend import read_deps, row_clock
+    from backend.privacy_index import ReadIndex
+    from backend.tests.test_meeting_items import record, add, push
+    rid = record(api, {'private':True, 'participants':['ben@acme.example']})
+    iid = add(api, rid, {'section':'task', 'text':'Participant task', 'detail':{'owner':'human:ana'}})['item']['id']
+    allowed = push(api, rid, iid)['item']['result_ref']
+    denied = post(api, 'tasks', {'title':'Unrelated task', 'body':'Private', 'owner':'human:ana', 'private':True})['id']
+    parties = row_clock.parties
+    # The readable task must be encountered first regardless of the covering index's order.
+    monkeypatch.setattr(row_clock, 'parties', lambda c: sorted(parties(c), key=lambda r: r['id'] != allowed))
+    machine, _, attempt = setup_attempt(api)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id':'participant-probe'}, machine['token'])
+    probes = {}
+    with api.app.state.store.transaction() as c:
+        a, b = H.task(c, allowed), H.task(c, denied)
+        assert [a[k] for k in ('owner_id','requester_id','readers','private')] == [b[k] for k in ('owner_id','requester_id','readers','private')]
+        room = H.open_conversation(c, 'human:ana', ['human:ben','bot:ops'], kind='chat', subject='Provenance probes')
+        c.execute('UPDATE messages SET conversation_id=? WHERE id=(SELECT message_id FROM jobs WHERE id=?)',
+                  (room['id'], attempt['job_id']))
+        for tid in (allowed, denied):
+            payload = {'nested':{'source':'task:' + tid}}
+            msg = H.say(c, 'human:ana', 'bot:ops', 'Provenance probe', conversation_id=room['id'])
+            c.execute('UPDATE messages SET refs=? WHERE id=?', (encode(payload), msg['id']))
+            child = H.say(c, 'human:ana', 'bot:ops', 'Inherited probe', conversation_id=room['id'])
+            c.execute('UPDATE messages SET refs=? WHERE id=?', (encode({'answers':[msg['id']]}), child['id']))
+            H.event(c, 'human:ben', 'participant.probe', 'probe-' + tid, payload)
+            c.execute("INSERT INTO linked_docs(id,title,url,kind,added_by,created_at,updated_at) VALUES(?,?,?,'website','human:ana',?,?)",
+                      (tid, 'Probe', 'https://acme.example/#/task/' + tid, H.now(), H.now()))
+            c.execute("INSERT INTO docs(id,path,title,body,created_by_id,created_at,updated_by_id,updated_at) VALUES(?,?,'Probe',?,'human:ana',?,'human:ana',?)",
+                      (tid, 'probe/' + tid, encode(payload), H.now(), H.now()))
+            c.execute("INSERT INTO doc_versions(doc_id,version,title,path,body,actor,created_at) VALUES(?,1,'Probe',?,?,'human:ana',?)",
+                      (tid, 'probe/' + tid, encode(payload), H.now()))
+            c.execute("INSERT INTO market_pages(id,title,category,body,updated_at) VALUES(?,'Probe','probe',?,?)", (tid, encode(payload), H.now()))
+            c.execute("INSERT INTO history_events(id,subject_type,subject_id,kind,new,created_at) VALUES(?,'task',?,'probe',?,?)",
+                      (tid, allowed, encode(payload), H.now()))
+            probes[tid] = (msg['id'], child['id'])
+    post(api, f"attempts/{attempt['id']}/events", {'events':[
+        {'seq':seq, 'kind':'message', 'payload':{'source':tid}} for seq, tid in enumerate((allowed, denied), 1)
+    ]}, machine['token'])
+    who = Identity('human:ben', 'human', email='ben@acme.example')
+    for settled in (False, True):
+        with api.app.state.store.read() as c:
+            if settled:
+                read_deps.sweep(c)
+            index = ReadIndex(c, who, rooms=True)
+            for tid, expected in ((allowed, True), (denied, False)):
+                assert H.task_private_readable(c, who.actor, H.task(c, tid)) is expected
+                for value in (tid, {'nested':['task:' + tid]}, encode({'task_id':tid}), 'https://acme.example/tasks/' + tid):
+                    assert index.content(value) is expected
+                for mid in probes[tid]:
+                    msg = H.message(c, mid)
+                    assert index.message(mid, msg['conversation_id'], msg['refs'], msg['in_reply_to']) is expected
+                assert index.event('probe-' + tid, 'human:ana', H.now(), encode({'source':tid})) is expected
+        for table, key in (('tasks','id'), ('linked_docs','id'), ('docs','id'), ('doc_versions','doc_id'), ('market_pages','id'), ('history_events','id')):
+            assert sql(api, f"SELECT {key} FROM {table} WHERE {key} IN ('{allowed}','{denied}')", 'ben-test') == [[allowed]], (settled, table)
+        for tid, expected in ((allowed, True), (denied, False)):
+            for mid in probes[tid]:
+                assert bool(sql(api, f"SELECT id FROM messages WHERE id='{mid}'", 'ben-test')) is expected
+        assert sql(api, "SELECT target FROM events WHERE action='participant.probe'", 'ben-test') == [['probe-' + allowed]]
+        assert sql(api, f"SELECT seq FROM attempt_events WHERE attempt_id='{attempt['id']}' AND seq IN (1,2)", 'ben-test') == [[1]]
+
+
 def test_private_relations_tags_and_events_do_not_leak_to_owner(api):
     hidden = task(api, labels=["sensitive-only"])
     public = task(api, private=False, requester="human:ana", owner="human:ana", title="Public parent")
@@ -762,7 +825,7 @@ def test_person_origin_rows_are_checked_in_one_row_and_match_the_one_row_read(ap
             task(api, private=False, requester="human:ana", owner="bot:ops", title="Company parent"),
             task(api, private=False, requester="bot:ops", owner="bot:ops", title="Bot work")]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET guest='human:cara' WHERE id=?", (rows[3]["id"],))
+        c.execute("UPDATE tasks SET readers=json_array('human:cara') WHERE id=?", (rows[3]["id"],))
         c.execute("UPDATE tasks SET status='done' WHERE id IN (?,?)", (rows[1]["id"], rows[5]["id"]))
         c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'parent','now')",
                   (rows[1]["id"], rows[4]["id"]))

@@ -6,13 +6,11 @@
   audit       the same lines as audit.jsonl, queryable
   drafts      one row per idempotency key, so a retried `draft` updates its own Gmail draft
   sends       one row per send, written *before* the API call; also where `sent-log --reconcile`
-              puts the owner's own sends, so the cooldowns count them
-  reviews     every second-model verdict, with the backend and the draft it judged
+              puts the owner's own sends
   messages    every normalized message a sync (or an opportunistic fetch) has stored,
               so the Mac can push a batch later without holding a hub token
   sync_state  per mailbox: Gmail history cursor, last run, last error, live count
-  mail_check_misses  mails sent after their org rule check brought back no verdict, by the check's id, until Tico
-                     counts them (the id, the employee and when: nothing of the mail)
+  queued_drafts      which Tico send a draft was queued as, so `discard` refuses a draft with a live send
 
 Nothing here talks to Google. Tests point it at a temp file.
 """
@@ -86,17 +84,6 @@ CREATE TABLE IF NOT EXISTS sends (
   source     TEXT NOT NULL DEFAULT 'mail',
   status     TEXT NOT NULL DEFAULT 'pending'
 );
-CREATE TABLE IF NOT EXISTS reviews (
-  id        INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts        TEXT NOT NULL,
-  employee  TEXT NOT NULL,
-  mailbox   TEXT NOT NULL DEFAULT '',
-  target    TEXT NOT NULL DEFAULT '',
-  backend   TEXT NOT NULL DEFAULT '',
-  ok        INTEGER NOT NULL DEFAULT 0,
-  available INTEGER NOT NULL DEFAULT 1,
-  verdict   TEXT NOT NULL DEFAULT '{}'
-);
 CREATE TABLE IF NOT EXISTS messages (
   mailbox          TEXT NOT NULL,
   msg_id           TEXT NOT NULL,
@@ -130,11 +117,6 @@ CREATE TABLE IF NOT EXISTS sync_state (
   last_error    TEXT NOT NULL DEFAULT '',
   message_count INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS mail_check_misses (
-  id        TEXT PRIMARY KEY,
-  employee  TEXT NOT NULL,
-  created   TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS judge_cache (
   cache_key   TEXT PRIMARY KEY,
   expires_at  INTEGER NOT NULL,
@@ -148,7 +130,10 @@ CREATE INDEX IF NOT EXISTS messages_push ON messages(pushed_at, mailbox);
 CREATE INDEX IF NOT EXISTS messages_epoch ON messages(mailbox, epoch);
 CREATE INDEX IF NOT EXISTS messages_from ON messages(mailbox, from_addr);
 CREATE INDEX IF NOT EXISTS judge_cache_expiry ON judge_cache(expires_at);
-CREATE INDEX IF NOT EXISTS mail_check_misses_employee ON mail_check_misses(employee, created);
+DROP TABLE IF EXISTS reviews;
+DROP TABLE IF EXISTS mail_check_misses;
+CREATE TABLE IF NOT EXISTS queued_drafts(mailbox TEXT NOT NULL, draft_id TEXT NOT NULL, send_id TEXT NOT NULL,
+ PRIMARY KEY(mailbox,draft_id));
 """
 
 
@@ -160,6 +145,8 @@ def connect(path=None):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(SCHEMA)
+    if "send_facts_json" not in {row[1] for row in conn.execute("PRAGMA table_info(messages)")}:
+        conn.execute("ALTER TABLE messages ADD COLUMN send_facts_json TEXT NOT NULL DEFAULT '{}'")
     conn.commit()
     return conn
 
@@ -240,34 +227,6 @@ def record_audit(conn, row):
                  (row["ts"], row["employee"], row.get("issue", "") or "", row.get("mailbox", ""),
                   row["action"], row.get("target", ""),
                   json.dumps(row.get("detail") or {}, sort_keys=True)))
-    conn.commit()
-
-
-# ---------------------------------------------------------------- org rule check misses
-
-MAIL_CHECK_MISSES_MAX = 100     # kept per employee, oldest dropped; also what one report to Tico carries
-
-
-def add_mail_check_miss(conn, employee, check_id, commit=True):
-    """A mail sent after its org rule check brought back no verdict: the check's id, for Tico to count once, later.
-    `commit` False: it lands with the caller's next commit (`finish_send`)."""
-    conn.execute("INSERT OR IGNORE INTO mail_check_misses (id, employee, created) VALUES (?,?,?)",
-                 (check_id, employee, stamp()))
-    conn.execute("DELETE FROM mail_check_misses WHERE employee=? AND id NOT IN (SELECT id FROM mail_check_misses "
-                 "WHERE employee=? ORDER BY created DESC, rowid DESC LIMIT ?)",
-                 (employee, employee, MAIL_CHECK_MISSES_MAX))
-    if commit:
-        conn.commit()
-
-
-def mail_check_misses(conn, employee):
-    return [r["id"] for r in conn.execute("SELECT id FROM mail_check_misses WHERE employee=? ORDER BY created, rowid "
-                                          "LIMIT ?", (employee, MAIL_CHECK_MISSES_MAX))]
-
-
-def drop_mail_check_misses(conn, ids):
-    """Tico counted these (its 2xx to the report that carried them)."""
-    conn.executemany("DELETE FROM mail_check_misses WHERE id=?", [(i,) for i in ids])
     conn.commit()
 
 
@@ -357,13 +316,9 @@ def claim_send(conn, key, employee, mailbox, issue, recipients, subject, thread_
     return get_send(conn, key), True
 
 
-def finish_send(conn, key, message_id="", status="sent", miss=None):
-    """`miss` (employee, check id): the send went out after a failed org rule check; its miss becomes reportable in
-    this same commit, only once the send is known to have gone."""
+def finish_send(conn, key, message_id="", status="sent"):
     conn.execute("UPDATE sends SET message_id=?, status=? WHERE key=?",
                  (message_id or "", status, key))
-    if miss:
-        add_mail_check_miss(conn, *miss, commit=False)
     conn.commit()
     return get_send(conn, key)
 
@@ -372,19 +327,6 @@ def drop_send(conn, key):
     """Undo a claim that never became a send, so the key is free to try again."""
     conn.execute("DELETE FROM sends WHERE key=?", (key,))
     conn.commit()
-
-
-def sends_on_day(conn, employee, mailbox, day):
-    r = conn.execute("SELECT count(*) c FROM sends WHERE employee=? AND mailbox=? AND day=? "
-                     "AND status!='failed'", (employee, mailbox, day)).fetchone()
-    return int(r["c"] if r else 0)
-
-
-def last_send_to(conn, mailbox, recipient):
-    """When anyone last wrote to this address from this mailbox, the bot or the owner in person."""
-    r = conn.execute("SELECT max(ts) t FROM sends WHERE mailbox=? AND recipient=? "
-                     "AND status!='failed'", (mailbox, str(recipient).lower())).fetchone()
-    return (r["t"] or "") if r else ""
 
 
 def has_sent_to(conn, mailbox, address):
@@ -440,31 +382,6 @@ def send_rows(conn, employee=None, mailbox=None, since=None, limit=500):
     return [dict(r) for r in conn.execute(sql, args + [int(limit)]).fetchall()]
 
 
-# ---------------------------------------------------------------- reviews
-
-def record_review(conn, employee, mailbox, target, verdict, when=None):
-    cur = conn.execute("INSERT INTO reviews (ts, employee, mailbox, target, backend, ok, "
-                       "available, verdict) VALUES (?,?,?,?,?,?,?,?)",
-                       (when or stamp(), employee, mailbox, target,
-                        verdict.get("backend", ""), 1 if verdict.get("ok") else 0,
-                        1 if verdict.get("available") else 0,
-                        json.dumps(verdict, sort_keys=True, default=str)))
-    conn.commit()
-    return cur.lastrowid
-
-
-def get_review(conn, review_id):
-    r = conn.execute("SELECT * FROM reviews WHERE id=?", (review_id,)).fetchone()
-    if not r:
-        return None
-    d = dict(r)
-    try:
-        d["verdict"] = json.loads(d["verdict"])
-    except ValueError:                                  # pragma: no cover
-        d["verdict"] = {}
-    return d
-
-
 def audit_rows(conn, since=None, employee=None, limit=500):
     sql, args = "SELECT * FROM audit WHERE 1=1", []
     if since:
@@ -511,6 +428,7 @@ def _message_values(mailbox, msg):
         "list_id": msg.get("list_id") or "",
         "is_internal": 1 if msg.get("is_internal") else 0,
         "has_unsubscribe": 1 if (msg.get("unsubscribe") or msg.get("has_unsubscribe")) else 0,
+        "send_facts_json": json.dumps(msg.get("send_facts") or {}, sort_keys=True),
     }
 
 
@@ -530,6 +448,7 @@ def _decode_message(row):
     d["body_truncated"] = bool(d.get("body_truncated"))
     d["is_internal"] = bool(d.get("is_internal"))
     d["has_unsubscribe"] = bool(d.get("has_unsubscribe"))
+    d["send_facts"] = json.loads(d.pop("send_facts_json", "{}") or "{}")
     d["id"] = d.get("msg_id")
     return d
 
@@ -555,7 +474,7 @@ def upsert_message(conn, mailbox, msg, when=None):
                             (mailbox, values["msg_id"])).fetchone()
     cols = ("thread_id", "epoch", "date", "from_addr", "from_header", "to_json",
             "cc_json", "subject", "snippet", "labels_json", "body", "body_truncated",
-            "attachments_json", "list_id", "is_internal", "has_unsubscribe")
+            "attachments_json", "list_id", "is_internal", "has_unsubscribe", "send_facts_json")
     args = [values[c] for c in cols]
     if existing:
         if _same_content(existing, values) and not existing["deleted_at"]:
@@ -564,7 +483,7 @@ def upsert_message(conn, mailbox, msg, when=None):
             "UPDATE messages SET thread_id=?, epoch=?, date=?, from_addr=?, from_header=?, "
             "to_json=?, cc_json=?, subject=?, snippet=?, labels_json=?, body=?, "
             "body_truncated=?, attachments_json=?, list_id=?, is_internal=?, "
-            "has_unsubscribe=?, updated_at=?, deleted_at=NULL, pushed_at=NULL "
+            "has_unsubscribe=?, send_facts_json=?, updated_at=?, deleted_at=NULL, pushed_at=NULL "
             "WHERE mailbox=? AND msg_id=?",
             args + [when, mailbox, values["msg_id"]])
         conn.commit()
@@ -572,9 +491,9 @@ def upsert_message(conn, mailbox, msg, when=None):
     conn.execute(
         "INSERT INTO messages (mailbox, msg_id, thread_id, epoch, date, from_addr, "
         "from_header, to_json, cc_json, subject, snippet, labels_json, body, "
-        "body_truncated, attachments_json, list_id, is_internal, has_unsubscribe, "
+        "body_truncated, attachments_json, list_id, is_internal, has_unsubscribe, send_facts_json, "
         "fetched_at, updated_at, deleted_at, pushed_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)",
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)",
         [mailbox, values["msg_id"]] + args + [when, when])
     conn.commit()
     return True

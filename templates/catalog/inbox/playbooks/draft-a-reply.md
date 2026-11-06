@@ -36,8 +36,9 @@ command without `--dry-run`; it updates the same Gmail draft if run twice. The t
 
 On the task: the message id, the draft text, the gaps, and one line on why. While mail sending is off in Tico, keep it as a draft. When sending is on, send requested replies within the mailbox rules using your Tools.
 
-When `Sending` is On and a rule there covers this message, send it with no approval, as a reply to the thread so it goes
-to the sender and nobody else: `$HUB_DIR/scripts/mail.sh reply --thread <thread> --body-file out/reply.txt --issue <task id>`.
-A forward to a `forward_to:` address is a new message to that address: `mail.sh draft --to <address> --subject "..."`, then
-`mail.sh send --draft <id>`. The answer says `"sent": true`, or `"sent": false` with the gate that refused: then it is a
-draft, leave it on the task and say why. Everything the rules do not cover stays a request for review.
+When `Sending` is On and a rule there covers this message, send it as a reply to the thread so it goes to the sender
+and nobody else: `$HUB_DIR/scripts/mail.sh reply --thread <thread> --body-file out/reply.txt --issue <task id>`.
+A forward to an address the rules name is a new message to that address: `mail.sh draft --to <address> --subject "..."`,
+then `mail.sh send --draft <id>`. Tico decides every send: the answer says `"queued": true` (it goes after the undo
+window, or once a person approves it in Tico), or `"downgraded": "draft"` with Tico's reason: then leave the draft on
+the task and say why. Everything the rules do not cover stays a request for review.

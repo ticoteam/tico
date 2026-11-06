@@ -60,7 +60,7 @@ The computers list, each computer's pop-up and **Settings → Health** show four
 |---|---|
 | **Running** | The turn has started. |
 | **Starting** | The computer has reserved a place and is preparing the turn. |
-| **Waiting** | The turn needs a login, quota, a free lane or another pre-start requirement. Each reason shows its count and oldest wait. |
+| **Waiting** | The turn needs a login, quota, available memory, a free lane or another pre-start requirement. Each reason shows its count and oldest wait. |
 | **Queued** | The work is in line to be picked up. |
 
 For example, **3 running · 2 starting · 7 waiting for quota (oldest 2 h) · 5 queued** separates work from its waits.
@@ -90,9 +90,26 @@ with **waiting: computer not reporting**, because a computer that stops reportin
 never reported is not held. The server also ends a run that has gone silent (no heartbeat or event for 5 minutes)
 once it is past its bot's max_run_minutes plus 5 minutes, without waiting for the computer.
 This includes turns with a reservation that have not started yet. Running turns continue. New starts resume when
-the hold clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
-the waiting turns, when the computer has a free turn; Tico's notices and messages between bots wait. This brake does
-not change your account, model or computer size.
+the hold clears. A person's own message to a bot (a chat, a message in its task) passes CPU overload and stale
+reports, ahead of the waiting turns, when the computer has a free turn. On Linux computers (including cloud machines
+and Docker), memory pressure also holds a person's messages. On Macs and computers whose platform is unknown,
+a person's messages pass the server's memory hold too.
+
+The Linux runner also checks current memory before starting a harness or preparing its thread, including when a
+fallback is the first harness for the turn. Its local hold uses the same 85% and 80% thresholds, even with diagnostics
+off. While waiting it gives its start place back and keeps its delivery lease. The run, Computers and Health say
+**waiting: computer busy: memory N%**. Memory admission ends only when a harness process actually launches or the turn
+acquires a live pooled process. Preparing a lazy host or its thread (such as Claude before its first send) does not
+cross that boundary: waits for sign-in renewal still check current memory before launching. The runner reports an
+allocated process on start-place and started requests, so neither the runner nor the hub parks that turn on its own
+allocation’s memory use. The boundary stays crossed through fallback. If a lazy harness acknowledges its start but
+fails to launch, its fallback checks memory locally until it allocates a process, keeping the running turn's place.
+It does not request pre-start admission again. Runners advertise allocation reporting through the
+`harness_allocation_v1` heartbeat capability. For runners without it, memory pressure never revokes an existing
+start grant. A runner talking to an older hub drops the new field or capability if that hub refuses it.
+The Mac runner never parks a turn on local memory readings;
+macOS's Memory Used includes memory it can reclaim through compression and swap. This does not cap the memory of
+tools already running inside a turn, or change your account, model or computer size.
 
 During an update, server and runner negotiate the start rules through heartbeat and claim. Older runners retain
 their existing delivery leases, including preparation already underway, until they update. Those starts have no new
@@ -235,12 +252,15 @@ Connecting a saved subscription is **Reconnect**, and asks first as a pasted val
 who added it. Owners and admins add, rename, reconnect and remove them in **Settings > Models**; anyone who sees that
 page sees the list (name, kind, status, computers, usage), never a value.
 
-Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many
-computers. Every bot on that computer then runs that tool on it. Automatic fallback can use it too when
-that tool is installed and the company allows automatic fallback. On an updated runner, an unused automatic
-candidate's login is fetched only when the bot is about to use it. Changing or removing that login leaves a turn
-still running on another tool alone. Once the fallback fetches the login, changing it stops that turn too. Older
-runners fetch fallback logins up front and restart those turns when a login changes.
+Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many computers.
+Every bot on that computer then runs that tool on it. A bot with no fallback of its own, or whose named fallback is another
+model on the same login (that fallback is skipped once the login is spent), can use it too when that tool is installed,
+the company has that tool's provider turned on (adding a subscription for that tool turns it on, and the first-run setup
+lists the providers to switch on), and **Fall back when a plan runs out** is on in **Settings > Models**. On an updated
+runner, an unused automatic candidate's login is fetched only when the bot is about to use it.
+Changing or removing that login leaves a turn still running on another tool alone. Once the fallback fetches the login,
+changing it stops that turn too. Older runners fetch fallback logins up front and restart those turns when a login
+changes.
 
 - Giving, switching or taking off a computer's subscription, reconnecting it, or removing one in use, restarts that tool there: its
   running turns stop and go back in the queue (a turn that may already have acted outside Tico is held for review
@@ -411,7 +431,7 @@ Choose **API key** when you pay the provider for each use:
   - **Add key** gives this computer a key of its own, for Codex, Claude Code, Cursor Agent and Muse Code. Only this
     computer uses it.
   - **Credentials** holds a key that several computers share (the company's key given to **Every computer**), and the
-    key of a tool whose key belongs to each bot, such as the Gemini CLI. **Add connection** offers **Open Credentials**
+    key of a tool whose key belongs to each bot, such as the Gemini CLI. **Add connection** offers **Open Keys**
     for those.
 
 ### Add one
@@ -431,7 +451,7 @@ In a computer's pop-up, **Add connection** (at the end of Connections) opens its
      [API keys on a Computer](#api-keys-on-a-computer)). A credential administrator can set **Shared with:** to other
      computers, or pick a key that is already shared instead of pasting one. An operator adds a key for this computer
      only. If a key already signs the tool in here, **Replace key** is on
-     its line instead. For any other tool, **Open Credentials**, where model keys are added and shared with computers.
+     its line instead. For any other tool, **Open Keys**, where model keys are added and shared with computers.
 4. The new connection's chip appears on the computer's row once the computer reports it; the computer does not need a
    restart.
 

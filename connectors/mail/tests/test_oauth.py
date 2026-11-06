@@ -268,7 +268,7 @@ class ReadOnlyRefusals(Base):
         for attempt in (lambda: g.modify("m1", add=["L1"]), lambda: g.modify("m1", remove=["INBOX"]),
                         lambda: g.create_label("hub/x"), lambda: g.create_draft("cmF3"),
                         lambda: g.update_draft("d1", "cmF3"), lambda: g.delete_draft("d1"),
-                        lambda: g.send_draft("d1")):
+                        lambda: g.send_raw("cmF3")):
             with self.assertRaises(Refused) as caught:
                 attempt()
             self.assertIn("read-only at Google", caught.exception.msg)
@@ -336,7 +336,7 @@ class Server:
 
 
 class ServerRefreshed(Base):
-    """A grant from Settings > Inbox > Connect Google: Tico's server holds the client secret and refreshes it."""
+    """A grant from Tools > Settings > Email > Connect Google: Tico's server holds the client secret and refreshes it."""
 
     def finish(self, server=None, google=None):
         server = server or Server()
@@ -502,7 +502,7 @@ class ActGrant(Base):
                 oauth.server_token(oauth.grant("ana@acme.example"), "gmail", [G + "gmail.modify"], "ana@acme.example")
         self.assertEqual(caught.exception.kind, "scope")
         self.assertEqual(caught.exception.msg, "ana@acme.example's Connect Google grant does not hold that access")
-        self.assertEqual(caught.exception.hint, "Connect Google again in Settings > Google to give Tico this access.")
+        self.assertEqual(caught.exception.hint, "Connect Google again in Tools > Settings > Email to give Tico this access.")
 
 
 class AdminPolicy(Base):

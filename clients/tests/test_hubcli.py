@@ -23,7 +23,7 @@ from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 ALIASES = {"approvals", "automations", "bots", "rule", "tasks"}
-SUBCOMMANDS = ["whoami", "inbound", "connections", "mail", "company-page", "audiences", "editions", "readers", "meeting", "message", "conversation", "thread", "question", "note", "feedback", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
+SUBCOMMANDS = ["whoami", "alerts", "inbound", "letter", "mail", "email", "company-page", "audiences", "editions", "readers", "meeting", "message", "conversation", "thread", "question", "note", "feedback", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
                "proposal", "rules", "strategy", "brand", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "call", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "origin", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "finance", "task-manager", "maintenance", "roadmap", "service-key"]
@@ -912,6 +912,90 @@ def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(mo
     ]
 
 
+def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
+    """`hub task create --private --reader X` sends the readers; `hub task readers list|add|remove` run the
+    hub_task_readers_* tools against /tasks/{id}/readers."""
+    from clients import remotecli
+    calls = []
+
+    class Api:
+        def get(self, path, /, **query):
+            if path == "me":
+                return {"actor": "human:ana", "role": "owner", "kind": "owner"}
+            calls.append(("GET", path, None))
+            return {"private": True, "readers": []}
+
+        def post(self, path, body=None, key=None, **kw):
+            calls.append(("POST", path, body))
+            return {"id": "T1", "private": True, "readers": ["human:ben"]}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            calls.append((method, path, body))
+            return {"id": "T1"}
+
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: Api())
+    remotecli.run(hubcli.parser().parse_args(["task", "create", "--owner", "ops", "--title", "Draft the offer letter",
+                                              "--body", "For the new hire.", "--private", "--reader", "ben",
+                                              "--reader", "group:desk"]))
+    made = [body for method, path, body in calls if method == "POST" and path == "tasks"]
+    assert made and made[-1]["private"] is True and made[-1]["readers"] == ["ben", "group:desk"], calls
+    calls.clear()
+    for argv in (["task", "readers", "list", "T1"], ["task", "readers", "add", "T1", "ben", "bot:cmo"],
+                 ["task", "readers", "remove", "T1", "ben"]):
+        args = hubcli.parser().parse_args(argv)
+        assert remotecli.tool_name(args.fn) == "hub_task_readers_" + argv[2]
+        remotecli.run(args)
+    assert calls == [("GET", "tasks/T1/readers", None), ("POST", "tasks/T1/readers", {"add": ["ben", "bot:cmo"]}),
+                     ("POST", "tasks/T1/readers", {"remove": ["ben"]})], calls
+
+
+def test_followers_run_from_the_cli_and_its_mcp_tools(monkeypatch):
+    """`hub task create --follow` sends follow; `hub task followers|follow|unfollow` run the hub_task_* tools against
+    /tasks/{id}/followers."""
+    from clients import remotecli
+    calls = []
+
+    class Api:
+        def get(self, path, /, **query):
+            if path == "me":
+                return {"actor": "human:ana", "role": "owner", "kind": "owner"}
+            calls.append(("GET", path, None))
+            return {"task_id": "T1", "following": False, "notify": None, "followers": []}
+
+        def post(self, path, body=None, key=None, **kw):
+            calls.append(("POST", path, body))
+            return {"id": "T1"}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            calls.append((method, path, body))
+            return {"task_id": "T1", "following": True, "notify": "live", "followers": []}
+
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: Api())
+    for follow in (True, False):
+        remotecli.run(hubcli.parser().parse_args(["task", "create", "--owner", "ops", "--title", "Ops weekly sweep",
+                                                  "--body", "Check the queue."] + (["--follow"] if follow else [])))
+    made = [body for method, path, body in calls if method == "POST" and path == "tasks"]
+    assert len(made) == 2 and made[0]["follow"] is True and "follow" not in made[1], calls
+    calls.clear()
+    for argv, tool in ((["task", "followers", "T1"], "hub_task_followers"),
+                       (["task", "follow", "T1", "--level", "digest"], "hub_task_follow"),
+                       (["task", "follow", "T1", "--who", "bot:cpo"], "hub_task_follow"),
+                       (["task", "unfollow", "T1", "--who", "ben"], "hub_task_follow"),
+                       (["task", "unfollow", "T1"], "hub_task_follow")):
+        args = hubcli.parser().parse_args(argv)
+        assert remotecli.tool_name(args.fn) == tool
+        remotecli.run(args)
+    assert calls == [("GET", "tasks/T1/followers", None),
+                     ("PUT", "tasks/T1/followers", {"following": True, "notify": "digest"}),
+                     ("PUT", "tasks/T1/followers", {"following": True, "actor": "bot:cpo"}),
+                     ("PUT", "tasks/T1/followers", {"following": False, "actor": "ben"}),
+                     ("PUT", "tasks/T1/followers", {"following": False})], calls
+    with pytest.raises(SystemExit):
+        hubcli.parser().parse_args(["task", "follow", "T1", "--level", "loud"])
+
+
 WEBHOOK_LEAVES = [  # every leaf of the command table in docs/webhooks.md, with the arguments it needs
     ["event-types", "--group", "webhook"],
     ["trigger", "list"], ["trigger", "create", "Orders"], ["trigger", "show", "orders"],
@@ -1183,10 +1267,12 @@ def test_the_retired_gtm_and_growth_idea_lines_run_their_new_commands_with_a_not
                        "--label", "channel:referral", "--label", "channel:door"]
     assert '"hub growth idea create" is now "hub task create --type idea"' in capsys.readouterr().err
     assert hubcli.main(["growth", "idea", "list", "--status", "testing", "--channel", "referral"]) == 0
-    assert ran[-1] == ["task", "list", "--type", "idea", "--step", "Testing", "--label", "channel:referral"]
+    assert ran[-1] == ["task", "list", "--type", "idea", "--step", "Live", "--label", "channel:referral"]
     assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "won", "--result", "CPA 31",
                         "--learning", "Video works"]) == 0
-    assert ran[-1] == ["task", "update", "t1", "--step", "Won", "--note", "Result: CPA 31\nLearning: Video works"]
+    assert ran[-1] == ["task", "update", "t1", "--step", "Succeeded", "--note", "Result: CPA 31\nLearning: Video works"]
+    assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "lost", "--result", "CPA 80"]) == 0
+    assert ran[-1] == ["task", "update", "t1", "--step", "Failed", "--note", "Result: CPA 80"]
     assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "paused", "--result", "CPA 31 so far"]) == 0
     assert ran[-1] == ["task", "update", "t1", "--step", "Paused", "--note", "Result: CPA 31 so far"]
     assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "paused"]) == 0
@@ -1344,17 +1430,17 @@ def test_assistant_proposals_lists_the_callers_waiting_cards(monkeypatch):
     client.get.assert_called_with("assistant/proposals")
 
 
-def test_connection_list_reaches_the_connections_route_with_its_paging(monkeypatch):
-    """`hub connections list --limit 5 --cursor c2` runs `hub_connections_list`: GET connections with the page."""
+def test_tool_index_reaches_the_tool_index_route_with_its_paging(monkeypatch):
+    """`hub tool index --limit 5 --cursor c2` runs `hub_tool_index`: GET tool-index with the page."""
     from clients import remotecli
     from unittest.mock import Mock
     client = Mock()
     client.get.side_effect = lambda path, **kw: {"actor": "bot:ops"} if path == "me" else {"items": [], "next": None}
     monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
-    remotecli.run(hubcli.parser().parse_args(["connections", "list", "--limit", "5", "--cursor", "c2"]))
+    remotecli.run(hubcli.parser().parse_args(["tool", "index", "--limit", "5", "--cursor", "c2"]))
     from unittest.mock import call
-    assert call("connections", limit=5, cursor="c2") in client.get.call_args_list
+    assert call("tool-index", limit=5, cursor="c2") in client.get.call_args_list
 
 
 def test_task_check_back_reaches_the_same_api_from_cli_and_mcp(monkeypatch):
@@ -1398,6 +1484,20 @@ def test_a_propose_without_for_sends_no_recipient(monkeypatch):
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
     remotecli.run(hubcli.parser().parse_args(["assistant", "propose", "--summary", "Archive", "--path", "/api/v2/bots/ops/archive"]))
     assert "for" not in client.post.call_args.args[1]
+
+
+def test_the_morning_message_posts_its_person_and_body_to_the_assistant(monkeypatch):
+    """`hub assistant morning --for human:<id> --body <text>` reaches the server as assistant/morning with both fields."""
+    from clients import hubcli, remotecli
+    client = mock.Mock()
+    client.post.return_value = {"message_id": "m1"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    args = hubcli.parser().parse_args(["assistant", "morning", "--for", "human:ana", "--body", "Hi"])
+    assert args.fn == "assistant morning"
+    remotecli.run(args)
+    assert client.post.call_args.args[0] == "assistant/morning"
+    assert client.post.call_args.args[1] == {"for": "human:ana", "body": "Hi"}
 
 
 def test_approval_list_is_the_pending_default_and_the_mcp_tool_matches(monkeypatch):
@@ -1466,3 +1566,24 @@ def test_maintenance_status_reads_the_one_maintenance_tool(monkeypatch):
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
     remotecli.run(hubcli.parser().parse_args(["maintenance", "status"]))
     assert reads == [("maintenance", {})]
+
+
+def test_personal_alert_cli_keeps_paid_test_identity_and_explicit_consent(monkeypatch):
+    from clients import remotecli, hubtools
+    class API:
+        def __init__(self, *args, **kwargs):
+            self.calls = []
+        def post(self, path, body, key=None):
+            self.calls.append((path, body, key))
+            return {"status": "accepted"}
+    api = API()
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    monkeypatch.delenv("HUB_OPERATION_ID", raising=False)
+    monkeypatch.setattr(remotecli, "Client", lambda *args, **kwargs: api)
+    args = hubcli.parser().parse_args(["alerts", "test", "--accept-charge", "--operation-id", "paid-once"])
+    assert remotecli.run(args) == {"status": "accepted"}
+    assert api.calls == [("alerts/me/test", {"accept_charge": True}, "paid-once")]
+    args = hubcli.parser().parse_args(["alerts", "verify", "+14155550123", "--sms-consent", "--call-consent"])
+    remotecli.run(args)
+    assert api.calls[-1][1] == {"phone": "+14155550123", "sms_consent": True, "call_consent": True}
+    assert "hub_alerts_test" not in {t["name"] for t in hubtools.listing(kind="botops")}

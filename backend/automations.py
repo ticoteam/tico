@@ -27,8 +27,9 @@ tells a slow catch-up from a loop, so a person decides: release the held runs to
 Turning the automation off or deleting it skips them too. A burst of distinct events inside a minute or two is a
 backlog and simply queues.
 
-Mail actions are carried out by the computer that reads the mailbox: it claims them (a lease of MAIL_LEASE_MINUTES,
-MAIL_TRIES claims at most) and reports each result; their step and run wait until then (`settle_mail`).
+Archive, label and leave run on the server for Whole Workspace mailboxes; other mail actions are carried out by the
+computer that reads the mailbox. Both claim a lease of MAIL_LEASE_MINUTES (MAIL_TRIES claims at most) and report each
+result; their step and run wait until then (`settle_mail`).
 
 The run state keeps every step's outputs for 30 days; after that `prune` keeps the status, cost and times only.
 """
@@ -57,6 +58,7 @@ from .migrations import renames
 from .models import Contract
 from . import audit_log, cloud_access
 from .store import H, Problem
+from . import sources as SRC
 
 log = logging.getLogger(__name__)
 
@@ -132,11 +134,11 @@ MAIL_TRIES = 3           # claims a mail action gets before it fails
 # Mail actions safe to carry out again on any computer (Gmail label changes): an expired lease another computer held
 # goes back to the queue for these. The rest may already have run there (a sent draft, a sent unsubscribe request).
 REPEATABLE_MAIL = ("archive", "label", "leave")
+SERVER_MAIL = "server:workspace-mail"
 BOTOPS ="bot:botops"            # builds automations for whoever asks it, with that asker's rights (backend/botops_act.py)
 VERSIONED = ("trigger", "steps", "batch", "destinations")   # what the automation does; a change here is a new version
 # The automations a write in this context comes from: their own actions never start them again.
 CHAIN = contextvars.ContextVar("automation_chain", default=())
-_BELL = threading.Event()
 
 
 def ensure(c):
@@ -914,6 +916,182 @@ def ensure_builtins(c, catalog=None, settings=None):
     return made
 
 
+MIRROR_VIA = "system mirror sync"
+MIRRORS_SQL = ("SELECT * FROM automations WHERE deleted_at IS NULL AND builtin=1 AND json_extract(flow,'$.readonly')=1 "
+               "ORDER BY created_at, id")
+HEALTH = "tico.builtin.health"
+MIRROR_RETRY_SECONDS = 3600     # a mirror write that failed is tried again after this, not every tick
+_mirror_failed = {}             # (database file, what) -> _monotonic() of the failure, this process only
+
+
+def _monotonic():
+    import time
+    return time.monotonic()
+
+
+def _rule_controls(rule):
+    """A task rule's mirror controls, as the cutover writes them (redesign_migration `_builtins`)."""
+    from . import redesign_migration as M
+    return {"on": bool(rule["enabled"]), "preset": rule["preset"], "daily_at": rule["daily_at"],
+            "department": rule["department"], "triggers": M._json(rule["triggers"], []),
+            "actions": M._json(rule["actions"], [])}
+
+
+def _health_mirror(owner, bot):
+    from . import redesign_migration as M
+    return M._mirror("Health Monitor", owner, "health", {"on": bot.get("state") == "active", "bot": H.HEALTH_MONITOR},
+                     {"kind": "bot", "id": H.HEALTH_MONITOR}, "Finds install problems and files them for BotOps.")
+
+
+def sync_system_mirrors(c):
+    """Keep the read-only mirrors (redesign_migration `_builtins`) in step with what Tico runs, in the caller's write.
+    The cutover made them once; this keeps them right after it, on every automations tick:
+    - a system job (system_routines.JOBS) or a task rule with no mirror gets one, of the cutover's shape, owner and id
+      scheme, marked in `redesign_migrated` as the cutover marks it, and so does the Health Monitor once its bot is
+      back (restored after it was archived). Only once the cutover is done and has a person to own it (`owner_wait` is
+      `catch_up`'s);
+    - a mirror of a job no longer in JOBS, of a task rule that is gone, a second mirror of one job or rule, and the
+      Health Monitor's once its bot is gone or archived are retired as a delete retires an automation (`remove`): off,
+      soft-deleted, their unfinished runs skipped; their runs stay as history. A mark that named a retired twin names
+      the one kept, so the cutover report does not call the job deleted;
+    - a job's mirror whose name or words are not the job's takes the job's; a task rule's takes the rule's name, switch
+      and settings; the Health Monitor's takes its bot's on/off.
+    A job that cannot run on this install keeps its mirror: the reads hide it (automation_overview `hidden_jobs`).
+    One read of the mirrors; writes only for what differs, so a second pass changes nothing. Never raises: a mirror
+    that cannot be written is logged once and tried again after MIRROR_RETRY_SECONDS (per process). Returns {made,
+    retired, renamed} automation ids."""
+    from . import automation_overview as AO, redesign_migration as M, system_routines as SR
+    done = {"made": [], "retired": [], "renamed": []}
+    try:
+        record = M.state(c)
+    except Exception:  # noqa: BLE001 - a database from before the converter
+        return done
+    if record.get("state") != "done":
+        return done
+    rules = ({r["id"]: dict(r) for r in c.execute("SELECT * FROM task_rules ORDER BY created_at, id")}
+             if H._has_table(c, "task_rules") else {})
+    health = H.bot(c, H.HEALTH_MONITOR)
+    health = dict(health) if health and health["state"] != "archived" else None
+    jobs, rule_mirrors, retire, twins, health_mirror = {}, {}, [], {}, None
+    for row in c.execute(MIRRORS_SQL).fetchall():
+        flow = flow_of(row)
+        name = str((flow.get("trigger") or {}).get("name") or "")
+        source = flow.get("source") if isinstance(flow.get("source"), dict) else {}
+        if name.startswith(AO.JOB_PREFIX):
+            key = name[len(AO.JOB_PREFIX):]
+            if key in jobs:
+                twins[row["id"]] = jobs[key][0]["id"]
+            if key not in SR.BY_KEY or key in jobs:
+                retire.append(row)
+            else:
+                jobs[key] = (row, flow)
+        elif name == AO.TASK_RULE and source.get("kind") == "task_rule":
+            rid = source.get("id")
+            if rid in rule_mirrors:
+                twins[row["id"]] = rule_mirrors[rid][0]["id"]
+            if rid not in rules or rid in rule_mirrors:
+                retire.append(row)
+            else:
+                rule_mirrors[rid] = (row, flow)
+        elif name == HEALTH:
+            if not health or health_mirror:
+                retire.append(row)
+            else:
+                health_mirror = (row, flow)
+
+    database = []
+
+    def what_of(what):
+        if not database:
+            found = c.execute("PRAGMA database_list").fetchone()
+            database.append(str(found[2]) if found else "")
+        return database[0], what
+
+    def waiting(what):
+        """Whether `what` failed under MIRROR_RETRY_SECONDS ago in this process: it is not tried, nor warned, again."""
+        at = _mirror_failed.get(what_of(what))
+        return at is not None and _monotonic() - at < MIRROR_RETRY_SECONDS
+
+    def step(what, work):
+        """`work()` in a savepoint of its own: True when it was written."""
+        if waiting(what):
+            return False
+        c.execute("SAVEPOINT mirror_sync")
+        try:
+            work()
+            c.execute("RELEASE mirror_sync")
+            _mirror_failed.pop(what_of(what), None)
+            return True
+        except Exception as exc:  # noqa: BLE001 - one mirror must not stop the tick; it is tried again in an hour
+            c.execute("ROLLBACK TO mirror_sync")
+            c.execute("RELEASE mirror_sync")
+            _mirror_failed[what_of(what)] = _monotonic()
+            log.warning("The system mirror %s could not be synced: %s", what, type(exc).__name__)
+            return False
+
+    def retire_one(row):
+        remove(c, H.KEEPER, row, via=MIRROR_VIA)
+        if row["id"] in twins and H._has_table(c, "redesign_migrated"):
+            c.execute("UPDATE redesign_migrated SET automation=? WHERE automation=?", (twins[row["id"]], row["id"]))
+
+    def update(row, flow, changed):
+        if step("update:" + row["id"], lambda: _save(c, H.KEEPER, row["id"], changed, flow, via=MIRROR_VIA)):
+            done["renamed"].append(row["id"])
+
+    for row in retire:
+        if step("retire:" + row["id"], lambda row=row: retire_one(row)):
+            done["retired"].append(row["id"])
+    for key, (row, flow) in jobs.items():
+        job = SR.BY_KEY[key]
+        name, words = job.name[:120], job.what[:500]
+        if flow.get("name") != name or flow.get("description") != words:
+            # Only its words change, never what it is: no new version, and its owner is not checked again.
+            update(row, flow, {**flow, "name": name, "description": words})
+    for rid, (row, flow) in rule_mirrors.items():
+        rule = rules[rid]
+        controls = _rule_controls(rule)
+        name, on = str(rule["name"] or "")[:120], bool(rule["enabled"])
+        if flow.get("name") != name or bool(flow.get("enabled")) != on or flow.get("controls") != controls:
+            update(row, flow, {**flow, "name": name, "enabled": on, "controls": controls})
+    if health_mirror:
+        row, flow = health_mirror
+        on = health.get("state") == "active"
+        if bool(flow.get("enabled")) != on:
+            controls = {**(flow.get("controls") or {}), "on": on}
+            update(row, flow, {**flow, "enabled": on, "controls": controls})
+    missing = [job for job in SR.JOBS if job.key not in jobs and not waiting("make:job:" + job.key)]
+    unmirrored = [(rid, rule) for rid, rule in rules.items()
+                  if rid not in rule_mirrors and not waiting("make:rule:" + rid)]
+    lost_health = bool(health and not health_mirror and not waiting("make:health"))
+    if not (missing or unmirrored or lost_health) or record.get("owner_wait"):
+        return done                                     # the usual tick: one read, nothing to write
+    who = M.system_who(c)
+    owner = M._owner_person(who)
+    if not owner:
+        return done
+    mid = record.get("migration") or "mig_" + H.new_id()
+    cfg = SR.config(c) if missing else {}
+
+    def make(what, flow, kind, ident, title):
+        def work():
+            made = M._save(c, who, flow)
+            M._mark(c, kind, ident, mid, made, title=title)
+            done["made"].append(made)
+        step(what, work)
+
+    for job in missing:
+        oid = "job:" + job.key
+        controls = {"on": True, "schedule": job.schedule, **(cfg.get(job.key) or {})}
+        flow = M._mirror(job.name, owner, "job." + job.key, controls, {"kind": "system_job", "id": oid}, job.what)
+        make("make:job:" + job.key, flow, "system_job", oid, job.name)
+    for rid, rule in unmirrored:
+        flow = M._mirror(rule["name"], owner, "task_rule", _rule_controls(rule), {"kind": "task_rule", "id": rid})
+        make("make:rule:" + rid, flow, "task_rule", rid, rule["name"])
+    if lost_health:
+        make("make:health", _health_mirror(owner, health), "health_monitor", "bot:" + H.HEALTH_MONITOR, "Health Monitor")
+    return done
+
+
 # ---------------------------------------------------------------------------------------------------- triggers
 def _count(c, aid, field):
     c.execute(f"INSERT INTO automation_daily(automation_id,day,{field}) VALUES(?,?,1) "
@@ -921,10 +1099,13 @@ def _count(c, aid, field):
 
 
 def _ring(c):
+    bell = getattr(c, "automation_bell", None)
+    if bell is None:
+        return   # A standalone connection has no app to notify; the scheduler also reads queued runs.
     if hasattr(c, "after_commit"):
-        c.after_commit.append(_BELL.set)
+        c.after_commit.append(bell.set)
     else:
-        _BELL.set()
+        bell.set()
 
 
 def _guard(c, row):
@@ -1092,6 +1273,11 @@ def _stored_ref(ref):
 
 
 def queue(c, row, payload, ref="", *, manual=False, chain=()):
+    with SRC.writing_as(SRC.automation_key(row["id"])):     # the keeper lines this run's guard and runs write
+        return _queue(c, row, payload, ref, manual=manual, chain=chain)
+
+
+def _queue(c, row, payload, ref="", *, manual=False, chain=()):
     """A queued run of this automation's current version, or None: an automation with a `find` runs one at a time (an
     occurrence while one is unfinished is passed over, counted as dropped), a schedule absorbs an occurrence
     while its last task is open (`_absorbed`), and on hold (the run guard's, `_guard`) the run is kept as `held`, the
@@ -2133,14 +2319,15 @@ class Hub:
             return pick
 
     def drain(self, limit=200):
-        """Run queued runs until none is left (or `limit`, so one request never drains forever)."""
+        """Advance queued runs, then Workspace mail; each pass is bounded so one request never drains forever."""
         done = 0
         while done < limit:
             rid = self.claim()
             if not rid:
-                return done
+                break
             self.go(rid)
             done += 1
+        drain_workspace_mail(self.store)
         return done
 
     def go(self, rid):
@@ -2154,7 +2341,8 @@ class Hub:
             # What it does comes from the run's version; its owner, cap and the rest are as they are now.
             flow = {**{k: v for k, v in flow_of(row).items() if k not in VERSIONED}, **json.loads(version["flow"])}
             services = HubServices(self, dict(row), flow, rid, tuple(json.loads(run["chain"] or "[]")))
-            state = E.advance(flow, state, services)
+            with SRC.writing_as(SRC.automation_key(row["id"])):     # the keeper lines its steps write name it
+                state = E.advance(flow, state, services)
         except Exception as exc:  # noqa: BLE001 - a bug in a run fails that run, not the drain
             state = {**state, "status": "failed", "error": (str(exc) or type(exc).__name__)[:300]}
         with self.store.transaction() as c:
@@ -2200,7 +2388,7 @@ def _entries(record):
 
 
 def settle_mail(c, state):
-    """The run's queued mail actions as their computer reported them: a step waits while one of its actions is out
+    """The run's queued mail actions as their executor reported them: a step waits while one of its actions is out
     and is ok or failed by the results, and a run with nothing else to wait for waits while a step does. Returns the
     run's status."""
     pending = failed = False
@@ -2257,7 +2445,7 @@ def _chain_end(c, mid, state):
 
 
 def _requeue(c, row):
-    """Where a mail action goes when its lease runs out or its computer asks to retry: back in the queue, unless
+    """Where a mail action goes when its lease runs out or its executor asks to retry: back in the queue, unless
     its run has ended failed meanwhile."""
     run = c.execute("SELECT status FROM automation_runs WHERE id=?", (row["run_id"],)).fetchone() if row["run_id"] else None
     return "canceled" if run and run["status"] in ("failed", "skipped") else "queued"
@@ -2307,6 +2495,128 @@ def _mail_report(c, row, state, result):
         _chain_end(c, row["id"], "skipped" if state == "failed" else "canceled")
     if state in ("done", "failed") and row["run_id"]:
         _settle_run(c, row["run_id"])
+    if state == "done" and row["action"] in REPEATABLE_MAIL:
+        # Both executors leave the same ids-only receipt; mail content stays in Gmail.
+        auto = c.execute("SELECT flow FROM automations WHERE id=?", (row["automation_id"],)).fetchone()
+        via = H.VIA.set("automation:" + row["automation_id"])
+        try:
+            H.event(c, A.acts_as(c, {"flow": flow_of(auto)}) if auto else H.KEEPER, "mail.organize", row["mailbox"],
+                    {"mailbox": row["mailbox"], "action": row["action"], "count": 1, "ids": [row["msg_id"]]})
+        finally:
+            H.VIA.reset(via)
+
+
+def _server_mail(c, mailbox, action):
+    from . import google_workspace
+    return action in REPEATABLE_MAIL and google_workspace.authority(c, mailbox) == "workspace"
+
+
+# A retry waits one lease interval, so repeated doorbells cannot exhaust its tries during a Gmail outage.
+_MAIL_DUE = "((state='queued' AND (attempts=0 OR claimed_at IS NULL OR claimed_at<=:cutoff)) " \
+            "OR (state='claimed' AND claimed_at<=:cutoff))"
+
+
+def _claim_workspace_mail(store, mid):
+    """Lease one repeatable action in a short write; another drain or computer cannot also claim it."""
+    with store.transaction() as c:
+        now = H.now()
+        row = c.execute("SELECT * FROM automation_mail_actions WHERE id=:id AND " + _MAIL_DUE,
+                        {"id": mid, "cutoff": H.shift(now, minutes=-MAIL_LEASE_MINUTES)}).fetchone()
+        if not row or not _server_mail(c, row["mailbox"], row["action"]):
+            return None
+        if _requeue(c, row) == "canceled":
+            _mail_report(c, row, "canceled", {"ok": False, "detail": "canceled: the run failed"})
+            return None
+        if row["after"]:
+            prev = c.execute("SELECT state FROM automation_mail_actions WHERE id=?", (row["after"],)).fetchone()
+            if not prev or prev["state"] != "done":
+                return None
+        if row["attempts"] >= MAIL_TRIES:
+            _mail_report(c, row, "failed", {"ok": False, "detail": f"no result after {MAIL_TRIES} tries"})
+            return None
+        c.execute("UPDATE automation_mail_actions SET state='claimed',claimed_at=?,claimed_by=?,attempts=attempts+1 "
+                  "WHERE id=?", (now, SERVER_MAIL, mid))
+        return {**dict(row), "state": "claimed", "claimed_at": now, "claimed_by": SERVER_MAIL,
+                "attempts": row["attempts"] + 1}
+
+
+def _workspace_mail(store, row):
+    """Recheck the owner's current rights, then change Gmail under a read connection, never a write lock."""
+    from connectors.mail import Refused
+    from connectors.mail.actions import label_name
+    from connectors.mail.labels import NEEDS_OWNER
+    from . import gmail_live, mailbox_access
+
+    with store.read() as c:
+        if not _server_mail(c, row["mailbox"], row["action"]):
+            return None                    # its credential changed: let the computer claim it instead
+        if store.settings.rehearsal or store.settings.demo:
+            raise Problem("rehearsal", "This install does not organize live email", 403)
+        owner = c.execute("SELECT owner_id FROM automations WHERE id=?", (row["automation_id"],)).fetchone()
+        args = json.loads(row["args"])
+        refused = mailbox_access.action_refusal(c, owner["owner_id"] if owner else "", row["mailbox"],
+                                                row["action"], args)
+        if refused:
+            raise Problem("forbidden", refused, 403)
+        if _requeue(c, row) == "canceled":
+            return None
+        if not row["msg_id"]:
+            raise Refused(f"the {row['action']} action names no message.")
+        if row["action"] == "archive":
+            gmail_live.organize(c, row["mailbox"], [row["msg_id"]], remove=("INBOX",))
+            return {"ok": True, "detail": "archived"}
+        name = (NEEDS_OWNER if row["action"] == "leave"
+                else label_name(args.get("label") or args.get("tag") or args.get("name")))
+        label = gmail_live.resolve_label(c, row["mailbox"], name, create=True)
+        gmail_live.organize(c, row["mailbox"], [row["msg_id"]], add=(label,))
+        return {"ok": True, "detail": "left for you" if row["action"] == "leave" else f"labelled {name}"}
+
+
+def drain_workspace_mail(store, limit=200):
+    """A bounded pass after run writes and on scheduler ticks, including retries and recovered leases.
+
+    Each row is tried at most once per pass. Candidates include chained rows; their predecessor is checked at the
+    lease, so a successful first action allows the next in this pass, while a retry leaves its successors waiting.
+    """
+    from connectors.mail import Refused
+
+    with store.read() as c:
+        candidates, picked, workspace = [], set(), {}
+        for row in c.execute("SELECT id,mailbox,action,\"after\",(SELECT p.state FROM automation_mail_actions p "
+                             "WHERE p.id=r.\"after\") AS previous_state FROM automation_mail_actions r WHERE action IN "
+                             "('archive','label','leave') AND " + _MAIL_DUE + " ORDER BY created_at,rowid",
+                             {"cutoff": H.shift(H.now(), minutes=-MAIL_LEASE_MINUTES)}):
+            if row["mailbox"] not in workspace:
+                workspace[row["mailbox"]] = _server_mail(c, row["mailbox"], row["action"])
+            if workspace[row["mailbox"]]:
+                if row["after"] and row["after"] not in picked and row["previous_state"] != "done":
+                    continue                # a chain waiting on a computer must not crowd out ready work
+                candidates.append(row["id"])
+                picked.add(row["id"])
+                if len(candidates) >= limit:
+                    break
+    done = 0
+    for mid in candidates:
+        row = _claim_workspace_mail(store, mid)
+        if row is None:
+            continue
+        retry = False
+        try:
+            result = _workspace_mail(store, row)
+        except Problem as exc:
+            result, retry = {"ok": False, "detail": exc.detail}, exc.retryable
+        except Refused as exc:
+            result = {"ok": False, "detail": exc.msg}
+        with store.transaction() as c:
+            current = c.execute("SELECT * FROM automation_mail_actions WHERE id=?", (mid,)).fetchone()
+            if (not current or current["state"] != "claimed" or current["claimed_by"] != SERVER_MAIL
+                    or current["claimed_at"] != row["claimed_at"]):
+                continue                    # a later lease owns the result now
+            state = (_requeue(c, row) if result is None or (retry and row["attempts"] < MAIL_TRIES)
+                     else "done" if result["ok"] else "failed")
+            _mail_report(c, row, state, {**json.loads(row["result"] or "{}"), **(result or {})})
+        done += 1
+    return done
 
 
 def tick(store, at=None):
@@ -2322,6 +2632,10 @@ def tick(store, at=None):
     now = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     with store.transaction() as c:
         ensure_builtins(c, settings=getattr(store, "settings", None))
+        try:
+            sync_system_mirrors(c)              # the system jobs' read-only mirrors, in step with JOBS
+        except Exception as exc:  # noqa: BLE001 - the mirrors wait for the next tick; the automations go on
+            log.warning("System mirror sync failed: %s", type(exc).__name__)
         from .scheduler import next_due
         for row in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL AND enabled=1 "
                              "AND trigger_type='schedule'").fetchall():
@@ -2700,8 +3014,8 @@ def install(app, store, auth, mutate):
     @app.middleware("http")
     async def automation_doorbell(request, call_next):
         response = await call_next(request)
-        if _BELL.is_set():
-            _BELL.clear()
+        if store.automation_bell.is_set():
+            store.automation_bell.clear()
             await asyncio.to_thread(hub.drain)
         return response
 
@@ -2729,8 +3043,10 @@ def install(app, store, auth, mutate):
                                                      "WHERE status='pending' GROUP BY automation_id")}
             chart = Chart(c) if who.role in ("human", "bot") else None   # one chart for every row's rule
             jobs = AO.system_jobs(c, store.settings)
+            hidden = AO.hidden_jobs(c, store.settings)     # a system job that cannot run here is not listed
             visible = [{**view(c, dict(r), who, chart=chart, jobs=jobs), "pending": pending.get(r["id"], 0)}
-                       for r in rows if may_change(c, who, {**flow_of(r), "readonly": False}, chart)]
+                       for r in rows if AO.shown(flow_of(r), hidden)
+                       and may_change(c, who, {**flow_of(r), "readonly": False}, chart)]
         shown, more = page(visible[max(cursor, 0):], max(1, min(limit, 500)), max(cursor, 0), LIST_BYTES)
         return {"automations": shown, "next": more}
 
@@ -3129,9 +3445,13 @@ def install(app, store, auth, mutate):
         def work(c):
             mailbox = body.mailbox.strip().lower()
             runner = mail_computer(c, who, mailbox)
+            from . import google_workspace
+            server_mail = google_workspace.authority(c, mailbox) == "workspace"
             now = H.now()
             for row in c.execute("SELECT * FROM automation_mail_actions WHERE mailbox=? AND state='claimed' "
                                  "AND claimed_at<?", (mailbox, H.shift(now, minutes=-MAIL_LEASE_MINUTES))).fetchall():
+                if server_mail and row["action"] in REPEATABLE_MAIL:
+                    continue                # only the server recovers these leases
                 if row["attempts"] >= MAIL_TRIES:
                     _mail_report(c, row, "failed", {**json.loads(row["result"] or "{}"), "ok": False,
                                                     "detail": f"no result after {MAIL_TRIES} tries"})
@@ -3149,15 +3469,16 @@ def install(app, store, auth, mutate):
             rows, spent = [], 0
             # An action waits for the one before it in its step's chain (`after`) to be done: a chain is claimed in order.
             for r in c.execute("SELECT * FROM automation_mail_actions AS r WHERE r.state='queued' AND r.mailbox=? "
+                               "AND (?=0 OR r.action NOT IN ('archive','label','leave')) "
                                "AND (r.\"after\" IS NULL OR EXISTS (SELECT 1 FROM automation_mail_actions AS p "
                                "WHERE p.id=r.\"after\" AND p.state='done')) ORDER BY r.created_at LIMIT 20",
-                               (mailbox,)):
+                               (mailbox, server_mail)):
                 size = len(r["args"] or "") + len(r["result"] or "")
                 if rows and spent + size > LIST_BYTES:
                     break                  # the rest stay queued for the next claim
                 spent += size
                 rows.append(dict(r))
-            # The company's What Tico may do (Settings > Google) covers automations too: with Send mail off a send is
+            # The company's What Tico may do (Tools) covers automations too: with Send mail off a send is
             # claimed as a draft, as with the inbox's own switch off. The connector checks each write itself, from
             # GET /connectors/mail/targets (connectors/mail/policy.py runner_company), not from the action.
             from .google_workspace import permissions
@@ -3208,6 +3529,15 @@ def install(app, store, auth, mutate):
                 mail_computer(c, who, row["mailbox"])
             if row["state"] in ("done", "failed", "canceled"):
                 return {"id": mid, "state": row["state"]}
+            if body.send_queue_id:
+                queued = c.execute("SELECT state FROM email_sends WHERE id=? AND automation_action_id=?",
+                                   (body.send_queue_id, mid)).fetchone()
+                if not queued:
+                    raise Problem("queue", "No durable send belongs to this action", 409)
+                if queued["state"] in ("pending", "waiting_approval", "dispatching"):
+                    c.execute("UPDATE automation_mail_actions SET state='waiting_send',result=? WHERE id=?",
+                              (json.dumps({"send_queue_id": body.send_queue_id}), mid))
+                    return {"id": mid, "state": "waiting_send"}
             state = ("done" if body.ok else _requeue(c, row) if body.retry and row["attempts"] < MAIL_TRIES else "failed")
             result = {**json.loads(row["result"] or "{}"), "ok": body.ok, "detail": body.detail,
                       **{k: v for k, v in (("message", body.message), ("draft", body.draft), ("thread", body.thread))
@@ -3228,3 +3558,4 @@ class MailResult(Contract):
     message: str = Field(default="", max_length=200)        # the Gmail message sent
     draft: str = Field(default="", max_length=200)          # the Gmail draft made
     thread: str = Field(default="", max_length=200)
+    send_queue_id: str = Field(default="", max_length=100)

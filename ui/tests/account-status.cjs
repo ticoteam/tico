@@ -12,7 +12,7 @@ const {unrouted} = require('./support/routes.cjs');
 // Each of these lit the dot or filled the menu before Amendment v3. None may do so now.
 const NOISE_HEALTH = {audience: 'owner', stuck: [], attention: 3, computers: [{id: 'r1', label: 'Studio Mac', online: true, runtimes: []}], failures: [], checks: [
   {id: 'version', label: 'Version', status: 'warn', summary: 'Tico 0.3.80 is available. You are on 0.3.79.', fixes: [{label: 'Update', href: '', tab: '', click: '#new-version'}]},
-  {id: 'models', label: 'Models', status: 'bad', summary: "Builder's Claude login was rejected. Sign in again.", fixes: [{label: 'Open Credentials', href: '#/credentials'}]},
+  {id: 'models', label: 'Models', status: 'bad', summary: "Builder's Claude login was rejected. Sign in again.", fixes: [{label: 'Open Keys', href: '#/tools/keys?show=credentials'}]},
   {id: 'computers', label: 'Computers', status: 'ok', summary: '1 computer online.', fixes: []}]};
 const NOISE_ISSUES = [
   // A Tico update on a computer: its Restart lives in Settings > Health, never in the menu.
@@ -32,6 +32,7 @@ const NOISE_ISSUES = [
     let status = {cloud: true, keeper_alive: true, health_issues: NOISE_ISSUES};
     let health = NOISE_HEALTH;
     let failStatus = false;
+    let config = {company_name: 'Acme'};
     const serve = async route => {
       const url = new URL(route.request().url()), p = url.pathname;
       if (url.origin !== 'http://tico-ui.test') return route.abort();
@@ -42,7 +43,8 @@ const NOISE_ISSUES = [
         if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.html') ? 'text/html'
           : name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'application/javascript' : 'application/octet-stream'});
       }
-      if (p === '/api/me') return json({id: 'chris', email: 'chris@tico.team', role: 'owner', cloud: true, config: {company_name: 'Tico'}});
+      if (p === '/api/me') return json({id: 'chris', email: 'chris@tico.team', role: 'owner', cloud: true, config});
+      if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([{id: 'builder', name: 'Builder', role: 'Builder'}]);
       if (p === '/api/humans') return json({people: [{id: 'chris', name: 'Chris'}], org_groups: []});
       if (p === '/api/status') return failStatus ? json({error: {detail: 'down'}}, 503) : json(status);
@@ -70,6 +72,51 @@ const NOISE_ISSUES = [
     const dot = page.locator('#account .account-dot');
     const menuLines = async () => { await page.evaluate(() => setAccountMenu(true)); await page.locator('#account-menu').waitFor(); return page.locator('#account-menu .account-status-line'); };
     const texts = locator => locator.locator('.account-status-text').allInnerTexts();
+
+    // A server being remote is not a portal connection. A linked company supplies its own portal URL.
+    await page.locator('#account').click();
+    const administration = page.locator('#account-administration');
+    assert.equal(await administration.isHidden(), true);
+    assert.equal(await administration.getAttribute('href'), null);
+    const portal = 'https://portal.acme.example/companies/acme';
+    config = {...config, administration_url: portal};
+    await page.evaluate(() => refreshConfig());
+    await administration.waitFor();
+    assert.equal(await administration.getAttribute('href'), portal);
+    assert.equal(await administration.getAttribute('target'), '_blank');
+    assert.match(await administration.getAttribute('rel'), /noopener/);
+    assert.equal(await page.getByRole('link', {name: 'Admin', exact: true}).count(), 1);
+    await page.context().route(portal, route => route.fulfill({contentType: 'text/html', body: '<title>Account portal</title>'}));
+    const popupOpened = page.waitForEvent('popup');
+    await administration.click();
+    const popup = await popupOpened;
+    await popup.waitForLoadState('domcontentloaded');
+    assert.equal(popup.url(), portal);
+    assert.equal(await popup.evaluate(() => window.opener), null);
+    assert.equal(page.url(), 'http://tico-ui.test/#/tasks', 'Admin leaves the app on its current page');
+    assert.equal(await page.locator('#account-menu').isHidden(), true);
+    await popup.close();
+    await page.bringToFront();
+    // Only people who can manage the company see it: a member does not, an admin does.
+    await page.evaluate(() => { S.me = {...S.me, role: 'member', bot_admin: false}; renderAdministration(); });
+    await page.locator('#account').click();
+    assert.equal(await administration.isHidden(), true, 'a member does not see Admin');
+    await page.evaluate(() => setAccountMenu(false));
+    await page.evaluate(() => { S.me = {...S.me, bot_admin: true}; });
+    await page.locator('#account').click();
+    await administration.waitFor();
+    assert.equal(await administration.getAttribute('href'), portal, 'an admin sees Admin');
+    await page.evaluate(() => { setAccountMenu(false); S.me = {...S.me, role: 'owner', bot_admin: false}; });
+    // The account-linked fallback is the hosted portal home; unlinking removes even the old href.
+    config = {...config, administration_url: 'https://app.tico.dev/'};
+    await page.evaluate(() => refreshConfig());
+    assert.equal(await administration.getAttribute('href'), 'https://app.tico.dev/');
+    config = {company_name: 'Acme'};
+    await page.evaluate(() => refreshConfig());
+    await page.locator('#account').click();
+    assert.equal(await administration.isHidden(), true);
+    assert.equal(await administration.getAttribute('href'), null);
+    await page.evaluate(() => setAccountMenu(false));
 
     // Health's warn and bad checks, the operation issue and the update line light nothing, and the menu lists none of them.
     await settle();
@@ -157,6 +204,7 @@ const NOISE_ISSUES = [
     // Phone: one line in the menu, fits the screen, no horizontal page scroll, and its Fix closes the menu.
     status = {cloud: true, keeper_alive: true, health_issues: NOISE_ISSUES};
     health = {...NOISE_HEALTH, computers: []};
+    config = {...config, administration_url: portal};
     const phone = await browser.newPage({viewport: {width: 390, height: 844}, hasTouch: true, isMobile: true, serviceWorkers: 'block'});
     phone.on('pageerror', e => errors.push(e.message));
     await phone.route('**/*', serve);
@@ -165,6 +213,7 @@ const NOISE_ISSUES = [
     await phone.locator('#account').tap();
     const phoneLines = phone.locator('#account-menu .account-status-line');
     await phoneLines.first().waitFor();
+    assert.equal(await phone.getByRole('link', {name: 'Admin', exact: true}).getAttribute('href'), portal);
     assert.deepEqual(await texts(phoneLines), ["Bots aren't running: no computer is online"]);
     const menu = await phone.locator('#account-menu').boundingBox();
     assert.ok(menu.x >= 0 && menu.x + menu.width <= 390, `the menu fits a phone: ${JSON.stringify(menu)}`);

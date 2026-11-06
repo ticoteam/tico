@@ -1,4 +1,4 @@
-"""Settings > Inbox > Connect Google: a person connects their own Google account, read only, with no admin.
+"""Tools > Settings > Email > Connect Google: a person connects their own Google account, read only, with no admin.
 
 The person asks to connect (`POST /api/v2/mail/google/connect`) and gets Google's sign-in address for Tico's
 own OAuth client (TICO_GOOGLE_OAUTH_CLIENT_ID/SECRET, run by whoever runs this server; nobody makes a Google
@@ -24,7 +24,7 @@ Not a bot, not BotOps or the Assistant acting for them, not an admin for someone
 same way; the computer revokes the grant at Google and forgets it.
 
 The scopes depend on the Google app that signs the person in. Tico's shared app (the server's environment) asks for
-read only (READ_SCOPES). The company's own app, set in Settings > Google, also asks for the act scopes (ACT_SCOPES:
+read only (READ_SCOPES). The company's own app, set in Tools > Settings > Email, also asks for the act scopes (ACT_SCOPES:
 gmail.modify, which labels, archives and drafts mail, and calendar.events), since an Internal app needs no Google review
 for them. The grant keeps only the scopes Google gave the exchange (`grant_scopes`, never more than the app may grant),
 and a refresh asks Google for no scope the grant lacks: a read-only grant stays read only until its person connects
@@ -100,7 +100,7 @@ IDENTITY_NAMES = {G + "userinfo.email", G + "userinfo.profile"}
 APPS = {"settings": "own", "env": "shared"}     # the Google app a connect signs in with, as the person is told it
 GOOGLE_SECONDS = 20
 CALLBACK = "/api/v2/mail/google/callback"
-INBOX = "/#/settings/inbox"    # Settings > Inbox (ui/app/router.js), which reads the outcome itself
+INBOX = "/#/tools/settings/email"  # Tools > Settings > Email, which reads the outcome itself
 SIGN_IN_SECONDS = 600           # Google's codes last about ten minutes; a sign-in left open longer starts again
 CLAIM_SECONDS = 300             # a computer that claimed and never answered
 HOLDER_SECONDS = 600            # a computer that said it holds mail credentials, this recently
@@ -188,7 +188,7 @@ def app_source(c, settings):
 
 def grantable(source, may=None):
     """The scopes a sign-in asks Google for with this OAuth client: read only with the shared app, and with the
-    company's own app also each act scope What Tico may do allows (Settings > Google; `may` None is all of them, the
+    company's own app also each act scope What Tico may do allows (Tools > Settings > Email; `may` None is all of them, the
     most this app may ever be given)."""
     if source != "settings":
         return READ_SCOPES
@@ -582,17 +582,17 @@ def install(app, store, member, mutate):
             hosts, live = google_rights.inbox_hosts(c), google_rights.live_runners(c)
             if not google_rights.takes(runner["id"], named, held, hosts, live):
                 raise Problem("not_this_grant", "This computer no longer runs the message bot for that mailbox, so it does "
-                                                "not refresh its Connect Google grant. Reconnect it in Settings > Google.",
+                                                "not refresh its Connect Google grant. Reconnect it in Tools > Settings > Email.",
                               403)
             # The grant's own scopes bound the refresh: a read-only grant is refused here, with no call to Google.
             if not wanted <= refresh_scopes(body.service, held["grant_scopes"]):
                 raise Problem("scope", f"This Connect Google grant does not hold all the {body.service} scopes asked "
-                                       "for. Connect Google again in Settings > Google to add them.", 422)
+                                       "for. Connect Google again in Tools > Settings > Email to add them.", 422)
             # What Tico may do narrows the token, not the grant: a write turned off is left out of what Google is
             # asked for, and the computer reads the narrower list back (`scopes`), so it refuses that write itself.
             wanted &= refresh_scopes(body.service, held["grant_scopes"], permissions(c))
             if not wanted:
-                raise Problem("scope", f"What Tico may do (Settings > Google) leaves none of the {body.service} "
+                raise Problem("scope", f"What Tico may do (Tools > Settings > Email) leaves none of the {body.service} "
                                        "scopes asked for", 422)
         with store.read() as c:
             client = oauth_client(c, settings)

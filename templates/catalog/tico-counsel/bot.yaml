@@ -13,9 +13,6 @@ private_tasks_default: true
 stateless: true
 max_run_minutes: 60
 
-# Counsel sends nothing. It answers the person or bot that asked, on its task, and suggests rules.
-outbound_send: false
-
 # No routines and no watchers: Counsel only runs on a task (a document added, or a question asked).
 routines: []
 

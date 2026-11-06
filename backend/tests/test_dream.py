@@ -4,7 +4,6 @@ them without ask ingest, their answer wakes the bot, and the commit it makes is 
 import json
 
 from backend import bot_settings as BS
-from backend import ask_ingest as A
 from backend import hubdb as H
 from backend.tests import test_ask_ingest as ingest
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
@@ -76,7 +75,7 @@ def test_a_dreams_question_skips_ask_ingest_and_reaches_the_person(gate):
     with api.app.state.store.transaction() as c:
         other = H.task_create(c, "human:ben", "Plan the November launch", "Dates.", "bot:ops", lint=False)
     r = api.post(f"/api/v2/tasks/{other['id']}/ask", json={"text": "Which date?"}, headers=headers(token))
-    assert r.status_code == 200 and r.json()["ingest"]["outcome"] == A.SENT_BACK, r.text
+    assert r.status_code == 422 and r.json()["error"]["code"] == "ask_refused", r.text
 
 
 def test_asking_answering_and_the_dreams_own_commit(api):
@@ -139,7 +138,7 @@ def test_a_hand_labelled_task_is_no_dream(gate):
         assert H.task_labels(H.task(c, tid)) == ["dream"]
     assert current(api) is None, "the label alone does not make it the bot's dream"
     r = api.post(f"/api/v2/tasks/{tid}/ask", json={"text": QUESTIONS}, headers=headers(token))
-    assert r.status_code == 200 and r.json()["ingest"]["outcome"] == A.SENT_BACK, r.text
+    assert r.status_code == 422 and r.json()["error"]["code"] == "ask_refused", r.text
     # A real dream beside it starts as its own task. (Ben's own open "Dream" for the bot is a duplicate to task_create.)
     real = dream(api, "ana-test")["dream"]["task"]
     assert real != tid and current(api)["task"] == real

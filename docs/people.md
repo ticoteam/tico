@@ -37,6 +37,8 @@ Cancel keeps the current access. Sign-in switches show **Saved** on success; a r
   (see [permissions](permissions.md)), and a ⋯ menu: **Send invite** (see [Invites](#invites)), **Can add bots** and **Can add humans** for a member, **Make owner** and
   **Mark as left** for the owner, and **Change my sign-in email** on the owner's own row ([below](#change-the-owners-sign-in-email)). Everything saves when it changes. Title and group are kept on the human but edited on
   their profile, not here.
+  **Recorder** is the version of the Tico Recorder the person used last (hover for when), amber when a newer one is out;
+  empty when Tico has not seen one ([Meetings](meetings.md#tico-recorder)).
 - **Mark as left.** They drop off the team chart, their API tokens are revoked, and they can no longer sign in. **Restore** (under
   **Left**) brings them back (their old tokens stay revoked).
 - **Remove** (under **Left**, owner only) deletes someone added by mistake for good, with their unused tokens, sent invites

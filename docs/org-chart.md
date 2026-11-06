@@ -8,8 +8,10 @@ and bots, with the groups inside it below them. A group's name opens its team pa
 one more level: the owner, when nobody is above them and they are in no group (else the only human nobody is above), is a
 row of its own, and the groups, then the humans and bots, that report to them sit beside it rather than under it. Any other
 human nobody is above follows as an ordinary row with their reports under them. With no such top person it nests as before. The built-in bots (the Assistant, BotOps, the
-Librarian, the Strategy Bot) stay out of the chart and the Goals tree. Ask opens the Assistant from any page, and the Assistant hands BotOps what needs it;
+Librarian, the Strategy Bot) stay out of the chart and the Goals tree. **Tico Assistant** opens the Assistant from any page except its own and setup, even while the signed-out banner shows, and the Assistant hands BotOps what needs it;
 the Librarian is reached from Docs and Market, the Strategy Bot from its panel beside the Strategy tabs. Settings > Bots lists all four.
+
+Your unread messages in a one-to-one DM with a teammate show as a count on that teammate's row, for people as well as bots.
 
 A paused bot shows a pause icon and **Paused** badge in **Settings > Bots** and beside its Team chart node. The whole chart node is dimmed. Click the badge or node to open the bot's page.
 When bots' names start with the same words (the "Head of" in **Head of Product** and **Head of Sales**), those words are
@@ -141,7 +143,7 @@ Team row, unless explicitly marked as a helper. Shared mailboxes such as `shared
 
 Every Acme address is `<firstname>@acme.example`. Personal message bots come from the `inbox`
 template and read only the assigned mailbox by default. The template seeds one weekday 07:30 Routine in America/Los_Angeles, initially disabled.
-Extra passes are optional owner choices; reading a report's mail is a grant that report gives (Settings > Mailboxes). Each mailbox has its
+Extra passes are optional owner choices; reading a report's mail is a grant that report gives (Tools). Each mailbox has its
 own rules in `registry/mail-rules.yaml`. Photos prefer a Google Workspace Directory thumbnail
 when domain-wide delegation includes `admin.directory.user.readonly`; otherwise the Slack
 profile image stored on the roster.
@@ -177,9 +179,9 @@ bot to someone without giving them the whole group, put that bot's slug in their
 
 ## Where notes go
 
-A human's `bot` is where Tico sends a meeting when they choose **Send to bot > Auto**. If they have no bot, Auto uses the
-default bot (Assistant when active, otherwise BotOps). There is no separate routing model call. Choose a named bot in the dialog
-when the work belongs elsewhere. See [Meetings](meetings.md) for the resulting task and `backend/media.py` for the API.
+A human's `bot` is where Tico sends a meeting sent with `bot_id: "auto"` (Pending's **Send to** choice, or the API). If they
+have no bot, Auto uses the default bot (Assistant when active, otherwise BotOps). There is no separate routing model call. Pick a
+named bot under the meeting's **Share** menu when the work belongs elsewhere. See [Meetings](meetings.md) for the resulting task and `backend/media.py` for the API.
 
 ## Adding a human
 

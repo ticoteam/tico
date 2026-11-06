@@ -43,19 +43,20 @@ function fixtures() {
   const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bot:engineer', requester_id: 'human:ana', status: 'doing',
     lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3,
     created_at: at(60 * 30), updated_at: at(30), ...over});
-  const ask = (from, body) => ({ask: {id: 'q-' + from, body, sender_id: from, recipient_id: 'human:ana'}});
+  const ask = (from, body, pick) => ({ask: {id: 'q-' + from, body, sender_id: from, recipient_id: 'human:ana'},
+    recommend: {ask: 'q-' + from, do: pick, option: pick, kind: 'reversible'}});
   const pr = (repo, n, title, state = 'open') => ({id: `pr-${repo}-${n}`, kind: 'pr', repo, number: n, url: `https://github.com/${repo}/pull/${n}`, title, state,
     checks: state === 'merged' ? 'passing' : 'pending'});
   return [
     // Needs you
     t('t-copy', 'Approve the Q4 pricing page copy', {owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open', updated_at: at(120), labels: ['pricing'],
-      ...ask('bot:writer', 'Two headline options are in the doc. Pick one so the page can ship Friday.')}),
+      ...ask('bot:writer', 'Two headline options are in the doc. Pick one so the page can ship Friday.', 'The first headline')}),
     t('t-refund', 'Choose a refund policy for annual plans', {owner_id: 'human:ana', requester_id: 'bot:support', status: 'open', updated_at: at(300), labels: ['billing'],
-      ...ask('bot:support', 'Three customers asked this week: a full refund within 30 days, or prorated?')}),
-    t('t-access', 'Review Engineer access to the billing repo', {owner_id: 'human:ana', requester_id: 'bot:botops', status: 'open', updated_at: at(60 * 26)}),
-    t('t-terms', 'Approve the new checkout terms', {owner_id: 'human:ana', requester_id: 'bot:engineer', status: 'open', _parent: 't-checkout', updated_at: at(150)}),
-    t('t-onboard', 'Sign off the onboarding email sequence', {owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open', updated_at: at(200), labels: ['email'], due_at: inDays(1)}),
-    t('t-deck', 'Review the launch deck', {owner_id: 'human:ana', requester_id: 'human:sam', status: 'open', updated_at: at(400), labels: ['launch']}),
+      ...ask('bot:support', 'Three customers asked this week: a full refund within 30 days, or prorated?', 'Prorated')}),
+    t('t-access', 'Review Engineer access to the billing repo', {owner_id: 'human:ana', requester_id: 'bot:botops', status: 'open', updated_at: at(60 * 26), person_ask: 'Can Engineer keep access to the billing repo?'}),
+    t('t-terms', 'Approve the new checkout terms', {owner_id: 'human:ana', requester_id: 'bot:engineer', status: 'open', _parent: 't-checkout', updated_at: at(150), person_ask: 'Can we use the new checkout terms?'}),
+    t('t-onboard', 'Sign off the onboarding email sequence', {owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open', updated_at: at(200), labels: ['email'], due_at: inDays(1), person_ask: 'Can we send the onboarding email sequence?'}),
+    t('t-deck', 'Review the launch deck', {owner_id: 'human:ana', requester_id: 'human:sam', status: 'open', updated_at: at(400), labels: ['launch'], person_ask: 'Can we use the launch deck?'}),
     // Needs Sam
     t('t-demo', 'Record the product demo video', {owner_id: 'human:sam', requester_id: 'human:ana', status: 'open', updated_at: at(60 * 50), due_at: inDays(-1), labels: ['launch']}),
     // Waits on a person this install does not know: Needs someone
@@ -89,8 +90,20 @@ const BOTS = [['engineer', 'Engineer', 'engineering'], ['support', 'Support', 's
   ({name, display_name, team, host: 'keeper', status: 'active', state: 'active', can_chat: true}));
 
 async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/issues', failIds = [], prefs = null, mover = true,
-  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null, activePage = null, bots = BOTS, beforeGoto = null} = {}) {
+  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null, activePage = null, bots = BOTS, beforeGoto = null, needsLive = false, waitForNeeds = true} = {}) {
   const tasks = [...(baseTasks ?? fixtures()), ...extraTasks];
+  const needsSnapshot = () => {
+    const items = tasks.filter(t => !['done', 'closed'].includes(t.status)
+      && !(t.holds || []).some(h => h.kind === 'snoozed')
+      && (t.status === 'declined' ? t.requester_id === 'human:ana' && !t.owner_id?.startsWith('human:')
+        && Date.now() - Date.parse(t.updated_at) < 24 * 3600e3
+        : t.owner_id === 'human:ana' || t.waiting_on === 'human:ana' || t.ask?.recipient_id === 'human:ana'))
+      .sort((a, b) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at)))
+      .map(t => ({...withRelations(t, tasks), kind: t.status === 'declined' ? 'declined' : t.ask ? 'question' : t.waiting_on ? 'waiting' : 'task'}));
+    const folded = new Set(items.flatMap(it => [...(it.folded || []).map(f => f.id), ...(it.merged || [])]));
+    return {items, count: items.length, plate_count: new Set(items.filter(it => !folded.has(it.id)).map(it => it.id)).size,
+      folded_task_ids: [...folded]};
+  };
   // These scripts read Needs you grouped by who asks; `byNeed` keeps the default, What it takes.
   if (!byNeed && !('hub.tasks.layout' in local)) local = {...local, 'hub.tasks.layout': JSON.stringify({group: {foryou: 'requester'}})};
   const posts = [];
@@ -125,6 +138,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p === '/api/issues') return json([]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
+    if (p === '/api/v2/needs-you') return json(needsSnapshot());
     if (p === '/api/v2/tasks/labels') return json({labels: [...new Set(tasks.flatMap(x => x.labels))].sort(), tags: []});
     if (p === '/api/v2/task-types') return json({types});
     if (p.startsWith('/api/v2/preferences/')) {
@@ -176,6 +190,8 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
         if (fields.due === '') delete task.due_at;
         if (fields.type) { const type = types.find(x => x.id === fields.type); task.type_id = fields.type; task.type = type ? {id: type.id, name: type.name} : null; }
         if ('step' in fields) { const step = types.flatMap(x => x.steps).find(s => s.id === fields.step); task.step_id = fields.step || null; task.step = step || null; if (step) task.status = step.status; }
+        // Membership follows the server's Needs you event, independently of the task-list reload.
+        if (needsLive) await page.evaluate(d => liveEmit('needs', d), needsSnapshot());
         return json({task: withRelations(task, tasks)});
       }
       return json({task: withRelations(task, tasks), children: tasks.filter(x => x._parent === id).map(x => withRelations(x, tasks)),
@@ -191,6 +207,8 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   await page.goto('https://tico-ui.test/' + hash);
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row, #task-body .bcard, #task-body .tl-empty'))
     .catch(e => { throw new Error(`${e.message}\npage errors: ${errors.join(' | ')}`); });
+  if (waitForNeeds) await page.waitForFunction(() => needsFirstIn());
+  await page.evaluate(() => tasksRender(TASKS_ST));
   return {page, errors, posts, tasks, pref: () => pref, conflictNextUpdate: id => conflictNextUpdate.add(id)};
 }
 const shot = async (page, name) => {
@@ -379,17 +397,20 @@ async function filters(browser) {
   await page.waitForFunction(() => !location.hash.includes('owner='));
   assert.equal(await page.locator('[data-chip="owner"]').count(), 0);
   assert.equal(await page.evaluate(() => document.activeElement.id), 'task-filter', 'focus lands on Filter');
-  // A filtered address always names its view, so a Needs-you link made on the board reopens as Needs you.
+  // A Needs-you link made on the board reopens as the complete personal queue, retaining the board's filters.
   await page.goto('https://tico-ui.test/#/board');
   await page.waitForFunction(() => TASKS_ST?.view === 'board' && !TASKS_ST.loading);
-  await page.locator('#task-view [data-view="foryou"]').click();
+  await page.locator('#task-view [data-view="list"]').click();
   await page.locator('#task-filter').click();
   await page.locator('#task-filter-pop [data-pick-field="tag"]').click();
   await page.locator('#task-filter-pop input[value="pricing"]').check();
   await page.keyboard.press('Escape');
+  await page.locator('#task-view [data-view="foryou"]').click();
   await page.waitForFunction(() => location.hash === '#/tasks?tag=pricing&type=general&view=foryou');
   await page.reload();
   await page.waitForFunction(() => TASKS_ST?.view === 'foryou' && !TASKS_ST.loading);
+  await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 6);
+  assert.equal(await page.locator('.tl-filters').isHidden(), true);
   // A shared address opens with its filters.
   await page.goto('https://tico-ui.test/#/tasks?owner=me&tag=pricing,billing&view=list');
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row'));
@@ -621,7 +642,7 @@ async function properties(browser) {
   await peek.locator('.task-subs .sub-bar').waitFor();
   const rows = await props.locator('.prop').evaluateAll(rs => rs.map(r => [r.querySelector('.prop-k').textContent,
     [...r.querySelectorAll('.prop-txt, .tlabel > [data-tag-key]')].map(x => x.textContent.trim()).join(' ')]));
-  assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', 'Everyone'], ['Due', 'Add due date'], ['Tags', 'checkout'],
+  assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', ''], ['Who can see', 'Public'], ['Due', 'Add due date'], ['Tags', 'checkout'],
     ['Part of', 'Add parent']]);
   assert.match(await props.locator('[data-prop="status"]').innerText(), /Waiting/);
   // Detail names the status; the status-grouped list uses its heading. "blocked" is a small chip.
@@ -1070,15 +1091,15 @@ async function waitingOnYou(browser) {
   // A bot's task set waiting on you (`--on`) is in Needs you under that bot, whoever filed it, with a short "Waiting" chip
   // and no buttons other rows lack.
   const host = {...fixtures().find(x => x.id === 't-inbox'), id: 't-host', title: 'Restart the build host', owner_id: 'bot:engineer',
-    requester_id: 'bot:botops', waiting_on: 'human:ana', note: 'It refuses SSH since the update.', updated_at: at(5)};
+    requester_id: 'bot:botops', waiting_on: 'human:ana', note: 'It refuses SSH since the update.', person_ask: 'Can you restart the build host?', updated_at: at(5)};
   const sams = {...host, id: 't-sams', title: 'Rotate the deploy key', waiting_on: 'human:sam'};
-  // A question nobody answered in three days (the server marks it `older`) folds into Older questions, uncounted.
+  // An old open question stays in Needs you even when it opens the full task.
   const stale = {...host, id: 't-stale', title: 'Pick the build host region', waiting_on: null,
     ask: {id: 'q-stale', body: 'East or west?', sender_id: 'bot:engineer', recipient_id: 'human:ana', older: true}};
   const {page, errors} = await open(browser, {hash: '#/tasks', extraTasks: [host, sams, stale]});
-  assert.equal((await groupNames(page)).at(-1).toLowerCase(), 'older questions');
+  assert.equal(await page.locator('.tl-group[data-group="older"]').count(), 1);
   assert.equal(await page.locator('.tl-group[data-group="older"] .tl-rows').isHidden(), true, 'folded until opened');
-  assert.equal(await page.locator('#task-view [data-view="foryou"] .cnt').innerText(), String(NEEDS_YOU + 1), 'not counted');
+  assert.equal(await page.locator('#task-view [data-view="foryou"] .cnt').innerText(), String(NEEDS_YOU + 2), 'both waits and open questions count');
   const row = page.locator('.tl-group[data-group="a:bot:engineer"] [data-task-key="tt-host"]');
   assert.equal(await row.count(), 1);
   assert.equal(await row.locator('.tl-waiting').innerText(), 'Waiting');
@@ -1326,8 +1347,8 @@ async function recheckLists(browser) {
   assert.deepEqual(errors, []);
   await page.close();
   // N9: handing a Needs-you task to someone else moves the list and the peek on to the next row.
-  const second = await open(browser, {hash: '#/tasks'});
-  await second.page.locator('[data-task-key="tt-access"] .tl-title').click();
+  const second = await open(browser, {hash: '#/tasks', needsLive: true});
+  await second.page.evaluate(() => taskPeekOpen(TASKS_ST, 'tt-access'));
   await second.page.locator('#task-peek [data-prop="owner"]').click();
   await second.page.locator('#task-peek .prop-pop [data-prop-pick="writer"]').click();
   await second.page.waitForFunction(() => !document.querySelector('[data-task-key="tt-access"]') && TASKS_ST.peek && TASKS_ST.peek !== 'tt-access');
@@ -1405,7 +1426,7 @@ async function recheckFinal(browser) {
   assert.deepEqual(errors, []);
   await page.close();
   // R2-2: a poll that overtakes a save's reload still moves the list and the peek on when the task leaves the view.
-  const second = await open(browser, {hash: '#/tasks'});
+  const second = await open(browser, {hash: '#/tasks', needsLive: true});
   // List reads are held, then let through in the order they were asked.
   const held = [];
   let holding = true;
@@ -1413,7 +1434,7 @@ async function recheckFinal(browser) {
     if (holding && new URL(route.request().url()).pathname === '/api/v2/tasks') await new Promise(r => held.push(r));
     await route.fallback();
   });
-  await second.page.locator('[data-task-key="tt-access"] .tl-title').click();
+  await second.page.evaluate(() => taskPeekOpen(TASKS_ST, 'tt-access'));
   await second.page.locator('#task-peek [data-prop="owner"]').click();
   await second.page.locator('#task-peek .prop-pop [data-prop-pick="writer"]').click();
   await until(() => held.length >= 1);

@@ -1,7 +1,7 @@
 """Stop quarantined turns through the normal Stop protocol and preserve their reason.
 
 The first runner call records the quarantine reason on the attempt. Renewal returns
-it with Stop. Completion requeues the work of the run (`requeues`) until the bot becomes active again. A quarantine
+it with Stop. Completion requeues the work of the run (`requeues`) until its task/chat hold or bot quarantine lifts. A quarantine
 stops the run the hub itself chose to cut, so it is judged as a computer's reported restart is (retry_facts): only a
 consumed approval, a fallback whose work is unknown or a named outside action (merge, publish, send, payment) holds it
 for review. Such a run resumes with a note (`requeue`) that says it was stopped by a quarantine and to check what it
@@ -16,14 +16,18 @@ import json
 from .store import H
 
 
-def line(c, bot, at=None):
+def line(c, bot, at=None, hold=None):
     """What a stopped turn's end reason says: "Quarantined: <reason>, resumes about HH:MM UTC", or "until a person
     clears it" for a quarantine only a person lifts. An escape names what the safety check stopped, never the refused
     words: the end reason is read more widely than the review."""
     at = at or H.now()
-    resumes = H.quarantine_resumes(c, bot)
+    if hold is not None:
+        until = H.shift(hold["created_at"], seconds=H.QUARANTINE_COOLDOWN_S)
+        resumes = {"auto": True, "resumes_at": until}
+    else:
+        resumes = H.quarantine_resumes(c, bot)
     if resumes["auto"]:
-        why = H.quarantine_reason(c, bot)
+        why = hold["reason"] if hold is not None else H.quarantine_reason(c, bot)
     else:
         review = H.quarantine_review(c, bot) or {}
         why = f"the safety check stopped a {review['what']}" if review.get("what") else "a person must review it"
@@ -34,11 +38,13 @@ def line(c, bot, at=None):
 
 
 def stop(c, row):
-    """Record the quarantine's Stop on `row`, a leased or running attempt of a quarantined bot whose runner still holds
+    """Record the quarantine's Stop on `row`, a leased or running attempt of held work whose runner still holds
     it, and return the attempt read again. A Stop already recorded (a person's, or this one) stands."""
     if row["stop_requested_at"]:
         return row
-    said = line(c, row["bot_id"])
+    from . import task_quarantine
+    hold = task_quarantine.for_attempt(c, row) if H.bot(c, row["bot_id"])["state"] != "quarantined" else None
+    said = line(c, row["bot_id"], hold=hold)
     c.execute("UPDATE attempts SET stop_requested_at=? WHERE id=? AND stop_requested_at IS NULL", (H.KEEPER, row["id"]))
     H.event(c, H.KEEPER, "attempt.stop", row["id"], {"bot": row["bot_id"], "quarantine": said})
     return c.execute("SELECT a.*,x.runner_id AS assigned_runner,x.generation AS assigned_generation "
