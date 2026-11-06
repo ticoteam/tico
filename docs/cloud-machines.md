@@ -86,12 +86,13 @@ belongs to one company, so it can have the helper.
 ## When a machine can't start
 
 When a bot's cloud machine can't start, the problem replaces the machine's state. It shows on the bot's page under
-**Computer**, on the work queued for the bot, and in **Settings → Health** when that work is stuck. *code* is the reason
-HQ or the server gives.
+**Computer**, on the work queued for the bot, and in **Settings → Health**. Health names each active bot whose machine
+has a problem, whether or not work is queued, and lists queued work that is stuck. *code* is the reason HQ or the
+server gives.
 
 | Shown as | Means |
 |---|---|
-| Out of credit | The company is out of credit, so its cloud machines don't start. Tico checks again about every 10 minutes. |
+| Out of credit | The company is out of credit, or its Tico Cloud plan is locked (the trial ended without a card, or the month is unpaid), so its cloud machines don't start until HQ says the company is open again. |
 | Didn't start (*code*): trying again | HQ refused to make or start the machine. Tico waits 15 seconds after the first refusal, twice as long after the next, and so on, up to 15 minutes. |
 | Couldn't be made or started (*code*): trying again | Something on the server failed during one of Tico's looks at the machine, for example while it was made or started. Tico tries again on each look, about every 10 seconds. |
 | Started, but its work did not run there | Tico started the machine for the bot's work, and the work did not run on it. |
