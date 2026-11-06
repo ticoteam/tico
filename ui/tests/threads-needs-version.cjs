@@ -57,7 +57,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
   await page.waitForFunction(() => S.v2.needsVersion === 'v1' && THREADS.needsSeen === 'v1' && liveConnected() && THREADS.on && !THREADS.loading, null, {timeout: t(8000)});
   // Adding the threads topic restarts the live stream, and that restart can read the list once more: the reads settle
   // before the reconnect is counted, so a slow restart is not taken for a read the reconnect caused.
-  for (let still = 0, last = ''; still < t(1500);) {
+  // Settled: no read for t(1500), or give up after t(8000) and let the checks below say what they see.
+  for (let still = 0, last = '', end = Date.now() + t(8000); still < t(1500) && Date.now() < end;) {
     const now = JSON.stringify(reads);
     if (now === last) still += 50; else { still = 0; last = now; }
     await page.waitForTimeout(50);
