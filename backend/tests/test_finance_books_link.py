@@ -89,6 +89,9 @@ def test_connect_returns_the_consent_page_and_sends_hq_tico_s_own_return_route(a
 
 def test_the_return_claims_the_grant_once_and_keeps_its_tokens_in_the_vault(api, linked):
     store = api.app.state.store
+    # The secret sentinels cannot occur in a generated UUID and falsely report a leak.
+    access_secret, refresh_secret = "books-access-secret!", "books-refresh-secret!"
+    linked.answers["claim"] = [tokens(access_secret, refresh_secret)]
     api.post("/api/v2/finance/books/connect", json={"provider": "quickbooks"}, headers=headers())
     back = return_path(api, linked)
     r = api.get(back + "?finance=connected&claim=clm_1", headers=headers(), follow_redirects=False)
@@ -97,14 +100,14 @@ def test_the_return_claims_the_grant_once_and_keeps_its_tokens_in_the_vault(api,
     with store.read() as c:
         row = c.execute("SELECT id, provider, purpose, status, settings FROM fin_connections").fetchone()
         assert (row["provider"], row["purpose"], row["status"]) == ("quickbooks", "books", "active")
-        assert "ref-1" not in row["settings"] and "acc-1" not in row["settings"]
+        assert refresh_secret not in row["settings"] and access_secret not in row["settings"]
         refresh = str(SX.books_settings(c, row["id"])["refresh"])
-        assert T.credential_secret(c, api.app.state.vault, refresh) == "ref-1"
+        assert T.credential_secret(c, api.app.state.vault, refresh) == refresh_secret
     again = api.get(back + "?finance=connected&claim=clm_1", headers=headers(), follow_redirects=False)
     assert again.status_code == 409 and claims(linked) == 1                 # the consent's flow is spent
     accounting = next(g for g in get(api, "finance/sources")["groups"] if g["group"] == "accounting")
     assert [(r["provider"], r["sync"]["status"]) for r in accounting["rows"]] == [("quickbooks", "active")]
-    assert "ref-1" not in json.dumps(accounting) and "acc-1" not in json.dumps(accounting)
+    assert refresh_secret not in json.dumps(accounting) and access_secret not in json.dumps(accounting)
 
 
 def test_a_consent_that_came_back_with_an_error_claims_nothing(api, linked):

@@ -1,6 +1,7 @@
 /* ui/app/automations-maintenance.js — Maintenance: Tico's one scheduled upkeep run, as a built-in row on the Automations
    list and its own screen (#/automations/maintenance[/runs]): the run's schedule, pause and monthly cap, each step's
-   switch, "How often" and number of bots, Run now, and the run history with each step's line.
+   switch, "How often" and number of bots, Run now, and the run history with each step's line. Beside it, System jobs
+   (#/automations/system-jobs): every job Tico runs on its own and the task rules, drawn by ui/app/settings-recurring.js.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    Payloads: backend/maintenance.py (GET/PATCH /api/v2/maintenance, GET /maintenance/runs, POST /maintenance/run).
    Anyone signed in reads it; `can_change` (an owner or an admin) decides whether the controls work. */
@@ -8,8 +9,6 @@
 
 const AU_MAINT = 'maintenance';
 const AU_MAINT_OWNER = 'tico';   // the list's Owner: Tico itself runs it
-// The system jobs the run replaced: an install converted before them keeps their read-only mirrors, which run nothing.
-const AU_MAINT_RETIRED = new Set(['auto_dream', 'cleanup', 'stall_triage'].map(k => 'tico.builtin.job.' + k));
 const AU_MAINT_SCHEDULES = [['hourly', 'Every hour'], ['2h', 'Every 2 hours'], ['3h', 'Every 3 hours'], ['6h', 'Every 6 hours'],
   ['12h', 'Every 12 hours'], ['daily', 'Once a day']];
 const AU_MAINT_OFTEN = [['run', 'Every run'], ['day', 'At most once a day'], ['week', 'At most once a week'], ['custom', 'Custom']];
@@ -22,6 +21,8 @@ const AU_MAINT_BETA = new Set(['learn']);
 const AU_MAINT_PRIVACY = '#/settings/general/settings-privacy';
 const AU_MAINT_RUNS_PAGE = 25;
 
+const AU_SYSJOBS = 'system-jobs';
+const AU_BUILTIN_PILL = '<span class="pill">Built-in</span>';
 const auMaintOk = m => !!m && Array.isArray(m.steps) && !!m.settings;
 const auMaintStep = key => (AU?.maint?.steps || []).find(s => s.key === key);
 const auMaintSchedule = s => (AU_MAINT_SCHEDULES.find(([k]) => k === s) || [, 'Every hour'])[1];
@@ -43,10 +44,10 @@ function auMaintRow(m) {
     ...(last ? {last_run: {id: last.id, started_at: last.started_at, status: auMaintRunStatus(last)}} : {}),
     next_run: m.next_run_at || null};
 }
-// The list with Maintenance first and the retired mirrors left out; an older hub (no steps) leaves it as it is.
+// The list with Maintenance and System jobs beside it first; an older hub (no steps) leaves it as it is.
 function auMaintList(list, m) {
   if (!auMaintOk(m)) return list;
-  return [auMaintRow(m), ...list.filter(a => !(a.readonly && AU_MAINT_RETIRED.has(a.trigger?.name)) && a.id !== AU_MAINT)];
+  return [auMaintRow(m), auSysJobsRow(), ...list.filter(a => a.id !== AU_MAINT && a.id !== AU_SYSJOBS)];
 }
 // A fresh listing (a save, Run now's follow): kept, the list row matched, and what is shown drawn again. A follow's
 // refresh leaves Settings as it is while a field there is being edited, so a value not yet saved is not lost.
@@ -68,26 +69,6 @@ async function auMaintLoad(state, opts) {
     state.maintError = auMaintOk(m) ? '' : 'Maintenance needs a newer hub';
     if (auMaintOk(m)) auMaintAdopt(state, m, opts);
   } catch (e) { if (AU === state && state.mtGen === gen) state.maintError = [403, 404].includes(e.status) ? 'Maintenance needs a newer hub' : e.message; }
-}
-
-// The list's runs, failures and cost for the range, from its own run log: the pages back to the range's start.
-async function auMaintStats(range, n) {
-  const span = AU_RANGE_SECONDS[range] * 1000, now = Date.now(), since = now - span, width = span / n;
-  const out = {id: AU_MAINT, runs: 0, failed: 0, cost: 0, buckets: Array.from({length: n}, () => ({ok: 0, failed: 0}))};
-  let before = '';
-  for (let i = 0; i < 30; i++) {
-    const page = await get('/v2/maintenance/runs?limit=50' + (before ? '&before=' + encodeURIComponent(before) : ''));
-    for (const r of page.runs || []) {
-      const t = new Date(r.started_at).getTime();
-      if (isNaN(t) || t < since) continue;
-      const bad = !!r.finished_at && !r.ok, b = Math.max(0, Math.min(n - 1, Math.floor((t - since) / width)));
-      out.runs++; out.failed += bad; out.cost += Number(r.cost_usd) || 0; out.buckets[b][bad ? 'failed' : 'ok']++;
-    }
-    const oldest = (page.runs || []).at(-1)?.started_at;
-    if (!page.next || !oldest || new Date(oldest).getTime() < since) break;
-    before = page.next;
-  }
-  return out;
 }
 
 // -------------------------------------------------------------------------------------------- drawing
@@ -208,6 +189,8 @@ function auMaintRunsHTML() {
 
 async function auMaintRunsLoad(state, more = false) {
   const r = state.mtRuns ||= {rows: [], next: null, open: new Set(), loading: false, error: ''};
+  // A run tapped on the overview's Runs tab opens here (automations-overview.js sets mtOpenRun).
+  if (state.mtOpenRun) { r.open.add(state.mtOpenRun); state.mtOpenRun = null; }
   if (r.loading || (more && !r.next)) return;
   r.loading = true; r.error = '';
   if (AU === state && state.id === AU_MAINT && state.view === 'runs') auDrawPane();
@@ -224,6 +207,12 @@ async function auMaintRunsLoad(state, more = false) {
     }
   } catch (e) { r.error = e.message; }
   r.loading = false;
+  // A run tapped on the overview that is older than the page loaded: the pages before it are read too, a few at most.
+  if (!r.error && r.next && [...r.open].some(id => !r.rows.some(x => x.id === id)) && (r.seek = (r.seek || 0) + 1) <= 10) {
+    void auMaintRunsLoad(state, true);
+    return;
+  }
+  r.seek = 0;
   if (AU === state && state.id === AU_MAINT && state.view === 'runs') auDrawPane();
 }
 
@@ -322,4 +311,21 @@ function auMaintChange(e) {
     if (!(n >= 1 && n <= 20)) { toast('1 to 20 bots', true); auDrawPane(); return; }
     void auMaintStepSave(d.mtBots, {max_bots: n});
   }
+}
+
+// -------------------------------------------------------------------------------------------- System jobs
+// The other built-in row: every job Tico runs on its own and the task rules (GET /api/v2/system-routines), with their
+// switches, schedules, Run now and New task rule (ui/app/settings-recurring.js). Anyone signed in reads it; the server's
+// `can_change` decides each row's controls.
+function auSysJobsRow() {
+  return {id: AU_SYSJOBS, name: 'System jobs', kind: 'system', builtin: true, readonly: true, owner_id: AU_MAINT_OWNER,
+    enabled: true, trigger: {type: 'system'}, steps: [], description: 'What Tico runs on its own', can_edit: false, can_pause: false};
+}
+function auSysJobsHead(hd) {
+  hd.innerHTML = `<h2 class="au-name">System jobs</h2>${AU_BUILTIN_PILL}`;
+}
+// A redraw of the screen keeps the list (and a half-typed time in it); renderSystemRoutines reads it again at most once a minute.
+function auSysJobsPane(pane) {
+  if (!pane.querySelector('#set-system-routines')) pane.innerHTML = `<div class="sysr-au" id="set-system-routines">${skelRows(3, {card: true, dot: false})}</div>`;
+  void renderSystemRoutines();
 }

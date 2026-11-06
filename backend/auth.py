@@ -17,6 +17,7 @@ from . import identity_proxy
 from . import people as P
 from . import rooms
 from . import service_keys
+from . import skill_devices
 from . import team_rules
 from . import read_cache
 from . import report_managers
@@ -93,7 +94,8 @@ class Identity:
     confirmed: bool = False
     # Acting for a human does not grant a bot membership in that human's private tasks.
     task_actor: str = ""
-    # A service key's scope (backend/service_keys.py ROUTES): "tasks" or "update"; empty for everyone else.
+    # A service key's scope (backend/service_keys.py ROUTES): "tasks" or "update"; "skills-device" for a person's skills
+    # helper token (backend/skill_devices.py ROUTES), its device id in token_id; empty for everyone else.
     scope: str = ""
     # Tico support in a session a person opened (backend/support_access.py): "app" or "full". Its actor is
     # human:tico-support, its session id in token_id, and `support_access.gate` decides what it reaches.
@@ -130,6 +132,28 @@ def standing(c, pid):
     return ""
 
 
+def bot_identity(c, actor, *, attempt_id=""):
+    """Resolve current bot standing from its registry, without minting a credential or a lease."""
+    from . import agents
+    bot = H.actor_id(actor) if H.is_bot(actor) else None
+    record = H.bot(c, bot) if bot else None
+    config = read_cache.one(c, BS.ONE_SQL, (bot,)) if record else None
+    if not record or record["state"] != "active" or not config:
+        raise Problem("identity", "This bot is no longer available", 403)
+    external = agents.external_harness(c, bot)
+    credential = agents.row(c, bot)
+    active_agent = credential is not None and not credential["revoked_at"]
+    # Authentication still marks an active agent credential external while its configured harness changes.
+    if external or active_agent:
+        if not active_agent or not credential["harness"] or (external and credential["harness"] != external):
+            raise Problem("identity", "This external bot has no current credential", 403)
+        return Identity(actor, "bot", agent=credential["harness"])
+    attempt = read_cache.one(c, "SELECT runner_id FROM attempts WHERE id=? AND bot_id=?", (attempt_id, bot)) if attempt_id else None
+    if attempt_id and not attempt:
+        raise Problem("identity", "This bot's source execution is no longer available", 403)
+    return Identity(actor, "bot", attempt_id=attempt_id, runner_id=attempt["runner_id"] if attempt else "")
+
+
 def validate_identity(c, who):
     if who.support:
         # No roster row: the session it came in with must still be live.
@@ -146,6 +170,10 @@ def validate_identity(c, who):
         if not row or service_keys.token_ended(c, row["made_with_token"]):
             raise Problem("identity", "Invalid credential", 401)
         return
+    if who.scope == skill_devices.SCOPE and not c.execute(
+            "SELECT 1 FROM skill_devices WHERE id=? AND revoked_at IS NULL", (who.token_id,)).fetchone():
+        # Again under a write's lock: a device revoked since the request began writes nothing.
+        raise Problem("identity", "Invalid credential", 401)
     if who.role in ("owner", "human"):
         if not H.human(c, H.actor_id(who.actor)):
             raise Problem("identity", "Unknown person", 401)
@@ -216,6 +244,14 @@ def _own_ask_to_a_person(who, row):
     return len(participants) == 2 and len(people) == 1 and who.actor in participants
 
 
+
+def reader_sql(c, actor):
+    """SQL over a tasks row: `actor` is on its reader list (`readers`), by name or through a group it is in. The twin
+    of hubdb.task_reader."""
+    names = A.qlist(H.reader_names(c, actor))
+    return (f"(readers IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(readers) THEN readers END) "
+            f"WHERE value IN {names}))")
+
 class Auth:
     def __init__(self, store):
         self.store = store
@@ -230,6 +266,18 @@ class Auth:
         self._access_seen = None
         self._credential_followed = None
         self.proxy = identity_proxy.build(self.settings, store)
+
+    @classmethod
+    def read_policy(cls, c):
+        """The database's read rules for native gates without a web server or sign-in settings."""
+        def build():
+            from . import access, teammate_access
+            policy = cls.__new__(cls)
+            policy.bot_admins = set(access.owner_and_admin_emails(c))
+            # Native reads use the same stored built-in bot set as teammate access.
+            policy.system_bot = lambda slug: slug in teammate_access._system_bots(c)
+            return policy
+        return read_cache.value(c, ("native_read_policy",), build, shared=True)
 
     def sync_access(self, c):
         """Adopt the stored owner and access list. One indexed read per request keeps a transfer
@@ -397,6 +445,51 @@ class Auth:
             touch(c, "UPDATE service_keys SET last_used_at=? WHERE id=?", (now, row["id"]))
         return Identity("service:" + row["id"], "service", token_label=str(row["label"]), scope=row["scope"] or "tasks")
 
+    def identity_from_skills_device(self, c, token, path, method):
+        """A person's skills helper (backend/skill_devices.py): that person, on the skills routes it needs and nowhere
+        else. A revoked token is refused like an unknown one; so is a person who left or whose sign-in is off."""
+        row = c.execute("SELECT d.id,d.label,d.person_id,d.revoked_at,d.last_seen_at,h.email FROM skill_devices d "
+                        "JOIN humans h ON h.id=d.person_id WHERE d.token_hash=?", (digest(token),)).fetchone()
+        if not row or row["revoked_at"]:
+            raise Problem("identity", "Invalid credential", 401)
+        if not skill_devices.allowed(method, path):
+            raise Problem("forbidden", skill_devices.REFUSAL, 403)
+        email = str(row["email"] or "").lower()
+        role = "owner" if email and email == self.owner_email else "human"
+        barred = standing(c, row["person_id"])
+        if barred == "left" or (barred == "off" and role != "owner"):
+            raise Problem("identity", "Invalid credential", 401)
+        now = H.now()
+        if not row["last_seen_at"] or row["last_seen_at"] < H.shift(now, seconds=-60):
+            touch(c, "UPDATE skill_devices SET last_seen_at=? WHERE id=?", (now, row["id"]))
+        return Identity("human:" + row["person_id"], role, email=email, via_token=True,
+                        token_label=str(row["label"] or "Skills helper"), token_id=row["id"], scope=skill_devices.SCOPE)
+
+    def runner_receipt_principal(self, c, who, aid):
+        """Read a runner's saved receipt as its original principal, even after the lease ends."""
+        from . import task_privacy as privacy
+        if who.role != "runner" or not aid:
+            return who
+        attempt = c.execute(
+            "SELECT a.* FROM attempts a JOIN assignments x ON x.bot=a.bot_id "
+            "JOIN bots b ON b.id=a.bot_id WHERE a.id=? AND a.runner_id=? "
+            "AND x.runner_id=? AND x.generation=a.generation AND b.state='active'",
+            (aid, who.runner_id, who.runner_id)).fetchone()
+        if not attempt:
+            raise Problem("privacy", "This execution is no longer assigned to this computer", 403)
+        principal = Identity("bot:" + attempt["bot_id"], "bot", runner_id=who.runner_id, attempt_id=aid)
+        if attempt["acting_person"]:
+            person = self.chat_person(c, attempt["acting_person"], attempt["bot_id"], aid, who.runner_id)
+            if person is None:
+                raise Problem("privacy", "The person can no longer run this page request", 403)
+            principal = replace(person, task_actor="")
+        if not privacy.attempt_readable(c, privacy.actor(principal), aid):
+            raise Problem("privacy", "This execution is no longer available", 403)
+        if attempt["acting_person"]:
+            for task_id in privacy.attempt_tasks(c, aid):
+                self.task(c, principal, task_id)
+        return principal
+
     def assistant_principal(self, c, attempt):
         """The person an assistant chat turn acts for, as that person and nobody more, or None.
 
@@ -414,13 +507,17 @@ class Auth:
                 or str(attempt["lease_until"] or "") <= H.now()):
             return None
         row = c.execute(
-            "SELECT v.owner_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "SELECT v.owner_id,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations v ON v.id=m.conversation_id WHERE j.id=? AND v.scope='personal' "
             "AND v.room_key=? AND m.sender_id=v.owner_id AND json_extract(m.refs,'$.assistant')=1",
             (attempt["job_id"], room_key)).fetchone()
         if not row:
             return None
-        return self.chat_person(c, row["owner_id"], attempt["bot_id"], attempt["id"], attempt["runner_id"])
+        person = self.chat_person(c, row["owner_id"], attempt["bot_id"], attempt["id"], attempt["runner_id"])
+        if person and isinstance((H._json(row["refs"], {}) or {}).get("make_page"), dict):
+            # The page request acts with the person's full rights; the attempt still identifies its Assistant.
+            return replace(person, task_actor="")
+        return person
 
     def chat_person(self, c, owner_actor, bot, attempt_id="", runner_id=""):
         """The person a turn of their chat bot (`bot`: the Assistant) acts as, with their rights and nobody more, or
@@ -454,6 +551,8 @@ class Auth:
                 pass
             elif token.startswith(service_keys.PREFIX):
                 who = self.identity_from_service_key(c, token, path, method)
+            elif token.startswith(skill_devices.PREFIX):
+                who = self.identity_from_skills_device(c, token, path, method)
             elif token.startswith("tico_sa_"):
                 from . import support_access
                 who = support_access.identity(c, token, self.settings)
@@ -763,15 +862,19 @@ class Auth:
         me = A.q(who.actor)
         from .meeting_audience import participant_access_sql
         participant = participant_access_sql(c, me)
-        # A private task's guest (hubdb.task_reach) reads it as its two parties do.
+        # A private task's readers (hubdb.task_reader: by name or through a group) read it as its two parties do.
         audience = (f"(owner_id IN {inherited_private} OR requester_id IN {inherited_private} "
-                    f"OR (coalesce(private,1)<>0 AND (guest={me} OR ({participant}))) "
+                    f"OR (coalesce(private,1)<>0 AND ({reader_sql(c, who.actor)} OR ({participant}))) "
                     f"OR (coalesce(private,1)=0 AND (owner_id IN {parties} OR requester_id IN {parties} OR ({clear}))))")
         if who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
             audience += (f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
-                         f"OR guest={actor} OR ({participant_access_sql(c, actor)}))")
+                         f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}))")
+        from . import counsel
+        denied = counsel.denied_page_copies(c, who, self)
+        if denied:
+            audience += " AND id NOT IN " + A.qlist(sorted(denied))
         return audience
 
     def operator(self, c, who, bot):
@@ -976,13 +1079,17 @@ class Auth:
         self.domain(who)
         if not row:
             raise Problem("not_found", "Task not found", 404)
+        from . import counsel
+        copied = counsel.page_copies(c).get(row["id"])
+        if copied and (not copied["removed"] or copied["page"]["state"] == "deleted") and not counsel.page_copy_readable(c, copied, who, self):
+            raise Problem("not_found", "Task not found", 404)
         if who.role not in ("owner", "human", "bot") or not H.task_private_readable(c, who.actor, row):
             raise Problem("not_found", "Task not found", 404)
         if who.task_actor and not H.task_private_readable(c, who.task_actor, row):
             raise Problem("not_found", "Task not found", 404)
         participants = (row["owner_id"], row["requester_id"])
         if not H.task_participant(c, who.actor, row) and not (H.task_private(c, row) and H.task_private_readable(c, who.actor, row)):
-            # A party to a task, or a private task's guest, always sees it; anyone else needs Read on every bot it
+            # A party to a task, or a private task's reader, always sees it; anyone else needs Read on every bot it
             # involves.
             bots = [H.actor_id(a) for a in participants if str(a).startswith("bot:")]
             for slug, level in (self.bot_accesses(c, who, bots).items() if bots else ()):
@@ -1065,31 +1172,44 @@ class Auth:
         row = H.approval(c, approval_id)
         if not row:
             raise Problem("not_found", "Approval not found", 404)
+        if row["kind"] == "send" and (row.get("payload") or {}).get("email_send_id"):
+            from .email_sending import can_ok, effective
+            send = c.execute("SELECT * FROM email_sends WHERE id=?", (row["payload"]["email_send_id"],)).fetchone()
+            permitted = send and can_ok(c, self, who.actor, send["mailbox"], send["bot"],
+                                       effective(c, send["mailbox"], send["bot"]))
+            if permitted or (not decide and who.actor == row["requested_by_id"]):
+                return row
+            raise Problem("forbidden", "This send follows its inbox's approval rule", 403)
         msg = H.message(c, row["message_id"])
         if decide:
             allowed = who.role in ("owner", "human") and msg["recipient_id"] == who.actor
         else:
             allowed = who.role == "owner" or who.actor in (row["requested_by_id"], msg["recipient_id"])
+        if row["kind"] == "letter":
+            from . import letters
+            letter = c.execute("SELECT * FROM letters WHERE approval_id=?", (approval_id,)).fetchone()
+            allowed = False
+            if letter:
+                may_decide = who.role in ("owner", "human") and (letters.admin(self, who) or (
+                    letter["acting_bot_id"] and self.bot_manager(c, who, letter["acting_bot_id"])))
+                allowed = letters.readable(c, self, who, letter) and (not decide or may_decide)
         if not allowed:
             raise Problem("forbidden", "This approval is not yours", 403)
         return row
 
 
 def actor_reads_task(c, actor, row):
-    """Whether an actor may read this task under every rule in Auth.task_row, without server sign-in settings.
+    """Whether an actor may read this task under every rule in Auth.task_row, using the stored read policy.
     With no transaction open, the read runs in a savepoint released at the end, so task_row's snapshot never leaves
     a BEGIN open on an autocommit connection."""
-    from . import access, teammate_access
-    policy = Auth.__new__(Auth)
+    from . import teammate_access
     opened = not c.in_transaction
     if opened:
         c.execute("SAVEPOINT actor_reads_task")
     try:
-        if H.is_human(actor):
-            policy.bot_admins = read_cache.value(c, ("task_read_admins",),
-                                                lambda: set(access.owner_and_admin_emails(c)))
+        policy = Auth.read_policy(c)
         if opened and row:
-            row = H.task(c, row["id"])      # read in this snapshot, as task_row's own BEGIN would
+            row = H.task(c, row["id"])
         who = read_cache.value(c, ("task_read_identity", actor), lambda: teammate_access._viewer_for(c, actor))
         if who is None:
             return False

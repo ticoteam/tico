@@ -42,7 +42,7 @@ kept per person (their id). A live change and a refresh both check it, one after
 
 Tico posts no nudge in a thread for an unanswered question. A question a bot is waiting on is listed on the bot's task roundup, and a question to a person that stays unanswered for two business days goes back to its bot ([Tasks](tasks.md)).
 
-Each manager of a bot whose Home still holds closed history gets one direct message about it, once (the **Earlier messages** row in [System routines](system-routines.md)). The job is plain code on a 15-minute schedule. It never calls or wakes a model, and a run with nothing to tell writes nothing.
+A bot's manager opens a Home's closed history from the Home's menu or its **Earlier messages** row.
 
 ## Catch up
 
@@ -75,8 +75,11 @@ as `thread_id` and `scope`.
 
 Each daily update and each week in review keeps its own structure and its own page, as before. It also posts one card
 in its author's Home: a single line (for example "Daily update, 2026-11-01") that links back to the update. The
-update's body is never copied into the thread. The card follows the Home's audience: whoever can read the Home sees
-it, and nobody else.
+update's body is never copied into the thread. The card is one message in that Home thread, so the Home's audience
+reads it. The Home route (`GET /api/v2/threads/home/{actor}`, `hub_thread_home`) returns only the Home's header, with
+no messages. The card comes from the Home thread's timeline (`GET /api/v2/threads/{thread_id}/timeline` with the Home's
+id, or `hub_thread_show` with that id). The app's Home does not draw these cards; the update is read on the Updates
+page.
 
 The card is posted as the author, so a bot's card in its own Home does not wake that bot.
 

@@ -118,6 +118,35 @@ pub struct Vault {
     pub subscriptions: Vec<crate::model_subscriptions::Delivered>,
     /// The bot's browser proxy, and the OS users this turn lets use it (crate::browser_exit).
     pub browser_exit: Option<crate::browser_exit::Admission>,
+    /// The granted tools whose calls go through the Tico tool proxy (backend/tool_proxy.py): for the prompt's line.
+    pub tools: Vec<ProxiedTool>,
+}
+
+/// A tool the turn calls through the Tico proxy: the key's variable holds a proxy token, `url_env` the proxy address.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProxiedTool {
+    pub name: String,
+    pub env: String,
+    pub url_env: String,
+    pub url: String,
+}
+
+/// The proxy address a grant names, or None for a grant that carries its real value (a `computer` tool, or a server
+/// older than the proxy). Its path is joined to the address this runner reaches the server by, which a Docker or
+/// private-network runner may know under another name than the server's public one. Only a `TICO_TOOL_*_URL` name.
+pub fn proxied_tool(item: &Value, server: &str) -> Option<ProxiedTool> {
+    static NAME: OnceLock<Regex> = OnceLock::new();
+    let name = NAME.get_or_init(|| Regex::new(r"^TICO_TOOL_[A-Z0-9_]+_URL$").unwrap());
+    let url = item["proxy_url"].as_str().filter(|u| !u.is_empty())?;
+    let url_env = item["url_env"].as_str().filter(|k| name.is_match(k))?;
+    let path = url.find("/api/v2/tool-proxy/").map(|i| &url[i..]);
+    let url = match path {
+        Some(p) if !server.is_empty() => format!("{}{p}", server.trim_end_matches('/')),
+        _ => url.to_string(),
+    };
+    let env = item["env"].as_str().unwrap_or_default().to_string();
+    let label = item["tool"].as_str().or_else(|| item["name"].as_str()).filter(|n| !n.is_empty()).unwrap_or(&env).to_string();
+    Some(ProxiedTool { name: label, env, url_env: url_env.to_string(), url })
 }
 
 impl Vault {
@@ -229,6 +258,9 @@ pub async fn environment_with(ctx: &EnvContext<'_>, attempt: &Value, vault: &mut
                 return Err("Multiple granted credentials use the same environment name".into());
             }
             let value = text_of(&item["value"]);
+            if let Some(tool) = proxied_tool(item, ctx.url) {
+                vault.tools.push(tool);
+            }
             if item["kind"].as_str() == Some("file") {
                 // Under isolation the state directory is closed to the bot user: the file goes where its turn reads.
                 let dir = if let Some(user) = &vault.turn_user { user.dir.clone() }
@@ -287,6 +319,10 @@ pub async fn environment_with(ctx: &EnvContext<'_>, attempt: &Value, vault: &mut
         }
     }
     env.retain(|k, _| !(k.starts_with("TICO_") || k == "HUB_DB" || k == "HUB_HUMAN_OVERRIDE"));
+    // After the TICO_ sweep: the proxy's address is Tico's own variable, set only from a grant that names one.
+    for tool in &vault.tools {
+        env.insert(tool.url_env.clone(), tool.url.clone());
+    }
     let root = root();
     let task_id = attempt.get("task").and_then(|t| t.get("id")).map(text_of).unwrap_or_default();
     let path = env.get("PATH").cloned().unwrap_or_else(|| "/usr/bin:/bin".into());
@@ -386,6 +422,30 @@ mod tests {
         assert!(!env.contains_key("CLAUDE_CONFIG_DIR"), "{env:?}");
         assert!(!vault.names.contains("CLAUDE_CONFIG_DIR"));
         assert_eq!(env["ACME_API_KEY"], "acme-synthetic");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_proxied_tool_gets_its_token_and_the_proxy_address_on_this_runners_server() {
+        let dir = std::env::temp_dir().join(format!("tico-env-proxy-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = EnvContext { url: "http://tico.internal:8765", projects_dir: &dir, state_dir: &dir };
+        let granted = serde_json::json!({"credentials": [
+            {"id": "c1", "name": "Close key", "env": "CLOSE_API_KEY", "kind": "env", "value": "tpx1.synthetic.token",
+             "tool": "Close CRM", "proxy_url": "https://tico.acme.example/api/v2/tool-proxy/close-crm",
+             "url_env": "TICO_TOOL_CLOSE_CRM_URL"},
+            {"id": "c2", "name": "Bad", "env": "BAD_KEY", "kind": "env", "value": "tpx1.other.token",
+             "proxy_url": "https://tico.acme.example/api/v2/tool-proxy/bad", "url_env": "PATH"},
+            {"id": "c3", "name": "Old", "env": "OLD_KEY", "kind": "env", "value": "old-synthetic"},
+        ]});
+        let mut vault = Vault::default();
+        let env = environment_with(&ctx, &serde_json::json!({"bot": "ops", "token": "t"}), &mut vault, Some(granted)).await.unwrap();
+        assert_eq!(env["CLOSE_API_KEY"], "tpx1.synthetic.token");
+        assert_eq!(env["TICO_TOOL_CLOSE_CRM_URL"], "http://tico.internal:8765/api/v2/tool-proxy/close-crm");
+        // A name outside TICO_TOOL_*_URL is never set from a grant; an older server's grant is just its value.
+        assert_ne!(env.get("PATH").map(String::as_str), Some("https://tico.acme.example/api/v2/tool-proxy/bad"));
+        assert_eq!(env["OLD_KEY"], "old-synthetic");
+        assert_eq!(vault.tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Close CRM"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

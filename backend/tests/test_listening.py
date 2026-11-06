@@ -174,8 +174,17 @@ def test_a_destination_saved_in_settings_wins_over_the_file_on_the_same_key_and_
     assert [i["destination"] for i in get(api, "intake?destination=leads", token=_token(api, "influencer"))["items"]] == ["leads"]
 
 
-def test_a_destination_the_file_would_refuse_is_refused_when_it_is_saved(api):
+def test_saved_destinations_are_owner_only_validated_never_remove_the_files_and_show_to_the_owner_and_admins(api):
     _bots(api)
+    # Only the owner writes destinations, and only owner and admins read them.
+    for token in ("ben-test", "cara-test", _token(api, "librarian")):
+        _save(api, "mine", token=token, expected=403)
+        post(api, "listening/destinations/market/remove", {}, token=token, expected=403)
+    assert "mine" not in _merged(api)
+    get(api, "listening/destinations", token="ben-test")
+    get(api, "listening/destinations", token="cara-test", expected=403)
+    get(api, "listening/destinations", token=_token(api, "listening"), expected=403)
+    # A destination the file would refuse is refused when it is saved.
     for bad in ({"category": "vendor_pitch_typo"}, {"category": "lead", "threshold": 0}, {"threshold": 1.5},
                 {"receiver": "bot:nobody"}, {"receiver": "human:ana"}, {"readers": ["bot:nobody"]},
                 {"unless": {"category": "nope", "threshold": 0.5}}, {"unless": {"category": "vendor_pitch", "threshold": 2}}):
@@ -184,30 +193,20 @@ def test_a_destination_the_file_would_refuse_is_refused_when_it_is_saved(api):
     assert "bad" not in _merged(api)
     ok = _save(api, "good", readers=["bot:doc-updater", "bot:doc-updater"], unless={"category": "vendor_pitch", "threshold": 0.7})
     assert ok["destination"]["readers"] == ["bot:doc-updater"] and ok["destination"]["unless"]["threshold"] == 0.7
-
-
-def test_only_the_owner_writes_destinations_and_only_owner_and_admins_read_them(api):
-    _bots(api)
-    for token in ("ben-test", "cara-test", _token(api, "librarian")):
-        _save(api, "mine", token=token, expected=403)
-        post(api, "listening/destinations/market/remove", {}, token=token, expected=403)
-    assert "mine" not in _merged(api)
-    get(api, "listening/destinations", token="ben-test")
-    get(api, "listening/destinations", token="cara-test", expected=403)
-    get(api, "listening/destinations", token=_token(api, "listening"), expected=403)
-
-
-def test_a_destination_only_the_file_has_cannot_be_removed_and_a_saved_one_can(api):
-    _bots(api)
+    # A destination only the file has cannot be removed and a saved one can.
     assert post(api, "listening/destinations/market/remove", {}, expected=409)["error"]["code"] == "yaml"
     post(api, "listening/destinations/nothing/remove", {}, expected=404)
     _save(api, "market", threshold=0.9)
     assert _merged(api)["market"]["threshold"] == 0.9
     post(api, "listening/destinations/market/remove", {})
     assert _merged(api)["market"]["threshold"] == 0.70, "removing the saved one brings the file's back"
+    # Hub SQL shows saved destinations to the owner and admins only.
+    assert post(api, "sql", {"sql": "SELECT key FROM listening_destinations"})["rows"] == [["good"]]
+    assert post(api, "sql", {"sql": "SELECT count(*) FROM listening_destinations"}, token=_token(api, "finance"))["rows"][0][0] == 0
 
 
-def test_the_market_destination_is_offered_once_and_a_removal_sticks(api):
+def test_the_market_destination_is_offered_once_a_removal_sticks_and_health_reads_saved_destinations(api):
+    from backend import health
     settings = _settings(api)
     with api.app.state.store.transaction() as c:
         assert L.seed_market(c, settings) is False, "no Librarian, nothing to offer"
@@ -223,6 +222,16 @@ def test_the_market_destination_is_offered_once_and_a_removal_sticks(api):
     with api.app.state.store.transaction() as c:
         assert L.seed_market(c, settings) is False
     assert "market" not in _merged(api)
+    # Health reads destinations saved in settings.
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what) "
+                  "VALUES ('typo','no_such_category',0.7,'bot:librarian','[]','null','')")
+    with api.app.state.store.read() as c:
+        check = health._listening(c, settings)
+    assert check["status"] == "warn" and "typo" in check["summary"]
+    _save(api, "typo", category="market", receiver="bot:librarian")
+    with api.app.state.store.read() as c:
+        assert health._listening(c, settings) is None
 
 
 def test_the_market_destination_is_not_offered_when_one_already_routes_market(api):
@@ -230,28 +239,6 @@ def test_the_market_destination_is_not_offered_when_one_already_routes_market(ap
     with api.app.state.store.transaction() as c:
         assert L.seed_market(c, _settings(api)) is False
         assert c.execute("SELECT count(*) FROM listening_destinations").fetchone()[0] == 0
-
-
-def test_health_reads_destinations_saved_in_settings(api):
-    from backend import health
-    _bots(api)
-    (_settings(api).registry_dir / L.LISTENING_FILE).write_text("destinations: {}")
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what) "
-                  "VALUES ('typo','no_such_category',0.7,'bot:librarian','[]','null','')")
-    with api.app.state.store.read() as c:
-        check = health._listening(c, _settings(api))
-    assert check["status"] == "warn" and "typo" in check["summary"]
-    _save(api, "typo", category="market", receiver="bot:librarian")
-    with api.app.state.store.read() as c:
-        assert health._listening(c, _settings(api)) is None
-
-
-def test_hub_sql_shows_saved_destinations_to_the_owner_and_admins_only(api):
-    _bots(api)
-    _save(api, "extra", category="content")
-    assert post(api, "sql", {"sql": "SELECT key FROM listening_destinations"})["rows"] == [["extra"]]
-    assert post(api, "sql", {"sql": "SELECT count(*) FROM listening_destinations"}, token=_token(api, "finance"))["rows"][0][0] == 0
 
 
 def test_stats_carry_a_daily_chart_and_the_callers_recent_posts(api):

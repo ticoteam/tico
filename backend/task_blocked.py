@@ -219,7 +219,8 @@ def reconciliation(c, row, snapshots=None):
         # A fresh refusal can describe a newer head/check result than the cached link.
         # Only a subsequent GitHub observation may clear that uncertainty.
         for pr in review_gate.links(c, row):
-            if gate.get('pr') != pr['url']:
+            from . import pr_identity as PR
+            if not PR.same(gate.get('pr'), pr):
                 continue
             if snapshots is not None:
                 detail = snapshots.get(pr['id']) or {}
@@ -275,7 +276,7 @@ _fresh = {"at": 0.0, "seen": {}, "tried": {}}
 
 def fresh(service, store=None, force=False):
     """Gate holds the cached read keeps, read once afresh from GitHub per change in what the gate reads: the webhook
-    cache counts skipped checks as passing, so all-green hosted checks at the current head clear a hold only from a
+    cache counts neutral checks as passing, so all-green hosted checks at the current head clear a hold only from a
     fresh read (review_gate.problem). A hold with a move Tico still retries is left to that retry, which reads GitHub
     itself (backend/move_retry.py). The holds tried longest ago go first, so reads that keep failing on some
     holds never keep the rest from their turn. Returns the ids of tasks whose hold cleared."""

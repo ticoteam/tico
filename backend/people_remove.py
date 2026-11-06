@@ -99,6 +99,8 @@ def remove(c, actor, roster, person):
         raise Problem("not_removable", check(person), 409)
     if recent_history(c, pid):
         raise Problem("has_history", KEEPS, 409)
+    from . import pages
+    pages.forget_audience_member(c, actor, "people", pid)
     people = [p for p in roster["people"] if p["id"] != pid]
     people = [{**p, "reports_to": person.get("reports_to") or ""} if p.get("reports_to") == pid else p for p in people]
     Access.save_roster(c, {**roster, "people": people})

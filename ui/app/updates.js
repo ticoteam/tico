@@ -49,7 +49,7 @@ function pageUpdates() {
   const params = new URLSearchParams(S.route.split('?')[1] || '');
   const kind = params.get('kind') === 'weekly' ? 'weekly' : 'daily';
   const view = params.get('view') === 'archive' ? 'archive' : 'inbox';
-  // A link to one update (the Updates chat's, updGoLink) names its day, so the tree shows that day, and may ask for
+  // A link to one update (#/updates?kind=&day=&update=) names its day, so the tree shows that day, and may ask for
   // the whole org for this visit when the update's author is not below you; the page then goes to the update.
   const day = /^\d{4}-\d{2}-\d{2}$/.test(params.get('day') || '') ? params.get('day') : null;
   const target = params.get('update') || null;
@@ -61,11 +61,9 @@ function pageUpdates() {
   const cached = state.data = updCacheRead(state);
   state.loading = !cached; state.fromCache = !!cached;
   if (cached) updOrder(state, true);
-  // The feed is redrawn in its own column; the Updates chat beside it (ui/app/updates-chat.js) stays, with its
-  // conversation, while only the kind, the day or the view changes.
   const main = $('#main');
-  let col = main.querySelector(':scope > .upd-col');
-  if (!col || !UPDC?.el?.isConnected) { main.innerHTML = '<div class="upd-col"></div>'; col = main.firstElementChild; }
+  main.innerHTML = '<div class="upd-col"></div>';
+  const col = main.firstElementChild;
   col.innerHTML = `<div class="upd-page">
     <div class="upd-head">
       <h1>${view === 'archive' ? 'Archive' : 'Updates'}</h1>
@@ -214,8 +212,8 @@ function updWriteBtn(u) {
   const label = u.day === updToday() ? 'Edit your update' : 'Write today\'s update';
   return `<button type="button" class="upd-act" data-upd-write aria-label="${label}" title="${label}"><span class="nav-icon" aria-hidden="true">edit</span></button>`;
 }
-// `kids` is the tree's toggle for the cards of this card's reports, at the right end of the row under the update
-// (with Edit on your own card); the row is gone when it has neither.
+// `kids` is the tree's toggle for the cards of this card's reports, on the name's line right of Archive (outside the
+// corner, so it never fades). The row under the update holds Edit on your own card and is gone without it.
 function updCard(u, i, state, kids = '') {
   const who = updAuthor(u.bot);
   const open = state.open.has(u.id);
@@ -227,9 +225,9 @@ function updCard(u, i, state, kids = '') {
       <div class="upd-meta"><span class="upd-av">${who.avatar}</span><a href="${who.href}" class="upd-name" data-upd-bot>${who.name}</a>
         ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}
         <span class="muted">· ${esc(ago(u.updated_at || u.created_at))}</span>${alert ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}
-        <span class="upd-corner">${who.person ? '' : updReplyBtn(u)}${updReadBtn(u.read)}${updArchiveBtn(state.view === 'archive', state.archivePending.has(u.id))}</span></div>
+        <span class="upd-corner">${who.person ? '' : updReplyBtn(u)}${updReadBtn(u.read)}${updArchiveBtn(state.view === 'archive', state.archivePending.has(u.id))}</span>${kids}</div>
       ${u.slides ? updDeck(u, state) : body ? `<div class="upd-body md">${safeMd(body, {shortLinks: true})}</div>` : ''}
-      <div class="upd-actions">${u.own && updCanWrite(state) ? updWriteBtn(u) : ''}${kids}</div>
+      <div class="upd-actions">${u.own && updCanWrite(state) ? updWriteBtn(u) : ''}</div>
       ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.sender_id).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
           <b>${esc(actorLabel(m.sender_id))}</b> ${String(m.sender_id).startsWith('bot:') ? `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>` : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
           <span class="muted">${m.pending ? 'sending…' : esc(ago(m.created_at))}</span></div>`).join('') : (u.replies ? '<div class="muted">Loading replies…</div>' : '')}
@@ -340,10 +338,27 @@ function updTreeHTML(state) {
       card = `<div class="upd-none" data-upd-node="${esc(n.key)}"><span class="upd-av">${who.avatar}</span><a href="${who.href}" class="upd-name">${who.name}</a>
         <span class="muted">No update yet</span>${own && updCanWrite(state) ? '<button type="button" class="ghost upd-write" data-upd-write>Write your update</button>' : ''}${toggle}</div>`;
     }
-    const below = kids.count && open ? `<div class="upd-sub">${n.children.map(k => node(k, depth + 1)).join('')}</div>` : '';
+    const below = kids.count && open ? `<div class="upd-sub">${group(n.children, depth + 1)}</div>` : '';
     return `<div class="upd-node" data-depth="${depth}">${card}${below}</div>`;
   };
-  const html = tree.roots.map(n => node(n, 0)).join('');
+  // Siblings with no update (you aside) share one line at the end: their avatars, then "No update yet". The name is
+  // each avatar's title; one without reports goes to its page, one with reports carries their count (and the unread
+  // dot) and opens them: its usual row and its reports' cards hang under the line. One alone keeps its usual row.
+  const quiet = n => !n.update && n.key !== tree.me;
+  const group = (nodes, depth) => {
+    const none = nodes.filter(quiet);
+    if (none.length < 2) return nodes.map(k => node(k, depth)).join('');
+    const whos = none.map(k => {
+      const who = updAuthor(k.author), kids = updKids(k);
+      if (!kids.count) return `<a href="${who.href}" class="upd-who" aria-label="${esc(who.label)}" title="${esc(who.label)}">${who.avatar}</a>`;
+      const label = `${who.label}, ${kids.count} report${kids.count === 1 ? '' : 's'}${kids.unread ? ', unread' : ''}`;
+      return `<button type="button" class="upd-who" data-upd-kids="${esc(k.key)}" aria-expanded="${state.expanded.has(k.key)}" aria-label="${esc(label)}" title="${esc(label)}">${who.avatar}<span class="upd-who-n" aria-hidden="true">${kids.count}</span>${kids.unread ? '<span class="upd-dot" aria-hidden="true"></span>' : ''}</button>`;
+    }).join('');
+    return [...nodes.filter(k => !quiet(k)).map(k => node(k, depth)),
+      `<div class="upd-node" data-depth="${depth}"><div class="upd-none upd-nones" role="group" aria-label="No update yet"><span class="upd-whos">${whos}</span><span class="muted">No update yet</span></div></div>`,
+      ...none.filter(k => k.children.length && state.expanded.has(k.key)).map(k => node(k, depth))].join('');
+  };
+  const html = group(tree.roots, 0);
   state.list = items;
   return html || '<div class="upd-empty"><span class="nav-icon" aria-hidden="true">account_tree</span><b>No one on the org chart yet.</b></div>';
 }
@@ -439,14 +454,6 @@ function updLinkedRank(state) {
   if (!state.linked.size) return;
   state.order ||= new Map();
   for (const [id, {from}] of state.linked) state.order.set(id, (state.order.get(from) ?? -1) + 0.5);
-}
-// A link to one update (#/updates?kind=&day=&update=, the Updates chat's): when its card is on the page, go to it;
-// else open the page on its kind and day and go to it once the feed loads (pageUpdates `target`).
-function updGoLink(href) {
-  const q = new URLSearchParams(href.split('?')[1] || ''), id = q.get('update'), state = UPD;
-  const kind = q.get('kind') === 'weekly' ? 'weekly' : 'daily';
-  if (state && state.data && state.kind === kind && (state.list || []).some(u => u.id === id)) { void updGoTo(state, id); return; }
-  location.hash = href;
 }
 // Scrolled to and highlighted. In the tree its managers' cards open; an author not below you shows the whole org for
 // this visit; one a newer update replaced is in the Archive. In List or Archive, one not on the page is loaded and
@@ -648,7 +655,7 @@ function updTipBind(state, feed) {
   const clear = () => { clearTimeout(state.tipTimer); state.tipTimer = null; };
   feed.addEventListener('pointerdown', ev => {
     clear(); state.tipBtn = null;
-    const b = ev.target.closest('.upd-act[title]');
+    const b = ev.target.closest('.upd-act[title], .upd-who[title]');
     if (!b || (ev.pointerType !== 'touch' && !matchMedia('(pointer:coarse)').matches)) return;
     state.tipTimer = setTimeout(() => {
       state.tipTimer = null; state.tipBtn = b;
@@ -658,13 +665,13 @@ function updTipBind(state, feed) {
     }, 450);
   }, {passive: true});
   for (const type of ['pointerup', 'pointercancel']) feed.addEventListener(type, clear, {passive: true});
-  feed.addEventListener('contextmenu', ev => { if (ev.target.closest('.upd-act') && matchMedia('(pointer:coarse)').matches) ev.preventDefault(); });
+  feed.addEventListener('contextmenu', ev => { if (ev.target.closest('.upd-act, .upd-who') && matchMedia('(pointer:coarse)').matches) ev.preventDefault(); });
 }
 function updBind(state) {
   const feed = $('#upd-feed');
   updTipBind(state, feed);
   feed.addEventListener('click', ev => {
-    if (state.tipBtn && ev.target.closest('.upd-act') === state.tipBtn) { state.tipBtn = null; return; }   // the long press named it
+    if (state.tipBtn && ev.target.closest('.upd-act, .upd-who') === state.tipBtn) { ev.preventDefault(); state.tipBtn = null; return; }   // the long press named it
     const card = ev.target.closest('[data-upd]');
     if (state.ignoreClick && Date.now() < state.ignoreClick.until && card?.dataset.upd === state.ignoreClick.id) {
       state.ignoreClick = null; return;                 // consume only this swipe's synthetic click
@@ -675,7 +682,11 @@ function updBind(state) {
     if (kids) {
       const key = kids.dataset.updKids;
       if (state.expanded.has(key)) state.expanded.delete(key); else state.expanded.add(key);
-      updRender(state); return;
+      const focused = document.activeElement === kids, which = kids.classList.contains('upd-who') ? '.upd-who' : '.upd-kids';
+      updRender(state);
+      // a redraw replaces the button: focus follows it, so a key press can open and close it again
+      if (focused) feed.querySelector(`${which}[data-upd-kids="${CSS.escape(key)}"]`)?.focus({preventScroll: true});
+      return;
     }
     if (ev.target.closest('[data-upd-write]')) {
       state.editing = true; updRender(state);

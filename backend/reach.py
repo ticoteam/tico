@@ -645,14 +645,14 @@ def _held(c, task_id, field, current, before):
 
 
 def task_parties(c, task_id, before=None):
-    """Everyone a task is shared with: its owner, requester, the one it waits on, its guest, everyone who owned it, and
+    """Everyone a task is shared with: its owner, requester, the one it waits on, its readers (a group's by its members), everyone who owned it, and
     whoever posted in or is a member of its thread. `before`: who was on it then (the dry-run's history; thread members
     are left out, as their joins are not dated)."""
-    row = c.execute("SELECT owner_id, requester_id, waiting_on, guest, conversation_id FROM tasks WHERE id=?",
+    row = c.execute("SELECT owner_id, requester_id, waiting_on, readers, conversation_id FROM tasks WHERE id=?",
                     (task_id,)).fetchone() if task_id else None
     if not row:
         return set()
-    out = {row["requester_id"], row["guest"]}
+    out = {row["requester_id"]} | H.reader_actors(c, dict(row))
     out |= _held(c, task_id, "owner", row["owner_id"], before)
     out |= _held(c, task_id, "waiting_on", row["waiting_on"], before)
     if row["conversation_id"]:

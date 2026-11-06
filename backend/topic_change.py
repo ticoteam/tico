@@ -373,10 +373,18 @@ def _decide(store, primary, who, bot, text, admit, deadline, box):
 
 
 def _audit(store, who, detail):
-    """The check's `judge.call` row, written by the worker once the send has its answer."""
+    """The check's `judge.call` row, written by the worker once the send has its answer, and its run of Fresh start on
+    new topic (Settings > Routines, Automations); a kept chat is a quiet run that folds."""
+    from . import system_routines as SR
+    run = SR.Run("topic_fresh")
+    if detail.get("error"):
+        run.did("Kept the chat: the check took too long" if detail["error"] == "timeout" else "Kept the chat: the check failed")
+    else:
+        run.did("New topic: started fresh" if detail.get("clear") else "Same topic", quiet=not detail.get("clear"))
     try:
         with store.transaction() as c:
             H.event(c, who.actor, "judge.call", detail["label"], detail)
+            SR.keep(c, run)
     except Exception as exc:
         LOG.warning("Topic check audit failed: %s", type(exc).__name__)
 

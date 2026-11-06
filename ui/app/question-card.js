@@ -18,7 +18,7 @@ function qcardQuestion(it) {
   return q;
 }
 // Who really asks: the bot by its name, or Tico for its own checks. Never the assistant's name or "You asked".
-const qcardAsker = actor => !actor || actor === 'keeper' || !/^(bot|human):/.test(actor) ? 'Tico' : actorLabel(actor);
+const qcardAsker = actor => !actor || actor === 'keeper' || !/^(bot|human):/.test(actor) ? KEEPER_LABEL : actorLabel(actor);
 function qcardAge(iso) {
   const s = (Date.now() - new Date(iso)) / 1000;
   if (!iso || isNaN(s)) return '';

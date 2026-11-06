@@ -52,3 +52,14 @@ def test_messages_and_task_asks_have_display_names(api, named_data):
     assert task['ask']['sender_name'] == 'Operations'
     assert task['ask']['recipient_name'] == 'Ana'
     assert tasks['actors']['bot:ops'] == 'Operations' and tasks['actors']['human:ana'] == 'Ana'
+
+
+def test_a_task_the_server_filed_reads_new_task_without_from(api):
+    from backend import names
+    notice = {'kind': 'notice', 'sender_id': 'keeper', 'body': 'New task from keeper: Health: Watchers'}
+    with api.app.state.store.read() as c:
+        names.annotate(c, {'messages': [notice]}, render_notices=True)
+        bot = {'kind': 'notice', 'sender_id': 'keeper', 'body': 'New task from keeper: Health: Watchers'}
+        names.annotate(c, {'messages': [bot]})
+    assert notice['body'] == 'New task: Health: Watchers' and notice['body_raw'] == 'New task from keeper: Health: Watchers'
+    assert bot['body'] == 'New task from keeper: Health: Watchers'      # bots read it as written

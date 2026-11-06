@@ -4,7 +4,7 @@ One story over eight weeks, from one daily model, so every figure adds up: a wee
 days the month rows add up. Each Monday the marketing lead's "Weekly numbers" routine sets the month rows through the
 Sunday before and logs the week's readings. Those runs are history, so they are written as the runs would have left
 them, played through the engine as the scheduler fires them: each run's bot turn opens the routine's task, and the turn's end charges the run. Creator videos drive store sales and scale up. Paid ads cost more
-per unit than a unit earns, so they pause, and their test closes as Lost.
+per unit than a unit earns, so they pause, and their test closes as Failed.
 
 The growth model counts revenue per customer per month. A unit's sale is spread over the months it counts (a $299 unit
 is about $25 a month over a year, and a Scene Library plan adds about $6), so each channel's monthly revenue stands for
@@ -98,19 +98,19 @@ CONTENT = {
         {"title": "Twelve creators film their own holiday show", "channel": "creator-videos", "owner": "bot:creators",
          "body": "Each creator films one 30-second clip on their own house, with the unit's code in the caption.",
          "created_days": 40,
-         "steps": [{"step": "Testing", "days": 38, "note": "Ten creators have their units. First clips go up on Monday."},
-                   {"step": "Scaling", "days": 18, "note": "Code orders are steady. Adding creators for the holidays."},
+         "steps": [{"step": "Live", "days": 38, "note": "Ten creators have their units. First clips go up on Monday."},
+                   {"step": "Working", "days": 18, "note": "Code orders are steady. Adding creators for the holidays."},
                    {"step": "Paused", "days": 17, "note": "Holding at ten creators until the holiday list is confirmed."}]},
         {"title": "Holiday search and social ads for the Storefront", "channel": "paid-ads", "owner": "bot:paid-media",
          "body": "A small test aimed at homes with a big facade. It wins if a unit costs less than its margin.",
          "created_days": 40,
-         "steps": [{"step": "Testing", "days": 36, "note": "Test budget is live. Cost per unit checked each morning."},
-                   {"step": "Lost", "days": 11, "close": True,
+         "steps": [{"step": "Live", "days": 36, "note": "Test budget is live. Cost per unit checked each morning."},
+                   {"step": "Failed", "days": 11, "close": True,
                     "note": "Cost per unit stayed above the margin. Ads paused, test closed."}]},
         {"title": "Starter bundle on bigmarket.example", "channel": "marketplace", "owner": "bot:marketplace",
          "body": "Home Starter with the mounting kit, listed for the marketplace only at a small discount.",
          "created_days": 14,
-         "steps": [{"step": "Testing", "days": 9, "note": "Bundle listed. Stock checked with inventory each Monday."},
+         "steps": [{"step": "Live", "days": 9, "note": "Bundle listed. Stock checked with inventory each Monday."},
                    {"step": "Paused", "days": 6, "note": "Holding the listing until inventory confirms the holiday stock."}]},
         {"title": "End-cap display at two homeworks.example stores", "channel": "retail-partners", "owner": "bot:retail",
          "body": "A display of Home Pro units at the end of two aisles. The partner sells them through on its own terms.",

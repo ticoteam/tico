@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from . import needs_shape
+from .sources import KINDS as SOURCE_KINDS
 
 VERSION = "2.0.0"
 COPY = Path(__file__).resolve().parents[1] / "docs" / "openapi" / "v2.json"
@@ -72,13 +73,14 @@ EVENTS_DESCRIPTION = (
     "without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the "
     "root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as "
     "`GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n"
-    "- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. "
-    "With `needs=changes`: `count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), "
+    "- `needs`: the viewer's own Needs-you `count`, `plate_count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. "
+    "With `needs=changes`: `count`, `plate_count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), "
     "task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` "
     "since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged "
     "(keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with "
     "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
     "`base`. `ready` then carries `needs_version`.\n"
+    "- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\n"
     "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
     "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "
     "`event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. "
@@ -88,6 +90,10 @@ EVENTS_DESCRIPTION = (
 
 # Path, method, tag, operationId, summary, name of the 200 answer in ANSWERS.
 STABLE = [
+    ("/api/v2/cloud-machines/support", "get", "Computers", "getCloudMachineSupport",
+     "Read Tico support's cloud-machine switch and helper states from HQ; unavailable off Tico Cloud", None),
+    ("/api/v2/cloud-machines/support", "put", "Computers", "setCloudMachineSupport",
+     "Let Tico support reach the company's cloud machines, or stop it; owner only", None),
     ("/api/v2/subscriptions", "get", "Subscriptions", "listSubscriptions", "Subscription logins reported by each Computer", "SubscriptionList"),
     ("/api/v2/subscriptions/name", "put", "Subscriptions", "renameSubscription", "Rename a subscription without changing its local login", "SubscriptionIdentity"),
     ("/api/v2/subscriptions/weekly", "put", "Subscriptions", "recordSubscriptionWeekly", "Record or clear a manual weekly allowance observation", "SubscriptionWeeklyResult"),
@@ -342,6 +348,10 @@ STABLE = [
     ("/api/v2/messages/{mid}/answer", "post", "Needs you", "answerMessage", "Answer a question a bot asked", None),
     ("/api/v2/needs-you/recommended", "post", "Needs you", "takeRecommendation",
      "Do what the bot recommends: answer its ask with what it said it would do, and close the card", None),
+    ("/api/v2/needs-you/seen", "post", "Needs you", "needsYouSeen",
+     "The caller's Needs you shows these questions to them (asks=<message ids>, at most 200): each open one is delivered", None),
+    ("/api/v2/tasks/{tid}/seen", "post", "Needs you", "taskSeen",
+     "The caller opened the task: its open questions to them are read", None),
     ("/api/v2/needs-you/clarify", "post", "Needs you", "clarifyAsk",
      "Ask the bot behind a stale question whether it still matters, in clearer words", None),
     ("/api/v2/stale-review/accept-all", "post", "Needs you", "acceptAllStaleSuggestions",
@@ -359,6 +369,8 @@ STABLE = [
     ("/api/v2/meetings/import", "post", "Meetings", "importMeeting", "Import into your Pending queue unless shared explicitly or automatically", None),
     ("/api/v2/meetings/settings", "get", "Meetings", "getMeetingReviewSettings", "Your meeting review preference and Team default", "MeetingReviewPreferences"),
     ("/api/v2/meetings/settings", "post", "Meetings", "setMeetingReviewSettings", "Set auto-share; only the owner sets the Team default", "MeetingReviewPreferences"),
+    ("/api/v2/meetings/recorder", "get", "Meetings", "getMyRecorder",
+     "Your most recently used Tico Recorder, the newest release's version and the download", "MyRecorder"),
     ("/api/v2/meetings/review", "post", "Meetings", "reviewMeetings", "Share or dismiss your Pending meetings", "MeetingReviewList"),
     ("/api/v2/meetings/{id}/review", "post", "Meetings", "reviewMeeting", "Approve, dismiss or restore your own meeting", "ReviewedMeeting"),
     ("/api/v2/meetings/{id}", "get", "Meetings", "getMeeting", "Read a meeting with its notes and transcripts", "ReviewedMeeting"),
@@ -368,7 +380,7 @@ STABLE = [
     ("/api/v2/meetings/granola/connect", "delete", "Meetings", "disconnectGranola", "Delete your encrypted Granola tokens", "GranolaDisconnect"),
     ("/api/v2/meetings/granola/sync", "post", "Meetings", "syncGranola", "Start a background sync; reuse the last two minutes", "GranolaSync"),
     ("/api/v2/meetings/search", "get", "Meetings", "searchMeetings", "Search or list recorded meetings", "MeetingSearch"),
-    ("/api/v2/meetings/transcript", "get", "Meetings", "getMeetingTranscript", "A meeting's transcript", None),
+    ("/api/v2/meetings/transcript", "get", "Meetings", "getMeetingTranscript", "A meeting's transcript; includes saved notes at offset zero, or notes only with notes=true", None),
     ("/api/v2/bots/{bot}/files", "get", "Files", "listBotFiles",
      "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page", "BotFileList"),
     ("/api/v2/files/uploads", "post", "Files", "uploadBotFile",
@@ -450,7 +462,7 @@ STABLE = [
      "Assistant"),
     ("/api/v2/assistant/messages", "post", "Assistant", "sendAssistantMessage",
      "Say something to the Assistant. It is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. "
-     "`place: updates` (the Updates chat) is handed the recent updates the caller may read", "AssistantSent"),
+     "`place: updates` is handed the recent updates the caller may read", "AssistantSent"),
     ("/api/v2/assistant/turn-on", "post", "Assistant", "turnOnAssistant",
      "Owner only: restore the archived assistant, or add it from the catalog, and activate it", None),
     ("/api/v2/assistant/actions", "post", "Assistant", "proposeAssistantAction",
@@ -476,6 +488,9 @@ STABLE = [
     ("/api/v2/assistant/read-back", "post", "Assistant", "readBackAssistantApprovals",
      "The Assistant only: post the list of approvals it is about to approve for you in your chat, with an optional note "
      "of its own words above it; only the listed ones may then be approved on your yes", None),
+    ("/api/v2/assistant/morning", "post", "Assistant", "sendAssistantMorning",
+     "The Assistant's background run only: one morning message for a person, in their own Assistant chat, as the "
+     "Assistant (no card). Once a company day per person: a second is 409 already_sent_today", None),
     # Goals and KPIs (docs/goals-and-kpis.md)
     ("/api/v2/strategy-bot", "get", "Goals", "getStrategyBot",
      "The Strategy Bot's name, whether its regular checks run, how much it does (its level, "
@@ -710,7 +725,7 @@ ACTORS = {"type": "object", "additionalProperties": {"type": "string"},
 
 # One item of a person's Needs you, whatever its kind (backend/needs_shape.py).
 NEEDS_ITEM = obj({"id": "s", "kind": {"type": "string", "description": "Needs you: task, question, waiting, "
-                                             "declined, ask, approval, stale, memory_tidy, setup. Goals: vision, kpi_red, kpi_stale, "
+                                             "declined, ask, approval, stale, setup. Goals: vision, kpi_red, kpi_stale, "
                                              "recovery, proposal, why. Each kind adds the fields its card reads"},
                          "title": "s", "body": "n",
                          "subject": {"oneOf": [obj({"type": {"enum": ["task", "message", "approval", "proposal", "kpi",
@@ -722,7 +737,12 @@ NEEDS_ITEM = obj({"id": "s", "kind": {"type": "string", "description": "Needs yo
                              "description": "The writes that settle it: " + "; ".join(
                                  f"`{k}` {v}" for k, v in needs_shape.ACTIONS.items())}})
 
+# Who wrote a line (backend/sources.py): a message's, a search hit's and a task history entry's `source`.
+SOURCE_SCHEMA = obj({"kind": {"type": "string", "enum": list(SOURCE_KINDS)}, "name": "s", "link": "n"},
+                    required=["kind", "name", "link"])
+
 SCHEMAS = {
+    "MessageSource": SOURCE_SCHEMA,
     "SubscriptionList": obj({"profiles_by_computer": items(obj({"runner_id": "s", "label": "s", "profiles": items(
         obj({"name": "s", "id": "s", "display_name": "s", "runtimes": "o"}))}))}),
     "SubscriptionIdentity": obj({"id": "s", "display_name": "s"}),
@@ -740,7 +760,7 @@ SCHEMAS = {
                           "words": "s"}, required=["thread_id", "scope", "messages", "left_out"]),
     "ChatGoalResult": obj({"goal": {"anyOf": [ref("ChatGoal"), {"type": "null"}]}}, required=["goal"],
                           supported={"type": "boolean"}, commands=items({"type": "object"})),
-    "Message": obj({"id": "s", "conversation_id": "s", "sender_id": "s", "recipient_id": "s", "kind": "s", "body": "s",
+    "Message": obj({"id": "s", "conversation_id": "s", "sender_id": "s", "recipient_id": "n", "kind": "s", "body": "s",
                     "created_at": "s", "in_reply_to": "n", "refs": "o"}, required=["id", "conversation_id", "sender_id", "recipient_id", "kind", "body", "created_at", "in_reply_to", "refs"],
                    sender_name={"type": "string", "description": "Display name of sender_id, when it is a person or a bot"},
                    recipient_name={"type": "string", "description": "Display name of recipient_id"},
@@ -824,9 +844,9 @@ SCHEMAS = {
                 step_rank={"type": ["number", "null"], "description": "Its place within its step, lower first"},
                 waiting_on={"type": ["string", "null"], "description": "The person a waiting task waits on; "
                             "the task is in their Needs you"},
-                guest={"type": ["string", "null"], "description": "The one person a private task with no person on "
-                       "it reached: its owning bot's first subtask, question or wait for them made them its guest. "
-                       "They read the task as its requester and owner do, and nothing else of its tree"},
+                readers=items({"type": "string"}) | {"description": "Who else can see a private task besides its "
+                         "requester and owner: people, bots and group:<id>s (a group by its members now). Empty on a "
+                         "company task. GET/PUT /api/v2/tasks/{id}/readers reads and changes it"},
                 holds=items(ref("TaskHold")) | {"description": "What holds the task (docs/tasks.md, Holds): at most one "
                                                 "per kind, empty when nothing does"},
                 roles={"type": "object", "description": "Who is on the task, by role: each role a short name the team "
@@ -1068,6 +1088,8 @@ SCHEMAS = {
                    "description": "Items that left the caller's queue this week on their own: expired, withdrawn, "
                                   "answered by their Assistant, and the total"},
         count={"type": "integer", "description": "Items in the whole list, whatever page this is"},
+        plate_count={"type": "integer", "description": "Unique task, question, waiting, declined, approval, ask and stale items "
+                     "across all boards, excluding folded or merged tasks; excludes thread and update attention"},
         by_kind={"type": "object", "additionalProperties": {"type": "integer"},
                  "description": "Items of each kind in the whole list, including unread pages; Tasks excludes thread kinds"},
         folded_task_ids={"type": "array", "items": {"type": "string"},
@@ -1077,7 +1099,7 @@ SCHEMAS = {
         bots={"type": "object", "additionalProperties": {"type": "integer"},
               "description": "With limit or cursor: how many items in the whole list each bot is behind"},
         restart={"type": "boolean", "description": "The cursor was from an older version: this page is the first"}),
-        obj({"actor": "s", "count": "i"})]},
+        obj({"actor": "s", "count": "i", "plate_count": "i"})]},
     "GranolaStatus": obj({"mode": {"type": "string", "enum": ["account", "api_key", "off"]},
                           "connected": "b", "email": "n", "plan_hint": {"type": ["string", "null"], "enum": ["free", "paid", None]},
                           "last_synced_at": "n", "last_error": "n", "imported_count": "i", "needs_signin": "b", "syncing": "b", "skipped": "i"},
@@ -1092,6 +1114,10 @@ SCHEMAS = {
     "MeetingSearch": obj({"results": "a", "next_offset": {"type": ["integer", "null"]}, "mode": "s"}),
     "ReviewedMeeting": obj({"id": "s", "title": "s", "review_state": {"type": "string", "enum": ["pending", "live", "dismissed"]}}),
     "MeetingReviewList": obj({"meetings": items(ref("ReviewedMeeting")), "count": "i", "pending_count": "i"}),
+    "MyRecorder": obj({"version": {"type": "string", "description": "Your most recently used copy's version; empty when none was seen"},
+                       "last_seen_at": "n", "recent": {"type": "boolean", "description": "A copy was seen in the last 30 days"},
+                       "latest": {"type": "string", "description": "The newest release's version; empty when unknown"},
+                       "update_available": "b", "download_url": "s"}),
     "MeetingReviewPreferences": obj({"auto_share": {"type": ["boolean", "null"]},
                                      "review_default": {"type": "string", "enum": ["review", "auto"]}, "effective_auto_share": "b"}),
     "InternalDocRow": obj({"id": "s", "path": "s", "title": "s", "updated_at": "s", "updated_by_id": "s", "locked": "b", "version": "i"},
@@ -1455,6 +1481,8 @@ SCHEMAS.update({
                       "next_offset": {"type": ["integer", "null"]}}),
 })
 SCHEMAS["Task"]["properties"]["tags"] = items(ref("Tag"))
+SCHEMAS["Message"]["properties"]["source"] = ref("MessageSource")
+SCHEMAS["TaskDetail"]["properties"]["events"] = items(obj({"source": ref("MessageSource")}, required=["source"]))
 
 # The named events automations and outgoing webhooks listen for (backend/event_catalog.py).
 TAGS["Events"] = "The catalog of named events (docs/routines.md)."
@@ -1656,6 +1684,17 @@ STABLE.extend([
     ("/api/v2/finance/connections", "post", "Finance", "createFinanceConnection",
      "Connect Mercury with a stored token credential (finance admins): the token is tested, its accounts listed and "
      "mapped into the books. The Idempotency-Key is the action's key", "FinanceConnectionResult"),
+    ("/api/v2/finance/ad-accounts", "get", "Finance", "listFinanceAdAccounts",
+     "A Google Ads or Meta Ads tool's ad spend (finance admins): whether Finance imports it every 4 hours and from which "
+     "day, the books line it books as, which stored keys hold each value (names only), the last import's result, and "
+     "each ad account with the bot it counts for and its spend this month in cents", "FinanceAdAccounts"),
+    ("/api/v2/finance/ad-imports", "post", "Finance", "saveFinanceAdImport",
+     "Save a tool's ad spend import (finance admins): on or off, history_from, the books line and {slot: credential "
+     "id}. One enabled import per platform (409 otherwise); switching on asks for a run at once", "FinanceAdAccounts"),
+    ("/api/v2/finance/ad-imports/run", "post", "Finance", "runFinanceAdImport",
+     "Import an enabled tool's ad spend now instead of at the next 4-hourly run (finance admins)", "FinanceAdAccounts"),
+    ("/api/v2/finance/ad-accounts/{ad_account_id}", "patch", "Finance", "updateFinanceAdAccount",
+     "Pick the bot an ad account's spend counts for, or null for none (finance admins)", "FinanceAdAccount"),
     ("/api/v2/finance/expenses", "get", "Finance", "getFinanceExpenses",
      "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line. The owner may pass "
      "view_as", "FinanceReport"),
@@ -1807,6 +1846,22 @@ SCHEMAS.update({
                                                     "updated_at": "s"}))}),
     "FinanceWebhookDeliveries": obj({"deliveries": items(obj({
         "trigger": "s", "delivery": "s", "received_at": "s", "type": "s", "via": "s", "outcome": "s", "body": "s"}))}),
+    "FinanceAdAccount": obj({"id": "s", "tool_id": "s", "external_id": "s", "name": "s", "currency": "s",
+                             "bot_slug": "n", "active": "b"}),
+    "FinanceAdAccounts": obj({
+        "tool_id": "s", "tool_name": "s", "platform": {"type": "string", "enum": ["google_ads", "meta_ads"]},
+        "platform_label": "s",
+        "import": obj({"saved": "b", "enabled": "b", "history_from": "s", "account_id": "s", "account_name": "s",
+                       "status": {"type": "string", "enum": ["never", "ok", "reconnect", "failed"]},
+                       "last_import_at": "n", "last_error": "s", "run_requested": "b", "every_hours": "i"}),
+        "slots": items(obj({"slot": "s", "label": "s", "required": "b", "credential_id": "s",
+                            "options": items(obj({"id": "s", "name": "s"}))})),
+        "books_lines": items(obj({"id": "s", "code": "s", "name": "s"})),
+        "elsewhere": {"type": ["object", "null"], "properties": {"tool_id": {"type": "string"},
+                                                                  "tool_name": {"type": "string"}}},
+        "month": "s", "month_label": "s",
+        "accounts": items(obj({"id": "s", "external_id": "s", "name": "s", "currency": "s", "bot_slug": "n",
+                               "active": "b", "month_to_date": "i"}))}),
     "FinanceConnectionResult": obj({"action_id": "n", "kind": "s", "status": "s", "code": "s", "reason": "s",
                                     "approver": "n", "result": "o"}, required=["status", "kind"]),
     "FinanceBillsAddress": obj({"bills_email": "n", "inbox_id": "n"}),
@@ -2203,20 +2258,61 @@ STABLE.extend([
     ('/api/v2/triggers/{trigger_id}/deliveries/{delivery}/replay','post','Triggers','replayTriggerDelivery','Run a kept call again as a new occurrence',None),
     ('/api/v2/triggers/{trigger_id}/recover','post','Triggers','recoverTrigger','Run again, under the current secret and preset, the calls refused in the last since_hours (1-720) whose body is kept; each keeps its delivery id',None),
 ])
-TAGS['Connections'] = 'Every connection in one list: who reads what it brings in, its bots and where to configure it.'
+TAGS['Tools'] = 'Every way the company reaches the outside world in one list, and API tools: their keys per level, who can use each, its checks and calls.'
 STABLE.extend([
-    ('/api/v2/connections','get','Connections','listConnections','Slack, GitHub, mail bots, Tico addresses and numbers, meeting '
-     'importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the '
-     'company\'s they may read. Paged with cursor','ConnectionList'),
+    ('/api/v2/tool-index','get','Tools','listToolIndex','API tools, mailboxes, Tico addresses and numbers, mailing mail, '
+     'Slack, GitHub, meeting importers, Listening, outgoing webhooks and declared tools the caller may see, with status '
+     'and who can use each. Follow next with cursor','ToolIndex'),
+    ('/api/v2/api-tools/{tool_id}','get','Tools','getApiTool','One API tool: its keys (never a value), who can use it at '
+     'which level, its last checks and calls; to whoever may change it, who can see it and why. A tool the caller may '
+     'not see is a 404','ApiTool'),
+    ('/api/v2/api-tools/{tool_id}','patch','Tools','updateApiTool','Change a tool\'s settings (credential administrators) '
+     'or who can see it: audience null for Everyone, or an audience for Only listed (the owner, or a credential '
+     'administrator who can see it, who then stays on the list)','ApiToolSettings'),
+    ('/api/v2/api-tools/{tool_id}/activity','get','Tools','listApiToolActivity','Calls through the proxy and uses of its '
+     'keys, newest first. Follow next with cursor','ApiToolActivity'),
 ])
-SCHEMAS['Connection'] = obj({'id': 's', 'kind': {'enum': ['slack', 'github', 'mailbox', 'inbox', 'meetings', 'trigger',
-                                                         'webhook', 'postal', 'listening']},
-                             'name': 's', 'detail': 's', 'status': {'enum': ['on', 'off', 'waiting', 'error', 'paused']},
-                             'scope': {'enum': ['company', 'team', 'person']}, 'readers': 's',
-                             'bots': items(obj({'slug': 's', 'name': 's'})), 'more_bots': 'i', 'configure': 's',
-                             'can_configure': 'b'},
-                            required=['id', 'kind', 'name', 'status', 'scope', 'readers', 'bots', 'configure'])
-SCHEMAS['ConnectionList'] = obj({'connections': items(ref('Connection')), 'next': 'n'})
+TOOL_STATUS = obj({'tone': {'enum': ['ok', 'wait', 'fail', 'run', 'idle']}, 'text': 's'})
+SCHEMAS['ToolIndexRow'] = obj({'id': 's', 'kind': {'enum': ['api', 'mailbox', 'number', 'address', 'slack', 'github',
+                                                           'meetings', 'listening', 'webhook', 'declared', 'website']},
+                               'name': 's', 'detail': 's', 'way': 's', 'status': TOOL_STATUS,
+                               'who': items(obj({'kind': {'enum': ['bot', 'person']}, 'id': 's', 'name': 's',
+                                                 'initials': 's'})),
+                               'who_total': 'i', 'needs_you': 'b', 'href': 's',
+                               'private': {'type': 'boolean', 'description': 'An API tool whose Who can see it is Only '
+                                           'listed'}},
+                              required=['id', 'kind', 'name', 'detail', 'way', 'status', 'who', 'who_total', 'needs_you',
+                                        'href'])
+SCHEMAS['ToolIndex'] = obj({'rows': items(ref('ToolIndexRow')),
+                            'counts': obj({'all': 'i', 'needs_you': 'i', 'api': 'i', 'mail': 'i', 'websites': 'i'}),
+                            'next': 'n'})
+SCHEMAS['ApiToolSettings'] = obj({'id': 's', 'name': 's', 'service': 's', 'base_url': 's', 'auth_scheme': 's',
+                                  'check_path': 's', 'delivery': {'enum': ['proxy', 'computer']}, 'private': 'b'})
+SCHEMAS['ApiTool'] = obj({'tool': ref('ApiToolSettings'),
+                          'keys': items(obj({'id': 's', 'name': 's', 'preview': 's',
+                                             'access_level': {'enum': ['read', 'read_write']},
+                                             'expires_on': 'n', 'last_used_at': 'n'},
+                                            required=['id', 'name', 'preview', 'access_level'])),
+                          'access': items(obj({'subject': 's', 'kind': {'enum': ['bot', 'person', 'finance']},
+                                               'name': 's', 'initials': 's', 'level': {'enum': ['read', 'read_write']},
+                                               'last_used_at': 'n',
+                                               'fixed': {'type': 'boolean', 'description': 'Finance reads this key; it '
+                                                         'goes when the source is disconnected, not here'}},
+                                              required=['subject', 'kind', 'name', 'initials', 'level', 'last_used_at'])),
+                          'checks': items(obj({'ok': 'b', 'status_code': {'type': ['integer', 'null']}, 'detail': 's',
+                                               'checked_at': 's'})),
+                          'recent': items({'type': 'object'}), 'status': TOOL_STATUS, 'can_manage': 'b',
+                          'private': 'b', 'can_set_audience': 'b',
+                          'audience': {'anyOf': [ref('AccessAudience'), {'type': 'null'}],
+                                       'description': 'Only to whoever may change it; null is Everyone'},
+                          'seen_by': items(obj({'subject': 's', 'kind': {'enum': ['person', 'group', 'bot', 'finance']},
+                                                'id': 's', 'name': 's', 'why': {'enum': ['Owner', 'Listed', 'Can use it']}})) | {
+                              'description': 'Only to whoever may change it: who can see an Only listed tool, and why'}},
+                         required=['tool', 'keys', 'access', 'checks', 'recent', 'status', 'can_manage', 'private',
+                                   'can_set_audience'])
+SCHEMAS['ApiToolActivity'] = obj({'rows': items(obj({'id': 's', 'kind': {'enum': ['call', 'use']}, 'actor': 's',
+                                                     'result': {'enum': ['sent', 'refused', 'failed', 'use']},
+                                                     'at': 's'})), 'next': 'n'})
 TAGS['Webhook relay'] = 'Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py).'
 STABLE.extend([
     ('/api/v2/relay', 'get', 'Webhook relay', 'getWebhookRelay', 'The Gateway key, how many relay addresses exist, the last '
@@ -2342,7 +2438,7 @@ STABLE.extend([
     ("/api/v2/pages/{fid}", "get", "Pages", "getPage", "One page and its status line; 404 when the caller may not read it",
      "PageShown"),
     ("/api/v2/pages/{fid}", "patch", "Pages", "editPage",
-     "Change a page's cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
+     "Change a page's audience, cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
      "PageShown"),
     ("/api/v2/files", "get", "Files", "listFiles",
      "Library › Files: every file the caller may see, newest activity first, filtered by kind, bot, team, task, date, "
@@ -2353,7 +2449,10 @@ STABLE.extend([
      "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when", "FileDeleted"),
 ])
 SCHEMAS.update({
-    "Page": obj({"file_id": "s", "title": "s", "bot_id": "s", "bot_name": "s", "version": "i", "updated_at": "s",
+    "Page": obj({"audience": {"anyOf": [ref("AccessAudience"), {"type": "null"}],
+                             "description": "Only returned to managers on a single page read or write; null inherits where it is filed"},
+                 "restricted": {"type": "boolean", "description": "Only returned to managers, including on lists and cards"},
+                 "file_id": "s", "title": "s", "bot_id": "s", "bot_name": "s", "version": "i", "updated_at": "s",
                  "updated_by": "n", "updated_by_name": "s",
                  "cadence": {"type": "string", "enum": ["none", "daily", "weekly", "monthly"]},
                  "as_of": {"type": ["string", "null"], "description": "The date the data is from (YYYY-MM-DD)"},
@@ -2536,26 +2635,6 @@ SCHEMAS['SlackLink'] = obj({
     'linked_by': 's', 'created_at': 's', 'updated_at': 's'})
 SCHEMAS['SlackLinkList'] = obj({'links': items(ref('SlackLink')), 'next_cursor': 'n', 'available': 'b'})
 
-# Independent reviewer cards: task closure never changes this audience or lifetime.
-TAGS['Memory tidy'] = "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
-STABLE.extend([
-    ('/api/v2/memory-tidy/cards', 'get', 'Memory tidy', 'listMemoryTidyCards',
-     'The named reviewer’s open cards; diffs are fetched on opening a card. Human and bot reviewers.', 'MemoryTidyCards'),
-    ('/api/v2/memory-tidy/cards/{ident}', 'get', 'Memory tidy', 'getMemoryTidyCard',
-     'A named reviewer’s card with its checked diff, including after both pass tasks close.', 'MemoryTidyCardResult'),
-    ('/api/v2/memory-tidy/cards/{ident}/decide', 'post', 'Memory tidy', 'decideMemoryTidyCard',
-     'Discard an open card without repository changes, or queue deterministic Keep on its capable assigned computer. Failed re-checks leave the card open.', 'MemoryTidyCardResult'),
-])
-SCHEMAS['MemoryTidyCard'] = obj({
-    'id': 's', 'kind': {'enum': ['memory_tidy']}, 'bot': 's', 'reviewer': 's', 'requester_id': 's', 'title': 's',
-    'memory_commit': 's', 'model': 's', 'cost_usd': {'type': 'number', 'description': 'Filing-ledger list-price estimate, including subscription usage.'},
-    'diary': 's', 'diff': {'type': 'string', 'description': 'Checked unified diff; present on detail reads and decisions, omitted from lists.'},
-    'created_at': 's', 'expires_at': 's', 'status': {'enum': ['open', 'withdrawn', 'discarded', 'kept']}, 'reason': 's', 'keep_available': 'b', 'keep_pending': 'b',
-}, required=['id', 'kind', 'bot', 'reviewer', 'requester_id', 'title', 'memory_commit', 'model', 'cost_usd', 'diary',
-             'created_at', 'expires_at', 'status', 'reason', 'keep_available'])
-SCHEMAS['MemoryTidyCards'] = obj({'cards': items(ref('MemoryTidyCard'))})
-SCHEMAS['MemoryTidyCardResult'] = obj({'card': ref('MemoryTidyCard')})
-
 # A bot's Dream (backend/dream.py): a cleanup task over its own memory, with up to three questions to its requester.
 STABLE.extend([
     ('/api/v2/bots/{bot}/dream', 'get', 'Bots', 'getBotDream',
@@ -2670,6 +2749,14 @@ SCHEMAS.update({
                                        "description": "Where to fix what stops it (cant_reply only)"}},
                               required=["actor", "name", "state", "detail", "since", "run_id", "fix"]),
     "ThreadBotStatus": obj({"bots": items(ref("ThreadBotStatusRow"))}, required=["bots"]),
+    "ThreadReach": obj({"thread_id": "s", "way": {"type": "string", "enum": ["steer", "queue", "defer"]},
+                        "reaches": items(obj({"actor": "s",
+                                              "reason": {"type": "string", "description": "mention, ask, dm, home, "
+                                                         "sub_thread, reply, follower or digest"},
+                                              "mode": {"type": "string", "enum": ["steer", "queue", "defer", "digest"]},
+                                              "defer_for": "n", "adds_reader": "b"},
+                                             required=["actor", "reason", "mode"])),
+                        "outside": items({"type": "string"})}, required=["thread_id", "reaches", "outside"]),
     "ThreadCrumb": obj({"id": "s", "title": "s"}),
     "ThreadTimeline": obj({"thread": ref("ThreadView"), "breadcrumb": items(ref("ThreadCrumb")),
                            "messages": items({"type": "object"}), "next_cursor": "n",
@@ -2690,6 +2777,8 @@ SCHEMAS.update({
     "ThreadFollow": obj({"thread_id": "s", "following": "b", "notify": "s"}, required=["thread_id", "following"]),
     "ThreadMessageDeleted": obj({"id": "s", "deleted": "b", "revision": "i"}, required=["id", "deleted"]),
 })
+SCHEMAS["ThreadMessage"]["properties"]["source"] = ref("MessageSource")
+SCHEMAS["ThreadSearch"]["properties"]["hits"]["items"]["properties"]["source"] = ref("MessageSource")
 STABLE.extend([
     ("/api/v2/threads", "get", "Threads", "listThreads",
      "The viewer's sidebar, threads and DMs they may read: needs attention, then unread, then recent, one page "
@@ -2739,6 +2828,10 @@ STABLE.extend([
     ("/api/v2/threads/{thread_id}/bot-status", "get", "Threads", "getThreadBotStatus",
      "The bots the thread's root waits on, at most 5, oldest wait first: `working` (its current step), `up_next` "
      "(finishing other work first) or `cant_reply` (what stops it, and `fix`)", "ThreadBotStatus"),
+    ("/api/v2/threads/{thread_id}/reach", "get", "Threads", "getThreadReach",
+     "Who a message would reach, each with its mode, given `text` (its @mentions), `delivery` (steer when none), "
+     "`defer_for` and `in_reply_to`; `outside` lists @mentions it would not reach, `adds_reader` a private task's new "
+     "reader. Writes nothing", "ThreadReach"),
     ("/api/v2/threads/{thread_id}/members", "get", "Threads", "listThreadMembers",
      "Who a thread is for, a page at a time", "ThreadMembers"),
     ("/api/v2/threads/{thread_id}/members", "post", "Threads", "addThreadMember",
@@ -2860,6 +2953,12 @@ STABLE.extend([
      'Link up to 20 readable tasks; sent is only for their requester. Results match input order; 404 skips an unavailable task without its data', 'MeetingTaskLinkBatch'),
     ('/api/v2/meetings/{rid}/tasks/{tid}', 'delete', 'Meetings', 'removeMeetingTask',
      'Remove a link as its creator, meeting owner, task owner or requester, or org owner', 'MeetingTaskRemoved'),
+    ('/api/v2/tasks/{tid}/context', 'get', 'Tasks', 'getTaskContext',
+     'Up to 10 pages and 10 meetings, newest first, filtered by your current read access; metadata only', 'TaskContext'),
+    ('/api/v2/tasks/{tid}/make-page', 'post', 'Tasks', 'makeTaskPage',
+     "Ask the caller's Assistant to make and pin a task page with their normal rights; 409 at 60 pins", 'AssistantSent'),
+    ('/api/v2/tasks/{tid}/make-page', 'get', 'Tasks', 'getTaskMakePage',
+     "The caller's latest Make page request: making, made, failed or update_required", 'TaskMakePage'),
     ('/api/v2/tasks/{tid}/meetings', 'get', 'Tasks', 'listTaskMeetings',
      'Readable linked meetings, newest first; limit 20 by default, at most 50, cursor and 64 KB cap', 'TaskMeetings'),
 ])
@@ -2872,6 +2971,13 @@ SCHEMAS.update({
     'TaskMeeting': obj({'meeting_id': 's', 'title': 's', 'started_at': 's', 'url': 's',
                         'kind': {'enum': ['linked', 'sent', 'proposal']}}),
     'TaskMeetings': obj({'meetings': items(ref('TaskMeeting')), 'next_cursor': 'n'}),
+    'TaskContextPage': obj({'id': 's', 'title': 's', 'version': 'i', 'updated_at': 's'}),
+    'TaskContextMeeting': obj({'id': 's', 'title': 's', 'date': 's'}),
+    'TaskContext': obj({'pages': {**items(ref('TaskContextPage')), 'maxItems': 10},
+                        'meetings': {**items(ref('TaskContextMeeting')), 'maxItems': 10}}),
+    'TaskMakePage': obj({'make_page': {'anyOf': [obj({'message_id': 's', 'conversation_id': 's',
+                                                  'state': {'enum': ['making', 'made', 'failed', 'update_required']}}),
+                                               {'type': 'null'}]}}),
     'MeetingTaskRemoved': obj({'ok': 'b'}),
 })
 
@@ -2893,6 +2999,18 @@ def spec(app):
             responses["200"] = {"description": EVENTS_DESCRIPTION,
                                 "x-task-event-schema": ref("TaskEvent"),
                                 "content": {"text/event-stream": {"schema": {"type": "string"}}}}
+        if path == "/api/v2/cloud-machines/support":
+            op["description"] = ("HQ is the source of the switch and helper states; no local copy is kept. "
+                                 "GET returns available false, on null and an empty machines list off Tico Cloud "
+                                 "or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. "
+                                 "PUT accepts a boolean on, needs the owner and refuses support sessions. "
+                                 "Core assigns an increasing revision and keeps it for retries of the same "
+                                 "Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean "
+                                 "on in the error. After an uncertain PUT, read HQ again before showing a saved state.")
+            responses["403"] = {"description": "People only; changing the switch needs the owner", **ERROR}
+            responses["502"] = {"description": "Didn't reach Tico HQ, or HQ's answer could not be used", **ERROR}
+            if method == "put":
+                responses["404"] = {"description": "not_cloud: cloud-machine support is not available", **ERROR}
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
             responses["200"] = {"description": "The file's bytes (application/octet-stream, sent as an attachment)",
                                 "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}
@@ -2917,10 +3035,19 @@ def spec(app):
         if not path.startswith("/public/roadmaps/") and path not in ("/healthz", "/auth/login", "/auth/token"):
             responses["401"] = {"description": "Not signed in", **ERROR}
             responses["422"] = {"description": "Invalid request or rule: error.code and field-specific error.detail", **ERROR}
+        if method == "post" and path in (
+                "/api/v2/tasks", "/api/v2/tasks/{tid}", "/api/v2/tasks/{tid}/comments",
+                "/api/v2/messages", "/api/v2/conversations/{cid}/messages"):
+            responses["422"] = {**ERROR, "description": "ask_refused: a bot ask fails the person's asking criteria; "
+                                "detail gives the reason and fix. Nothing is created or changed; no quarantine "
+                                "or org-rule hold. Progress notes should be posted as updates."}
         if path == "/auth/token":
             op["requestBody"] = TOKEN_REQUEST
             op["security"] = []
             responses["400"] = {"description": "invalid_grant, or the request is malformed", **ERROR}
+        if path == "/api/v2/mail/messages/organize":
+            op["requestBody"] = {"required": True, "content": {"application/json": {"schema": ref("MailOrganizeBody")}}}
+            responses["403"] = {"description": "Organize access or the company organize switch is off", **ERROR}
         connection = path == '/api/v2/inbound/company-connection'
         if connection:
             op['requestBody'] = {'required':True,'content':{'application/json':{'schema':{
@@ -3188,7 +3315,7 @@ STABLE.extend([
 ])
 
 
-# Settings > Inboxes (backend/mailboxes.py): which inboxes Tico uses and who may use each.
+# Tools (backend/mailboxes.py): which inboxes Tico uses and who may use each.
 TAGS["Mailboxes"] = "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
 _MAILBOX_LEVEL = {"enum": ["none", "read", "read_write"]}
 _MAILBOX_REF = obj({"id": "s", "name": "s"})
@@ -3232,6 +3359,71 @@ STABLE.extend([
      "Take one person's or bot's access away", "MailboxDetail"),
 ])
 
+TAGS["Email"] = "Live Gmail organizing; Gmail holds the mail and Tico records only action details and ids."
+MAIL_ORGANIZE_ACTION = {"enum": ["archive", "unarchive", "mark_read", "mark_unread", "label", "unlabel"]}
+MAIL_ORGANIZE_IDS = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 128},
+                     "minItems": 1, "maxItems": 500}
+MAIL_ORGANIZE_FIELDS = {
+    "mailbox": {"type": "string", "maxLength": 254}, "action": MAIL_ORGANIZE_ACTION,
+    "ids": MAIL_ORGANIZE_IDS, "query": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "label": {"type": "string", "minLength": 1, "maxLength": 225},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}}
+SCHEMAS["MailOrganizeBody"] = {"oneOf": [
+    {**obj(MAIL_ORGANIZE_FIELDS, required=("mailbox", "action", "ids")), "not": {"required": ["query"]}},
+    {**obj(MAIL_ORGANIZE_FIELDS, required=("mailbox", "action", "query")), "not": {"required": ["ids"]}}]}
+SCHEMAS["MailOrganizeUndo"] = obj({"action": MAIL_ORGANIZE_ACTION, "ids": items("s"), "label": "s"},
+                                  required=("action", "ids"))
+SCHEMAS["MailOrganizeResult"] = obj({"mailbox": "s", "action": MAIL_ORGANIZE_ACTION, "label": "s", "count": "i",
+                                    "ids": items("s"), "undo": ref("MailOrganizeUndo")},
+                                    required=("mailbox", "action", "count", "ids", "undo"))
+STABLE.append(("/api/v2/mail/messages/organize", "post", "Email", "organizeMailMessages",
+               "Organize up to 500 messages live in Whole Workspace Gmail; requires organize access; never deletes",
+               "MailOrganizeResult"))
+
+TAGS["Letters out"] = "Physical letters sent through the Gateway; approvals bind the saved proof and price."
+SCHEMAS["LetterOutContents"] = obj({
+    **{key: "s" for key in ("id", "requested_by", "mail_class", "currency", "status", "error", "created_at", "updated_at")},
+    **{key: "n" for key in ("acting_bot_id", "automation_id", "task_id", "thread_id", "quote_id", "quote_expires_at",
+                            "approval_id", "approval_hash", "hq_letter_id", "proof")},
+    "recipient": "o", "return_address": "o", "tracking": items(obj({"barcode": "s", "status": "n"})),
+    "page_count": {"type": ["integer", "null"]}, "total_micros": "i", "color": "b", "duplex": "b", "cancel_possible": "b",
+    "letter_id": "s", "approval_reason": "s", "accepted_at": "n", "billing": "s",
+    "charged_micros": {"type": ["integer", "null"]}, "redacted": {"enum": [False]}, "can_cancel": "b"})
+SCHEMAS["LetterOutMetadata"] = obj({**{key: "s" for key in ("id", "mail_class", "currency", "status", "billing", "created_at", "updated_at")},
+    "acting_bot_id": "n", "page_count": {"type": ["integer", "null"]}, "total_micros": "i",
+    "charged_micros": {"type": ["integer", "null"]}, "redacted": {"enum": [True]}, "can_cancel": "b"})
+SCHEMAS["LetterOutMetadata"]["additionalProperties"] = False
+SCHEMAS["LetterOut"] = {"oneOf": [ref("LetterOutContents"), ref("LetterOutMetadata")]}
+SCHEMAS["LetterOutPage"] = obj({"items": items(ref("LetterOut")), "next_before": "n"})
+SCHEMAS["LettersSettings"] = obj({"id": "s", "mode": "s", "return_address": {"type": ["object", "null"]},
+    "monthly_cap_micros": {"type": ["integer", "null"]}, "availability": "s", "checked_at": "n", "created_at": "s", "updated_at": "s"})
+SCHEMAS["LettersAccess"] = obj({"send": "b", "outbox_id": "s"})
+SCHEMAS["LettersGrants"] = obj({"outbox_id": "s", "next": "n", "grants": items(obj({"id": "s", "outbox_id": "s", "grantee_type": "s", "grantee_id": "s",
+    "level": "s", "granted_by_id": "s", "created_at": "s"}))})
+SCHEMAS["LettersGrant"] = obj({"grantee_type": "s", "grantee_id": "s", "level": "s"})
+SCHEMAS["LettersRevoked"] = obj({"revoked": "b"})
+SCHEMAS["LetterBotSettings"] = obj({"bot_id": "s", "mode": "n", "monthly_cap_micros": {"type": ["integer", "null"]}})
+STABLE.extend([
+    ("/api/v2/letters", "get", "Letters out", "listLetters", "Letters the caller may read, paged and byte capped", None),
+    ("/api/v2/letters/quotes", "post", "Letters out", "quoteLetter", "Quote a PDF or rendered text without sending", None),
+    ("/api/v2/letters/{letter_id}", "get", "Letters out", "getLetter", "Letter, approved proof and tracking", None),
+    ("/api/v2/letters/{letter_id}/send", "post", "Letters out", "sendLetter", "Ask first or submit under the sending policy", None),
+    ("/api/v2/letters/{letter_id}/cancel", "post", "Letters out", "cancelLetter", "Request cancellation; pass through the provider's honest refusal", None),
+    ("/api/v2/letters/settings", "get", "Letters out", "getLettersSettings", "Company return address, mode, cap and setup state", None),
+    ("/api/v2/letters/settings", "put", "Letters out", "setLettersSettings", "Owner or admin sets company Letters out policy", None),
+    ("/api/v2/letters/access", "get", "Letters out", "getLettersAccess", "Whether the caller has sending access", None),
+    ("/api/v2/letters/outboxes/{outbox_id}/grants", "get", "Letters out", "listLettersGrants", "Sending grants on the company outbox", None),
+    ("/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}", "put", "Letters out", "grantLettersAccess", "Owner or admin grants send access", None),
+    ("/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}", "delete", "Letters out", "revokeLettersAccess", "Owner or admin revokes send access", None),
+    ("/api/v2/letters/bots/{bot_id}/settings", "get", "Letters out", "getBotLettersSettings", "Bot's sending policy override and optional cap", None),
+    ("/api/v2/letters/bots/{bot_id}/settings", "put", "Letters out", "setBotLettersSettings", "Bot manager sets a policy that cannot loosen company policy", None),
+])
+_LETTERS_ANSWERS = {"listLetters": "LetterOutPage", "quoteLetter": "LetterOut", "getLetter": "LetterOut",
+    "sendLetter": "LetterOut", "cancelLetter": "LetterOut", "getLettersSettings": "LettersSettings",
+    "setLettersSettings": "LettersSettings", "getLettersAccess": "LettersAccess", "listLettersGrants": "LettersGrants",
+    "grantLettersAccess": "LettersGrant", "revokeLettersAccess": "LettersRevoked", "getBotLettersSettings": "LetterBotSettings",
+    "setBotLettersSettings": "LetterBotSettings"}
+STABLE = [(*entry[:-1], _LETTERS_ANSWERS.get(entry[3], entry[-1])) for entry in STABLE]
 TAGS["Physical mail"] = "Company letters, explicit Read grants and legal mail routing (docs/physical-mail.md)."
 SCHEMAS.update({
     "PostalMailGrant": obj({"id": "s", "address_id": "s", "grantee_type": {"enum": ["person", "bot"]},
@@ -3260,6 +3452,36 @@ STABLE.extend([
      "Route future legal mail to an active bot or the owner (null), keeping the owner informed; owner or admin", "PostalMailSettings"),
 ])
 
+TAGS["Email sending"] = "One sending policy and durable undo queue for bots, automations and people acting through Tico."
+ANSWERS.update({
+    "EmailSendingPolicy": obj({"company": "o", "inbox": "o", "bot": "o", "effective": "o"}),
+    "EmailSend": obj({"id": "s", "mailbox": "s", "actor": "s", "bot": "s", "via": "s", "automation_action_id": "n", "calendar_action_id": "n", "content_sha256": "s",
+                      "body_sha256": "s", "subject": "s", "approval_id": "s", "state": "s", "created_at": "s",
+                      "send_after": "s", "claimed_at": "n", "finished_at": "n", "provider_message_id": "n",
+                      "detail": "s", "recipients": items("s"), "attachments": items("o"),
+                      "decision": "o", "classification": "o"}),
+    "EmailSendResult": obj({"send": ref("EmailSend")}),
+    "EmailSendDetail": obj({"send": ref("EmailSend"), "body": "s", "bodies": items("o"), "preview_complete": "b"}),
+    "EmailSendList": obj({"sends": items(ref("EmailSend")), "next_cursor": "n"}),
+    "EmailSuppressionList": obj({"recipients": items("o"), "next_cursor": "n"}),
+})
+STABLE.extend([
+    ("/api/v2/email/sending-policy", "get", "Email sending", "getEmailSendingPolicy", "Company sending policy", "EmailSendingPolicy"),
+    ("/api/v2/email/sending-policy", "put", "Email sending", "setEmailSendingPolicy", "Set company sending policy (an admin, acting as themselves)", "EmailSendingPolicy"),
+    ("/api/v2/email/inboxes/{mailbox}/sending-policy", "get", "Email sending", "getInboxSendingPolicy", "Inbox policy with effective rule and inheritance", "EmailSendingPolicy"),
+    ("/api/v2/email/inboxes/{mailbox}/sending-policy", "put", "Email sending", "setInboxSendingPolicy", "Set inbox policy (its person or a shared inbox admin)", "EmailSendingPolicy"),
+    ("/api/v2/bots/{bot}/email-sending-policy", "get", "Email sending", "getBotEmailSendingPolicy", "Bot policy, optionally resolved for an inbox", "EmailSendingPolicy"),
+    ("/api/v2/bots/{bot}/email-sending-policy", "put", "Email sending", "setBotEmailSendingPolicy", "Set bot override (a person who manages it)", "EmailSendingPolicy"),
+    ("/api/v2/email/sends", "post", "Email sending", "queueEmail", "Freeze email content for approval and the undo window; identical content and recipients deduplicate", "EmailSendResult"),
+    ("/api/v2/email/sends", "get", "Email sending", "listEmailSends", "Pending sends or the inbox send audit, paged and byte capped", "EmailSendList"),
+    ("/api/v2/email/sends/{sid}", "get", "Email sending", "getEmailSend", "Frozen preview and audit (inbox readers, the sender or an authorized approver)", "EmailSendDetail"),
+    ("/api/v2/email/sends/{sid}/attachments/{part}", "get", "Email sending", "getFrozenEmailAttachment", "Download the exact frozen attachment (the send's readers or approvers)", None),
+    ("/api/v2/email/sends/{sid}/approve", "post", "Email sending", "attachEmailApproval", "Attach an existing content-bound or in-chat approval", "EmailSendResult"),
+    ("/api/v2/email/sends/{sid}/cancel", "post", "Email sending", "cancelEmailSend", "Cancel before dispatch; delivered mail cannot be recalled", "EmailSendResult"),
+    ("/api/v2/email/inboxes/{mailbox}/suppressed-recipients", "get", "Email sending", "listEmailSuppressions", "Inbox admin's bounce suppression list", "EmailSuppressionList"),
+    ("/api/v2/email/inboxes/{mailbox}/suppressed-recipients/{address}", "delete", "Email sending", "removeEmailSuppression", "Restore sending to a bounced address (inbox admin)", None),
+])
+
 
 TAGS["Alerts"] = "Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert."
 SCHEMAS.update({
@@ -3283,6 +3505,30 @@ STABLE.extend([
     ("/api/v2/alerts/me/test", "post", "Alerts", "testMyAlerts", "Send a test for $1 paid by the company; accept_charge and a stable Idempotency-Key required; the monthly caps apply", "AlertTest"),
     ("/api/v2/alerts/company", "get", "Alerts", "getAlertCompanyCap", "Company monthly alert cap and accepted/reserved spend, in USD; owner/admin", "AlertCompanyCap"),
     ("/api/v2/alerts/company", "put", "Alerts", "setAlertCompanyCap", "Set the company monthly alert cap in USD (zero disables paid alerts); owner/admin", "AlertCompanyCap"),
+])
+
+# The company skills directory (backend/skills.py): answers are not declared yet, so the document lists the routes only.
+TAGS["Skills"] = "The company's approved skills: proposals and approval, screening state, and installs for bots and people (docs/skills.md)."
+STABLE.extend([
+    ("/api/v2/skills", "get", "Skills", "listSkills", "The directory: each skill with its latest approved version and install count", None),
+    ("/api/v2/skills/proposals", "post", "Skills", "proposeSkill", "Propose a skill or an update as its whole folder of text files; an admin approves it after screening", None),
+    ("/api/v2/skills/proposals", "get", "Skills", "listSkillProposals", "Proposals: admins see all, anyone else their own", None),
+    ("/api/v2/skills/proposals/{pid}", "get", "Skills", "getSkillProposal", "A proposal with its files, its diff, whether the skill moved on, and its latest screening", None),
+    ("/api/v2/skills/proposals/{pid}/approve", "post", "Skills", "approveSkillProposal", "Admins approve a screened proposal as the skill's next version", None),
+    ("/api/v2/skills/proposals/{pid}/decline", "post", "Skills", "declineSkillProposal", "Admins decline a pending proposal with a reason", None),
+    ("/api/v2/skills/proposals/{pid}/withdraw", "post", "Skills", "withdrawSkillProposal", "The proposer withdraws a pending proposal", None),
+    ("/api/v2/skills/proposals/{pid}/rescreen", "post", "Skills", "rescreenSkillProposal", "Admins or the proposer send a pending proposal back to screening", None),
+    ("/api/v2/skills/usage", "get", "Skills", "listSkillUsage", "Each skill's use over 7 or 30 days: by trigger, people and bots, last used, top users (admins; others see themselves)", None),
+    ("/api/v2/skills/installed", "get", "Skills", "listMySkillInstalls", "Your installs and those of the bots you may write, desired and staged, with updates available", None),
+    ("/api/v2/skills/install-targets", "get", "Skills", "listSkillInstallTargets", "Who the caller may install a skill for: writable bots, people, and teams as current members", None),
+    ("/api/v2/skills/{name}/usage", "get", "Skills", "getSkillUsage", "One skill's use: totals, per actor, the last 20 uses with readable links, and install coverage", None),
+    ("/api/v2/skills/installs", "get", "Skills", "listSkillInstalls", "The installs of one bot or person, with what is wanted and what is staged there", None),
+    ("/api/v2/skills/installs/{iid}", "delete", "Skills", "uninstallSkill", "Take a skill off a bot or person, with the rights to install it", None),
+    ("/api/v2/skills/{name}", "get", "Skills", "getSkill", "One skill: its versions and the installs the caller may see", None),
+    ("/api/v2/skills/{name}/versions/{number}", "get", "Skills", "getSkillVersion", "One approved version of a skill, with its files", None),
+    ("/api/v2/skills/bundles/{sha256}", "get", "Skills", "getSkillBundle", "An approved version's files by its bundle sha, checked against the sha before it is served", None),
+    ("/api/v2/skills/{name}/installs", "post", "Skills", "installSkill", "Install a skill for one bot or person, at the latest version or pinned to one", None),
+    ("/api/v2/skills/{name}/installs/bulk", "post", "Skills", "installSkillForTargets", "Install a skill for several bots or people at once, all or nothing", None),
 ])
 
 def generate():

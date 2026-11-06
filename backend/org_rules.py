@@ -208,9 +208,7 @@ def redact_audit(c, auth, who, found):
             cite = snap.get("cite") if isinstance(snap, dict) else None
             if not cite:
                 continue
-            row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite.get("file_id"),)).fetchone()
-            if not _cite_visible(c, auth, who, row, memo):
-                snap["cite"] = {"hidden": True}
+            snap["cite"] = _cite(c, auth, who, cite, memo)
 
 
 def _audit(c, actor, rule_id, before, after, who):
@@ -540,6 +538,10 @@ def _cite_visible(c, auth, who, row, memo):
 def _cite(c, auth, who, cite, memo=None):
     if not cite:
         return None
+    from .files import page_ref_denials
+    denied = page_ref_denials(c, auth, who, cite)
+    if "A deleted page" in denied.values():
+        return {"removed": True, "label": "A deleted page"}
     row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite.get("file_id"),)).fetchone()
     if not _cite_visible(c, auth, who, row, memo if memo is not None else {}):
         return {"hidden": True}
@@ -590,7 +592,6 @@ def settings_for(c, bot, ctx=None):
     """The bot's settings as sentences, read from the modules that hold them. Each is {text, source, edit}; `edit` names
     the page and anchor where the setting is changed, or is null when no one changes it in the product."""
     from . import hubdb as HD
-    from . import mail_settings
     from . import turn_budgets
     from . import usage_limits
     ctx = ctx or _ctx(c)
@@ -607,10 +608,11 @@ def settings_for(c, bot, ctx=None):
         text = f"Only {_join(names)} can message {name}" if names else f"Nobody can message {name}"
     out.append({"text": text, "source": "bot_access", "edit": {"page": "bot", "anchor": "access"}})
 
-    mail = mail_settings.stored(c, bot)
+    from .email_sending import effective
     from .google_workspace import permissions
-    sends = bool(mail and mail["outbound_send"]) and permissions(c)["send_mail"]   # the company's Send mail too
-    out.append({"text": f"{name} {'can send mail' if sends else 'cannot send mail outside Tico'}",
+    mode = effective(c, bot=bot)["mode"] if permissions(c)["send_mail"] else "never"   # the company's Send mail too
+    out.append({"text": f"{name} " + {"on_their_own": "sends mail on its own", "ask_first": "asks before sending mail",
+                                      "never": "cannot send mail"}[mode],
                 "source": "mail_settings", "edit": {"page": "settings", "anchor": "people"}})
 
     default = usage_limits.company(c)

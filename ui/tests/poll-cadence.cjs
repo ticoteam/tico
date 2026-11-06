@@ -47,8 +47,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     });
     await page.clock.install({time: new Date('2026-10-27T12:00:00Z')});
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('#settings-more > summary').click();
-    await page.locator('[data-settings-tab=health]').click();
+    await page.locator('#settings-health-line [data-hl-details]').click();   // Health has no tab: General's Health line opens it
     await page.locator('#hl-page').waitFor({timeout: t(5000)});
     assert.equal(await page.evaluate(() => liveConnected()), false, 'the live stream should be down in this test');
     await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);

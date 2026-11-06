@@ -188,6 +188,9 @@ pub struct Settings {
     pub gateway_inputs: Value,
     /// The task's worktrees in other repos the session may work in (Claude `--add-dir`; others ignore it).
     pub add_dirs: Vec<String>,
+    /// The turn's staged company skills folder (crate::company_skills::stage): Codex loads its skills as the app
+    /// server's extra skill root. Claude reads the same folder through `add_dirs`.
+    pub company_skills: Option<String>,
     /// A bot with branches: Claude reads only the project's settings and MCP servers (hosts/claude.py).
     pub shared: bool,
     /// The bot's own MCP servers from bot.yaml, this harness's transports only (crate::perbot::mcp_for_run).
@@ -287,6 +290,147 @@ pub fn shell_outside_actions(command: &str) -> Vec<&'static str> {
         .map(|(label, _)| *label).collect()
 }
 
+/// Whether a shell line only reads, judged on the whole line: every run of it (`|`, `;`, `&&`, `||`, newlines) is setup
+/// (`cd <dir>`, `export NAME=value`, `env NAME=value ...`, bare `NAME=value`), a program from READ_ONLY_PROGRAMS, or
+/// `hub` with a command path from HUB_READ_PATHS. Output may go only to `/dev/null` or another descriptor (`2>&1`), and
+/// input only from a plain file. False for anything it cannot read whole: a heredoc, `$` or backtick expansion, a
+/// subshell, a background `&`, `xargs`, `eval`, `source`, any other program, or a shell wrapper whose script is not
+/// plainly one word (`bash -lc '...'` is read as its script, as Codex sends every command). The backend requeues a turn
+/// whose lease lapsed only when every shell call it ran says true here (backend/execution.py read_only_shells).
+pub fn shell_reads_only(command: &str) -> bool {
+    if let Some(script) = shell_script(command) {
+        return shell_reads_only(&script);
+    }
+    if command.contains("<<") || outer_expands(command) {
+        return false;
+    }
+    let runs: Vec<&str> = command_runs(command).into_iter().filter(|run| !run.trim().is_empty()).collect();
+    !runs.is_empty() && runs.into_iter().all(run_reads_only)
+}
+
+/// Programs that only read files or print, with no flag that runs another program or writes a file
+/// (the few that have one are refused in `run_reads_only`).
+const READ_ONLY_PROGRAMS: &[&str] = &[
+    "ls", "pwd", "cat", "head", "tail", "grep", "rg", "wc", "jq", "stat", "which", "date", "sort", "uniq", "diff",
+    "tree", "du", "df", "echo", "printf",
+];
+
+/// `hub` command paths that only read: each is a leaf in HUB_PATHS (tested here) and parses to a leaf command in
+/// clients/hubcli.py (backend/tests/test_hub_command_tree.py). Left out on purpose: reads that mark something (`inbox`,
+/// `message list`, `update read`, `changelog list`), reads with a writing flag (`rule read --from`), paid lookups
+/// (`gateway search`, `doc fetch`), checks, and every group or alias of a group (`status`, `org`, `docs`).
+const HUB_READ_PATHS: &[&str] = &[
+    "agent pair show", "alerts show", "approval list", "approval show", "approvals list", "approvals show",
+    "assistant change list", "audiences list", "automation guide", "automation list", "automation runs",
+    "automation show", "automation stats", "automation templates", "automation versions", "automations guide",
+    "automations list", "automations runs", "automations show", "automations stats", "automations templates",
+    "automations versions", "board", "bot recent", "bot show", "bot status history", "bot status list",
+    "bots recent", "bots show", "bots status history", "bots status list", "brand show", "brand summary",
+    "calendar list", "calendar status", "calendar upcoming", "call list", "call show", "card list", "catalog",
+    "computer list", "computer performance", "computers", "context search", "context show", "conversation show",
+    "credential list", "doc history", "doc list", "doc read", "doc search", "docs links", "editions list",
+    "editions show", "email inbox", "email mailboxes", "email search", "email sends", "feedback list",
+    "feedback markers", "feedback reasons", "file list", "file read", "file search", "finance search",
+    "goal checkin list", "goal list", "goal show", "goals", "group list", "growth channel list",
+    "growth channel show", "growth cohort list", "growth source list", "gtm show", "gtm summary", "history",
+    "human list", "inbound list", "inbound search", "integrations", "kpi list", "kpi show", "lens list",
+    "lens runs", "lens show", "letter list", "letter show", "listening item list", "listening runs",
+    "listening show", "listening stats", "live stats", "mail list", "maintenance runs", "maintenance status",
+    "market find", "market segment tree", "market show", "market size list", "market watch list", "mcp stats",
+    "meeting granola status", "meeting read", "meeting search", "needs-you show", "note list", "notes",
+    "notice list", "origin show", "page list", "page show", "proposal list", "readers list", "recent",
+    "relay status", "relay wake-url show", "replay show", "repo list", "rule due list", "rule list",
+    "rules due list", "rules list", "run list", "seat list", "service-key list", "settings find", "settings show",
+    "slack channel list", "sleep status", "strategy show", "strategy summary", "strategy versions", "tag list",
+    "tag show", "task answers", "task caps", "task context", "task deleted", "task followers", "task list",
+    "task meetings", "task readers list", "task requesters", "task show", "task tree", "tasks answers",
+    "tasks caps", "tasks context", "tasks deleted", "tasks followers", "tasks list", "tasks meetings",
+    "tasks readers list", "tasks requesters", "tasks show", "tasks tree", "team show", "template list",
+    "thread list", "thread members list", "thread search", "thread show", "tool list", "tool show",
+    "trigger list", "trigger show", "turns", "update list", "update show", "updates", "webhook list",
+    "webhook sends", "webhook show", "whoami",
+];
+
+/// Whether one run of a shell line only reads (`shell_reads_only`).
+fn run_reads_only(run: &str) -> bool {
+    static REDIRECT: OnceLock<Regex> = OnceLock::new();
+    let redirect = REDIRECT.get_or_init(|| {
+        Regex::new(concat!(
+            r"(?:(?:&|[0-9]*)>>?[ \t]*/dev/null|[0-9]*>&(?:[0-9]+|-)|[0-9]*<[ \t]*[A-Za-z0-9._/~+-]+)",
+            r"(?:[ \t]|$)"
+        ))
+        .unwrap()
+    });
+    // What the shell itself reads, with quoted and escaped text blanked out: past the allowed redirections, no
+    // redirection, background `&`, subshell or group may be left.
+    let Some(bare) = unquoted(run) else { return false };
+    if redirect.replace_all(&bare, " ").contains(['&', '>', '<', '(', ')', '{', '}']) {
+        return false;
+    }
+    let Some(words) = shell_words(run) else { return false };
+    let words: Vec<String> = words.into_iter().skip_while(|w| is_assignment(w)).collect();
+    words_read_only(&words)
+}
+
+/// Whether a run's words (past its leading assignments) only set up or read.
+fn words_read_only(words: &[String]) -> bool {
+    let Some((first, args)) = words.split_first() else { return true };
+    let short = |letters: &str| {
+        args.iter().any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains(|c| letters.contains(c)))
+    };
+    let long = |names: &[&str]| args.iter().any(|a| names.iter().any(|n| a.starts_with(n)));
+    let globbed = args.iter().any(|a| a.contains(['*', '?', '[']));
+    match first.as_str() {
+        "cd" => args.len() <= 1,
+        "export" => !args.is_empty() && args.iter().all(|w| is_assignment(w)),
+        "env" => {
+            let rest: Vec<String> =
+                args.iter().skip_while(|w| is_assignment(w) || *w == "-i" || *w == "-0").cloned().collect();
+            rest.first().is_none_or(|w| !w.starts_with('-')) && words_read_only(&rest)
+        }
+        "hub" => hub_summary(words).strip_prefix("hub ").is_some_and(|path| HUB_READ_PATHS.contains(&path)),
+        // A file name that expands to a flag could turn on one of the flags refused below.
+        "sort" | "tree" | "uniq" | "date" | "rg" if globbed => false,
+        "sort" => !short("o") && !long(&["--output", "--compress"]),
+        "tree" => !short("oR") && !long(&["--output"]),
+        // `uniq IN OUT` writes OUT: only flags (reading standard input) are taken.
+        "uniq" => args.iter().all(|a| a.starts_with('-')),
+        "date" => !short("s") && !long(&["--set"]),
+        "rg" => !long(&["--pre", "--hostname-bin"]),
+        program => READ_ONLY_PROGRAMS.contains(&program),
+    }
+}
+
+/// A shell run as the shell reads it, with the text of every quote and escape replaced by `x`; None when a quote is left
+/// open.
+fn unquoted(run: &str) -> Option<String> {
+    let (mut out, mut quote) = (String::with_capacity(run.len()), None::<char>);
+    let mut chars = run.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), _) if c == q => {
+                quote = None;
+                out.push('x');
+            }
+            (Some('"'), '\\') => {
+                chars.next();
+                out.push_str("xx");
+            }
+            (Some(_), _) => out.push('x'),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                out.push('x');
+            }
+            (None, '\\') => {
+                chars.next();
+                out.push_str("xx");
+            }
+            _ => out.push(c),
+        }
+    }
+    quote.is_none().then_some(out)
+}
+
 /// Every command path the hub CLI parses (clients/hubcli.py), its aliases and its top-level renames included, as
 /// space-joined words such as `task close` or `needs-you show`. backend/tests/test_hub_command_tree.py fails when
 /// this list and the CLI differ, so a command added or renamed there is added here too.
@@ -298,7 +442,7 @@ const HUB_PATHS: &[&str] = &[
     "approval request", "approval show", "approvals", "approvals approve", "approvals decline",
     "approvals list", "approvals read-back", "approvals request", "approvals show", "ask", "assistant",
     "assistant change", "assistant change list", "assistant change restore", "assistant learn",
-    "assistant learned", "assistant proposals", "assistant propose", "assistant read", "assistant send",
+    "assistant learned", "assistant morning", "assistant proposals", "assistant propose", "assistant read", "assistant send",
     "assistant withdraw", "audiences", "audiences list", "audit", "automation", "automation create",
     "automation delete", "automation discard", "automation guide", "automation held", "automation inbox",
     "automation list", "automation question-sets", "automation recent-runs", "automation restore",
@@ -326,14 +470,15 @@ const HUB_PATHS: &[&str] = &[
     "call leave", "call list", "call retry", "call show", "call start", "call token", "card", "card add",
     "card list", "card remove", "card update", "catalog", "changelog", "changelog list", "changelog mark-read",
     "chat", "chat goal", "chat send", "classify", "company-page", "computer", "computer browser-exit",
-    "computer list", "computer performance", "computer turns-at-once", "computers", "connections",
-    "connections list", "context", "context search", "context show", "conversation", "conversation show",
+    "computer list", "computer performance", "computer turns-at-once", "computers", "context",
+    "context search", "context show", "conversation", "conversation show",
     "credential", "credential delete", "credential grant", "credential import", "credential list",
     "credential request", "credential revoke", "credential set", "db", "decision", "decision ask",
     "decision outcome", "decision readout", "decisions", "doc", "doc archive", "doc ask", "doc ask-status",
     "doc fetch", "doc history", "doc link-list", "doc list", "doc read", "doc search", "doc write", "docs",
-    "docs links", "editions", "editions list", "editions show", "email", "email inbox", "email mailboxes",
-    "email message", "email search", "email thread", "event-types", "external", "external sync",
+    "docs links", "editions", "editions list", "editions show", "email", "email archive", "email cancel", "email inbox",
+    "email label", "email mailboxes", "email mark-read", "email mark-unread", "email message", "email policy",
+    "email search", "email sends", "email thread", "email unarchive", "email unlabel", "event-types", "external", "external sync",
     "feedback", "feedback give", "feedback list", "feedback markers", "feedback reasons", "feedback remove",
     "feedback rule", "feedback rule-draft", "file", "file approved", "file archive", "file delete",
     "file import", "file link", "file list", "file publish", "file read", "file review", "file search",
@@ -357,6 +502,7 @@ const HUB_PATHS: &[&str] = &[
     "kpi list", "kpi log", "kpi readings", "kpi restore", "kpi show", "kpi target", "kpi unlink", "kpi update",
     "learn", "lens", "lens list", "lens run", "lens runs", "lens show", "listen", "listen judge", "listening",
     "listening decide", "listening item", "listening item list", "listening item resolve", "listening runs",
+    "letter", "letter cancel", "letter list", "letter quote", "letter send", "letter show",
     "listening save", "listening show", "listening stats", "live", "live brief", "live stats", "mail",
     "mail list", "mail read", "maintenance", "maintenance run", "maintenance runs",
     "maintenance set", "maintenance status", "market", "market apply", "market ask", "market briefing",
@@ -372,7 +518,7 @@ const HUB_PATHS: &[&str] = &[
     "message list", "message mark-read", "message redact", "message send", "needs-you", "needs-you abandon",
     "needs-you commit", "needs-you next", "needs-you respond", "needs-you show", "needs-you start", "note",
     "note create", "note delete", "note list", "notes", "notice", "notice list", "org", "org models",
-    "org order", "org reports-to", "origin", "origin show", "page", "page archive", "page list", "page publish",
+    "org order", "org reports-to", "origin", "origin show", "page", "page access", "page archive", "page list", "page publish",
     "page show", "people", "person", "pin", "pin add", "pin remove", "pin update", "pipeline", "proposal",
     "proposal create", "proposal decide", "proposal list", "queries", "question", "question answer",
     "question ask", "readers", "readers list", "recent", "relay", "relay set", "relay status", "relay wake-url",
@@ -386,7 +532,7 @@ const HUB_PATHS: &[&str] = &[
     "rules edit", "rules list", "rules read", "rules retire", "rules skip", "rules suggested", "rules withdraw",
     "run", "run export", "run list", "say", "seat", "seat close", "seat create", "seat list", "seat update",
     "service-key", "service-key create", "service-key list", "service-key revoke", "settings", "settings ask",
-    "settings find", "settings set", "settings show", "skill", "skill copy", "slack", "slack channel",
+    "settings find", "settings set", "settings show", "skill", "skill copy", "skill submit", "slack", "slack channel",
     "slack channel add", "slack channel import", "slack channel list", "slack channel remove", "sleep",
     "sleep set", "sleep status", "sql", "status", "strategy", "strategy bet",
     "strategy bet add", "strategy bet retire", "strategy bet update", "strategy diff", "strategy draft",
@@ -395,21 +541,25 @@ const HUB_PATHS: &[&str] = &[
     "task", "task answers", "task ask", "task ask-resolve", "task attach", "task bulk", "task cap",
     "task cap set", "task caps", "task check-back", "task child", "task close", "task comment",
     "task comment-delete", "task comment-edit", "task comment-moderate", "task create", "task defer",
-    "task delete", "task deleted", "task done", "task label", "task later", "task link", "task list",
-    "task meetings", "task model", "task publication-preview", "task question", "task relate", "task requester-remove",
+    "task delete", "task deleted", "task done", "task follow", "task followers", "task label", "task later",
+    "task link", "task list",
+    "task context", "task meetings", "task model", "task publication-preview", "task question", "task readers", "task readers add",
+    "task readers list", "task readers remove", "task relate", "task requester-remove",
     "task requester-save", "task requesters", "task restore", "task run", "task show", "task snooze",
     "task stuck", "task tree", "task type", "task type create", "task type delete", "task type update",
-    "task types", "task unsnooze", "task update", "task wait", "task waive-qa", "task worktree",
+    "task types", "task unfollow", "task unsnooze", "task update", "task wait", "task waive-qa", "task worktree",
     "task worktree add", "task worktree attach", "task worktree setup", "task-manager", "task-manager bot",
     "task-manager off", "task-manager on", "task-manager run", "task-manager schedule", "task-manager status",
     "tasks", "tasks answers", "tasks ask", "tasks ask-resolve", "tasks attach", "tasks bulk", "tasks cap",
     "tasks cap set", "tasks caps", "tasks check-back", "tasks child", "tasks close", "tasks comment",
     "tasks comment-delete", "tasks comment-edit", "tasks comment-moderate", "tasks create", "tasks defer",
-    "tasks delete", "tasks deleted", "tasks done", "tasks label", "tasks later", "tasks link", "tasks list",
-    "tasks meetings", "tasks model", "tasks publication-preview", "tasks question", "tasks relate", "tasks requester-remove",
+    "tasks delete", "tasks deleted", "tasks done", "tasks follow", "tasks followers", "tasks label", "tasks later",
+    "tasks link", "tasks list",
+    "tasks context", "tasks meetings", "tasks model", "tasks publication-preview", "tasks question", "tasks readers",
+    "tasks readers add", "tasks readers list", "tasks readers remove", "tasks relate", "tasks requester-remove",
     "tasks requester-save", "tasks requesters", "tasks restore", "tasks run", "tasks show", "tasks snooze",
     "tasks tree", "tasks type", "tasks type create", "tasks type delete", "tasks type update", "tasks types",
-    "tasks unsnooze", "tasks update", "tasks wait", "tasks waive-qa", "tasks worktree", "tasks worktree add",
+    "tasks unfollow", "tasks unsnooze", "tasks update", "tasks wait", "tasks waive-qa", "tasks worktree", "tasks worktree add",
     "tasks worktree attach", "tasks worktree setup", "team", "team budget", "team icon", "team show",
     "template", "template list", "thread", "thread bot-status", "thread catch-up", "thread catchup",
     "thread create", "thread delete", "thread dm", "thread dm-group", "thread edit", "thread follow",
@@ -417,7 +567,8 @@ const HUB_PATHS: &[&str] = &[
     "thread members list", "thread members remove", "thread open-earlier", "thread pin", "thread post",
     "thread react", "thread read", "thread reply", "thread search", "thread show", "thread slack-resume",
     "thread sub", "thread task", "thread unfollow", "thread unpin", "thread unreact", "thread update",
-    "thread upload", "tool", "tool add", "tool learn", "tool list", "tool query-search", "tool remove",
+    "thread upload", "tool", "tool add", "tool call", "tool check", "tool index", "tool learn", "tool list",
+    "tool query-search", "tool remove",
     "tool report", "tool show", "tool update", "tools", "trigger", "trigger create", "trigger delete",
     "trigger deliveries", "trigger delivery", "trigger list", "trigger recover", "trigger relay",
     "trigger relay create", "trigger relay delete", "trigger relay rotate", "trigger replay", "trigger rotate",
@@ -440,10 +591,52 @@ pub fn command_program(command: &str) -> String {
         return command_program(&script);
     }
     let command = if command.contains("<<") { command.split('\n').next().unwrap_or("") } else { command };
-    if let Some(words) = command_runs(command).into_iter().find_map(hub_words) {
+    // A blank run (a comment's end, a trailing separator) holds no work.
+    let runs: Vec<&str> = command_runs(command).into_iter().filter(|run| !run.trim().is_empty()).collect();
+    if let Some(words) = runs.iter().find_map(|run| hub_words(run)) {
         return hub_summary(&words);
     }
-    plain_program(command).map(clip).unwrap_or_default()
+    // The work is the first run past the setup runs before it: `cd web && npm test` names npm. A line that is only
+    // setup names its last run, so `cd /tmp` still reads `cd`.
+    let mut work = runs.as_slice();
+    while let [setup, rest @ ..] = work {
+        if rest.is_empty() || !is_setup_run(setup) {
+            break;
+        }
+        work = rest;
+    }
+    work.first().and_then(|run| plain_program(strip_env(run))).map(clip).unwrap_or_default()
+}
+
+/// A run that only sets the next one up and does no work of its own: `cd <dir>`, `source <file>`, `. <file>`,
+/// `export NAME=value`, `env NAME=value` or bare `NAME=value` assignments. Its words are read only to tell its shape,
+/// never shown, and a redirection makes it work, not setup.
+fn is_setup_run(run: &str) -> bool {
+    let Some(words) = shell_words(run) else { return false };
+    let Some((first, args)) = words.split_first() else { return true };
+    match first.as_str() {
+        "cd" | "source" | "." => args.len() <= 1 && args.iter().all(|w| !w.contains(['<', '>', '|', '&', ';'])),
+        "export" => !args.is_empty() && args.iter().all(|w| is_assignment(w)),
+        "env" => args.iter().all(|w| is_assignment(w) || w == "-i" || w == "-0"),
+        _ => is_assignment(first) && args.iter().all(|w| is_assignment(w)),
+    }
+}
+
+/// A run without its leading `env` and the `NAME=value` words (or `-i`, `-0`) after it, so `env TOKEN=x hub task list`
+/// reads as `hub task list`. Only those flags are taken: another flag may take a word of its own, which is never shown
+/// in its place. A run that is only `env` and its words is kept whole.
+fn strip_env(run: &str) -> &str {
+    static ENV: OnceLock<Regex> = OnceLock::new();
+    let env = ENV.get_or_init(|| {
+        Regex::new(
+            r#"^[ \t]*env(?:[ \t]+(?:-[i0]|[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"\\$`]*"|[A-Za-z0-9._/:@%+,-])*))*[ \t]+"#,
+        )
+        .unwrap()
+    });
+    match env.find(run) {
+        Some(m) if !run[m.end()..].trim().is_empty() && !run[m.end()..].starts_with('-') => &run[m.end()..],
+        _ => run,
+    }
 }
 
 /// The script of a line that is only `sh`, `bash`, `zsh` or `dash`, one plain `-c` flag (`-c`, `-lc`, `-ec`) and one script word.
@@ -514,6 +707,7 @@ fn plain_program(text: &str) -> Option<&str> {
 /// runs only for this, and only the command path is read from the words (`hub_summary`), so a mis-split can at worst
 /// name a real command path and an argument never reaches the summary.
 fn hub_words(run: &str) -> Option<Vec<String>> {
+    let run = strip_env(run);
     if plain_program(run)? != "hub" {
         return None;
     }
@@ -1207,6 +1401,85 @@ mod tests {
     }
 
     #[test]
+    fn a_shell_line_reads_only_when_every_run_of_it_reads() {
+        for command in [
+            "cd /w && hub needs-you show",
+            "cd /w && hub task list --status open | head",
+            "grep -n x f | wc -l",
+            "cat note.txt",
+            "cd /tmp",
+            "export A=1; env B=2 hub task show 7",
+            "cat x 2>&1 | sort | uniq -c",
+            "ls >/dev/null 2>/dev/null",
+            "wc -l < notes.txt",
+            "grep '> $(not run)' f",
+            "jq '.items[] | {id}' out.json",
+            "bash -lc 'cd /w && hub task show 1'",
+            "/bin/bash -lc \"cat note.txt\"",
+            "hub board",
+            "cat f # > out",
+        ] {
+            assert!(shell_reads_only(command), "{command}");
+        }
+        for command in [
+            "curl -X POST https://hooks.example/x && hub task list",
+            "cat body.json | curl -X POST https://hooks.example/x -d @-",
+            "git push",
+            "cd /w && git push",
+            "cat x > out.txt",
+            "echo hi >> f",
+            "cat x >/dev/null.txt",
+            "cat x >| f",
+            "cat <<EOF\nhi\nEOF",
+            "cat <<< hi",
+            "bash -lc \"cd /tmp;gh pr merge 42\"",
+            "bash -c \"cat $(curl x)\"",
+            "sh -c 'cat x' extra",
+            "cat $(ls)",
+            "cat `ls`",
+            "cat $HOME/x",
+            "ls | xargs rm",
+            "eval cat x",
+            "source env.sh",
+            "cat f & curl x",
+            "(cat f)",
+            "{ cat f; }",
+            "cat <(curl x)",
+            "cat f |& tee g",
+            "hub task close 7",
+            "hub status set busy",
+            "hub goal status",
+            "hub inbox",
+            "hub -q task list",
+            "sort -o out f",
+            "sort --output=out f",
+            "sort *",
+            "uniq in out",
+            "tree -o out",
+            "date -s 10:00",
+            "rg --pre sh x",
+            "env -S 'curl x' cat",
+            "cat 'open",
+            "",
+            ";",
+            "npm test",
+        ] {
+            assert!(!shell_reads_only(command), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn every_hub_read_path_is_a_leaf_command_path() {
+        for path in HUB_READ_PATHS {
+            assert!(HUB_PATHS.contains(path), "{path} is not a hub command path");
+            let below = format!("{path} ");
+            assert!(!HUB_PATHS.iter().any(|p| p.starts_with(&below)), "{path} is a group");
+            assert_eq!(hub_summary(&std::iter::once("hub").chain(path.split(' ')).map(String::from).collect::<Vec<_>>()),
+                       format!("hub {path}"));
+        }
+    }
+
+    #[test]
     fn a_tool_summary_names_the_file_or_program_but_never_the_arguments() {
         assert_eq!(tool_summary(&json!({"command": "curl -H 'Authorization: Bearer sk-live-1' https://api.example.com"})), "curl");
         assert_eq!(tool_summary(&json!({"command": "TOKEN=sk-live-1 /usr/bin/python3 run.py --key sk-live-1"})), "python3");
@@ -1234,10 +1507,11 @@ mod tests {
         assert_eq!(command_program("cargo test 2>&1 | tail"), "cargo");
         assert_eq!(command_program("cd /tmp"), "cd");
         assert_eq!(command_program("(cd web && npm test)"), "");
-        assert_eq!(command_program("sh -c 'cd x && cargo test'"), "cd");
+        assert_eq!(command_program("sh -c 'cd x && cargo test'"), "cargo");
         assert_eq!(command_program("hub task create --title \"a && hub task close\""), "hub task create");
         assert_eq!(command_program("hub ask botops please check the release"), "hub ask");
-        assert_eq!(command_program("FOO=1 && curl x"), "");
+        assert_eq!(command_program("FOO=1 && curl x"), "curl");
+        assert_eq!(command_program("FOO=1 curl x"), "curl");
         assert_eq!(command_program("X=$(a && sk-live-1) hub task list"), "");
         assert_eq!(tool_summary(&json!({"command": "cd web && hub task list --token sk-live-1"})), "hub task list");
     }
@@ -1258,17 +1532,17 @@ mod tests {
             assert!(!shown.contains("private") && !shown.contains("customer"), "{line:?} showed {shown:?}");
         }
         assert_eq!(command_program("cd /repo <<'EOF'\nprivate-token\nEOF\nnpm test"), "cd");
-        assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "cd");
+        assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "");
         assert_eq!(command_program(">|private-token printf ok"), "");
-        assert_eq!(command_program("cd /tmp && >|private-token printf ok"), "cd");
+        assert_eq!(command_program("cd /tmp && >|private-token printf ok"), "");
         assert_eq!(command_program("(( 1 || private_token ))"), "");
         assert_eq!(command_program("cd /w && hub task close 7f3a"), "hub task close");
-        assert_eq!(command_program("cd /w && npm test"), "cd");
+        assert_eq!(command_program("cd /w && npm test"), "npm");
     }
 
     #[test]
     fn a_shell_comment_is_in_no_run() {
-        assert_eq!(command_program("cd /repo # note; private-token\nnpm test"), "cd");
+        assert_eq!(command_program("cd /repo # note; private-token\nnpm test"), "npm");
         assert_eq!(command_program("cd /repo # note; private-token"), "cd");
         assert_eq!(command_program("echo ok # x && hub task close"), "echo");
         assert_eq!(command_program("cd x; a#b && hub task list"), "hub task list");
@@ -1283,6 +1557,10 @@ mod tests {
         assert_eq!(command_program("hub task close 7f3a"), "hub task close");
         assert_eq!(command_program("hub needs-you show"), "hub needs-you show");
         assert_eq!(command_program("hub bot status history"), "hub bot status history");
+        for action in ["archive", "unarchive", "mark-read", "mark-unread", "label", "unlabel"] {
+            assert_eq!(command_program(&format!("hub email {action} ana@acme.example private-label private-id")),
+                       format!("hub email {action}"));
+        }
         assert_eq!(command_program("hub nosuch command"), "hub");
     }
 
@@ -1295,8 +1573,8 @@ mod tests {
         assert_eq!(command_program("<<'EOF'\nhub approval approve\nEOF"), "");
         assert_eq!(command_program("<<EOF\ncustomer-private\nEOF"), "");
         assert_eq!(command_program(">'>' printf customer-private"), "");
-        assert_eq!(command_program("cd /w && >\\> printf customer-private"), "cd");
-        assert_eq!(command_program("cd /w && >'>' hub task close customer-private"), "cd");
+        assert_eq!(command_program("cd /w && >\\> printf customer-private"), "");
+        assert_eq!(command_program("cd /w && >'>' hub task close customer-private"), "");
         assert_eq!(command_program("TOKEN=customer-private >'>' printf customer-private"), "");
         assert_eq!(command_program("2> >(printf customer-private) true"), "");
         assert_eq!(command_program("/bin/zsh -lc 'cd /w && hub needs-you show'"), "hub needs-you show");
@@ -1331,15 +1609,42 @@ mod tests {
         // A heredoc body is no run.
         assert_eq!(command_program("cd /repo <<'EOF'\nprivate-token\nEOF\nnpm test"), "cd");
         // A redirection is skipped to the program behind it, whether its target is attached or the next word.
-        assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "cd");
-        assert_eq!(command_program("cd /repo && > /tmp/customer-123.json printf ok"), "cd");
-        assert_eq!(command_program("cd /w && 2>&1 npm test"), "cd");
+        assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "");
+        assert_eq!(command_program("cd /repo && > /tmp/customer-123.json printf ok"), "");
+        assert_eq!(command_program("cd /w && 2>&1 npm test"), "");
         // A program word is a plain path, and a program name is at most 40 characters.
         assert_eq!(command_program("$HOME/bin/tool --x"), "");
         assert_eq!(command_program(&format!("{} x", "a".repeat(41))), "");
-        // A hub command in a later run still reads; any other line reads as its first program.
+        // A hub command in a later run still reads; a setup run before other work is skipped.
         assert_eq!(command_program("cd /w && hub task close 7f3a"), "hub task close");
-        assert_eq!(command_program("cd /w && npm test"), "cd");
+        assert_eq!(command_program("cd /w && npm test"), "npm");
+    }
+
+    #[test]
+    fn a_setup_run_before_the_work_is_skipped_and_its_arguments_never_show() {
+        assert_eq!(command_program("cd /home/user/workspace/bot-coo && hub task list --status open"), "hub task list");
+        assert_eq!(command_program("cd \"/home/user/My Repo\" && git status"), "git");
+        assert_eq!(command_program("cd /repo && npm test"), "npm");
+        assert_eq!(command_program("cd /repo;npm test"), "npm");
+        assert_eq!(command_program("cd /repo\nnpm test"), "npm");
+        assert_eq!(command_program("cd /repo # note\nnpm test"), "npm");
+        assert_eq!(command_program("cd /repo && export TOKEN=sk-live-1 && cargo test"), "cargo");
+        assert_eq!(command_program("export HUB_TOKEN=sk-live-1 && npm test"), "npm");
+        assert_eq!(command_program("export HUB_TOKEN=sk-live-1 && hub task create --title x"), "hub task create");
+        assert_eq!(command_program("env HUB_TOKEN=sk-live-1 cargo test"), "cargo");
+        assert_eq!(command_program("env HUB_TOKEN=sk-live-1 hub task list --token x"), "hub task list");
+        assert_eq!(command_program("cd /w && env HUB_TOKEN=sk-live-1 hub task close 7f3a"), "hub task close");
+        assert_eq!(command_program("cd /w && env -i A=1 npm test"), "npm");
+        assert_eq!(command_program("source ~/.env.sh && npm test"), "npm");
+        assert_eq!(command_program(". ./secret-env && hub task close 7f3a"), "hub task close");
+        assert_eq!(command_program("cd /w && source a.sh b.sh && npm test"), "source");
+        assert_eq!(command_program("env -u sk-live-1 npm test"), "env");
+        assert_eq!(command_program("cd /w && env -u sk-live-1 npm test"), "env");
+        assert_eq!(command_program("cd /w && export A=1 B=2 && npm test"), "npm");
+        assert_eq!(command_program("cd /w && npm test > out.log"), "npm");
+        assert_eq!(command_program("cd /w"), "cd");
+        assert_eq!(command_program("cd /w && export A=1"), "export");
+        assert!(!command_program("cd /private-customer && export K=sk-live-1 && npm test").contains("private"));
     }
 
     #[test]

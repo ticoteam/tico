@@ -190,6 +190,9 @@ def cost_usd(settings, model, usage):
     elif priced(settings, model) and str(model or "").lower().startswith("jev"):
         rate_in, rate_out = settings.decisions_jev_usd_per_mtok_input, settings.decisions_jev_usd_per_mtok_output
     elif priced(settings, model):
+        if providers.per_request_long_tier(model):
+            # One request: its prompt (fresh and cached input together) pays the long-prompt tier when over it.
+            return round(providers.estimate_cost(model, fresh, cached, out, [(fresh, cached, out)]), 6)
         return round(providers.estimate_cost(model, fresh, cached, out), 6)
     else:
         rate_in, rate_out = CEILING
@@ -392,6 +395,60 @@ def gateway(settings, store=None, vault=None):
     engine.model, engine.provider, engine.saved = J.GATEWAY_MODEL, J.GATEWAY_PROVIDER, not settings.gateway_key
     engine.level = level
     engine.current_model = lambda: J.decide_model(level())
+    return engine
+
+
+# The strict call (skill screening, backend/skill_screening.py): the Gateway at one language-model level, asked once for
+# up to STRICT_SECONDS, and nothing else. A failure is the caller's to show; no other provider answers in its place,
+# since a lower-quality answer is not a screen.
+STRICT_LEVEL = "high"
+STRICT_SECONDS = 90
+
+
+def strict_engine(store, c, level=STRICT_LEVEL, timeout=STRICT_SECONDS, vault=None):
+    """`engine(state, questions, label=None, evidence=False)` for the Tico AI Gateway at `level` alone, or None when the
+    Gateway is not set up, this is rehearsal, or the month's decision spend is at the cap (`over_spend_cap`). It is
+    metered like every decision (`metered`: the cap counts the call, its cost is a `judge.spend` row) and audited as one
+    `judge.call` row (label, counts, tokens, cost, the answers; never the state, never the evidence). A failure raises
+    `J.JudgeError` after its audit row: no Jev, TypeSafe or company model is asked. Call the engine outside any
+    transaction, since it writes its own."""
+    settings = store.settings
+    if settings.rehearsal or over_spend_cap(c, settings):
+        return None
+    if settings.gateway_key:
+        if not settings.gateway_url:
+            return None
+        secret, url, bot = settings.gateway_key, settings.gateway_url, None
+    else:
+        from .credentials import Vault
+        keys = vault or Vault(store)
+        if not keys.configured:
+            return None
+        secret, url, _ = gateway_connection.target(c, keys, settings)
+        url = G.decisions_url(url)
+        bot = gateway_connection.bot_header(c, keys, DECIDE_BOT)
+    if not secret:
+        return None
+    model = J.decide_model(level)
+    call = J.gateway(secret, url, model=model, timeout=timeout, headers=bot)
+
+    def engine(state, questions, label=None, evidence=False):
+        detail = {"label": label or "", "questions": len(questions),
+                  "types": sorted({q["type"] for q in questions.values()})}
+        try:
+            result = metered(store, [model], state, questions, label,
+                             lambda: call(state, questions, label, evidence=evidence))
+        except J.JudgeError as exc:
+            with store.transaction() as t:
+                H.event(t, H.KEEPER, "judge.call", label or "", {
+                    **detail, "error": J.error_code(exc),
+                    **({"cost_usd": exc.cost_usd} if getattr(exc, "cost_usd", None) else {})})
+            raise
+        with store.transaction() as t:
+            H.event(t, H.KEEPER, "judge.call", label or "", {
+                **detail, **audit_detail(result), "answers": J.summary(result["answers"])})
+        return result
+    engine.model, engine.provider = model, J.GATEWAY_PROVIDER
     return engine
 
 

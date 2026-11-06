@@ -88,6 +88,37 @@ def test_the_bot_list_says_the_effort_a_bot_runs_at_and_nothing_when_it_has_none
     assert (rows["cpo"]["resolved_runtime"], rows["cpo"]["resolved_effort"], rows["inbox"]["resolved_effort"]) == ("", "", "")
 
 
+def test_gpt_6_1_terra_is_priced_at_the_approved_rate_and_held_from_every_pick(api):
+    """Gated (Dev 693): the row is priced at Tico's rate, held, and refused by every pick and listing."""
+    from backend.store import Problem
+    from backend import task_models
+    row = P.MODEL_BY_ID["gpt-6.1-terra"]
+    assert row["held"] and row["deprecated"]
+    assert P.price_of("gpt-6.1-terra") == (1.25, 0.062, 6.25)
+    assert "gpt-6.1-terra" not in [r["id"] for r in P.provider_models("openai")]
+    assert "gpt-6.1-terra" not in [r["id"] for r in P.provider_models("openai", current=False)]
+    with pytest.raises(P.ProviderError):
+        P.complete_choice(["openai"], model="gpt-6.1-terra")
+    assert P.complete_choice(["openai"], model="gpt-6.1-terra", kept="gpt-6.1-terra") == ("codex", "gpt-6.1-terra")
+    with pytest.raises(P.ProviderError):
+        P.meeting_choice(P._record({"enabled": ["openai"]}), "gpt-6.1-terra")
+    with pytest.raises(Problem):
+        task_models.refuse_retired(row)
+    listed = api.get("/api/v2/models", headers={"Authorization": "Bearer ana-test"}).json()["models"]
+    assert "gpt-6.1-terra" not in [m["id"] for m in listed]
+
+
+def test_a_live_gateway_tier_for_the_held_id_does_not_expose_it(monkeypatch):
+    """Once Tico HQ publishes a Terra tier, the gateway's lookups must not make the held id pickable."""
+    live = {"id": "gpt-6.1-terra", "label": "live", "runtime": "pi", "provider": "tico", "efforts": ("low",),
+            "default_effort": "low", "tier": {"department": "x", "level": "low", "fast": False, "version": 1, "auto": False}}
+    monkeypatch.setattr(P.gateway_tiers, "row_for", lambda model: live if model == "gpt-6.1-terra" else None)
+    assert P.MODEL_BY_ID["gpt-6.1-terra"]["provider"] == "openai"
+    with pytest.raises(P.ProviderError):
+        P.complete_choice(["tico", "openai"], model="gpt-6.1-terra")
+    assert "gpt-6.1-terra" not in [r["id"] for r in P.provider_models("tico")]
+
+
 def test_mercury_on_openrouter_is_offered_only_as_a_meeting_model_and_priced():
     from clients import openrouter
     assert P.OPENROUTER_MEETING_MODEL == "mercury-3"
@@ -97,11 +128,3 @@ def test_mercury_on_openrouter_is_offered_only_as_a_meeting_model_and_priced():
     assert (row["runtime"], row["default_effort"], row["efforts"][0]) == ("pi", "low", "low")
     assert P.PRICES["mercury-3"] == (0.20, 0.02, 0.70)
     assert openrouter.MODELS["mercury-3"] == "inception/mercury-3"
-
-
-def test_gpt_6_1_terra_is_a_current_codex_model_a_bot_can_choose_and_it_is_priced():
-    row = P.MODEL_BY_ID["gpt-6.1-terra"]
-    assert (row["runtime"], row["provider"]) == ("codex", "openai") and not row.get("deprecated")
-    assert "gpt-6.1-terra" in [m["id"] for m in P.provider_models("openai")]
-    assert P.complete_choice(["openai"], "codex", "gpt-6.1-terra") == ("codex", "gpt-6.1-terra")
-    assert P.PRICES["gpt-6.1-terra"] == P.price_of("gpt-6.1-terra") == (1.0, 0.05, 5.0)

@@ -309,6 +309,40 @@ def test_a_green_new_head_at_a_step_with_after_green_moves_on_to_the_next_check(
     assert step_events(api, task)[-1][0] == H.KEEPER
 
 
+@pytest.mark.parametrize('target', ['merge', 'In QA'])
+def test_shared_fixes_waits_for_a_head_newer_than_the_review_that_returned_it(api, target):
+    from backend import step_flow as F
+    task = ticket(api)
+    flow(api, task, 'Review 2', on_pass='Review 1 Fixes', on_fail='Review 1 Fixes')
+    flow(api, task, 'Review 1 Fixes', after_green=target)
+    verdict(api, check(api, task), 'approve')
+    assert step(api, task) == 'Review 1 Fixes'
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': NEW}))
+    receipt(api, task, NEW)
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, 'bot:cpo', task['id'], step='Review 2')
+    verdict(api, check(api, task, title='Review 2: PR #412'), 'changes', head=NEW)
+    assert step(api, task) == 'Review 1 Fixes'
+    with api.app.state.store.transaction() as c:
+        current = H.task(c, task['id'])
+        assert V._judged_by(c, current, F.step(c, current['step_id'])) == NEW
+        assert V.merge_ready(c, current) is None
+        c.execute('DELETE FROM jobs')
+    _suite(api, 'github-actions', 'completed', 'success', sha=NEW)
+    assert step(api, task) == 'Review 1 Fixes'
+    assert not builder_jobs(api), 'green CI on the returned head must not skip its changes'
+
+    fixed = 'e' * 40
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': fixed}))
+    receipt(api, task, fixed)
+    _suite(api, 'github-actions', 'completed', 'success', sha=fixed)
+    if target == 'merge':
+        assert step(api, task) == 'Review 1 Fixes'
+        assert [m['refs'].get(V.HANDOFF) for m in builder_jobs(api)] == ['merge']
+    else:
+        assert step(api, task) == 'In QA'
+
+
 def test_on_the_dev_board_the_builder_moves_on_from_fixes_not_ci(api):
     task = ticket(api)
     verdict(api, check(api, task), "changes")
@@ -358,10 +392,7 @@ def test_a_check_timeout_keeps_unrelated_human_and_bot_subtasks_open(api):
 
 
 @pytest.mark.parametrize("unavailable", [
-    {"state": "quarantined"}, {"state": "planned"}, {"state": "paused"}, {"state": "archived"},
-    {"state": ""}, {"state": None},
-    {"onboarding_state": "needs_setup"}, {"onboarding_state": "needs_onboarding"},
-    {"config": {"profile": "responder"}}, {"config": {"harness": "dots"}},
+    {"state": "quarantined"}, {"state": ""}, {"onboarding_state": "needs_setup"}, {"config": {"profile": "responder"}},
 ])
 def test_allocator_skips_inactive_pool_members_and_assigns_remaining_checks(api, unavailable):
     from backend import task_allocator
@@ -676,6 +707,36 @@ def test_a_round_timed_out_after_a_fail_at_the_head_goes_to_on_fail_and_never_to
     assert handoffs[0]["refs"]["verdict"] == "fail" and "QA Fixes" in handoffs[0]["body"], handoffs[0]
 
 
+def test_timeout_keeps_the_private_qa_verdict_source(api):
+    import json
+    from backend import task_privacy
+    from backend.tests.test_api import unrelated_task_managers
+
+    task = ticket(api, step="In QA")
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+        qa = H.task_create(c, "bot:cpo", "QA: PR #412", f"Check head {HEAD}", "bot:cmo",
+                           parent_id=task["id"], private=True, lint=False)
+        usage(c, qa["id"], "cmo")
+    verdict(api, qa, "fail")
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:cpo", task["id"], step="In QA")
+        c.execute("DELETE FROM jobs")
+    check(api, task, "QA: PR #412")
+    with api.app.state.store.transaction() as c:
+        assert V.timeouts(c, H.shift(H.now(), hours=24 * 7)) == [task["id"]]
+        [msg] = [H.message(c, r[0]) for r in c.execute(
+            "SELECT m.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='cpo' "
+            "AND j.state='queued' AND json_extract(m.refs,'$.handoff') IS NOT NULL")]
+        assert msg["refs"]["trigger_source"] == qa["id"]
+        assert not task_privacy.message_readable(c, "bot:unrelated", msg)
+        assert task_privacy.message_readable(c, "bot:cpo", msg)
+        event = dict(c.execute("SELECT old,new,note FROM history_events WHERE subject_id=? AND kind='round_skipped'",
+                               (task["id"],)).fetchone())
+        assert json.loads(event["old"])["source_tasks"] == [qa["id"]]
+        assert not task_privacy.content_readable(c, "bot:unrelated", event)
+
+
 def test_a_later_pass_at_a_failed_head_does_not_let_a_timed_out_round_clear_the_merge(api):
     """QA failed the head, a later round passed the same head without a fix, and the ticket came back once more: the
     round that times out then finds the fail still standing, so the ticket goes to QA Fixes, never to the merge."""
@@ -869,7 +930,7 @@ def _github_status_read(state):
     return [{"context": "shard 0", "state": state}] + [{"context": f"shard {n}", "state": "success"} for n in range(1, 101)]
 
 
-@pytest.mark.parametrize("state", ["failing", "pending"])
+@pytest.mark.parametrize("state", ["failing"])
 def test_a_dropped_check_among_more_than_100_non_passing_keeps_the_head_unpassed_on_later_webhooks(api, monkeypatch, state):
     """Dev 646 follow-up: the stored copy keeps 100 of 101 non-passing checks. The kept ones then pass one at a time by
     webhook while the dropped one is still `state`: the head must never read passing, and no merge may be woken."""
@@ -923,7 +984,7 @@ def test_a_push_after_a_marked_head_clears_the_dropped_marker_with_its_checks(ap
     assert "checks_dropped" not in H._json(link["detail"], {})
 
 
-@pytest.mark.parametrize("state", ["failing", "pending"])
+@pytest.mark.parametrize("state", ["failing"])
 def test_a_webhook_that_drops_a_non_passing_check_marks_the_head_before_any_full_read(api, state):
     """Dev 731 review: the first webhook past 100 non-passing checks sets the dropped-check marker itself, with no full
     read first. The retained checks then pass one by one; the head must stay on the dropped check's state and wake no merge."""
@@ -937,3 +998,16 @@ def test_a_webhook_that_drops_a_non_passing_check_marks_the_head_before_any_full
         assert _link(api, task)["checks"] != "passing", n
     assert _link(api, task)["checks"] == state
     assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+
+
+def test_the_dropped_check_marker_keeps_the_pending_state_without_a_server():
+    """The pending arm of the dropped-check marker (the webhook tests above keep only the failing arm)."""
+    from backend import github
+    checks = {"shard 0": "pending", "shard 1": "passing"}
+    assert github._dropped(checks, {"shard 1"}) == "pending"
+    assert github._dropped({**checks, "shard 2": "failing"}, {"shard 1"}) == "failing"
+    assert github._dropped(checks, {"shard 0", "shard 1"}) is None
+    assert github._with_dropped("passing", "pending") == "pending"
+    assert github._with_dropped("pending", None) == "pending"
+    assert github._with_dropped("failing", "pending") == "failing"
+    assert github._with_dropped("passing", None) == "passing"

@@ -48,9 +48,6 @@ CREATE TABLE IF NOT EXISTS support_tickets(
  hq_id TEXT NOT NULL, hq_secret TEXT NOT NULL, messages TEXT NOT NULL DEFAULT '[]',
  seen_id INTEGER NOT NULL DEFAULT 0, checked_at TEXT, request_key TEXT);
 CREATE INDEX IF NOT EXISTS support_tickets_actor ON support_tickets(actor, created_at);
-CREATE TABLE IF NOT EXISTS support_file_attempts(
- actor TEXT NOT NULL, request_key TEXT NOT NULL, created_at TEXT NOT NULL,
- ticket_id TEXT, PRIMARY KEY(request_key));
 """
 MAX_MESSAGE = 4000
 PER_DAY = 10                 # new tickets one person may file in a day; HQ limits the address as well

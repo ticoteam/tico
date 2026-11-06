@@ -307,6 +307,14 @@ def propose_count(out, argv):
     return out
 
 
+def bulk_echo(out, argv):
+    """`task bulk close`: matched and changed are the number of distinct task ids the call names (any form of argv)."""
+    ids = set(re.findall(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", " ".join(argv)))
+    if isinstance(out, dict) and "matched" in out:
+        out = {**out, "matched": len(ids), "changed": len(ids)}
+    return out
+
+
 def apply_state(obj, table, field, drop=None):
     """Set `field` on each dict in obj whose id is in table (a short id matches its full id); with `drop`, leave out the
     list items whose table value is drop."""
@@ -430,6 +438,8 @@ def answer(argv, via, tool=None):
             out = apply_state(out, state["automations"], "enabled")
         if words[:2] == ["assistant", "propose"]:
             out = propose_count(out, argv)
+        if words[:3] == ["task", "bulk", "close"]:
+            out = bulk_echo(out, argv)
     if out is not None:
         text = out if isinstance(out, str) else json.dumps(out, indent=1)
     elif resp is not None:

@@ -181,6 +181,10 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
 - A message the org rules hold writes nothing. The author may withdraw it, and so may the person a bot reports to; only
   the reviewer sends it anyway ([Rules](rules-plan.md)).
 
+A page's maintainer bot and its managers may narrow **Who can see it**, archive and restore it. The audience applies
+to people and bots after inherited file visibility, including wider pins; the maintainer and managers always pass
+that audience check. Only managers see its chosen names ([Pages](pages.md#who-can-see-it)).
+
 ## Dashboard, team pages and pins
 
 The owner and admins arrange the Dashboard. A team page is arranged by them and by a person who leads the group or a group
@@ -191,7 +195,7 @@ release moved into its group's Read once on upgrade: whoever both the page and t
 audience when Read was Everyone), never more; See was left as it was. A bot pins only its own pages and cards, to its own
 sidebar or a task it holds or asked for; a person who manages a bot may pin another bot's page to its sidebar. A page a
 person pins to the Dashboard or a team page may be read by that place's audience, and a private task's file is never
-pinned there ([Overview](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who
+pinned there ([Company](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who
 asked (`hub card`, `hub pin`).
 
 ## History's Log
@@ -266,8 +270,8 @@ Create product repositories is a wider reach than bot repositories, so:
   bot's Instructions.
 - **The bot gets write to what it made, and the Owner is told** in a notice, for example *Head of Engineering created
   private repo tico-services (acme/tico-services). Head of Engineering has write access to it.* Granting write ticks the
-  repository for the team, so bots set to **All ticked repos** reach it too; the notice names them. A creator on **All
-  ticked repos** with read access moves to **Chosen repos**, keeping read on every repository it reached, so its write
+  repository for the team, so bots set to **All repos in use** reach it too; the notice names them. A creator on **All
+  repos in use** with read access moves to **Chosen repos**, keeping read on every repository it reached, so its write
   stays on what it made; the notice says so, and a repository ticked later reaches it only once chosen. Every creation is
   recorded as `github.product_repo_created` with the bot as the actor, and the grant as `bot.repos_changed`.
 
@@ -293,7 +297,7 @@ An incoming webhook (a trigger) is an address outside senders post to ([Webhooks
 ## Screening
 
 Text from outside Tico can carry instructions meant for the bot that reads it (a prompt injection). Screening checks that
-text at the doors it comes in by, before a bot reads it. Change it in **Settings → System → Screening** (owner or admin).
+text at the doors it comes in by, before a bot reads it. Change it in **Settings → Security → Screening** (owner or admin).
 
 | Door | What is checked | Default |
 |---|---|---|
@@ -337,6 +341,10 @@ The check has four layers. Two of them can be switched off in the same card:
   `screening.held` or `screening.warned` event, with the score and kind, never the text. Settings lists the newest.
 - **Test** runs eight built-in samples, four attacks and four lookalikes (code, a security article, an ordinary
   request), through the model and shows which it got right. Each sample counts against the person's decision budget.
+
+Skills are screened separately, by the skill screening job, before an admin can approve one. That screen is mandatory
+and has no off switch. It never fails open: with no answer from Decide High, the proposal is not screened and cannot be
+approved. See [Skills: Screening](skills.md#screening).
 
 ## Outgoing webhooks
 
@@ -575,11 +583,11 @@ routing), is them asking: the run it wakes has their rights. Anyone else's comme
 On a task another bot asked BotOps for, a person's comment lends nothing either: the run keeps that bot's rights, and
 what they can't do comes to the person who commented as a Confirm card in their BotOps chat.
 On its own task BotOps never needs anyone's rights to add the task's worktree (the bot's own repository access decides; an
-owner or admin gives it in Settings > Repositories) or to file a question or subtask for a person under it; that ask grants
+owner or admin gives it in Settings > General > Repositories) or to file a question or subtask for a person under it; that ask grants
 nothing by itself.
 With a person's rights BotOps may give another bot repository access at once, but never take any away: setting a bot to
 own, dropping a chosen repository or turning write into read comes to that person as a Confirm card naming the grants that
-would stop. The same change made in Settings > Repositories (or `hub bot repos`) says which grants stopped applying.
+would stop. The same change made in Settings > General > Repositories (or `hub bot repos`) says which grants stopped applying.
 A message cited by id (`on_behalf_of`) must be the requester's own, in their own chat with BotOps rather than a thread another human
 spoke in, and it must be the same human whose message started the run. Someone who has left lends nothing.
 

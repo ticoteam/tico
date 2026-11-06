@@ -2,12 +2,12 @@
 import pytest
 
 from backend import hubdb as H
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, get, headers, post, setup_attempt, legacy_send_approval  # noqa: F401
 
 
-def question(api, *, questions=None):
-    _, _, attempt = setup_attempt(api)
-    task = post(api, 'tasks', {'owner': 'bot:ops', 'title': 'Choose a draft', 'body': 'Synthetic draft'})
+def question(api, *, questions=None, attempt=None, title='Choose a draft'):
+    attempt = attempt or setup_attempt(api)[2]
+    task = post(api, 'tasks', {'owner': 'bot:ops', 'title': title, 'body': 'Synthetic draft'})
     ask = {'who': 'ana', 'questions': questions or [
         {'id': 'decision', 'header': '', 'question': 'Which draft?',
          'options': [{'label': 'Blue', 'then': 'Keep the blue draft'},
@@ -31,9 +31,14 @@ def test_exact_label_matches_card_and_repeated_delivery_is_idempotent(api):
         assert H.answers_to(c, [mid])
 
 
-@pytest.mark.parametrize('text', ['Maybe Blue', 'blue', 'Blue and Red'])
-def test_nonmatching_reply_stays_as_note_and_options_remain_open(api, text):
-    tid, mid = question(api)
+def test_nonmatching_reply_stays_as_note_and_options_remain_open(api):
+    attempt = setup_attempt(api)[2]
+    for text in ('Maybe Blue', 'blue', 'Blue and Red'):
+        nonmatching_reply_stays_as_note_and_options_remain_open(api, text, attempt)
+
+
+def nonmatching_reply_stays_as_note_and_options_remain_open(api, text, attempt):
+    tid, mid = question(api, attempt=attempt, title='Choose a draft: ' + text)
     out = post(api, f'messages/{mid}/answer', {'text': text})
     assert out['decision_open'] and 'still open' in out['feedback']
     assert get(api, f'tasks/{tid}')['task']['open_asks'] == 1
@@ -62,10 +67,10 @@ def test_publish_label_settles_question_without_approving_a_send(api):
         {'id': 'decision', 'header': '', 'question': 'Publish the draft?',
          'options': [{'label': 'Publish', 'then': 'Select the prepared draft'},
                      {'label': 'Wait', 'then': 'Keep the draft'}]}])
-    _, _, attempt = setup_attempt(api, bot='cpo')
-    post(api, 'approvals', {'kind': 'send', 'payload': {
+    setup_attempt(api, bot='cpo')
+    legacy_send_approval(api, {
         'to': 'colleague@acme.example', 'cc': [], 'subject': 'Synthetic draft',
-        'body_sha256': 'a' * 64, 'mailbox': 'work'}}, attempt['token'])
+        'body_sha256': 'a' * 64, 'mailbox': 'work'}, actor='bot:cpo')
     with api.app.state.store.read() as c:
         approvals = [tuple(r) for r in c.execute('SELECT * FROM approvals')]
     post(api, f'messages/{mid}/answer', {'text': 'Publish'})

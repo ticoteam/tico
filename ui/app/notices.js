@@ -249,7 +249,7 @@ async function nvStart() {
     nvSetBusy(false);
     const command = e.body?.error?.command;
     if (e.status === 409 && command) {
-      nvOut(`<p class="nv-status">Update from the server:</p><div class="nv-cmd"><code>${esc(command)}</code><button class="ghost" id="nv-copy" type="button" data-command="${esc(command)}">Copy</button></div>`);
+      nvOut(`<p class="nv-status">Update from the server:</p><div class="nv-cmd"><code>${esc(command)}</code><button class="ghost" data-nv-copy type="button" data-command="${esc(command)}">Copy</button></div>`);
     } else nvOut(`<p class="nv-status err">${esc(e.message)}</p>`);
     return;
   }
@@ -276,7 +276,7 @@ document.addEventListener('click', ev => {
   if (t.closest('#new-version')) { setNewVersionPop($('#new-version-pop').hidden); return; }
   if (t.closest('#nv-whatsnew')) { setNewVersionPop(false); return; }   // the link goes to What's new; the pop-up is done
   if (t.closest('#nv-update')) { if (!nvBusy) void nvStart(); return; }
-  const copy = t.closest('#nv-copy');
+  const copy = t.closest('[data-nv-copy]');
   if (copy) { navigator.clipboard?.writeText(copy.dataset.command).then(() => { copy.textContent = 'Copied'; }, () => {}); return; }
   if (t.closest('#nv-dismiss')) {
     try { localStorage.setItem(nvDismissedKey(), S.config.update.latest); } catch {}

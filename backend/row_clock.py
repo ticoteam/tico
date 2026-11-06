@@ -13,7 +13,7 @@ from threading import Lock
 from types import MappingProxyType
 
 # tasks_private_status holds these columns (and two more) under this WHERE, word for word: the read never touches a body.
-PARTIES = "SELECT id,requester_id,owner_id,guest,private FROM tasks INDEXED BY tasks_private_status WHERE private IS NOT 0"
+PARTIES = "SELECT id,requester_id,owner_id,readers,private FROM tasks INDEXED BY tasks_private_status WHERE private IS NOT 0"
 ACCESS = "SELECT key,value FROM registry_metadata WHERE key IN ('owner','access','rules')"
 _IN_ACCESS = "IN ('owner','access','rules')"
 # Every task id, and every room's task. Only the existence of a task and a room's task reference are shared: a status
@@ -35,8 +35,8 @@ def ensure(c):
     triggers = (
         ("row_clock_parties_insert", "AFTER INSERT ON tasks WHEN NEW.private IS NOT 0", bump % "parties"),
         ("row_clock_parties_delete", "AFTER DELETE ON tasks WHEN OLD.private IS NOT 0", bump % "parties"),
-        ("row_clock_parties_update", "AFTER UPDATE OF requester_id,owner_id,guest,private ON tasks WHEN "
-         "(OLD.requester_id IS NOT NEW.requester_id OR OLD.owner_id IS NOT NEW.owner_id OR OLD.guest IS NOT NEW.guest "
+        ("row_clock_parties_update", "AFTER UPDATE OF requester_id,owner_id,readers,private ON tasks WHEN "
+         "(OLD.requester_id IS NOT NEW.requester_id OR OLD.owner_id IS NOT NEW.owner_id OR OLD.readers IS NOT NEW.readers "
          "OR OLD.private IS NOT NEW.private) AND (OLD.private IS NOT 0 OR NEW.private IS NOT 0)", bump % "parties"),
         ("row_clock_access_insert", f"AFTER INSERT ON registry_metadata WHEN NEW.key {_IN_ACCESS}", bump % "access"),
         ("row_clock_access_delete", f"AFTER DELETE ON registry_metadata WHEN OLD.key {_IN_ACCESS}", bump % "access"),
@@ -78,7 +78,7 @@ def _rows(c, statement):
 
 
 def parties(c):
-    """Every private task's (id, requester, owner, guest, private), as dicts the caller must not mutate."""
+    """Every private task's (id, requester, owner, readers, private), as dicts the caller must not mutate."""
     return _shared(c, "parties", PARTIES, _rows)
 
 

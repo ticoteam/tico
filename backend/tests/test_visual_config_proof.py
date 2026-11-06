@@ -25,13 +25,14 @@ def request(enabled=True):
             "instance_id": "i-123456789abcdef01", "install_id": ID, "challenge": "b" * 64}
 
 
-def material(now=None):
-    return {"install_id": ID, "token": visuals.mint(KEY, "human:fictional", "file1", 1, now=now),
+def material(now=None, task_actor=""):
+    return {"install_id": ID, "token": visuals.mint(KEY, "human:fictional", "file1", 1, now=now, task_actor=task_actor),
             "sha256": hashlib.sha256(b"artifact response").hexdigest()}
 
 
-def test_on_actual_probe_contract_refusals_and_inert_credentials():
-    calls, proof = [], material()
+@pytest.mark.parametrize("task_actor", ["", "bot:assistant"])
+def test_on_actual_probe_contract_refusals_and_inert_credentials(task_actor):
+    calls, proof = [], material(task_actor=task_actor)
     def exchange(host, path, method="GET", headers=None, **kwargs):
         calls.append((host, path, method, headers))
         return (200, proof["sha256"]) if path == "/visuals/" + proof["token"] else (404, "")

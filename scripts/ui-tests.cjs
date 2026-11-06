@@ -233,7 +233,7 @@ async function runScripts(files, jobs, run) {
 
 async function main() {
   const dir = path.join(__dirname, '..', 'ui', 'tests');
-  const CORE = ['account-status', 'health-findings', 'bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'meetings-pending', 'task-live', 'task-live-drafts', 'recorder-pending', 'org-rules', 'org-rules-counsel', 'people-access', 'recruit-unit',
+  const CORE = ['account-status', 'health-findings', 'bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'meeting-page', 'meetings-pending', 'task-live', 'task-live-drafts', 'recorder-pending', 'org-rules', 'org-rules-counsel', 'people-access', 'recruit-unit',
                 'settings-forms', 'settings-no-dead-ends', 'sign-in-redirect', 'strategy', 'task-privacy', 'tasks-page', 'team-groups', 'threads', 'threads-halfway', 'dashboard', 'visual-cards', 'visual-fallback', 'visual-hosted', 'visual-media', 'visual-media-app'];
   const args = process.argv.slice(2);
   let jobs;
@@ -264,6 +264,8 @@ async function main() {
   const files = allFiles.filter(f => chosen ? chosen.includes(f.replace(/\.cjs$/, '')) : !WALKTHROUGHS.includes(f.replace(/\.cjs$/, '')));
   if (!files.length) { console.error('no UI test scripts matched'); process.exit(1); }
   if (list) { console.log(files.map(f => f.replace(/\.cjs$/, '')).join('\n')); return; }
+  // The page runs the UI's TypeScript files as their compiled JavaScript: compile them once, before any script reads it.
+  execFileSync(process.execPath, [path.join(__dirname, 'build-ui.cjs')], {stdio: 'inherit'});
   const {cores, idleFraction} = await sampleCpu();
   const selected = resources(process.env, cores, idleFraction);
   jobs ??= selected.jobs;
@@ -291,7 +293,7 @@ async function main() {
   await runScripts(files, jobs, run);
   const secs = ((Date.now() - started) / 1000).toFixed(0);
   if (process.env.TICO_UI_TIMINGS) fs.writeFileSync(process.env.TICO_UI_TIMINGS, JSON.stringify(timings, null, 2) + '\n');
-  console.log(failed.length ? `\n${failed.length} of ${files.length} UI scripts failed: ${failed.join(', ')} (${secs}s)`
+  console.log(failed.length ? `\n${failed.length} of ${files.length} UI scripts failed: ${failed.join(', ')} (all ${files.length} took ${secs}s)`
                             : `\n${files.length} UI scripts passed in ${secs}s`);
   process.exit(failed.length ? 1 : 0);
 }

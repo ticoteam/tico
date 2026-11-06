@@ -81,6 +81,9 @@ pub async fn empty_clone(path: &Path) -> bool {
 
 /// (state, detail): `cloned`, or `failed` and why. Only a missing or empty folder is cloned into.
 pub async fn clone_repository(path: &Path, repository: &str, env: &Env, url: Option<&str>) -> (&'static str, String) {
+    if let Err(problem) = crate::repo_safety::outside_installation(path) {
+        return ("failed", problem);
+    }
     if path.exists() && (!path.is_dir() || !empty_dir(path)) {
         return ("failed", format!("{} already exists here and is not an empty folder; left as it is", path.file_name().unwrap_or_default().to_string_lossy()));
     }
@@ -144,6 +147,9 @@ impl Runner {
     /// Clone the bot's repository when it is assigned here and has no checkout. The readiness problem to show,
     /// or "" when the checkout is now here (or an independent bot has no link).
     pub async fn fetch_repository(&self, bot: &str, entry: &Value, path: &Path) -> String {
+        if let Err(problem) = crate::repo_safety::outside_installation(path) {
+            return problem;
+        }
         let mut repository = text_of(&entry["repository"]);
         let config = &entry["config"];
         let personal = repository.is_empty() && truthy(config.get("shared_from"));

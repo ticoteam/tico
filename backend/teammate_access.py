@@ -47,6 +47,7 @@ import sqlite3
 
 from . import bot_access as A
 from . import people as P
+from . import sources
 from .store import H, Problem
 
 LEVELS = ("see", "read", "write", "manage")
@@ -123,6 +124,8 @@ def forget_group(c, actor, gid):
     """A deleted group's access goes with it, and no other teammate's audience names it any more: a group made later
     with the same id starts from the defaults. What it was stays in the audit log."""
     from . import audit_log
+    from . import pages
+    pages.forget_audience_member(c, actor, "teams", gid)
     for row in list(stored_rows(c).values()):
         kind, ident = row["target_type"], row["target_id"]
         before = _complete(row["access"], kind, ident)
@@ -243,6 +246,8 @@ class _Context:
 
     def names(self, level):
         if self.role == "bot":
+            if self.me in self.archived:
+                return False
             return A.names(level, bot=self.me, team=self.chain)
         return A.names(level, person=self.me, team=self.chain)
 
@@ -257,6 +262,21 @@ class _Context:
                     out |= P.group_and_below(gid, self.roster)
             self._leads = out
         return self._leads
+
+
+def in_audience(c, viewer, level, auth=None):
+    """Whether an audience names this viewer, including their nested groups, without management exceptions."""
+    return _Context(c, viewer, auth).names(A.audience(level))
+
+
+def parse_audience(c, value):
+    """One audience checked with the same shape and known teammates as the access editor."""
+    from . import views
+    roster = views.roster(c, shared=True)
+    people = {p["id"] for p in roster.get("people") or []} | {h["id"] for h in H.humans(c)}
+    groups = set(roster.get("org_groups") or {})
+    bots = {r["id"] for r in H.bots(c)}
+    return A.parse({level: value for level in AUDIENCE_LEVELS}, people, groups, bots)["read"]
 
 
 def _lead_actor(ref):
@@ -501,16 +521,19 @@ def readers(c, target, level="read", auth=None):
 
 def _viewer_for(c, actor):
     """An identity for an actor, without elevating it: the owner when it is the owner's address."""
-    from .auth import Identity
-    if actor.startswith("bot:"):
-        return Identity(actor, "bot")
-    human = H.human(c, H.actor_id(actor))
-    if not human:
-        return None
-    from . import access
-    email = str(human.get("email") or "").lower()
-    owner = str((access._load_json(c, access.OWNER) or {}).get("email") or "").lower()
-    return Identity(actor, "owner" if email and email == owner else "human", email=email)
+    from . import read_cache
+    def build():
+        from .auth import Identity
+        if actor.startswith("bot:"):
+            return Identity(actor, "bot")
+        human = H.human(c, H.actor_id(actor))
+        if not human:
+            return None
+        from . import access
+        email = str(human.get("email") or "").lower()
+        owner = str((access._load_json(c, access.OWNER) or {}).get("email") or "").lower()
+        return Identity(actor, "owner" if email and email == owner else "human", email=email)
+    return read_cache.value(c, ("teammate_viewer", actor), build, shared=True)
 
 
 def hidden(c, viewer, level="see", kinds=KINDS, auth=None):
@@ -767,6 +790,7 @@ class Known:
         self.me = str(getattr(viewer, "actor", "") or "")
         self._people = self._strangers = None
         self._in = {}
+        self._names, self._looked = {}, set()
 
     @property
     def people(self):
@@ -827,11 +851,47 @@ class Known:
             self._strangers = hidden(self.c, self.viewer, "see", KINDS, self.auth)
         return self._strangers
 
+    def unseen_of(self, actors):
+        """Which of these actors the viewer may not see, read for just them: cheaper than `strangers` for a short
+        list on a page that must not grow with the company."""
+        actors = [a for a in dict.fromkeys(actors) if a]
+        if self._strangers is not None:
+            return {a for a in actors if a in self._strangers}
+        role = getattr(self.viewer, "role", "")
+        if not actors or role not in ("human", "bot") or is_admin(self.c, self.viewer, self.auth):
+            return set()
+        return {a for a, levels in levels_many(self.c, self.viewer, actors, self.auth).items() if not levels["see"]}
+
     def seen(self, actors):
         """`actors` as someone not in their conversation may be told of them."""
         return [a for a in actors if a not in self.strangers]
 
+    def _names_for(self, ids):
+        """Display names for these actors, one lookup per actor for this reader's whole request."""
+        missing = {i for i in ids if i not in self._looked}
+        if missing:
+            self._names.update(sources.lookup(self.c, missing))
+            self._looked |= missing
+        return {i: self._names[i] for i in ids if i in self._names}
+
+    def whole(self, message):
+        """The message with the `source` everyone who may see it all reads: nothing hidden (events._SameForAll)."""
+        return {**message, "source": sources.message_source(self._names_for(sources.actors_of([message])), message)}
+
+    def source(self, message):
+        """A message's `source` (backend/sources.py). A person the reader may not see is not named in it, here or as the
+        Assistant's person, unless the reader is in the message's conversation."""
+        names = self._names_for(sources.actors_of([message]))
+        if self.people and not self.member(message.get("conversation_id")):
+            names = {key: name for key, name in names.items() if key not in self.people}
+        return sources.message_source(names, message)
+
     def message(self, message):
+        if isinstance(message, dict):
+            from .files import readable_page_refs
+            message = readable_page_refs(self.c, self.auth, self.viewer, message)
+            if "sender_id" in message:
+                message = {**message, "source": self.source(message)}
         if not self.people or not isinstance(message, dict):
             return message
         named = [key for key in ("sender_id", "recipient_id") if message.get(key) in self.people]
@@ -840,7 +900,7 @@ class Known:
         return {**message, **{key: "" for key in named}}
 
     def messages(self, messages):
-        return [self.message(m) for m in messages] if self.people else messages
+        return [self.message(m) for m in messages]
 
     def conversation(self, conversation):
         if not self.people or not isinstance(conversation, dict) or self.me in (conversation.get("participants") or []):
@@ -853,11 +913,14 @@ class Known:
             return task
         named = [key for key in self.TASK_FIELDS if task.get(key) in self.people]
         origin = task.get("from_person") in self.people
-        if not named and not origin:
+        readers = task.get("readers") if isinstance(task.get("readers"), list) else []
+        hidden = [r for r in readers if r in self.people]
+        if not named and not origin and not hidden:
             return task
         if self.me in (task.get("owner_id"), task.get("requester_id")) or self.member(task.get("conversation_id")):
             return task
-        return {**task, **{key: "" for key in named}, **({"from_person": None} if origin else {})}
+        return {**task, **{key: "" for key in named}, **({"from_person": None} if origin else {}),
+                **({"readers": [r for r in readers if r not in self.people]} if hidden else {})}
 
     def tasks(self, tasks):
         return [self.task(t) for t in tasks] if self.people else tasks

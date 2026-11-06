@@ -9,6 +9,7 @@ import json
 import re
 import uuid
 from datetime import datetime, timezone
+from . import sources as SRC
 
 NOTE_MAX = 500
 ACTIVE = ("open", "doing", "waiting", "review", "ready")
@@ -114,6 +115,7 @@ def clear(c, row):
         c.execute("UPDATE tasks SET check_back_at=NULL,check_back_note=NULL WHERE id=?", (row["id"],))
 
 
+@SRC.scoped("follow-up-timer")
 def consume(c, task_id, actor):
     """A follow-up whose time has come was listed on its owner's task roundup (backend/task_roundup.py): it is consumed,
     so its time is cleared, and the clearing is recorded."""

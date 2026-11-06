@@ -60,7 +60,7 @@ from . import read_cache
 from . import visuals as V
 from .store import H, Problem, encode
 
-TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads", "meeting_items", "presence")
+TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads", "meeting_items", "presence", "letters")
 AGENT_TOPICS = ("messages", "threads")   # what an external agent's standing token may follow (outside a turn)
 KEEP_HOURS = 24           # a client away longer than this reads in full
 FALLBACK_SECONDS = 1.5    # the shared look for changes another process wrote
@@ -107,9 +107,12 @@ def _row(topic, kind, subject, ref="NULL", conversation="NULL", bot="NULL", wher
             + (f" WHERE {where}" if where else "") + ";")
 
 
-def _needs(kind, *actors, where=None):
-    """A `needs` row for each person among `actors`: their Needs-you list may have moved."""
-    people = " UNION ".join(f"SELECT {actor} AS who" for actor in actors)
+def _needs(kind, *actors, where=None, lists=()):
+    """A `needs` row for each person among `actors` and the JSON actor `lists` (a task's readers):
+    their Needs-you list may have moved."""
+    people = " UNION ".join([f"SELECT {actor} AS who" for actor in actors]
+                            + [f"SELECT value AS who FROM json_each(CASE WHEN json_valid({each}) THEN {each} END)"
+                               for each in lists])
     return (f"INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'needs','{kind}',who,{_NOW} "
             f"FROM ({people}) WHERE who LIKE 'human:%'" + (f" AND {where}" if where else "") + ";")
 
@@ -167,7 +170,7 @@ _MEETING_ACCESS = ("OLD.review_state IS NOT NEW.review_state OR OLD.owner IS NOT
 
 # Who could read a task before this write: its parties and privacy, kept on the row when they
 # change (and on a delete), so a delta read says `gone` only to someone who could have seen it.
-_WAS = "json_array(OLD.owner_id,OLD.requester_id,OLD.private,OLD.guest)"   # task_reads._could_read
+_WAS = "json_array(OLD.owner_id,OLD.requester_id,OLD.private,OLD.readers)"   # task_reads._could_read
 _MEDIA = ("width", "height", "thumb_blob_id", "poster_blob_id")
 _MEDIA_TASKS = ("SELECT task_id AS id FROM task_assets WHERE blob_id=NEW.blob_id UNION SELECT f.task_id "
                 "FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE v.blob_id=NEW.blob_id")
@@ -177,11 +180,43 @@ _ASK_TASK = ("(SELECT " + H.MESSAGE_TASK_SQL + " FROM messages m LEFT JOIN conve
 
 _RUN_CONVERSATION = ("(SELECT m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
                      "JOIN messages m ON m.id=j.message_id WHERE a.id={aid})")
-_PARTIES = ("owner_id", "requester_id", "waiting_on", "guest")
+_PARTIES = ("owner_id", "requester_id", "waiting_on")
+
+
+def _letters_for_source(kind, *ids):
+    """Bounded indexed lookup: a source with many letters invalidates the outbox once."""
+    found = ("SELECT DISTINCT letter_id FROM letter_sources WHERE source_type='" + kind + "' AND source_id IN ("
+             + ",".join(ids) + f") LIMIT {FAN_CAP + 1}")
+    many = f"(SELECT count(*) FROM ({found}))>{FAN_CAP}"
+    return ("INSERT INTO changes(topic,kind,subject_id,created_at) "
+            f"SELECT 'letters','access',letter_id,{_NOW} FROM ({found}) WHERE NOT {many};"
+            f"INSERT INTO changes(topic,kind,created_at) SELECT 'letters','invalidate',{_NOW} WHERE {many};")
+
+
+def _letters_for_task(task):
+    return _letters_for_source("task", task)
+
+
+def _letters_for_thread(thread, root):
+    return _letters_for_source("thread", thread, root)
+
 
 # (trigger name, event, table, WHEN or None, body). One list, so a new source is one more line. A table that does not exist is
 # skipped, and a trigger whose definition changed is replaced at the next start.
 TRIGGERS = [
+    ("changes_letters_insert", "INSERT", "letters", None, _row("letters", "insert", "NEW.id")),
+    ("changes_letters_update", "UPDATE", "letters", None, _row("letters", "update", "NEW.id")),
+    ("changes_task_letters_access", "UPDATE", "tasks", _changed("private", "readers", *_PARTIES), _letters_for_task("NEW.id")),
+    ("changes_task_letters_delete", "DELETE", "tasks", None, _letters_for_task("OLD.id")),
+    ("changes_roles_letters_insert", "INSERT", "task_roles", None, _letters_for_task("NEW.task_id")),
+    ("changes_roles_letters_delete", "DELETE", "task_roles", None, _letters_for_task("OLD.task_id")),
+    ("changes_thread_letters_access", "UPDATE", "conversations",
+     _changed("audience", "audience_group_id", "participants", "owner_id"),
+     _letters_for_thread("NEW.id", "COALESCE(NEW.root_id,NEW.id)")),
+    ("changes_members_letters_insert", "INSERT", "thread_members", None,
+     _letters_for_thread("NEW.thread_id", "(SELECT COALESCE(root_id,id) FROM conversations WHERE id=NEW.thread_id)")),
+    ("changes_members_letters_delete", "DELETE", "thread_members", None,
+     _letters_for_thread("OLD.thread_id", "(SELECT COALESCE(root_id,id) FROM conversations WHERE id=OLD.thread_id)")),
     ("changes_meeting_items_insert", "INSERT", "meeting_items", None,
      _row("meeting_items", "items", "NEW.id", ref="NEW.meeting_id")),
     ("changes_meeting_items_update", "UPDATE", "meeting_items", _ANY_COLUMN,
@@ -198,15 +233,15 @@ TRIGGERS = [
      _row("tasks", "meetings", "NEW.task_id", ref="NEW.meeting_id") + _row("meeting_items", "links", "NEW.id", ref="NEW.meeting_id")),
     ("changes_meeting_task_links_delete", "DELETE", "meeting_task_links", None,
      _row("tasks", "meetings", "OLD.task_id", ref="OLD.meeting_id") + _row("meeting_items", "links", "OLD.id", ref="OLD.meeting_id")),
-    ("changes_task_meeting_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "guest"),
+    ("changes_task_meeting_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "readers"),
      _meeting_links("NEW.id")),
     ("changes_roles_meeting_insert", "INSERT", "task_roles", None, _meeting_links("NEW.task_id")),
     ("changes_roles_meeting_delete", "DELETE", "task_roles", None, _meeting_links("OLD.task_id")),
-    ("changes_item_task_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "guest"),
+    ("changes_item_task_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "readers"),
      _item_task_refs("NEW.id")),
     ("changes_item_roles_insert", "INSERT", "task_roles", None, _item_task_refs("NEW.task_id")),
     ("changes_item_roles_delete", "DELETE", "task_roles", None, _item_task_refs("OLD.task_id")),
-    ("changes_proposal_task_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "guest"),
+    ("changes_proposal_task_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "readers"),
      _item_task_refs("NEW.id", "proposed_task_id")),
     ("changes_proposal_roles_insert", "INSERT", "task_roles", None, _item_task_refs("NEW.task_id", "proposed_task_id")),
     ("changes_proposal_roles_delete", "DELETE", "task_roles", None, _item_task_refs("OLD.task_id", "proposed_task_id")),
@@ -216,13 +251,14 @@ TRIGGERS = [
      _row("presence", "changed", "OLD.place", ref="OLD.place")),
 
     ("changes_tasks_insert", "INSERT", "tasks", None,
-     _row("tasks", "insert", "NEW.id") + _needs("task", *("NEW." + p for p in _PARTIES))),
+     _row("tasks", "insert", "NEW.id") + _needs("task", *("NEW." + p for p in _PARTIES), lists=("NEW.readers",))),
     ("changes_tasks_update", "UPDATE", "tasks", None,
      _row("tasks", "update", "NEW.id",
-          ref=f"CASE WHEN {_changed('owner_id', 'requester_id', 'private', 'guest')} THEN {_WAS} END")
-     + _needs("task", *("OLD." + p for p in _PARTIES), *("NEW." + p for p in _PARTIES))),
+          ref=f"CASE WHEN {_changed('owner_id', 'requester_id', 'private', 'readers')} THEN {_WAS} END")
+     + _needs("task", *("OLD." + p for p in _PARTIES), *("NEW." + p for p in _PARTIES),
+              lists=("OLD.readers", "NEW.readers"))),
     ("changes_tasks_delete", "DELETE", "tasks", None,
-     _row("tasks", "delete", "OLD.id", ref=_WAS) + _needs("task", *("OLD." + p for p in _PARTIES))),
+     _row("tasks", "delete", "OLD.id", ref=_WAS) + _needs("task", *("OLD." + p for p in _PARTIES), lists=("OLD.readers",))),
     ("changes_task_links_insert", "INSERT", "task_links", None, _row("tasks", "link", "NEW.task_id")),
     # Only a write that changes a column: a rewrite with the same values wakes no stream (a worktree heartbeat did this
     # every few minutes per closed task).
@@ -347,11 +383,6 @@ TRIGGERS = [
      _needs("approval", "(SELECT recipient_id FROM messages WHERE id=NEW.message_id)")),
     ("changes_approvals_update", "UPDATE", "approvals", _changed("decision", "consumed_at"),
      _needs("approval", "(SELECT recipient_id FROM messages WHERE id=NEW.message_id)")),
-    # Standalone tidy cards notify the human reviewer’s inbox, never a parent task.
-    ("changes_memory_tidy_cards_insert", "INSERT", "memory_tidy_cards", None,
-     _needs("memory_tidy", "NEW.reviewer")),
-    ("changes_memory_tidy_cards_update", "UPDATE", "memory_tidy_cards", _changed("status"),
-     _needs("memory_tidy", "NEW.reviewer")),
     # A stale ticket suggestion is on its owner's card until they accept or skip it (backend/stale_review.py).
     ("changes_stale_suggestions_insert", "INSERT", "stale_suggestions", None, _needs("stale", "NEW.owner")),
     ("changes_stale_suggestions_update", "UPDATE", "stale_suggestions", _changed("outcome"),
@@ -659,6 +690,12 @@ for _name in ("changes_proposal_task_access", "changes_proposal_roles_insert", "
     NEEDS[_name] = ("meeting_items.proposed_task_id",)
 for _name in ("changes_item_task_access", "changes_item_roles_insert", "changes_item_roles_delete"):
     NEEDS[_name] = ("meeting_items",)
+
+
+for _name in ("changes_task_letters_access", "changes_task_letters_delete", "changes_roles_letters_insert",
+              "changes_roles_letters_delete", "changes_thread_letters_access", "changes_members_letters_insert",
+              "changes_members_letters_delete"):
+    NEEDS[_name] = ("letter_sources", "conversations.root_id", "conversations.audience")
 
 
 def ensure(c):
@@ -1110,13 +1147,14 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
 def _trashed_visible(c, who, task_id):
     """A deleted task is reported gone only to someone who could have seen it."""
     try:
-        row = c.execute("SELECT owner, requester, private, guest FROM task_trash WHERE task_id=? AND purged_at IS NULL",
+        row = c.execute("SELECT owner, requester, private, readers FROM task_trash WHERE task_id=? AND purged_at IS NULL",
                         (task_id,)).fetchone()
     except sqlite3.OperationalError:
         return False
     if not row:
         return False
-    return who.actor in (row["owner"], row["requester"], row["guest"]) or not row["private"]
+    return (not row["private"] or who.actor in (row["owner"], row["requester"])
+            or H.task_reader(c, who.actor, {"readers": row["readers"]}))
 
 
 class _Viewer:
@@ -1388,11 +1426,16 @@ def _messages(view, rows, shared=None):
                  "message_seq": message.get("seq"), "revision": message.get("revision") or 0}
         if threads.message_readable(c, view.reader, message, thread_checked=True):
             shown = view.known.message(message)
-            if shown is not message or (isinstance(refs, dict) and refs.get("attachments")):
+            # Shared text only when this reader sees the message as all its readers do, `source` included.
+            whole = view.known.whole(message) if "sender_id" in message else message
+            from .files import readable_page_refs
+            original_refs = refs
+            refs = readable_page_refs(c, view.auth, view.who, refs)
+            if shown != whole or refs != original_refs or (isinstance(refs, dict) and refs.get("attachments")):
                 out.append((row, {"id": subject, "conversation_id": cid, **place,
                                   "message": {**shown, "refs": refs, "thread_id": cid, "root_id": place["root_id"]}}))
             else:
-                out.append((row, _SameForAll(cid, place, message, refs)))
+                out.append((row, _SameForAll(cid, place, whole, refs)))
         elif (message.get("deleted_at") and not threads.legacy_hidden(c, view.reader, message)
               and _readable_before_deletion(view, dict(message))):
             out.append((row, {"id": subject, "conversation_id": cid, **place, "deleted": True}))
@@ -1614,19 +1657,19 @@ def needs_baseline(c, auth, who, task_view):
 
 
 def _needs_list(view, rows, task_view, held=None):
-    from .views import needs_bots, needs_folded_ids, needs_items, needs_kinds, needs_marks, went_away
+    from .views import needs_bots, needs_folded_ids, needs_items, needs_kinds, needs_marks, needs_plate_count, went_away
     items = needs_items(view.c, view.auth, view.who, task_view)
     folded = needs_folded_ids(items)
     away = went_away(view.c, view.who.actor)
     if held is None:
-        return [(rows[-1], {"count": len(items), "items": items, "went_away": away,
+        return [(rows[-1], {"count": len(items), "plate_count": needs_plate_count(items), "items": items, "went_away": away,
                             "folded_task_ids": folded})]
     marks, version = needs_marks(items)
     before = held.get("marks") or {}
     changed = [k for k, mark in marks.items() if before.get(k) != mark]
     removed = [k for k in before if k not in marks]
     many = len(changed) + len(removed) > NEEDS_CHANGES_MAX
-    entry = {"count": len(items), "version": version, "base": held.get("version"),
+    entry = {"count": len(items), "plate_count": needs_plate_count(items), "version": version, "base": held.get("version"),
              "changed": None if many else changed, "removed": None if many else removed, "went_away": away,
              "bots": needs_bots(items, view.who.actor), "by_kind": needs_kinds(items)}   # whole-list facts, even on a page
     before_folded = held.get("folded_task_ids") or []
@@ -1773,6 +1816,9 @@ def read_in(c, snapshot, auth, who, after, *, topics=TOPICS, conversations=(), b
     floor = (first - 1) if first is not None else newest
     if after > newest or after < floor or newest - after > BACKLOG_MAX:
         return [], newest, True, False
+    if c.execute("SELECT 1 FROM changes WHERE topic='tasks' AND kind='bulk' AND ref='page_access' "
+                 "AND seq>? LIMIT 1", (after,)).fetchone():
+        return [], newest, True, False
     rows = snapshot.changes(who, after, limit, topics, conversations, bots, tasks, parties, threads_scope, meetings, places)
     more = len(rows) >= limit
     cursor = rows[-1]["seq"] if more else newest
@@ -1816,6 +1862,21 @@ def read_in(c, snapshot, auth, who, after, *, topics=TOPICS, conversations=(), b
         picked += [("needs", r, e) for r, e in _needs_list(view, by_topic["needs"], task_view, needs_held)]
     if by_topic.get("threads"):
         picked += [("threads", r, e) for r, e in _threads(view, by_topic["threads"])]
+    if by_topic.get("letters"):
+        from . import letters
+        invalidations = [r for r in by_topic["letters"] if r["kind"] == "invalidate"]
+        if invalidations and letters.outbox_access(c, auth, who):
+            picked.append(("letters", invalidations[-1], {"invalidate": True}))
+        newest_letters = {r["subject_id"]: r for r in by_topic["letters"] if r["subject_id"] is not None}
+        for ident, change in newest_letters.items():
+            try:
+                letter = letters.get(c, auth, who, ident, metadata=True)
+            except Problem:
+                row = c.execute("SELECT acting_bot_id FROM letters WHERE id=?", (ident,)).fetchone()
+                if letters.outbox_access(c, auth, who, row if row is not None else {"acting_bot_id": None}):
+                    picked.append(("letters", change, {"id": ident, "gone": True}))
+                continue
+            picked.append(("letters", change, {"id": ident, "letter": letters.public(letter)}))
     for topic in ('meeting_items', 'presence'):
         for row in by_topic.get(topic, []):
             picked.append((topic, row, {'meeting_id': row['ref'], 'kind': row['kind']} if topic == 'meeting_items'

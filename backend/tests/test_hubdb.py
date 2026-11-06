@@ -336,7 +336,7 @@ ALTER TABLE growth_settings ADD COLUMN verdict_win_pct REAL NOT NULL DEFAULT 60;
                                                      "ORDER BY position, id")],
                          [name for _, name, _ in MT.STEPS])
         self.assertEqual(tuple(conn.execute("SELECT name, status FROM task_steps WHERE id='idea-scaling'").fetchone()),
-                         ("Scaling", "doing"))
+                         ("Working", "doing"))
 
 
 class RegistrySync(HubCase):
@@ -948,7 +948,7 @@ class WaitingWithDependency(HubCase):
         # A note naming what it waits on parks it, with a hint on recording the wait.
         parked = H.task_update(self.conn, CMO, task['id'], status='waiting', note='Waiting on the vendor reply')
         self.assertEqual(parked['status'], 'waiting')
-        self.assertIn('nothing will move it', parked['warnings'][0])
+        self.assertIn('goes back to open', parked['warnings'][0])
         self.assertIn('hub task create --parent', parked['warnings'][0])
 
     def test_a_note_only_wait_on_a_person_requested_task_warns(self):
@@ -1037,11 +1037,11 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(needs(), 1)
         H.answer(self.conn, ANA, question['id'], 'Friday')
         self.assertEqual(needs(), 0)
-        # A bot's private task to itself reaches the one person it asks, its guest (Dev 172), and no second one.
+        # A bot's private task to itself reaches the one person it asks, a reader (Dev 172), and no second one.
         secret = H.task_create(self.conn, CMO, 'Review the payroll export', '', CMO, private=True)
         H.task_update(self.conn, CMO, secret['id'], status='waiting', waiting_on='ben',
                       note='Approve the payroll export? If yes, I will send it.')
-        self.assertEqual(H.task(self.conn, secret['id'])['guest'], H.human_actor('ben'))
+        self.assertEqual(H.task_readers(H.task(self.conn, secret['id'])), [H.human_actor('ben')])
         self.refused('private', H.task_update, self.conn, CMO, secret['id'], status='waiting', waiting_on='ana',
                      note='Approve the payroll export? If yes, I will send it.')
         # A person's private task still stays with its two parties.
@@ -1133,23 +1133,6 @@ class WaitingWithDependency(HubCase):
         H.task_update(self.conn, CMO, question['id'], status='done', note='Ana said yes.')
         self.assertEqual((H.task(self.conn, trial['id'])['status'], H.task(self.conn, trial['id'])['note']),
                          ('open', f"{H.person_name(self.conn, CMO)} closed the ask to Ana Rivera: Ana said yes."))
-
-    def test_bot_tasks_already_waiting_on_a_person_move_to_the_subtask_shape(self):
-        from backend import person_asks
-        plain = "Approve the venue for Friday? If yes, I'll book it."
-        moved = H.task_create(self.conn, CMO, 'Book the venue', 'All the venue notes.', CMO, private=False)
-        unclear = H.task_create(self.conn, CMO, 'Renew the domain', '', CMO, private=False)
-        for row, note in ((moved, plain), (unclear, 'Blocked on db14c907')):
-            self.conn.execute("UPDATE tasks SET status='waiting', waiting_on=?, note=? WHERE id=?", (ANA, note, row['id']))
-        self.assertEqual(person_asks.migrate(self.conn), [moved['id']])
-        self.assertEqual(person_asks.migrate(self.conn), [], 'moved once')
-        after = H.task(self.conn, moved['id'])
-        self.assertEqual((after['owner_id'], after['status'], after['waiting_on'], after['note']),
-                         (CMO, 'waiting', None, f'Blocked on Ana Rivera: {plain}'))
-        [card] = [H.task(self.conn, t) for t in TR.child_ids(self.conn, moved['id'])]
-        self.assertEqual((card['owner_id'], card['title'], card['body']), (ANA, 'Approve the venue for Friday?', plain))
-        # The one with no plain ask stays for its bot to restate (the task roundup lists it).
-        self.assertEqual(H.task(self.conn, unclear['id'])['waiting_on'], ANA)
 
     def test_a_plain_ask_passes_and_shorthand_does_not(self):
         # Abbreviations, initials, a year after a few letters, a standard's number and a product name are plain words.

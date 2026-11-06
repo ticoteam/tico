@@ -1,4 +1,4 @@
-"""What Settings > Gateway shows and what an agent reads about the Tico AI Gateway's lineup.
+"""What the Tico Gateway card on Settings > Models shows and what an agent reads about the Tico AI Gateway's lineup.
 
 The catalog is backend/gateway_tiers.py's (HQ's, refreshed while the Gateway is connected, else this release's). The
 picks in use are counted from the bots' own settings: a bot counts once for each pick it uses, as its model, its
@@ -73,10 +73,12 @@ def _now(tier):
 
 
 def models(cat):
-    """The models table of Settings > Gateway: one row per level with its model and its Fast model. Every department
-    runs a level on the same model today; if one ever differs, the rows are per department instead (`same` false)."""
+    """The models table of the Gateway card: one row per level with its model and its Fast model. Every department
+    runs a level on the same model today; if one ever differs, the rows are per department instead (`same` false).
+    A tier that runs a held model is not shown (`gateway_tiers.live_row`)."""
     names = {row["id"]: row["name"] for row in cat["departments"]}
-    tiers = {(row["department"], row["level"], bool(row["fast"])): _now(row) for row in cat["models"] if row.get("department")}
+    live = [row for row in map(gateway_tiers.live_row, cat["models"]) if row is not None]
+    tiers = {(row["department"], row["level"], bool(row["fast"])): _now(row) for row in live if row.get("department")}
     departments = [ident for ident in names if any(key[0] == ident for key in tiers)]
     levels = [(row["id"], row["name"]) for row in cat["levels"]]
     same = bool(departments) and all(tiers.get((d, level, fast)) == tiers.get((departments[0], level, fast))
@@ -85,14 +87,15 @@ def models(cat):
     rows = [{"id": level if same else f"{department}-{level}", "name": prefix + name,
              "model": tiers[(department, level, False)], "fast": tiers.get((department, level, True))}
             for prefix, department in groups for level, name in levels if (department, level, False) in tiers]
-    meeting = next((row for row in cat["models"] if row["id"] == gateway_tiers.MEETING_TIER), None)
+    meeting = next((row for row in live if row["id"] == gateway_tiers.MEETING_TIER), None)
     return {"same": same, "departments": [names[d] for d in departments], "levels": rows,
             "meeting": {"name": meeting["name"], **_now(meeting)} if meeting else None,
-            "decisions": [{"id": row["id"], "name": row["name"], **_now(row)} for row in cat["decisions"] if row["versions"]]}
+            "decisions": [{"id": row["id"], "name": row["name"], **_now(row)}
+                          for row in map(gateway_tiers.live_row, cat["decisions"]) if row is not None and row["versions"]]}
 
 
 def overview(c, settings=None, *, owner=False):
-    """The Settings > Gateway page: the connection with this month's spend against its cap, the picks in use, the models
+    """The Tico Gateway card on Settings > Models: the connection with this month's spend against its cap, the picks in use, the models
     and the services."""
     cat = catalog(c, settings)
     rows, decide = picks(c, settings)

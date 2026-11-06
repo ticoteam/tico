@@ -16,7 +16,7 @@ use tokio::process::Child;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use super::{event, failed, hub_mcp_server, is_auth_retryable, is_limit, shell_outside_actions, tool_summary, Events, HostError, Settings};
+use super::{event, failed, hub_mcp_server, is_auth_retryable, is_limit, shell_outside_actions, shell_reads_only, tool_summary, Events, HostError, Settings};
 use crate::util::{iso, log, py_dumps, text_of};
 
 pub const STREAM_ARGS: &[&str] = &[
@@ -1319,6 +1319,13 @@ impl ClaudeHost {
         if name == "Bash" {
             if let Some(command) = input["command"].as_str() {
                 fields["outside_actions"] = json!(shell_outside_actions(command));
+                fields["reads_only"] = json!(shell_reads_only(command));
+            }
+        }
+        if name == "Skill" {
+            // The skill's name alone, for the company's usage counts (backend/skill_runtime.py); never its arguments.
+            if let Some(skill) = input["skill"].as_str().filter(|s| crate::company_skills::name_ok(s)) {
+                fields["skill"] = json!(skill);
             }
         }
         if let Some(s) = subagent {
@@ -1697,10 +1704,12 @@ mod tests {
                     break;
                 }
             }
-            // These shared Python snapshots contain read-only shell commands. Rust adds recovery labels.
+            // These shared Python snapshots hold no outside actions; Rust adds recovery labels and whether each
+            // line only reads (their `cat` and `wc` lines do, `sleep 4; echo done` does not).
             for event in &mut expected {
                 if event["tool"] == "Bash" && event["status"] == "started" {
                     event["outside_actions"] = json!([]);
+                    event["reads_only"] = json!(matches!(event["summary"].as_str(), Some("cat" | "wc")));
                 }
             }
             assert_eq!(got, expected, "{}", path.display());
@@ -2350,6 +2359,20 @@ mod tests {
     }
 
     #[test]
+    fn a_skill_call_carries_its_name_and_nothing_else() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        host.tool_started(&json!({"id": "s1", "name": "Skill", "input": {"skill": "acme-brief", "args": "the private Q3 numbers"}}), None, "th", "tu");
+        host.tool_started(&json!({"id": "s2", "name": "Skill", "input": {"skill": "plugin:Other Name"}}), None, "th", "tu");
+        host.tool_started(&json!({"id": "s3", "name": "Read", "input": {"skill": "acme-brief", "file_path": "/w/a.md"}}), None, "th", "tu");
+        let (named, plugin, other) = (rx.try_recv().unwrap(), rx.try_recv().unwrap(), rx.try_recv().unwrap());
+        assert_eq!((named["tool"].as_str(), named["status"].as_str(), named["item_id"].as_str(), named["skill"].as_str()),
+                   (Some("Skill"), Some("started"), Some("s1"), Some("acme-brief")));
+        assert!(!named.to_string().contains("private"), "{named}");
+        assert!(plugin.get("skill").is_none() && other.get("skill").is_none());
+    }
+
+    #[test]
     fn a_refused_turns_event_gives_the_reset() {
         // `rate_limit_event` as Claude Code sends it when the five-hour window refuses a turn.
         let info: Value = serde_json::from_str(r#"{"status":"rejected","resetsAt":4102444800,"rateLimitType":"five_hour","overageStatus":"rejected","isUsingOverage":false}"#).unwrap();
@@ -2483,9 +2506,8 @@ mod feature_tests {
         let exe = root.join("claude");
         let log = root.join("spawns.log");
         std::fs::write(&exe, format!("#!/bin/sh\necho \"$*\" >> '{}'\necho '2.1.300 (Claude Code)'\necho '--autocompact'\n", log.display())).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-        (vec![exe.display().to_string()], log)
+        // Read the script through the shell so parallel forks cannot hold its writable inode open at exec.
+        (vec!["/bin/sh".into(), exe.display().to_string()], log)
     }
 
     fn runs(log: &std::path::Path) -> usize {
@@ -2500,6 +2522,7 @@ mod feature_tests {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         // The probe passes the version as `installed_version` reads it, which is what a turn's start is keyed by too.
         let version = installed_version(&cmd, "--version").await;
+        assert_eq!(version, "2.1.300 (Claude Code)\n--autocompact", "the version probe runs the fixture");
         let read = runs(&log);
         note_version(&cmd, &version).await;
         assert_eq!(runs(&log), read + 1, "a new version is read once, for --help");

@@ -44,7 +44,7 @@ pub struct Session {
     pub latest: Mutex<Option<Vec<u8>>>,
     pub thumbnail: Mutex<Option<Vec<u8>>>,
     generation: Mutex<String>,
-    access_token: Mutex<String>,
+    access_token: Mutex<(u64, String)>,
     pub app: Option<tauri::AppHandle>,
     pub capture_id: String,
     pub selected: AtomicBool,
@@ -157,7 +157,7 @@ impl ScreenShare {
             latest: Mutex::new(None),
             thumbnail: Mutex::new(None),
             generation: Mutex::new(String::new()),
-            access_token: Mutex::new(String::new()),
+            access_token: Mutex::new((settings::version(), String::new())),
             app: Some(app.clone()),
             capture_id: uuid::Uuid::new_v4().to_string(),
             selected: AtomicBool::new(false),
@@ -273,7 +273,7 @@ impl Session {
     }
     fn stop_remote(&self, timeout: Duration) {
         let generation = self.generation.lock().unwrap().clone();
-        let token = self.access_token.lock().unwrap().clone();
+        let token = self.access_token.lock().unwrap().1.clone();
         if generation.is_empty() || token.is_empty() {
             return;
         }
@@ -298,10 +298,11 @@ impl Session {
             !self.stopped.load(Ordering::Acquire),
             "Screen sharing cancelled"
         );
-        let token = self.access_token.lock().unwrap().clone();
-        let token = if token.is_empty() {
+        let version = settings::version();
+        let (seen, token) = self.access_token.lock().unwrap().clone();
+        let token = if token.is_empty() || seen != version {
             let fresh = (self.auth)(None)?;
-            *self.access_token.lock().unwrap() = fresh.clone();
+            *self.access_token.lock().unwrap() = (version, fresh.clone());
             fresh
         } else {
             token
@@ -331,7 +332,7 @@ impl Session {
             && !self.stopped.load(Ordering::Acquire)
         {
             let fresh = (self.auth)(Some(&token))?;
-            *self.access_token.lock().unwrap() = fresh.clone();
+            *self.access_token.lock().unwrap() = (version, fresh.clone());
             ensure!(
                 !self.stopped.load(Ordering::Acquire),
                 "Screen sharing cancelled"
@@ -475,7 +476,7 @@ mod tests {
             latest: Mutex::new(None),
             thumbnail: Mutex::new(None),
             generation: Mutex::new(String::new()),
-            access_token: Mutex::new("synthetic-test-token".into()),
+            access_token: Mutex::new((settings::version(), "synthetic-test-token".into())),
             app: None,
             capture_id: "capture-one".into(),
             selected: AtomicBool::new(false),
@@ -487,6 +488,53 @@ mod tests {
                 .build()
                 .unwrap(),
         })
+    }
+    #[test]
+    fn settings_reload_screen_requests_use_replaced_credentials_without_a_401() {
+        if std::env::var("TICO_SETTINGS_SCREEN_TEST_CHILD").as_deref() != Ok("1") {
+            let directory = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["screen::tests::settings_reload_screen_requests_use_replaced_credentials_without_a_401", "--exact", "--nocapture"])
+                .env("TICO_SETTINGS_SCREEN_TEST_CHILD", "1")
+                .env("TICO_RECORDER_DATA_DIR", directory.path())
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        settings::hold_secret("tico:screen-reload", "synthetic-test-token").unwrap();
+        settings::hold_secret("tico-grant:screen-reload", "").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut s = session(format!("http://{}", listener.local_addr().unwrap()));
+        Arc::get_mut(&mut s).unwrap().auth =
+            Arc::new(|rejected| signin::token_after_rejection("screen-reload", rejected));
+        let server = std::thread::spawn(move || {
+            for token in ["synthetic-test-token", "replacement-token"] {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut head = vec![];
+                while !head.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).unwrap();
+                    head.push(byte[0]);
+                }
+                let head = String::from_utf8(head).unwrap().to_ascii_lowercase();
+                assert!(head.contains(&format!("authorization: bearer {token}\r\n")));
+                socket
+                    .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                    .unwrap();
+            }
+        });
+        assert!(s.request("/", None, None).unwrap().status().is_success());
+        settings::hold_secret("tico:screen-reload", "replacement-token").unwrap();
+        assert!(s.request("/", None, None).unwrap().status().is_success());
+        server.join().unwrap();
     }
     #[test]
     fn stopping_is_immediate_even_with_a_blocked_sender_and_never_retargets() {

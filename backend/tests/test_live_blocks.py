@@ -3,7 +3,7 @@ address names, from the same visibility as Needs you and the task page. Nothing 
 import pytest
 
 from backend import visuals as V
-from backend.tests.test_api import api, headers, post  # noqa: F401  (fixtures)
+from backend.tests.test_api import api, as_member, headers, post, restrict  # noqa: F401  (fixtures)
 from backend.tests.test_files import turn
 
 VISUALS = "http://visuals.localhost:9001"
@@ -77,10 +77,11 @@ def test_a_page_with_live_blocks_is_never_the_hosted_copy(api, monkeypatch):
 
 def test_publishing_keeps_live_tags_with_their_own_attributes_only():
     cleaned, unembedded = V.clean(b'<p><tico-tasks waiting-on="viewer" limit="3" bogus="1" onclick="x()">'
-                                  b'</tico-tasks><tico-task id="t1" src="https://cdn.example/x.png"/></p>',
+                                  b'</tico-tasks><tico-task id="t1" src="https://cdn.example/x.png"/>'
+                                  b'<tico-kpi id="k1" onclick="x()"></tico-kpi></p>',
                                   "page", base=False)
     assert b'<tico-tasks waiting-on="viewer" limit="3"></tico-tasks>' in cleaned
-    assert b'<tico-task id="t1"/>' in cleaned
+    assert b'<tico-task id="t1"/>' in cleaned and b'<tico-kpi id="k1"></tico-kpi>' in cleaned
     assert b"bogus" not in cleaned and b"onclick" not in cleaned and unembedded == []
 
 
@@ -95,3 +96,73 @@ def test_a_page_fills_at_most_the_cap_and_the_tags_past_it_render_empty(monkeypa
     assert filled == [f"t{i}" for i in range(LB.LIVE_TAG_CAP)]
     assert out.startswith(LB.STYLE) and out.count(LB.STYLE) == 1
     assert "<b>t49</b>" in out and "t50" not in out and "<tico-task" not in out
+
+
+def test_a_kpi_tag_shows_a_bots_value_and_its_change_and_nothing_for_a_viewer_who_cannot_read_the_bot(api):
+    from datetime import datetime, timedelta, timezone
+    from backend import botkpis
+    from backend import live_blocks as LB
+    now = datetime.now(timezone.utc)
+    as_member(api, "ben@acme.example")          # the fixture's Ben is an admin, and an admin may read every bot
+    text = ('<p><tico-kpi bot="ops" name="cost_7d"></tico-kpi><tico-kpi bot="ops" name="Model cost (7d)"></tico-kpi>'
+            '<tico-kpi bot="ops" name="unknown_kpi"></tico-kpi><tico-kpi bot="ops" name="cost_7d" period="30d"></tico-kpi>'
+            '<tico-kpi bot="nobody" name="cost_7d"></tico-kpi></p>')
+    with api.app.state.store.transaction() as c:
+        # The week before last is the previous period: $1.00 then, $2.50 now.
+        c.executemany("INSERT INTO attempts(id, bot_id, created_at, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, 'api')", [
+            ("this-week", botkpis._stamp(now - timedelta(days=1)), 2.5),
+            ("last-week", botkpis._stamp(now - timedelta(days=10)), 1.0)])
+        restrict(c, "ops", people=["ben"])
+        auth = api.app.state.auth
+        shown = LB.fill(text, c, auth.identity_for_actor(c, "human:ben"), auth, None)
+        assert shown.count('class="tico-live-kpi"') == 2
+        assert "Model cost (7d)" in shown and "$2.50" in shown and "▲ $1.50 vs previous 7d" in shown
+        assert "unknown_kpi" not in shown and "nobody" not in shown
+        hidden = LB.fill(text, c, auth.identity_for_actor(c, "human:cara"), auth, None)
+        assert "$2.50" not in hidden and "tico-live-kpi" not in hidden
+
+
+def test_a_stored_kpi_tag_shows_its_latest_reading_and_its_change_on_the_reading_a_period_before(api):
+    from backend import live_blocks as LB
+    kpi = post(api, "kpis", {"name": "Booked demos", "unit": "demos", "owner": "me", "cadence": "weekly"})["kpi"]
+    # A week before the latest (Oct 25) is the reading to compare with; Oct 29 is the previous reading, not that one.
+    for value, period_end in [(9, "2026-10-11"), (12, "2026-10-25"), (14, "2026-10-29"), (15, "2026-11-01")]:
+        post(api, f"kpis/{kpi['id']}/readings", {"value": value, "period_end": period_end})
+    text = f'<p><tico-kpi id="{kpi["id"]}"></tico-kpi><tico-kpi id="auto:nope"></tico-kpi></p>'
+    with api.app.state.store.transaction() as c:
+        auth = api.app.state.auth
+        shown = LB.fill(text, c, auth.identity_for_actor(c, "human:ben"), auth, None)
+    assert shown.count('class="tico-live-kpi"') == 1
+    assert "Booked demos" in shown and "15 demos" in shown and "▲ 3 demos vs previous week" in shown
+
+
+def test_a_stored_kpi_tag_shows_no_change_when_the_only_earlier_reading_is_over_two_periods_old(api):
+    from backend import live_blocks as LB
+    kpi = post(api, "kpis", {"name": "Booked demos", "unit": "demos", "owner": "me", "cadence": "weekly"})["kpi"]
+    # Sep 1 is two months before the latest reading, so "vs previous week" would compare against the wrong week.
+    for value, period_end in [(9, "2026-09-01"), (15, "2026-11-01")]:
+        post(api, f"kpis/{kpi['id']}/readings", {"value": value, "period_end": period_end})
+    text = f'<p><tico-kpi id="{kpi["id"]}"></tico-kpi></p>'
+    with api.app.state.store.transaction() as c:
+        auth = api.app.state.auth
+        shown = LB.fill(text, c, auth.identity_for_actor(c, "human:ben"), auth, None)
+    assert "Booked demos" in shown and "15 demos" in shown
+    assert "vs previous" not in shown and "No change" not in shown
+
+
+def test_a_stored_kpi_of_a_bot_shows_only_to_viewers_who_may_read_that_bot(api):
+    from backend import live_blocks as LB
+    as_member(api, "ben@acme.example")          # the fixture's Ben is an admin, and an admin may read every bot
+    kpi = post(api, "kpis", {"name": "Booked demos", "unit": "demos", "owner": "me", "cadence": "weekly"})["kpi"]
+    post(api, f"kpis/{kpi['id']}/readings", {"value": 15, "period_end": "2026-11-01"})
+    text = f'<p><tico-kpi id="{kpi["id"]}"></tico-kpi></p>'
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE kpis SET owner_id='bot:ops' WHERE id=?", (kpi["id"],))
+        restrict(c, "ops", people=["ben"])
+        auth = api.app.state.auth
+        shown = LB.fill(text, c, auth.identity_for_actor(c, "human:ben"), auth, None)
+        hidden = LB.fill(text, c, auth.identity_for_actor(c, "human:cara"), auth, None)
+        assert "Booked demos" in shown and "15 demos" in shown
+        assert "Booked demos" not in hidden and "tico-live-kpi" not in hidden
+        c.execute("UPDATE kpis SET archived_at='2026-11-02T00:00:00.000000Z' WHERE id=?", (kpi["id"],))
+        assert "tico-live-kpi" not in LB.fill(text, c, auth.identity_for_actor(c, "human:ben"), auth, None)

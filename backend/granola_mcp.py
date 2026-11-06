@@ -1106,13 +1106,28 @@ class GranolaMCP:
         rows = await asyncio.to_thread(connections)
         active = {row["actor"] for row in rows}
         self.starts = {actor: value for actor, value in self.starts.items() if actor in active}
+        started = failed = 0
         for index, row in enumerate(rows):
             try:
                 start = self.starts.setdefault(row["actor"], self.clock() + index * 5)
                 if self.clock() >= start:
+                    running = row["actor"] in self.jobs
                     await self.trigger(Identity(row["actor"], "human", row["email"]), SCHEDULE)
+                    started += not running and row["actor"] in self.jobs
             except Exception:
+                failed += 1
                 continue
+        if rows:
+            # One run of Meeting notes sync per pass (Settings > Routines, Automations); a pass with nothing due folds.
+            await asyncio.to_thread(self.record, started, failed)
+
+    def record(self, started, failed):
+        from . import system_routines as SR
+        run = SR.Run("meeting_sync")
+        words = [SR.count_words(started, "sync started", "syncs started")] if started else []
+        if failed:
+            words.append(SR.count_words(failed, "connection could not be read", "connections could not be read"))
+        SR.write(self.store, run.did(", ".join(words) or "Nothing due", quiet=not words))
 
     async def loop(self, stop):
         while not stop.is_set():

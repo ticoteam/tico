@@ -1,4 +1,5 @@
-/* Personal phone alerts in Inboxes > Settings > Texts. Registry: ui/app/inboxes.js. */
+/* ui/app/inboxes-alerts.js — Personal phone alerts: Settings › General › Notifications (settings.js draws it into
+   #settings-notifications with a ctx of its own). The pills and card come from ui/app/inboxes.js. */
 'use strict';
 
 const IB_ALERT_EVENTS = [
@@ -45,7 +46,7 @@ async function inboxesAlerts(host, ctx) {
       <button type="button" class="ghost" data-alert-remove>${removing ? 'Retry removal' : 'Remove phone'}</button>
     </div>`;
   const recent = (current.recent || []).slice(0, 10);
-  host.innerHTML = inboxesCard('inboxes-alerts', 'Alerts', `
+  host.innerHTML = inboxesCard('inboxes-alerts', 'Notifications', `
     <p class="ib-alert-price">$1 per accepted alert, including tests. Paid by the company.</p>
     <div class="ib-field"><div class="ib-field-label">Your phone · only you</div><div>${addPhone}</div></div>
     <form data-alert-preferences>
@@ -154,4 +155,13 @@ async function inboxesAlerts(host, ctx) {
   });
 }
 
-inboxesSetting('texts-alerts', {section: 'texts', order: 40, render: inboxesAlerts});
+// Settings › Notifications: drawn when General is shown, with a ctx that lives while its host is on the page.
+function settingsNotificationsRender() {
+  const host = $('#settings-notifications');
+  if (!host) return;
+  const run = (host._alertsRun || 0) + 1;
+  host._alertsRun = run;
+  const ctx = {admin: settingsIsAdmin(), me: S.me, live: () => host.isConnected && host._alertsRun === run,
+    once: (name, load) => load(), refresh: settingsNotificationsRender};
+  return inboxesAlerts(host, ctx).catch(e => { if (host.isConnected) host.innerHTML = `<section class="card"><p class="err">${esc(e.message)}</p></section>`; });
+}

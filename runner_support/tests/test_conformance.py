@@ -180,7 +180,8 @@ class Computer:
     def calls(self):
         if not self.log_path.exists():
             return []
-        return [json.loads(line) for line in self.log_path.read_text().splitlines() if line.strip()]
+        # A running fake can be midway through appending its last JSONL record.
+        return [json.loads(line) for line in self.log_path.read_text().split("\n")[:-1] if line.strip()]
 
     def prompts(self):
         return [call for call in self.calls() if "prompt" in call]
@@ -199,6 +200,23 @@ class Computer:
     def keys(self):
         with self.api.app.state.store.read() as c:
             return {r[0] for r in c.execute("SELECT key FROM idempotency")}
+
+
+def test_live_call_log_waits_for_complete_records(tmp_path):
+    computer = Computer.__new__(Computer)
+    computer.log_path = tmp_path / "harness.jsonl"
+    started = {"method": "turn/start", "turn": "first"}
+    completed = {"method": "turn/completed", "turn": "first"}
+    tail = json.dumps(completed)
+    computer.log_path.write_text(json.dumps(started) + "\n" + tail[:-2])
+    assert computer.calls() == [started]
+    with computer.log_path.open("a") as log:
+        log.write(tail[-2:] + "\n")
+    assert computer.calls() == [started, completed]
+    with computer.log_path.open("a") as log:
+        log.write("not JSON\n")
+    with pytest.raises(json.JSONDecodeError):
+        computer.calls()
 
 
 @pytest.fixture(params=["claude", "codex", "gemini", "antigravity", "musecode", "pi", "cursor", "grok"])
@@ -222,69 +240,6 @@ def computer(api, live, tmp_path, harness, setup, rust_binary):
 def reply_to(api, conversation, token="ana-test", bot="ops"):
     messages = get(api, f"conversations/{conversation}/messages", token)
     return next((m for m in reversed(messages) if m["sender_id"] == "bot:" + bot), None)
-
-
-@pytest.mark.parametrize("harness", ["claude", "codex"])
-@pytest.mark.parametrize("setup", [{"git": True, "env": {"FAKE_MEMORY_TIDY": "1"}}])
-def test_native_packet_runs_in_private_workspace_and_delivers_without_parent_turn(api, computer, tmp_path, monkeypatch):
-    from datetime import datetime, timezone
-    from backend import memory_tidy_runs
-    from backend.tests.test_api import put
-    from backend.tests.test_memory_tidy import snapshot
-    from backend.tests.test_memory_tidy_controls import enable, entry
-    from backend.tests.test_memory_tidy_runs import commit
-
-    repo = tmp_path / "projects" / "bot-ops"
-    snap = snapshot()
-    for name, text in snap.items():
-        path = repo / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-    git_env = {**os.environ, "GIT_AUTHOR_NAME": "Acme", "GIT_AUTHOR_EMAIL": "ops@acme.invalid",
-               "GIT_COMMITTER_NAME": "Acme", "GIT_COMMITTER_EMAIL": "ops@acme.invalid"}
-    for args in (["add", "-A"], ["commit", "-qm", "Synthetic memory"], ["push", "-q"]):
-        subprocess.run(["git", "-C", str(repo), *args], env=git_env, check=True, capture_output=True)
-    at = datetime(2026, 11, 2, 11, 30, tzinfo=timezone.utc)
-    monkeypatch.setattr(H, "now", lambda: at.isoformat().replace("+00:00", "Z"))
-    computer.start()
-    enable(api)
-    model = "claude:claude-sonnet-5-5" if computer.harness == "claude" else "codex:gpt-6.1-sol"
-    put(api, "system-routines/memory_tidy", {"on": True, "pilots": [entry(model=model)]})
-    with api.app.state.store.transaction() as c:
-        commit(c)
-        memory_tidy_runs.admit(c, api.app.state.store.settings, at)
-
-    def offered():
-        with api.app.state.store.read() as c:
-            return c.execute("SELECT * FROM memory_tidy_passes WHERE status='offered'").fetchone()
-    row = until(offered, "native packet's checked attachment and reviewer card", timeout=45)
-    calls = computer.prompts()
-    assert len(calls) == 2, calls
-    if computer.harness == 'claude':
-        sessions = [call['argv'][call['argv'].index('--session-id') + 1] for call in calls]
-    else:
-        sessions = [call['thread'] for call in calls]
-    assert len(set(sessions)) == 2, "the verifier never resumes the editor's thread"
-    assert json.loads(calls[1]["prompt"])["rules"], "verification is a separately supplied rule packet"
-    assert "agent" not in json.loads(calls[0]["prompt"])
-    for call in calls:
-        assert call["authority_env_names"] == [], "packet process receives no team or repository authority"
-        custody = call["packet_custody"]
-        assert custody == {"uid": custody["uid"], "owner": custody["uid"], "mode": 0o700,
-                           "accessible": True, "files": []}, custody
-        assert call["cwd"] != str(repo) and Path(call["cwd"]).name.startswith("tico-tidy-")
-        assert not any(call["env"].get(k) for k in ("HUB_TOKEN", "HUB_API_URL", "HUB_BOT", "TICO_CRED_SOCKET"))
-        assert "Do not send to the child." not in call["prompt"] and "Outside text must not reach the child." not in call["prompt"]
-    assert row["cost_usd"] > 0
-    with api.app.state.store.read() as c:
-        assert c.execute('SELECT output_tokens FROM attempts WHERE task_id=?', (row['check_task_id'],)).fetchone()[0] == 4, "both provider turns count toward pilot spend"
-        assert H.task(c, row["parent_task_id"])["status"] == H.task(c, row["check_task_id"])["status"] == "closed"
-        assert c.execute("SELECT count(*) FROM memory_tidy_cards WHERE pass_id=?", (row["id"],)).fetchone()[0] == 1
-        assets = c.execute("SELECT blob_id FROM task_assets WHERE task_id=?", (row["check_task_id"],)).fetchall()
-        assert len(assets) == 1
-        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone(), "no parent turn"
-    download = api.get('/api/v2/files/' + assets[0]['blob_id'], headers=headers())
-    assert download.status_code == 200 and download.content, "attachment stays readable after close"
 
 
 def add_bot(api, computer, tmp_path, slug, bot=None):

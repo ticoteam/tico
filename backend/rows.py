@@ -11,6 +11,12 @@ converts the row first (`dict(row)`) or annotates the parameter and lets callers
 from typing import TypedDict
 
 
+class PageIdentityRow(TypedDict):
+    """An alias keeps its page's read provenance after the bytes are purged."""
+    identity: str
+    file_id: str
+
+
 class AlertPreferenceRow(TypedDict):
     person_id: str
     phone: str | None
@@ -28,6 +34,15 @@ class AlertPreferenceRow(TypedDict):
     quiet_end: str
     emergency_exception: int
     monthly_cap: int
+    updated_at: str
+
+
+class RecorderInstallRow(TypedDict):
+    person_id: str
+    install_id: str
+    version: str
+    last_seen_at: str
+    created_at: str
     updated_at: str
 
 
@@ -131,7 +146,7 @@ class TaskRow(TypedDict):
     step_rank: float | None
     private: int
     waiting_on: str | None
-    guest: str | None
+    readers: str | None
     lane: str
     rank: float | None
     next_run: int
@@ -227,6 +242,7 @@ class AttemptRow(TypedDict):
     gateway_key_id: str | None
     handed_runtime: str | None
     handed_model: str | None
+    acting_person: str | None
     lane: str
     wake: str | None
     model: str | None
@@ -255,6 +271,23 @@ class AttemptRow(TypedDict):
     est_cost_usd: float | None
     billing: str | None
     usage_reason: str | None
+
+
+class CloudMachineDeletionRow(TypedDict):
+    """Deletion intent stays tied to the live HQ machine id across replacements."""
+    machine_id: str
+    bot: str
+    runner_id: str | None
+    reason: str
+    next_try_at: float | None
+    failures: int
+    created_at: float | None
+
+
+class CloudMachineEnrollmentFailureRow(TypedDict):
+    """Each live HQ machine id spends the enrollment retry budget at most once."""
+    machine_id: str
+    bot: str
 
 
 class RunnerRow(TypedDict):
@@ -387,8 +420,8 @@ class ThreadPinRow(TypedDict):
 
 
 class MessageRouteRow(TypedDict):
-    """Who routing asked for one person's message (backend/thread_routing.py): `bot_ids` is a JSON list of bot actors,
-    `[]` when it asked none."""
+    """Who routing asked for one person's message, kept as history (routing was retired: backend/threads.py `plan`):
+    `bot_ids` is a JSON list of bot actors, `[]` when it asked none."""
     message_id: str
     thread_id: str
     bot_ids: str
@@ -529,6 +562,95 @@ class BotSettingsRow(TypedDict):
     updated_at: str | None
 
 
+class LetterOutboxRow(TypedDict):
+    id: str
+    mode: str
+    return_address: str | None
+    monthly_cap_micros: int | None
+    availability: str
+    checked_at: str | None
+    created_at: str
+    updated_at: str
+
+
+class LetterOutboxGrantRow(TypedDict):
+    id: str
+    outbox_id: str
+    grantee_type: str
+    grantee_id: str
+    level: str
+    granted_by_id: str
+    created_at: str
+    updated_at: str
+
+
+class LetterBotSettingRow(TypedDict):
+    bot_id: str
+    mode: str | None
+    monthly_cap_micros: int | None
+    updated_by: str
+    updated_at: str
+
+
+class LetterRow(TypedDict):
+    id: str
+    outbox_id: str
+    requested_by: str
+    acting_bot_id: str | None
+    automation_id: str | None
+    task_id: str | None
+    thread_id: str | None
+    attempt_id: str | None
+    recipient: str
+    recipient_hash: str
+    return_address: str
+    mail_class: str
+    color: int
+    duplex: int
+    source_blob_id: str
+    original_blob_id: str | None
+    source_provenance: str
+    proof_blob_id: str | None
+    page_count: int | None
+    quote_id: str | None
+    quote_expires_at: str | None
+    approval_hash: str | None
+    approval_id: str | None
+    approved_hash: str | None
+    submission_quote_id: str | None
+    hq_letter_id: str | None
+    total_micros: int
+    currency: str
+    status: str
+    tracking: str
+    cancel_possible: int
+    always_ask: int
+    approval_reason: str
+    error: str
+    attempts: int
+    next_sync_at: str | None
+    submitted_at: str | None
+    accepted_at: str | None
+    charged_micros: int | None
+    spend_released: int
+    billing: str
+    created_at: str
+    updated_at: str
+
+
+class LetterSourceRow(TypedDict):
+    letter_id: str
+    source_type: str
+    source_id: str
+
+
+class LetterProofRow(TypedDict):
+    letter_id: str
+    blob_id: str
+    approval_hash: str
+    created_at: str
+
+
 class MaintenanceStepRow(TypedDict):
     """One `maintenance_steps` row (SELECT *): a Maintenance step's switch, "How often", custom interval, "Most bots per
     run" and cursors (migration 0090, backend/maintenance.py)."""
@@ -601,3 +723,284 @@ class MaintenanceRequestRow(TypedDict):
     request_key: str
     maintenance_run_id: str
     created_at: str
+
+
+class EmailSendingPolicyRow(TypedDict):
+    scope: str
+    settings: str
+    updated_at: str
+    updated_by: str
+
+
+class EmailSendRow(TypedDict):
+    id: str
+    mailbox: str
+    actor: str
+    bot: str
+    via: str
+    automation_action_id: str | None
+    content_sha256: str
+    idempotency_key: str
+    recipients: str
+    attachments: str
+    subject: str
+    body_sha256: str
+    raw: str
+    draft_id: str
+    thread_id: str
+    reply_to_id: str
+    approval_id: str
+    classification: str
+    decision: str
+    state: str
+    created_at: str
+    send_after: str
+    claimed_at: str | None
+    provider_attempted_at: str | None
+    runner_id: str | None
+    finished_at: str | None
+    provider_message_id: str | None
+    detail: str
+    operation_key: str
+    lease_id: str
+    checked_at: str
+    calendar_action_id: str | None
+
+
+class EmailSuppressedRecipientRow(TypedDict):
+    mailbox: str
+    address: str
+    reason: str
+    created_at: str
+
+
+class EmailLegacyAutomationRow(TypedDict):
+    automation_id: str
+    owner_id: str
+    version: int
+
+
+class EmailSendPreviewRow(TypedDict):
+    send_id: str
+    actor: str
+    content_sha256: str
+    shown_at: str
+
+
+class EmailSendOperationRow(TypedDict):
+    actor: str
+    operation_key: str
+    send_id: str
+
+
+class ToolRow(TypedDict):
+    """An API tool (backend/api_tools.py): a service bots call with a key, through the proxy or on computers."""
+    id: str
+    name: str
+    service: str
+    base_url: str
+    auth_scheme: str
+    check_path: str
+    delivery: str
+    created_by: str
+    created_at: str
+    updated_at: str
+    audience: str | None
+
+
+class ToolCheckRow(TypedDict):
+    """One key's check of its tool: the status the Tools page shows until the next."""
+    id: str
+    tool_id: str
+    credential_id: str | None
+    ok: int
+    status_code: int | None
+    detail: str
+    checked_at: str
+
+
+class ToolCallRow(TypedDict):
+    """One proxied call (track B's proxy writes it): the tool's activity, never the key or the body."""
+    id: str
+    tool_id: str
+    credential_id: str | None
+    actor: str
+    bot: str
+    access_level: str
+    method: str
+    path: str
+    status_code: int | None
+    result: str
+    detail: str
+    duration_ms: int | None
+    created_at: str
+
+
+class SkillRow(TypedDict):
+    """A company skill: the approved name; `latest_version_id` stays None until its first approval."""
+    id: str
+    name: str
+    description: str
+    latest_version_id: str | None
+    created_by_type: str
+    created_by_id: str
+    deleted_at: str | None
+    created_at: str
+    updated_at: str
+
+
+class SkillVersionRow(TypedDict):
+    """One approved, immutable bundle: `files` is the JSON [{path, content}]."""
+    id: str
+    skill_id: str
+    number: int
+    sha256: str
+    files: str
+    description: str
+    proposal_id: str
+    approved_by_id: str
+    approved_at: str
+    created_at: str
+
+
+class SkillProposalRow(TypedDict):
+    id: str
+    name: str
+    skill_id: str | None
+    base_version_id: str | None
+    sha256: str
+    files: str
+    description: str
+    source: str
+    note: str
+    status: str
+    proposed_by_type: str
+    proposed_by_id: str
+    task_id: str | None
+    decided_by_id: str | None
+    decided_at: str | None
+    decline_reason: str | None
+    version_id: str | None
+    screen_status: str
+    created_at: str
+    updated_at: str
+
+
+class SkillScreeningRow(TypedDict):
+    id: str
+    proposal_id: str
+    sha256: str
+    base_version_id: str | None
+    question_set: str
+    status: str
+    reason: str | None
+    verdict: str | None
+    risk: str | None
+    summary: str | None
+    findings: str
+    patterns: str
+    judge_call_id: str | None
+    created_at: str
+
+
+class SkillInstallRow(TypedDict):
+    id: str
+    skill_id: str
+    target_type: str
+    target_id: str
+    version_policy: str
+    pinned_version_id: str | None
+    installed_by_type: str
+    installed_by_id: str
+    created_at: str
+    updated_at: str
+
+
+class SkillReceiptRow(TypedDict):
+    """What a runner or helper actually staged for a target."""
+    target_type: str
+    target_id: str
+    skill_id: str
+    sha256: str
+    source: str
+    staged_at: str
+
+
+class SkillUsageRow(TypedDict):
+    """One use: skill, who, where, when. Never prompt text or arguments."""
+    id: int
+    skill_id: str
+    sha256: str | None
+    actor_type: str
+    actor_id: str
+    requested_by_id: str | None
+    trigger: str
+    source: str
+    session_key: str
+    tool_use_id: str
+    task_id: str | None
+    thread_id: str | None
+    used_at: str
+    created_at: str
+
+
+class SkillUsageDailyRow(TypedDict):
+    used_on: str
+    skill_id: str
+    actor_type: str
+    actor_id: str
+    trigger: str
+    uses_count: int
+
+
+class UnlistedSkillUsageDailyRow(TypedDict):
+    """A bot's uses in a day of a skill the directory does not have: the name, the bot, the day and a count only."""
+    used_on: str
+    name: str
+    bot_id: str
+    uses_count: int
+
+
+class SkillSuggestionRow(TypedDict):
+    """A remove or promote suggestion for Library › Skills (backend/skill_suggestions.py)."""
+    id: str
+    kind: str
+    subject: str
+    name: str
+    target_type: str
+    target_id: str
+    uses_count: int
+    bots_count: int
+    status: str
+    closed_by_id: str | None
+    closed_at: str | None
+    created_at: str
+    updated_at: str
+
+
+class SkillDeviceRow(TypedDict):
+    """A person's skills helper; the token is stored only as `token_hash`."""
+    id: str
+    person_id: str
+    label: str
+    token_hash: str
+    reporting_enabled: int
+    claude_version: str | None
+    last_seen_at: str | None
+    revoked_at: str | None
+    created_at: str
+    updated_at: str
+
+
+class SkillDeviceCodeRow(TypedDict):
+    device_code_hash: str
+    user_code: str
+    label: str
+    status: str
+    person_id: str | None
+    reporting_enabled: int
+    device_id: str | None
+    expires_at: str
+    created_at: str
+    updated_at: str
+    client_hash: str | None

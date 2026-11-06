@@ -13,6 +13,7 @@ from pathlib import Path
 from . import hubdb
 from .blobs import Blobs
 from .config import Settings
+from . import sources as SRC
 
 
 class RecoveryBlobs(Blobs):
@@ -420,6 +421,7 @@ def upload_snapshot(source, bucket, key, s3):
         return {"bucket": bucket, "key": key, "verified": True, **expected}
 
 
+@SRC.scoped("system:backup")
 def restore_snapshot(source, destination):
     """Restore to a new file and fence all pre-disaster machine/execution credentials.
 

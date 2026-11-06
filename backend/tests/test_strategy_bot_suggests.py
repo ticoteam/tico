@@ -232,7 +232,7 @@ def test_a_merged_item_names_only_the_originals_its_reader_may_read(api):
                 {"person": OWNER, "title": "Which pricing page first?", "question": "Which one?",
                  "tasks": [asked, filed]}, token=strategy_token)["task"]
     with api.app.state.store.transaction() as c:      # Ops' task becomes its own private task, out of Ana's reach
-        c.execute("UPDATE tasks SET private=1, requester_id='bot:ops', guest=NULL WHERE id=?", (asked,))
+        c.execute("UPDATE tasks SET private=1, requester_id='bot:ops', readers=NULL WHERE id=?", (asked,))
     page = test_goal_asks.get(api, "needs-you", "ana-test")["items"]
     assert next(i for i in page if i["id"] == item["id"])["merged"] == [filed]
 

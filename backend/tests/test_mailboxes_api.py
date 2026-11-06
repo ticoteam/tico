@@ -1,4 +1,4 @@
-"""Settings > Inboxes (backend/mailboxes.py): the admin's table of every mailbox and a member's own and shared ones;
+"""Tools (backend/mailboxes.py): the admin's table of every mailbox and a member's own and shared ones;
 Connect mailbox (a person's address is theirs, any other is a shared inbox or waits for its person); Make shared inbox;
 who can use one mailbox (Read / Read and write), granted and revoked by its owner, or an admin for a shared inbox, and
 nobody else; Stop using in Tico. Every write is a person acting as themselves: the Assistant, a bot and a task actor are

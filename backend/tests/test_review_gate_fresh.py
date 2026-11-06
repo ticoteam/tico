@@ -15,8 +15,8 @@ STALE = f'Tests: head {OLD}: 9 passed, 0 failed'
 GREEN = {f'check {i}': 'success' for i in range(16)}
 
 
-def github(api, monkeypatch, checks):
-    """A configured GitHub App whose PR #412 is at HEAD with these check-run conclusions; returns the paths read."""
+def github(api, monkeypatch, checks, head=HEAD):
+    """A configured GitHub App whose PR #412 has this head and check-run conclusions; returns the paths read."""
     service = api.app.state.github_app
     monkeypatch.setattr(service, 'row', lambda c: {'org': 'ticoteam'})
     monkeypatch.setattr(service, 'mint', lambda *a: ('synthetic', 'later'))
@@ -24,7 +24,7 @@ def github(api, monkeypatch, checks):
     def fetch(method, path, **kw):
         reads.append(path)
         if '/pulls/' in path:
-            data = {'head': {'sha': HEAD}}
+            data = {'head': {'sha': head}}
         elif path.endswith('check-runs'):
             data = {'check_runs': [{'id': i, 'name': name, 'conclusion': result}
                                    for i, (name, result) in enumerate(checks.items(), 1)]}
@@ -33,6 +33,27 @@ def github(api, monkeypatch, checks):
         return SimpleNamespace(status_code=200, json=lambda: data)
     monkeypatch.setattr(service, '_call', fetch)
     return reads
+
+
+def test_fresh_ci_reads_write_only_to_close_an_open_access_outage(api, monkeypatch):
+    from backend import review_gate, source_outages
+    task = ticket(api)
+    github(api, monkeypatch, GREEN)
+    store, service = api.app.state.store, api.app.state.github_app
+    with store.transaction() as c:
+        prs = review_gate.links(c, H.task(c, task['id']))
+        source_outages.observe(c, 'github:' + prs[0]['repo'].lower(), 'GitHub checks access', waiting=1)
+    review_gate.snapshot(service, prs)
+    with store.read_transaction() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action='source_outage.restored'").fetchone()[0] == 1
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('an already restored source needs no writer')
+
+    with monkeypatch.context() as patched:
+        patched.setattr(store, 'transaction', unexpected)
+        for _ in range(2):
+            assert review_gate.snapshot(service, prs)[prs[0]['id']]['head_sha'] == HEAD
 
 
 def bot_token(api, slug='cpo'):

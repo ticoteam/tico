@@ -106,6 +106,7 @@ fn plan(url: &str) -> Plan {
         model: DEFAULT_MODEL.into(),
         language: "en".into(),
         key: Some("fixture-key".into()),
+        follow_settings: false,
         tico: None,
         required: true,
         retry: Duration::from_millis(50),
@@ -135,6 +136,78 @@ fn texts(store: &Store, id: &str, channel: &str) -> Vec<(String, u64)> {
         .collect()
 }
 const SECOND: usize = 16_000;
+
+#[test]
+fn settings_reload_stream_waits_for_a_key_and_reloads_credentials_and_endpoint() {
+    if settings::tests::isolated(
+        "stream::tests::settings_reload_stream_waits_for_a_key_and_reloads_credentials_and_endpoint",
+    ) {
+        return;
+    }
+    let closed: Session = Box::new(|socket| {
+        created(socket);
+        while !matches!(socket.read().unwrap(), Message::Close(_)) {}
+    });
+    let (url, seen, server) = mock(vec![
+        closed,
+        Box::new(|socket| {
+            created(socket);
+            while !matches!(socket.read().unwrap(), Message::Close(_)) {}
+        }),
+        Box::new(|socket| {
+            created(socket);
+            until_done(socket);
+            send(socket, json!({"type":"transcript.done"}));
+        }),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Settings changed while streaming").unwrap();
+    let mut config = Settings {
+        streaming: Some(true),
+        streaming_url: url.clone(),
+        ..Default::default()
+    };
+    settings::write(dir.path(), &config).unwrap();
+    let mut streams = Streams::new(
+        store.clone(),
+        record.id.clone(),
+        Plan::from_settings(&config).unwrap(),
+    );
+    let feed = streams.feed("me").unwrap();
+    wait_for("the missing-key status", || {
+        state(&record.id, "me").state == "off"
+    });
+    assert!(seen.lock().unwrap().is_empty());
+    settings::save_secret(KEY_NAME, "first-key").unwrap();
+    wait_for("the first credential", || {
+        seen.lock().unwrap().len() == 1 && state(&record.id, "me").state == "live"
+    });
+    settings::save_secret(KEY_NAME, "second-key").unwrap();
+    wait_for("the replacement credential", || {
+        seen.lock().unwrap().len() == 2 && state(&record.id, "me").state == "live"
+    });
+    config.streaming_url = format!("{url}/changed");
+    settings::write(dir.path(), &config).unwrap();
+    wait_for("the replacement endpoint", || {
+        seen.lock().unwrap().len() == 3 && state(&record.id, "me").state == "live"
+    });
+    assert!(state(&record.id, "me").error.is_empty());
+    drop(feed);
+    wait_for("the stream to stop", || {
+        state(&record.id, "me").state == "stopped"
+    });
+    server.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|(_, key)| key.as_str())
+            .collect::<Vec<_>>(),
+        ["Bearer first-key", "Bearer second-key", "Bearer second-key"]
+    );
+    assert!(requests[2].0.starts_with("/v1/stt/changed?"));
+}
 
 #[test]
 fn service_times_map_to_the_recording_across_gaps() {
@@ -230,7 +303,7 @@ fn partials_show_live_finals_replace_what_they_cover_and_the_key_stays_in_the_he
         (turns[0].text.as_str(), turns[0].start_ms),
         ("We chip", 60_100)
     );
-    assert_eq!(turns[0].speaker, "S2");
+    assert_eq!(turns[0].speaker, "Speaker 1");
     gate.send(()).unwrap();
     wait_for("the restated final", || {
         texts(&store, &record.id, "them")
@@ -457,6 +530,7 @@ fn a_full_stream_queue_drops_streamed_audio_and_never_recorded_audio() {
                     health,
                     consumer,
                     stream: Box::new(Synthetic),
+                    live_input: None,
                 }],
                 String::new(),
             ))
@@ -621,4 +695,58 @@ fn through_your_tico_live_text_follows_what_it_can_do() {
     assert!(uri.starts_with("/api/v2/recorder/stream?"), "{uri}");
     assert!(!uri.contains("person-token"));
     assert_eq!(auth, "Bearer person-token");
+}
+
+#[test]
+fn transport_failures_never_expose_protocol_internals() {
+    let error = tungstenite::Error::Io(std::io::Error::new(
+        std::io::ErrorKind::UnexpectedEof,
+        "unexpected EOF during chunk size line",
+    ));
+    let message = describe(&error);
+    assert!(crate::retry::notice(&message, 1, "Transcription is retrying").is_empty());
+    assert_eq!(
+        crate::retry::notice(&message, 3, "Transcription is retrying"),
+        "Transcription is retrying"
+    );
+}
+
+#[test]
+fn sparse_service_speakers_keep_first_seen_numbers_across_final_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Provisional voices").unwrap();
+    let (_, receiver) = mpsc::channel();
+    let mut worker = Worker {
+        store: store.clone(),
+        id: record.id.clone(),
+        channel: "them".into(),
+        plan: plan("ws://127.0.0.1:1/v1/stt"),
+        receiver,
+        queued: Arc::default(),
+        dropped: Arc::default(),
+        reconnects: 0,
+        settings_version: None,
+    };
+    for (at, raw) in [(1.0, 3), (3.0, 0), (5.0, 3)] {
+        let mut event = result(true, true, at, 0.5, &[("Hello", at, at + 0.3)]);
+        event["words"][0]["speaker"] = json!(raw);
+        worker.event(&event.to_string(), &[(0, 0.)]).unwrap();
+    }
+    let words = store.live_words(&record.id).unwrap();
+    assert_eq!(
+        words["them"]
+            .iter()
+            .map(|w| w.speaker.as_str())
+            .collect::<Vec<_>>(),
+        ["stream:S4", "stream:S1", "stream:S4"]
+    );
+    let record = store.get(&record.id).unwrap();
+    assert_eq!(
+        words["them"]
+            .iter()
+            .map(|w| record.speaker_labels[&w.speaker].as_str())
+            .collect::<Vec<_>>(),
+        ["Speaker 1", "Speaker 2", "Speaker 1"]
+    );
 }

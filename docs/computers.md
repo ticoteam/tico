@@ -14,7 +14,7 @@ reports an app-salted hash of the OS device identity; the raw identity stays on 
 **Settings → Models** holds the company's model settings:
 
 - **Subscriptions**: the company's Claude and ChatGPT plans and API keys, each given to the computers that use it.
-- **Tico Gateway**: one switch, **Use when a computer has no subscription, or a plan runs out**. The
+- **Tico Gateway**: one switch, **Use as fallback** (used when a computer has no subscription, or a plan runs out). The
   [Tico AI Gateway](ai-gateway.md) key, address and spend are under **Advanced**.
 - **Defaults**: **Default model**, **Decisions**, **Meeting model**, **Fall back when a plan runs out** and **Check model**.
 - **Limits**: the [company turn levels](#change-the-company-turn-levels).
@@ -252,12 +252,15 @@ Connecting a saved subscription is **Reconnect**, and asks first as a pasted val
 who added it. Owners and admins add, rename, reconnect and remove them in **Settings > Models**; anyone who sees that
 page sees the list (name, kind, status, computers, usage), never a value.
 
-Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many
-computers. Every bot on that computer then runs that tool on it. Automatic fallback can use it too when
-that tool is installed and the company allows automatic fallback. On an updated runner, an unused automatic
-candidate's login is fetched only when the bot is about to use it. Changing or removing that login leaves a turn
-still running on another tool alone. Once the fallback fetches the login, changing it stops that turn too. Older
-runners fetch fallback logins up front and restart those turns when a login changes.
+Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many computers.
+Every bot on that computer then runs that tool on it. A bot with no fallback of its own, or whose named fallback is another
+model on the same login (that fallback is skipped once the login is spent), can use it too when that tool is installed,
+the company has that tool's provider turned on (adding a subscription for that tool turns it on, and the first-run setup
+lists the providers to switch on), and **Fall back when a plan runs out** is on in **Settings > Models**. On an updated
+runner, an unused automatic candidate's login is fetched only when the bot is about to use it.
+Changing or removing that login leaves a turn still running on another tool alone. Once the fallback fetches the login,
+changing it stops that turn too. Older runners fetch fallback logins up front and restart those turns when a login
+changes.
 
 - Giving, switching or taking off a computer's subscription, reconnecting it, or removing one in use, restarts that tool there: its
   running turns stop and go back in the queue (a turn that may already have acted outside Tico is held for review
@@ -428,7 +431,7 @@ Choose **API key** when you pay the provider for each use:
   - **Add key** gives this computer a key of its own, for Codex, Claude Code, Cursor Agent and Muse Code. Only this
     computer uses it.
   - **Credentials** holds a key that several computers share (the company's key given to **Every computer**), and the
-    key of a tool whose key belongs to each bot, such as the Gemini CLI. **Add connection** offers **Open Credentials**
+    key of a tool whose key belongs to each bot, such as the Gemini CLI. **Add connection** offers **Open Keys**
     for those.
 
 ### Add one
@@ -448,7 +451,7 @@ In a computer's pop-up, **Add connection** (at the end of Connections) opens its
      [API keys on a Computer](#api-keys-on-a-computer)). A credential administrator can set **Shared with:** to other
      computers, or pick a key that is already shared instead of pasting one. An operator adds a key for this computer
      only. If a key already signs the tool in here, **Replace key** is on
-     its line instead. For any other tool, **Open Credentials**, where model keys are added and shared with computers.
+     its line instead. For any other tool, **Open Keys**, where model keys are added and shared with computers.
 4. The new connection's chip appears on the computer's row once the computer reports it; the computer does not need a
    restart.
 

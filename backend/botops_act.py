@@ -329,6 +329,10 @@ LIMITS = re.compile(API + rf"usage/limits(/{_S})?")
 
 # Comes back as a Confirm card; it runs only on the person's own click, as them.
 CONFIRM = _routes(
+    ("PUT", r"letters/settings"),
+    ("PUT", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
+    ("DELETE", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
+    ("PUT", rf"letters/bots/{_S}/settings"),
     ("PUT", rf"postal/addresses/{_S}/grants/(bot|person)/{_S}"),
     ("DELETE", rf"postal/addresses/{_S}/grants/(bot|person)/{_S}"),
     ("PUT", r"postal/settings"),
@@ -357,6 +361,9 @@ MESSAGES = re.compile(API + r"messages")
 
 # Confirm-card routes only an owner or an admin may ask for: a member is told so at once, not handed a card that fails.
 ADMIN_ONLY = _routes(
+    ("PUT", r"letters/settings"),
+    ("PUT", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
+    ("DELETE", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
     ("PUT", r"providers"), ("PUT", r"access/(limits|allow)"), ("PUT", r"usage/limits"), ("PUT", rf"usage/pools/(company|groups/{_S})"),
     ("POST", rf"(runners|computers)/{_S}/member-bots"),
     ("POST", r"system/update"), ("PUT", r"directory"), ("POST", r"directory/(sync|preview)"),
@@ -665,11 +672,11 @@ def _place(path):
         what = "its repository access" if parts[2:3] == ["repositories"] else "its settings"
         return "#/bot/" + slug + "/more", slug, what
     if parts[0] == "repositories":
-        return "#/repositories", "", "Settings > Repositories"
+        return "#/settings/general/set-repos", "", "Settings > General › Repositories"
     if parts[0] == "tasks" and len(parts) > 1 and parts[1]:
         return "#/task/" + parts[1], "", "the task"
     if parts[0] == "credentials":
-        return "#/credentials", "", "Credentials"
+        return "#/tools/keys?show=credentials", "", "Tools > Keys"
     if parts[0] in ("runners", "computers"):
         return "#/settings", "", "Settings > Computers"
     return "#/settings", "", "Settings"
@@ -713,8 +720,8 @@ def fix(path, code, status, acting, names, base=""):
         # A worktree is made with the task's owner bot's own repository access (backend/worktrees.py), so no one's
         # request lends it: say who gives that access.
         text = ("The task's bot needs write access to that repository: an owner or admin gives it in Settings > "
-                "Repositories; then BotOps can add the worktree itself")
-        link = "#/repositories"
+                "General › Repositories; then BotOps can add the worktree itself")
+        link = "#/settings/general/set-repos"
     elif code == "on_behalf_of":
         # The cited request lends nothing (closed, too old, another person's, words others wrote): the detail says why.
         text = ("BotOps can't act on that earlier request: ask it again in your BotOps chat so it acts with your "

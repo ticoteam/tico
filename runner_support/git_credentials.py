@@ -232,6 +232,11 @@ def publish_history(path, repository, env=None, url=None, timeout=60):
     `current` (nothing to do), `skipped` (not a checkout with commits) or `failed`; detail says why
     for `failed` and `skipped`."""
     path = Path(path)
+    from clients.repo_safety import outside_installation
+    try:
+        outside_installation(path)
+    except ValueError as exc:
+        return "failed", str(exc)
     if not repository or not (path / ".git").exists():
         return "skipped", "no repository link" if not repository else "not a git checkout"
     env = safe_git.environment(env)
@@ -363,6 +368,11 @@ def clone_repository(path, repository, env=None, url=None, timeout=180):
     (or the machine's own git access). Only a missing or empty folder is cloned into; anything already
     there is left as it is. Returns (state, detail), state `cloned` or `failed`; detail says why."""
     path = Path(path)
+    from clients.repo_safety import outside_installation
+    try:
+        outside_installation(path)
+    except ValueError as exc:
+        return "failed", str(exc)
     if path.exists() and (not path.is_dir() or any(path.iterdir())):
         return "failed", f"{path.name} already exists here and is not an empty folder; left as it is"
     fresh = not path.exists() or not any(path.iterdir())      # nothing in it is anyone's yet

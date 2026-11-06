@@ -38,7 +38,7 @@ function taskPipelineState(state) {
 function taskPipelineRemember(state) {
   try { localStorage.setItem('tico.tasks.type', state.type || 'general'); } catch {}
 }
-// Every task view belongs to one type; a selected type turns the board into its steps.
+// Open, Board and finished tasks belong to one type; a selected type turns the board into its steps.
 function taskPipelineMatches(task, state) {
   return pipelineTypeId(task) === (state.type || 'general');
 }

@@ -28,6 +28,8 @@ class ReadIndex:
         self.private = {r["id"]: dict(r) for r in row_clock.parties(c)}
         # Meeting participant grants belong to one task, even when its parties match another task's.
         self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
+        from . import counsel
+        self.denied.update(counsel.denied_page_copies(c, who))
         self._attempts = self._attachments = self._tags = self._intervals = None
         # Each instance belongs to one consistent read transaction.
         self.message_sources = lru_cache(maxsize=4096)(self._message_sources)
@@ -114,7 +116,8 @@ class ReadIndex:
         return frozenset(ids)
 
     def content(self, value):
-        return ((not self.denied or not self.denied.intersection(self.references(value)))
+        return (privacy.page_content_readable(self.c, self.principals, value)
+                and (not self.denied or not self.denied.intersection(self.references(value)))
                 and self.meetings.readable(self.principals, self.meetings.references(value)))
 
     def conversation(self, cid):
@@ -327,6 +330,8 @@ class ReadIndex:
         data = H._json(refs, {}) or {}
         if not isinstance(data, dict):
             raise ValueError("Unsupported message provenance")
+        if not privacy.page_message_readable(self.c, self.principals, data):
+            return False
         run = data.get("run")
         aid = data.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
         if any(isinstance(data.get(key), list) and data[key] for key in ("answers", "inputs")):

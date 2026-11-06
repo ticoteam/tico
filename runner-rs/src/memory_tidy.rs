@@ -157,6 +157,7 @@ impl Packet {
         // processes. Use a private, freshly created temporary directory owned by
         // exactly the identity that will start the provider process.
         let workspace = std::env::temp_dir().join(format!("tico-tidy-{aid}"));
+        crate::repo_safety::outside_installation(&workspace)?;
         std::fs::DirBuilder::new()
             .mode(0o700)
             .create(&workspace)

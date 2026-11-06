@@ -682,7 +682,7 @@ def test_a_model_change_checks_this_bots_own_sign_in_on_its_computer(api, botops
     assert refused.json()["error"]["link"].endswith("/#/settings") and "Sign in" in refused.json()["error"]["fix"]
     # Pi takes a key per bot: ops has none, so it is refused, pointing at Credentials ...
     keyless = act(api, ana, "POST", "bots/ops/model", {"model": "kimi-k3", "expected_revision": revision})
-    assert keyless.status_code == 409 and keyless.json()["error"]["link"].endswith("/#/credentials")
+    assert keyless.status_code == 409 and keyless.json()["error"]["link"].endswith("/#/tools/keys?show=credentials")
     # ... and once ops holds its own key, the computer-wide "missing" (another bot's) does not block it.
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO credentials(id,name,kind,env,ciphertext,nonce,created_at,updated_at,updated_by) "

@@ -1,6 +1,6 @@
-"""Settings > Inboxes > Connect Google: a person connects their own mailbox through a Google app the server uses.
+"""Tools > Settings > Email > Connect Google: a person connects their own mailbox through a Google app the server uses.
 
-Tico's shared app (the server's environment) asks for read only. The company's own app (Settings > Inboxes) also asks for
+Tico's shared app (the server's environment) asks for read only. The company's own app (Tools) also asks for
 the act scopes the mail CLI gates labels, drafts and calendar writes on. The browser comes back to the server; the
 computer that syncs mail finishes the sign-in and keeps the grant.
 No Workspace admin, no service account, no domain-wide delegation, and nobody connects anyone else's mailbox.
@@ -38,7 +38,7 @@ def app(api):
 
 @pytest.fixture
 def own_app(app, monkeypatch):
-    """The company's own Google app, set in Settings > Inboxes, signs people in: the environment's client is cleared so
+    """The company's own Google app, set in Tools, signs people in: the environment's client is cleared so
     that it is the one a connect uses now (oauth_client prefers the environment)."""
     settings = app.app.state.store.settings
     monkeypatch.setattr(settings, "google_oauth_client_id", None)
@@ -338,23 +338,21 @@ def test_an_older_google_connects_table_gets_the_fingerprint_columns():
         {r[1] for r in c.execute("PRAGMA table_info(google_connects)")}
 
 
-@pytest.mark.parametrize("error,kind", [("invalid_grant", "signin"), ("admin_policy_enforced", "admin_policy"),
-                                        ("invalid_client", "app_config"), ("org_internal", "app_unavailable"),
-                                        ("server_error", "error")])
-def test_a_refused_refresh_says_why_and_nothing_else(app, monkeypatch, error, kind):
-    machine, _ = holding(app, monkeypatch, FakeGoogle(error=error))
-    r = refresh(app, machine["token"])
-    assert r.status_code == 409 and r.json()["error"]["code"] == "google_refused"
-    assert r.json()["error"]["kind"] == kind
-    assert "1//grant" not in r.text and "tico-secret" not in r.text
-
-
-@pytest.mark.parametrize("google", [FakeGoogle(error=OSError("unreachable")),
-                                    FakeGoogle(error="internal_failure", status=503)])
-def test_google_out_of_reach_or_down_is_a_network_refusal(app, monkeypatch, google):
-    machine, _ = holding(app, monkeypatch, google)
-    r = refresh(app, machine["token"])
-    assert r.status_code == 409 and r.json()["error"]["kind"] == "network"
+def test_a_refused_refresh_says_why_and_nothing_else_and_google_out_of_reach_or_down_is_a_network_refusal(app, monkeypatch):
+    machine, _ = holding(app, monkeypatch)
+    for error, kind in [("invalid_grant", "signin"), ("admin_policy_enforced", "admin_policy"),
+                        ("invalid_client", "app_config"), ("org_internal", "app_unavailable"),
+                        ("server_error", "error")]:
+        monkeypatch.setattr(google_connect, "post_token", FakeGoogle(error=error))
+        r = refresh(app, machine["token"])
+        assert r.status_code == 409 and r.json()["error"]["code"] == "google_refused", (error, r.status_code, r.text)
+        assert r.json()["error"]["kind"] == kind, (error, r.text)
+        assert "1//grant" not in r.text and "tico-secret" not in r.text, error
+    for name, google in [("unreachable", FakeGoogle(error=OSError("unreachable"))),
+                         ("503", FakeGoogle(error="internal_failure", status=503))]:
+        monkeypatch.setattr(google_connect, "post_token", google)
+        r = refresh(app, machine["token"])
+        assert r.status_code == 409 and r.json()["error"]["kind"] == "network", (name, r.status_code, r.text)
 
 
 def test_an_answer_wider_than_asked_is_refused_not_passed_on(app, monkeypatch):

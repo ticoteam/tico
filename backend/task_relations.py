@@ -550,7 +550,7 @@ def _check_blocker(conn, actor, row, blocker_id):
     if H.task_private(conn, block) and (not H.task_private(conn, row) or not all(
             H.task_private_readable(conn, party, block) for party in (row["owner_id"], row["requester_id"]))
     ) and not H.subtask_flows_up(conn, block, row):
-        # Its own subtask for its guest may block it: the guest's answer comes back to it (hubdb.subtask_flows_up).
+        # Its own subtask for its reader may block it: the reader's answer comes back to it (hubdb.subtask_flows_up).
         H.refuse(conn, actor, "private", "A private dependency requires the same private audience")
     # No loop: the blocker must not already wait, directly or through others, on this task.
     loop = conn.execute("WITH RECURSIVE ahead(id) AS (SELECT to_task FROM task_relations WHERE from_task=? "

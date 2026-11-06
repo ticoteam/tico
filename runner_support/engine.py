@@ -11,7 +11,7 @@ otherwise, with cargo on PATH, it is built now, behind a lock. When neither work
 launchd or systemd starts it again. `"engine": "python"` in runner.json and TICO_RUNNER_ENGINE=python are ignored with
 a warning: there is no Python runner any more.
 
-`python -m runner_support.engine prepare` gets the binary ready (scripts/tico install, a release update) and exits non-zero
+`python -m runner_support.engine prepare` gets the binary ready (scripts/tico-computer install, a release update) and exits non-zero
 with the reason when it cannot; `python -m runner_support.engine path` prints the ready binary's path.
 """
 

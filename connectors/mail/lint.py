@@ -1,14 +1,14 @@
 """The deterministic lint. Every rule has a stable id, a severity, and a one-line fix.
 
-Pure: text in, findings out. No network, no Google, no model. `mail lint` runs it standalone and
-`draft`, `reply` and `send` run it inside themselves - errors block, warnings are recorded in the
-audit line. A rule id never changes meaning, because playbooks and Issues quote them.
+Pure: text in, findings out. No network, no Google, no model. `mail lint` runs it standalone, `draft`,
+`reply` and `schedule` run it on the draft as writing feedback (errors stop the draft, warnings are recorded in
+the audit line), and Tico runs it again on every bot's queued send (backend/email_sending.py), where an error asks
+a person. A rule id never changes meaning, because playbooks and Issues quote them; a retired id is never reused.
 
     id    severity  what it catches
     L001  error     a forbidden phrase (docs/company.md "What we are not")
     L010  error     a URL on a host that is not acme.example
     L011  error     a forbidden URL (calendly, go.acme.example/get-demo, S3, presigned)
-    L012  error     the body carries a link and none of them is the employee's required CTA
     L020  error     a placeholder survived ({{ }}, [NAME], TODO, XXX, lorem ipsum, <insert)
     L030  error     something shaped like a secret (xoxb-, AKIA, sk-, ghp_, -----BEGIN)
     L040  error     internal leakage (s3://, runtime/, emp-, bot-<slug>/, AGENT.md)
@@ -19,7 +19,6 @@ audit line. A rule id never changes meaning, because playbooks and Issues quote 
     L053  error     the body is over 2500 characters
     L054  error     more than 3 exclamation marks
     L055  error     no signature (none of the last lines names the owner)
-    L056  error     more than one external recipient
     L060  error     fewer than two times offered (skipped with --slot: that is a confirmation)
     L061  error     the times offered are not in chronological order
     L062  error     a time offered is in the past
@@ -35,10 +34,11 @@ L041 is the only warning: an inbound thread about "invoice #4471" is a real cust
 so it is recorded rather than blocking, and the owner can see it in the audit. Everything else is a
 policy breach, a leak, or a scheduling promise the calendar cannot keep.
 
-Two rules are deliberately narrower than they first look, because the wider version would block
-mail the playbooks require. L012 only fires when the body has a link at all - the "reply to a no"
-script carries none, and forcing a CTA into it would be wrong. L060 only fires without --slot -
-one time in an offer is a mistake, one time in a confirmation is the point.
+L060 is deliberately narrower than it first looks, because the wider version would block mail the playbooks
+require: it only fires without --slot - one time in an offer is a mistake, one time in a confirmation is the point.
+
+Retired: L012 (a standing allowance's required CTA; allowances are gone) and L056 (more than one outside
+recipient; Tico's sending policy asks a person about that on the queued send).
 """
 
 import re
@@ -48,7 +48,7 @@ from . import DEFAULT_TZ, zone
 
 # ---------------------------------------------------------------- rule inputs
 
-FORBIDDEN_PHRASES = ("we guarantee",)   # a company adds its own with `forbidden_phrases:` in mail-policy.yaml
+FORBIDDEN_PHRASES = ("we guarantee",)
 FORBIDDEN_URL_PARTS = ("calendly.com",)
 PRESIGNED = ("x-amz-signature", "x-amz-credential", "amazonaws.com", "s3.amazonaws.com")
 PLACEHOLDERS = ("{{", "}}", "[NAME]", "[name]", "TODO", "XXX", "lorem ipsum", "<insert")
@@ -186,17 +186,12 @@ def overlaps(start, end, busy, buffer_minutes=BUFFER_MINUTES):
 
 # ---------------------------------------------------------------- the lint
 
-def run(body, subject="", to=(), cc=(), slug="", reply_to="", is_reply=None,
-        allowance=None, thread_participants=None, internal_domains=("acme.example",),
-        forbidden_phrases=(), signature_names=None,
-        now=None, tz_name=DEFAULT_TZ, busy=None, check_calendar=False, slot=None,
-        minutes=DEFAULT_MEETING_MINUTES, approved_externals=False, forwarding=False):
+def run(body, subject="", to=(), cc=(), slug="", reply_to="", is_reply=None, thread_participants=None,
+        internal_domains=("acme.example",), signature_names=None, now=None, tz_name=DEFAULT_TZ, busy=None,
+        check_calendar=False, slot=None, minutes=DEFAULT_MEETING_MINUTES):
     """Every rule, in id order. Returns a Result; nothing here raises on a bad draft.
 
-    `approved_externals` is True when a per-message approval Issue names every external
-    address on the message (policy.approval_check(...)["full"]); L056 then does not apply,
-    because the owner chose those recipients personally. `forwarding` is True when the message only goes to the
-    owner's own forward targets (policy.is_forward): it quotes the sender, so a link on another host is not a breach.
+    `signature_names` None skips L055: a caller that does not know whose name signs (the server) does not guess.
     """
     tz = zone(tz_name)
     now = (now or datetime.now(tz)).astimezone(tz)
@@ -211,12 +206,11 @@ def run(body, subject="", to=(), cc=(), slug="", reply_to="", is_reply=None,
     low = body.lower()
 
     # -- content ----------------------------------------------------
-    hits = [p for p in (*FORBIDDEN_PHRASES, *forbidden_phrases) if p in low or p in subject.lower()]
+    hits = [p for p in FORBIDDEN_PHRASES if p in low or p in subject.lower()]
     if hits:
         f.append(finding("L001", "error",
                          "forbidden phrase: " + ", ".join(repr(h) for h in hits),
-                         "Rephrase in the company's own voice (docs/company.md); the list is "
-                         "`forbidden_phrases` in registry/mail-policy.yaml."))
+                         "Rephrase in the company's own voice (docs/company.md)."))
 
     urls = URL_RE.findall(body)
     allowed_hosts = tuple(h for d in internal_domains for h in (d, "www." + d))
@@ -226,31 +220,18 @@ def run(body, subject="", to=(), cc=(), slug="", reply_to="", is_reply=None,
         host = host.split(":")[0].lower()
         if host not in allowed_hosts:
             bad_hosts.append(u)
-    if bad_hosts and not forwarding:
+    if bad_hosts:
         f.append(finding("L010", "error",
                          "URL on a host that is not an internal domain: " + ", ".join(bad_hosts[:3]),
                          "Only " + " and ".join(allowed_hosts) + " may appear in mail the hub "
                          "writes. Link the product page, not a third party."))
-    forbidden_parts = list(FORBIDDEN_URL_PARTS) + list(
-        (allowance or {}).get("urls", {}).get("forbidden") or [])
     bad_urls = [u for u in urls
-                if any(str(p).lower() in u.lower() for p in forbidden_parts)
+                if any(p in u.lower() for p in FORBIDDEN_URL_PARTS)
                 or any(p in u.lower() for p in PRESIGNED)]
     if bad_urls:
         f.append(finding("L011", "error",
                          "forbidden URL: " + ", ".join(bad_urls[:3]),
-                         "No calendly.com, nothing the employee's allowance forbids, no S3 or presigned links."))
-    pattern = (allowance or {}).get("urls", {}).get("required_pattern") or ""
-    if pattern and urls and not any(re.match(pattern, u) for u in urls):
-        # Only when the body carries a link at all: a reply to a no, or a plain answer, is
-        # allowed to carry none. What is not allowed is a *different* link.
-        f.append(finding("L012", "error",
-                         f"no URL matches the required pattern for {slug or 'this employee'}: "
-                         + ", ".join(urls[:3]),
-                         "Generate the CTA with the employee's own tool (influencer: "
-                         "software/utm.py) and paste it whole; the pattern is in that "
-                         "employee's allowance in registry/mail-policy.yaml. A message with no "
-                         "link at all is fine."))
+                         "No calendly.com, no S3 or presigned links."))
 
     left = [p for p in PLACEHOLDERS if p in body or p in subject]
     if left:
@@ -306,13 +287,6 @@ def run(body, subject="", to=(), cc=(), slug="", reply_to="", is_reply=None,
         if not any(name in ln.lower() for ln in tail for name in signature_names):
             f.append(finding("L055", "error", "no signature: the last lines do not name the owner",
                              "The mailbox is the owner's, so the message signs off as the owner."))
-    ext = [a for a in to
-           if not any(a.endswith("@" + d) or a.endswith("." + d) for d in internal_domains)]
-    if len(ext) > 1 and not approved_externals:
-        f.append(finding("L056", "error",
-                         f"{len(ext)} external recipients: " + ", ".join(ext),
-                         "One external recipient per message. Send them separately, so a reply "
-                         "goes to one thread and the cooldown counts properly."))
 
     # -- replies ----------------------------------------------------
     if is_reply and not reply_to:

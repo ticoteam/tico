@@ -50,6 +50,26 @@ def test_a_calls_cost_is_the_providers_own_figure_else_its_tokens_at_list_price(
     assert B.cost_usd(settings, "a-model-with-no-price", {"output_tokens": 1_000_000}) == 50.0
 
 
+def test_a_terra_call_at_272000_prompt_tokens_is_priced_at_the_long_tier_as_one_request(tmp_path):
+    settings = Settings(db_path=tmp_path / "hub.db")
+    # The long-prompt tier starts at 272,000 prompt tokens: 271,999 is still the standard rate.
+    assert B.cost_usd(settings, "gpt-6.1-terra", {"input_tokens": 271_999, "output_tokens": 1_000}) == \
+        round((271_999 * 1.25 + 1_000 * 6.25) / 1_000_000, 6)
+    assert B.cost_usd(settings, "gpt-6.1-terra", {"input_tokens": 272_000, "output_tokens": 1_000}) == \
+        round((272_000 * 2.5 + 1_000 * 9.375) / 1_000_000, 6)
+    # Fresh and cached input together make the prompt; each part is billed at the long tier's own rate.
+    assert B.cost_usd(settings, "gpt-6.1-terra",
+                      {"input_tokens": 200_000, "cache_read_input_tokens": 72_000, "output_tokens": 1_000}) == \
+        round((200_000 * 2.5 + 72_000 * 0.125 + 1_000 * 9.375) / 1_000_000, 6)
+
+
+def test_a_haiku_judge_call_over_its_long_tier_keeps_the_standard_price(tmp_path):
+    settings = Settings(db_path=tmp_path / "hub.db")
+    # Claude Haiku 5.5's long-prompt tier (over 100,000 prompt tokens) stays off judge calls until its rate is approved.
+    assert B.cost_usd(settings, "claude-haiku-5-5", {"input_tokens": 100_001, "output_tokens": 1_000}) == \
+        round((100_001 * 0.10 + 1_000 * 0.50) / 1_000_000, 6)
+
+
 def test_the_audit_keeps_model_tokens_latency_and_cost_and_says_when_the_fallback_answered(api, monkeypatch):
     priced(api.app.state.store.settings)
     jev = fake(api)
@@ -369,26 +389,27 @@ def test_every_transport_caps_a_decisions_answer_at_what_the_cap_reserves(provid
             "openrouter": body.get("max_tokens")}[provider] == J.MAX_OUTPUT_TOKENS
 
 
-@pytest.mark.parametrize("provider,model", COMPANY_MODELS)
-def test_a_company_model_call_billed_its_whole_allowance_stays_within_its_reservation(api, monkeypatch, provider,
-                                                                                      model):
+def test_a_company_model_call_billed_its_whole_allowance_stays_within_its_reservation(api, monkeypatch):
     """The bound holds only if no call costs more than was held for it. Through the meter, on the company's model,
     with the provider billing the longest answer the request allows: the recorded cost is at most the reservation."""
     store = api.app.state.store
     store.settings.decisions_monthly_usd = 50.0
-    provider_api = WholeAllowance(provider)
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: J.llm(provider, "synthetic", model,
-                                                                             opener=provider_api))
-    held, reserve = [], B.reservation
-    monkeypatch.setattr(B, "reservation", lambda *args: held.append(reserve(*args)) or held[-1])
-    with store.read() as c:
-        engine = B.server_engine(store, c, None)
-    result = engine({"team": "Acme"}, QUESTIONS, "company")
-    assert provider_api.limits == [J.MAX_OUTPUT_TOKENS]
-    with store.read() as c:
-        recorded = json.loads(c.execute("SELECT detail FROM events WHERE action='judge.spend'").fetchone()[0])
-    assert recorded["model"] == model and recorded["cost_usd"] == result["cost_usd"] > 0
-    assert recorded["cost_usd"] <= held[0], f"{provider}: billed ${recorded['cost_usd']}, held ${held[0]}"
+    reserve = B.reservation
+    for provider, model in COMPANY_MODELS:
+        provider_api = WholeAllowance(provider)
+        monkeypatch.setattr(B, "fallback_engine", lambda *args, provider=provider, model=model, provider_api=provider_api,
+                            **kwargs: J.llm(provider, "synthetic", model, opener=provider_api))
+        held = []
+        monkeypatch.setattr(B, "reservation", lambda *args, held=held: held.append(reserve(*args)) or held[-1])
+        with store.read() as c:
+            engine = B.server_engine(store, c, None)
+        result = engine({"team": "Acme"}, QUESTIONS, "company")
+        assert provider_api.limits == [J.MAX_OUTPUT_TOKENS]
+        with store.read() as c:
+            recorded = json.loads(c.execute("SELECT detail FROM events WHERE action='judge.spend' "
+                                            "ORDER BY rowid DESC LIMIT 1").fetchone()[0])
+        assert recorded["model"] == model and recorded["cost_usd"] == result["cost_usd"] > 0
+        assert recorded["cost_usd"] <= held[0], f"{provider}: billed ${recorded['cost_usd']}, held ${held[0]}"
 
 
 # ----------------------------------------------------------------------------- one engine for every caller

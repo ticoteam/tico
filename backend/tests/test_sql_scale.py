@@ -122,6 +122,7 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
 
 
 @pytest.mark.slow
+@pytest.mark.alone
 def test_bot_and_member_reads_stay_under_five_seconds_on_production_sized_history(api):
     post(api, "chat/ops", {"text": "Summarize the week."})
     machine = runner(api)

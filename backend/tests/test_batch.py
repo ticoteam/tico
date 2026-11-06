@@ -4,7 +4,7 @@ the assistant's per-item report opening the next batch. backend/batch.py."""
 import json
 
 from backend import hubdb as H
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, get, post, setup_attempt, legacy_send_approval  # noqa: F401
 
 
 def ask_ana(api, bot, text, title="Pick the outbound tool", token=None):
@@ -15,6 +15,8 @@ def ask_ana(api, bot, text, title="Pick the outbound tool", token=None):
 
 
 def approval_for_ana(api, bot="finance", kind="spend", payload=None, task=None, token=None):
+    if kind == "send":
+        return legacy_send_approval(api, payload, actor="bot:" + bot, task_id=task)
     attempt = {"token": token} if token else setup_attempt(api, bot)[2]
     body = {"kind": kind, "payload": payload or {"amount": 1200, "account": "ads", "what": "LinkedIn ads"}}
     if task:

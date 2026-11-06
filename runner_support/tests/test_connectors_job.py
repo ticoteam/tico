@@ -87,6 +87,24 @@ def test_the_job_runs_on_a_computer_with_no_key_file(tmp_path, monkeypatch):
                                                "connectors/health"]
 
 
+def test_the_calendar_cli_reports_conference_preparation_as_a_definite_retryable_non_send(tmp_path, monkeypatch):
+    import json
+    import subprocess
+    from types import SimpleNamespace
+    import pytest
+    from runner_support.connectors import CalendarInvitationPending
+    no_key(monkeypatch, tmp_path)
+    made = publisher(tmp_path, Hub(), fetch=lambda *args: [], mail=fake_mail())
+    result = SimpleNamespace(returncode=75, stdout=json.dumps({"kind": "conference_pending", "retryable": True, "event_id": "silent-hold"}))
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: result)
+    with pytest.raises(CalendarInvitationPending) as pending:
+        made.calendar_event({"id": "action"})
+    assert pending.value.event_id == "silent-hold" and "Retry scheduling" in str(pending.value)
+    result.stdout = "{}"
+    with pytest.raises(RuntimeError, match="creation failed"):
+        made.calendar_event({"id": "action"})
+
+
 def test_calendar_snapshots_and_health_name_the_accounts_read(tmp_path, monkeypatch):
     no_key(monkeypatch, tmp_path)
     hub = Hub()

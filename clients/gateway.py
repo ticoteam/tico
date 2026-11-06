@@ -180,6 +180,41 @@ def branded_opener(*handlers):
     return opener
 
 
+class LettersError(Exception):
+    """A fixed Gateway code, never a provider's text or letter contents."""
+
+    def __init__(self, status, code):
+        self.status, self.code = status, code
+        super().__init__(code)
+
+
+def letters(key, base, path="", *, body=None, idempotency_key=None, pdf=False):
+    """The install Letters API through the same key, safe URL and branded transport as other Gateway calls."""
+    headers = {"Authorization": "Bearer " + key, "Accept": "application/pdf" if pdf else "application/json"}
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(safe_base(base) + "/letters" + path,
+        data=json.dumps(body).encode() if body is not None else None, headers=headers)
+    cap = 8 * 1024 * 1024 if pdf else 128 * 1024
+    try:
+        with branded_opener(_Unredirected()).open(request, timeout=60) as response:
+            data = response.read(cap + 1)
+            if len(data) > cap:
+                raise LettersError(502, "response_too_large")
+            return data if pdf else json.loads(data)
+    except urllib.error.HTTPError as exc:
+        code = _code(exc.read(4096))
+        allowed = {"unconfigured", "cannot_cancel", "quote_changed", "quote_expired", "idempotency_conflict",
+                   "quote_already_used", "invalid", "provider_rejected", "provider_error", "address_pending",
+                   "out_of_credit", "cap_reached", "billing_required", "rate_limited", "not_found", "revoked_key", "unknown_key",
+                   "idempotency_key_abandoned"}
+        raise LettersError(exc.code, code if code in allowed else "gateway_error") from None
+    except (OSError, ValueError, urllib.error.URLError):
+        raise LettersError(502, "gateway_unavailable") from None
+
+
 def _send(request, timeout):
     """`check`'s transport, built for each call so it reads the environment's proxy as it is now. A redirect is
     answered as the HTTP error it is. Plain HTTP (only ever to this computer, `safe_base`) goes straight there: a proxy
@@ -275,7 +310,7 @@ def run_code(text):
 def run_status(code, text=""):
     """What a bot's status says about a run the Gateway refused with `code`, before what happens to the run."""
     if code == "unknown_model":
-        return "The Tico AI Gateway doesn't offer this model; Settings > Gateway lists the picks"
+        return "The Tico AI Gateway doesn't offer this model; Settings > Models lists the picks"
     if code == "no_route":
         return "No Tico route for this request"
     if code == NOT_FOUND:

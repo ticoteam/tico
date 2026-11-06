@@ -21,7 +21,7 @@ const BRIDGE_SCRIPT: &str = r#"
   window.ticoNative = name => ({postMessage: body => invoke('bridge', {name, body: body === undefined ? null : body})});
   // What this build's bridge answers beyond the first three, so a page never posts into a
   // shell too old to hear it.
-  window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog', 'visualOrigin', 'visualFiles', 'orgInfo', 'bootTiming'];
+  window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog', 'visualOrigin', 'visualFiles', 'visualView', 'orgInfo', 'bootTiming'];
   // The shell's version and the end of its log ({version, lines}), for Support diagnostics.
   window.ticoNativeLog = () => invoke('app_log');
 })();

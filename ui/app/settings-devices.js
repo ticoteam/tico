@@ -458,15 +458,18 @@ function renderSettingsMachines() {
   const revoked = SETTINGS_DATA.machines.filter(machine => machine.revoked_at).length;
   const machines = SETTINGS_DATA.machines.filter(machine => showRevoked || !machine.revoked_at);
   const {pickers, others} = machineToolColumns(machines);
+  // Share the entry's support read; the rows are drawn again when it comes.
+  if (!CLOUD_SUPPORT.read && machines.some(machine => machine.cloud_machine))
+    void cloudSupportRead().then(view => { if (view) renderSettingsMachines(); });
   const cards = machines.map(machine => {
     const online = machineOnline(machine);
     const dot = machine.revoked_at ? 'failed' : online ? 'ok' : '';
     const presence = machinePresenceWords(machine);
     const failures = Object.values(machine.readiness?.bots || {}).filter(value => !value.ready).length;
     const waiting = machineWaiting(machine) ? `<span class="pill waiting" data-machine-waiting title="Waiting for ${esc(machine.label)}">Waiting</span>` : '';
-    const now = machineNowWords(machine);
+    const now = machineNowWords(machine), support = cloudSupportWords(machine);
     return `<tr class="machine-card" data-computer-row="${esc(machine.id)}">
-      <td class="machine-cell"><span class="machine-head"><span class="machine-status" data-machine-status title="${esc(presence)}"><span class="dot ${dot}" aria-hidden="true"></span><span class="sr-only">${esc(presence)}</span></span><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button>${machineUpdateWords(machine.update)}${waiting}${failures ? `<span class="pill fail" title="${failures} bot${failures === 1 ? '' : 's'} not ready">${failures} not ready</span>` : ''}</span></td>
+      <td class="machine-cell"><span class="machine-head"><span class="machine-status" data-machine-status title="${esc(presence)}"><span class="dot ${dot}" aria-hidden="true"></span><span class="sr-only">${esc(presence)}</span></span><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button>${machineUpdateWords(machine.update)}${waiting}${failures ? `<span class="pill fail" title="${failures} bot${failures === 1 ? '' : 's'} not ready">${failures} not ready</span>` : ''}</span>${support ? `<span class="settings-cell-note" data-machine-support>${esc(support)}</span>` : ''}</td>
       <td class="num tnum machine-bot-count">${(machine.bots || []).length}</td>
       ${pickers.map(runtime => `<td data-label="${esc(subsToolName(runtime))}" data-subs-cell>${subsPickerHTML(machine, runtime)}</td>`).join('')}
       ${others.map(runtime => `<td data-label="${esc(machineToolName(machine, runtime))}">${machineToolCellHTML(machine, runtime)}</td>`).join('')}
@@ -655,7 +658,7 @@ function settingsSetupPrompt(slug) {
   return `Help me update the ${appName()} bot setup.\n\nCurrent cloud state:\n${rows.join('\n')}\n\nAsk me what I want to change, then use the formal owner-admin API. Do not edit the production SQLite database directly. Bot definitions in the ${appName()} backend are authoritative after the one-time bootstrap: create a bot with POST /api/v2/bots and update its name, description, hierarchy, status, repository, or room type with POST /api/v2/bots/{bot}/definition. No ${appName()} application deploy or registry publish is required. Provision the bot's repository on any computer that will run it, and verify computer readiness. Preserve tasks and conversation history. Change a bot's model, reasoning effort, or registered computer through POST /api/v2/bots/{bot}/transitions so ${appName()} checkpoints every current session before applying it. If the transition is blocked because the old computer is unavailable, explain what continuity will be lost and ask me before calling apply-without-checkpoint. Use revision and assignment-generation checks. Humans are still managed separately from bot definitions.`;
 }
 function settingsEnrollmentPrompt(operator, filename) {
-  return `Set up a ${appName()} local runner for ${settingsPersonName(operator)} using the downloaded ${filename} enrollment file. Work from the Tico checkout on the target Mac. Locate the human's bot repositories, run scripts/setup-runner.sh "$HOME/Downloads/${filename}", then run scripts/tico doctor and resolve every repository, runtime login (Codex or Claude), model, or configuration-readiness problem. Never print or commit the enrollment code or runner token and never open an inbound port. Do not install the private processing or connector workers. Registration must not assign bots; when the computer is ready, tell me to return to ${appName()} Settings and choose it for each intended bot so existing sessions are checkpointed before the move.`;
+  return `Set up a ${appName()} local runner for ${settingsPersonName(operator)} using the downloaded ${filename} enrollment file. Work from the Tico checkout on the target Mac. Locate the human's bot repositories, run scripts/setup-runner.sh "$HOME/Downloads/${filename}", then run scripts/tico-computer doctor and resolve every repository, runtime login (Codex or Claude), model, or configuration-readiness problem. Never print or commit the enrollment code or runner token and never open an inbound port. Do not install the private processing or connector workers. Registration must not assign bots; when the computer is ready, tell me to return to ${appName()} Settings and choose it for each intended bot so existing sessions are checkpointed before the move.`;
 }
 function settingsCopyPrompt(slug) {
   void copyText(settingsSetupPrompt(slug)).then(() => toast(`${slug ? settingsBotName(slug) + ' ' : ''}setup prompt copied`)).catch(() => toast('Could not copy the setup prompt', true));

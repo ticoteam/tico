@@ -72,9 +72,13 @@ function settingsHistoryQuery() {
   if (SETTINGS_HISTORY_VIEW !== 'log') q.set('view', SETTINGS_HISTORY_VIEW);
   return q.toString() ? '?' + q : '';
 }
-function settingsLogWho(actor, names) {
+function settingsLogWho(actor, names, item = {}) {
+  // A row the server made names what made it (rowSource): a built-in or an automation, else "Automatic".
+  const src = rowSource(item, actor);
+  if (SOURCE_LINES.has(src.kind)) return src.kind === 'automation' && src.link
+    ? `<a class="chip" href="${esc(src.link)}">${esc(src.name)}</a>` : `<span class="chip">${esc(src.name || KEEPER_LABEL)}</span>`;
   const slug = actorSlug(actor);
-  return slug ? empChip(slug) : `<span class="chip">${esc(names[actor] || actorLabel(actor) || 'Tico')}</span>`;
+  return slug ? empChip(slug) : `<span class="chip">${esc(names[actor] || actorLabel(actor) || KEEPER_LABEL)}</span>`;
 }
 function settingsLogRowsHTML(items, names) {
   return items.map(item => {
@@ -83,7 +87,7 @@ function settingsLogRowsHTML(items, names) {
     const subject = link ? `<a href="${esc(link)}"${away ? ' target="_blank" rel="noopener"' : ''}>${esc(item.subject || 'Open')}</a>` : esc(item.subject);
     return `<div class="log-row" data-log-id="${esc(item.id)}">
       <span class="log-when tnum">${agoSpan(item.at)}</span>
-      <span class="log-who">${settingsLogWho(item.actor, names)}</span>
+      <span class="log-who">${settingsLogWho(item.actor, names, item)}</span>
       <span class="log-kind">${esc(HISTORY_KIND_LABEL[item.kind] || item.kind)}</span>
       <span class="log-subject">${about}<span>${subject}</span></span>
       <span class="log-result" title="${esc(item.result)}">${esc(item.result)}</span></div>`;

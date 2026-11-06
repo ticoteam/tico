@@ -47,6 +47,13 @@ def owner_on_the_lists(api):
 def test_the_owner_changes_their_email_in_place_and_every_copy_moves_at_once(environment):
     api = environment()
     owner_on_the_lists(api)
+    with api.app.state.store.transaction() as c:      # meetings and a Granola link filed under the old address
+        for mid, owner, review in (("m-mine", "Morgan@acme.example", "pending"), ("m-riley", "riley@acme.example", "live")):
+            c.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at,review_state) VALUES(?,?,?,?,?,?,?)",
+                      (mid, "Sync", owner, json.dumps({"owner": owner, "title": "Sync"}), H.now(), H.now(), review))
+        c.execute("INSERT INTO meeting_deliveries(meeting_id,requested_by,sender_name,destination,instructions,requested_at) "
+                  "VALUES('m-mine',?,'Morgan','bot:support','',?)", (OWNER_EMAIL, H.now()))
+        c.execute("INSERT INTO granola_connections VALUES('human:morgan','granola:x',?,X'00',X'00','{}')", (OWNER_EMAIL,))
     before = state(api)
     result = change(api, " Morgan@New.example ")
     after = state(api)
@@ -63,6 +70,18 @@ def test_the_owner_changes_their_email_in_place_and_every_copy_moves_at_once(env
     assert json.loads(event["detail"]) == {"from": OWNER_EMAIL, "to": NEW, "revision": result["revision"],
                                                 "via": "app"}
     assert view(api)["owner"]["email"] == NEW and api.app.state.auth.owner_email == NEW
+    # Meetings and a Granola link filed under the old address follow the owner.
+    with api.app.state.store.read() as c:
+        rows = {r["id"]: (r["owner"], json.loads(r["metadata"])["owner"])
+                for r in c.execute("SELECT id,owner,metadata FROM meetings")}
+        assert rows == {"m-mine": (NEW, NEW), "m-riley": ("riley@acme.example", "riley@acme.example")}
+        assert c.execute("SELECT requested_by FROM meeting_deliveries").fetchone()[0] == NEW
+        assert c.execute("SELECT email FROM granola_connections").fetchone()[0] == NEW
+    # A transfer keeps the owner history and the retired addresses.
+    call(api, "POST", "/owner", {"person": "riley", "confirm": True, "expected_revision": view(api)["owner"]["revision"]})
+    owner = state(api)["owner"]
+    assert owner["email"] == "riley@acme.example" and owner["retired"] == [OWNER_EMAIL]
+    assert [h["email"] for h in owner["history"]][-2:] == [OWNER_EMAIL, NEW]
 
 
 def test_the_new_address_signs_in_as_the_same_owner_and_the_old_one_joins_no_one(environment):
@@ -87,14 +106,6 @@ def test_the_new_address_signs_in_as_the_same_owner_and_the_old_one_joins_no_one
     # The owner can still put the old address on the roster on purpose, as someone else.
     call(api, "POST", "/people", {"name": "Morgan (old)", "email": OWNER_EMAIL}, headers=signed_in())
     assert api.get("/api/v2/me", headers=old).json()["role"] == "human"
-
-
-def test_an_address_that_belongs_to_someone_else_is_refused_and_nothing_changes(environment):
-    api = environment()
-    before = state(api)
-    r = change(api, "Riley@acme.example", expected=409)
-    assert "already belongs to someone else" in r["error"]["detail"]
-    assert state(api) == before
 
 
 def test_a_failure_part_way_through_changes_nothing(environment, monkeypatch):
@@ -124,13 +135,10 @@ def test_only_the_signed_in_owner_changes_it_and_only_typed_twice(environment):
     change(api, "not-an-address", expected=422)
     change(api, OWNER_EMAIL, expected=409)                                 # already the owner's
     change(api, NEW, revision=revision + 5, expected=409)                  # stale page
-    assert state(api) == before
-
-
-def test_botops_and_the_assistant_acting_as_the_owner_are_refused_even_after_a_click(environment):
-    api = environment()
-    before = state(api)
-    revision = view(api)["owner"]["revision"]
+    # An address that belongs to someone else is refused and nothing changes.
+    r = change(api, "Riley@acme.example", expected=409)
+    assert "already belongs to someone else" in r["error"]["detail"]
+    # BotOps and the Assistant acting as the owner are refused, even after a click.
     for token, via, confirmed in (("as-botops", "botops", False), ("as-assistant", "assistant", False),
                                   ("as-click", "assistant", True), ("as-botops-click", "botops", True)):
         api.app.state.store.settings.test_identities[token] = Identity(
@@ -269,15 +277,6 @@ def test_changing_it_back_lets_the_old_address_in_again_as_the_same_person(envir
     assert len(after["events"]) == 2 and after["joined"] == 0
 
 
-def test_a_transfer_keeps_the_owner_history_and_the_retired_addresses(environment):
-    api = environment()
-    change(api, NEW)
-    call(api, "POST", "/owner", {"person": "riley", "confirm": True, "expected_revision": view(api)["owner"]["revision"]})
-    owner = state(api)["owner"]
-    assert owner["email"] == "riley@acme.example" and owner["retired"] == [OWNER_EMAIL]
-    assert [h["email"] for h in owner["history"]][-2:] == [OWNER_EMAIL, NEW]
-
-
 def test_the_host_command_shows_the_change_then_applies_it_without_a_sign_in(environment, monkeypatch, capsys):
     api = environment()
     settings = api.app.state.store.settings
@@ -297,24 +296,6 @@ def test_the_host_command_shows_the_change_then_applies_it_without_a_sign_in(env
     assert json.loads(after["events"][0]["detail"])["via"] == "host" and after["events"][0]["actor"] == "host"
     # The running server adopts it on its next request, with no restart.
     assert view(api)["owner"]["email"] == NEW
-
-
-def test_meetings_and_a_granola_link_filed_under_the_old_address_follow_the_owner(environment):
-    api = environment()
-    with api.app.state.store.transaction() as c:
-        for mid, owner, review in (("m-mine", "Morgan@acme.example", "pending"), ("m-riley", "riley@acme.example", "live")):
-            c.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at,review_state) VALUES(?,?,?,?,?,?,?)",
-                      (mid, "Sync", owner, json.dumps({"owner": owner, "title": "Sync"}), H.now(), H.now(), review))
-        c.execute("INSERT INTO meeting_deliveries(meeting_id,requested_by,sender_name,destination,instructions,requested_at) "
-                  "VALUES('m-mine',?,'Morgan','bot:support','',?)", (OWNER_EMAIL, H.now()))
-        c.execute("INSERT INTO granola_connections VALUES('human:morgan','granola:x',?,X'00',X'00','{}')", (OWNER_EMAIL,))
-    change(api, NEW)
-    with api.app.state.store.read() as c:
-        rows = {r["id"]: (r["owner"], json.loads(r["metadata"])["owner"])
-                for r in c.execute("SELECT id,owner,metadata FROM meetings")}
-        assert rows == {"m-mine": (NEW, NEW), "m-riley": ("riley@acme.example", "riley@acme.example")}
-        assert c.execute("SELECT requested_by FROM meeting_deliveries").fetchone()[0] == NEW
-        assert c.execute("SELECT email FROM granola_connections").fetchone()[0] == NEW
 
 
 def test_a_directory_sync_never_adds_the_owner_s_old_address_back_as_a_second_person():

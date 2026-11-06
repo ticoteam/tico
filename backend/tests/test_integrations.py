@@ -90,7 +90,7 @@ def test_shipped_pages_and_templates_name_no_fixture_people_or_companies(paths):
 
 
 def test_the_tool_list_files_a_bots_alias_under_its_page_with_each_bots_write_level_and_problem(api):
-    """Library › Tools reads who has each tool from this list: a bot naming `close` is filed under Close CRM (the page
+    """Tools reads who has each tool from this list: a bot naming `close` is filed under Close CRM (the page
     keeps its title), its entry's verbs narrow the page's write level, and a missing credential is the tool's issue,
     named by its variable and never by a value."""
     configure(api)

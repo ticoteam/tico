@@ -383,6 +383,12 @@ def test_the_start_record_keeps_no_secret_and_flags_an_image_not_built_from_its_
     before = code_hash.digest(image)
     (image / "runner-rs" / "harnesses" / "pi.toml").write_text("id = 'pi'  # patched\n")
     assert code_hash.digest(image) != before
+    # The JavaScript the image serves for the UI's TypeScript is code too (backend/ui_build.py).
+    (image / "build" / "ui" / "app").mkdir(parents=True)
+    (image / "build" / "ui" / "app" / "a.js").write_text("const A = 1;\n")
+    before = code_hash.digest(image)
+    (image / "build" / "ui" / "app" / "a.js").write_text("const A = 2;\n")
+    assert code_hash.digest(image) != before
 
 
 def test_a_long_write_names_its_route_and_code_site_in_the_file_the_log_and_the_events(store, monkeypatch, caplog):

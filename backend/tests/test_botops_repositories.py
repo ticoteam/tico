@@ -392,7 +392,7 @@ RAW_WORDS = {"own", "all", "chosen", "none"}
 
 
 def test_the_new_bot_repository_default_reads_as_what_new_bots_get(api, botops):
-    """{"new_bot_default": "all"} is the card a person confirms for Settings > Repositories > New bots get."""
+    """{"new_bot_default": "all"} is the card a person confirms for Settings > General › Repositories > New bots get."""
     from backend import rooms
     from backend.assistant import create_proposal
     state = api.app.state
@@ -402,7 +402,7 @@ def test_the_new_bot_repository_default_reads_as_what_new_bots_get(api, botops):
         cards = [create_proposal(c, state.store.settings, ana, room, "botops", "Open up new bots",
                                  "PUT", "/api/v2/repositories/settings", {"new_bot_default": v})["action"] for v in ("all", "own", "x")]
     assert [a["description"] for a in cards] == [
-        "New bots get every repository ticked in Settings > Repositories", "New bots get only their own repository",
+        "New bots get every repository ticked in Settings > General › Repositories", "New bots get only their own repository",
         "Change which repositories new bots get"]
 
 

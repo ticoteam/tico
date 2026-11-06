@@ -150,7 +150,11 @@ type Signature = (String, String, usize, usize, usize);
 fn signature(record: &Recording) -> Signature {
     (
         record.id.clone(),
-        record.speakers.clone(),
+        format!(
+            "{}:{}",
+            record.speakers,
+            network::hash(&json!(record.meeting_speakers))
+        ),
         record.chunks.len(),
         record.chunks.iter().map(|chunk| chunk.text.len()).sum(),
         record
@@ -314,6 +318,7 @@ pub struct Recorder {
     pub live_sync: Option<LiveSync>,
     _task_link_sync: Option<tico_recorder_native::task_links::TaskLinkSync>,
     pub config: Settings,
+    settings_version: u64,
     pub records: Vec<Summary>,
     current: Option<Recording>,
     blocks: (Signature, Vec<Block>),
@@ -348,6 +353,10 @@ pub struct Recorder {
     draft_status: String,
     link_tasks: Value,
     link_tasks_at: Instant,
+    link_tasks_generation: u64,
+    link_tasks_dirty: bool,
+    seen_task_links: Value,
+    link_activity: tico_recorder_native::task_links::Activity,
     chat_error: String,
     /// A question or message that failed, offered back in the input.
     chat_retry: String,
@@ -364,6 +373,7 @@ pub struct Recorder {
     pub calendar: Value,
     pub live: Value,
     pub roster: Vec<(String, String)>,
+    draft_people: (String, Vec<assist::Person>),
     chat_private: bool,
     asking: String,
     asking_for: Option<String>,
@@ -410,6 +420,7 @@ impl Recorder {
         if !demo && let Err(error) = speech::settle(store.root(), speech::own_keys) {
             eprintln!("Speech source unchanged: {error:#}");
         }
+        let settings_version = settings::version();
         let config = settings::read(store.root())?;
         let records = store.summaries()?;
         let (tx, rx) = mpsc::channel();
@@ -449,6 +460,7 @@ impl Recorder {
                 .map(|row| row.id.clone())
                 .unwrap_or_default(),
             config,
+            settings_version,
             records,
             current: None,
             blocks: (Default::default(), vec![]),
@@ -481,6 +493,10 @@ impl Recorder {
             draft_status: String::new(),
             link_tasks: Value::Null,
             link_tasks_at: Instant::now() - Duration::from_secs(60),
+            link_tasks_generation: 0,
+            link_tasks_dirty: true,
+            seen_task_links: Value::Null,
+            link_activity: Default::default(),
             chat_error: String::new(),
             chat_retry: String::new(),
             adding: None,
@@ -492,6 +508,7 @@ impl Recorder {
             calendar,
             live: json!({}),
             roster: vec![],
+            draft_people: Default::default(),
             chat_private: false,
             asking: String::new(),
             asking_for: None,
@@ -627,7 +644,9 @@ impl Recorder {
         }
         let record = self.store.get(id)?;
         self.context = self.store.context(id).unwrap_or_default();
+        self.link_activity = self.store.task_link_activity(id);
         self.current = Some(record);
+        self.seen_task_links = self.task_links_snapshot();
         self.link_tasks = Value::Null;
         self.link_tasks_at = Instant::now() - Duration::from_secs(60);
         self.reset_saved();
@@ -773,21 +792,26 @@ impl Recorder {
     }
     /// The open meeting refreshes often; the whole library only every few seconds.
     fn reload_open(&mut self) {
+        // Take the mark before reading: a concurrent receipt write must trigger another refresh.
+        self.seen_open = self.store.version();
         if let Some(id) = &self.meeting
             && let Ok(stored) = self.store.context(id)
-            && stored.task_link_operations != self.context.task_link_operations
+            && Self::context_links(&stored) != Self::context_links(&self.context)
         {
             // Merge background link results without losing notes or unsent edits in the window.
             self.save_context();
-            self.link_tasks_at = Instant::now() - Duration::from_secs(60);
         }
-        self.seen_open = self.store.version();
         if let Some(id) = &self.meeting {
             self.ui_version += 1;
             match self.store.get(id) {
                 Ok(record) => self.current = Some(record),
                 Err(error) => self.error = error.to_string(),
             }
+        }
+        let links = self.task_links_snapshot();
+        if links != self.seen_task_links {
+            self.seen_task_links = links;
+            self.invalidate_task_links();
         }
         self.refresh = Instant::now();
     }
@@ -1091,6 +1115,34 @@ impl Recorder {
         }
         let (config, store) = (self.config.clone(), self.store.clone());
         let destination = self.draft_destination(&id);
+        let people = (self.draft_people.0 == destination).then(|| self.draft_people.1.clone());
+        let me = config
+            .destinations
+            .iter()
+            .find(|d| d.id == destination)
+            .map(|d| d.actor.clone())
+            .unwrap_or_default();
+        let mut participants = vec![];
+        if self.meeting.as_deref() == Some(id.as_str()) {
+            for field in ["humans", "access"] {
+                participants.extend(
+                    self.live[field]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|p| p["actor"].as_str())
+                        .map(str::to_owned),
+                );
+            }
+            participants.extend(
+                self.live["bots"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p["bot"].as_str())
+                    .map(|slug| format!("bot:{slug}")),
+            );
+        }
         self.job_for("autodraft", Some(id.clone()), move || {
             let mut config = config;
             if speech::source(&config) == speech::TICO
@@ -1098,16 +1150,33 @@ impl Recorder {
             {
                 config.destinations.swap(0, at);
             }
-            let tasks = Tico::saved(&config, &destination)
-                .and_then(|tico| tico.draft_tasks(&store, &id))
-                .unwrap_or_default();
+            let tico = Tico::saved(&config, &destination).ok();
+            let tasks = tico.as_ref().and_then(|tico| tico.draft_tasks(&store, &id).ok()).unwrap_or_default();
+            let roster = assist::Roster {
+                people: people.or_else(|| tico.as_ref().and_then(|tico| tico.draft_people().ok())).unwrap_or_default(),
+                me,
+                participants,
+            };
             let (config, key) = speech::assist(&config)?;
-            Ok(json!({"added":assist::draft_with_tasks(&store, &config, &key, &id, &tasks)?}))
+            Ok(json!({"added":assist::draft_with_roster(&store, &config, &key, &id, &tasks, &roster)?}))
         });
     }
     /// Background work: finished jobs, the recording's end, refreshes, live sync, calendar and
     /// drafts. Runs on its own timer whether or not the window is visible.
     pub fn tick(&mut self) {
+        let version = settings::version();
+        // Demo settings are fixture state; normal windows follow every writer.
+        if !self.demo
+            && self.settings_version != version
+            && let Ok(config) = settings::read(self.store.root())
+        {
+            self.config = config;
+            self.settings_version = version;
+            self.reset_saved();
+            self.keep_destination();
+            self.services_at = None;
+            self.bump();
+        }
         while let Ok(reply) = self.rx.try_recv() {
             if reply.kind == "delete" {
                 self.join_delete();
@@ -1123,6 +1192,7 @@ impl Recorder {
                 if here
                     && let Ok(value) = reply.result
                     && value["scope"] == self.link_scope()
+                    && value["generation"] == self.link_tasks_generation
                 {
                     if let Some(rows) = value["linked"]["tasks"].as_array()
                         && let Some(loaded) = self.link_tasks["linked"]["tasks"].as_array_mut()
@@ -1135,18 +1205,19 @@ impl Recorder {
                 continue;
             }
             if reply.kind == "task-links" {
-                if here {
-                    self.link_tasks = reply
-                        .result
-                        .ok()
-                        .filter(|v| v["scope"] == self.link_scope())
-                        .unwrap_or(Value::Null);
+                if here
+                    && reply.result.as_ref().is_ok_and(|v| {
+                        v["scope"] == self.link_scope()
+                            && v["generation"] == self.link_tasks_generation
+                    })
+                {
+                    self.link_tasks = reply.result.unwrap()["data"].clone();
                 }
                 continue;
             }
             if reply.kind == "link" && here {
                 self.save_context();
-                self.link_tasks_at = Instant::now() - Duration::from_secs(60);
+                self.invalidate_task_links();
             }
             if ["items", "presence"].contains(&reply.kind.as_str())
                 && (!here
@@ -1359,7 +1430,16 @@ impl Recorder {
                             self.last_sync = Instant::now() - Duration::from_secs(5);
                         }
                         "roster" => {
-                            self.roster = serde_json::from_value(value).unwrap_or_default();
+                            let people: Vec<assist::Person> =
+                                serde_json::from_value(value["people"].clone()).unwrap_or_default();
+                            self.roster = people
+                                .iter()
+                                .map(|p| (p.actor.clone(), p.name.clone()))
+                                .collect();
+                            self.draft_people = (
+                                value["destination"].as_str().unwrap_or_default().into(),
+                                people,
+                            );
                         }
                         "send" => self.say("Saved to Tico"),
                         "import" => {
@@ -1413,6 +1493,15 @@ impl Recorder {
             self.reload();
         }
         self.refresh_task_links();
+        let activity = self
+            .meeting
+            .as_deref()
+            .map(|id| self.store.task_link_activity(id))
+            .unwrap_or_default();
+        if self.link_activity != activity {
+            self.link_activity = activity;
+            self.bump();
+        }
         self.sync_presence();
         self.sync_saved();
         self.watch_inputs();
@@ -1530,7 +1619,8 @@ impl Recorder {
     pub fn recording(&self) -> bool {
         self.active.is_some()
     }
-    /// Why an app update waits right now: a recording runs, or a live meeting is connected.
+    /// Why an app update waits right now: a recording runs, a live meeting is connected (live or paused), or a
+    /// send is under way.
     pub fn update_hold(&self) -> Option<&'static str> {
         if self.deleting.is_some() {
             Some("After deletion finishes")
@@ -1541,7 +1631,7 @@ impl Recorder {
         } else if self
             .records
             .iter()
-            .any(|record| record.live_state == "live")
+            .any(|record| matches!(record.live_state.as_str(), "live" | "paused"))
         {
             Some("After the live meeting ends")
         } else if self.sending.is_some()
@@ -1911,7 +2001,9 @@ impl Recorder {
     pub fn load_roster(&mut self) {
         if !self.router_name().is_empty() {
             self.roster_for = self.router();
-            self.network_job("roster", |tico, _, _| Ok(json!(tico.roster()?)));
+            self.network_job("roster", |tico, _, _| {
+                Ok(json!({"destination":tico.destination.id,"people":tico.draft_people()?}))
+            });
         }
     }
 
@@ -2864,6 +2956,9 @@ impl Recorder {
             "sending": self.send_step().map(|(id, label)| json!({"id": id, "label": label})),
             "profile": synthetic_input(),
             "notice": self.input_notice().filter(|notice| *notice != self.notice_dismissed),
+            "speaker_permission": self.active.is_some()
+                && tico_recorder_native::speaker_names::permission_pending(),
+            "speaker_access": tico_recorder_native::speaker_names::access(),
             "speech": speech::view(&self.config, self.key_saved("transcription"),
                 self.streaming() && self.key_saved(stream::KEY_NAME)),
         })
@@ -3104,7 +3199,7 @@ impl Recorder {
                 && (!ended || has_text),
             "place": if live { format!("Shared live · {org}") } else { "Private · on this Mac".into() },
             "sync_error": if sync_error.is_empty() { String::new() } else {
-                format!("Tico sync needs attention: {sync_error}. Audio and transcript remain saved on this Mac.")
+                sync_error
             },
             "setup": self.setup_notices(),
             "audio": audio_view(&record),
@@ -3141,17 +3236,27 @@ impl Recorder {
             && !self.context.live_id.is_empty()
             && self.live["visibility"] != "team"
         {
+            let me = self
+                .config
+                .destinations
+                .iter()
+                .find(|d| d.id == self.router())
+                .map(|d| d.actor.as_str())
+                .unwrap_or_default();
+            // The person always sees themselves: they are in the meeting they are looking at.
             owners.retain(|row| {
-                self.live["owner_actor"] == row.0
+                row.0 == me
+                    || self.live["owner_actor"] == row.0
                     || self.live["access"]
                         .as_array()
                         .into_iter()
                         .flatten()
                         .any(|a| a["actor"] == row.0)
-                    || self.live["bots"].as_array().into_iter().flatten().any(|b| {
-                        row.0 == format!("bot:{}", b["bot"].as_str().unwrap_or_default())
-                            && b["joined_by"] == self.live["owner_actor"]
-                    })
+                    || self.live["bots"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|b| row.0 == format!("bot:{}", b["bot"].as_str().unwrap_or_default()))
             });
         }
         let send_blocked = tico_recorder_native::live::item_send_blocked(&self.context);
@@ -3189,12 +3294,12 @@ impl Recorder {
             .map(|item| {
                 let linked = self.linked_task(&item.task_id);
                 let proposal = (item.task_destination.is_empty() || item.task_destination == self.router()).then(|| self.linked_task(&item.proposed_task_id)).flatten();
-                let chosen = if item.owner.is_empty() {
+                let chosen = if item.owner.is_empty() && !item.id.starts_with("draft-") {
                     self.last_owner.clone()
                 } else {
                     item.owner.clone()
                 };
-                let owner_name = owners
+                let owner_name = self.roster
                     .iter()
                     .find(|row| row.0 == chosen)
                     .map(|row| row.1.clone())
@@ -3235,7 +3340,7 @@ impl Recorder {
                     "send_blocked": send_blocked,
                     "paused_warning": !self.context.paused_windows.is_empty() && (!item.quote.trim().is_empty() || !item.title.trim().is_empty()),
                     "can_send": can_send && !chosen.is_empty() && !item.title.trim().is_empty(),
-                    "error": error,
+                    "error": if item.kind == "link" { self.task_link_error(&item.task_id).to_owned() } else { error },
                 })
             })
             .collect();
@@ -3490,7 +3595,7 @@ fn audio_view(record: &Recording) -> Value {
     let failures: Vec<_> = record
         .chunks
         .iter()
-        .filter(|chunk| chunk.status == "failed" || !chunk.error.is_empty())
+        .filter(|chunk| !tico_recorder_native::retry::chunk_notice(chunk).is_empty())
         .collect();
     // Error and drop counts are bookkeeping, not news; the live notice says when audio is
     // really being lost. A stalled input is kept.
@@ -3508,7 +3613,7 @@ fn audio_view(record: &Recording) -> Value {
         "failed": failed,
         "finding_speakers": pending == 0 && record.speakers == "running",
         "inputs": inputs,
-        "failures": failures.iter().take(12).map(|chunk| format!("{} {} · {}", clock(chunk.start_ms), chunk.speaker, chunk.error)).collect::<Vec<_>>(),
+        "failures": failures.iter().map(|chunk| tico_recorder_native::retry::chunk_notice(chunk)).collect::<std::collections::BTreeSet<_>>().into_iter().take(12).collect::<Vec<_>>(),
         "more": failures.len().saturating_sub(12),
     })
 }
@@ -3595,6 +3700,71 @@ fn wait_stopped(store: &Store, id: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod saved_panel_tests {
     use super::*;
+    #[test]
+    fn suggested_owners_show_by_name_and_unclear_drafts_do_not_reuse_the_last_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Planning").unwrap();
+        let mut app = Recorder::new(store, None, true).unwrap();
+        app.open(&record.id).unwrap();
+        app.choosing_org = false;
+        app.last_owner = "human:ana".into();
+        app.roster = vec![("bot:concierge".into(), "Guest Relations".into())];
+        app.context.live_id = "live-planning".into();
+        app.live = json!({"visibility":"private", "owner_actor":"human:ana"});
+        app.context.items = vec![
+            Item {
+                id: "draft-assigned".into(),
+                title: "Negotiate quotes".into(),
+                owner: "bot:concierge".into(),
+                ..Default::default()
+            },
+            Item {
+                id: "draft-unclear".into(),
+                title: "Send prices".into(),
+                ..Default::default()
+            },
+        ];
+        let view = app.actions_view("Acme");
+        assert_eq!(view["items"][0]["owner"], "bot:concierge");
+        assert_eq!(view["items"][0]["owner_name"], "Guest Relations");
+        assert_eq!(view["items"][1]["owner"], "");
+        assert_eq!(view["items"][1]["owner_name"], "");
+        assert_eq!(view["items"][1]["can_send"], false);
+    }
+
+    #[test]
+    fn private_action_recipients_include_bots_added_by_participants() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Planning").unwrap();
+        let mut app = Recorder::new(store, None, true).unwrap();
+        app.open(&record.id).unwrap();
+        app.context.live_id = "live-planning".into();
+        app.live = json!({
+            "visibility": "private", "owner_actor": "human:ana",
+            "access": [{"actor": "human:ben"}],
+            "bots": [{"bot": "ops", "joined_by": "human:ben"}]
+        });
+        app.roster = [
+            ("human:ana", "Ana"),
+            ("human:ben", "Ben"),
+            ("bot:ops", "Operations"),
+            ("bot:outside", "Outside"),
+        ]
+        .into_iter()
+        .map(|(actor, name)| (actor.into(), name.into()))
+        .collect();
+        let view = app.actions_view("one");
+        let owners: Vec<_> = view["owners"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["actor"].as_str().unwrap())
+            .collect();
+        assert_eq!(owners, vec!["bot:ops", "human:ana", "human:ben"]);
+    }
+
     fn fixture() -> (tempfile::TempDir, Recorder) {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();

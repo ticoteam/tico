@@ -388,20 +388,25 @@ function v2MessageHTML(m) {
   }
   // A bot's reply held by an org rule: one line naming the rule, never the text (ui/app/org-rule-holds.js).
   if (m.refs?.org_rule && m.kind === 'notice') return ruleHeldNoteHTML(m);
+  // A row no person or bot wrote is a gray line (rowSource); a bot's own notice keeps its name.
+  const src = rowSource(m);
+  if (isSourceLine(m)) return sourceLineHTML(m, {cls: 'chat-line', src});
   if (m.kind === 'notice') return `<div class="chat-system" data-message="${esc(m.id || '')}"><b>Task</b> ${esc(plainActors(m.body))}<div class="chat-meta">${when}</div></div>`;
   // One bot's message to another, landed in a person's room: shown as an aside, not a reply.
   if (String(m.sender_id || '').startsWith('bot:') && String(m.recipient_id || '').startsWith('bot:') && m.recipient_id !== m.sender_id)
     return `<details class="chat-system chat-fold" ${v2FoldAttrs(m)}><summary><b>${esc(actorLabel(m.sender_id))} → ${esc(actorLabel(m.recipient_id))}</b> · ${esc(chatLine(plainActors(m.body), 80))} ${when}</summary><div class="md">${safeMd(m.body || '', {shortLinks: true})}</div></details>`;
   const pid = actorPerson(m.sender_id);
   const mine = !!pid;                       // any person's message sits on the right, under their name
-  const who = mine ? esc(personHandle(pid)) : esc(actorLabel(m.sender_id));
+  // The Assistant passing on a person's words: "Ana's Assistant", with the Assistant's face.
+  const relay = src.kind === 'assistant_for';
+  const who = mine ? esc(personHandle(pid)) : esc(relay ? src.name : actorLabel(m.sender_id));
   const me = m.sender_id === myActor();    // your own lines need no name on a bot's page
   const fb = !mine && m.id && String(m.sender_id || '').startsWith('bot:') ? fbKey('message', m.id) : '';
   // The message a new topic started a fresh session for (backend/topic_change.py): one quiet line above it.
   const fresh = mine && m.refs?.topic_changed ? '<div class="conv-break chat-topic-break" role="separator">Topic changed</div>' : '';
   return `${fresh}<div class="conv-run chat${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
     <time class="chat-stamp" datetime="${esc(m.created_at || '')}" data-ago="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>
-    <div class="conv-run-head">${mine ? `<span class="mono muted">${who}</span>` : actorChip(m.sender_id)}
+    <div class="conv-run-head">${mine ? `<span class="mono muted">${who}</span>` : relay ? `<span class="chip">${avatar(assistantBot(), 16)}<span>${who}</span></span>` : actorChip(m.sender_id)}
       ${m.kind && m.kind !== 'say' ? `<span class="pill">${esc(m.kind)}</span>` : ''}
       <span class="spacer" style="flex:1"></span>
       <span class="tnum" data-ago="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</span></div>
@@ -459,20 +464,33 @@ function chatSideKind(m, slug) {
   if (self && !actorSlug(m.recipient_id) && m.recipient_id !== 'keeper')
     // A loose message sent while a run another bot started was working: that bot's news, passed on (backend/turns.py).
     return m.prompted_by === 'bot' && !refs.turn_id ? 'relay' : '';
-  return from === 'keeper' || m.kind === 'notice' ? 'notice' : 'bots';
+  // Who wrote it (rowSource): a task update, a built-in's, an automation's or a system line is a notice; the Assistant's
+  // relay of a person's words is the conversation.
+  const src = rowSource(m);
+  if (src.kind === 'assistant_for') return '';
+  return SOURCE_LINES.has(src.kind) || m.kind === 'notice' ? 'notice' : 'bots';
 }
 // Who a side item is from, as the folded line names it: the other bot in a bot-to-bot message, else the sender.
 function chatSideName(m, slug) {
-  if (m.sender_id === 'keeper') return m.refs?.task ? 'tasks' : actorLabel('keeper');
+  const src = rowSource(m);
+  if (SOURCE_LINES.has(src.kind)) return src.kind === 'task_update' ? 'tasks' : src.name;
   const self = [`bot:${slug}`, `bot:${botBranchChatTarget(slug)}`];
   if (self.includes(m.sender_id) && actorSlug(m.recipient_id) && !self.includes(m.recipient_id)) return actorLabel(m.recipient_id);
   return actorLabel(m.sender_id);
 }
 function chatSideHead(m) {
   if (m.refs?.note) return 'Note' + ((t => t ? ' · ' + t : '')(Object.values(m.ref_tasks || {})[0]?.title || ''));
-  if (m.sender_id === 'keeper') return m.refs?.task ? 'Task' : actorLabel('keeper');
+  const src = rowSource(m);
+  if (SOURCE_LINES.has(src.kind)) return src.name;          // a system line has no sender
   const to = m.recipient_id && m.recipient_id !== m.sender_id ? ' → ' + actorLabel(m.recipient_id) : '';
   return actorLabel(m.sender_id) + to + (m.elsewhere?.subject ? ' · ' + m.elsewhere.subject : '');
+}
+// The head in bold; an automation's name links to it; a system line has none.
+function chatSideHeadHTML(m) {
+  const src = rowSource(m);
+  if (src.kind === 'automation' && src.link) return `<a class="src-name" href="${esc(src.link)}"><b>${esc(src.name)}</b></a>`;
+  const head = chatSideHead(m);
+  return head ? `<b>${esc(head)}</b>` : '';
 }
 // About two lines at phone width: longer text, or more than one line of it, gets "Show more".
 const CHAT_SIDE_SHORT = 110;
@@ -482,7 +500,7 @@ function chatSideItemHTML(m) {
   const open = long && V2C?.openSide?.has(m.id);
   const when = m.created_at ? `<time class="chat-time" data-ago="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>` : '';
   return `<div class="cs-item${open ? ' open' : ''}" data-message="${esc(m.id || '')}">
-    <div class="cs-head"><b>${esc(chatSideHead(m))}</b>${when}</div>
+    <div class="cs-head">${chatSideHeadHTML(m)}${when}</div>
     <div class="cs-text md${open ? '' : ' clamp'}">${safeMd(text, {shortLinks: true})}</div>${open && S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
     ${long ? `<button type="button" class="link cs-more" data-cs-more="${esc(m.id || '')}" aria-expanded="${open}">${open ? 'Show less' : 'Show more'}</button>` : ''}${
       m.elsewhere?.preview ? `<button type="button" class="link cs-more" data-bots-open="${esc(m.elsewhere.id)}">Earlier messages</button>` : ''}</div>`;
@@ -493,8 +511,12 @@ function chatSideHTML(messages, slug) {
   const when = last?.created_at ? `<time class="chat-time" data-ago="${esc(last.created_at)}" title="${esc(fmt(last.created_at))}">${esc(ago(last.created_at))}</time>` : '';
   const names = [...new Set(messages.map(m => chatSideName(m, slug)).filter(Boolean))];
   const who = names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3}` : '');
+  // A run of only task updates says so: "14 task updates".
+  const updates = messages.every(m => rowSource(m).kind === 'task_update');
+  const head = chatSideHead(first);
   const label = messages.length === 1
-    ? `<b>${esc(chatSideHead(first))}</b><span class="cs-gist">· ${esc(chatLine(plainActors(first.body), 90))}</span>`
+    ? `${head ? `<b>${esc(head)}</b><span class="cs-gist">· ` : '<span class="cs-gist">'}${esc(chatLine(plainActors(first.body), 90))}</span>`
+    : updates ? `<b>${messages.length} task updates</b>`
     : `<b>${messages.length} updates</b><span class="cs-gist">· ${esc(who)}</span>`;
   return `<details class="chat-side chat-fold" data-fold="${esc(key)}" data-side-count="${messages.length}"${v2FoldOpen({id: key}) ? ' open' : ''}>
     <summary>${label}${when}</summary><div class="chat-side-items">${messages.map(chatSideItemHTML).join('')}</div></details>`;

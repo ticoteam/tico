@@ -80,7 +80,7 @@ def test_an_undated_ask_waits_for_the_batch_and_a_task_handed_to_a_person_closes
         assert ask_deadlines.sweep(c)["closed"] == [card["id"]]
         back = H.task(c, task["id"])
         assert back["status"] == "open" and back["note"].startswith(
-            f"Tico closed the ask to {H.person_name(c, 'human:ana')}: No answer from")
+            f"The system closed the ask to {H.person_name(c, 'human:ana')}: No answer from")
 
     # A go-ahead date after day 14 is refused when asked; here one is set anyway: the ask waits for its date, then
     # goes ahead and closes.

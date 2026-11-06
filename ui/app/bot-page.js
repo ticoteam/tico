@@ -44,7 +44,7 @@ function botStopped() {
 function botPauseHTML(slug, state, error = '') {
   const retry = '<button type="button" class="ghost small" data-bot-pause-retry>Retry</button>';
   if (!state) return error ? `<p class="err" role="alert">${esc(error)} ${retry}</p>` : '<p class="muted" role="status">Loading…</p>';
-  const e = botRow(slug), name = botDisplayName(slug);
+  const name = botDisplayName(slug);
   const paused = state.state === 'paused', record = state.paused_by;
   const stamp = record && Number.isFinite(Date.parse(record.at))
     ? `${new Date(record.at).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';
@@ -474,6 +474,7 @@ async function pageBot(slug, tab) {
   </div>
   <div id="pane-settings" role="tabpanel" aria-labelledby="bot-tab-settings" hidden>
     <section class="card"><div class="bot-editor bot-editor-inline" id="bot-editor"><div class="empty">Loading settings…</div></div><div id="bot-settings-panels"></div></section>
+    <div id="bot-builtin-cards">${botBuiltinCardsHTML(slug)}</div>
     <section class="card"><header><h2>Screen</h2></header><dl class="bot-setup" id="bot-screen-settings"></dl></section>
     <section class="card" id="bot-access-card"><header><h2>Access</h2></header>
       ${accessTable(e)}</section>

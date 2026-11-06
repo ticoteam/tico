@@ -17,10 +17,12 @@ the file was deleted, by whom and when, without its title or content. Bytes anot
 import asyncio
 import base64
 import binascii
+import hashlib
 import csv
 import io
 import json
 import logging
+import secrets
 import sqlite3
 from html.parser import HTMLParser
 
@@ -28,6 +30,7 @@ from fastapi import Request
 
 from . import manual
 from . import names
+from . import visuals
 from .store import H, Problem
 
 LOG = logging.getLogger("tico.files")
@@ -65,7 +68,8 @@ PURGE_ATTEMPTS = 10
 # What holds a blob apart from a message or a file (`release_message_files`): a task's attachment, one in the trash, a
 # meeting's media, a scanned letter, a piece of market evidence.
 BLOB_HOLDERS = (("message_assets", "blob_id"), ("task_assets", "blob_id"), ("task_trash_assets", "blob_id"),
-                ("media_assets", "blob_id"), ("mail_items", "blob_id"), ("market_evidence", "blob_id"))
+                ("media_assets", "blob_id"), ("mail_items", "blob_id"), ("market_evidence", "blob_id"),
+                ("letters", "source_blob_id"), ("letters", "original_blob_id"), ("letter_proofs", "blob_id"))
 TEXT_TYPES = ("text/markdown", "text/plain", "application/json", "text/yaml")
 TABLE_TYPES = {"text/csv": ",", "text/tab-separated-values": "\t"}
 
@@ -114,28 +118,38 @@ def has_pins(c):
 
 
 # ---------------------------------------------------------------------------------------------- cursors and scans
-def encode_cursor(stamp, ident):
-    return base64.urlsafe_b64encode(f"{stamp}|{ident}".encode()).decode()
+def cursor_cipher(key):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    return AESGCM(hashlib.sha256(b"tico.file-cursor.v1\0" + key).digest())
 
 
-def decode_cursor(cursor):
+def encode_cursor(stamp, ident, key):
+    # Only a random nonce is public: both the row identity and its timestamp are authenticated ciphertext.
+    nonce = secrets.token_bytes(12)
+    sealed = cursor_cipher(key).encrypt(nonce, json.dumps([stamp, ident]).encode(), b"file-cursor-v1")
+    return base64.urlsafe_b64encode(nonce + sealed).decode()
+
+
+def decode_cursor(cursor, key):
+    from cryptography.exceptions import InvalidTag
     try:
-        stamp, _, ident = base64.urlsafe_b64decode(cursor.encode()).decode().partition("|")
-    except (ValueError, binascii.Error, UnicodeError) as exc:
+        sealed = base64.urlsafe_b64decode(cursor.encode())
+        stamp, ident = json.loads(cursor_cipher(key).decrypt(sealed[:12], sealed[12:], b"file-cursor-v1"))
+        if not isinstance(stamp, str) or not isinstance(ident, str) or not stamp or not ident:
+            raise ValueError()
+        return stamp, ident
+    except (InvalidTag, ValueError, TypeError, binascii.Error, UnicodeError) as exc:
         raise Problem("validation", "That cursor is not valid", 422) from exc
-    if not stamp or not ident:
-        raise Problem("validation", "That cursor is not valid", 422)
-    return stamp, ident
 
 
-def scan(c, select, where, params, limit, cursor, keep, budget=None):
+def scan(c, select, where, params, limit, cursor, keep, budget=None, *, cursor_key):
     """(rows, next cursor): the newest `bot_files` rows (aliased `f`) matching `where` that `keep` accepts, at most
     `limit`, looked at in chunks. After SCAN_MAX rows it answers with what it has and a cursor where it stopped, so a
     list of files the viewer mostly may not see stays bounded and still pages on. `budget(row)` may stop a page early
     (bytes), returning False for the row that would not fit."""
     from .files import prime_visible
     out, last, scanned = [], None, 0
-    position = decode_cursor(cursor) if cursor else None
+    position = decode_cursor(cursor, cursor_key) if cursor else None
     while True:
         clauses = list(where)
         args = list(params)
@@ -149,15 +163,15 @@ def scan(c, select, where, params, limit, cursor, keep, budget=None):
         for r in batch:
             if keep(r):
                 if len(out) == limit or (budget and not budget(r)):
-                    return out, encode_cursor(out[-1]["last_activity_at"], out[-1]["id"]) if out else \
-                        encode_cursor(last["last_activity_at"], last["id"]) if last else None
+                    return out, encode_cursor(out[-1]["last_activity_at"], out[-1]["id"], cursor_key) if out else \
+                        encode_cursor(last["last_activity_at"], last["id"], cursor_key) if last else None
                 out.append(r)
             last = r
         scanned += len(batch)
         if len(batch) < SCAN_CHUNK:
             return out, None
         if scanned >= SCAN_MAX:
-            return out, encode_cursor(last["last_activity_at"], last["id"])
+            return out, encode_cursor(last["last_activity_at"], last["id"], cursor_key)
         position = (last["last_activity_at"], last["id"])
 
 
@@ -397,7 +411,8 @@ class Library:
                 return spent[0] <= LIST_BYTES
             rows, nxt = scan(c, "SELECT f.*,p.cadence AS page_cadence,p.archived AS page_archived FROM bot_files f "
                                 "LEFT JOIN pages p ON p.file_id=f.id", where, params, limit, cursor,
-                             lambda r: self.files.visible(c, who, r, cache), budget)
+                             lambda r: self.files.visible(c, who, r, cache), budget,
+                             cursor_key=visuals.key_for(self.app, self.store.settings))
             known = names.lookup(c, {"bot:" + r["bot_id"] for r in rows})
             files = [self.row_view(c, who, r, caches, known) for r in rows]
             known.update(names.lookup(c, {f["actor"] for f in files if f.get("actor")}))
@@ -536,19 +551,28 @@ def still_used(c, digest):
 
 def purge_rows(c, actor, row):
     """In one write: the deletion record, every version row, the blob rows only this file used and their links, the
-    file's search text and page row; the file row becomes a tombstone. Bytes no row needs any more are queued."""
+    file's search text; file and page rows retain authorization tombstones. Bytes no row needs any more are queued."""
     fid, now = row["id"], H.now()
     versions = c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchall()
     c.execute("INSERT INTO file_deletions(file_id,actor,versions,created_at) VALUES(?,?,?,?)",
               (fid, actor, len(versions), now))
     blob_ids = {b for v in versions for b in (v["blob_id"], v["poster_blob_id"], v["thumb_blob_id"]) if b}
+    if c.execute("SELECT 1 FROM pages WHERE file_id=?", (fid,)).fetchone():
+        from .files import retain_page_label_sources
+        retain_page_label_sources(c, row)
+        for v in versions:
+            for key in ("blob_id", "poster_blob_id", "thumb_blob_id", "digest", "source_digest"):
+                if v[key]:
+                    c.execute("INSERT OR IGNORE INTO page_identities(identity,file_id) VALUES(?,?)", (v[key], fid))
+        c.execute("UPDATE pages SET deleted_at=?,archived=1,as_of=NULL,replaced_by_id=NULL WHERE file_id=?", (now, fid))
     c.execute("DELETE FROM bot_file_versions WHERE file_id=?", (fid,))
     c.execute("UPDATE bot_files SET title='Deleted file',state='deleted',archived=1,url=NULL,current_version=0,"
               "identity=?,last_activity_at=? WHERE id=?", ("deleted:" + fid, now, fid))
     release_blobs(c, blob_ids, now)
     unindex(c, fid)
     c.execute("UPDATE pages SET replaced_by_id=NULL WHERE replaced_by_id=?", (fid,))
-    c.execute("DELETE FROM pages WHERE file_id=?", (fid,))
+    from . import counsel
+    counsel.revoke_page_copies(c, None, fid)
     if has_pins(c):
         c.execute("DELETE FROM pins WHERE item=?", ("page:" + fid,))
     c.execute("INSERT INTO bot_file_activity(file_id,actor,action,task_id,created_at,detail) VALUES(?,?,?,?,?,?)",

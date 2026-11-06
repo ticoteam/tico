@@ -41,30 +41,27 @@ def test_removed_bot_cannot_replay_turn_receipt(live):
     post(live, path, {}, token="ops-live", key="claimed-once", expected=404)
 
 
-def test_only_connector_expands_private_audience_and_team_members_keep_bot_attach(live):
+def test_participants_expand_private_audience_and_keep_bots_when_adder_leaves(live):
     mid = private(live)
     post(live, f"live-meetings/{mid}/access", {"add": ["ben"]})
     post(live, f"live-meetings/{mid}/join", {}, token="ben-test")
-    for body in ({"add": ["cara"]}, {"visibility": "team"}):
-        post(live, f"live-meetings/{mid}/access", body, token="ben-test", expected=403)
-    post(live, f"live-meetings/{mid}/bots", {"bots": ["ops"]}, token="ben-test", expected=403)
-    assert attach(live, mid, "ops")["added"] == ["ops"]
+    post(live, f"live-meetings/{mid}/access", {"add": ["cara"]}, token="ben-test")
+    post(live, f"live-meetings/{mid}/access", {"visibility": "team"}, token="ben-test", expected=403)
+    assert attach(live, mid, "ops", token="ben-test")["added"] == ["ops"]
     post(live, f"live-meetings/{mid}/access", {"add": ["cara"]}, token="ops-live", expected=403)
     team = post(live, "live-meetings", {"title": "Synthetic team planning"})["id"]
     post(live, f"live-meetings/{team}/join", {}, token="ben-test")
     assert attach(live, team, "ops", token="ben-test")["added"] == ["ops"]
     chunk(live, team, 1, 0, 1000, "Ops, review this synthetic team plan")
-    # Tightening the audience also revokes grants made by implicit team participants.
+    # Tightening the audience keeps the bot's grant and outstanding turn.
     narrowed = post(live, f"live-meetings/{team}/access", {"visibility": "private"})
-    assert narrowed["router"]["turns"][0]["status"] == "skipped"
-    get(live, f"live-meetings/{team}", token="ops-live", expected=404)
-    # A retained pre-correction attachment made by an added human is removed on revocation.
-    with live.app.state.store.transaction() as c:
-        c.execute("INSERT INTO live_meeting_bots(meeting_id,bot,joined_by,joined_at) VALUES(?,?,?,?)",
-                  (mid, "finance", "human:ben", H.now()))
+    assert narrowed["router"]["turns"][0]["status"] == "pending"
+    get(live, f"live-meetings/{team}", token="ops-live")
+    attach(live, mid, "finance", token="ben-test")
     post(live, f"live-meetings/{mid}/access", {"remove": ["ben"]})
     with live.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot='finance'", (mid,)).fetchone()
+        assert c.execute("SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot='finance'", (mid,)).fetchone()
+    get(live, f"live-meetings/{mid}", token="finance-live")
 
 
 def test_team_to_private_retains_explicit_people_not_joiners_or_open_stream(live, monkeypatch):

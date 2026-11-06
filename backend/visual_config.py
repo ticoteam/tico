@@ -170,7 +170,7 @@ def probe(request, material, environ, *, database=Path("/data/hub.sqlite"), exch
     try:
         found = visuals.read(key, token)
         body = wire.decode(visuals._unb64(token.partition(".")[0]), 2048)
-        if not found or type(body[-1]) is not int or body[-1] < time.time() + 30:
+        if not found or type(body[4]) is not int or body[4] < time.time() + 30:
             raise ValueError()
     except (ValueError, TypeError, IndexError):
         raise wire.Pending("probe_material_expired") from None

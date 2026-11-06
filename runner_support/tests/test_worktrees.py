@@ -91,7 +91,11 @@ def test_add_setup_report_attach_dirty_push_remove_restore(trees):
     git(path, 'checkout', '-q', row['branch'])
     # A failure names the step and the reason instead of a list of guesses.
     broken = workspace / 'tasks' / 'broken' / 'org__product'
+    missing = W.inspect(workspace, {**row, 'path': 'tasks/broken/org__product'})
+    assert missing['state'] == 'missing' and 'error' not in missing, missing
     broken.mkdir(parents=True)
+    not_repo = W.inspect(workspace, {**row, 'path': 'tasks/broken/org__product'})
+    assert 'Tracked path is not a Git worktree' in not_repo['error'], not_repo
     (broken / '.git').write_text('gitdir: /nonexistent/worktree\n')
     failed = W.inspect(workspace, {**row, 'path': 'tasks/broken/org__product'})
     assert failed['error'].startswith('Could not read its remote: Git config failed'), failed

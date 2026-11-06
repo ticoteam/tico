@@ -182,7 +182,7 @@ def test_counsel_has_no_credentials_and_sends_nothing(api):
     card = Path(counsel.__file__).resolve().parents[1] / "templates" / "catalog" / "tico-counsel" / "bot.yaml"
     document = yaml.safe_load(card.read_text())
     assert document["tools"] == []
-    assert document["outbound_send"] is False
+    assert "outbound_send" not in document          # a bot.yaml asks for nothing: the sending policy decides
     assert document["routines"] == []
     assert document["private_tasks_default"] is True
     assert "no credentials" in card.read_text() and "sends nothing" in card.read_text()

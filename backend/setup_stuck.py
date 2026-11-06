@@ -1,4 +1,4 @@
-"""Bots left in setup: shown on Overview, and their person told once.
+"""Bots left in setup: shown on Company › Campus, and their person told once.
 
 A starter bot is parked (`needs_setup`) until someone finishes its setup, and a parked bot claims no work, so
 its routines' jobs and its tasks pile up where nobody looks. After a day it is listed with the stuck bots
@@ -63,7 +63,7 @@ def nudge(c, at=None):
         people = [person] if person else []
         waiting = f", with {row['queued']} job{'s' if row['queued'] != 1 else ''} waiting" if row["queued"] else ""
         text = (f"{row['name']} has been waiting in setup for {held_for(row['since'], at)}{waiting}, so it runs nothing. "
-                "Finish its setup on its page, or choose Finish with defaults on Overview.")
+                "Finish its setup on its page, or choose Finish with defaults on Company › Campus.")
         for actor in people:
             H.say(c, H.KEEPER, actor, text, kind="notice")
         # Marked even with nobody to tell, so a roster change later does not bring an old bot back as news.

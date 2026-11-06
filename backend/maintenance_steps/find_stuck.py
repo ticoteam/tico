@@ -1,9 +1,10 @@
 """Find stuck: the Maintenance step that gives each bot its task roundup list (backend/task_roundup.py).
 
 The roundup decides what a bot's list names: one grouped list per bot per run, nothing to a person, and a registry key per
-line so nothing is listed twice. This step runs it on Maintenance's schedule. The bots with a list are chosen by a read on
-the connection, the oldest line first, and at most the step's max_bots (DEFAULT_MAX_BOTS when it sets none) are sent per run;
-the rest keep their lines for the next run. Each bot is sent in its own short transaction under the wake limiter
+line so nothing is listed twice. This step runs it on Maintenance's schedule. Bots are chosen least recently sent first,
+then oldest line. The age comes from the lines the list would show. The bots are chosen by a read on the connection, and at
+most the step's max_bots (DEFAULT_MAX_BOTS when it sets none) are sent per run; the rest keep their lines for the next run.
+Each bot is sent in its own short transaction under the wake limiter
 (backend/maintenance_limits.py): the bot once, and each task its list names, which the limiter may hold for the day. Those
 lines are dropped and the rest of the list is sent. The scheduler's standalone roundup timer is off; Maintenance owns
 scheduled lists, while the legacy manual roundup remains available.
@@ -27,7 +28,8 @@ def run(c, ctx):
     setting = (ctx.get("settings") or {}).get("max_bots")
     max_bots = DEFAULT_MAX_BOTS if setting is None else int(setting)
     checked = c.execute("SELECT count(*) FROM bots WHERE state='active'").fetchone()[0]
-    plans = sorted(task_roundup.discover(c, at), key=lambda plan: plan["oldest"])     # the oldest line first
+    plans = sorted(task_roundup.discover(c, at), key=lambda plan: (
+        task_roundup._when(task_roundup._mark(c, task_roundup.SENT_KEY + plan["slug"])), plan["oldest"]))
     found = sum(plan["lines"] for plan in plans)
     woken, refused, limited, listed = [], [], [], 0
     for plan in plans:
