@@ -2,12 +2,14 @@
 coverage calls unused (never unknown), promote at 2 bots or 10 uses in 30 days, one suggestion per subject until it is
 acted on, dismissed or 30 days old, admins only, nothing removed until an admin says so, and the counts kept 90 days.
 
-Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
+Ana owns the company, Ben is an admin, Cara is a member (the base fixture). Bots run Claude Code here unless a test
+says otherwise: only a harness that reports every skill use lets coverage call a bot's install unused.
 """
 from datetime import timedelta
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import skill_suggestions as SS
 from backend import skill_usage as U
 from backend.maintenance_steps import suggest as step
@@ -25,13 +27,15 @@ def unlisted(api, name, bot, uses, days=1, at=NOW):
                   ((at - timedelta(days=days)).date().isoformat(), name, bot, uses))
 
 
-def installed(api, target_type, target_id, *, age=40, staged=True, reporting=False):
+def installed(api, target_type, target_id, *, age=40, staged=True, reporting=False, harness="claude"):
     r = api.post("/api/v2/skills/triage/installs", json={"target_type": target_type, "target_id": target_id,
                                                       "version_policy": "latest"}, headers=headers("ana-test"))
     assert r.status_code == 200, r.text
     iid = r.json()["id"]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE skill_installs SET created_at=? WHERE id=?", (ts(NOW - timedelta(days=age)), iid))
+        if target_type == "Bot":
+            BS.update(c, target_id, {"harness": harness})
         if staged:
             c.execute("INSERT INTO skill_receipts (target_type, target_id, skill_id, sha256, source, staged_at) "
                       "VALUES (?,?,?,?,?,?)", (target_type, target_id, skill_id(api), "a" * 64,
@@ -59,6 +63,7 @@ def test_remove_is_suggested_only_for_installs_coverage_calls_unused_never_unkno
     unused_bot = installed(api, "Bot", ops)
     installed(api, "Bot", finance, staged=False)            # no receipt: unknown
     installed(api, "Bot", cpo, age=10)                      # under 30 days: unknown
+    installed(api, "Bot", bot_id(api, "coo"), harness="codex")  # its harness does not report every use: unknown
     installed(api, "Human", "cara")                         # staged, but her helper does not report: unknown
     unused_person = installed(api, "Human", "ben", reporting=True)
     used = installed(api, "Human", "ana", reporting=True)
