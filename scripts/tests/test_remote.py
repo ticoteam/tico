@@ -202,14 +202,14 @@ def test_a_wait_past_twenty_minutes_exits_without_dispatching(monkeypatch):
     with pytest.raises(SystemExit, match='after 20 min; not dispatching') as exit:
         remote.wait_for_capacity(4)
     assert exit.value.code  # a message, so the exit status is not 0
-    assert sum(sleeps) == 20 * 60
+    assert sum(sleeps) == pytest.approx(20 * 60)  # the last wait is clamped to the limit, in floats
 
 
 def test_a_count_that_keeps_failing_for_two_minutes_warns_and_lets_the_dispatch_go(monkeypatch, capsys):
     sleeps = fake_timeline(monkeypatch)
     fake_gh(monkeypatch, [(1, '', 'HTTP 502: Bad Gateway')] * 20)
     assert remote.wait_for_capacity(4) is False
-    assert sum(sleeps) == 2 * 60
+    assert sum(sleeps) == pytest.approx(2 * 60)
     assert 'dispatching without the cap' in capsys.readouterr().err
 
 
