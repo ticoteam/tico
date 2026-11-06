@@ -419,3 +419,8 @@ def test_guard_refuses_lines_that_landed_in_released_sections():
         pytest.skip("no full history in this checkout")
     for squash, version in replays.items():
         assert changes_outside_unreleased(ROOT, main=squash + "^", head=squash) == [version]
+
+
+def test_a_release_header_may_carry_its_time_and_a_dated_one_keeps_the_day():
+    rows = changelog.parse_notes("## [0.5.0] - 2026-10-27T15:42:00-07:00\n- Timed.\n## [0.4.0] - 2026-10-26\n- Dated.\n")
+    assert [row["shipped_at"] for row in rows] == ["2026-10-27T15:42:00-07:00", "2026-10-26T00:00:00Z"]

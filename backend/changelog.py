@@ -18,7 +18,9 @@ def parse_notes(text):
     rows, row, bullet = [], None, None
     for line in text.splitlines():
         if line.startswith("## "):
-            match = re.fullmatch(r"## \[?([^\] ]+)\]?\s+-\s+(\d{4}-\d{2}-\d{2})\s*", line)
+            match = re.fullmatch(
+                r"## \[?([^\] ]+)\]?\s+-\s+(\d{4}-\d{2}-\d{2})(T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2}))?\s*", line
+            )
             row = None
             bullet = None
             if match and releases.parse(match[1]):
@@ -27,7 +29,8 @@ def parse_notes(text):
                     "id": "release-" + version,
                     "version": version,
                     "title": "Tico v" + version,
-                    "shipped_at": match[2] + "T00:00:00Z",
+                    # A header may add the release's time (`## [X.Y.Z] - 2026-10-27T15:42:00-07:00`); without it only the day is known.
+                    "shipped_at": match[2] + (match[3] or "T00:00:00Z"),
                     "bullets": [],
                     "source": "release",
                     "url": "https://github.com/ticoteam/tico/releases/tag/v" + version,
