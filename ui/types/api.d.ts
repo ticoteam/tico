@@ -5500,6 +5500,7 @@ export type TaskCreate = {
   delivery?: "steer" | "queue" | "defer" | null;
   due?: string | null;
   effort?: string | null;
+  follow?: boolean;
   from_private?: boolean;
   goal_id?: string | null;
   harness?: string | null;

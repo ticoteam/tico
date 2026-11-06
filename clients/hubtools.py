@@ -702,6 +702,7 @@ def tag_update(api, args):
        "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only its requester, owner and readers see it; bot defaults also apply"},
        "readers": {"type": "array", "items": {"type": "string"}, "description": "Private: who else sees it: human:<id>, bot:<slug> or group:<id>"},
+        "follow": {"type": "boolean", "description": "Follow it yourself (the owner follows anyway)"},
        "from_private": {"type": "boolean", "default": False,
                         "description": "From a run on your own private task with no person on it: a company-visible "
                                        "task for a bot, carrying only its own words (no 12 words copied from the private "
@@ -755,7 +756,7 @@ def task_create(api, args):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model",
                   "check_role", "visibility", "public_title", "public_summary", "from_private", "model", "effort",
-                  "harness", "check_back_at", "check_back_note", "readers"):
+                  "harness", "check_back_at", "check_back_note", "readers", "follow"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
@@ -1413,6 +1414,35 @@ def task_readers_add(api, args):
       {"id": TASK_ID, "readers": READERS}, required=("id", "readers"), writes=True)
 def task_readers_remove(api, args):
     return api.post(f"tasks/{args['id']}/readers", {"remove": list(args["readers"])}, key=_key(args))
+
+
+FOLLOW_LEVEL = {"type": "string", "enum": ["live", "mentions", "digest", "muted"],
+                "description": "live: every message; mentions: only what names you; digest: in a batch; muted: "
+                               "nothing is sent"}
+FOLLOWER = {"type": "string", "description": "Someone else who sees the task (human:<id> or bot:<slug>), when you may "
+                                             "change the task; default you"}
+
+
+@tool("hub_task_followers", "Who follows a task, each at their level. Its owner follows by default; filing or "
+      "commenting does not follow.", {"id": TASK_ID}, required=("id",))
+def task_followers(api, args):
+    return api.get(f"tasks/{args['id']}/followers")
+
+
+@tool("hub_task_follow", "Follow a task (or set your level). With `who`, follow it for someone else who sees it, when "
+      "you may change the task.", {"id": TASK_ID, "level": FOLLOW_LEVEL, "who": FOLLOWER}, required=("id",),
+      writes=True)
+def task_follow(api, args):
+    body = {"following": True, **({"notify": args["level"]} if args.get("level") else {}),
+            **({"actor": args["who"]} if args.get("who") else {})}
+    return api.call("PUT", f"tasks/{args['id']}/followers", body, key=_key(args))
+
+
+@tool("hub_task_unfollow", "Stop following a task. With `who`, take someone else off, when you may change the task.",
+      {"id": TASK_ID, "who": FOLLOWER}, required=("id",), writes=True)
+def task_unfollow(api, args):
+    body = {"following": False, **({"actor": args["who"]} if args.get("who") else {})}
+    return api.call("PUT", f"tasks/{args['id']}/followers", body, key=_key(args))
 
 
 @tool("hub_task_relate", "Relate another task to this one, read as `id kind task`: parent (task is its "

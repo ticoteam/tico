@@ -284,6 +284,7 @@ function openTaskCreate(owner = '', opts = {}) {
         <div class="r3">
           <label>Tags <input type="text" name="labels" list="task-label-list-new" placeholder="bug, pricing-page" aria-label="Tag keys, comma separated" size="18" value="${esc((opts.labels || []).join(', '))}"><datalist id="task-label-list-new">${(TASKS_ST?.labels || []).map(l => `<option value="${esc(l)}">`).join('')}</datalist></label>
           <label><input type="checkbox" name="top"> Top of their queue</label>
+          <label><input type="checkbox" name="follow"> Follow</label>
         </div>
         <label>Serves <select name="goal" aria-label="The goal this task serves"><option value="">No goal</option></select></label>
         <label>Details (required)<textarea name="body" required aria-label="Details" placeholder="Details"></textarea></label>
@@ -324,6 +325,7 @@ function openTaskCreate(owner = '', opts = {}) {
     const labels = form.labels.value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
     if (labels.length) payload.labels = labels;
     if (form.top.checked) payload.top = true;
+    if (form.elements.follow.checked) payload.follow = true;
     if (form.link.value.trim()) payload.links = [form.link.value.trim()];
     if (parent) payload.relations = [{task: parent.id, kind: 'parent'}];
     try {

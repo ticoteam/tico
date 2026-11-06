@@ -950,6 +950,52 @@ def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
                      ("POST", "tasks/T1/readers", {"remove": ["ben"]})], calls
 
 
+def test_followers_run_from_the_cli_and_its_mcp_tools(monkeypatch):
+    """`hub task create --follow` sends follow; `hub task followers|follow|unfollow` run the hub_task_* tools against
+    /tasks/{id}/followers."""
+    from clients import remotecli
+    calls = []
+
+    class Api:
+        def get(self, path, /, **query):
+            if path == "me":
+                return {"actor": "human:ana", "role": "owner", "kind": "owner"}
+            calls.append(("GET", path, None))
+            return {"task_id": "T1", "following": False, "notify": None, "followers": []}
+
+        def post(self, path, body=None, key=None, **kw):
+            calls.append(("POST", path, body))
+            return {"id": "T1"}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            calls.append((method, path, body))
+            return {"task_id": "T1", "following": True, "notify": "live", "followers": []}
+
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: Api())
+    for follow in (True, False):
+        remotecli.run(hubcli.parser().parse_args(["task", "create", "--owner", "ops", "--title", "Ops weekly sweep",
+                                                  "--body", "Check the queue."] + (["--follow"] if follow else [])))
+    made = [body for method, path, body in calls if method == "POST" and path == "tasks"]
+    assert len(made) == 2 and made[0]["follow"] is True and "follow" not in made[1], calls
+    calls.clear()
+    for argv, tool in ((["task", "followers", "T1"], "hub_task_followers"),
+                       (["task", "follow", "T1", "--level", "digest"], "hub_task_follow"),
+                       (["task", "follow", "T1", "--who", "bot:cpo"], "hub_task_follow"),
+                       (["task", "unfollow", "T1", "--who", "ben"], "hub_task_unfollow"),
+                       (["task", "unfollow", "T1"], "hub_task_unfollow")):
+        args = hubcli.parser().parse_args(argv)
+        assert remotecli.tool_name(args.fn) == tool
+        remotecli.run(args)
+    assert calls == [("GET", "tasks/T1/followers", None),
+                     ("PUT", "tasks/T1/followers", {"following": True, "notify": "digest"}),
+                     ("PUT", "tasks/T1/followers", {"following": True, "actor": "bot:cpo"}),
+                     ("PUT", "tasks/T1/followers", {"following": False, "actor": "ben"}),
+                     ("PUT", "tasks/T1/followers", {"following": False})], calls
+    with pytest.raises(SystemExit):
+        hubcli.parser().parse_args(["task", "follow", "T1", "--level", "loud"])
+
+
 WEBHOOK_LEAVES = [  # every leaf of the command table in docs/webhooks.md, with the arguments it needs
     ["event-types", "--group", "webhook"],
     ["trigger", "list"], ["trigger", "create", "Orders"], ["trigger", "show", "orders"],

@@ -79,6 +79,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--private [--reader X ...]]  private: only its requester, owner and readers (people, bots,
                                            group:<id>) see it
     hub task readers list|add|remove <id> [X ...]   who can see a private task besides its requester and owner
+    hub task followers <id>                who follows a task, each at their level
+    hub task follow|unfollow <id> [--level live|mentions|digest|muted] [--who X]   follow a task or stop; --who: for
+                                           someone else who sees it, when you may change the task
     hub task model <id> [<model>] [--effort E] [--harness H] [--clear]
                                            the model this task's runs use; --clear puts it back on the bot's task model
                     [--defer [24h|2d|never]]  for a bot: a deferred task, no wake; its next run carries it, and
@@ -1721,6 +1724,8 @@ def parser():
                    help="only its requester, owner and readers see it")
     s.add_argument("--reader", dest="readers", action="append",
                    help="with --private: someone else who sees it, a person, bot or group:<id> (repeat for more)")
+    s.add_argument("--follow", action="store_true", default=None,
+                   help="follow the task you file (its owner follows anyway)")
     s.add_argument("--from-private", dest="from_private", action="store_true",
                    help="from a run on your private task: a company-visible task for a bot, in your own words (no "
                         "12 words copied from the private work, no secret-shaped value, no file or link of it)")
@@ -1972,6 +1977,16 @@ def parser():
         s.add_argument("id")
         s.add_argument("readers", nargs="+", metavar="X", help="human:<id>, bot:<slug> or group:<id>")
         s.set_defaults(fn="task readers " + change)
+    s = task.add_parser("followers", help="who follows a task, each at their level")
+    s.add_argument("id")
+    s.set_defaults(fn="task followers")
+    for change, words in (("follow", "follow a task, or set your level"), ("unfollow", "stop following a task")):
+        s = task.add_parser(change, help=words)
+        s.add_argument("id")
+        if change == "follow":
+            s.add_argument("--level", choices=("live", "mentions", "digest", "muted"))
+        s.add_argument("--who", help="someone else who sees it (human:<id> or bot:<slug>), when you may change the task")
+        s.set_defaults(fn="task " + change)
     s = task.add_parser("relate", help="relate another task to this one: <id> <kind> <task>")
     s.add_argument("id")
     s.add_argument("task")

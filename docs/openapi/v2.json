@@ -74517,6 +74517,11 @@
             "maxItems": 50,
             "title": "Readers"
           },
+          "follow": {
+            "type": "boolean",
+            "title": "Follow",
+            "default": false
+          },
           "check_model": {
             "anyOf": [
               {

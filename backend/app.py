@@ -33,6 +33,7 @@ from . import outcome_stats
 from . import recorder_installs
 from . import assistant_changes, why_here
 from . import teammate_access
+from . import task_followers
 from . import sources as SRC
 from . import start_places
 from . import ask_ingest, ask_routing, delivery, strategy_bot, invites, owner_link
@@ -4259,7 +4260,9 @@ def create_app(settings=None):
             for event in history:
                 event["source"] = SRC.source_of(lines, event)     # reads `data`, which the answer leaves out
                 event.pop("data", None)
-            return {"task": task_view(row, c, visible_sql=auth.task_sql(c, who), who=who),
+            # Who follows it (backend/task_followers.py): null for a task with no thread of its own.
+            return {"task": {**task_view(row, c, visible_sql=auth.task_sql(c, who), who=who),
+                             "followers": task_followers_seen(c, who, row)},
                     "events": history,
                     "can_comment": can_comment,
                     "children": children,
@@ -4557,7 +4560,7 @@ def create_app(settings=None):
                             change_paths=body.change_paths, qa=body.qa,
                             qa_not_checkable_live=body.qa_not_checkable_live,
                             quiet_notice=bool(joins) or bool(gate and gate["acts"]), from_private=bool(kept),
-                            same=same)
+                            same=same, follow=body.follow)
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         due = None
         if body.next_run and H.is_bot(owner):
@@ -5572,6 +5575,47 @@ def create_app(settings=None):
     def put_task_readers(request: Request, tid: str, body: M.TaskReaderList):
         """Replace the reader list of a private task."""
         return change_readers(request, tid, body, "Change who sees", replace=body.readers)
+
+    def task_followers_seen(c, who, row):
+        """The task's followers this reader may be told of, or None for a task with no thread of its own."""
+        tid = task_followers.thread_id(c, row)
+        if not tid:
+            return None
+        rows = task_followers.listed(c, row)
+        known = teammate_access.Known(c, who, auth)
+        if not known.member(tid):
+            rows = [r for r in rows if r["actor"] not in known.strangers]
+        return rows
+
+    def followers_answer(c, who, task_id):
+        rows = task_followers_seen(c, who, H.task(c, task_id))
+        mine = next((r for r in rows or [] if r["actor"] == who.actor), None)
+        return {"task_id": task_id, "following": bool(mine), "notify": mine["notify"] if mine else None,
+                "followers": rows}
+
+    @app.get("/api/v2/tasks/{tid}/followers")
+    def get_task_followers(request: Request, tid: str):
+        """Who follows the task, each at their level (docs/tasks.md, Followers)."""
+        with store.read() as c:
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            return followers_answer(c, who, task_id)
+
+    @app.put("/api/v2/tasks/{tid}/followers")
+    def put_task_followers(request: Request, tid: str, body: M.TaskFollower):
+        """Follow or unfollow the task, or set a level: yourself (no actor), or anyone who sees it when you may change
+        the task."""
+        def work(c):
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            from . import reach
+            task_followers.change(c, who.actor, task_id, body.actor, following=body.following, notify=body.notify,
+                                  mover=mover(c, who) or None,
+                                  check=lambda target: reach.check(c, who, target, "task", task_id=task_id))
+            return followers_answer(c, who, task_id)
+        return mutate(request, body, work)
 
     @app.delete("/api/v2/tasks/{tid}/links/{link_id}")
     def delete_task_link(request: Request, tid: str, link_id: M.ID):

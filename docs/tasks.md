@@ -1547,6 +1547,30 @@ status opens its statuses (or a typed task's steps) to move it; a person's due d
 within two days and red once passed.
 
 
+## Followers
+
+A task's **followers** are the people and bots who follow its thread, each at a level: `live` (everything),
+`mentions`, `digest` or `muted`. Nothing is guessed from roles:
+
+- The owner follows, at `live`. A new owner follows; the old owner stops unless they chose to follow or were
+  @mentioned.
+- Filing a task does not follow it, for people and bots alike. Choose **Follow** on the new-task form, `follow: true`
+  on `POST /api/v2/tasks`, `hub task create --follow`, or `follow` on `hub_task_create`.
+- Commenting does not follow a task either. An @mention does.
+- Only someone who can see the task follows it: a private task's followers are its requester, owner, readers and
+  inherited readers who chose to. Someone taken off Who can see is no longer listed.
+- Anyone who can see the task follows or unfollows it and sets their own level. Whoever may change the task (as for
+  readers) adds and takes off others; a bot only teammates in its reach.
+- The task's **Followers** row lists them by name, with the level when it is not live: **Follow** or **Following**
+  (your level, Unfollow) for you, × and + for others.
+- `hub task followers <id>`; `hub task follow <id> [--level live|mentions|digest|muted] [--who X]`;
+  `hub task unfollow <id> [--who X]` (MCP: `hub_task_followers`, `hub_task_follow`, `hub_task_unfollow`).
+- API: `GET /api/v2/tasks/{id}/followers`; `PUT` with `{"actor"?: X, "following": true|false, "notify"?: level}`
+  (no `actor`: you). Each answers `{task_id, following, notify, followers: [{actor, notify, reason}]}`, `following`
+  and `notify` being yours; `reason` is `owner`, `manual` (chosen) or `mentioned`. The task's detail carries
+  `followers` too. A task filed into a shared chat has no thread of its own: `followers` is null and a follow is
+  refused (`no-thread`).
+
 ## Company and private tasks
 
 New ordinary tasks are readable by active company people and bots. Reading does not grant
@@ -1583,7 +1607,8 @@ read it, as before; they are not listed. A company task is seen by everyone.
 - Readers go only on a private task: a company task refuses them and lists none. Making a task company-visible takes
   its readers off (each in its history), so making it private again starts from its requester and owner.
   A task lists at most 50; add a group instead.
-- A reader reads that task only: not the task above it or its other subtasks. Reading a task's thread follows the task.
+- A reader reads that task only: not the task above it or its other subtasks. Reading a task's thread follows the
+  task's Who can see.
 
 ### A private task with no person on it: the person it reaches
 
