@@ -355,7 +355,6 @@ async function pageBot(slug, tab) {
   const e = botRow(slug);
   if (!e) { BOT = null; $('#main').innerHTML = `<div class="empty">Unknown bot "${esc(slug)}".</div>`; return; }
   if (BOT?.slug === slug && $('#btabs')) { showBotTab(tab); return; }   // same bot, another tab
-  const keeper = isKeeper(slug);        // hosted by the keeper: hub.db is its record (docs/history/hub-v2.md)
   const boss = botRow(e.reports_to);
   const role = String(e.role || e.description || '').trim();
   const limited = botLimited(e);       // seen, not read: no activity anywhere on the page
@@ -395,11 +394,11 @@ async function pageBot(slug, tab) {
     <div class="bot-thread" id="bot-thread"></div>
   </div>
 
-  <aside id="pane-tasks" class="bot-rail" aria-label="Tasks" hidden${keeper && !botSidebarLayout(slug) ? ' data-loading' : ''}>
-    ${keeper && !limited ? `<button type="button" class="rail-ico bot-sidebar-edit" id="bot-sidebar-edit" aria-label="Edit sidebar" title="Edit"${botSidebarLayout(slug)?.can_edit ? '' : ' hidden'}><span class="nav-icon" aria-hidden="true">edit</span></button>
+  <aside id="pane-tasks" class="bot-rail" aria-label="Tasks" hidden${!botSidebarLayout(slug) ? ' data-loading' : ''}>
+    ${!limited ? `<button type="button" class="rail-ico bot-sidebar-edit" id="bot-sidebar-edit" aria-label="Edit sidebar" title="Edit"${botSidebarLayout(slug)?.can_edit ? '' : ' hidden'}><span class="nav-icon" aria-hidden="true">edit</span></button>
     <div class="bot-rail-editbar" hidden><span class="muted" id="bot-sidebar-status" role="status"></span><span class="spacer"></span>
       <button type="button" class="ghost" id="bot-sidebar-add">Add</button><button type="button" class="ghost" id="bot-sidebar-cancel">Cancel</button><button type="button" class="primary" id="bot-sidebar-done">Done</button></div>` : ''}
-    <div class="bot-rail-loading rail-empty"${keeper && !botSidebarLayout(slug) ? '' : ' hidden'}>Loading…</div>
+    <div class="bot-rail-loading rail-empty"${!botSidebarLayout(slug) ? '' : ' hidden'}>Loading…</div>
     ${botWidgetsHTML(slug, {
       tasks: `<section class="rail-sec bot-tasks-sec" id="bot-tasks" aria-labelledby="bot-tasks-h"><header class="rail-head"><h2 class="rail-h" id="bot-tasks-h">Tasks</h2></header>
       <div class="tabs slim bot-task-tabs" role="tablist" aria-label="Task lists">${botTaskTabsBarHTML(slug)}</div>
@@ -463,8 +462,8 @@ async function pageBot(slug, tab) {
     <section class="card" id="bot-updates-card"><header><h2>Updates</h2><a class="linkish" href="${UPDATES}">See updates</a></header>
       <div id="bot-updates"><div class="empty">Loading…</div></div></section>
     <section class="card"><header><h2>Activity</h2></header><div id="bot-history" class="bot-history"><div class="empty">Loading…</div></div></section>
-    ${keeper ? `<section class="card" id="bot-status-card"><header><h2>Status history</h2></header>
-      <div id="v2-history"><div class="empty">Loading…</div></div></section>` : ''}
+    <section class="card" id="bot-status-card"><header><h2>Status history</h2></header>
+      <div id="v2-history"><div class="empty">Loading…</div></div></section>
     <section class="card" id="bot-runs-card"><header><h2>Runs</h2></header>
       ${(rs => rs.length ? `<div id="bot-recent-runs">${runsTable(rs, false)}</div>`
         : '<div id="bot-recent-runs" data-pending="1"><div class="muted">Loading…</div></div>'
@@ -575,7 +574,7 @@ async function pageBot(slug, tab) {
   if (BOT_EDIT && BOT_EDIT.slug !== slug) BOT_EDIT = null;
   botTaskTabShow(slug, botTaskTabFirst(slug, needsMeCount(slug)));
   botSidebarApply(slug);
-  if (keeper) { botSidebarBind(slug); void botSidebarLoad(slug); void botPinsLoad(slug); }
+  botSidebarBind(slug); void botSidebarLoad(slug); void botPinsLoad(slug);
   // A click opens a folded section without focusing it, so its ring shows only for the keyboard.
   $('#pane-tasks').querySelectorAll('.rail-fold>summary').forEach(sum => sum.addEventListener('mousedown', ev => ev.preventDefault()));
   $('#pane-tasks').addEventListener('click', ev => {
@@ -680,8 +679,8 @@ function showBotTab(tab) {
   $('#pane-chat').querySelectorAll('[data-talk]').forEach(b => { const on = b.dataset.talk === BOT.thread?.kind; b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
   const once = (key, fn) => { if (!BOT.loaded.has(key)) { BOT.loaded.add(key); fn(BOT.slug); } };
   if (split || view === 'tasks') {
-    once('tasks', isKeeper(BOT.slug) ? loadBotTasksV2 : loadBotIssues);
-    if (isKeeper(BOT.slug)) once('files', slug => window.botFiles?.mount($('#bot-files'), {slug, get, esc, openFile: openFileLink}));
+    once('tasks', loadBotTasksV2);
+    once('files', slug => window.botFiles?.mount($('#bot-files'), {slug, get, esc, openFile: openFileLink}));
     botLatestSeen();
   }
   if (view === 'info') once('toolslist', slug => window.botTools?.mountList($('#bot-tools'), {slug, get, esc}));
@@ -689,7 +688,7 @@ function showBotTab(tab) {
     once('strategy-log', () => renderStrategyBotLog($('#strategy-bot-log')));
   if (!BOT.limited) {
     if (view === 'history') {
-      if (isKeeper(BOT.slug)) once('history', v2HistoryLoad);
+      once('history', v2HistoryLoad);
       once('runs', fillBotRuns);
       once('settings-history', botSettingsHistoryLoad);
     }

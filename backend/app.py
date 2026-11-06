@@ -2485,7 +2485,8 @@ def create_app(settings=None):
         was read for every bot in the answer."""
         row = dict(bot)
         # runtime, model and host are the bot's declaration (bot_settings); a bot with no declaration has none of them.
-        row.update({"model": "", "runtime": "", "host": "dispatcher"})
+        # The keeper is the only host there is, so a bot that declares none is a keeper bot.
+        row.update({"model": "", "runtime": "", "host": "keeper"})
         config = rows.config(bot["id"])
         assignment = rows.assignments.get(bot["id"]) if level["read"] else None
         row["access"] = level
@@ -2506,7 +2507,7 @@ def create_app(settings=None):
             declared = follow(c, bot["id"], json.loads(config["config"]) if config["config"] else {},
                               rows.config)
             row.update({"model": declared.get("model") or "", "runtime": declared.get("runtime") or "",
-                        "host": declared.get("host") or "dispatcher"})
+                        "host": declared.get("host") or "keeper"})
             if declared.get("shared_from"):
                 repo = declared.get("repo") or repo
                 row.update({"model": declared.get("model") or "", "runtime": declared.get("runtime") or "",

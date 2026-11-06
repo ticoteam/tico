@@ -779,7 +779,7 @@ async function botLatestUpdate(slug) {
   const u = r?.updates?.[0];
   if (!$('#bot-latest') || BOT?.slug !== slug) return;
   if (!u) { host.hidden = true; host.innerHTML = ''; return; }
-  const all = isKeeper(slug) ? `<a class="rail-ico" href="#/bot/${encodeURIComponent(slug)}/history" aria-label="All updates" title="All updates"><span class="nav-icon" aria-hidden="true">dynamic_feed</span></a>` : '';
+  const all = `<a class="rail-ico" href="#/bot/${encodeURIComponent(slug)}/history" aria-label="All updates" title="All updates"><span class="nav-icon" aria-hidden="true">dynamic_feed</span></a>`;
   host.innerHTML = `<header class="rail-head"><h2 class="rail-h">Updates</h2>
       <span class="rail-age" title="${esc(fmt(u.updated_at || u.created_at))}">${esc(ago(u.updated_at || u.created_at))}</span>${u.read ? '' : '<span class="upd-dot" role="img" aria-label="Unread"></span>'}
       <span class="spacer"></span>${all}</header>

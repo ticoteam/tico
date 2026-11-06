@@ -34,7 +34,7 @@ OLD_BOTS_DDL = """CREATE TABLE IF NOT EXISTS bots (
   state TEXT DEFAULT 'active', created_at TEXT, last_turn_at TEXT);"""
 NEW_BOTS_DDL = """CREATE TABLE IF NOT EXISTS bots (
   id TEXT PRIMARY KEY NOT NULL, slug TEXT NOT NULL UNIQUE, display_name TEXT, runtime TEXT, model TEXT, effort TEXT,
-  cwd TEXT, host TEXT DEFAULT 'dispatcher', thread_id TEXT, token_hash TEXT,
+  cwd TEXT, host TEXT DEFAULT 'keeper', thread_id TEXT, token_hash TEXT,
   state TEXT DEFAULT 'active', created_at TEXT, last_turn_at TEXT);"""
 
 # runners as store.SCHEMA made it before migration 0062 split off its heartbeat state

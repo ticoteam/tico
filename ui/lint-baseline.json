@@ -57,7 +57,7 @@
     "ui/app/overview.js": 1,
     "ui/app/pages.js": 7,
     "ui/app/person-page.js": 9,
-    "ui/app/pill.js": 5,
+    "ui/app/pill.js": 3,
     "ui/app/question-card.js": 4,
     "ui/app/recruit.js": 8,
     "ui/app/redesign-library.js": 7,

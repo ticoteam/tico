@@ -46,7 +46,7 @@ async function refresh(force) {
     if (TASKS_ST && isTasksRoute(S.route) && !TASKS_ST.fullRead) void tasksLoad(TASKS_ST, {poll: true});
     // The Active column beside the chat was loaded once and never again, so a task the bot closed
     // stayed listed until a reload. The poll redraws it too.
-    if (BOT && isKeeper(BOT.slug) && BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
+    if (BOT && BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
   }
 }
 
@@ -107,7 +107,7 @@ function liveTasksApply(events) {
     if (changed && list === state) { tasksTools(state); tasksRender(state); }
   }
   // These read whole lists, so at most every 15 s and not in a hidden tab (liveThrottle).
-  if (BOT && isKeeper(BOT.slug)) {
+  if (BOT) {
     const me = 'bot:' + BOT.slug;
     if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me || d.task?.requester_id === me)) liveThrottle('bot-tasks', () => {
       if (!BOT || BOT.slug !== me.slice(4)) return;
@@ -145,7 +145,7 @@ function liveWire() {
       renderTree();
       if (OVERVIEW_PAGE) overviewNeedsDraw();
       if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
-      if (BOT && isKeeper(BOT.slug)) botNeedsChanged(BOT.slug);
+      if (BOT) botNeedsChanged(BOT.slug);
     }, 200);
   }).catch(() => {}));
   // My dashboard reads itself again when what its cards show may have moved (ui/app/dashboard.js dashFollow).

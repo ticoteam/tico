@@ -3,8 +3,7 @@
 
 The contract is `docs/history/hub-v2.md` §0-§5. This module is the whole database layer: the cloud
 service (`backend/store.py` and everything behind it) goes through it and nowhere else. Pure
-stdlib, one file. It grew up under the local keeper; the `dispatcher` host default in the bot
-config is that history, kept because configs and callers still carry it.
+stdlib, one file. It grew up under the local keeper, which is the only host there is.
 
 Shape of every write:
 
@@ -241,7 +240,7 @@ NOTICE_DAYS = 14                # how long a notice stays in the inbox
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bots (
   id TEXT PRIMARY KEY NOT NULL, slug TEXT NOT NULL UNIQUE, display_name TEXT, runtime TEXT, model TEXT, effort TEXT,
-  cwd TEXT, host TEXT DEFAULT 'dispatcher', thread_id TEXT, token_hash TEXT,
+  cwd TEXT, host TEXT DEFAULT 'keeper', thread_id TEXT, token_hash TEXT,
   state TEXT DEFAULT 'active', created_at TEXT, last_turn_at TEXT);
 
 CREATE TABLE IF NOT EXISTS humans (
