@@ -214,11 +214,12 @@ const shotsDir = process.env.TICO_SHOTS || '';
       await shot(`desktop-models-gateway-${mode}.png`);
     }
     await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
-    // An admin who is not the owner sees prices and picks, no keys row and no Advanced; a member none of them. No
+    // An admin who is not the owner sees prices and picks, no keys row, and nothing to change under Advanced; a member
+    // sees no prices, picks or services. No
     // picks in use: no picks table. No Gateway connection: no keys row.
     await page.evaluate(() => { S.me.role = 'member'; S.me.bot_admin = true; return renderSettingsProviders(true); });
     await card.locator('[data-gateway-prices]').waitFor();
-    assert.equal(await card.locator('[data-gateway-api-keys], [data-gateway-advanced]').count(), 0, 'owner only');
+    assert.equal(await card.locator('[data-gateway-api-keys], [data-gateway-advanced] input, [data-gateway-advanced] button').count(), 0, 'owner only');
     await page.evaluate(() => { delete S.me.bot_admin; return renderSettingsProviders(true); });
     await card.locator('[data-gateway-toggle]').waitFor();
     assert.equal(await card.locator('[data-gateway-prices], [data-gateway-picks], [data-gateway-services-row]').count(), 0, 'admins only');
