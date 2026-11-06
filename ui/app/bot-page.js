@@ -44,7 +44,7 @@ function botStopped() {
 function botPauseHTML(slug, state, error = '') {
   const retry = '<button type="button" class="ghost small" data-bot-pause-retry>Retry</button>';
   if (!state) return error ? `<p class="err" role="alert">${esc(error)} ${retry}</p>` : '<p class="muted" role="status">Loading…</p>';
-  const e = botRow(slug), name = botDisplayName(slug);
+  const name = botDisplayName(slug);
   const paused = state.state === 'paused', record = state.paused_by;
   const stamp = record && Number.isFinite(Date.parse(record.at))
     ? `${new Date(record.at).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';

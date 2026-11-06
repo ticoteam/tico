@@ -1,3 +1,4 @@
+export {};
 const $ = selector => document.querySelector(selector);
 const origin = location.origin;
 let model = null, scene = null, topology = '', revision = 0, disposed = false, failed = false, replay = null, replaying = false, paused = false;

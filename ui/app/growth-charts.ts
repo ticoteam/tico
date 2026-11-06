@@ -21,7 +21,10 @@ function grRuns(values: readonly GrValue[], at: (i: number, v: number | string) 
   let run: GrPoint[] | null = null;
   values.forEach((v, i) => {
     if (v == null) { run = null; return; }
-    if (!run) runs.push(run = []);
+    if (!run) {
+      run = [];
+      runs.push(run);
+    }
     run.push(at(i, v));
   });
   return runs;
