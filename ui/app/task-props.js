@@ -61,6 +61,7 @@ function taskPropsHTML(t, opts = {}) {
   // Private: the box only; Who can see, below it, says who does
   rows.push(`<div class="prop" data-prop-row="private"><span class="prop-k">Private</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Private" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester_id) ? '' : 'disabled'}></label></span></div>`);
   rows.push(taskReadersRowHTML(t, r));
+  rows.push(taskFollowersRowHTML(t, r));
   if (roadmapTask(t)) {
     rows.push(`<div class="prop" data-prop-row="publication"><span class="prop-k">Public</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Public" data-task-public ${t.visibility === 'public' ? 'checked' : ''} ${r.reopen && !t.private ? '' : 'disabled'}><span class="prop-txt">${t.visibility === 'public' ? 'Shown on the public roadmap' : 'Team only'}</span></label></span></div>`);
     rows.push(`<div class="prop" data-prop-row="size"><span class="prop-k">Size</span><span class="prop-vwrap"><input class="roadmap-size" type="number" aria-label="Size" data-task-size data-task-field="size" min="0" step="any" value="${esc(t.size ?? '')}" ${r.reopen ? '' : 'disabled'}></span></div>`);
@@ -114,7 +115,7 @@ function taskPropsHTML(t, opts = {}) {
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
-const PROP_WORDS = {readers: 'Who can see', status: 'Status', owner: 'Owner', due: 'Due', check_back: 'Follow up by', check_back_note: 'Expected result', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People', publication: 'Public', size: 'Size'};
+const PROP_WORDS = {readers: 'Who can see', followers: 'Followers', status: 'Status', owner: 'Owner', due: 'Due', check_back: 'Follow up by', check_back_note: 'Expected result', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People', publication: 'Public', size: 'Size'};
 
 // Who is on a task by role (the server's `roles`): one chip per person and role, × takes one off, + adds one.
 // Roles are names the team chooses; what they mean downstream is the client's.
@@ -152,6 +153,45 @@ async function taskReaders(d, task, body) {
   } catch (e) {
     if (d.propsErrs?.id !== String(task.id)) d.propsErrs = {id: String(task.id), map: new Map()};
     d.propsErrs.map.set('readers', e.message);
+    taskPropsMsgPaint(d);
+  }
+}
+// Followers: who follows the task, each at their level (backend/task_followers.py). Not a task field: the task's detail
+// carries it (`followers`, null for a task in a shared chat, which has no row) and its own route changes it.
+// Follow / Following (your level, Unfollow) for you; × and + for whoever may change the task.
+const TASK_FOLLOWERS = new Map();   // task id -> the followers last read
+const FOLLOW_LEVELS = [['live', 'Everything'], ['mentions', 'Mentions'], ['digest', 'Digest'], ['muted', 'Muted']];
+const followLevelWord = n => (FOLLOW_LEVELS.find(([k]) => k === n) || [])[1] || n;
+function taskFollowersRowHTML(t, r) {
+  const id = String(t.id);
+  if ('followers' in t) TASK_FOLLOWERS.set(id, t.followers);
+  const list = TASK_FOLLOWERS.get(id);
+  if (!Array.isArray(list)) return '';
+  const may = r.mover || r.party, me = myActor(), mine = list.find(f => f.actor === me);
+  const chip = f => `<span class="prop-chip" data-follower="${esc(f.actor)}">${actorAvatar(f.actor, 16)}<span class="prop-txt">${esc(actorName(f.actor))}${f.notify === 'live' ? '' : ' · ' + esc(followLevelWord(f.notify))}</span>${may && f.actor !== me
+    ? `<button type="button" class="prop-x" data-prop-unfollow="${esc(f.actor)}" aria-label="Take ${esc(actorName(f.actor))} off" title="Take off">${TL_ICON.x}</button>` : ''}</span>`;
+  const own = mine
+    ? `<button type="button" class="prop-v" data-prop="follow-me" aria-haspopup="menu" aria-label="Following: ${esc(followLevelWord(mine.notify))}"><span class="prop-txt">Following</span></button>`
+    : '<button type="button" class="prop-v empty" data-prop-follow aria-label="Follow"><span class="prop-txt">Follow</span></button>';
+  const add = may ? `<button type="button" class="prop-add" data-prop="followers" aria-haspopup="menu" aria-label="Add a follower" title="Add">${TL_ICON.plus}</button>` : '';
+  return `<div class="prop" data-prop-row="followers"><span class="prop-k" aria-hidden="true">Followers</span><span class="prop-vwrap"><span class="prop-tags" aria-label="Followers">${list.map(chip).join('')}${own}${add}</span></span></div>`;
+}
+function taskFollowersPaint(d, task, list) {
+  TASK_FOLLOWERS.set(String(task.id), list);
+  const row = $('[data-prop-row="followers"]', d);
+  if (row && String(d.dataset.task) === String(task.id)) row.outerHTML = taskFollowersRowHTML({id: task.id}, taskPropRights(task)) || '<span hidden></span>';
+}
+// One change ({actor?, following, notify?}), then the row from the server's answer.
+async function taskFollow(d, task, body) {
+  d.focusProp = 'followers';
+  try {
+    const data = await put(`/v2/tasks/${encodeURIComponent(task.id)}/followers`, body);
+    if (d.propsErrs?.id === String(task.id)) d.propsErrs.map.delete('followers');
+    taskFollowersPaint(d, task, data.followers);
+    taskPropsMsgPaint(d);
+  } catch (e) {
+    if (d.propsErrs?.id !== String(task.id)) d.propsErrs = {id: String(task.id), map: new Map()};
+    d.propsErrs.map.set('followers', e.message);
     taskPropsMsgPaint(d);
   }
 }
@@ -263,12 +303,22 @@ function taskPropLoops(t, key, rows) {
 function taskPropsBind(d, task, change) {
   const box = $('[data-task-props]', d); if (!box) return;
   taskPropsMsgPaint(d);
-  const save = (key, body) => { d.focusProp = key; return change(body); };
+  const save = (key, body) => {
+    d.focusProp = key;
+    const done = change(body);
+    // A new owner follows and the old one may not: read the list again once the owner is saved.
+    if (key === 'owner') void Promise.resolve(done).then(() => get(`/v2/tasks/${encodeURIComponent(task.id)}/followers`))
+      .then(data => { if (data) taskFollowersPaint(d, task, data.followers); }).catch(() => {});
+    return done;
+  };
   const type = pipelineType(task), typed = !!type && pipelineTypeId(task) !== 'general';
   box.onclick = async ev => {
     if (ev.target.closest('[data-tag-key],[data-drop-label],[data-open-task]')) return;   // a tag opens its page; × and ↗ are bound in taskModalBind
     const unread = ev.target.closest('[data-prop-clear-reader]');
     if (unread) { void taskReaders(d, task, {remove: [unread.dataset.propClearReader]}); return; }
+    const gone = ev.target.closest('[data-prop-unfollow]');
+    if (gone) { void taskFollow(d, task, {actor: gone.dataset.propUnfollow, following: false}); return; }
+    if (ev.target.closest('[data-prop-follow]')) { void taskFollow(d, task, {following: true}); return; }
     const off = ev.target.closest('[data-prop-clear-role]');
     if (off) {
       const role = off.dataset.propClearRole, gone = off.dataset.actor;
@@ -330,6 +380,20 @@ function taskPropsBind(d, task, change) {
         html: `<span class="tl-opt-face">${actorAvatar(it.actor, 16)}</span><span>${esc(it.label)}</span>`}));
       propMenu(d, b, {label: 'Who can see', find: 'Find a person, bot or team', items, none: 'Nobody to add',
         onPick: it => void taskReaders(d, task, {add: [it.value]})});
+    } else if (key === 'follow-me') {
+      const now = (TASK_FOLLOWERS.get(String(task.id)) || []).find(f => f.actor === myActor())?.notify;
+      propMenu(d, b, {label: 'Following', items: [...FOLLOW_LEVELS.map(([value, text]) => ({value, text, checked: now === value})),
+        {value: '', text: 'Unfollow'}],
+        onPick: it => void taskFollow(d, task, it.value ? {following: true, notify: it.value} : {following: false})});
+    } else if (key === 'followers') {
+      const have = new Set((TASK_FOLLOWERS.get(String(task.id)) || []).map(f => f.actor));
+      // A private task: only who can see it (a group on its list may hold anyone, so then everyone is offered).
+      const seen = task.private && !(task.readers || []).some(a => a.startsWith('group:'))
+        ? new Set([...(task.readers || []), task.owner_id, task.requester_id, taskRequester(task)]) : null;
+      const items = threadAddable({groups: false}).filter(it => !have.has(it.actor) && (!seen || seen.has(it.actor)))
+        .map(it => ({value: it.actor, text: it.label, html: `<span class="tl-opt-face">${actorAvatar(it.actor, 16)}</span><span>${esc(it.label)}</span>`}));
+      propMenu(d, b, {label: 'Add a follower', find: 'Find a person or bot', items, none: 'Nobody to add',
+        onPick: it => void taskFollow(d, task, {actor: it.value, following: true})});
     } else if (key === 'owner') {
       const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll('option[value]:not([value=""])');
       propMenu(d, b, {label: 'Owner', find: 'Find a person or bot', items: [...opts].map(o => {
