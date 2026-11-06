@@ -119,6 +119,7 @@ async function filesPages({hub, browser, phone}) {
     assertClean(page, `${where}: unlink reaches both task readers`);
     assertClean(reader, `${where}: linked pages refresh without reopening the task`);
     await reader.context().close();
+    await page.context().close();
 }
 
 async function makePage({hub, browser, phone}) {
@@ -208,5 +209,6 @@ journey('e2e-files-pages', async ctx => {
   for (const [name, step] of Object.entries({filesPages, makePage})) {
     try { await step(ctx); }
     catch (error) { error.message = `[${name}, ${ctx.phone ? 'phone' : 'desktop'}] ${error.message}`; throw error; }
+    finally { for (const context of ctx.browser.contexts()) await context.close().catch(() => {}); }
   }
 }, [...SEEDS, 'pages']);

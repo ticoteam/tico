@@ -8,6 +8,7 @@
 // redesign-e2e-bot (its own bot_proposal seed changes Inbox triage) stays a separate script.
 const assert = require('node:assert/strict');
 const {run, open, go, api, ok, automationNamed, sideways, shot, t} = require('./support/redesign-e2e.cjs');
+const e2e = require('./support/e2e.cjs');
 const promoInput = require('./fixtures/redesign-automation-promo.json');
 
 // ---- redesign-e2e-visibility
@@ -351,34 +352,43 @@ const assistantRoutine = (() => {
   };
 })();
 
-// ---- e2e-automations: the automation's own Runs tab, for a scheduled automation Dana made and fired by hand.
+// ---- e2e-automations: the automation's own Runs tab, for a scheduled automation Dana made and fired by hand. It opens
+// through the e2e harness, which watches the page: a console error or a 4xx/5xx API answer fails it.
 const runsTab = async ({hub, browser, phone, tag}) => {
   const NAME = 'Friday status check';
-  const page = await open(browser, hub, 'dana', {phone, hash: '#/automations'});
-  const made = await ok(page, 'POST', 'automations', {name: NAME, owner: 'person:dana', enabled: true, builtin: false,
-    trigger: {type: 'schedule', cron: '0 16 * * 5', tz: 'UTC'}, steps: []});
+  const made = await e2e.must(hub, 'dana', 'POST', 'automations', {
+    name: NAME, owner: 'person:dana', enabled: true, builtin: false,
+    trigger: {type: 'schedule', cron: '0 16 * * 5', tz: 'UTC'}, steps: [],
+  }, 'make the automation');
   const id = made.id || made.automation?.id;
   assert.ok(id, `${tag}: the create returns the automation id`);
+
+  const page = await e2e.open(browser, hub, 'dana', {phone, hash: '#/automations'});
+  await page.locator('#main', {hasText: NAME}).first().waitFor({timeout: t(20000)});
+  e2e.assertClean(page, `${tag}: automations listed`);
+
   await go(page, `#/automations/${id}`);
   await page.locator('#main', {hasText: NAME}).first().waitFor({timeout: t(20000)});
-  await ok(page, 'POST', `automations/${id}/run`, {input: {}});
-  const runs = await ok(page, 'GET', `automations/${id}/runs`);
+  e2e.assertClean(page, `${tag}: automation open`);
+
+  await e2e.must(hub, 'dana', 'POST', `automations/${id}/run`, {input: {}}, 'fire it now');
+  const runs = await e2e.must(hub, 'dana', 'GET', `automations/${id}/runs`, undefined, 'read its runs');
   assert.ok((runs.runs || runs.items || []).length >= 1, `${tag}: the hub has a run`);
   await page.reload();
   await page.locator('#main', {hasText: NAME}).first().waitFor({timeout: t(20000)});
   // The automation's own Runs tab (the list's Automations | Runs tabs are in the page, hidden behind it).
   await page.locator('#main button:visible, #main a:visible, #main [role=tab]:visible', {hasText: /^Runs$/}).first().click();
-  await page.waitForFunction(() => { const text = document.querySelector('#main')?.innerText || '';
-    return /\d{1,2}:\d{2} [AP]M/.test(text) && /Done/.test(text); }, null, {timeout: t(30000)})
-    .catch(() => assert.fail(`${tag}: the run row draws its time and outcome`));
-  assert.deepEqual(page.errors, [], `${tag}: no page errors`);
+  const text = await e2e.drawn(page, '#main', text => /\d{1,2}:\d{2} [AP]M/.test(text) && /Done/.test(text),
+    `${tag}: the run row draws its time and outcome`);
+  assert.match(text, /Done/, `${tag}: the run row shows its outcome`);
+  e2e.assertClean(page, `${tag}: run drawn`);
   assert.equal(await sideways(page), false, `${tag}: automations scroll sideways`);
   await page.context().close();
 };
 
 const STEPS = {visibility, automations, paths, build, assistantRoutine, runsTab};
 
-run('redesign-e2e-automations', ['org', 'toured', 'automations', 'assistant'], async ctx => {
+run('redesign-e2e-automations', ['org', 'toured', 'automations', 'assistant', 'finance'], async ctx => {
   for (const [name, step] of Object.entries(STEPS)) {
     try { await step(ctx); }
     catch (error) { error.message = `[${name}, ${ctx.tag}] ${error.message}`; throw error; }

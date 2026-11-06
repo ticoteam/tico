@@ -346,5 +346,6 @@ journey('e2e-core', async ctx => {
   for (const [name, step] of Object.entries(STEPS)) {
     try { await step(ctx); }
     catch (error) { error.message = `[${name}, ${ctx.phone ? 'phone' : 'desktop'}] ${error.message}`; throw error; }
+    finally { for (const context of ctx.browser.contexts()) await context.close().catch(() => {}); }   // each step's pages end with it
   }
 });
