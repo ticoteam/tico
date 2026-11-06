@@ -35032,6 +35032,56 @@
         ]
       }
     },
+    "/api/v2/skills/bundles/{sha256}": {
+      "get": {
+        "summary": "An approved version's files by its bundle sha, checked against the sha before it is served",
+        "operationId": "getSkillBundle",
+        "parameters": [
+          {
+            "name": "sha256",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sha256"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
     "/api/v2/skills/installs": {
       "get": {
         "summary": "The installs of one bot or person, with what is wanted and what is staged there",

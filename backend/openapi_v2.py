@@ -3515,6 +3515,7 @@ STABLE.extend([
     ("/api/v2/skills/installs/{iid}", "delete", "Skills", "uninstallSkill", "Take a skill off a bot or person, with the rights to install it", None),
     ("/api/v2/skills/{name}", "get", "Skills", "getSkill", "One skill: its versions and the installs the caller may see", None),
     ("/api/v2/skills/{name}/versions/{number}", "get", "Skills", "getSkillVersion", "One approved version of a skill, with its files", None),
+    ("/api/v2/skills/bundles/{sha256}", "get", "Skills", "getSkillBundle", "An approved version's files by its bundle sha, checked against the sha before it is served", None),
     ("/api/v2/skills/{name}/installs", "post", "Skills", "installSkill", "Install a skill for one bot or person, at the latest version or pinned to one", None),
     ("/api/v2/skills/{name}/installs/bulk", "post", "Skills", "installSkillForTargets", "Install a skill for several bots or people at once, all or nothing", None),
 ])
