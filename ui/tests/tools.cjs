@@ -97,6 +97,9 @@ function apiFake() {
       const row = fin.accounts.find(a => p.endsWith('/' + a.id));
       if (row && method === 'PATCH') { row.bot_slug = body.bot_slug; return {...row}; }
     }
+    // Bots for Finance's "Spend goes to" picker.
+    if (p === '/api/employees') return [{name: 'sales', display_name: 'Sales', status: 'active'},
+      {name: 'paid-rental-ads', display_name: 'Paid rental ads', status: 'active'}];
     if (p === '/api/v2/tool-index') return {rows: structuredClone(ROWS), counts: COUNTS, next: null};
     if (p === '/api/v2/tools') return {integrations: []};
     if (p === '/api/v2/groups') return {groups: [{id: 'g-books', name: 'Bookkeeping'}]};
