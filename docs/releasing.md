@@ -293,10 +293,16 @@ Run tests on your computer while you work. On pull requests to main, the PR chec
 that a measured static dependency map says use a changed file: what each tracked file imports (transitively), runs
 by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data files, folders it lists or globs). The
 Caddy image job runs only when a change reaches the image inputs or `backend/caddy_assets.py`; otherwise the plan
-compiles the changed files and runs the Dockerfile's import check itself. Conftest, `pytest.ini`, workflows,
-dependencies, `docs/` (except `docs/images` and `docs/history`), CHANGELOG.md, the selector, and deleted or
-unparsable files fall back to the full default Python suite and core browser scripts. Main pushes always run that full default suite, and a newer main push never
-cancels an earlier one; only a pull request's superseded run is canceled. Runner/harness changes also run
+compiles the changed files and runs the Dockerfile's import check itself. A `docs/` page, CHANGELOG.md or a GitHub
+file runs the tests that read it (by path, folder or listing) and the tests of the code that reads it, not everything
+that imports that code. A change to how the checks run (the PR checks workflow, `scripts/ci_install.sh`, the browser
+system packages) runs the tests that read it and one short core browser script, and a workflow change also builds the
+Caddy image. Conftest, `pytest.ini`, dependency pins and deleted or unparsable files fall back to the full default
+Python suite and core browser scripts. A draft pull request runs no checks (every job is skipped); marking it ready
+for review does. Main requires no check, so a skipped run is not a pass: wait until the ready-for-review run's checks
+show passing, not skipped, before merging. Main has no PR-check run of its own: its pull requests tested each change
+and Release validation runs the whole gate on each candidate; a daily PR caches run (`pr-cache.yml`) keeps the
+main-branch caches pull requests restore from fresh. A pull request's superseded run is canceled. Runner/harness changes also run
 slow conformance on the Rust runner and all its fake harnesses; UI changes select their browser scripts, including
 imported-history for chat changes, or every browser script when the UI mapping is uncertain.
 
@@ -306,7 +312,8 @@ Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A
 one retry. Pip and npm download caches remain enabled. Checks run on 4-vCPU RunsOn Spot VMs in Tico's own AWS
 account (fork PRs on GitHub-hosted runners). `scripts/pr_checks.py` sizes the Python and browser groups so each VM
 finishes in about `TICO_CI_JOB_SECONDS` (180) including setup, using JUnit per-file and browser per-script timings
-from the last successful full main run, with collected test counts until timings exist. New files use the observed
+from the latest successful Release validation run (its `test-timings` artifact: the same pytest flags, slow tests
+included), with collected test counts until timings exist. New files use the observed
 seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check links each job and its elapsed seconds in its summary. It also
 fails if a required job failed or was canceled. The target is under ten minutes from start to completed checks;
 hosted run receipts, including cache state, establish whether that target is met.
@@ -336,7 +343,7 @@ That is the default suite: pytest in parallel without the tests marked `@pytest.
 core browser scripts (`CORE` in `scripts/ui-tests.cjs`) with the load-aware concurrency described below. The check records wall time and load; it
 takes about two minutes, and a run over 300 seconds still passes and says it is slow. There is no budget on the
 number of tests: keep every test that guards a real failure, and none of wording or copy. Release validation builds the three images and the Release workflow publishes them with the
-GitHub release. The PR checks workflow runs this full default suite on main and on uncertain PR selections; known PR mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
+GitHub release. The PR checks workflow runs this full default suite on uncertain PR selections; known PR mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
 slow tests and every browser script, and release candidate validation covers that full suite.
 
 ## Hosted release validation

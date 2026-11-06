@@ -464,6 +464,11 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/junit"
           echo "PYTEST_ADDOPTS=$PYTEST_ADDOPTS -o junit_family=xunit1 --junitxml=$RUNNER_TEMP/junit/python-${TICO_RELEASE_SHARD//\//-of-}.xml" >> "$GITHUB_ENV"
+      - name: Write the browser part's per-script seconds (ui-tests.cjs TICO_UI_TIMINGS), for the PR check groups
+        if: matrix.part == 'browser'
+        run: |
+          mkdir -p "$RUNNER_TEMP/junit"
+          echo "TICO_UI_TIMINGS=$RUNNER_TEMP/junit/browser-${TICO_RELEASE_SHARD//\//-of-}.json" >> "$GITHUB_ENV"
       - name: Run the candidate's unchanged release gate, this part
         # The helper takes its slice only from --part/--shard (argparse), never from the environment.
         run: |
@@ -484,7 +489,7 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always() && matrix.part == 'python'
+        if: always() && (matrix.part == 'python' || matrix.part == 'browser')
         with:
           name: release-junit-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
           path: ${{ runner.temp }}/junit
@@ -543,6 +548,32 @@ jobs:
           { echo "### Factory sim, group ${{ matrix.shard }} of 8"; echo '```'
             awk '/^== /{h=$0; next} /^ +(FAIL|NOTE) /{if(h){print h; h=""} print} /scenario runs in/' "$RUNNER_TEMP/sim.log"
             echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  # Per-file and per-script seconds from this gate's reports, in the format PR checks size their groups from
+  # (scripts/pr_checks.py durations). Optional: it never changes the release verdict or the run's conclusion.
+  test-timings:
+    needs: gate
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: scripts/pr_checks.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-junit-${{ github.run_id }}-*
+          path: ci-results
+          merge-multiple: true
+      - run: python3 scripts/pr_checks.py durations
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timings
+          path: durations.json
+          retention-days: 30
 
   # The one verdict: the release passes only when every part passed and the Linux binaries and images built.
   release-check:
