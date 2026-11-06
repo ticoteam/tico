@@ -159,6 +159,15 @@ def runner_route_latency(c, now=None):
     return None
 
 
+def _disk_row(fresh, document):
+    """A computer's disk for Health: its newest one-minute sample (`fresh`) when there is one, else its readiness disk,
+    with the last clean-up the computer ran by itself (readiness `disk_cleanup`) on it."""
+    disk = {k: fresh[k] for k in ("total_bytes", "free_bytes")} if fresh else document.get("disk")
+    if isinstance(disk, dict) and isinstance(document.get("disk_cleanup"), dict):
+        disk = {**disk, "cleanup": document["disk_cleanup"]}
+    return disk
+
+
 def _computers(c, runners_online, settings, limits=None):
     from .readiness import computer_login, login_warning, SIGNED_OUT
     since = {r["id"] for r in runners_online}
@@ -171,12 +180,15 @@ def _computers(c, runners_online, settings, limits=None):
     wanted = {default} - {""}
     from .cloud_machines import resting as resting_machines
     from .model_subscriptions import KINDS, RUNNER_CAPABILITIES_SQL, in_effect
+    from .performance import latest_disks
     from .read_cache import prime
     resting = resting_machines(c)
     found = c.execute("SELECT r.id,r.label,r.last_seen_at,r.platform,r.readiness,r.capabilities,"
                       "coalesce(nullif(h.name,''),r.owner_id) AS owner_id FROM runners_with_state r "
                       "LEFT JOIN humans h ON h.id=r.owner_id WHERE r.revoked_at IS NULL ORDER BY r.label").fetchall()
     prime(c, RUNNER_CAPABILITIES_SQL, {(r["id"],): r for r in found})      # in_effect's runner read, for every computer
+    # The disk as of its last minute's sample: readiness sends the disk again only when something else changed.
+    disks = latest_disks(c, [r["id"] for r in found])
     for r in found:
         document = readiness_document(r["readiness"])
         runtimes = document.get("runtimes") or {}
@@ -186,7 +198,9 @@ def _computers(c, runners_online, settings, limits=None):
         rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in since, "last_seen_at": r["last_seen_at"],
                      "resting": r["id"] in resting and r["id"] not in since,
                      "platform": r["platform"] or "", "update": runner_versions.view(fleet.get(r["id"])),
-                     "disk": document.get("disk"),
+                     # The disk as of its last minute's sample, else its readiness. The last clean-up the computer
+                     # ran by itself rides on its disk row (runner-rs/src/disk_clean.rs).
+                     "disk": _disk_row(disks.get(r["id"]), document),
                      "owner_id": r["owner_id"], "container_exec": document.get("container_exec"),
                      "github_auth": document.get("github_auth"), "browser_launch": document.get("browser_launch"),
                      "engine": document.get("engine"),
@@ -347,16 +361,21 @@ def _missing_tool_credentials(c, online_ids):
     return sorted(out)
 
 
-def reserved_credentials(c):
+def reserved_credentials(c, who=None, admins=(), auth=None):
     """(credential name, variable, bot) for each credential a bot holds under a name Tico reserves. The runner leaves
-    such a credential out of the bot's turns, so the bot runs without it until someone renames the variable."""
+    such a credential out of the bot's turns, so the bot runs without it until someone renames the variable. Given
+    `who`, never a key of a tool they may not see (backend/api_tools.py `visible`)."""
     from clients.access_entry import RESERVED_ENV, RESERVED_PREFIXES
     from .credentials import effective_grant
+    hidden = set()
+    if who is not None:
+        from .api_tools import hidden_keys
+        hidden = hidden_keys(c, who, admins, auth)
     out = []
     for row in c.execute("SELECT DISTINCT v.id,v.name,v.env,g.subject FROM credentials v JOIN credential_grants g "
                          "ON g.credential_id=v.id WHERE g.subject LIKE 'bot:%' AND g.revoked_at IS NULL "
                          "AND v.ciphertext IS NOT NULL AND v.env<>'' ORDER BY v.name"):
-        if (row["env"] in RESERVED_ENV or row["env"].startswith(RESERVED_PREFIXES)) \
+        if (row["env"] in RESERVED_ENV or row["env"].startswith(RESERVED_PREFIXES)) and row["id"] not in hidden \
                 and effective_grant(c, row["id"], row["subject"]):
             out.append((row["name"], row["env"], H.actor_id(row["subject"])))
     return out
@@ -2162,7 +2181,7 @@ def view(c, who, settings, auth, github, config):
                              "Missing Credential: " + "; ".join(f"{tool} on {label}" for tool, label in missing_tools[:5])
                              + ("." if len(missing_tools) <= 5 else f"; and {len(missing_tools) - 5} more."),
                              [_fix("Open Keys", "#/tools/keys?show=credentials"), _fix("Open Computers", "#/settings", "devices")]))
-    if full and (reserved := reserved_credentials(c)):
+    if full and (reserved := reserved_credentials(c, who, tuple(settings.credential_admins or ()), auth)):
         checks.append(_check("reserved_credentials", "Credential names", "warn",
                              "Bots run without these credentials, because Tico keeps their variable names for itself: " + "; ".join(f"{name} ({env}) for {_bot_name(c, bot)}" for name, env, bot in reserved[:5])
                              + ("." if len(reserved) <= 5 else f"; and {len(reserved) - 5} more.")
@@ -2236,14 +2255,26 @@ def view(c, who, settings, auth, github, config):
 
     if full:
         overloads = recent_overloads(c, [computer["id"] for computer in computers])
+        from .cloud_machines import disk_words
+        cloud_disks = disk_words(c)                     # a cloud machine grows to a bigger size instead
         for computer in computers:
             disk = computer.get("disk") or {}
+            cloud = cloud_disks.get(computer["id"])
+            if cloud is not None:
+                # A cloud machine's own reading since it last started; none when it rests or has not read since.
+                disk = {**disk, **cloud["disk"]} if cloud["disk"] and computer["id"] not in resting_ids else {}
             total, free = disk.get("total_bytes"), disk.get("free_bytes")
             if isinstance(total, int) and total > 0 and isinstance(free, int) and 1 - free / total > .85:
+                cleanup = disk.get("cleanup") or {}
+                done = (f" Its own clean-up at {cleanup.get('at', '')[11:16]} UTC freed "
+                        f"{(cleanup.get('freed_bytes') or 0) / 1024**3:.1f} GB; what is left is not safe for it to remove."
+                        if cleanup.get("still_low") else "")
+                advice = (cloud or {}).get("advice") or (
+                    "Free space on this computer; for Docker, run `docker image prune -a` to remove unused images. "
+                    "The update retries when space frees.")
                 checks.append(_check("disk:" + computer["id"], "Disk space", "warn",
                                      f"{computer['label']}: disk is {100 * (1 - free / total):.0f}% full "
-                                     f"({free / 1024**3:.1f} GB free). Free space on this computer; for Docker, run "
-                                     "`docker image prune -a` to remove unused images. The update retries when space frees.",
+                                     f"({free / 1024**3:.1f} GB free).{done} " + advice,
                                      [_fix("Open Computers", "#/settings", "devices")]))
             # Diagnostics only: an overload is shown here and on the computer's Performance page; nothing acts on it.
             from .performance import describe

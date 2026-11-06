@@ -338,23 +338,21 @@ def test_an_older_google_connects_table_gets_the_fingerprint_columns():
         {r[1] for r in c.execute("PRAGMA table_info(google_connects)")}
 
 
-@pytest.mark.parametrize("error,kind", [("invalid_grant", "signin"), ("admin_policy_enforced", "admin_policy"),
-                                        ("invalid_client", "app_config"), ("org_internal", "app_unavailable"),
-                                        ("server_error", "error")])
-def test_a_refused_refresh_says_why_and_nothing_else(app, monkeypatch, error, kind):
-    machine, _ = holding(app, monkeypatch, FakeGoogle(error=error))
-    r = refresh(app, machine["token"])
-    assert r.status_code == 409 and r.json()["error"]["code"] == "google_refused"
-    assert r.json()["error"]["kind"] == kind
-    assert "1//grant" not in r.text and "tico-secret" not in r.text
-
-
-@pytest.mark.parametrize("google", [FakeGoogle(error=OSError("unreachable")),
-                                    FakeGoogle(error="internal_failure", status=503)])
-def test_google_out_of_reach_or_down_is_a_network_refusal(app, monkeypatch, google):
-    machine, _ = holding(app, monkeypatch, google)
-    r = refresh(app, machine["token"])
-    assert r.status_code == 409 and r.json()["error"]["kind"] == "network"
+def test_a_refused_refresh_says_why_and_nothing_else_and_google_out_of_reach_or_down_is_a_network_refusal(app, monkeypatch):
+    machine, _ = holding(app, monkeypatch)
+    for error, kind in [("invalid_grant", "signin"), ("admin_policy_enforced", "admin_policy"),
+                        ("invalid_client", "app_config"), ("org_internal", "app_unavailable"),
+                        ("server_error", "error")]:
+        monkeypatch.setattr(google_connect, "post_token", FakeGoogle(error=error))
+        r = refresh(app, machine["token"])
+        assert r.status_code == 409 and r.json()["error"]["code"] == "google_refused", (error, r.status_code, r.text)
+        assert r.json()["error"]["kind"] == kind, (error, r.text)
+        assert "1//grant" not in r.text and "tico-secret" not in r.text, error
+    for name, google in [("unreachable", FakeGoogle(error=OSError("unreachable"))),
+                         ("503", FakeGoogle(error="internal_failure", status=503))]:
+        monkeypatch.setattr(google_connect, "post_token", google)
+        r = refresh(app, machine["token"])
+        assert r.status_code == 409 and r.json()["error"]["kind"] == "network", (name, r.status_code, r.text)
 
 
 def test_an_answer_wider_than_asked_is_refused_not_passed_on(app, monkeypatch):

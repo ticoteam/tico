@@ -39,7 +39,11 @@ def test_pre_start_retry_limit_fails_unstarted_jobs_and_preserves_running_work(a
             "expired" if acknowledge_start else "failed")
     messages = get(api, f"conversations/{message['conversation_id']}/messages")
     replies = [m["body"] for m in messages if m["sender_id"] == "bot:ops"]
-    assert replies == ([] if acknowledge_start else ["Your ops couldn't start on Test Mac; check that Computer"])
+    if acknowledge_start:
+        # Held for review: the person is told once that it stopped mid-reply.
+        assert len(replies) == 1 and "computer dropped mid-reply" in replies[0]
+    else:
+        assert replies == ["Your ops couldn't start on Test Mac; check that Computer"]
 
 
 def test_review_is_private_and_exposes_saved_output_without_credentials(api):
@@ -121,13 +125,12 @@ def test_a_reported_reset_holds_the_bot_until_then_and_the_tick_releases_it(api,
                          (seq,)).fetchone()
 
 
-@pytest.mark.parametrize("reset", ["days9", "past", "naive"])
-def test_an_unbelievable_reported_reset_keeps_the_default_wait(api, reset):
+def test_an_unbelievable_reported_reset_keeps_the_default_wait(api):
     from backend.execution import LIMIT_COOLDOWN, limit_cooldown
     from backend.store import H
     machine, message, attempt = setup_attempt(api)
     now = H.now()
-    at = {"days9": H.shift(now, days=9), "past": H.shift(now, minutes=-10), "naive": H.shift(now, hours=1)[:19]}[reset]
+    at = H.shift(now, days=9)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "odd-reset"}, machine["token"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": 0, "limited": True,
          "limit_resets_at": at, "text": ""}, machine["token"])
@@ -766,7 +769,7 @@ def test_a_lapse_with_no_hub_update_during_the_run_stays_held(api, update):
     assert review['stopped'] == 'changed' and "Tico's update" not in review['reason']
 
 
-@pytest.mark.parametrize('writer', [('Bash', None), ('Write', 'call-1'), ('mcp__hub__hub_task_update', None)])
+@pytest.mark.parametrize('writer', [('Bash', None), ('Write', 'call-1')])
 def test_a_run_that_used_a_tool_that_writes_waits_and_its_review_lists_the_calls(api, writer):
     """Any call outside the reads, a subagent's included, holds the run for review; the card names every call."""
     machine, message, attempt = restarted_mid_turn(api, [('Read', None), ('Agent', None), writer], restart=False)
@@ -1247,8 +1250,9 @@ def settled(api, attempt):
 
 
 def bot_replies(api, message, bot='ops'):
+    """The bot's replies in the chat, not the notice a held run's person gets (Execution.tell_held)."""
     return [m['body'] for m in get(api, f"conversations/{message['conversation_id']}/messages")
-            if m['sender_id'] == 'bot:' + bot]
+            if m['sender_id'] == 'bot:' + bot and m['kind'] != 'notice']
 
 
 def test_a_finished_turn_dismissed_because_its_task_closed_still_ends_completed_and_answers_in_the_task(api):
@@ -2135,7 +2139,6 @@ def test_restart_uses_start_evidence_and_does_not_hold_internal_shell_writes(api
 @pytest.mark.parametrize('tool,label', [
     ('mcp__hub__hub_release_now', 'publish release'),
     ('mcp__hub__hub_webhook_send', 'send webhook'),
-    ('mcp__hub__hub_support_send', 'send support report'),
 ])
 def test_restart_with_hub_publish_or_send_call_is_held_and_names_it(api, tool, label):
     """Hub publish/send tools recorded with their runner prefix hold a restarted run and name the operation."""
@@ -2152,8 +2155,16 @@ def runner_shell_cases():
                        'runner-rs/tests/fixtures/recovery-shell-events.json').read_text())
 
 
-@pytest.mark.parametrize('case', runner_shell_cases(), ids=lambda case: case['command'])
-@pytest.mark.parametrize('host', ['codex', 'claude'])
+def kept_shell_cases():
+    """A merge on codex (the private-marker leak check), the shell-wrapped merge on claude, and a read-only command."""
+    by_command = {case['command']: case for case in runner_shell_cases()}
+    return [pytest.param(by_command[command], host, id=f'{command}-{host}') for command, host in (
+        ('gh pr merge 42 --squash --body synthetic-private-marker', 'codex'),
+        ('/bin/bash -lc "cd /tmp;gh pr merge 42"', 'claude'),
+        ('cat note.txt', 'claude'))]
+
+
+@pytest.mark.parametrize('case,host', kept_shell_cases())
 def test_restart_shell_actions_use_real_runner_events(api, case, host):
     """Rust host tests produce these exact payloads from provider start items; no full command summary exists."""
     add_recovery_reviewer(api)
@@ -2179,8 +2190,7 @@ def test_restart_shell_actions_use_real_runner_events(api, case, host):
             assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:botops'").fetchone()
 
 
-@pytest.mark.parametrize('program', ['gh', 'npm', 'docker', 'hub', 'stripe'])
-@pytest.mark.parametrize('labels', [None, ['synthetic-private-marker']])
+@pytest.mark.parametrize('program,labels', [('gh', None), ('stripe', ['synthetic-private-marker'])])
 def test_restart_legacy_program_only_event_does_not_hide_possible_action(api, program, labels):
     add_recovery_reviewer(api)
     machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])

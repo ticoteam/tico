@@ -9,8 +9,7 @@ from backend.tests.test_api import hold
 from backend import bot_settings as BS
 
 
-@pytest.fixture(params=['bot', 'person'])
-def manager(api, request):
+def _manager(api, kind):
     with api.app.state.store.transaction() as c:
         roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         for p in roster['people']:
@@ -21,9 +20,21 @@ def manager(api, request):
         c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='ops'")
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='cpo'")
         c.execute("UPDATE bot_config SET reports_to='human:priya' WHERE bot='cmo'")
-    token = bot_token(api, 'cpo') if request.param == 'bot' else 'ben-test'
-    actor = 'bot:cpo' if request.param == 'bot' else 'human:ben'
+    token = bot_token(api, 'cpo') if kind == 'bot' else 'ben-test'
+    actor = 'bot:cpo' if kind == 'bot' else 'human:ben'
     return token, actor
+
+
+@pytest.fixture(params=['bot', 'person'])
+def manager(api, request):
+    """Both kinds of manager, for the paths where a person's manager differs from a bot's."""
+    return _manager(api, request.param)
+
+
+@pytest.fixture
+def bot_manager(api):
+    """The bot manager alone: the paths a person manager takes are the same code."""
+    return _manager(api, 'bot')
 
 
 def make(api, *, owner='bot:ops', requester='human:ana', private=True, **kwargs):
@@ -38,25 +49,25 @@ def change(api, task, token, **fields):
     return post(api, 'tasks/' + task['id'], {'version': current['version'], **fields}, token=token)
 
 
-@pytest.mark.parametrize('fields,field', [({'status': 'doing'}, 'status'),
+def test_manager_updates_every_field_and_is_named_in_history(api, manager):
+    token, actor = manager
+    for fields, field in [({'status': 'doing'}, 'status'),
     ({'due': '2027-01-01T00:00:00Z'}, 'due_at'), ({'owner': 'cpo'}, 'owner_id'),
     ({'title': 'Check the revised packet'}, 'title'), ({'body': 'Review the revised packet.'}, 'body'),
-    ({'rank': 12}, 'rank'), ({'step_rank': 11}, 'step_rank')])
-def test_manager_updates_and_is_named_in_history(api, manager, fields, field):
-    token, actor = manager
-    task = make(api)
-    changed = change(api, task, token, **fields)
-    assert changed[field] != task.get(field)
-    with api.app.state.store.read() as c:
-        events = [e for e in H.task_history(c, task['id']) if e['field'] == {'due_at': 'due', 'owner_id': 'owner'}.get(field, field)]
-        if field not in ('rank', 'step_rank'):
-            assert events[-1]['actor'] == actor
-        assert c.execute("SELECT actor FROM events WHERE action='task.update' AND target=? ORDER BY rowid DESC LIMIT 1",
-                         (task['id'],)).fetchone()[0] == actor
+    ({'rank': 12}, 'rank'), ({'step_rank': 11}, 'step_rank')]:
+        task = make(api)
+        changed = change(api, task, token, **fields)
+        assert changed[field] != task.get(field), field
+        with api.app.state.store.read() as c:
+            events = [e for e in H.task_history(c, task['id']) if e['field'] == {'due_at': 'due', 'owner_id': 'owner'}.get(field, field)]
+            if field not in ('rank', 'step_rank'):
+                assert events[-1]['actor'] == actor, field
+            assert c.execute("SELECT actor FROM events WHERE action='task.update' AND target=? ORDER BY rowid DESC LIMIT 1",
+                             (task['id'],)).fetchone()[0] == actor, field
 
 
-def test_manager_changes_step_and_preserves_review_checks(api, manager):
-    token, actor = manager
+def test_manager_changes_step_and_preserves_review_checks(api, bot_manager):
+    token, actor = bot_manager
     with api.app.state.store.transaction() as c:
         typ = H.type_create(c, H.KEEPER, 'Manager workflow', [
             {'name': 'Todo', 'status': 'open'}, {'name': 'Build', 'status': 'doing'}])
@@ -84,8 +95,8 @@ def test_manager_reads_both_private_parties_in_detail_list_sql_and_loses_access(
     assert owned['id'] not in {t['id'] for t in get(api, 'tasks', token=token)['tasks']}
 
 
-def test_manager_comment_and_question_wake_owner_without_mention(api, manager):
-    token, actor = manager
+def test_manager_comment_and_question_wake_owner_without_mention(api, bot_manager):
+    token, actor = bot_manager
     task = make(api)
     # The manager is not the direct boss: add a second bot layer for bot and human cases.
     with api.app.state.store.transaction() as c:
@@ -107,8 +118,8 @@ def test_manager_comment_and_question_wake_owner_without_mention(api, manager):
             assert c.execute('SELECT 1 FROM jobs WHERE message_id=?', (message['id'],)).fetchone()
 
 
-def test_requester_manager_comment_wakes_owner_with_requester_permissions(api, manager):
-    token, actor = manager
+def test_requester_manager_comment_wakes_owner_with_requester_permissions(api, bot_manager):
+    token, actor = bot_manager
     task = make(api, owner='bot:cmo', requester='bot:ops')
     result = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Please continue the packet.'}, token=token)
     assert result['woke'] and result['comment']['sender_id'] == actor
@@ -118,8 +129,8 @@ def test_requester_manager_comment_wakes_owner_with_requester_permissions(api, m
         assert c.execute('SELECT 1 FROM jobs WHERE message_id=?', (message['id'],)).fetchone()
 
 
-def test_manager_blockers_stale_link_and_reparent(api, manager):
-    token, actor = manager
+def test_manager_blockers_stale_link_and_reparent(api, bot_manager):
+    token, actor = bot_manager
     task = make(api)
     blocker = make(api, private=False)
     parent = make(api)
@@ -139,8 +150,8 @@ def test_manager_blockers_stale_link_and_reparent(api, manager):
 
 
 @pytest.mark.parametrize('descendant_blocked', [False, True])
-def test_manager_reparent_preserves_ancestor_blocker_guard(api, manager, descendant_blocked):
-    token, _ = manager
+def test_manager_reparent_preserves_ancestor_blocker_guard(api, bot_manager, descendant_blocked):
+    token, _ = bot_manager
     parent = make(api)
     child = make(api)
     blocked = make(api, parent_id=child['id']) if descendant_blocked else child
@@ -175,8 +186,8 @@ def test_requester_manager_closes_reopens_owner_manager_cannot_close(api, manage
         post(api, 'tasks/' + requested['id'], {'version': closed['version'], 'status': 'doing'}, token=token, expected=403)
 
 
-def test_manager_snoozes_defers_asks_and_resolves_its_reports_question(api, manager):
-    token, actor = manager
+def test_manager_snoozes_defers_asks_and_resolves_its_reports_question(api, bot_manager):
+    token, actor = bot_manager
     task = make(api)
     snoozed = post(api, 'tasks/' + task['id'] + '/snooze', {'until': '2027-01-01T00:00:00Z'}, token=token)
     assert hold(snoozed, 'snoozed')['by'] == actor
@@ -194,8 +205,8 @@ def test_manager_snoozes_defers_asks_and_resolves_its_reports_question(api, mana
     assert result['comment']['sender_id'] == actor
 
 
-def test_manager_finishing_report_subtask_returns_result_to_parent_once(api, manager):
-    token, actor = manager
+def test_manager_finishing_report_subtask_returns_result_to_parent_once(api, bot_manager):
+    token, actor = bot_manager
     parent = make(api, owner='bot:cmo', requester='human:priya', private=False)
     child = make(api, requester='bot:cmo', private=False, parent_id=parent['id'])
     # Another open child keeps the generic all-children-finished wake from hiding a lost result.
@@ -220,8 +231,8 @@ def test_manager_finishing_report_subtask_returns_result_to_parent_once(api, man
             (child['id'],)).fetchone()[0] == 1
 
 
-def test_role_holder_keeps_snooze_right_without_lending_it_to_manager(api, manager):
-    token, _ = manager
+def test_role_holder_keeps_snooze_right_without_lending_it_to_manager(api, bot_manager):
+    token, _ = bot_manager
     report = bot_token(api, 'ops')
     task = make(api, owner='bot:cmo', requester='human:priya', private=False)
     with api.app.state.store.transaction() as c:
@@ -237,8 +248,8 @@ def test_role_holder_keeps_snooze_right_without_lending_it_to_manager(api, manag
     assert post(api, path + '/unsnooze', {}, token=report)['holds'] == []
 
 
-def test_manager_run_now_and_waiting_person(api, manager):
-    token, actor = manager
+def test_manager_run_now_and_waiting_person(api, bot_manager):
+    token, actor = bot_manager
     bot_token(api, 'ops')  # report has a current assigned computer
     task = make(api)
     post(api, 'tasks/' + task['id'] + '/run-now', {}, token=token)
@@ -258,8 +269,8 @@ def test_nonmanager_unchanged_and_refusal_names_managers(api, manager):
     post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Unrelated comment.'}, token=outsider, expected=403)
 
 
-def test_manager_cannot_edit_or_delete_another_authors_comment(api, manager):
-    token, _ = manager
+def test_manager_cannot_edit_or_delete_another_authors_comment(api, bot_manager):
+    token, _ = bot_manager
     task = make(api)
     with api.app.state.store.transaction() as c:
         comment = H.task_comment(c, 'bot:ops', task['id'], 'Original report.')

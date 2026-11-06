@@ -150,10 +150,8 @@ pub fn sources() -> Result<Vec<String>> {
 /// routes (including headphones) and native setup failures retain the existing microphone path.
 pub fn start_microphone_for_meeting(name: Option<&str>, meeting_audio: bool) -> Result<Source> {
     #[cfg(target_os = "macos")]
-    if meeting_audio {
-        if let Ok(source) = macos::start_voice_microphone(name) {
-            return Ok(source);
-        }
+    if meeting_audio && let Ok(source) = macos::start_voice_microphone(name) {
+        return Ok(source);
     }
     #[cfg(not(target_os = "macos"))]
     let _ = meeting_audio;

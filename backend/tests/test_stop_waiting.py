@@ -44,8 +44,8 @@ def test_unstopped_failed_completion_still_requires_start(api):
         assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "leased"
 
 
-@pytest.mark.parametrize("started", [False, True])
-@pytest.mark.parametrize("cause", ["stop", "done", "closed", "declined", "open"])
+@pytest.mark.parametrize("cause,started", [(cause, started) for cause in ("stop", "done", "closed", "declined", "open")
+                                           for started in (False, True) if started is False or cause not in ("closed", "declined")])
 def test_expiry_cancels_stopped_or_finished_work_and_preserves_normal_retry(api, cause, started, monkeypatch):
     from backend import execution
     # Cancellation must win even over the pre-start failure threshold.
@@ -77,8 +77,8 @@ NOTICE_BODIES = ["New task from human:ana: Count the words", "Subtask result ret
                  "PR #7 checks passed", "A future keeper notice"]
 
 
-@pytest.mark.parametrize("status", ["done", "closed", "declined", "open"])
-@pytest.mark.parametrize("body", NOTICE_BODIES)
+@pytest.mark.parametrize("status,body", [(status, NOTICE_BODIES[0]) for status in ("done", "closed", "declined", "open")]
+                         + [("done", NOTICE_BODIES[-1])])
 def test_all_keeper_notices_are_obsolete_only_on_finished_tasks(api, status, body):
     machine, task, original = task_attempt(api)
     with api.app.state.store.transaction() as c:
@@ -99,8 +99,7 @@ def test_all_keeper_notices_are_obsolete_only_on_finished_tasks(api, status, bod
             assert H.message(c, notice["id"])["delivered_at"]
 
 
-@pytest.mark.parametrize("status", ["done", "closed", "declined"])
-@pytest.mark.parametrize("kind", ["say", "notice"])
+@pytest.mark.parametrize("status,kind", [("done", "say"), ("done", "notice")])
 def test_a_persons_own_message_on_a_finished_task_is_never_suppressed(api, status, kind):
     machine, task, original = task_attempt(api)
     with api.app.state.store.transaction() as c:

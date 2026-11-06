@@ -43,7 +43,7 @@ API key. One signed-in model is enough for the first result; Health lists the ot
    reports to the nearest hired manager above it until that manager is hired, then moves under it. On Content Marketer's
    page, press **Start onboarding**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
    to give it readers, publishing plans, topics, voice examples and privacy rules; review its first draft in chat.
-6. On **Tasks > New task**, assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
+6. On **Tasks**, press **+** (New task) and assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
    it Done with the draft file on the task. Read the draft, then close the task yourself: the requester closes it, not the bot.
 
 Success is a draft file on the task, read by a person, and a task you closed. The steps, and what to try next (meeting notes
@@ -310,7 +310,7 @@ private GitHub repositories.
 
 ## Developer notes
 
-Run the suite locally; GitHub Actions also runs the default suite on every pull request to main and every push to main (PR checks). There is no budget on how many tests it has: write as many as a change needs, as long as each
+Run the suite locally; GitHub Actions also runs the default suite on every pull request to main that is not a draft (PR checks). There is no budget on how many tests it has: write as many as a change needs, as long as each
 guards a real failure: security and privacy boundaries, data safety (migrations, backup, restore),
 the updater and release path, core contracts (job claim and lease, task writes, chat, the API
 schema), regressions and edge cases that would lose or duplicate work. No tests of wording or docs. The default Python suite runs in about a minute on a laptop;
@@ -322,8 +322,9 @@ python -m pytest -q          # parallel by default (pytest-xdist); add -n 0 to d
 ```
 
 Browser checks need `npm ci` and a Playwright browser (`npx playwright install chromium`), then
-`npm run test:ui` (the core scripts in `ui/tests/`, three at a time; `--all` runs every script, `node scripts/ui-tests.cjs <name>` runs one). A script still running after its time limit (`TICO_UI_SCRIPT_TIMEOUT`, 120 seconds times the load slowdown) is stopped with every process it started, and its failure names the browser call it was waiting on; if any of them could not be stopped, the failure says "cleanup incomplete" and why. The UI has no build step and no runtime network
-dependency: `marked` and the icon font are vendored in `ui/vendor/` with their licenses.
+`npm run test:ui` (the core scripts in `ui/tests/`, three at a time; `--all` runs every script, `node scripts/ui-tests.cjs <name>` runs one). A script still running after its time limit (`TICO_UI_SCRIPT_TIMEOUT`, 120 seconds times the load slowdown) is stopped with every process it started, and its failure names the browser call it was waiting on; if any of them could not be stopped, the failure says "cleanup incomplete" and why. The UI's TypeScript files are compiled by
+`npm run build:ui` (into `build/ui/`; ui/README.md), and the UI has no runtime network dependency: `marked` and the
+icon font are vendored in `ui/vendor/` with their licenses.
 
 The live checkout on an owner's Mac is what the runner executes: the launchd jobs run
 `python -m runner_support` with that directory as the working directory, and the bot job execs the Rust runner built

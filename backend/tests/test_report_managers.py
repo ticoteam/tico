@@ -203,7 +203,7 @@ def newer_changes(api, bot_slug, n, created):
                         report_managers.VIA) for i in range(n)])
 
 
-def test_a_bots_history_keeps_its_change_when_other_bots_fill_the_newest_page(api):
+def test_a_bots_history_keeps_its_change_when_other_bots_fill_the_newest_page_and_pages_never_skip_or_repeat(api):
     lead = bot(api, "lead", reports_to="human:ben")
     bot(api, "counsel", reports_to="lead")
     bot(api, "junior", reports_to="lead")
@@ -216,12 +216,7 @@ def test_a_bots_history_keeps_its_change_when_other_bots_fill_the_newest_page(ap
         found = [row for row in listed if row["id"] == mine["id"]]
         assert found and found[0]["can_undo"] is True, token
         assert {row["bot"] for row in listed} == {mine["bot"]}, token
-
-
-def test_a_history_page_is_bounded_and_the_next_page_neither_skips_nor_repeats(api):
-    lead = bot(api, "lead", reports_to="human:ben")
-    bot(api, "counsel", reports_to="lead")
-    task_model(api, lead)
+    # A history page is bounded and the next page neither skips nor repeats.
     stamp = H.now()
     newer_changes(api, "counsel", 250, lambda i: stamp)     # one time for all: the cursor must not skip a tie
     counsel = bot_id(api, "counsel")
@@ -239,7 +234,7 @@ def test_a_history_page_is_bounded_and_the_next_page_neither_skips_nor_repeats(a
     assert total > 250 and len(seen) == len(set(seen)) == total
 
 
-def test_a_caller_who_manages_no_bot_reads_no_settings_change(api, monkeypatch):
+def test_a_caller_who_manages_no_bot_reads_no_settings_change_and_a_person_sees_only_their_bots(api, monkeypatch):
     lead = bot(api, "lead", reports_to="human:ben")
     bot(api, "counsel", reports_to="lead")
     task_model(api, lead)
@@ -259,13 +254,8 @@ def test_a_caller_who_manages_no_bot_reads_no_settings_change(api, monkeypatch):
     assert get(api, "settings/history", token="cara-test")["changes"] == []
     # Nothing reads the install's settings changes for her: no statement touches the table at all.
     assert not [sql for sql in statements if "settings_changes" in sql]
-
-
-def test_a_person_sees_only_the_manager_changes_to_the_bots_they_manage(api):
-    bot(api, "lead", reports_to="human:ben")
-    bot(api, "counsel", reports_to="lead")
+    # A person sees only the manager changes to the bots they manage.
     bot(api, "helper", operator="cara")
-    newer_changes(api, "counsel", 300, lambda i: H.shift(H.now(), seconds=i))
     newer_changes(api, "helper", 2, lambda i: H.shift(H.now(), seconds=i))
     listed = get(api, "settings/history", token="cara-test")["changes"]
     helper = bot_id(api, "helper")

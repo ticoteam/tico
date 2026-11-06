@@ -63,6 +63,7 @@ impl WatchLog {
             since: Instant::now(),
         }
     }
+    #[cfg(target_os = "macos")]
     pub fn rec(&self) -> &str {
         &self.rec
     }

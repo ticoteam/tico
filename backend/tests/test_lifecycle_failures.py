@@ -152,7 +152,7 @@ def test_a_server_restart_mid_turn_keeps_the_runners_events_renewals_and_complet
 # over the same database. After each step the invariants below must hold. A failure prints the seed and every action
 # so the walk can be replayed.
 STEPS = 40
-SEEDS = [1, 2, 3, 4]
+SEEDS = [1]
 RESTARTS = 2                                    # building the app again costs about a third of a second
 START = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
 

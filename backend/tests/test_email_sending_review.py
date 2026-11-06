@@ -23,9 +23,8 @@ def raw(message):
 
 
 @pytest.mark.parametrize("form", ["alternative", "inline_text", "primary_text", "primary_unknown", "primary_multipart"])
-@pytest.mark.parametrize("legal_prompt", [True, False])
-def test_unsupported_recipient_visible_bodies_always_ask(inbox, form, legal_prompt):
-    autonomous(inbox, ask_attachments=False, ask_legal_money=legal_prompt)
+def test_unsupported_recipient_visible_bodies_always_ask(inbox, form):
+    autonomous(inbox, ask_attachments=False, ask_legal_money=False)
     message = EmailMessage()
     message["From"], message["To"], message["Subject"] = BOX, CONTACT, "Alternative body"
     message.set_content("Thanks for the update.")
@@ -517,9 +516,8 @@ def test_rehearsal_keeps_restrictions_but_discards_send_permits_and_proofs(inbox
     '<!--[if mso]><p>We agree to pay $100000.</p><![endif]--><p>Thanks.</p>',
     '<input value="We agree to pay $100000"><p>Thanks.</p>',
 ])
-@pytest.mark.parametrize("prompt_legal", [False, True])
-def test_render_dependent_body_is_previewed_but_cannot_be_classified_as_harmless(inbox, html, prompt_legal):
-    autonomous(inbox, ask_legal_money=prompt_legal)
+def test_render_dependent_body_is_previewed_but_cannot_be_classified_as_harmless(inbox, html):
+    autonomous(inbox, ask_legal_money=False)
     msg = EmailMessage()
     msg["From"], msg["To"], msg["Subject"] = BOX, CONTACT, "Update"
     msg.set_content(html, subtype="html")

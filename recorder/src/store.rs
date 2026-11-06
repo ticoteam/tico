@@ -178,9 +178,9 @@ fn reserve_speaker(labels: &mut BTreeMap<String, String>, id: &str, preferred: &
         || preferred
             .strip_prefix('S')
             .is_some_and(|n| n.parse::<usize>().is_ok());
-    let label = if !preferred.is_empty() && !provisional {
-        preferred.to_owned()
-    } else if preferred.starts_with("Speaker ") && !used(preferred) {
+    let label = if (!preferred.is_empty() && !provisional)
+        || (preferred.starts_with("Speaker ") && !used(preferred))
+    {
         preferred.to_owned()
     } else {
         let next = labels

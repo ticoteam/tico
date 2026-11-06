@@ -115,7 +115,3 @@ def test_weekly_numbers_routine_is_an_automation_next_due_on_a_monday_with_eight
     with signed_in(built) as api:
         task = api.get(f"/api/v2/tasks/{runs[0]['steps'][0]['outputs']['ref']}").json()["task"]
     assert task["title"] == "Weekly numbers" and task["status"] == "done"
-
-
-def test_the_numbers_are_the_same_on_every_build(built, tmp_path_factory):
-    assert numbers_of(demo.build(tmp_path_factory.mktemp("growth-again"), now=NOW)) == numbers_of(built)

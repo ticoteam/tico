@@ -30,8 +30,9 @@ def delivered(api, row, suffix='one'):
                                            'billing': 'billed', 'charged_micros': 1500000})
 
 
-@pytest.mark.parametrize('mutation,source', [('audience', 'explicit'), ('audience', 'inferred_child'),
-                                           ('remove', 'explicit'), ('remove', 'inferred_child')])
+# Each axis once: an audience change on an explicit source, a removed member on an inferred child. The manager's loss of
+# source access is pinned by test_a_manager_losing_source_access_gets_gone_and_an_unrelated_person_gets_no_id.
+@pytest.mark.parametrize('mutation,source', [('audience', 'explicit'), ('remove', 'inferred_child')])
 def test_real_thread_access_changes_redact_finished_letter_rows(api, hq, mutation, source):
     root = create_thread(api, 'cara-test', audience='company' if mutation == 'audience' else 'members',
                          members=['human:ana'] if mutation == 'remove' else [], body='Source context.')

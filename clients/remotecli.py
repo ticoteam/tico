@@ -308,7 +308,7 @@ def run(args, who=None):
     if fn in ("tool list", "tool show", "tool query-search") and not (fn == "tool list" and args.bot):
         # Reads a runner credential may make outside a turn; /me would refuse a runner.
         return integrations(client, args)
-    if fn in ("bot copy", "bot update-from-original", "bot suggest-to-original", "skill copy"):
+    if fn in ("bot copy", "bot update-from-original", "bot suggest-to-original", "skill copy", "skill submit"):
         return via_tool(client, args)              # they work in this computer's workspace (clients/botcopy.py)
     if fn == "tool report":
         return via_tool(client, args, tools=json.loads(args.tools))

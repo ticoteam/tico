@@ -361,10 +361,56 @@ def test_private_or_deleted_sources_stay_out_of_company_update(api, monkeypatch)
         assert updates.request_slots(c, "ops")["learnings"] == []
 
 
-def test_direct_chat_referencing_a_public_task_stays_out_of_company_update(api):
+def test_only_what_the_company_may_read_reaches_the_company_update(api):
+    """One install, each source in turn (public and private Slack channels, personal sent mail, task comments, a direct
+    chat that references a public task, the bot's home with restricted history), the learning rows cleared between."""
     store = api.app.state.store
+
+    def fresh():
+        with store.transaction() as c:
+            for table in [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'learning_%'")]:
+                c.execute(f"DELETE FROM {table}")
+
+    # Only known public Slack messages.
+    with api.app.state.store.transaction() as c:
+        items = []
+        for channel, channel_type in (("C_PUBLIC", "channel"), ("C_PRIVATE", "group"), ("C_UNKNOWN", None)):
+            event, why = slack_gateway.event_from({"event_id": channel, "team_id": "T_ACME", "event": {
+                "type": "message" if channel_type else "app_mention", "channel_type": channel_type,
+                "channel": channel, "ts": "1.0", "user": "U_ANA", "text": "Keep this rule."}}, "U_TICO")
+            assert why is None and event["channel_kind"] == "channel"
+            c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,ts,user_id,event_type,"
+                      "text,received_at) VALUES(?,?,?,'channel','1.0','1.0','U_ANA',?,'Keep this rule.',?)",
+                      (channel, "T_ACME", channel, event["event_type"], H.now()))
+            items.append({"key": channel, "source": "slack", "ref": {"channel": channel, "ts": "1.0"}})
+        keep_items(c, items)
+        assert [i["item_key"] for i in learnings.pending(c, "ops")] == ["C_PUBLIC"]
+
+    fresh()                                          # Personal sent mail.
+    mail = put_mail(api, "ana@acme.example", from_addr="ana@acme.example", labels=["SENT"], body="Personal salary plans.")
+    with api.app.state.store.transaction() as c:
+        keep_items(c, [{"key": "personal-mail", "source": "mail",
+                        "ref": {"mailbox": "ana@acme.example", "msg_id": mail["msg_id"]}}])
+        assert updates.request_slots(c, "ops")["learnings"] == []
+
+    fresh()                                          # A real public task comment passes provenance, a private one does not.
+    with api.app.state.store.transaction() as c:
+        items = []
+        for private in (False, True):
+            title = "Private invoice rules" if private else "Public invoice rules"
+            task = H.task_create(c, "human:ana", title, "Friday is the cutoff.", "bot:ops", lint=False, private=private)
+            comment = H.task_comment(c, "human:ana", task["id"], "Keep the Friday cutoff.", wake=False)
+            assert H.message(c, comment["id"])["restricted"] == 1
+            items.append({"key": "private" if private else "public", "source": "task",
+                          "ref": {"message": comment["id"]}})
+        keep_items(c, items)
+        assert [i["item_key"] for i in learnings.pending(c, "ops")] == ["public"]
+        c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), items[0]["ref"]["message"]))
+        assert learnings.pending(c, "ops") == []
+
+    fresh()                                          # A direct chat referencing a public task.
     with store.transaction() as c:
-        task = H.task_create(c, "human:ana", "Invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=False)
+        task = H.task_create(c, "human:ana", "Chat invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=False)
         room = H.open_conversation(c, "human:ana", ["human:ana", "bot:ops"], scope="direct")
         message = H.say(c, "human:ana", "bot:ops", "Keep this correction between us.",
                         conversation_id=room["id"], refs={"task": task["id"]})
@@ -377,15 +423,13 @@ def test_direct_chat_referencing_a_public_task_stays_out_of_company_update(api):
         assert learnings.pending(c, "ops") == []
         assert "between us" not in updates.request_text(c, "ops", "daily", updates.today())
 
-
-def test_bot_home_corrections_follow_home_access_and_message_privacy(api):
-    store = api.app.state.store
+    fresh()                                          # The bot's home corrections follow home access and message privacy.
     with store.transaction() as c:
         home = threads.home(c, "bot:ops")
         public = H.say(c, "human:ana", "bot:ops", "Use the Friday cutoff.", conversation_id=home["id"])
         legacy = H.say(c, "human:ana", "bot:ops", "Old restricted history.", conversation_id=home["id"])
         c.execute("UPDATE messages SET legacy_audience='shared:ops' WHERE id=?", (legacy["id"],))
-        task = H.task_create(c, "human:ana", "Private invoice rules", "Personal billing.", "bot:ops", lint=False, private=True)
+        task = H.task_create(c, "human:ana", "Private billing rules", "Personal billing.", "bot:ops", lint=False, private=True)
         private = H.say(c, "human:ana", "bot:ops", "Keep the private billing rule.",
                         conversation_id=home["id"], refs={"task": task["id"]})
         ids = {m["id"] for m in (public, legacy, private)}
@@ -401,46 +445,6 @@ def test_bot_home_corrections_follow_home_access_and_message_privacy(api):
         request = updates.send_request(c, queue(c), delivery=True)
         assert "Use the Friday cutoff." in request["body"]
         assert "Old restricted history" not in request["body"] and "private billing rule" not in request["body"]
-
-
-def test_only_known_public_slack_messages_reach_company_update(api):
-    with api.app.state.store.transaction() as c:
-        items = []
-        for channel, channel_type in (("C_PUBLIC", "channel"), ("C_PRIVATE", "group"), ("C_UNKNOWN", None)):
-            event, why = slack_gateway.event_from({"event_id": channel, "team_id": "T_ACME", "event": {
-                "type": "message" if channel_type else "app_mention", "channel_type": channel_type,
-                "channel": channel, "ts": "1.0", "user": "U_ANA", "text": "Keep this rule."}}, "U_TICO")
-            assert why is None and event["channel_kind"] == "channel"
-            c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,ts,user_id,event_type,"
-                      "text,received_at) VALUES(?,?,?,'channel','1.0','1.0','U_ANA',?,'Keep this rule.',?)",
-                      (channel, "T_ACME", channel, event["event_type"], H.now()))
-            items.append({"key": channel, "source": "slack", "ref": {"channel": channel, "ts": "1.0"}})
-        keep_items(c, items)
-        assert [i["item_key"] for i in learnings.pending(c, "ops")] == ["C_PUBLIC"]
-
-
-def test_personal_sent_mail_stays_out_of_company_update(api):
-    mail = put_mail(api, "ana@acme.example", from_addr="ana@acme.example", labels=["SENT"], body="Personal salary plans.")
-    with api.app.state.store.transaction() as c:
-        keep_items(c, [{"key": "personal-mail", "source": "mail",
-                        "ref": {"mailbox": "ana@acme.example", "msg_id": mail["msg_id"]}}])
-        assert updates.request_slots(c, "ops")["learnings"] == []
-
-
-def test_real_public_task_comment_passes_provenance_but_private_comment_does_not(api):
-    with api.app.state.store.transaction() as c:
-        items = []
-        for private in (False, True):
-            title = "Private invoice rules" if private else "Public invoice rules"
-            task = H.task_create(c, "human:ana", title, "Friday is the cutoff.", "bot:ops", lint=False, private=private)
-            comment = H.task_comment(c, "human:ana", task["id"], "Keep the Friday cutoff.", wake=False)
-            assert H.message(c, comment["id"])["restricted"] == 1
-            items.append({"key": "private" if private else "public", "source": "task",
-                          "ref": {"message": comment["id"]}})
-        keep_items(c, items)
-        assert [i["item_key"] for i in learnings.pending(c, "ops")] == ["public"]
-        c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), items[0]["ref"]["message"]))
-        assert learnings.pending(c, "ops") == []
 
 
 def test_completed_delivery_parses_saved_count_and_logs_stats_once(api, monkeypatch):

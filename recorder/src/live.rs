@@ -789,14 +789,13 @@ pub(crate) fn note_state(store: &Store, id: &str, view: &Value) -> Result<()> {
         if state == "paused" {
             pause_window(context, at_ms);
         }
-        if state == "live" {
-            if let Some((start, end)) = context
+        if state == "live"
+            && let Some((start, end)) = context
                 .paused_windows
                 .last_mut()
                 .filter(|(_, end)| end.is_none())
-            {
-                *end = Some(at_ms.max(*start));
-            }
+        {
+            *end = Some(at_ms.max(*start));
         }
         context.live_state = state.into();
         Ok(())

@@ -220,7 +220,6 @@ function taskStatsRender() {
   const stages = flowStages(data, st.stage);
   // A stage that is not on offer falls back to finishing: Done, or a type's last step.
   if (!stages.some(([k]) => k === st.stage)) st.stage = stages.some(([k]) => k === 'done') ? 'done' : stages[stages.length - 1][0];
-  const word = (stages.find(([k]) => k === st.stage) || [])[1] || st.stage;
   const before = flowPrevTotals(st.prev, st.days), range = (FLOW_RANGES.find(([n]) => n === st.days) || [])[1] || st.days + 'd';
   const change = k => {
     if (!before) return '';

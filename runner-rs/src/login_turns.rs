@@ -66,7 +66,13 @@ pub struct Turn {
 
 impl Turn {
     pub fn new(bot: &str, task: &str, class: Class) -> Turn {
-        Turn { bot: bot.into(), task: task.into(), class, work: String::new(), attempt: String::new() }
+        Turn {
+            bot: bot.into(),
+            task: task.into(),
+            class,
+            work: String::new(),
+            attempt: String::new(),
+        }
     }
 
     pub fn of(mut self, work: &str, attempt: &str) -> Turn {
@@ -102,31 +108,59 @@ pub struct Login {
 
 impl Login {
     pub fn new(runtime: &str, login: &str) -> Login {
-        let label = if login.is_empty() { "this computer's ChatGPT login".to_string() } else { format!("ChatGPT login \"{login}\"") };
-        Login { key: format!("{runtime}:{login}"), label }
+        let label = if login.is_empty() {
+            "this computer's ChatGPT login".to_string()
+        } else {
+            format!("ChatGPT login \"{login}\"")
+        };
+        Login {
+            key: format!("{runtime}:{login}"),
+            label,
+        }
     }
 
     /// The chat's and the run's line while a turn waits:
     /// "Waiting for <login> (held by <bot> on <task> since <HH:MM>Z; position N)".
     pub fn waiting(&self, w: &Waiting, bot: &str) -> String {
-        let on = if w.task.is_empty() { String::new() } else { format!(" on {}", w.task) };
-        format!("Waiting for {} (held by {}{on} since {}; position {})", self.label, who(&w.holder, bot), clock(w.since), w.position)
+        let on = if w.task.is_empty() {
+            String::new()
+        } else {
+            format!(" on {}", w.task)
+        };
+        format!(
+            "Waiting for {} (held by {}{on} since {}; position {})",
+            self.label,
+            who(&w.holder, bot),
+            clock(w.since),
+            w.position
+        )
     }
 
     /// The run's note when the turn goes to its fallback instead: "ChatGPT login busy with <bot>; ...".
     pub fn busy(&self, holder: &str, bot: &str) -> String {
-        let label = self.label.strip_prefix("this computer's ").map_or_else(|| self.label.clone(), String::from);
+        let label = self
+            .label
+            .strip_prefix("this computer's ")
+            .map_or_else(|| self.label.clone(), String::from);
         format!("{label} busy with {}", who(holder, bot))
     }
 
     /// The run's note when its turn gave the login to the next waiter at the cap.
     pub fn yielded(&self) -> String {
-        format!("Paused after {} min so the next turn could use {}; resumes next", HOLD_CAP.as_secs() / 60, self.label)
+        format!(
+            "Paused after {} min so the next turn could use {}; resumes next",
+            HOLD_CAP.as_secs() / 60,
+            self.label
+        )
     }
 }
 
 fn who(holder: &str, bot: &str) -> String {
-    if holder == bot { "another turn of this bot".into() } else { holder.into() }
+    if holder == bot {
+        "another turn of this bot".into()
+    } else {
+        holder.into()
+    }
 }
 
 /// "HH:MMZ" of a time in seconds since the epoch.
@@ -136,7 +170,10 @@ fn clock(epoch: f64) -> String {
 }
 
 fn epoch_now() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or_default()
 }
 
 struct Holding {
@@ -183,7 +220,13 @@ struct Slot {
 impl Slot {
     fn reserved_for(&self, turn: &Turn) -> bool {
         self.reserved.as_ref().is_some_and(|r| {
-            r.bot == turn.bot && (if r.work.is_empty() { r.task == turn.task } else { r.work == turn.work }) && Instant::now() < r.until
+            r.bot == turn.bot
+                && (if r.work.is_empty() {
+                    r.task == turn.task
+                } else {
+                    r.work == turn.work
+                })
+                && Instant::now() < r.until
         })
     }
 
@@ -206,12 +249,26 @@ impl Slot {
 
     fn waiting(&self, id: u64) -> Option<Waiting> {
         let h = self.holder.as_ref()?;
-        let position = self.order().iter().position(|&i| self.waiters[i].id == id)? + 1;
-        Some(Waiting { holder: h.turn.bot.clone(), attempt: h.turn.attempt.clone(), task: h.turn.task.clone(), since: h.at, position })
+        let position = self
+            .order()
+            .iter()
+            .position(|&i| self.waiters[i].id == id)?
+            + 1;
+        Some(Waiting {
+            holder: h.turn.bot.clone(),
+            attempt: h.turn.attempt.clone(),
+            task: h.turn.task.clone(),
+            since: h.at,
+            position,
+        })
     }
 
     fn hold(&mut self, turn: Turn) {
-        self.holder = Some(Holding { turn, since: Instant::now(), at: epoch_now() });
+        self.holder = Some(Holding {
+            turn,
+            since: Instant::now(),
+            at: epoch_now(),
+        });
     }
 }
 
@@ -224,9 +281,13 @@ fn slots() -> &'static Mutex<HashMap<String, Slot>> {
 fn release(key: &str) {
     let next = {
         let mut slots = slots().lock().unwrap();
-        let Some(slot) = slots.get_mut(key) else { return };
+        let Some(slot) = slots.get_mut(key) else {
+            return;
+        };
         slot.holder = None;
-        let Some(&first) = slot.order().first() else { return };
+        let Some(&first) = slot.order().first() else {
+            return;
+        };
         let mut w = slot.waiters.remove(first);
         // Everyone who asked before it was passed over once more.
         for other in slot.waiters.iter_mut().filter(|o| o.seq < w.seq) {
@@ -270,7 +331,10 @@ pub struct Held {
 
 impl Held {
     fn new(key: &str) -> Held {
-        Held { key: key.into(), host: None }
+        Held {
+            key: key.into(),
+            host: None,
+        }
     }
 
     /// The host this turn runs on the login: if it is still running when the turn lets go, the login stays held
@@ -286,7 +350,9 @@ impl Held {
 
     /// What the turn's drive loop watches for the cap while the turn runs.
     pub fn cap(&self) -> Cap {
-        Cap { key: self.key.clone() }
+        Cap {
+            key: self.key.clone(),
+        }
     }
 
     /// This turn gives way at the cap: its continuation takes the login right after the next waiter's turn.
@@ -294,7 +360,12 @@ impl Held {
         let mut slots = slots().lock().unwrap();
         if let Some(slot) = slots.get_mut(&self.key) {
             if let Some(turn) = slot.holder.as_ref().map(|h| h.turn.clone()) {
-                slot.reserved = Some(Reserved { bot: turn.bot, task: turn.task, work: turn.work, until: Instant::now() + RESERVED_FOR });
+                slot.reserved = Some(Reserved {
+                    bot: turn.bot,
+                    task: turn.task,
+                    work: turn.work,
+                    until: Instant::now() + RESERVED_FOR,
+                });
             }
         }
     }
@@ -312,7 +383,10 @@ impl Cap {
     pub fn due(&self, now: Instant) -> bool {
         let slots = slots().lock().unwrap();
         slots.get(&self.key).is_some_and(|s| {
-            !s.waiters.is_empty() && s.holder.as_ref().is_some_and(|h| now.saturating_duration_since(h.since) >= hold_cap(&self.key))
+            !s.waiters.is_empty()
+                && s.holder
+                    .as_ref()
+                    .is_some_and(|h| now.saturating_duration_since(h.since) >= hold_cap(&self.key))
         })
     }
 
@@ -366,7 +440,10 @@ fn hold_cap(_key: &str) -> Duration {
 impl Drop for Held {
     fn drop(&mut self) {
         let key = std::mem::take(&mut self.key);
-        match (self.host.take().filter(|h| h.running()), tokio::runtime::Handle::try_current()) {
+        match (
+            self.host.take().filter(|h| h.running()),
+            tokio::runtime::Handle::try_current(),
+        ) {
             (Some(host), Ok(runtime)) => {
                 runtime.spawn(async move {
                     host.stop().await;
@@ -388,7 +465,11 @@ pub fn try_take(key: &str, turn: &Turn) -> Result<Held, String> {
 
 /// The login at once, or (with `queue`) a place in its queue: Err with the place (when queued) and the holder.
 #[allow(clippy::type_complexity)]
-fn take_or_queue(key: &str, turn: &Turn, queue: bool) -> Result<Held, (Option<(u64, oneshot::Receiver<Held>)>, String)> {
+fn take_or_queue(
+    key: &str,
+    turn: &Turn,
+    queue: bool,
+) -> Result<Held, (Option<(u64, oneshot::Receiver<Held>)>, String)> {
     let mut slots = slots().lock().unwrap();
     let slot = slots.entry(key.into()).or_default();
     if slot.holder.is_none() {
@@ -398,7 +479,11 @@ fn take_or_queue(key: &str, turn: &Turn, queue: bool) -> Result<Held, (Option<(u
         }
         return Ok(Held::new(key));
     }
-    let holder = slot.holder.as_ref().map(|h| h.turn.bot.clone()).unwrap_or_default();
+    let holder = slot
+        .holder
+        .as_ref()
+        .map(|h| h.turn.bot.clone())
+        .unwrap_or_default();
     if !queue {
         return Err((None, holder));
     }
@@ -414,7 +499,13 @@ fn take_or_queue(key: &str, turn: &Turn, queue: bool) -> Result<Held, (Option<(u
         }
         None => (id, 0),
     };
-    slot.waiters.push(Waiter { id, seq, turn: turn.clone(), skipped, grant: Some(tx) });
+    slot.waiters.push(Waiter {
+        id,
+        seq,
+        turn: turn.clone(),
+        skipped,
+        grant: Some(tx),
+    });
     Err((Some((id, rx)), holder))
 }
 
@@ -431,7 +522,12 @@ impl Drop for Queued {
             if let Some(i) = slot.waiters.iter().position(|w| w.id == self.id) {
                 let w = slot.waiters.remove(i);
                 if !w.turn.work.is_empty() {
-                    slot.kept.push(Kept { turn: w.turn, seq: w.seq, skipped: w.skipped, until: Instant::now() + PLACE_KEPT_FOR });
+                    slot.kept.push(Kept {
+                        turn: w.turn,
+                        seq: w.seq,
+                        skipped: w.skipped,
+                        until: Instant::now() + PLACE_KEPT_FOR,
+                    });
                 }
             }
         }
@@ -458,7 +554,13 @@ pub async fn take(key: &str, turn: &Turn) -> Held {
 /// login, every `tick` while waiting and once more when the login is granted, so a canceled turn never starts on it
 /// (dropping it passes the login to the next turn in the queue). `waiting` hears who holds the login and the turn's
 /// place when it starts to wait and whenever either changes.
-pub async fn wait_for(key: &str, turn: &Turn, over: impl Fn() -> Option<String>, mut waiting: impl FnMut(&Waiting), tick: Duration) -> Result<Held, String> {
+pub async fn wait_for(
+    key: &str,
+    turn: &Turn,
+    over: impl Fn() -> Option<String>,
+    mut waiting: impl FnMut(&Waiting),
+    tick: Duration,
+) -> Result<Held, String> {
     if let Some(why) = over() {
         return Err(why);
     }
@@ -466,7 +568,10 @@ pub async fn wait_for(key: &str, turn: &Turn, over: impl Fn() -> Option<String>,
         Ok(held) => return Ok(held),
         Err((place, _)) => place.expect("a queued turn has its place"),
     };
-    let _queued = Queued { key: key.into(), id };
+    let _queued = Queued {
+        key: key.into(),
+        id,
+    };
     let mut told: Option<Waiting> = None;
     let mut tell = |told: &mut Option<Waiting>| {
         let now = slots().lock().unwrap().get(key).and_then(|s| s.waiting(id));
@@ -496,14 +601,18 @@ pub async fn wait_for(key: &str, turn: &Turn, over: impl Fn() -> Option<String>,
 
 /// The bot whose turn holds the login, if one does.
 pub fn holder(key: &str) -> Option<String> {
-    slots().lock().unwrap().get(key).and_then(|s| s.holder.as_ref().map(|h| h.turn.bot.clone()))
+    slots()
+        .lock()
+        .unwrap()
+        .get(key)
+        .and_then(|s| s.holder.as_ref().map(|h| h.turn.bot.clone()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     fn t(bot: &str) -> Turn {
@@ -541,7 +650,10 @@ mod tests {
         let key = "codex:test-busy";
         let held = try_take(key, &t("builder")).unwrap();
         assert_eq!(holder(key).as_deref(), Some("builder"));
-        assert_eq!(try_take(key, &t("support")).err().as_deref(), Some("builder"));
+        assert_eq!(
+            try_take(key, &t("support")).err().as_deref(),
+            Some("builder")
+        );
         drop(held);
         assert_eq!(holder(key), None);
         let again = try_take(key, &t("support")).unwrap();
@@ -591,7 +703,11 @@ mod tests {
         drop(try_take(key, &t("next")).expect("free after a timeout"));
         // A turn that gave up waiting leaves the queue: the login is not kept for it.
         let held = try_take(key, &t("a")).unwrap();
-        assert!(tokio::time::timeout(Duration::from_millis(20), take(key, &t("gave-up"))).await.is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), take(key, &t("gave-up")))
+                .await
+                .is_err()
+        );
         drop(held);
         assert_eq!(try_take(key, &t("b")).map(|_| ()).err(), None);
     }
@@ -601,10 +717,13 @@ mod tests {
     /// FAKE_MODE=silent it closes its output once started and runs on; otherwise a TERM ends it half a second later.
     async fn codex_host(mode: &str) -> (crate::hosts::Host, i32, std::path::PathBuf) {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("tico-login-host-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("tico-login-host-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let program = dir.join("codex");
-        std::fs::write(&program, r#"#!/usr/bin/env python3
+        std::fs::write(
+            &program,
+            r#"#!/usr/bin/env python3
 import json, os, signal, sys, time
 mode = os.environ.get("FAKE_MODE", "")
 with open(os.environ["FAKE_PID"], "w") as f:
@@ -621,17 +740,32 @@ for line in sys.stdin:
         sys.stdout = open(os.devnull, "w")
         os.close(1)
 time.sleep(60)
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
         let pid_file = dir.join("pid");
-        let path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default());
-        let env: crate::env::Env = [("PATH".to_string(), path),
-                                    ("FAKE_MODE".to_string(), mode.to_string()),
-                                    ("FAKE_PID".to_string(), pid_file.display().to_string())].into_iter().collect();
+        let path = format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let env: crate::env::Env = [
+            ("PATH".to_string(), path),
+            ("FAKE_MODE".to_string(), mode.to_string()),
+            ("FAKE_PID".to_string(), pid_file.display().to_string()),
+        ]
+        .into_iter()
+        .collect();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let host = crate::hosts::Host::Codex(crate::hosts::codex::CodexHost::on_home(env, tx, None));
+        let host =
+            crate::hosts::Host::Codex(crate::hosts::codex::CodexHost::on_home(env, tx, None));
         host.start().await.expect("the stand-in app-server starts");
-        let pid = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        let pid = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
         (host, pid, dir)
     }
 
@@ -641,7 +775,8 @@ time.sleep(60)
     }
 
     #[tokio::test]
-    async fn a_codex_turn_cut_off_while_its_host_is_stopping_keeps_the_login_until_the_app_server_is_reaped() {
+    async fn a_codex_turn_cut_off_while_its_host_is_stopping_keeps_the_login_until_the_app_server_is_reaped(
+    ) {
         let key = "codex:test-cut-stop";
         let (host, pid, _dir) = codex_host("deaf").await;
         let mut held = take(key, &t("ops")).await;
@@ -649,19 +784,37 @@ time.sleep(60)
         // The turn's own cleanup begins the stop and is cut off while the app-server, deaf to TERM, still runs: the
         // protocol says not alive already, the process lives on until the KILL five seconds later.
         let started = std::time::Instant::now();
-        assert!(tokio::time::timeout(Duration::from_millis(300), host.stop()).await.is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), host.stop())
+                .await
+                .is_err()
+        );
         assert!(!host.alive() && host.running() && exists(pid));
         drop(held);
         tokio::time::sleep(Duration::from_secs(1)).await;
-        assert_eq!(try_take(key, &t("next")).map(|_| ()).err().as_deref(), Some("ops"), "free while the app-server still ran");
-        let next = tokio::time::timeout(Duration::from_secs(15), take(key, &t("next"))).await.expect("free once reaped");
-        assert!(!exists(pid), "the next turn got the login before the app-server was reaped");
-        assert!(started.elapsed() >= Duration::from_secs(4), "{:?}", started.elapsed());
+        assert_eq!(
+            try_take(key, &t("next")).map(|_| ()).err().as_deref(),
+            Some("ops"),
+            "free while the app-server still ran"
+        );
+        let next = tokio::time::timeout(Duration::from_secs(15), take(key, &t("next")))
+            .await
+            .expect("free once reaped");
+        assert!(
+            !exists(pid),
+            "the next turn got the login before the app-server was reaped"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_secs(4),
+            "{:?}",
+            started.elapsed()
+        );
         drop(next);
     }
 
     #[tokio::test]
-    async fn a_turn_that_panics_with_its_codex_host_running_keeps_the_login_until_the_app_server_is_reaped() {
+    async fn a_turn_that_panics_with_its_codex_host_running_keeps_the_login_until_the_app_server_is_reaped(
+    ) {
         let key = "codex:test-panic";
         // An app-server that closed its output but still runs: the protocol says not alive, the process is there.
         let (host, pid, _dir) = codex_host("silent").await;
@@ -679,9 +832,17 @@ time.sleep(60)
             panic!("the worker crashed mid-turn");
         });
         assert!(crashed.await.unwrap_err().is_panic());
-        assert_eq!(try_take(key, &t("next")).map(|_| ()).err().as_deref(), Some("ops"));
-        let next = tokio::time::timeout(Duration::from_secs(15), take(key, &t("next"))).await.expect("free once reaped");
-        assert!(!exists(pid), "the next turn got the login while the crashed turn's app-server still ran");
+        assert_eq!(
+            try_take(key, &t("next")).map(|_| ()).err().as_deref(),
+            Some("ops")
+        );
+        let next = tokio::time::timeout(Duration::from_secs(15), take(key, &t("next")))
+            .await
+            .expect("free once reaped");
+        assert!(
+            !exists(pid),
+            "the next turn got the login while the crashed turn's app-server still ran"
+        );
         drop(next);
 
         // A turn cut off mid-run (its future dropped) is the same.
@@ -693,7 +854,9 @@ time.sleep(60)
             std::future::pending::<()>().await;
         });
         assert!(cut.await.is_err());
-        let next = tokio::time::timeout(Duration::from_secs(15), take(key, &t("next"))).await.expect("free once reaped");
+        let next = tokio::time::timeout(Duration::from_secs(15), take(key, &t("next")))
+            .await
+            .expect("free once reaped");
         assert!(!exists(pid) && !host.running());
         drop(next);
 
@@ -711,12 +874,19 @@ time.sleep(60)
         let over = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let why = |over: &Arc<std::sync::atomic::AtomicBool>| {
             let over = over.clone();
-            move || over.load(Ordering::SeqCst).then(|| "Execution interrupted after stop".to_string())
+            move || {
+                over.load(Ordering::SeqCst)
+                    .then(|| "Execution interrupted after stop".to_string())
+            }
         };
         // Already stopped, login free: refused, and the login stays free.
         let key = "codex:test-over-free";
         over.store(true, Ordering::SeqCst);
-        assert!(wait_for(key, &t("ops"), why(&over), |_| {}, Duration::from_secs(60)).await.is_err());
+        assert!(
+            wait_for(key, &t("ops"), why(&over), |_| {}, Duration::from_secs(60))
+                .await
+                .is_err()
+        );
         assert!(try_take(key, &t("next")).is_ok());
 
         // Stopped just before the holder lets go, with no tick in between: the grant is checked too, and the turn
@@ -727,14 +897,32 @@ time.sleep(60)
         let said = Arc::new(Mutex::new(vec![]));
         let heard = said.clone();
         let ops = why(&over);
-        let stopped = tokio::spawn(async move { wait_for(key, &t("ops"), ops, move |w| heard.lock().unwrap().push(w.holder.clone()), Duration::from_secs(60)).await });
+        let stopped = tokio::spawn(async move {
+            wait_for(
+                key,
+                &t("ops"),
+                ops,
+                move |w| heard.lock().unwrap().push(w.holder.clone()),
+                Duration::from_secs(60),
+            )
+            .await
+        });
         tokio::time::sleep(Duration::from_millis(20)).await;
-        let behind = tokio::spawn(async move { wait_for(key, &t("support"), || None, |_| {}, Duration::from_secs(60)).await });
+        let behind = tokio::spawn(async move {
+            wait_for(key, &t("support"), || None, |_| {}, Duration::from_secs(60)).await
+        });
         tokio::time::sleep(Duration::from_millis(20)).await;
         over.store(true, Ordering::SeqCst);
         drop(first);
-        assert!(stopped.await.unwrap().is_err(), "a stopped turn started on the login");
-        let next = tokio::time::timeout(Duration::from_secs(5), behind).await.expect("the next waiter proceeds").unwrap().unwrap();
+        assert!(
+            stopped.await.unwrap().is_err(),
+            "a stopped turn started on the login"
+        );
+        let next = tokio::time::timeout(Duration::from_secs(5), behind)
+            .await
+            .expect("the next waiter proceeds")
+            .unwrap()
+            .unwrap();
         assert_eq!(holder(key).as_deref(), Some("support"));
         assert_eq!(*said.lock().unwrap(), ["builder"]);
         drop(next);
@@ -744,21 +932,35 @@ time.sleep(60)
         over.store(false, Ordering::SeqCst);
         let first = try_take(key, &t("builder")).unwrap();
         let ops = why(&over);
-        let lost = tokio::spawn(async move { wait_for(key, &t("ops"), ops, |_| {}, Duration::from_millis(10)).await });
+        let lost = tokio::spawn(async move {
+            wait_for(key, &t("ops"), ops, |_| {}, Duration::from_millis(10)).await
+        });
         tokio::time::sleep(Duration::from_millis(30)).await;
         over.store(true, Ordering::SeqCst);
-        assert!(tokio::time::timeout(Duration::from_secs(5), lost).await.expect("the wait ends").unwrap().is_err());
+        assert!(tokio::time::timeout(Duration::from_secs(5), lost)
+            .await
+            .expect("the wait ends")
+            .unwrap()
+            .is_err());
         assert_eq!(holder(key).as_deref(), Some("builder"));
         drop(first);
-        assert!(try_take(key, &t("next")).is_ok(), "the given-up waiter left the queue");
+        assert!(
+            try_take(key, &t("next")).is_ok(),
+            "the given-up waiter left the queue"
+        );
     }
 
     /// No code path copies a login file into another home. Switch account signs in inside the login's own home
     /// (login.rs begin_switch) and seeds nothing for Codex; the only other copy is the replay recorder's, test-only.
     #[test]
     fn no_code_path_copies_a_codex_login_between_homes() {
-        let login = crate::harness_tools::login_command("codex").expect("Codex has a login section");
-        assert!(login.seed.is_empty(), "Switch account copies {:?} into the side home", login.seed);
+        let login =
+            crate::harness_tools::login_command("codex").expect("Codex has a login section");
+        assert!(
+            login.seed.is_empty(),
+            "Switch account copies {:?} into the side home",
+            login.seed
+        );
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let (mut files, mut dirs) = (vec![], vec![src.clone()]);
         while let Some(d) = dirs.pop() {
@@ -771,7 +973,9 @@ time.sleep(60)
                 }
             }
         }
-        let copying = regex::Regex::new(r#"fs::copy|fs::write|fs::rename|write_private|"cp"|\bcopy\b"#).unwrap();
+        let copying =
+            regex::Regex::new(r#"fs::copy|fs::write|fs::rename|write_private|"cp"|\bcopy\b"#)
+                .unwrap();
         let mut found = vec![];
         for path in files {
             let rel = path.strip_prefix(&src).unwrap().display().to_string();
@@ -780,7 +984,10 @@ time.sleep(60)
             }
             let text = std::fs::read_to_string(&path).unwrap();
             // Production code only: everything before the file's own test module (`mod` or `pub(crate) mod`).
-            let code = ["#[cfg(test)]\nmod ", "#[cfg(test)]\npub(crate) mod "].iter().filter_map(|m| text.find(m)).min()
+            let code = ["#[cfg(test)]\nmod ", "#[cfg(test)]\npub(crate) mod "]
+                .iter()
+                .filter_map(|m| text.find(m))
+                .min()
                 .map_or(text.as_str(), |at| &text[..at]);
             for (n, line) in code.lines().enumerate() {
                 if line.contains("auth.json") && copying.is_match(line) {
@@ -796,15 +1003,36 @@ time.sleep(60)
         let computer = Login::new("codex", "");
         assert_eq!(computer.key, "codex:");
         let since = 20_000.0 * 86_400.0 + 19.0 * 3600.0 + 6.0 * 60.0;
-        let w = Waiting { holder: "pr-reviewer-sol".into(), attempt: String::new(), task: "Review 1: PR #1005".into(), since, position: 2 };
+        let w = Waiting {
+            holder: "pr-reviewer-sol".into(),
+            attempt: String::new(),
+            task: "Review 1: PR #1005".into(),
+            since,
+            position: 2,
+        };
         assert_eq!(computer.waiting(&w, "qa-engineer"),
                    "Waiting for this computer's ChatGPT login (held by pr-reviewer-sol on Review 1: PR #1005 since 19:06Z; position 2)");
-        assert_eq!(computer.busy("builder", "support"), "ChatGPT login busy with builder");
+        assert_eq!(
+            computer.busy("builder", "support"),
+            "ChatGPT login busy with builder"
+        );
         let work = Login::new("codex", "work");
-        let own = Waiting { holder: "support".into(), attempt: String::new(), task: String::new(), since: since + 59.0 * 60.0, position: 1 };
+        let own = Waiting {
+            holder: "support".into(),
+            attempt: String::new(),
+            task: String::new(),
+            since: since + 59.0 * 60.0,
+            position: 1,
+        };
         assert_eq!(work.waiting(&own, "support"), "Waiting for ChatGPT login \"work\" (held by another turn of this bot since 20:05Z; position 1)");
-        assert_eq!(work.busy("builder", "support"), "ChatGPT login \"work\" busy with builder");
-        assert_eq!(work.yielded(), "Paused after 20 min so the next turn could use ChatGPT login \"work\"; resumes next");
+        assert_eq!(
+            work.busy("builder", "support"),
+            "ChatGPT login \"work\" busy with builder"
+        );
+        assert_eq!(
+            work.yielded(),
+            "Paused after 20 min so the next turn could use ChatGPT login \"work\"; resumes next"
+        );
     }
 
     /// `waiters` queue on `key` one after the other while `held_by` holds it; each, once it has the login, notes itself
@@ -830,14 +1058,20 @@ time.sleep(60)
     }
 
     #[tokio::test]
-    async fn a_release_blocking_qa_turn_goes_ahead_of_earlier_reviews_and_reviews_ahead_of_the_rest() {
+    async fn a_release_blocking_qa_turn_goes_ahead_of_earlier_reviews_and_reviews_ahead_of_the_rest(
+    ) {
         let key = "codex:test-class";
         let held_by = try_take(key, &t("builder")).unwrap();
-        let order = served(key, held_by, vec![
-            Turn::new("support", "Weekly digest", Class::Other),
-            Turn::new("pr-reviewer-sol", "Review 1: PR #1005", Class::Review),
-            Turn::new("qa-engineer", "QA: PR #987", Class::Release),
-        ]).await;
+        let order = served(
+            key,
+            held_by,
+            vec![
+                Turn::new("support", "Weekly digest", Class::Other),
+                Turn::new("pr-reviewer-sol", "Review 1: PR #1005", Class::Review),
+                Turn::new("qa-engineer", "QA: PR #987", Class::Release),
+            ],
+        )
+        .await;
         assert_eq!(order, ["qa-engineer", "pr-reviewer-sol", "support"]);
         assert_eq!(holder(key), None);
     }
@@ -847,7 +1081,18 @@ time.sleep(60)
         let key = "codex:test-starve";
         let held_by = try_take(key, &t("builder")).unwrap();
         let release = |bot: &str| Turn::new(bot, "QA: PR #1", Class::Release);
-        let order = served(key, held_by, vec![t("support"), release("qa-1"), release("qa-2"), release("qa-3"), release("qa-4")]).await;
+        let order = served(
+            key,
+            held_by,
+            vec![
+                t("support"),
+                release("qa-1"),
+                release("qa-2"),
+                release("qa-3"),
+                release("qa-4"),
+            ],
+        )
+        .await;
         assert_eq!(MAX_SKIPS, 2);
         assert_eq!(order, ["qa-1", "qa-2", "support", "qa-3", "qa-4"]);
     }
@@ -855,23 +1100,45 @@ time.sleep(60)
     #[tokio::test]
     async fn a_waiting_turn_hears_who_holds_the_login_on_what_and_its_place_as_they_change() {
         let key = "codex:test-place";
-        let held_by = try_take(key, &Turn::new("pr-reviewer-sol", "Review 1: PR #1005", Class::Review)).unwrap();
+        let held_by = try_take(
+            key,
+            &Turn::new("pr-reviewer-sol", "Review 1: PR #1005", Class::Review),
+        )
+        .unwrap();
         let heard = Arc::new(Mutex::new(Vec::<Waiting>::new()));
         let h = heard.clone();
         let review = tokio::spawn(async move {
             let turn = Turn::new("reviewer-2", "Review 2: PR #11", Class::Review);
-            wait_for(key, &turn, || None, move |w| h.lock().unwrap().push(w.clone()), Duration::from_millis(2)).await
+            wait_for(
+                key,
+                &turn,
+                || None,
+                move |w| h.lock().unwrap().push(w.clone()),
+                Duration::from_millis(2),
+            )
+            .await
         });
         tokio::time::sleep(Duration::from_millis(20)).await;
         {
             let heard = heard.lock().unwrap();
             assert_eq!(heard.len(), 1, "{heard:?}");
-            assert_eq!((heard[0].holder.as_str(), heard[0].task.as_str(), heard[0].position), ("pr-reviewer-sol", "Review 1: PR #1005", 1));
+            assert_eq!(
+                (
+                    heard[0].holder.as_str(),
+                    heard[0].task.as_str(),
+                    heard[0].position
+                ),
+                ("pr-reviewer-sol", "Review 1: PR #1005", 1)
+            );
             assert!(heard[0].since > 1_700_000_000.0);
         }
         // A release-blocking turn asks later and goes first: the review hears it is second now.
         let qa = tokio::spawn(async move {
-            let _held = take(key, &Turn::new("qa-engineer", "QA: PR #987", Class::Release)).await;
+            let _held = take(
+                key,
+                &Turn::new("qa-engineer", "QA: PR #987", Class::Release),
+            )
+            .await;
             tokio::time::sleep(Duration::from_millis(50)).await;
         });
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -881,24 +1148,50 @@ time.sleep(60)
         let held = review.await.unwrap().expect("the review has the login");
         assert_eq!(holder(key).as_deref(), Some("reviewer-2"));
         let last = heard.lock().unwrap().last().cloned().unwrap();
-        assert_eq!((last.holder.as_str(), last.task.as_str(), last.position), ("qa-engineer", "QA: PR #987", 1));
+        assert_eq!(
+            (last.holder.as_str(), last.task.as_str(), last.position),
+            ("qa-engineer", "QA: PR #987", 1)
+        );
         drop(held);
     }
 
     #[tokio::test]
     async fn a_waiter_whose_lease_lapses_and_is_leased_again_keeps_its_place() {
         let key = "codex:test-lapse";
-        let held_by = try_take(key, &Turn::new("builder", "Dev 278", Class::Other).of("task-278", "att-1")).unwrap();
-        let review = Turn::new("pr-reviewer-sol", "Review 1: PR #1009", Class::Review).of("task-1009", "att-2");
+        let held_by = try_take(
+            key,
+            &Turn::new("builder", "Dev 278", Class::Other).of("task-278", "att-1"),
+        )
+        .unwrap();
+        let review = Turn::new("pr-reviewer-sol", "Review 1: PR #1009", Class::Review)
+            .of("task-1009", "att-2");
         let lapsed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let l = lapsed.clone();
         let (r, place) = (review.clone(), Arc::new(Mutex::new(0)));
         let p = place.clone();
         let first = tokio::spawn(async move {
-            wait_for(key, &r, move || l.load(Ordering::SeqCst).then(|| "Lease expired".to_string()), move |w| *p.lock().unwrap() = w.position, Duration::from_millis(2)).await
+            wait_for(
+                key,
+                &r,
+                move || {
+                    l.load(Ordering::SeqCst)
+                        .then(|| "Lease expired".to_string())
+                },
+                move |w| *p.lock().unwrap() = w.position,
+                Duration::from_millis(2),
+            )
+            .await
         });
         tokio::time::sleep(Duration::from_millis(10)).await;
-        let later = tokio::spawn(async move { drop(take(key, &Turn::new("support", "Digest", Class::Review).of("task-9", "att-3")).await) });
+        let later = tokio::spawn(async move {
+            drop(
+                take(
+                    key,
+                    &Turn::new("support", "Digest", Class::Review).of("task-9", "att-3"),
+                )
+                .await,
+            )
+        });
         tokio::time::sleep(Duration::from_millis(10)).await;
         assert_eq!(*place.lock().unwrap(), 1);
         lapsed.store(true, Ordering::SeqCst);
@@ -908,7 +1201,15 @@ time.sleep(60)
         let (p, heard) = (Arc::new(Mutex::new(0)), Arc::new(Mutex::new(String::new())));
         let (p2, h2) = (p.clone(), heard.clone());
         let back = tokio::spawn(async move {
-            let held = wait_for(key, &again, || None, move |w| *p2.lock().unwrap() = w.position, Duration::from_millis(2)).await.unwrap();
+            let held = wait_for(
+                key,
+                &again,
+                || None,
+                move |w| *p2.lock().unwrap() = w.position,
+                Duration::from_millis(2),
+            )
+            .await
+            .unwrap();
             *h2.lock().unwrap() = holder(key).unwrap_or_default();
             tokio::time::sleep(Duration::from_millis(20)).await;
             drop(held);
@@ -926,11 +1227,23 @@ time.sleep(60)
     #[tokio::test]
     async fn the_holders_attempt_is_named_to_waiters() {
         let key = "codex:test-attempt";
-        let held = try_take(key, &Turn::new("pr-reviewer-sol", "Review 1", Class::Review).of("task-1", "att-holder")).unwrap();
+        let held = try_take(
+            key,
+            &Turn::new("pr-reviewer-sol", "Review 1", Class::Review).of("task-1", "att-holder"),
+        )
+        .unwrap();
         let heard = Arc::new(Mutex::new(String::new()));
         let h = heard.clone();
         let w = tokio::spawn(async move {
-            wait_for(key, &t("qa"), || None, move |w| *h.lock().unwrap() = w.attempt.clone(), Duration::from_millis(2)).await.map(drop)
+            wait_for(
+                key,
+                &t("qa"),
+                || None,
+                move |w| *h.lock().unwrap() = w.attempt.clone(),
+                Duration::from_millis(2),
+            )
+            .await
+            .map(drop)
         });
         tokio::time::sleep(Duration::from_millis(10)).await;
         assert_eq!(*heard.lock().unwrap(), "att-holder");
@@ -943,10 +1256,16 @@ time.sleep(60)
         let key = "codex:test-cap";
         let held = try_take(key, &t("builder")).unwrap();
         let start = Instant::now();
-        assert!(!held.cap().due(start + HOLD_CAP + Duration::from_secs(3600)), "nobody waits: no cap");
+        assert!(
+            !held.cap().due(start + HOLD_CAP + Duration::from_secs(3600)),
+            "nobody waits: no cap"
+        );
         let waiter = tokio::spawn(async move { drop(take(key, &t("qa")).await) });
         tokio::time::sleep(Duration::from_millis(10)).await;
-        assert!(!held.cap().due(Instant::now()), "someone waits, but the cap is not reached");
+        assert!(
+            !held.cap().due(Instant::now()),
+            "someone waits, but the cap is not reached"
+        );
         assert!(!held.cap().due(start + HOLD_CAP - Duration::from_secs(1)));
         assert!(held.cap().due(start + HOLD_CAP));
         drop(held);
@@ -960,12 +1279,17 @@ time.sleep(60)
         let builder = Turn::new("builder", "Dev 278", Class::Other);
         let held = try_take(key, &builder).unwrap();
         let order = Arc::new(Mutex::new(vec![]));
-        let queue = |turn: Turn, order: Arc<Mutex<Vec<String>>>| tokio::spawn(async move {
-            let _held = take(key, &turn).await;
-            order.lock().unwrap().push(turn.bot.clone());
-            tokio::time::sleep(Duration::from_millis(30)).await;
-        });
-        let qa = queue(Turn::new("qa-engineer", "QA: PR #987", Class::Release), order.clone());
+        let queue = |turn: Turn, order: Arc<Mutex<Vec<String>>>| {
+            tokio::spawn(async move {
+                let _held = take(key, &turn).await;
+                order.lock().unwrap().push(turn.bot.clone());
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            })
+        };
+        let qa = queue(
+            Turn::new("qa-engineer", "QA: PR #987", Class::Release),
+            order.clone(),
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
         let other = queue(t("support"), order.clone());
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -977,7 +1301,10 @@ time.sleep(60)
         for t in [qa, other, again] {
             t.await.unwrap();
         }
-        assert_eq!(*order.lock().unwrap(), ["qa-engineer", "builder", "support"]);
+        assert_eq!(
+            *order.lock().unwrap(),
+            ["qa-engineer", "builder", "support"]
+        );
         // Its place was used: a later turn of the same task waits its turn like any other.
         let held = try_take(key, &t("ops")).unwrap();
         let order = served(key, held, vec![t("support"), builder]).await;
@@ -990,7 +1317,17 @@ time.sleep(60)
         let (now, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
         let first = try_take(key, &t("builder")).unwrap();
         let mut turns = vec![];
-        for (n, class) in [Class::Other, Class::Release, Class::Review, Class::Other, Class::Release, Class::Review].into_iter().enumerate() {
+        for (n, class) in [
+            Class::Other,
+            Class::Release,
+            Class::Review,
+            Class::Other,
+            Class::Release,
+            Class::Review,
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let (now, most) = (now.clone(), most.clone());
             turns.push(tokio::spawn(async move {
                 let mut held = take(key, &Turn::new(&format!("bot-{n}"), "", class)).await;

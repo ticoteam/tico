@@ -138,6 +138,18 @@
 .fin-grp td{padding-top:10px;font-weight:600}
 .fin-grp .fin-link{display:inline-flex;align-items:center;gap:6px;font-weight:600}
 .fin-caret{display:inline-block;width:12px;color:var(--muted)}
+/* Budgets: a tree, children indented; Used is a thin meter. */
+.fin-bud-t tbody td:first-child{padding-left:calc(var(--d,0) * 16px)}
+.fin-bud-t tr.fin-grp{cursor:default}
+.fin-bud-t .fin-bar-m{display:block;width:64px;margin:0}
+.fin-bud-t td.fin-edit{cursor:text;text-decoration:underline dotted color-mix(in srgb,var(--muted) 60%,transparent);text-underline-offset:3px}
+.fin-bud-t td.fin-edit:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.fin-bud-t .pill{margin:0}
+.fin-radios{display:flex;flex-direction:column;gap:8px;margin:0;padding:0;border:0;min-width:0}
+.fin-radios legend{margin-bottom:6px;padding:0;font-size:var(--t-sm);color:var(--muted)}
+.fin-radios label.fin-check{white-space:normal}
+.fin-paste{display:contents}
+.fin-paste[hidden]{display:none}
 .fin-src-t tr[data-fin-src] td:first-child{padding-left:18px}
 .fin-ind{padding-left:calc(var(--d,0) * 16px)}
 .fin-acc-t td{white-space:normal}

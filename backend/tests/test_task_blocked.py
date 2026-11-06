@@ -358,14 +358,14 @@ def test_age_alert_skips_a_waiting_task_on_another_board(api, monkeypatch):
 
 def test_owner_blocked_move_is_a_manual_hold_that_never_reopens(api):
     """The write's hint must match what happens: the owner's own Blocked move is a manual hold, which nothing reopens by
-    itself, so it gets no "nothing will move it" hint."""
+    itself, so it gets no "goes back to open" hint."""
     from backend import task_blocked
     task = ticket(api)
     _team_blocked(api, task)
     with api.app.state.store.transaction() as c:
         parked = H.task_update(c, task['owner_id'], task['id'], step='Blocked', note='Waiting for a machine')
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
-        assert not any('nothing will move it' in w for w in parked.get('warnings') or [])
+        assert not any('goes back to open' in w for w in parked.get('warnings') or [])
         task_blocked.sweep(c, H.shift(H.now(), hours=48))
         assert H.task(c, task['id'])['status'] == 'waiting'
 

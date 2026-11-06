@@ -17,7 +17,7 @@ def read(api, token='ana-test'):
     return api.get('/api/v2/bots/ops/pause-state', headers=headers(token))
 
 
-def test_pause_record_and_legacy_fallback(api, monkeypatch):
+def _pause_record_and_legacy_fallback(api, monkeypatch):
     monkeypatch.setattr(company_billing, 'paused', lambda *args: False)
     before = read(api).json()
     assert before['state'] == 'active' and before['can_control'] is True
@@ -29,9 +29,11 @@ def test_pause_record_and_legacy_fallback(api, monkeypatch):
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM events WHERE target='ops' AND action='bot.pause'")
     assert read(api).json()['paused_by'] is None
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE id='ops'")
 
 
-def test_only_readable_open_tasks_count_and_no_new_control_permission(api, monkeypatch):
+def _only_readable_open_tasks_count_and_no_new_control_permission(api, monkeypatch):
     monkeypatch.setattr(company_billing, 'paused', lambda *args: False)
     post(api, 'tasks', {'owner': 'ops', 'title': 'Check visible work', 'body': 'Review the design.'})
     post(api, 'tasks', {'owner': 'ops', 'title': 'Check private work', 'body': 'Review the design.', 'private': True})
@@ -43,7 +45,7 @@ def test_only_readable_open_tasks_count_and_no_new_control_permission(api, monke
     assert read(api, 'cara-test').status_code == 404
 
 
-def test_billing_projection_excludes_money_and_record_only_is_not_a_pause(api, monkeypatch):
+def _billing_projection_excludes_money_and_record_only_is_not_a_pause(api, monkeypatch):
     billing = {'state': 'paused', 'record_only': False, 'balance_micros': -1000000, 'credits': ['private']}
     monkeypatch.setattr(company_billing, 'read', lambda *args: billing)
     value = read(api, 'cara-test').json()
@@ -54,7 +56,7 @@ def test_billing_projection_excludes_money_and_record_only_is_not_a_pause(api, m
     assert read(api).json()['company_paused'] is False
 
 
-def test_pause_bit_is_read_from_hq_once_per_minute(api, monkeypatch):
+def _pause_bit_is_read_from_hq_once_per_minute(api, monkeypatch):
     calls = []
     def hq(*args):
         calls.append(args)
@@ -71,6 +73,18 @@ def test_pause_bit_is_read_from_hq_once_per_minute(api, monkeypatch):
     now[0] += 2
     assert read(api).json()['company_paused'] is True
     assert len(calls) == 2
+
+
+def test_the_pause_banner_projection_one_bot_one_company_story(api, monkeypatch):
+    def fresh():
+        company_billing._pause.clear()
+        monkeypatch.setattr(company_billing, 'CLOCK', lambda: 1000.0)
+    for step in (_billing_projection_excludes_money_and_record_only_is_not_a_pause,
+                 _pause_bit_is_read_from_hq_once_per_minute,
+                 _pause_record_and_legacy_fallback,
+                 _only_readable_open_tasks_count_and_no_new_control_permission):  # last: it restricts the bot
+        fresh()
+        step(api, monkeypatch)
 
 
 def test_paused_cache_is_per_gateway_key_and_read_stays_uncached(monkeypatch):

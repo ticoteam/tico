@@ -24,6 +24,10 @@ os.environ.update({"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "tes
                    "AWS_CONFIG_FILE": os.devnull, "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
                    "AWS_EC2_METADATA_DISABLED": "true"})
 
+# A test process builds an app per test: every one after the first reuses the route analysis and field validators the
+# first built (backend/route_memo.py). Tests only: a server builds one app, and production never patches FastAPI.
+from backend import route_memo  # noqa: E402
+route_memo.install()
 
 import re  # noqa: E402
 import pytest  # noqa: E402
@@ -87,6 +91,13 @@ def pytest_configure(config):
     _unix_socket_bind_outside_tmp_path(config)
     if hasattr(config, "workerinput") or config.option.pyargs:
         return          # --pyargs names modules, not paths
+    # The page serves the UI's TypeScript as its compiled JavaScript: compiled here once when this checkout can
+    # (Node and `npm ci`); otherwise the tests that load the page fail and say to run `npm run build:ui`.
+    from backend import ui_build
+    try:
+        ui_build.prepare()
+    except ui_build.StaleBuild:
+        pass
     base = Path(config.invocation_params.dir)
     missing = [str(arg) for arg in config.args if not (base / str(arg).split("::")[0]).exists()]
     if missing:

@@ -138,7 +138,7 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
    Content Marketer's page, press **Start onboarding**. Paste the [sample answers](#sample-answers-for-content-marketer)
    and answer anything else it asks. It posts a first draft in the same DM, labelled "First draft, not yet reviewed".
    Outbound sending stays off until you turn it on for that bot.
-3. **Give it one task.** On **Tasks > New task**, assign Content Marketer: “Draft a 200-word blog post introducing our example app to project teams from these facts:
+3. **Give it one task.** On **Tasks**, press **+** (New task) and assign Content Marketer: “Draft a 200-word blog post introducing our example app to project teams from these facts:
    our example app keeps tasks and meeting notes together; readers can try it locally; use a plain, friendly voice and invent
    no claims. Return a draft on this task.”
 4. **Review the draft.** When it finishes, the bot marks the task **Done** with a note, and the draft file (`post.md`, from its
@@ -890,6 +890,10 @@ Native release checkouts download the matching checksummed binary. Development c
 it with Rust 1.92 or newer. `TICO_SCREEN_RELAY_BIN` can supply a matching executable; its source
 fingerprint is checked before startup. Use `CARGO_HOME`, `CARGO_TARGET_DIR`, `RUSTUP_HOME` and
 `TMPDIR` on your work disk to keep build files there. Docker ships the binary and needs no compiler.
+A checkout also compiles the web UI's TypeScript files: install Node 22 and run `npm ci` once, and
+`python -m backend.server` runs `npm run build:ui` itself when the build is missing or stale, with the Node on
+PATH or, for a launchd or systemd job whose PATH lacks it, one in /opt/homebrew/bin, /usr/local/bin, Volta or nvm's
+default. Without them it refuses to start and says what is missing (ui/README.md, "TypeScript"). The Docker image ships the compiled UI.
 
 Existing native launchd/systemd server jobs need a one-time `scripts/tico-computer -e <env> server install`
 after updating, so they run `backend.server` rather than a direct Uvicorn listener. New jobs already

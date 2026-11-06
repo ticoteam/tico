@@ -279,11 +279,10 @@ PL
 }
 
 bootstrap() {
-  local i
   launchctl bootout "$DOMAIN/$1" 2>/dev/null || true
   # Unloading a running job returns before its process has stopped, and loading the label again until it
   # has fails with "Input/output error". Wait for launchd to let go of it.
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
     launchctl print "$DOMAIN/$1" >/dev/null 2>&1 || break
     sleep 1
   done
@@ -299,8 +298,8 @@ bootstrap() {
 # A loaded job is not a running one: launchd refuses to spawn a job whose log or directory it cannot open
 # (exit 78, EX_CONFIG) and retries forever without a line in the log. Wait briefly for a process.
 started() {
-  local i info
-  for i in 1 2 3 4 5 6 7 8 9 10; do
+  local _ info
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
     info="$(launchctl print "$DOMAIN/$1" 2>/dev/null || true)"
     printf '%s\n' "$info" | grep -q '^[[:space:]]*pid = [0-9]' && return 0
     printf '%s\n' "$info" | grep -q 'last exit code = 78' && break

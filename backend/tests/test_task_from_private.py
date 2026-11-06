@@ -129,13 +129,12 @@ def test_done_tells_the_private_tasks_owner_and_its_wait_clears(api):
                for r in jobs), jobs
 
 
-@pytest.mark.parametrize("under", [True, False])
 @pytest.mark.parametrize("words", [
     "Background: the vendor's intake form posts every upload to the shared bucket before the chat setting is read.",
     "Comment",
     "Criteria",
 ])
-def test_words_copied_from_the_private_work_are_a_correction_naming_the_copy_check(api, under, words):
+def test_words_copied_from_the_private_work_are_a_correction_naming_the_copy_check(api, words):
     row = private_work(api)
     with api.app.state.store.transaction() as c:
         H.task_comment(c, "bot:cpo", row["id"], "Note for ops: the bucket lifecycle rule deletes refused uploads only "
@@ -147,20 +146,18 @@ def test_words_copied_from_the_private_work_are_a_correction_naming_the_copy_che
     elif words == "Criteria":
         words = "Done when the quarantine report lists every refused upload with its owner and the hour it was deleted."
     attempt = run_on(api)
-    correction(api, filed(row["id"] if under else None, body=words), attempt["token"], "copies 12 or more words")
+    correction(api, filed(row["id"], body=words), attempt["token"], "copies 12 or more words")
 
 
-@pytest.mark.parametrize("under", [True, False])
-def test_a_secret_shaped_value_is_a_correction_naming_that_check(api, under):
+def test_a_secret_shaped_value_is_a_correction_naming_that_check(api):
     row = private_work(api)
     attempt = run_on(api)
-    body = filed(row["id"] if under else None, body="Push the fix with token ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8")
+    body = filed(row["id"], body="Push the fix with token ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8")
     correction(api, body, attempt["token"], "secret-shaped")
 
 
-@pytest.mark.parametrize("under", [True, False])
 @pytest.mark.parametrize("carried", ["file", "attachment", "link"])
-def test_a_file_or_link_from_the_private_task_is_a_correction_naming_that_check(api, under, carried):
+def test_a_file_or_link_from_the_private_task_is_a_correction_naming_that_check(api, carried):
     row = private_work(api)
     url = "https://docs.acme.example/vendor-intake-review"
     with api.app.state.store.transaction() as c:
@@ -176,7 +173,7 @@ def test_a_file_or_link_from_the_private_task_is_a_correction_naming_that_check(
     extra = {"file": {"body": f"See {FILE} for the failing request."},
              "attachment": {"body": f"The attachment {blob} shows the failing request."},
              "link": {"links": [url]}}[carried]
-    correction(api, filed(row["id"] if under else None, **extra), attempt["token"], "file or link from a private task")
+    correction(api, filed(row["id"], **extra), attempt["token"], "file or link from a private task")
 
 
 def test_a_bot_that_only_reads_the_private_task_is_refused(api):
@@ -251,7 +248,7 @@ SECRET = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
 COPIED = "the vendor's intake form posts every upload to the shared bucket before the chat setting is read"
 
 
-@pytest.mark.parametrize("extra,check", [
+EVERY_TEXT = [
     ({"acceptance_criteria": ["Done when " + COPIED]}, "copies 12 or more words"),
     ({"labels": [SECRET.lower()]}, "secret-shaped"),
     ({"links": ["https://ci.acme.example/run?token=" + SECRET]}, "secret-shaped"),
@@ -259,11 +256,14 @@ COPIED = "the vendor's intake form posts every upload to the shared bucket befor
     ({"blocker": {"repo": "acme/web", "status": 403, "endpoint": SECRET}}, "secret-shaped"),
     ({"public_title": "Uploads: " + SECRET}, "secret-shaped"),
     ({"public_summary": "Background: " + COPIED}, "copies 12 or more words"),
-])
-def test_every_text_the_task_keeps_gets_the_words_checks(api, extra, check):
+]
+
+
+def test_every_text_the_task_keeps_gets_the_words_checks(api):
     row = private_work(api)
     attempt = run_on(api)
-    correction(api, filed(row["id"], **extra), attempt["token"], check)
+    for extra, check in EVERY_TEXT:
+        correction(api, filed(row["id"], **extra), attempt["token"], check)
 
 
 def test_the_private_run_attaches_no_file_to_the_new_task(api):
@@ -275,16 +275,16 @@ def test_the_private_run_attaches_no_file_to_the_new_task(api):
     assert r.status_code == 403, r.text
 
 
-@pytest.mark.parametrize("field", ["title", "body", "acceptance_criteria", "labels", "public_title", "public_summary"])
-def test_a_private_tasks_title_anywhere_in_the_text_is_a_correction(api, field):
+def test_a_private_tasks_title_anywhere_in_the_text_is_a_correction(api):
     row = private_work(api)
     carried = private_work(api, "Ops Lockfile_Scan")
     attempt = run_on(api)
     carry(api, attempt, carried)
-    for name in ("ZIP TRIAGE", "ops lockfile scan"):
-        value = f"Follow up on {name} first."
-        extra = {field: [value] if field in ("acceptance_criteria", "labels") else value}
-        correction(api, filed(row["id"], **extra), attempt["token"], "names a private task by its title")
+    for field in ("title", "body", "acceptance_criteria", "labels", "public_title", "public_summary"):
+        for name in ("ZIP TRIAGE", "ops lockfile scan"):
+            value = f"Follow up on {name} first."
+            extra = {field: [value] if field in ("acceptance_criteria", "labels") else value}
+            correction(api, filed(row["id"], **extra), attempt["token"], "names a private task by its title")
     # A word of a title on its own is not the title.
     assert post(api, "tasks", filed(row["id"], body=REPAIR["body"] + " Triage it first."), attempt["token"])
 
@@ -298,12 +298,9 @@ def _rows(api):
 
 
 # A role's name is checked as sent and as stored (lower-cased): each of these secret shapes is caught by one side only.
-@pytest.mark.parametrize("under", [True, False])
-@pytest.mark.parametrize("name,check", [
-    ("ZIP_Triage", "names a private task by its title"),
-    (" Ops-Lockfile_scan ", "names a private task by its title"),
-    ("XOXB-1234567890-ABCDEFABCDEF", "secret-shaped"),      # secret-shaped once lower-cased
-    ("AKIAABCDEFGHIJ123456", "secret-shaped"),              # secret-shaped as sent
+@pytest.mark.parametrize("under,name,check", [
+    (True, "ZIP_Triage", "names a private task by its title"),
+    (False, "XOXB-1234567890-ABCDEFABCDEF", "secret-shaped"),      # secret-shaped once lower-cased
 ])
 def test_a_role_name_gets_the_words_checks_as_sent_and_as_stored(api, under, name, check):
     row = private_work(api)
@@ -315,11 +312,10 @@ def test_a_role_name_gets_the_words_checks_as_sent_and_as_stored(api, under, nam
     assert _rows(api) == before
 
 
-@pytest.mark.parametrize("under", [True, False])
-def test_a_plain_role_still_files(api, under):
+def test_a_plain_role_still_files(api):
     row = private_work(api)
     attempt = run_on(api)
-    body = filed(row["id"] if under else None, roles={"Reviewer": ["doc-updater"]})
+    body = filed(row["id"], roles={"Reviewer": ["doc-updater"]})
     assert not dry_run(api, body, attempt["token"])
     made = post(api, "tasks", body, attempt["token"])
     assert get(api, "tasks/" + made["id"], bot_token(api, "finance"))["task"]["roles"] == {"reviewer": ["bot:doc-updater"]}

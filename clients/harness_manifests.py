@@ -28,6 +28,7 @@ FIELDS = {
     "weekly_usage": (str, ""),
     "account": (str, ""),
     "tool_events": (bool, False),
+    "skill_events": (bool, False),
     "mcp_transports": (list, []),
     "mcp_unsupported": (str, ""),
     "resume_after_interrupt": (bool, True),
