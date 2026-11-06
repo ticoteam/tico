@@ -21,6 +21,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [Build your team](onboarding-guide.md), [Team chart](org-chart.md) and [People](people.md).
 - [The sample company](sample-company.md): a made-up five-bot team to try Tico with.
 - [Choose and set up bots](creating-bots.md), with the full [Starter catalog](starter-bots.md).
+- [Skills directory](skills.md): propose a skill, approve it once it is screened, and install it for bots and people.
 - [Connect tools](connect-tools.md) (including [a specialist outside Tico](connect-tools.md#work-with-a-specialist-outside-tico) and [hiring an external AI specialist](connect-tools.md#hire-an-external-ai-specialist)), [Credentials](credential-vault.md) and [Permissions](permissions.md).
   [Tico AI Gateway](ai-gateway.md) runs bots on Tico picks (a department, a level, Fast or not) with one key from Tico.
   Members can have 25 active bots by default; the owner can change the limit.
@@ -49,6 +50,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
   [Sessions](sessions.md) and [Task worktrees](worktrees.md).
 - [API](api.md), [Custom frontend](custom-frontend.md), [Listening API](listening.md#save-decide-and-resolve),
   [Needs you batches](needs-you-batches.md) and [Service keys](service-keys.md), for another system that files tasks.
+  [Company skills in your own Claude Code](skills.md#peoples-claude-code): the skills helper, its device token and its usage reports.
   [Recorder speech and assist](recorder.md) relays the Tico Recorder's transcription, live text and chat through the Gateway.
 - Clients written against the old names: [Upgrading to the contract release](upgrading-to-contract-release.md).
 - External agents: [Common setup](connect-an-agent.md), [Hermes](hermes-agents.md), [OpenClaw](openclaw-agents.md), [Grok Bot and Dots](external-agent-sync.md).

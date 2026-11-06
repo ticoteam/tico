@@ -2,18 +2,44 @@
 send switch and batch timing. Mail arrives through the mail sync's own route (publish_mail, the runner's token), and
 every check reads what the engine did with it: its runs, the day's counts, the judge's calls, the Assistant and the
 send switch."""
+
 import json
 
 from ..fakes import ReplayJudge, attach_judge
-from ..harness import (DANA_ID, DANA_REF, W3, Check, Scenario, assistant_of, auto_id, automation, body, find, got,
-                       inbox_read, inbox_send, mail_computer, mail_message, publish_mail, replied, rows, setup,
-                       today_counts, turn_of)
+from ..harness import (
+    DANA_ID,
+    DANA_REF,
+    W3,
+    Check,
+    Scenario,
+    assistant_of,
+    auto_id,
+    automation,
+    body,
+    find,
+    got,
+    inbox_read,
+    inbox_send,
+    mail_computer,
+    mail_message,
+    publish_mail,
+    replied,
+    rows,
+    setup,
+    today_counts,
+    turn_of,
+)
 
 INBOX = "dana@acme.example"
 TIMES = ["08:00", "13:00", "17:00"]
 DAY = 86400
-BUCKET = {"bucket": {"type": "choice", "instructions": "Reply, or archive as noise?",
-                     "criteria": {"reply": "needs an answer", "archive": "noise"}}}
+BUCKET = {
+    "bucket": {
+        "type": "choice",
+        "instructions": "Reply, or archive as noise?",
+        "criteria": {"reply": "needs an answer", "archive": "noise"},
+    }
+}
 
 
 # ---------------------------------------------------------------------------------------------- helpers
@@ -32,8 +58,14 @@ def inbox_trigger(**extra):
 def bucket_answer(choice, confidence):
     """The judge's answer for the bucket question, in the shape the judge returns (backend/judge.py, matrix.py)."""
     other = "archive" if choice == "reply" else "reply"
-    return {"bucket": {"type": "choice", "choice": choice, "confidence": confidence,
-                       "probabilities": {choice: confidence, other: round(1 - confidence, 2)}}}
+    return {
+        "bucket": {
+            "type": "choice",
+            "choice": choice,
+            "confidence": confidence,
+            "probabilities": {choice: confidence, other: round(1 - confidence, 2)},
+        }
+    }
 
 
 def flow_of(data):
@@ -119,13 +151,31 @@ def judge_calls(f):
 
 # ---------------------------------------------------------------------------------------------- 16 filter archive
 def s16_steps(org, f):
-    org.step(f, "auto", automation, org, "Inbox · dana", DANA_REF,
-             trigger=inbox_trigger(filters=[cond("message.from", "contains", "promo")]),
-             steps=[node("sort", "filter", rules=[{"when": [cond("message.from", "contains", "promo")],
-                                                   "match": "all", "then": [{"do": "archive", "args": {}}],
-                                                   "stop": True}])])
+    org.step(
+        f,
+        "auto",
+        automation,
+        org,
+        "Inbox · dana",
+        DANA_REF,
+        trigger=inbox_trigger(filters=[cond("message.from", "contains", "promo")]),
+        steps=[
+            node(
+                "sort",
+                "filter",
+                rules=[
+                    {
+                        "when": [cond("message.from", "contains", "promo")],
+                        "match": "all",
+                        "then": [{"do": "archive", "args": {}}],
+                        "stop": True,
+                    }
+                ],
+            )
+        ],
+    )
     org.step(f, "match", publish_mail, org, INBOX, [mail_message("m16-promo", "promo@shop.acme.example", "Sale")])
-    org.step(f, "computer1", mail_computer, org, INBOX)   # the archive is done by the mail computer
+    org.step(f, "computer1", mail_computer, org, INBOX)  # the archive is done by the mail computer
     org.step(f, "other", publish_mail, org, INBOX, [mail_message("m16-ops", "ops@acme.example", "Deploy notes")])
     org.step(f, "computer2", mail_computer, org, INBOX)
     org.step(f, "read", read_auto, org, f)
@@ -135,8 +185,12 @@ def s16_steps(org, f):
 def filtered_saved(f):
     trigger = read_flow(f).get("trigger") or {}
     filters = trigger.get("filters") or []
-    ok = trigger.get("type") == "message" and trigger.get("inbox") == INBOX and bool(filters) \
+    ok = (
+        trigger.get("type") == "message"
+        and trigger.get("inbox") == INBOX
+        and bool(filters)
         and filters[0].get("field") == "message.from"
+    )
     return ok, f"trigger {trigger}"
 
 
@@ -157,24 +211,57 @@ def dropped_counted(f):
     setup(f, "auto", "read", "runs")
     today = today_counts(body(f, "read")) or {}
     runs = rows(body(f, "runs"))
-    return today.get("dropped") == 1 and len(runs) == 1, \
-        f"today {today}, {len(runs)} run row(s); want one dropped and one run row"
+    return today.get("dropped") == 1 and len(
+        runs
+    ) == 1, f"today {today}, {len(runs)} run row(s); want one dropped and one run row"
 
 
 # ---------------------------------------------------------------------------------------------- 17 decide questions
 def s17_steps(org, f):
     org.step(f, "judge", attach_judge, org, ReplayJudge([bucket_answer("reply", 0.8), bucket_answer("reply", 0.6)]))
-    org.step(f, "auto", automation, org, "Triage · dana", DANA_REF, trigger=inbox_trigger(), steps=[
-        node("rank", "decide", questions=BUCKET, level="medium", out="d1"),
-        node("reply", "filter", rules=[{"when": [cond("d1.bucket", "is", "reply", min=0.7)], "match": "all",
-                                         "then": [{"do": "draft_reply", "args": {}}], "stop": True}])])
+    org.step(
+        f,
+        "auto",
+        automation,
+        org,
+        "Triage · dana",
+        DANA_REF,
+        trigger=inbox_trigger(),
+        steps=[
+            node("rank", "decide", questions=BUCKET, level="medium", out="d1"),
+            node(
+                "reply",
+                "filter",
+                rules=[
+                    {
+                        "when": [cond("d1.bucket", "is", "reply", min=0.7)],
+                        "match": "all",
+                        "then": [{"do": "draft_reply", "args": {}}],
+                        "stop": True,
+                    }
+                ],
+            ),
+        ],
+    )
     org.step(f, "read", read_auto, org, f)
-    org.step(f, "mail1", publish_mail, org, INBOX,
-             [mail_message("m17-a", "client@acme.example", "Deck?", "Can you send the deck?")])
-    org.step(f, "computer1", mail_computer, org, INBOX)   # the draft is made by the mail computer
+    org.step(
+        f,
+        "mail1",
+        publish_mail,
+        org,
+        INBOX,
+        [mail_message("m17-a", "client@acme.example", "Deck?", "Can you send the deck?")],
+    )
+    org.step(f, "computer1", mail_computer, org, INBOX)  # the draft is made by the mail computer
     org.step(f, "runs1", runs_of, org, f)
-    org.step(f, "mail2", publish_mail, org, INBOX,
-             [mail_message("m17-b", "client@acme.example", "Deck again?", "Did you get my note?")])
+    org.step(
+        f,
+        "mail2",
+        publish_mail,
+        org,
+        INBOX,
+        [mail_message("m17-b", "client@acme.example", "Deck again?", "Did you get my note?")],
+    )
     org.step(f, "computer2", mail_computer, org, INBOX)
     org.step(f, "runs2", runs_of, org, f)
 
@@ -226,31 +313,98 @@ def not_drafted_at_06(f):
 # ---------------------------------------------------------------------------------------------- 18 paths on outputs
 def s18_steps(org, f):
     org.step(f, "judge", attach_judge, org, ReplayJudge([bucket_answer("reply", 0.8)]))
-    org.step(f, "auto", automation, org, "Route mail · dana", DANA_REF, trigger=inbox_trigger(), steps=[
-        node("rank", "decide", questions=BUCKET, level="medium", out="d1"),
-        node("fork", "paths", paths=[
-            {"name": "reply", "when": [cond("d1.bucket", "is", "reply", min=0.7)],
-             "steps": [node("r", "action", do="draft_reply", args={})]},
-            {"name": "archive", "when": [cond("d1.bucket", "is", "archive", min=0.7)],
-             "steps": [node("a", "action", do="archive", args={})]}],
-         otherwise={"steps": [node("o", "action", do="note", args={"text": "unsure"})]})])
-    org.step(f, "first", automation, org, "Route first match · dana", DANA_REF, trigger=inbox_trigger(), steps=[
-        node("fork", "paths", paths=[
-            {"name": "first", "when": [cond("message.from", "contains", "client")],
-             "steps": [node("f1", "action", do="note", args={"text": "first"})]},
-            {"name": "second", "when": [cond("message.from", "contains", "client")],
-             "steps": [node("f2", "action", do="note", args={"text": "second"})]}],
-         otherwise={"steps": []})])
+    org.step(
+        f,
+        "auto",
+        automation,
+        org,
+        "Route mail · dana",
+        DANA_REF,
+        trigger=inbox_trigger(),
+        steps=[
+            node("rank", "decide", questions=BUCKET, level="medium", out="d1"),
+            node(
+                "fork",
+                "paths",
+                paths=[
+                    {
+                        "name": "reply",
+                        "when": [cond("d1.bucket", "is", "reply", min=0.7)],
+                        "steps": [node("r", "action", do="draft_reply", args={})],
+                    },
+                    {
+                        "name": "archive",
+                        "when": [cond("d1.bucket", "is", "archive", min=0.7)],
+                        "steps": [node("a", "action", do="archive", args={})],
+                    },
+                ],
+                otherwise={"steps": [node("o", "action", do="note", args={"text": "unsure"})]},
+            ),
+        ],
+    )
+    org.step(
+        f,
+        "first",
+        automation,
+        org,
+        "Route first match · dana",
+        DANA_REF,
+        trigger=inbox_trigger(),
+        steps=[
+            node(
+                "fork",
+                "paths",
+                paths=[
+                    {
+                        "name": "first",
+                        "when": [cond("message.from", "contains", "client")],
+                        "steps": [node("f1", "action", do="note", args={"text": "first"})],
+                    },
+                    {
+                        "name": "second",
+                        "when": [cond("message.from", "contains", "client")],
+                        "steps": [node("f2", "action", do="note", args={"text": "second"})],
+                    },
+                ],
+                otherwise={"steps": []},
+            )
+        ],
+    )
     # Paths never rejoin: a step after a fork is refused on save (CONTRACT §2 Rules), so no run can reach one.
-    org.step(f, "rejoin", org.api, "post", "/api/v2/automations", {
-        "name": "Rejoin · dana", "owner": DANA_REF, "enabled": True, "trigger": inbox_trigger(), "steps": [
-            node("fork", "paths", paths=[{"name": "one", "when": [], "steps": [node("p1", "action", do="note",
-                                                                                        args={"text": "one"})]}],
-                 otherwise={"steps": []}),
-            node("after", "action", do="note", args={"text": "after the fork"})]}, wave=W3)
+    org.step(
+        f,
+        "rejoin",
+        org.api,
+        "post",
+        "/api/v2/automations",
+        {
+            "name": "Rejoin · dana",
+            "owner": DANA_REF,
+            "enabled": True,
+            "trigger": inbox_trigger(),
+            "steps": [
+                node(
+                    "fork",
+                    "paths",
+                    paths=[
+                        {"name": "one", "when": [], "steps": [node("p1", "action", do="note", args={"text": "one"})]}
+                    ],
+                    otherwise={"steps": []},
+                ),
+                node("after", "action", do="note", args={"text": "after the fork"}),
+            ],
+        },
+        wave=W3,
+    )
     org.step(f, "read", read_auto, org, f)
-    org.step(f, "mail", publish_mail, org, INBOX,
-             [mail_message("m18-a", "client@acme.example", "Which plan?", "Which plan?")])
+    org.step(
+        f,
+        "mail",
+        publish_mail,
+        org,
+        INBOX,
+        [mail_message("m18-a", "client@acme.example", "Which plan?", "Which plan?")],
+    )
     org.step(f, "runs", runs_of, org, f)
     org.step(f, "first_runs", runs_of, org, f, "first")
 
@@ -281,13 +435,30 @@ def first_match_only(f):
 
 # ---------------------------------------------------------------------------------------------- 19 assistant turn
 def s19_steps(org, f):
-    org.step(f, "auto", automation, org, "Assistant · dana", DANA_REF, trigger=inbox_trigger(), steps=[
-        {"id": "ask", "type": "llm", "enabled": True, "as": "assistant:dana", "prompt": "Draft a reply",
-         "out": "txt"}])
+    org.step(
+        f,
+        "auto",
+        automation,
+        org,
+        "Assistant · dana",
+        DANA_REF,
+        trigger=inbox_trigger(),
+        steps=[
+            {
+                "id": "ask",
+                "type": "llm",
+                "enabled": True,
+                "as": "assistant:dana",
+                "prompt": "Draft a reply",
+                "out": "txt",
+            }
+        ],
+    )
     org.step(f, "read", read_auto, org, f)
     org.step(f, "before", assistant_of, org, DANA_ID)
-    org.step(f, "mail", publish_mail, org, INBOX,
-             [mail_message("m19-a", "client@acme.example", "Hello", "Can we talk?")])
+    org.step(
+        f, "mail", publish_mail, org, INBOX, [mail_message("m19-a", "client@acme.example", "Hello", "Can we talk?")]
+    )
     org.step(f, "after", assistant_of, org, DANA_ID)
     org.step(f, "runs", runs_of, org, f)
 
@@ -320,19 +491,29 @@ def turn_names_assistant(f):
 
 # ---------------------------------------------------------------------------------------------- 20 send switch
 def s20_steps(org, f):
-    org.step(f, "auto", automation, org, "Replies · dana", DANA_REF, trigger=inbox_trigger(),
-             steps=[node("send", "action", do="send_reply", args={})])
+    org.step(
+        f,
+        "auto",
+        automation,
+        org,
+        "Replies · dana",
+        DANA_REF,
+        trigger=inbox_trigger(),
+        steps=[node("send", "action", do="send_reply", args={})],
+    )
     org.step(f, "read", read_auto, org, f)
     org.step(f, "on", inbox_send, org, INBOX, True)
     org.step(f, "read_on", inbox_read, org, INBOX)
-    org.step(f, "mail_on", publish_mail, org, INBOX,
-             [mail_message("m20-a", "client@acme.example", "Lunch?", "Friday?")])
-    org.step(f, "computer_on", mail_computer, org, INBOX)   # the send is made by the mail computer
+    org.step(
+        f, "mail_on", publish_mail, org, INBOX, [mail_message("m20-a", "client@acme.example", "Lunch?", "Friday?")]
+    )
+    org.step(f, "computer_on", mail_computer, org, INBOX)  # the send is made by the mail computer
     org.step(f, "runs_on", runs_of, org, f)
     org.step(f, "off", inbox_send, org, INBOX, False)
     org.step(f, "read_off", inbox_read, org, INBOX)
-    org.step(f, "mail_off", publish_mail, org, INBOX,
-             [mail_message("m20-b", "client@acme.example", "Monday?", "Monday?")])
+    org.step(
+        f, "mail_off", publish_mail, org, INBOX, [mail_message("m20-b", "client@acme.example", "Monday?", "Monday?")]
+    )
     org.step(f, "computer_off", mail_computer, org, INBOX)
     org.step(f, "runs_off", runs_of, org, f)
 
@@ -372,11 +553,26 @@ def draft_when_off(f):
 def s21_steps(org, f):
     judge = ReplayJudge([bucket_answer("reply", 0.8), bucket_answer("reply", 0.8)])
     org.step(f, "judge", attach_judge, org, judge)
-    org.step(f, "auto", org.api, "post", "/api/v2/automations", {
-        "name": "Batch · dana", "owner": DANA_REF, "enabled": True, "builtin": False,
-        "batch": {"times": TIMES}, "trigger": inbox_trigger(),
-        "steps": [node("gate", "filter", rules=[]),
-                  node("rank", "decide", questions=BUCKET, level="medium", out="d1")]}, wave=W3)
+    org.step(
+        f,
+        "auto",
+        org.api,
+        "post",
+        "/api/v2/automations",
+        {
+            "name": "Batch · dana",
+            "owner": DANA_REF,
+            "enabled": True,
+            "builtin": False,
+            "batch": {"times": TIMES},
+            "trigger": inbox_trigger(),
+            "steps": [
+                node("gate", "filter", rules=[]),
+                node("rank", "decide", questions=BUCKET, level="medium", out="d1"),
+            ],
+        },
+        wave=W3,
+    )
     org.step(f, "read", read_auto, org, f)
     org.step(f, "mail1", publish_mail, org, INBOX, [mail_message("m21-a", "client@acme.example", "One", "First one")])
     org.step(f, "receipt", runs_of, org, f)
@@ -421,52 +617,85 @@ def next_batch_waits(f):
 
 
 SCENARIOS = [
-    Scenario(16, "inbox-filter-archive", "Inbox filter: matching mail archived, the rest left; dropped mail counted",
-             s16_steps, [
-                 Check("an inbox automation with a filtered message trigger is saved", W3, filtered_saved),
-                 Check("mail matching the filter is archived", W3, match_archived),
-                 Check("mail the filter does not match is not archived", W3, other_stays),
-                 Check("a trigger its filters drop writes a daily count, no run row", W3, dropped_counted),
-             ]),
-    Scenario(17, "inbox-decide-questions",
-             "Inbox Decide: answers stored per question with the level; the reply rule gated on min confidence",
-             s17_steps, [
-                 Check("a Decide step on a question set is saved with level and out", W3, decide_saved),
-                 Check("the judge is asked at the decide level", W3, judge_at_level),
-                 Check("the Decide outputs hold each question's answer, with its confidence", W3, answer_stored),
-                 Check("the Decide outputs carry the level it ran at", W3, level_stored),
-                 Check("a reply at confidence 0.8 passes min 0.7 and drafts", W3, drafted_at_08),
-                 Check("a reply at confidence 0.6 fails min 0.7 and does not draft", W3, not_drafted_at_06),
-             ]),
-    Scenario(18, "inbox-paths-on-outputs", "Inbox paths: the path output names the path taken; first match only",
-             s18_steps, [
-                 Check("a paths step on a Decide output is saved with two paths and otherwise", W3, paths_saved),
-                 Check("the paths output reads the path taken, reply", W3, path_output),
-                 Check("two paths match one mail: the first runs, the second does not", W3, first_match_only),
-                 Check("a path does not rejoin: a step after the fork is refused on save (422)", W3,
-                       lambda f: replied(f, "rejoin", 422)),
-             ]),
-    Scenario(19, "inbox-assistant-turn",
-             "Inbox LLM as Dana's Assistant: created on first use, the turn names that bot",
-             s19_steps, [
-                 Check("an LLM step as assistant:dana is saved", W3, assistant_saved),
-                 Check("no Assistant exists before the first mail", W3, none_before),
-                 Check("the first mail creates Dana's Assistant, a bot", W3, assistant_created),
-                 Check("the llm turn names Dana's Assistant, not another session", W3, turn_names_assistant),
-             ], bots={"coo": ("assistant", "claude")}),   # the team's Assistant bot (settings assistant_bot)
-    Scenario(20, "inbox-send-switch", "Inbox send switch: reply sent when on; draft and send_off logged when off",
-             s20_steps, [
-                 Check("a send_reply step is saved", W3, send_saved),
-                 Check("the send switch reads back on", W3, reads_on),
-                 Check("with the send switch on, the reply is sent", W3, sent_when_on),
-                 Check("the send switch reads back off", W3, reads_off),
-                 Check("with the switch off, a draft is saved and send_off is logged", W3, draft_when_off),
-             ]),
-    Scenario(21, "inbox-batched", "Inbox batch: Filter on receipt, Decide and LLM at the batch times", s21_steps, [
-        Check("batch times are saved and read back", W3, batch_saved),
-        Check("the Filter runs on receipt; the Decide waits", W3, filter_on_receipt),
-        Check("no Decide call on receipt: the batch holds it", W3, held_until_batch),
-        Check("the Decide runs at a batch time", W3, ran_at_batch),
-        Check("mail that arrives between batch times waits for the next one", W3, next_batch_waits),
-    ]),
+    Scenario(
+        16,
+        "inbox-filter-archive",
+        "Inbox filter: matching mail archived, the rest left; dropped mail counted",
+        s16_steps,
+        [
+            Check("an inbox automation with a filtered message trigger is saved", W3, filtered_saved),
+            Check("mail matching the filter is archived", W3, match_archived),
+            Check("mail the filter does not match is not archived", W3, other_stays),
+            Check("a trigger its filters drop writes a daily count, no run row", W3, dropped_counted),
+        ],
+    ),
+    Scenario(
+        17,
+        "inbox-decide-questions",
+        "Inbox Decide: answers stored per question with the level; the reply rule gated on min confidence",
+        s17_steps,
+        [
+            Check("a Decide step on a question set is saved with level and out", W3, decide_saved),
+            Check("the judge is asked at the decide level", W3, judge_at_level),
+            Check("the Decide outputs hold each question's answer, with its confidence", W3, answer_stored),
+            Check("the Decide outputs carry the level it ran at", W3, level_stored),
+            Check("a reply at confidence 0.8 passes min 0.7 and drafts", W3, drafted_at_08),
+            Check("a reply at confidence 0.6 fails min 0.7 and does not draft", W3, not_drafted_at_06),
+        ],
+    ),
+    Scenario(
+        18,
+        "inbox-paths-on-outputs",
+        "Inbox paths: the path output names the path taken; first match only",
+        s18_steps,
+        [
+            Check("a paths step on a Decide output is saved with two paths and otherwise", W3, paths_saved),
+            Check("the paths output reads the path taken, reply", W3, path_output),
+            Check("two paths match one mail: the first runs, the second does not", W3, first_match_only),
+            Check(
+                "a path does not rejoin: a step after the fork is refused on save (422)",
+                W3,
+                lambda f: replied(f, "rejoin", 422),
+            ),
+        ],
+    ),
+    Scenario(
+        19,
+        "inbox-assistant-turn",
+        "Inbox LLM as Dana's Assistant: created on first use, the turn names that bot",
+        s19_steps,
+        [
+            Check("an LLM step as assistant:dana is saved", W3, assistant_saved),
+            Check("no Assistant exists before the first mail", W3, none_before),
+            Check("the first mail creates Dana's Assistant, a bot", W3, assistant_created),
+            Check("the llm turn names Dana's Assistant, not another session", W3, turn_names_assistant),
+        ],
+        bots={"coo": ("assistant", "claude")},
+    ),  # the team's Assistant bot (settings assistant_bot)
+    Scenario(
+        20,
+        "inbox-send-switch",
+        "Inbox send switch: reply sent when on; draft and send_off logged when off",
+        s20_steps,
+        [
+            Check("a send_reply step is saved", W3, send_saved),
+            Check("the send switch reads back on", W3, reads_on),
+            Check("with the send switch on, the reply is sent", W3, sent_when_on),
+            Check("the send switch reads back off", W3, reads_off),
+            Check("with the switch off, a draft is saved and send_off is logged", W3, draft_when_off),
+        ],
+    ),
+    Scenario(
+        21,
+        "inbox-batched",
+        "Inbox batch: Filter on receipt, Decide and LLM at the batch times",
+        s21_steps,
+        [
+            Check("batch times are saved and read back", W3, batch_saved),
+            Check("the Filter runs on receipt; the Decide waits", W3, filter_on_receipt),
+            Check("no Decide call on receipt: the batch holds it", W3, held_until_batch),
+            Check("the Decide runs at a batch time", W3, ran_at_batch),
+            Check("mail that arrives between batch times waits for the next one", W3, next_batch_waits),
+        ],
+    ),
 ]

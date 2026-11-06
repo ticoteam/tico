@@ -108,6 +108,12 @@ At each start of a release image, the server also asks GitHub which commit that 
 (`GET api.github.com/repos/ticoteam/tico/commits/v<version>`, nothing else in the request) to check its image was built from it
 ([flight recorder](docs/observability.md#the-flight-recorder)). `TICO_UPDATE_CHECK=off` stops this too.
 
+The server also reads the Tico Recorder's public updater feed on GitHub
+(`github.com/ticoteam/tico/releases/latest/download/recorder-latest.json`, at most hourly, nothing else in the request) to
+know the newest Recorder version. The Recorder tells your own Tico, never anyone else, its version and a random id for
+that copy (kept in its library folder) on each call; Tico keeps the last version and time per person and copy, so
+owners and admins see it in Settings > People. `TICO_UPDATE_CHECK=off` stops the feed check too.
+
 ### Check it yourself
 
 - `TICO_TELEMETRY_DEBUG=1` prints the exact request Tico would send to the server log and sends nothing.

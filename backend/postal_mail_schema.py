@@ -1,5 +1,6 @@
 """Physical mail (backend/postal_mail.py): the letters that reached this company and where the email-in copies come
 from. hubdb.MIGRATIONS applies it."""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS mail_items (
   id TEXT PRIMARY KEY, provider TEXT NOT NULL, external_id TEXT NOT NULL,

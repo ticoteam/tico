@@ -142,10 +142,10 @@ const UPDATE = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https:
     v = await visit({updater: 'manual'});
     await v.page.locator('#new-version').click();
     await v.page.locator('#nv-update').click();
-    await v.page.locator('#nv-copy').waitFor();
+    await v.page.getByRole('dialog', {name: 'New version'}).locator('[data-nv-copy]').waitFor();
     assert.equal((await v.page.locator('#new-version').innerText()).trim(), 'Update to v0.2.0', 'a refused start hands the row back from Updating');
     assert.deepEqual(v.posts, [{version: '0.2.0'}]);
-    assert.match(await v.page.locator('.nv-cmd code').innerText(), /^docker compose pull && docker compose up -d$/);
+    assert.match(await v.page.locator('#new-version-pop .nv-cmd code').innerText(), /^docker compose pull && docker compose up -d$/);
     await v.ctx.close();
 
     // With one, progress is polled and the page reloads once the new version is healthy.

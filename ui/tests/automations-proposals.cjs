@@ -65,7 +65,7 @@ const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/aut
       const {page, errors, writes} = await openAutomations(browser, {viewport: PHONE, hash: '#/automations/bot'});
       await page.waitForSelector('tr.au-row[data-row="au_inbox"]');
       assert.equal(await page.locator('#au-root').getAttribute('data-screen'), 'list');
-      await page.getByRole('button', {name: '+ New'}).click();
+      await page.getByRole('button', {name: 'New automation'}).click();
       await page.locator('.au-newm [data-new="schedule"]').click();
       await page.waitForFunction(() => document.querySelector('#au-root').dataset.screen === 'detail' && /New automation/.test(document.querySelector('.au-name')?.textContent));
       const made = writes.filter(w => w.method === 'POST' && w.path === '/api/v2/automations');

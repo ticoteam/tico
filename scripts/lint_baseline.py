@@ -12,6 +12,7 @@ A new finding therefore fails the check, and so does an entry whose rule no long
 Findings are read with the baseline switched off (`--config "lint.per-file-ignores = {}"`), so the comparison sees
 every real finding. Test files keep their own minimal rule set in ruff.toml and are not part of the baseline.
 """
+
 import argparse
 import ast
 import collections
@@ -50,8 +51,9 @@ def raw_findings():
     pairs = collections.Counter()
     for item in json.loads(done.stdout or "[]"):
         pairs[(relpath(item["filename"]), item["code"] or "syntax")] += 1
-    invalid = sorted({line.strip() for line in done.stderr.splitlines()
-                      if line.startswith("warning: Invalid") and "noqa" in line})
+    invalid = sorted(
+        {line.strip() for line in done.stderr.splitlines() if line.startswith("warning: Invalid") and "noqa" in line}
+    )
     return pairs, invalid
 
 
@@ -113,7 +115,7 @@ def forwards_to(source, dest):
     parts = Path(dest).with_suffix("").parts
     module = ".".join(parts[:-1] if parts[-1] in ("__init__", "__main__") else parts)
     package, _, name = module.rpartition(".")
-    alias = "_real"      # the name a forwarder's target import binds; its module swap and __getattr__ use it too
+    alias = "_real"  # the name a forwarder's target import binds; its module swap and __getattr__ use it too
     reaches = []
 
     def is_const(node, value):
@@ -122,64 +124,109 @@ def forwards_to(source, dest):
     def is_name(node, ident):
         return isinstance(node, ast.Name) and node.id == ident
 
-    def is_target_import(node):          # from <package> import <name> as _real, or import <module> as _real
+    def is_target_import(node):  # from <package> import <name> as _real, or import <module> as _real
         if isinstance(node, ast.ImportFrom):
-            return (node.level == 0 and node.module == package and len(node.names) == 1
-                    and node.names[0].name == name and node.names[0].asname == alias)
-        return (isinstance(node, ast.Import) and len(node.names) == 1 and node.names[0].name == module
-                and node.names[0].asname == alias)
+            return (
+                node.level == 0
+                and node.module == package
+                and len(node.names) == 1
+                and node.names[0].name == name
+                and node.names[0].asname == alias
+            )
+        return (
+            isinstance(node, ast.Import)
+            and len(node.names) == 1
+            and node.names[0].name == module
+            and node.names[0].asname == alias
+        )
 
-    def is_run_module_of_target(call):   # runpy.run_module("<module>"[, run_name="__main__"][, alter_sys=True])
-        return (isinstance(call.func, ast.Attribute) and call.func.attr == "run_module"
-                and is_name(call.func.value, "runpy") and len(call.args) == 1 and is_const(call.args[0], module)
-                and all((kw.arg == "run_name" and is_const(kw.value, "__main__"))
-                        or (kw.arg == "alter_sys" and is_const(kw.value, True)) for kw in call.keywords))
+    def is_run_module_of_target(call):  # runpy.run_module("<module>"[, run_name="__main__"][, alter_sys=True])
+        return (
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr == "run_module"
+            and is_name(call.func.value, "runpy")
+            and len(call.args) == 1
+            and is_const(call.args[0], module)
+            and all(
+                (kw.arg == "run_name" and is_const(kw.value, "__main__"))
+                or (kw.arg == "alter_sys" and is_const(kw.value, True))
+                for kw in call.keywords
+            )
+        )
 
-    def is_module_swap(node):            # sys.modules[__name__] = _real: no annotation (AnnAssign), no type comment
-        return (isinstance(node, ast.Assign) and len(node.targets) == 1 and node.type_comment is None
-                and isinstance(node.targets[0], ast.Subscript) and isinstance(node.targets[0].value, ast.Attribute)
-                and node.targets[0].value.attr == "modules" and is_name(node.targets[0].value.value, "sys")
-                and is_name(node.targets[0].slice, "__name__") and is_name(node.value, alias))
+    def is_module_swap(node):  # sys.modules[__name__] = _real: no annotation (AnnAssign), no type comment
+        return (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and node.type_comment is None
+            and isinstance(node.targets[0], ast.Subscript)
+            and isinstance(node.targets[0].value, ast.Attribute)
+            and node.targets[0].value.attr == "modules"
+            and is_name(node.targets[0].value.value, "sys")
+            and is_name(node.targets[0].slice, "__name__")
+            and is_name(node.value, alias)
+        )
 
-    def is_main_test(test):              # exactly __name__ == "__main__"
-        return (isinstance(test, ast.Compare) and is_name(test.left, "__name__") and len(test.ops) == 1
-                and isinstance(test.ops[0], ast.Eq) and len(test.comparators) == 1
-                and is_const(test.comparators[0], "__main__"))
+    def is_main_test(test):  # exactly __name__ == "__main__"
+        return (
+            isinstance(test, ast.Compare)
+            and is_name(test.left, "__name__")
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Eq)
+            and len(test.comparators) == 1
+            and is_const(test.comparators[0], "__main__")
+        )
 
-    def is_getattr_forwarder(node):      # def __getattr__(name): return getattr(_real, name)
-        if not (isinstance(node, ast.FunctionDef) and node.name == "__getattr__" and not node.decorator_list
-                and node.returns is None and not getattr(node, "type_params", None)):
+    def is_getattr_forwarder(node):  # def __getattr__(name): return getattr(_real, name)
+        if not (
+            isinstance(node, ast.FunctionDef)
+            and node.name == "__getattr__"
+            and not node.decorator_list
+            and node.returns is None
+            and not getattr(node, "type_params", None)
+        ):
             return False
         args = node.args
-        if not (len(args.args) == 1 and args.args[0].arg == "name" and args.args[0].annotation is None
-                and args.args[0].type_comment is None
-                and not (args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg or args.defaults)):
+        if not (
+            len(args.args) == 1
+            and args.args[0].arg == "name"
+            and args.args[0].annotation is None
+            and args.args[0].type_comment is None
+            and not (args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg or args.defaults)
+        ):
             return False
         if len(node.body) != 1 or not isinstance(node.body[0], ast.Return):
             return False
         call = node.body[0].value
-        return (isinstance(call, ast.Call) and is_name(call.func, "getattr") and not call.keywords
-                and len(call.args) == 2 and is_name(call.args[0], alias) and is_name(call.args[1], "name"))
+        return (
+            isinstance(call, ast.Call)
+            and is_name(call.func, "getattr")
+            and not call.keywords
+            and len(call.args) == 2
+            and is_name(call.args[0], alias)
+            and is_name(call.args[1], "name")
+        )
 
     def allowed(node):
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-            return True                  # a string statement, such as the docstring
+            return True  # a string statement, such as the docstring
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             if is_target_import(node):
                 reaches.append(node)
                 return True
-            return isinstance(node, ast.Import) and all(a.name in ("sys", "runpy") and a.asname is None
-                                                        for a in node.names)
+            return isinstance(node, ast.Import) and all(
+                a.name in ("sys", "runpy") and a.asname is None for a in node.names
+            )
         if is_module_swap(node):
             return True
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):     # runpy.run_module("<module>", ...)
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):  # runpy.run_module("<module>", ...)
             if is_run_module_of_target(node.value):
                 reaches.append(node)
                 return True
             return False
-        if isinstance(node, ast.If):     # if __name__ == "__main__": ... else: ...
+        if isinstance(node, ast.If):  # if __name__ == "__main__": ... else: ...
             return is_main_test(node.test) and all(map(allowed, node.body)) and all(map(allowed, node.orelse))
-        return is_getattr_forwarder(node)    # an AnnAssign or any other statement is code
+        return is_getattr_forwarder(node)  # an AnnAssign or any other statement is code
 
     return all(map(allowed, tree.body)) and bool(reaches)
 
@@ -251,7 +298,9 @@ def check(base_ref):
     for path, code in sorted(pairs.keys() - baseline):
         problems.append(f"new finding: {path} {code} x{pairs[(path, code)]}")
     for path, code in sorted(baseline - pairs.keys()):
-        problems.append(f"stale baseline entry (no longer fires; drop it with `python3 scripts/lint_baseline.py --write`): {path} {code}")
+        problems.append(
+            f"stale baseline entry (no longer fires; drop it with `python3 scripts/lint_baseline.py --write`): {path} {code}"
+        )
     for path, code in sorted(baseline):
         if code in NEVER_BASELINED:
             problems.append(f"{code} may not be baselined: {path}")

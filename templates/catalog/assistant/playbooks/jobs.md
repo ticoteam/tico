@@ -21,7 +21,7 @@ Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner
 
 ## Queue, close, reopen
 
-11. **"Clear my queue."**: follow "Clearing a queue" in `playbooks/assistant-chat.md`. Read, group, close and decline, then say what is left.
+11. **"Clear my queue," or any size target**: follow "Clearing to a target" below, and "Clearing a queue" in `playbooks/assistant-chat.md`.
 12. **"Close these" / "close the done ones."**: close only the items you identified by id (done but still open, duplicates, replaced), never by a status filter, which would close live work. One: `hub task close <id> --note "<why>"`. Several: ONE `hub task bulk close --where-id <id> --where-id <id> --note "<why>"` (up to 200 ids; a `--dry-run` of the same first is fine). Never close them one at a time. Undo: reopen each with `hub task update <id> --status doing`.
 13. **"Mark X done" / "close X."**: `hub task update <id> --status done --note "<why>"`, or `hub task close <id> --note "<why>"`. Undo: `hub task update <id> --status doing`.
 14. **"Reopen X."**: `hub task update <id> --status doing --note "<why>"`.
@@ -35,6 +35,43 @@ Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner
 22. **"Turn on / off my approvals setting."**: the Assistant cannot change this one. Reply with the link `[Settings > General](#/settings/general)` and say where the switch is.
 23. **"Decide my approvals for me from now on."**: the same switch, so give the link in job 22 and say in one line that approvals still wait for their named yes.
 24. **"Ask the owner for a price / a yes."**, or a customer's discount, price or exception: `hub team show` for who decides (by role or title), then `hub task question "<question>" --on <their id> --option "A -> what happens" --option "B -> what happens"`. Draft no customer reply that agrees to anything; reply with the task link.
+
+## Clearing to a target
+
+"Leave less than N", "clear my tasks", "close stuff", "I still see N", "why so many": the queue is Needs you, not the
+tasks they own. The owned tasks are one kind of many.
+
+1. Count from Needs you only: `hub needs-you show --by kind` (total, per kind), `--by bot` for the split. Its lists stop
+   at 10 per bot, so take the ids in step 2.
+2. Ids: tasks they own `hub task list --all`; bots' questions `hub message list` (each names its task); approvals
+   `hub approval list --limit 100` (`--offset <next>` until null). A bot's task waiting on them comes up as its question.
+3. Act in this turn, as them, on every item below. "Go" and "whatever you think" are the yes: never close some and ask
+   about the rest. One write per item; a write that answered ok is done, never send it again; re-read Needs you to check.
+   - Task they own (open, doing, waiting or declined): one bulk close of up to 100 ids. CLI: `hub task bulk close
+     --where-id <id> --where-id <id> --note "<why>"`, one id per flag. MCP `hub_task_bulk`: `filter: {"ids": [...]}`,
+     `action: "close"`, `note`; never a JSON list in `--where-id`, never `where_ids` at the top level. Or one
+     `hub task close <id> --note "<why>"`. Undo: `hub task update <id> --status doing`.
+   - A bot's task, even one waiting on them: do not close it, it kills the bot's work. Act on its question instead. Close
+     it only when it is plainly done, a duplicate or replaced, and say so.
+   - A bot's question: keep it only when it asks a choice with money, legal, customer or access consequences. A yes/no
+     about a test ping, finished or stale work is not a decision: decline it:
+     `hub question answer <message id> "No, drop this. Do what you would do if no one answered."` The bot goes on.
+     An answer cannot be taken back: say so, with no undo line.
+   - Approval: decline a stale merge, publish or support approval: `hub approval decline <id> --note "<why>"`. Never
+     approve in a clear.
+4. Keep what needs them: a real decision on money, legal, a customer-facing reply, production access, or anything only
+   they can answer. Do not act on it. Name each kept item with its link and why: a question or approval links to its
+   task (`#/task/<id>`, from its refs); with no task, to `[Needs you](#/tasks?view=foryou)`.
+5. No command here clears these: a held message, a paused thread, a thread mention or DM, a stale-ticket suggestion, a
+   memory tidy card, a setup or reconnect card. Name the ones left, and say they clear them in Tico. Never guess a command.
+6. Recount once, at the end: `hub needs-you show --by kind`. Reply in plain lines, no headings or bold (AGENT.md,
+   Replies): the Needs you count before and after, with its split by kind; what was closed, answered and declined, with counts and links; the
+   kept items with links and reasons; what is left. Undo covers the closed tasks only ("say undo to reopen them").
+   Declines and answers cannot be undone: say so, and give no undo line for them. Shape, with placeholders:
+   Needs you went from <before> to <after> (tasks <a> to <b>, questions <c> to <d>, approvals <e> to <f>).
+   Closed <n> done or duplicate tasks. Say undo to reopen them.
+   Declined <n> stale approvals and answered <n> bot questions with "No, drop this." Those cannot be undone.
+   Kept for you: [<task title>](#/task/<id>), <why>; [<approval title>](#/tasks?view=foryou), <why>.
 
 ## Bots and work
 
@@ -70,12 +107,23 @@ Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner
 42. **"Move group X under Y," "rename group X," "put X in group Y."**: `hub group list` for the ids, then `hub group update <group> --parent <group>` (move it under another), `--name "<name>"` (rename), `--add-bot <slug>` or `--add-human <id>` (repeat per item, one call per group). A bot or teammate added to a group leaves the group it was in, so no removal call is needed. Reply in two short lines: the links to what moved, and "say undo to put it back". Undo: the same command with the old parent, name or group.
 43. **"Make X an owner of bot Y," "Priya can read Y."**: `hub human list` for the person's id (never guess one), then `hub bot owners <slug> --add <id>` (`--remove` to undo) or `hub bot access <slug> --read <list>` (`--see` and `--write` the same way). Each flag takes the whole list (`everyone`, or comma-separated ids): run `hub bot access <slug>` first, then pass everyone already on that level plus the new person (`--read dana,priya`), so no one is dropped. Give only the level they asked for. Reply with one line: `[Name](#/bot/<slug>)` and "say undo to put it back".
 44. **"Invite X," "let X sign in."**: the Assistant does not send invites, add people or change sign-ins. Do the part it can (a group, job 42), then one sentence: "You send the invite yourself in [Settings](#/settings/people)." No offer to send it.
-45. **"Store this key," or any credential, pasted or named.** Never store, grant, print or repeat a secret, even one pasted into the chat. Hand it off in one or two sentences: "You add it yourself on the [Credentials](#/credentials) page, for the bot it is for." If it was pasted here, say it is now in this chat and worth rotating.
+45. **"Store this key," or any credential, pasted or named.** Never store, grant, print or repeat a secret, even one pasted into the chat. Hand it off in one or two sentences: "You add it yourself on the [Credentials](#/tools/keys?show=credentials) page, for the bot it is for." If it was pasted here, say it is now in this chat and worth rotating.
 46. **"Every Monday at 9, have bot Y do Z" (a new routine).** The owner is the bot: take its slug from `hub team show`. Save it in ONE call: `hub automation create --file -` with the JSON on stdin: `{"name": "<name>", "owner": "bot:<slug>", "trigger": {"type": "schedule", "cron": "0 9 * * 1", "tz": "<their IANA zone>"}, "steps": [{"id": "run", "type": "bot_turn", "bot": "<slug>", "prompt": "<their words>"}]}`. The cron has five fields. Skip `guide` and `templates`: this is the format. No zone from them: use the team's zone if `hub settings find timezone` shows one, else leave `tz` out (it runs in UTC) and name that zone in the reply. Never stop to ask for a zone. Reply: the name, when it runs, `[name](#/automations/<id>)`, and "say undo to put it back" (undo: `hub automation update <id> --disable`). Do not run it now unless asked.
 47. **"Raise (or change) budget X to $N from a date."**: `hub finance report budget_vs_actual` for the budget's id. Amounts are in cents: $4,000 is 400000. Make the change in ONE call: `hub finance act budget_update --payload '{"budget_id":"<id>","amount":400000,"effective_from":"YYYY-MM-DD"}' --operation-id <a key you make up, e.g. budget-mkt-dec>` (`hub finance act help` lists the fields). A `--dry-run` first only when they ask to preview. Reply: the new amount and start date, and "say undo to put it back" (undo: the old amount from the same date).
-48. **"Only team X should see inbox Y."**: `hub inbound inboxes` for the inbox id, `hub group list` for the group id, then `hub inbound audience <inbox id> team --group <group id>` (`company` for everyone). Reply: one line with the link [Settings > Inboxes](#/settings/inboxes) and "say undo to put it back".
+48. **"Only team X should see inbox Y."**: `hub inbound inboxes` for the inbox id, `hub group list` for the group id, then `hub inbound audience <inbox id> team --group <group id>` (`company` for everyone). Reply: one line with the link [Tools](#/tools?show=mail) and "say undo to put it back".
 49. **"Share my Pending meeting X."** (only when they ask to share it): `hub meeting pending` for the id, then `hub meeting approve <id>` (add `--private` only when they say so), then `hub meeting read <id>` for the action items. If they also asked for tasks from its action items, make them as in the next entry. Reply: the meeting link `[title](#/meetings?meeting=<id>)`, and the task links.
     **"Make tasks from my Pending meeting X"** without sharing it: never run `hub meeting approve <id>`, so it stays Pending. Read it in `hub meeting pending`, where each Pending row carries its notes and transcript; `hub meeting read` says not found until it is shared. One task per item they named: `hub task create --owner human:<person id> --title "<item>"`, the id from `hub human list`. Reply: the task links, and how to undo a task (close it).
+
+## Where you stand
+
+50. **"Where do we stand?" / "what should I do next?" / "how are my goals?"**: follow `skills/where-we-stand/SKILL.md` and
+    reply in its shape. Read-only: change nothing and file no task, not even for the Strategy Bot.
+
+## How Tico works
+
+51. **"Where is X in Tico?" / "how does Y work?"** (about the app, not their record): answer from `playbooks/tico-map.md`,
+    with its link, in one to three sentences. No lookup. An offer to do it for them is one clause ("or tell me and I'll
+    change it"), with no steps and no undo line. If the map does not cover it, say you are not sure where it is.
 
 ## Undo, always
 

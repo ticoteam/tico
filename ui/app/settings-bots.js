@@ -139,7 +139,6 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
   // harness, "Tico AI Gateway", stands for them). `real` maps it back to the pi harness the bot runs them on.
   const gw = settingsGateway(), viaTier = !!gw && all.some(row => settingsIsTico(row.model));
   const choices = viaTier ? all.filter(row => !settingsIsTico(row.model)) : all;
-  const tierRows = viaTier ? all.filter(row => settingsIsTico(row.model)) : [];
   // A bot's own Model control greys out what its computer cannot run; bulk change checks each bot on Apply.
   const box = fields.closest('[data-bot-choice]');
   const bot = box?.dataset.botChoice ? S.emps.find(row => row.id === box.dataset.botChoice) : null;

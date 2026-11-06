@@ -74,7 +74,7 @@ async function overviewLoadComputers() {
 function pageOverview() {
   const main = $('#main'); main.classList.add('overview-layout');
   main.innerHTML = `<section class="overview-page" aria-label="Company overview">
-    <div class="overview-tabs"><h1>Overview</h1>${dashTabsHTML('campus')}</div>
+    <div class="overview-tabs"><h1>Company</h1>${dashTabsHTML('campus')}</div>
     <a class="overview-needs" id="overview-needs" href="#/tasks" hidden></a>
     <div class="overview-stuck" id="overview-stuck" role="status" hidden></div>
     <div class="overview-hours" id="overview-hours" role="button" tabindex="0" aria-haspopup="dialog"></div>
@@ -201,7 +201,7 @@ function overviewStuckDraw() {
 function overviewNeedsDraw() {
   const el = OVERVIEW_PAGE && $('#overview-needs'); if (!el) return;
   if (S.me?.role === 'bot') { el.hidden = true; return; }
-  const n = S.v2?.needsCount ?? (S.v2?.needs || []).length, w = S.v2?.wentAway, parts = [];
+  const n = decideCount(), w = S.v2?.wentAway, parts = [];
   if (w?.expired) parts.push(`${w.expired} expired`);
   if (w?.withdrawn) parts.push(`${w.withdrawn} withdrawn`);
   if (w?.assistant) parts.push(`${w.assistant} answered by your Assistant`);

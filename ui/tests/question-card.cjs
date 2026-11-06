@@ -112,12 +112,12 @@ const card = () => ({
     assert.deepEqual(answers.shift(), {task: 't-four', target: {comment: 'q-t-four'},
       answers: {decision: ['Calls', 'Visitor notes', 'Spend cap']}, other: 'Pages: only pricing for now.'});
 
-    // 15: Tico's own check says Tico, never the assistant's name or "You asked"; each of its buttons says what happens.
+    // 15: the server's own check says Automatic, never the assistant's name or "You asked"; each of its buttons says what happens.
     await page.locator('.decide .dc-card[data-key="task:t-stuck"]').waitFor();
     const check = await page.evaluate(() => ({who: document.querySelector('.decide .dc-who-name').textContent.trim(),
       header: document.querySelector('.decide .dc-who').textContent,
       buttons: [...document.querySelectorAll('.decide .dc-actions button')].map(b => b.querySelector('.qc-then')?.textContent)}));
-    assert.equal(check.who, 'Tico');
+    assert.equal(check.who, 'Automatic');
     assert.ok(!/Assistant|You asked/.test(check.header), check.header);
     assert.deepEqual(check.buttons, ['The bot is woken again', 'The task is closed']);
 
@@ -129,6 +129,19 @@ const card = () => ({
     await page.locator('.decide .dc-actions [data-dc="all"]').click();
     await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
     assert.deepEqual(answers.shift(), {task: 't-all', target: {comment: 'q-t-all'},
+      answers: {decision: ['Calls', 'Visitor notes', 'Pages', 'Spend cap']}});
+
+    // A question task (backend/question_tasks.py): the same card, its ask the task itself, answered with {task}.
+    const qtask = question('t-qt', {owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open', waiting_on: null});
+    qtask.ask = {...qtask.ask, id: 't-qt', question_task: true, refs: {...qtask.ask.refs, target: {task: 't-qt'}, task_question: true}};
+    items = [qtask];
+    await page.evaluate(async () => { decideStop(); await v2Refresh(); decideOpen('task:t-qt'); });
+    await page.locator('.decide .dc-card[data-key="task:t-qt"]').waitFor();
+    assert.equal((await page.evaluate(card)).picks.length, 4);
+    await page.waitForFunction(() => DEC && !DEC.busy && performance.now() >= (DEC.lockUntil || 0));
+    await page.locator('.decide .dc-actions [data-dc="all"]').click();
+    await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
+    assert.deepEqual(answers.shift(), {task: 't-qt', target: {task: 't-qt'},
       answers: {decision: ['Calls', 'Visitor notes', 'Pages', 'Spend cap']}});
 
     // 11: the task page's Needs you box is the same card: same header, question, why line, picks and buttons.

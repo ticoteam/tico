@@ -12,8 +12,21 @@ def task(api, title="Review the draft"):
 
 
 def ask(who=None, other=True):
-    return {"questions": [{"id": "verdict", "header": "Review", "question": "Is this ready?",
-                           "options": [{"label": "Approve", "then": "Go with Approve"}, {"label": "Request changes", "then": "Go with Request changes"}], "other": other}], "who": who}
+    return {
+        "questions": [
+            {
+                "id": "verdict",
+                "header": "Review",
+                "question": "Is this ready?",
+                "options": [
+                    {"label": "Approve", "then": "Go with Approve"},
+                    {"label": "Request changes", "then": "Go with Request changes"},
+                ],
+                "other": other,
+            }
+        ],
+        "who": who,
+    }
 
 
 def attach(api, tid, name="report.md", **fields):
@@ -49,7 +62,9 @@ def test_version_names_scopes_archive_and_author_edits(api):
 @pytest.mark.parametrize("change", [{"extra": True}])
 def test_ask_validation(api, change):
     tid = task(api)
-    r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Review", "ask": {**ask(), **change}}, headers=headers())
+    r = api.post(
+        f"/api/v2/tasks/{tid}/comments", json={"text": "Review", "ask": {**ask(), **change}}, headers=headers()
+    )
     assert r.status_code == 422, r.text
 
 
@@ -69,11 +84,21 @@ def test_comments_answers_rights_validation_multiple_answers_and_needs_you(api):
     with api.app.state.store.transaction() as c:
         restrict(c, "ops", everyone=True)
     for invalid in ({"verdict": ["Bogus"]}, {"missing": ["Approve"]}, {"verdict": ["Approve", "Request changes"]}):
-        assert api.post(f"/api/v2/tasks/{tid}/answers", json={**body, "answers": invalid}, headers=headers("ben-test")).status_code == 422
+        assert (
+            api.post(
+                f"/api/v2/tasks/{tid}/answers", json={**body, "answers": invalid}, headers=headers("ben-test")
+            ).status_code
+            == 422
+        )
     answer = post(api, f"tasks/{tid}/answers", body, "ben-test")
     assert answer["comment"]["kind"] == "answer" and 'answered "Is this ready?": Approve.' in answer["comment"]["body"]
     assert answer["comment"]["refs"]["answer"] == answer["answer"]
-    post(api, f"tasks/{tid}/answers", {**body, "answers": {"verdict": ["Request changes"]}, "other": "Change the intro."}, "cara-test")
+    post(
+        api,
+        f"tasks/{tid}/answers",
+        {**body, "answers": {"verdict": ["Request changes"]}, "other": "Change the intro."},
+        "cara-test",
+    )
     comments = get(api, f"tasks/{tid}/comments")["comments"]
     assert len(next(m for m in comments if m["id"] == question["id"])["answers"]) == 2
     assert len(get(api, f"tasks/{tid}/answers")["answers"]) == 2
@@ -113,6 +138,7 @@ def test_plain_ask_and_reply_still_close_through_existing_protocol(api):
 
 def test_review_migration_keeps_existing_version_bytes(api):
     import sqlite3
+
     tid = task(api)
     fid = attach(api, tid)["file_id"]
     with api.app.state.store.read() as c:
@@ -125,23 +151,29 @@ def test_review_migration_keeps_existing_version_bytes(api):
 
 def test_cli_comment_uploads_use_distinct_retry_keys(tmp_path, monkeypatch):
     from clients import remotecli
+
     paths = [tmp_path / name for name in ("a.md", "b.md")]
     for path in paths:
         path.write_text("Draft")
     calls = []
+
     class Client:
         def __init__(self, *args, **kwargs):
             pass
+
         def get(self, path):
             return {"actor": "human:ana"}
+
         def post(self, path, body, key=None):
             calls.append((path, body, key))
             return {"file_id": "file-a", "version": len(calls)} if path.endswith("/files") else {"ok": True}
+
     monkeypatch.setattr(remotecli, "Client", Client)
     monkeypatch.setenv("HUB_API_URL", "https://example.com")
     monkeypatch.setenv("HUB_OPERATION_ID", "review-operation")
-    args = parser().parse_args(["task", "comment", "t1", "Review", "--attach", str(paths[0]), "--attach", str(paths[1]),
-                                "--choices", "A,B"])
+    args = parser().parse_args(
+        ["task", "comment", "t1", "Review", "--attach", str(paths[0]), "--attach", str(paths[1]), "--choices", "A,B"]
+    )
     assert remotecli.run(args) == {"ok": True}
     assert len(set(c[2] for c in calls)) == 3
     assert calls[-1][1]["attachments"] == ["file-a@1", "file-a@2"]
@@ -151,6 +183,7 @@ def test_cli_comment_uploads_use_distinct_retry_keys(tmp_path, monkeypatch):
 def test_requester_bot_can_open_person_uploads_and_adopted_legacy_ids(api):
     from backend.auth import Identity
     from backend.blobs import register
+
     machine = runner(api)
     assign(api, machine, "coo")
     ready(api, machine, ["coo"])
@@ -171,9 +204,11 @@ def test_requester_bot_can_open_person_uploads_and_adopted_legacy_ids(api):
     # Legacy blob ownership remains readable after a series changes scope.
     with api.app.state.store.transaction() as c:
         private = H.open_conversation(c, "human:ben", ["bot:ops"], scope="personal", room_key="ops")
-        c.execute("UPDATE bot_files SET scope=?,bot_id='inbox' WHERE id=?",
-                  ("conversation:" + private["id"], old["id"]))
+        c.execute(
+            "UPDATE bot_files SET scope=?,bot_id='inbox' WHERE id=?", ("conversation:" + private["id"], old["id"])
+        )
         from backend.store import Problem
+
         with pytest.raises(Problem):
             api.app.state.files.visible_file(c, Identity("human:ana", "owner"), old["id"])
     assert api.get(f"/api/v2/files/{old['id']}?v=1", headers=headers()).content == b"old"
@@ -187,13 +222,13 @@ def test_attach_requires_comment_rights_even_without_question(api, existing):
     if existing:
         attach(api, tid)
     with api.app.state.store.transaction() as c:
-        restrict(c, "ops", see={"people": ["cara", "ana"]}, read={"people": ["cara", "ana"]},
-                 write={"people": ["ana"]})
+        restrict(c, "ops", see={"people": ["cara", "ana"]}, read={"people": ["cara", "ana"]}, write={"people": ["ana"]})
     seen = get(api, f"tasks/{tid}", "cara-test")
     assert seen["task"]["id"] == tid and seen["can_comment"] is False
     assert get(api, f"tasks/{tid}")["can_comment"] is True
-    response = api.post(f"/api/v2/tasks/{tid}/files", json={"name": "report.md", "text": "Draft"},
-                        headers=headers("cara-test"))
+    response = api.post(
+        f"/api/v2/tasks/{tid}/files", json={"name": "report.md", "text": "Draft"}, headers=headers("cara-test")
+    )
     assert response.status_code == 403
     assert len(get(api, f"tasks/{tid}/files")["files"]) == int(existing)
 
@@ -213,8 +248,9 @@ def test_answer_uses_comment_wake_rule(api, role):
         assign(api, machine, "ops")
         ready(api, machine, ["ops"])
         token = claim(api, machine, "ops")["token"]
-    answer = post(api, f"tasks/{tid}/answers", {"target": {"comment": question["id"]},
-                                              "answers": {"verdict": ["Approve"]}}, token)
+    answer = post(
+        api, f"tasks/{tid}/answers", {"target": {"comment": question["id"]}, "answers": {"verdict": ["Approve"]}}, token
+    )
     assert answer["woke"] == (role != "other")
     assert bool(answer["comment"]["refs"].get("quiet")) == (role == "other")
     with api.app.state.store.read() as c:
@@ -234,6 +270,7 @@ def test_needs_you_excludes_inactive_tasks_with_structured_asks(api, status):
 
 def test_readable_answer_escapes_interpolated_text_and_classifies_only_other(api):
     from backend.task_review import readable_text
+
     assert readable_text("www.example.com ftp://example.com") == "www&#46;example.com ftp&#58;//example.com"
     tid = task(api)
     choice = ask("ben")
@@ -265,11 +302,25 @@ def test_the_person_a_bot_asked_wakes_it_with_their_answer(api):
 
 def test_done_news_skips_a_bot_that_cannot_read_the_task(api):
     parent = post(api, "tasks", {"owner": "ops", "title": "Plan the launch week", "body": "All of it."})["id"]
-    child = post(api, "tasks", {"owner": "inbox", "title": "Draft the launch mail", "body": "One page.",
-                                "relations": [{"task": parent, "kind": "parent"}]})["id"]
+    child = post(
+        api,
+        "tasks",
+        {
+            "owner": "inbox",
+            "title": "Draft the launch mail",
+            "body": "One page.",
+            "relations": [{"task": parent, "kind": "parent"}],
+        },
+    )["id"]
     version = get(api, f"tasks/{child}")["task"]["version"]
     post(api, f"tasks/{child}", {"version": version, "status": "done", "note": "Sent the draft."})
     with api.app.state.store.read() as c:
-        told = {r[0] for r in c.execute("SELECT recipient_id FROM messages WHERE body LIKE '% marked this done:%' "
-                                        "AND json_extract(refs,'$.task')=?", (child,))}
+        told = {
+            r[0]
+            for r in c.execute(
+                "SELECT recipient_id FROM messages WHERE body LIKE '% marked this done:%' "
+                "AND json_extract(refs,'$.task')=?",
+                (child,),
+            )
+        }
     assert "bot:inbox" in told and "bot:ops" not in told, told

@@ -5,6 +5,7 @@ runner's own tests' recording server does. Work is files: the test puts attempts
 order, one per claim) and the bots' assignments in /work/assignments.json; a finished turn's completion lands in
 /work/done/<attempt>.json. GitHub is `git http-backend` over /srv/git, with no sign-in.
 """
+
 import http.server
 import json
 import os
@@ -94,11 +95,20 @@ class GitHub(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         path, _, query = self.path.partition("?")
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        env = {"GIT_PROJECT_ROOT": GIT_ROOT, "GIT_HTTP_EXPORT_ALL": "1", "REQUEST_METHOD": self.command,
-               "PATH_INFO": path, "QUERY_STRING": query, "CONTENT_TYPE": self.headers.get("Content-Type", ""),
-               "CONTENT_LENGTH": str(len(body)), "REMOTE_USER": "acme", "PATH": os.environ["PATH"]}
-        out = subprocess.run(["git", "-c", "safe.directory=*", "http-backend"], input=body, env=env,
-                             capture_output=True).stdout
+        env = {
+            "GIT_PROJECT_ROOT": GIT_ROOT,
+            "GIT_HTTP_EXPORT_ALL": "1",
+            "REQUEST_METHOD": self.command,
+            "PATH_INFO": path,
+            "QUERY_STRING": query,
+            "CONTENT_TYPE": self.headers.get("Content-Type", ""),
+            "CONTENT_LENGTH": str(len(body)),
+            "REMOTE_USER": "acme",
+            "PATH": os.environ["PATH"],
+        }
+        out = subprocess.run(
+            ["git", "-c", "safe.directory=*", "http-backend"], input=body, env=env, capture_output=True
+        ).stdout
         head, _, payload = out.partition(b"\r\n\r\n")
         status = 200
         headers = []

@@ -61,10 +61,11 @@ async function open(browser, {phone = false} = {}) {
   return {page, errors};
 }
 
-const row = (page, id) => page.locator(`.th-msg[data-mid="${id}"]`);
+// A message row, or the gray line a row the server wrote is (the request: ui/app/hub-v2.js rowSource).
+const row = (page, id) => page.locator(`:is(.th-msg, .th-line)[data-mid="${id}"]`);
 const line = page => page.locator('.th-upd-btn');
 // The messages inside the panel a line controls, in order.
-const panelRows = (page, panel) => page.evaluate(id => [...document.getElementById(id).querySelectorAll('.th-msg')].map(e => e.dataset.mid), panel);
+const panelRows = (page, panel) => page.evaluate(id => [...document.getElementById(id).querySelectorAll('.th-msg, .th-line')].map(e => e.dataset.mid), panel);
 
 let browser = null;
 (async () => {
@@ -100,6 +101,8 @@ let browser = null;
     await row(page, 'u2').waitFor();
     assert.equal(await line(page).getAttribute('aria-expanded'), 'true');
     assert.deepEqual(await panelRows(page, panel), ['u1', 'u2'], 'the request, then the reply, under the line');
+    assert.equal(await page.locator('.th-line[data-mid="u1"]').count(), 1, "the server's request is a gray line, not a message");
+    assert.equal(await page.locator('.th-line[data-mid="u1"] .src-name').count(), 0, 'with no sender');
     await line(page).click();
     await row(page, 'u2').waitFor({state: 'detached'});
     assert.equal(await row(page, 'u1').count(), 0);

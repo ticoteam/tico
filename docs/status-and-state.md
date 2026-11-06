@@ -105,7 +105,7 @@ Values (`TASK_STATUSES`):
 
 - `open`: not started. Owners may set it.
 - `doing`: being worked on.
-- `waiting`: parked on something else (`waiting_on`). The task stays in its working step and shows a Waiting tag.
+- `waiting`: parked on something else: a subtask, a blocker (a person's open question task is one), an approval or an outside wait. The task stays in its working step and shows a Waiting tag.
 - `review`: work is finished and waiting for review or QA. Owners may set it.
 - `ready`: the hub has learned the work is ready, for example its pull request merged. Set by movers and the keeper, never by an owning bot.
 - `done`: finished work. Shown under Done.
@@ -522,7 +522,7 @@ Without a CHECK (not constrained here; values are whatever the code writes):
   `seats.request_state`, `seat_requests.state`, `service_jobs.state`, `slack_events.state`, `slack_posts.state`,
   `worktree_waits.state`, `check_waits.state`, `calendar_actions.status`, `intake_items.status`, `support_tickets.status`,
   `rule_suggestions.status`, `runner_versions.update_state`, `runner_harness_actions.state`, `update_queue.state`,
-  `mail_items.state`, `mail_items.status`, `market_*.status`, `memory_tidy_cards.status`, `inbound_inboxes.state`, `bills_inbound.state`,
+  `mail_items.state`, `mail_items.status`, `market_*.status`, `inbound_inboxes.state`, `bills_inbound.state`,
   `learning_runs.status`, `lens_runs.status`, `listen_runs.status`, `flight_slow.status`, `redesign_migrations.state`,
   `task_trash.status`, `assistant_actions.status`, `automation_mail_actions.state`, `ask_ingest_items.outcome`,
   `batches.state`, `attempts.outcome`, `schedule_occurrences.outcome`, `stale_suggestions.verdict`, `stall_triage.outcome`,

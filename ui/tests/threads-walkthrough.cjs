@@ -487,11 +487,11 @@ async function messageAct(page, text, label, phone) {
     // ------------------------------------------------------------------ Connect: Slack, Find a thread, Summarize
     await journey(browser, hub, 'connect', 'dana', async (page, phone, name) => {
       await step(page, 'connections page', phone, name, async () => {
-        await shell(page, '#/library/connections', '#cn-slack')();
+        await shell(page, '#/tools/slack', '#tool-slack-links')();
         await snap(page, 'connect-page', phone);
       });
       await step(page, 'Slack section', phone, name, async () => {
-        await page.locator('#cn-slack').scrollIntoViewIfNeeded();
+        await page.locator('#tool-slack-links').scrollIntoViewIfNeeded();
         await snap(page, 'connect-slack', phone);
       });
       await step(page, 'find a thread', phone, name, async () => {

@@ -23,8 +23,9 @@ def pending(conn, waves=None):
     """The (kind, table, old, new) renames this database still needs, in order: tables first, then columns. `waves`
     limits the columns to those waves (all of the map's when None)."""
     columns = {}
-    for table, column in conn.execute("SELECT m.name, p.name FROM sqlite_master m "
-                                      "JOIN pragma_table_info(m.name) p WHERE m.type='table'"):
+    for table, column in conn.execute(
+        "SELECT m.name, p.name FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE m.type='table'"
+    ):
         columns.setdefault(table, set()).add(column)
     todo = []
     for old, new in TABLES:
@@ -55,7 +56,7 @@ def apply(conn, waves=None):
     if not todo:
         return 0
     legacy = conn.execute("PRAGMA legacy_alter_table").fetchone()[0]
-    conn.execute("PRAGMA legacy_alter_table=OFF")      # SQLite rewrites the triggers, views and indexes that name it
+    conn.execute("PRAGMA legacy_alter_table=OFF")  # SQLite rewrites the triggers, views and indexes that name it
     try:
         for kind, table, old, new in todo:
             if kind == "table":

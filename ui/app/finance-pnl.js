@@ -708,23 +708,36 @@ async function finVendorSave(input) {
   await finBudgetDecide(kind, payload, {title: name, change: finBudgetChange(FIN_MONTH[finDate(from).getMonth()], was, cents), alive: () => FIN?.line === state,
     saved: () => void finLineLoad(), undo: () => { input.disabled = false; input.value = finCentsField(was); }});
 }
-// The month a new budget starts: the month shown when it is ahead, else next month.
-const finFromField = () => `<label>From<input type="month" name="from" required min="${finNextMonth(finToday().slice(0, 7))}" value="${finLineFuture() ? FIN_LINE.month : finNextMonth(finToday().slice(0, 7))}"></label>`;
-function finFromValue(form) {
+// The fields a new budget's dialog shares: a line's Line budget and Vendor budget here, and Finance › Budgets'
+// + Budget (finance-budgets.js).
+const finAmountField = (label = 'Budget / mo') => `<label>${esc(label)}<input name="amount" inputmode="decimal" required autocomplete="off"></label>`;
+function finAmountValue(form) {
+  const cents = finParseCents(form.elements.amount.value);
+  if (cents == null) throw new Error('A dollar amount, like 450');
+  return cents;
+}
+const finAtLimitField = (chosen = 'ask') => `<label>At limit<select name="at_limit">${Object.entries(FIN_AT_LIMIT).map(([v, l]) =>
+  `<option value="${v}"${v === chosen ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`;
+// The month a new budget starts: `month` when it is open (ahead; or this one, with `now`), else the first open month.
+const finFromMin = now => now ? finToday().slice(0, 7) : finNextMonth(finToday().slice(0, 7));
+const finFromField = (month = '', now = false) => {
+  const min = finFromMin(now);
+  return `<label>From<input type="month" name="from" required min="${min}" value="${month && month >= min ? month : min}"></label>`;
+};
+function finFromValue(form, now = false) {
   const v = form.elements.from.value;
-  if (!v || v <= finToday().slice(0, 7)) throw new Error('Pick a month ahead');
+  if (!v || v < finFromMin(now)) throw new Error(now ? 'Pick this month or one ahead' : 'Pick a month ahead');
   return v + '-01';
 }
 function finVendorAdd() {
   const parent = finLineParent(), account = FIN.line.id;
   if (!parent) return;
   finDecideDialog('Vendor budget', `<label>Vendor<input name="vendor" required maxlength="80" autocomplete="off"></label>
-    <label>Budget / mo<input name="amount" inputmode="decimal" required autocomplete="off"></label>${finFromField()}
-    <label>At limit<select name="at_limit">${Object.entries(FIN_AT_LIMIT).map(([v, l]) => `<option value="${v}"${v === 'ask' ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`,
+    ${finAmountField()}${finFromField(FIN_LINE.month)}${finAtLimitField()}`,
   'Add', form => {
-    const vendor = form.elements.vendor.value.trim(), cents = finParseCents(form.elements.amount.value);
+    const vendor = form.elements.vendor.value.trim();
     if (!vendor) throw new Error('Name the vendor');
-    if (cents == null) throw new Error('A dollar amount, like 450');
+    const cents = finAmountValue(form);
     FIN_LINE.sel = vendor;
     return ['budget_create', {name: vendor, period: 'month', account_id: account, vendor, parent_id: parent.id,
       amount: cents, effective_from: finFromValue(form), at_limit: form.elements.at_limit.value}];
@@ -733,9 +746,8 @@ function finVendorAdd() {
 // A vendor budget sits under its line's budget (a budget tree starts at a line), so a line without one gets it first.
 function finLineBudgetAdd() {
   const name = FIN.line.cur?.account?.name || $('#fin-line-name')?.textContent || 'Line', account = FIN.line.id;
-  finDecideDialog('Line budget', `<label>Budget / mo<input name="amount" inputmode="decimal" required autocomplete="off"></label>${finFromField()}`, 'Add', form => {
-    const cents = finParseCents(form.elements.amount.value);
-    if (cents == null) throw new Error('A dollar amount, like 450');
+  finDecideDialog('Line budget', finAmountField() + finFromField(FIN_LINE.month), 'Add', form => {
+    const cents = finAmountValue(form);
     return ['budget_create', {name, period: 'month', account_id: account, amount: cents, effective_from: finFromValue(form)}];
   }, 'Saved');
 }

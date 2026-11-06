@@ -1,4 +1,4 @@
-/* ui/app/bot-tasks.js — Tasks on a keeper bot's page
+/* ui/app/bot-tasks.js — Tasks on a bot's page
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 

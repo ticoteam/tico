@@ -34,56 +34,196 @@ ROOT = Path(__file__).resolve().parents[2]
 HERE = ROOT / "scripts/cleanup"
 WAVE_ORDER = ["1", "2", "2s", "2b", "3"]
 
-PY_DIRS = ("backend", "e2e", "clients", "runner_support", "scripts", "setup", "evals", "connectors", "integrations", "tools", "ui", "docker",
-           "docs-eval", "contracts")
+PY_DIRS = (
+    "backend",
+    "e2e",
+    "clients",
+    "runner_support",
+    "scripts",
+    "setup",
+    "evals",
+    "connectors",
+    "integrations",
+    "tools",
+    "ui",
+    "docker",
+    "docs-eval",
+    "contracts",
+)
 PY_FILES = ("conftest.py",)
-JS_GLOBS = ("ui/**/*.js", "ui/**/*.cjs", "ui/**/*.mjs", "app/shell/**/*.js", "scripts/**/*.cjs", "scripts/**/*.mjs",
-            "examples/**/*.js")                                  # the custom frontend example reads the API's field names
+JS_GLOBS = (
+    "ui/**/*.js",
+    "ui/**/*.cjs",
+    "ui/**/*.mjs",
+    "app/shell/**/*.js",
+    "scripts/**/*.cjs",
+    "scripts/**/*.mjs",
+    "examples/**/*.js",
+)  # the custom frontend example reads the API's field names
 RS_DIRS = ("runner-rs", "relay-rs", "app/src")
-MD_DIRS = ("docs", "templates", "skills", "examples", "integrations", "contracts", "questions", "runner-rs", "policies",
-           "connectors", "tools")                               # bot-facing prose and each folder's README
-YAML_DIRS = ("templates", "connectors")                         # bot.yaml, card.yaml, playbook metadata: prose and backticks
+MD_DIRS = (
+    "docs",
+    "templates",
+    "skills",
+    "examples",
+    "integrations",
+    "contracts",
+    "questions",
+    "runner-rs",
+    "policies",
+    "connectors",
+    "tools",
+)  # bot-facing prose and each folder's README
+YAML_DIRS = ("templates", "connectors")  # bot.yaml, card.yaml, playbook metadata: prose and backticks
 SH_BOT_DIRS = ("templates", "skills", "examples", "connectors")  # bot-side scripts that run hub sql
-JSON_GLOBS = ("contracts/runner/fixtures/*.json", "ui/tests/fixtures/*.json")   # the UI tests answer with these
+JSON_GLOBS = ("contracts/runner/fixtures/*.json", "ui/tests/fixtures/*.json")  # the UI tests answer with these
 SKIP_PARTS = ("node_modules", "/vendor/", "ui/assets/", "__pycache__", "scripts/cleanup/", "/target/")
 
 SQL_STRONG = re.compile(
     r"^\s*SELECT\s|\b(SELECT\b[\s\S]*\bFROM|INSERT\s+(OR\s+\w+\s+)?INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|CREATE\s+(TEMP\s+|UNIQUE\s+)?"
     r"(TABLE|INDEX|TRIGGER|VIEW)|ALTER\s+TABLE|WHERE|JOIN|ORDER\s+BY|GROUP\s+BY|ON\s+CONFLICT|RETURNING|"
-    r"COALESCE\s*\(|IFNULL\s*\(|IS\s+(NOT\s+)?NULL|VALUES\s*\(|json_extract\s*\(|json_each\s*\(|excluded\.)")
+    r"COALESCE\s*\(|IFNULL\s*\(|IS\s+(NOT\s+)?NULL|VALUES\s*\(|json_extract\s*\(|json_each\s*\(|excluded\.)"
+)
 SQL_KEYWORDS = {
-    "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "NULL", "IS", "IN", "AS", "ON", "BY", "ORDER", "GROUP", "DESC",
-    "ASC", "LIMIT", "OFFSET", "LIKE", "GLOB", "BETWEEN", "CASE", "WHEN", "THEN", "ELSE", "END", "DISTINCT", "EXISTS",
-    "SET", "VALUES", "INTO", "INSERT", "UPDATE", "DELETE", "JOIN", "LEFT", "INNER", "OUTER", "CROSS", "USING", "HAVING",
-    "UNION", "ALL", "COLLATE", "NOCASE", "ESCAPE", "CAST", "INTEGER", "TEXT", "REAL", "BLOB", "DEFAULT", "PRIMARY",
-    "KEY", "UNIQUE", "CHECK", "REFERENCES", "CONFLICT", "DO", "NOTHING", "REPLACE", "IGNORE", "RETURNING", "WITH",
-    "RECURSIVE", "INDEXED", "TABLE", "INDEX", "TRIGGER", "VIEW", "CREATE", "ALTER", "ADD", "COLUMN", "DROP", "IF",
-    "BEGIN", "BEFORE", "AFTER", "FOR", "EACH", "ROW", "NEW", "OLD", "RAISE", "ABORT", "TRUE", "FALSE", "OVER",
-    "PARTITION", "FILTER", "MAX", "MIN", "COUNT", "SUM", "TOTAL", "AVG", "excluded", "OF", "TEMP", "RENAME", "TO",
-    "WITHOUT", "ROWID", "STRICT", "NULLS", "FIRST", "LAST", "ISNULL", "NOTNULL", "MATCH", "REGEXP"}
-TABLE_REF = re.compile(r"\b(?:FROM|JOIN|INTO|UPDATE|TABLE(?:\s+IF\s+(?:NOT\s+)?EXISTS)?|ON|INDEXED\s+BY)\s+"
-                       r"([A-Za-z_]\w*|\x00)(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?")
+    "SELECT",
+    "FROM",
+    "WHERE",
+    "AND",
+    "OR",
+    "NOT",
+    "NULL",
+    "IS",
+    "IN",
+    "AS",
+    "ON",
+    "BY",
+    "ORDER",
+    "GROUP",
+    "DESC",
+    "ASC",
+    "LIMIT",
+    "OFFSET",
+    "LIKE",
+    "GLOB",
+    "BETWEEN",
+    "CASE",
+    "WHEN",
+    "THEN",
+    "ELSE",
+    "END",
+    "DISTINCT",
+    "EXISTS",
+    "SET",
+    "VALUES",
+    "INTO",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "JOIN",
+    "LEFT",
+    "INNER",
+    "OUTER",
+    "CROSS",
+    "USING",
+    "HAVING",
+    "UNION",
+    "ALL",
+    "COLLATE",
+    "NOCASE",
+    "ESCAPE",
+    "CAST",
+    "INTEGER",
+    "TEXT",
+    "REAL",
+    "BLOB",
+    "DEFAULT",
+    "PRIMARY",
+    "KEY",
+    "UNIQUE",
+    "CHECK",
+    "REFERENCES",
+    "CONFLICT",
+    "DO",
+    "NOTHING",
+    "REPLACE",
+    "IGNORE",
+    "RETURNING",
+    "WITH",
+    "RECURSIVE",
+    "INDEXED",
+    "TABLE",
+    "INDEX",
+    "TRIGGER",
+    "VIEW",
+    "CREATE",
+    "ALTER",
+    "ADD",
+    "COLUMN",
+    "DROP",
+    "IF",
+    "BEGIN",
+    "BEFORE",
+    "AFTER",
+    "FOR",
+    "EACH",
+    "ROW",
+    "NEW",
+    "OLD",
+    "RAISE",
+    "ABORT",
+    "TRUE",
+    "FALSE",
+    "OVER",
+    "PARTITION",
+    "FILTER",
+    "MAX",
+    "MIN",
+    "COUNT",
+    "SUM",
+    "TOTAL",
+    "AVG",
+    "excluded",
+    "OF",
+    "TEMP",
+    "RENAME",
+    "TO",
+    "WITHOUT",
+    "ROWID",
+    "STRICT",
+    "NULLS",
+    "FIRST",
+    "LAST",
+    "ISNULL",
+    "NOTNULL",
+    "MATCH",
+    "REGEXP",
+}
+TABLE_REF = re.compile(
+    r"\b(?:FROM|JOIN|INTO|UPDATE|TABLE(?:\s+IF\s+(?:NOT\s+)?EXISTS)?|ON|INDEXED\s+BY)\s+"
+    r"([A-Za-z_]\w*|\x00)(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?"
+)
 WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-PLACEHOLDER = "\x00"   # an f-string replacement field inside SQL text
+PLACEHOLDER = "\x00"  # an f-string replacement field inside SQL text
 
 
 # ---------------------------------------------------------------------------------------------------------------
 # The map
+
 
 class Wave:
     def __init__(self, data, wave, schema):
         spec = data["waves"][wave]
         self.wave = wave
         self.glob = dict(spec.get("global") or {})
-        self.scoped = {}                       # old -> {table: new}
+        self.scoped = {}  # old -> {table: new}
         for key, new in (spec.get("scoped") or {}).items():
             table, old = key.split(".", 1)
             self.scoped.setdefault(old, {})[table] = new
-        self.schema = schema                   # table -> set(columns) before this wave
+        self.schema = schema  # table -> set(columns) before this wave
         self.tables = set(schema)
         self.old_names = set(self.glob) | set(self.scoped)
-        self.models = None                     # class name -> renamed fields (model_classes), filled by process
-        self.broad = {}                        # old -> new: a scoped name that is a row's field wherever it is a key
+        self.models = None  # class name -> renamed fields (model_classes), filled by process
+        self.broad = {}  # old -> new: a scoped name that is a row's field wherever it is a key
 
     def sql_new(self, old, touched):
         """The new name of an unqualified column token in SQL touching `touched` (None: leave it)."""
@@ -139,6 +279,7 @@ def load(wave):
 def base_schema():
     sys.path.insert(0, str(HERE))
     from gen_map import FIXTURE, load_schema
+
     tables, virtual = load_schema(FIXTURE)
     return {t: set(c) for t, c in tables.items()}
 
@@ -146,18 +287,24 @@ def base_schema():
 def glob_match(rel, pattern):
     """A path glob where `*` stays inside one folder and `**` crosses folders, `**/` none or more of them (fnmatch's
     `*` crosses folders and its `**/` needs one: ui/**/*.js missed ui/support.js)."""
-    regex = re.escape(pattern).replace(r"\*\*/", "\1").replace(r"\*\*", "\0").replace(r"\*", "[^/]*") \
-        .replace("\1", "(?:.*/)?").replace("\0", ".*")
+    regex = (
+        re.escape(pattern)
+        .replace(r"\*\*/", "\1")
+        .replace(r"\*\*", "\0")
+        .replace(r"\*", "[^/]*")
+        .replace("\1", "(?:.*/)?")
+        .replace("\0", ".*")
+    )
     return re.fullmatch(regex, rel) is not None
 
 
 class Keep:
     def __init__(self, data):
         self.files = list(data.get("files") or [])
-        self.names = data.get("names") or {}      # glob -> [names]
-        self.keys = data.get("keys") or {}        # glob -> [names] kept as Python keys/values; SQL still renamed
-        self.sites = data.get("sites") or {}      # glob -> [line texts] whose names are all kept
-        self.wire_models = set(data.get("wire_models") or [])   # request models whose fields are wire names
+        self.names = data.get("names") or {}  # glob -> [names]
+        self.keys = data.get("keys") or {}  # glob -> [names] kept as Python keys/values; SQL still renamed
+        self.sites = data.get("sites") or {}  # glob -> [line texts] whose names are all kept
+        self.wire_models = set(data.get("wire_models") or [])  # request models whose fields are wire names
         # API paths whose request bodies are wire: a dict literal sent to one keeps its keys.
         self.wire_paths = [re.compile(p) for p in data.get("wire_paths") or []]
 
@@ -177,17 +324,18 @@ class Keep:
         if not found:
             return False
         start, end = text.rfind("\n", 0, offset) + 1, text.find("\n", offset)
-        here = text[start:end if end >= 0 else len(text)]
+        here = text[start : end if end >= 0 else len(text)]
         return any(t in here for t in found)
 
 
 # ---------------------------------------------------------------------------------------------------------------
 # Report
 
+
 class Report:
     def __init__(self):
-        self.renamed = Counter()               # (file, kind) -> n
-        self.sites = defaultdict(list)         # category -> [(file, line, name, text)]
+        self.renamed = Counter()  # (file, kind) -> n
+        self.sites = defaultdict(list)  # category -> [(file, line, name, text)]
 
     def edit(self, rel, kind):
         self.renamed[(rel, kind)] += 1
@@ -201,28 +349,28 @@ CATEGORY_HELP = {
     "js-method": "a method call on an object (`response.finished()`): not a field, kept",
     "site-kept": "a line keep.yaml `sites` keeps: a flag, count or other system's field named like a column",
     "sql-scoped-skip": "SQL naming a scoped column where the touched tables did not settle it (unknown/placeholder "
-                       "table, or tables that disagree): fix by hand",
+    "table, or tables that disagree): fix by hand",
     "key-scoped-skip": "a key literal equal to a scoped name outside a function that touches its table",
     "key-bool": "a dict key equal to a renamed name whose value is a bool/number literal (a flag, not the column)",
     "value": "an exact literal equal to a renamed name in a value position (compare, list, argument, return): "
-             "renamed only in wave 1",
+    "renamed only in wave 1",
     "renamed-value": "wave 1: a literal renamed in a value position (lists of columns, arguments): check each",
     "kwarg": "a keyword argument named like a renamed column (not dict(...)): the callee's parameter decides",
     "attribute": "attribute access .old in Python (a model or object field)",
     "both-keys": "an old name read or removed in a function that also sets the new name as a key (decode-in-place "
-                 "such as row['refs'] = parse(row.pop('refs_json'))): renamed, check the order",
+    "such as row['refs'] = parse(row.pop('refs_json'))): renamed, check the order",
     "pop-dropped": "a standalone pop/del of the raw column in a function that sets its decoded twin under the new "
-                   "name: the statement was deleted (it would now remove the decoded value)",
+    "name: the statement was deleted (it would now remove the decoded value)",
     "dup-key": "a dict, call or literal list that held both an old and a new name now names one twice (the later "
-               "entry wins): keep the right one by hand",
+    "entry wins): keep the right one by hand",
     "json-key": "a key on a stored JSON document (refs, trigger, flow, step, detail, meta, payload, spec): existing "
-                "rows keep the old key, so it is not renamed; rename it only together with a data migration",
+    "rows keep the old key, so it is not renamed; rename it only together with a data migration",
     "key-kept": "a key or value keep.yaml `keys` leaves alone in this file: another system's field (Stripe, Xero) "
-                "that shares the name",
+    "that shares the name",
     "key-foreign-dict": "a bare word key in a dict literal none of whose other keys is a column of a table holding it (a word table): kept",
     "event-name": "an event name (an argument of event(...), or event=/action=): not a column, kept",
     "wire-field": "a field of a keep.yaml wire model (what a runner or other separately updated client sends): "
-                  "kept under its wire name",
+    "kept under its wire name",
     "mention": "an old name inside a string that is neither SQL nor an exact key (f-string or other text)",
     "js-scoped": "JavaScript site for a scoped (per-table) name: not renamed",
     "js-string": "JavaScript string literal equal to a renamed name outside ['x'] / in / URL params",
@@ -235,8 +383,12 @@ CATEGORY_HELP = {
 
 def write_report(path, wave, report, totals, report_only=False):
     flag = " --report-only" if report_only else ""
-    lines = [f"# Cleanup codemod report, wave {wave}", "",
-             "Generated by `python3 scripts/cleanup/rename.py --wave " + wave + flag + "`. Do not edit.", ""]
+    lines = [
+        f"# Cleanup codemod report, wave {wave}",
+        "",
+        "Generated by `python3 scripts/cleanup/rename.py --wave " + wave + flag + "`. Do not edit.",
+        "",
+    ]
     if report_only:
         lines += ["Report only: this wave is mapped, not applied. The counts are what the codemod would rename.", ""]
     lines += [f"Renamed sites: {sum(report.renamed.values())} in {len({f for f, _ in report.renamed})} files.", ""]
@@ -262,6 +414,7 @@ def write_report(path, wave, report, totals, report_only=False):
 # ---------------------------------------------------------------------------------------------------------------
 # SQL
 
+
 def sql_tables(text):
     """(tables, aliases) a SQL text touches; PLACEHOLDER stands for an f-string field."""
     tables, aliases = set(), {}
@@ -283,10 +436,11 @@ def sql_tables(text):
                 aliases.setdefault(words[0], words[0])
                 if len(words) > 1 and words[-1].upper() not in SQL_KEYWORDS and WORD.fullmatch(words[-1]):
                     aliases[words[-1]] = words[0]
-    for m in re.finditer(r"\bWITH\s+(?:RECURSIVE\s+)?([A-Za-z_]\w*)\s*(?:\([^)]*\))?\s+AS\s*\(|,\s*([A-Za-z_]\w*)\s+AS\s*\(",
-                         clean):
+    for m in re.finditer(
+        r"\bWITH\s+(?:RECURSIVE\s+)?([A-Za-z_]\w*)\s*(?:\([^)]*\))?\s+AS\s*\(|,\s*([A-Za-z_]\w*)\s+AS\s*\(", clean
+    ):
         cte = m.group(1) or m.group(2)
-        tables.add(cte)                      # a CTE is a table this statement defines: unknown to the schema
+        tables.add(cte)  # a CTE is a table this statement defines: unknown to the schema
     return tables, aliases
 
 
@@ -303,8 +457,11 @@ def sql_statements(text):
         at = clean.find(";", i)
         if at < 0:
             break
-        if re.match(r"\s*CREATE\s+(TEMP\s+)?TRIGGER\b", clean[start:at], re.I) and \
-                re.search(r"\bBEGIN\b", clean[start:at], re.I) and not re.search(r"\bEND\s*$", clean[start:at], re.I):
+        if (
+            re.match(r"\s*CREATE\s+(TEMP\s+)?TRIGGER\b", clean[start:at], re.I)
+            and re.search(r"\bBEGIN\b", clean[start:at], re.I)
+            and not re.search(r"\bEND\s*$", clean[start:at], re.I)
+        ):
             i = at + 1
             continue
         spans.append((start, at + 1))
@@ -331,21 +488,21 @@ def sql_edits(text, wave, tables=None, aliases=None):
     i, n = 0, len(text)
     while i < n:
         ch = text[i]
-        if ch == "'" or (ch == "\\" and text[i + 1:i + 2] == "'"):
+        if ch == "'" or (ch == "\\" and text[i + 1 : i + 2] == "'"):
             start = i + (2 if ch == "\\" else 1)
             j = start
             while j < n:
-                if text[j] == "\\" and text[j + 1:j + 2] == "'":
+                if text[j] == "\\" and text[j + 1 : j + 2] == "'":
                     break
                 if text[j] == "'":
-                    if text[j + 1:j + 2] == "'":
+                    if text[j + 1 : j + 2] == "'":
                         j += 2
                         continue
                     break
                 j += 1
-            i = j + (2 if text[j:j + 1] == "\\" else 1)
+            i = j + (2 if text[j : j + 1] == "\\" else 1)
             continue
-        if ch == "-" and text[i + 1:i + 2] == "-":
+        if ch == "-" and text[i + 1 : i + 2] == "-":
             j = text.find("\n", i)
             i = n if j < 0 else j
             continue
@@ -354,15 +511,18 @@ def sql_edits(text, wave, tables=None, aliases=None):
             word = m.group(0)
             if word in wave.old_names:
                 prev = text[i - 1] if i else ""
-                nxt = text[m.end():m.end() + 1]
+                nxt = text[m.end() : m.end() + 1]
                 if nxt == "(":
-                    pass                                     # a function call
+                    pass  # a function call
                 elif prev == ".":
                     q = re.search(r"([A-Za-z_]\w*)\.$", text[:i])
                     table = aliases.get(q.group(1), q.group(1)) if q else None
                     if q and q.group(1) in ("excluded", "NEW", "OLD", "new", "old"):
-                        own = re.search(r"\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)", text, re.I) \
-                            if q.group(1) == "excluded" else re.search(r"\bTRIGGER\b.*?\bON\s+(\w+)", text, re.I | re.S)
+                        own = (
+                            re.search(r"\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)", text, re.I)
+                            if q.group(1) == "excluded"
+                            else re.search(r"\bTRIGGER\b.*?\bON\s+(\w+)", text, re.I | re.S)
+                        )
                         table = own.group(1) if own else table
                     new = wave.table_new(table, word) if table in wave.tables or word in wave.glob else None
                     if new:
@@ -401,20 +561,42 @@ def is_fragment(text, identifiers):
     """A piece of SQL without a statement keyword: 'created DESC', 't.updated>=?', 'id, created, title'."""
     clean = strip_sql_literals(text).replace(PLACEHOLDER, " ")
     if re.fullmatch(r"\s*[A-Za-z_]\w*(\.[A-Za-z_]\w*)+\s*", clean):
-        return False                    # a lone dotted name ('order.created', 'system.update.started': an event type)
+        return False  # a lone dotted name ('order.created', 'system.update.started': an event type)
     if not clean.strip() or not re.search(r"[,=<>?()]|\b(AND|OR|DESC|ASC|IS|IN|LIKE|BETWEEN|NOT)\b|\w\.\w", clean):
         return False
     if re.search(r"[!;\"{}\[\]]|\s-\s|\.\s|:\s", clean):
         return False
-    words = [m.group(0) for m in WORD.finditer(clean)
-             if clean[m.end():m.end() + 1] not in (".", "(")]          # qualifiers and function names
+    words = [
+        m.group(0) for m in WORD.finditer(clean) if clean[m.end() : m.end() + 1] not in (".", "(")
+    ]  # qualifiers and function names
     if not words:
         return False
     for w in words:
-        if w in SQL_KEYWORDS or w in identifiers or w.upper() in {"JSON_EXTRACT", "COALESCE", "IFNULL", "LOWER",
-                                                                    "UPPER", "LENGTH", "SUBSTR", "DATETIME", "DATE",
-                                                                    "JULIANDAY", "STRFTIME", "NULLIF", "INSTR",
-                                                                    "TRIM", "ABS", "ROUND", "JSON", "JSON_EACH"}:
+        if (
+            w in SQL_KEYWORDS
+            or w in identifiers
+            or w.upper()
+            in {
+                "JSON_EXTRACT",
+                "COALESCE",
+                "IFNULL",
+                "LOWER",
+                "UPPER",
+                "LENGTH",
+                "SUBSTR",
+                "DATETIME",
+                "DATE",
+                "JULIANDAY",
+                "STRFTIME",
+                "NULLIF",
+                "INSTR",
+                "TRIM",
+                "ABS",
+                "ROUND",
+                "JSON",
+                "JSON_EACH",
+            }
+        ):
             continue
         return False
     return True
@@ -422,6 +604,7 @@ def is_fragment(text, identifiers):
 
 # ---------------------------------------------------------------------------------------------------------------
 # Python
+
 
 class Source:
     def __init__(self, text):
@@ -552,7 +735,7 @@ class PyFile:
 
     def __init__(self, rel, text, wave, report, keep, check=False):
         self.rel, self.src, self.wave, self.report, self.keep = rel, Source(text), wave, report, keep
-        self.edits = {}            # (start, end) -> (new, kind, old)
+        self.edits = {}  # (start, end) -> (new, kind, old)
         self.check = check
 
     def kept(self, name):
@@ -562,7 +745,7 @@ class PyFile:
         if self.kept(old):
             return
         if kind not in ("sql", "comment") and self.keep.key(self.rel, old):
-            self.site("key-kept", start, old)     # another system's field of the same name (keep.yaml keys)
+            self.site("key-kept", start, old)  # another system's field of the same name (keep.yaml keys)
             return
         self.edits[(start, end)] = (new, kind, old)
 
@@ -639,10 +822,17 @@ class PyFile:
         for node in ast.walk(tree):
             if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
                 first = node.body[0]
-                if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and \
-                        isinstance(first.value.value, str):
+                if (
+                    isinstance(first, ast.Expr)
+                    and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)
+                ):
                     spans.add(first.value.lineno)
-            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            if (
+                isinstance(node, ast.Expr)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            ):
                 spans.add(node.value.lineno)
         return spans
 
@@ -663,7 +853,7 @@ class PyFile:
                     if text and is_sql(text):
                         tables |= sql_tables(text)[0]
                     if isinstance(sub, ast.Constant) and isinstance(sub.value, str) and sub.value in self.wave.tables:
-                        tables.add(sub.value)            # a table named in a helper call: H.update(c, "tasks", ...)
+                        tables.add(sub.value)  # a table named in a helper call: H.update(c, "tasks", ...)
                 out[id(node)] = tables
         return out
 
@@ -716,10 +906,39 @@ class PyFile:
 
     # A request's, a tool's or a command's input: `owner` and `bot` there take a name or an id, so they keep the role
     # name (the row they end up in has owner_id).
-    INPUT_RECEIVERS = {"args", "arguments", "kwargs", "params", "body", "payload", "query", "request", "inputs",
-                       "input", "form", "req", "tool_args", "fields", "patch", "changes", "update", "updates",
-                       "change", "action", "raw", "pl", "sets", "entry", "document", "acl", "conversion", "journal",
-                       "operation", "completion", "data"}
+    INPUT_RECEIVERS = {
+        "args",
+        "arguments",
+        "kwargs",
+        "params",
+        "body",
+        "payload",
+        "query",
+        "request",
+        "inputs",
+        "input",
+        "form",
+        "req",
+        "tool_args",
+        "fields",
+        "patch",
+        "changes",
+        "update",
+        "updates",
+        "change",
+        "action",
+        "raw",
+        "pl",
+        "sets",
+        "entry",
+        "document",
+        "acl",
+        "conversion",
+        "journal",
+        "operation",
+        "completion",
+        "data",
+    }
     INPUT_KEYWORDS = {"json", "body", "data", "params"}
 
     def _test_body_key(self, node):
@@ -744,8 +963,9 @@ class PyFile:
                 return False
             if isinstance(up, ast.keyword) and up.arg in self.INPUT_KEYWORDS:
                 return True
-            if isinstance(up, ast.Assign) and any(isinstance(t, ast.Name) and t.id in self.INPUT_RECEIVERS
-                                                  for t in up.targets):
+            if isinstance(up, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id in self.INPUT_RECEIVERS for t in up.targets
+            ):
                 return True
             if isinstance(up, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 return False
@@ -777,7 +997,7 @@ class PyFile:
                         mark(kw.value)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 args = node.args
-                for arg, default in zip(args.args[len(args.args) - len(args.defaults):], args.defaults, strict=True):
+                for arg, default in zip(args.args[len(args.args) - len(args.defaults) :], args.defaults, strict=True):
                     if arg.arg in self.EVENT_ARGS:
                         mark(default)
                 for arg, default in zip(args.kwonlyargs, args.kw_defaults, strict=True):
@@ -816,7 +1036,7 @@ class PyFile:
                     if offsets[a] is not None:
                         self.site("sql-scoped-skip", offsets[a], word)
             elif text in self.wave.old_names:
-                pass                                            # an exact literal: the AST pass decides
+                pass  # an exact literal: the AST pass decides
             elif " " in text.strip() or len(group["parts"]) > 1 or PLACEHOLDER in text:
                 for word in sorted(hits):
                     if re.search(rf"(?<![\w$.-]){re.escape(word)}(?![\w-])", text) and not self._prose(text):
@@ -853,7 +1073,8 @@ class PyFile:
                 dict_like = isinstance(call, ast.Call) and (
                     (isinstance(call.func, ast.Name) and call.func.id == "dict")
                     or (isinstance(call.func, ast.Attribute) and call.func.attr == "update")
-                    or self._table_call(call, node.arg))
+                    or self._table_call(call, node.arg)
+                )
                 model_new = self._model_call(call, node.arg) if isinstance(call, ast.Call) else None
                 if model_new:
                     start = self.src.ast_offset(node.lineno, node.col_offset)
@@ -867,8 +1088,12 @@ class PyFile:
                         self.site("key-scoped-skip", node.lineno, node.arg, line_is=True)
                 else:
                     self.site("kwarg", node.lineno, node.arg, line_is=True)
-            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and \
-                    node.target.id in names and isinstance(self.parents.get(node), ast.ClassDef):
+            elif (
+                isinstance(node, ast.AnnAssign)
+                and isinstance(node.target, ast.Name)
+                and node.target.id in names
+                and isinstance(self.parents.get(node), ast.ClassDef)
+            ):
                 new = wave.glob.get(node.target.id)
                 if self.parents[node].name in self.keep.wire_models:
                     self.site("wire-field", node.lineno, node.target.id, line_is=True)
@@ -891,8 +1116,11 @@ class PyFile:
         out = defaultdict(set)
         for node in ast.walk(tree):
             key = None
-            if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store) and \
-                    isinstance(node.slice, ast.Constant):
+            if (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.ctx, ast.Store)
+                and isinstance(node.slice, ast.Constant)
+            ):
                 key = node.slice.value
             elif isinstance(node, ast.Dict):
                 for k in node.keys:
@@ -912,9 +1140,15 @@ class PyFile:
             return False
         parent = self.parents.get(node)
         stmt = None
-        if isinstance(parent, ast.Call) and isinstance(parent.func, ast.Attribute) and parent.func.attr == "pop" \
-                and parent.args and parent.args[0] is node and len(parent.args) == 2 and \
-                isinstance(self.parents.get(parent), ast.Expr):
+        if (
+            isinstance(parent, ast.Call)
+            and isinstance(parent.func, ast.Attribute)
+            and parent.func.attr == "pop"
+            and parent.args
+            and parent.args[0] is node
+            and len(parent.args) == 2
+            and isinstance(self.parents.get(parent), ast.Expr)
+        ):
             stmt = self.parents[parent]
         elif isinstance(parent, ast.Subscript) and isinstance(parent.ctx, ast.Del):
             holder = self.parents.get(parent)
@@ -925,10 +1159,10 @@ class PyFile:
             return False
         start = self.src.starts[stmt.lineno - 1]
         end = self.src.starts[stmt.end_lineno] if stmt.end_lineno < len(self.src.starts) else len(self.src.text)
-        before = self.src.text[start:self.src.ast_offset(stmt.lineno, stmt.col_offset)]
-        after = self.src.text[self.src.ast_offset(stmt.end_lineno, stmt.end_col_offset):end]
+        before = self.src.text[start : self.src.ast_offset(stmt.lineno, stmt.col_offset)]
+        after = self.src.text[self.src.ast_offset(stmt.end_lineno, stmt.end_col_offset) : end]
         if before.strip() or after.strip().split("#")[0].strip():
-            self.site("both-keys", node.lineno, old, line_is=True)    # shares its line: leave it to a person
+            self.site("both-keys", node.lineno, old, line_is=True)  # shares its line: leave it to a person
             return True
         if not self.kept(old):
             self.edits[(start, end)] = ("", "pop-dropped", self.src.text[start:end])
@@ -954,8 +1188,11 @@ class PyFile:
         for arg in [*func.args.posonlyargs, *func.args.args, *func.args.kwonlyargs]:
             if arg.annotation is None:
                 continue
-            names = {getattr(n, "id", None) or getattr(n, "attr", None) for n in ast.walk(arg.annotation)
-                     if isinstance(n, (ast.Name, ast.Attribute))}
+            names = {
+                getattr(n, "id", None) or getattr(n, "attr", None)
+                for n in ast.walk(arg.annotation)
+                if isinstance(n, (ast.Name, ast.Attribute))
+            }
             hit = {n for n in names if n in models}
             if hit:
                 out[arg.arg] = hit
@@ -969,10 +1206,10 @@ class PyFile:
             self.site("wire-field", node.lineno, node.attr, line_is=True)
             return None
         if node.value.id == "body" and node.attr in getattr(self.wave, "wire_fields", ()):
-            self.site("wire-field", node.lineno, node.attr, line_is=True)   # maybe a wire body handed on: keep
+            self.site("wire-field", node.lineno, node.attr, line_is=True)  # maybe a wire body handed on: keep
             return None
         if node.value.id == "body" and any(node.attr in f for f in self.wave.models.values()):
-            return self.wave.glob.get(node.attr)       # a request body handed on to a helper without its annotation
+            return self.wave.glob.get(node.attr)  # a request body handed on to a helper without its annotation
         cur = self.parents.get(node)
         while cur is not None:
             if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)) and not isinstance(cur, ast.Lambda):
@@ -988,7 +1225,9 @@ class PyFile:
         """Whether dict literal `dct` has other string keys and none is a column of a table holding `node`'s name:
         then it is a lookup table of words ({'started': TEMPLATE, 'blocked': ...}), not a row."""
         holders = [cols for cols in self.wave.schema.values() if node.value in cols]
-        others = [k.value for k in dct.keys if k is not node and isinstance(k, ast.Constant) and isinstance(k.value, str)]
+        others = [
+            k.value for k in dct.keys if k is not node and isinstance(k, ast.Constant) and isinstance(k.value, str)
+        ]
         return bool(others) and not any(k in cols for k in others for cols in holders)
 
     def _wire_body(self, node):
@@ -1002,8 +1241,11 @@ class PyFile:
         """Whether `call` (or a call it is chained on: `api.post(path).json()`) names a keep.yaml wire path."""
         while isinstance(call, ast.Call):
             texts = [a.value for a in call.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
-            texts += ["".join(v.value if isinstance(v, ast.Constant) else "{}" for v in a.values)
-                      for a in call.args if isinstance(a, ast.JoinedStr)]
+            texts += [
+                "".join(v.value if isinstance(v, ast.Constant) else "{}" for v in a.values)
+                for a in call.args
+                if isinstance(a, ast.JoinedStr)
+            ]
             if any(p.search(t) for p in self.keep.wire_paths for t in texts):
                 return True
             call = call.func.value if isinstance(call.func, ast.Attribute) else None
@@ -1061,7 +1303,10 @@ class PyFile:
         wave, old = self.wave, node.value
         parent = self.parents.get(node)
         if isinstance(parent, ast.Call) and getattr(parent.func, "id", getattr(parent.func, "attr", "")) in (
-                "field_validator", "validator", "field_serializer"):
+            "field_validator",
+            "validator",
+            "field_serializer",
+        ):
             cls = self.parents.get(self.parents.get(parent))
             while cls is not None and not isinstance(cls, ast.ClassDef):
                 cls = self.parents.get(cls)
@@ -1075,18 +1320,25 @@ class PyFile:
         if isinstance(parent, ast.Tuple) and parent.elts.index(node) >= 1:
             before = parent.elts[parent.elts.index(node) - 1]
             if isinstance(before, ast.Constant) and before.value in holders:
-                return True              # (table, column, ...): ("attempts", "finished")
-        if isinstance(parent, (ast.List, ast.Tuple)) and isinstance(self.parents.get(parent), ast.keyword) and \
-                self.parents[parent].arg == "required":
-            return True                  # a schema's required fields: the properties beside it are keys, renamed
+                return True  # (table, column, ...): ("attempts", "finished")
+        if (
+            isinstance(parent, (ast.List, ast.Tuple))
+            and isinstance(self.parents.get(parent), ast.keyword)
+            and self.parents[parent].arg == "required"
+        ):
+            return True  # a schema's required fields: the properties beside it are keys, renamed
         if isinstance(parent, ast.Tuple) and len(parent.elts) == 2 and parent.elts[0] is node:
             outer = self.parents.get(parent)
-            if isinstance(parent.elts[1], ast.Constant) and isinstance(parent.elts[1].value, str) and \
-                    re.match(r"(TEXT|INTEGER|REAL|BLOB|NUMERIC)\b", parent.elts[1].value):
-                return True              # (column, declaration) for an ADD COLUMN
+            if (
+                isinstance(parent.elts[1], ast.Constant)
+                and isinstance(parent.elts[1].value, str)
+                and re.match(r"(TEXT|INTEGER|REAL|BLOB|NUMERIC)\b", parent.elts[1].value)
+            ):
+                return True  # (column, declaration) for an ADD COLUMN
             if isinstance(outer, (ast.Tuple, ast.List)) and all(
-                    isinstance(e, ast.Tuple) and len(e.elts) == 2 and isinstance(e.elts[0], ast.Constant)
-                    for e in outer.elts):
+                isinstance(e, ast.Tuple) and len(e.elts) == 2 and isinstance(e.elts[0], ast.Constant)
+                for e in outer.elts
+            ):
                 firsts = [e.elts[0].value for e in outer.elts]
                 return any(sum(x in wave.schema[t] for x in firsts) >= max(3, 0.6 * len(firsts)) for t in holders)
         if isinstance(parent, (ast.Tuple, ast.List, ast.Set)):
@@ -1103,8 +1355,9 @@ class PyFile:
             return False
         if len(strings) == 2:
             return all(x in wave.glob for x in strings) and any(set(strings) <= wave.schema[t] for t in holders)
-        return len(strings) >= 3 and any(sum(x in wave.schema[t] for x in strings) >= max(3, 0.6 * len(strings))
-                                         for t in holders)
+        return len(strings) >= 3 and any(
+            sum(x in wave.schema[t] for x in strings) >= max(3, 0.6 * len(strings)) for t in holders
+        )
 
     def _key_literal(self, node):
         wave, old = self.wave, node.value
@@ -1112,17 +1365,29 @@ class PyFile:
         context = None
         if isinstance(parent, ast.Subscript) and parent.slice is node:
             context = "key"
-        elif isinstance(parent, ast.Call) and node in parent.args and isinstance(parent.func, ast.Attribute) \
-                and parent.func.attr in self.KEY_METHODS and parent.args[0] is node:
+        elif (
+            isinstance(parent, ast.Call)
+            and node in parent.args
+            and isinstance(parent.func, ast.Attribute)
+            and parent.func.attr in self.KEY_METHODS
+            and parent.args[0] is node
+        ):
             context = "key"
-        elif isinstance(parent, ast.Compare) and parent.left is node and \
-                all(isinstance(op, (ast.In, ast.NotIn)) for op in parent.ops):
+        elif (
+            isinstance(parent, ast.Compare)
+            and parent.left is node
+            and all(isinstance(op, (ast.In, ast.NotIn)) for op in parent.ops)
+        ):
             comp = parent.comparators[0]
             context = "value" if isinstance(comp, (ast.Tuple, ast.List, ast.Set)) else "key"
         elif isinstance(parent, ast.Dict) and node in parent.keys:
             value = parent.values[parent.keys.index(node)]
-            if isinstance(value, ast.Constant) and isinstance(value.value, (bool, int, float)) and \
-                    not isinstance(value.value, str) and old not in wave.glob_json():
+            if (
+                isinstance(value, ast.Constant)
+                and isinstance(value.value, (bool, int, float))
+                and not isinstance(value.value, str)
+                and old not in wave.glob_json()
+            ):
                 self.site("key-bool", node.lineno, old, line_is=True)
                 return
             if old not in wave.glob_json() and self._foreign_siblings(parent, node):
@@ -1134,9 +1399,14 @@ class PyFile:
         if context == "key" and isinstance(parent, ast.Dict) and self._wire_body(parent):
             self.site("wire-field", node.lineno, old, line_is=True)
             return
-        if context == "key" and self._wire_call(parent.value if isinstance(parent, ast.Subscript) else
-                                                 parent.func.value if isinstance(parent, ast.Call) else None):
-            self.site("wire-field", node.lineno, old, line_is=True)   # a field of a runner answer: post(path)['x']
+        if context == "key" and self._wire_call(
+            parent.value
+            if isinstance(parent, ast.Subscript)
+            else parent.func.value
+            if isinstance(parent, ast.Call)
+            else None
+        ):
+            self.site("wire-field", node.lineno, old, line_is=True)  # a field of a runner answer: post(path)['x']
             return
         if context == "key" and old not in wave.glob_json() and self._json_doc(node, parent):
             self.site("json-key", node.lineno, old, line_is=True)
@@ -1161,16 +1431,25 @@ class PyFile:
         """The new name of `column` when the call names, as a literal, a table that renames it:
         clone('messages', ..., refs_json=...)."""
         for arg in call.args:
-            if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value in self.wave.tables and \
-                    column in self.wave.schema.get(arg.value, ()):
+            if (
+                isinstance(arg, ast.Constant)
+                and isinstance(arg.value, str)
+                and arg.value in self.wave.tables
+                and column in self.wave.schema.get(arg.value, ())
+            ):
                 return self.wave.table_new(arg.value, column)
         return None
 
     def _column_arg(self, call, node):
         """A string argument next to a literal table name that has this column: add_column(c, 'tasks', 'x', ...)."""
         for arg in call.args:
-            if arg is not node and isinstance(arg, ast.Constant) and isinstance(arg.value, str) and \
-                    arg.value in self.wave.tables and node.value in self.wave.schema.get(arg.value, ()):
+            if (
+                arg is not node
+                and isinstance(arg, ast.Constant)
+                and isinstance(arg.value, str)
+                and arg.value in self.wave.tables
+                and node.value in self.wave.schema.get(arg.value, ())
+            ):
                 return True
         return False
 
@@ -1180,8 +1459,9 @@ class PyFile:
             if text[start:end] != old:
                 continue
             if self.keep.site(self.rel, self.src.text, start):
-                self.report.site("site-kept", self.rel, self.src.text.count("\n", 0, start) + 1, old,
-                                 line(self.src.text, start))
+                self.report.site(
+                    "site-kept", self.rel, self.src.text.count("\n", 0, start) + 1, old, line(self.src.text, start)
+                )
                 continue
             text = text[:start] + new + text[end:]
             self.report.edit(self.rel, kind)
@@ -1199,9 +1479,31 @@ Wave.glob_json = _glob_json
 # JavaScript
 
 JS_PUNCT = re.compile(r"\?\.|\.\.\.|=>|===|!==|==|!=|<=|>=|&&|\|\||\?\?|[{}()\[\];,.:?=<>+\-*/%!&|^~@#]")
-REGEX_PREV = set("(,=:[!&|?{};+-*%<>~^") | {"return", "typeof", "case", "do", "else", "in", "of", "new", "delete",
-                                             "void", "throw", "yield", "await", "=>", "&&", "||", "??", "===",
-                                             "!==", "==", "!=", "<=", ">="}
+REGEX_PREV = set("(,=:[!&|?{};+-*%<>~^") | {
+    "return",
+    "typeof",
+    "case",
+    "do",
+    "else",
+    "in",
+    "of",
+    "new",
+    "delete",
+    "void",
+    "throw",
+    "yield",
+    "await",
+    "=>",
+    "&&",
+    "||",
+    "??",
+    "===",
+    "!==",
+    "==",
+    "!=",
+    "<=",
+    ">=",
+}
 
 
 def js_tokens(text):
@@ -1221,7 +1523,7 @@ def js_tokens(text):
             if c == "`":
                 out.append(("template", start, i, text[start:i]))
                 return i + 1, False
-            if c == "$" and text[i + 1:i + 2] == "{":
+            if c == "$" and text[i + 1 : i + 2] == "{":
                 out.append(("template", start, i, text[start:i]))
                 return i + 2, True
             i += 1
@@ -1251,7 +1553,7 @@ def js_tokens(text):
                 elif text[j] == "\n":
                     break
                 j += 1
-            out.append(("string", i, j + 1, text[i + 1:j]))
+            out.append(("string", i, j + 1, text[i + 1 : j]))
             prev_sig = "str"
             i = j + 1
             continue
@@ -1292,14 +1594,14 @@ def js_tokens(text):
             prev_sig = "regex"
             i = j
             continue
-        m = re.match(r"[A-Za-z_$][\w$]*", text[i:i + 200])
+        m = re.match(r"[A-Za-z_$][\w$]*", text[i : i + 200])
         if m:
             word = m.group(0)
             out.append(("ident", i, i + len(word), word))
             prev_sig = word if word in REGEX_PREV else "ident"
             i += len(word)
             continue
-        m = re.match(r"\d[\w.]*", text[i:i + 100])
+        m = re.match(r"\d[\w.]*", text[i : i + 100])
         if m:
             out.append(("number", i, i + len(m.group(0)), m.group(0)))
             prev_sig = "num"
@@ -1330,7 +1632,7 @@ def js_file(rel, text, wave, report, keep):
     toks = js_tokens(text)
     edits = {}
     names = wave.old_names
-    brackets = []                    # stack of (char, index of token) for {[(
+    brackets = []  # stack of (char, index of token) for {[(
     for k, tok in enumerate(toks):
         kind, start, end, value = tok
         if kind == "punct" and value in "{[(":
@@ -1351,8 +1653,9 @@ def js_file(rel, text, wave, report, keep):
                 new = wave.glob.get(value)
                 subscript = prev and prev[3] == "[" and nxt and nxt[3] == "]"
                 in_check = nxt and nxt[0] == "ident" and nxt[3] == "in"
-                obj_key = nxt and nxt[3] == ":" and prev and prev[3] in ("{", ",") and brackets and \
-                    brackets[-1][0] == "{"
+                obj_key = (
+                    nxt and nxt[3] == ":" and prev and prev[3] in ("{", ",") and brackets and brackets[-1][0] == "{"
+                )
                 if new and (subscript or in_check or obj_key):
                     edits[(start + 1, end - 1)] = (new, "js-key", value)
                 elif new is None:
@@ -1367,21 +1670,23 @@ def js_file(rel, text, wave, report, keep):
         if new is None and value in wave.broad:
             new = wave.broad[value]
             if not (prev and prev[3] in (".", "?.")) and not rel.startswith("ui/tests/"):
-                report.site("js-scoped", rel, ln, value, line(text, start))   # the app's object keys: often a request
+                report.site("js-scoped", rel, ln, value, line(text, start))  # the app's object keys: often a request
                 continue
         if new is None:
             if prev and prev[3] in (".", "?.") or (nxt and nxt[3] == ":"):
                 report.site("js-scoped", rel, ln, value, line(text, start))
             continue
         if prev and prev[3] in (".", "?."):
-            if nxt and nxt[3] == "(":            # a method (Playwright's response.finished()), not a field
+            if nxt and nxt[3] == "(":  # a method (Playwright's response.finished()), not a field
                 report.site("js-method", rel, ln, value, line(text, start))
                 continue
-            if JS_DOM_LINE.search(line(text, start)):   # an Animation's or a view transition's `finished` promise
+            if JS_DOM_LINE.search(line(text, start)):  # an Animation's or a view transition's `finished` promise
                 report.site("dom-api", rel, ln, value, line(text, start))
                 continue
             owner = toks[k - 2] if k >= 2 else None
-            if owner and owner[0] == "ident" and owner[3] in ("elements", "dataset", "form"):   # a form control, an attribute
+            if (
+                owner and owner[0] == "ident" and owner[3] in ("elements", "dataset", "form")
+            ):  # a form control, an attribute
                 report.site("dom-name", rel, ln, value, line(text, start))
                 continue
             if owner and owner[0] == "ident" and owner[3] in JSON_DOCS and not value.endswith("_json"):
@@ -1395,7 +1700,7 @@ def js_file(rel, text, wave, report, keep):
         opener = brackets[-1][1]
         before = toks[opener - 1][3] if opener else ""
         if before in ("import", "export") or before in JS_BLOCK_BEFORE:
-            continue                     # a block, not an object: `let a = [], created = []` declares a variable
+            continue  # a block, not an object: `let a = [], created = []` declares a variable
         if nxt and nxt[3] == ":" and not (prev and prev[3] == "?"):
             edits[(start, end)] = (new, "js-key", value)
         elif nxt and nxt[3] in (",", "}", "="):
@@ -1415,11 +1720,12 @@ def js_file(rel, text, wave, report, keep):
 def line(text, offset):
     a = text.rfind("\n", 0, offset) + 1
     b = text.find("\n", offset)
-    return text[a:b if b >= 0 else len(text)]
+    return text[a : b if b >= 0 else len(text)]
 
 
 # ---------------------------------------------------------------------------------------------------------------
 # Rust
+
 
 def rust_file(rel, text, wave, report, keep):
     edits = {}
@@ -1456,6 +1762,7 @@ def rust_file(rel, text, wave, report, keep):
 
 # ---------------------------------------------------------------------------------------------------------------
 # Markdown and JSON fixtures
+
 
 def backtick_edits(text, wave):
     """Renames inside `backticked` spans of prose: an identifier, a dotted path (`bot_config.config_json.x`), a comma
@@ -1556,6 +1863,7 @@ def json_fixture(rel, text, wave, report, keep):
 # ---------------------------------------------------------------------------------------------------------------
 # Driver
 
+
 def tracked_files():
     out = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout
     return [p for p in out.splitlines() if not any(s in p for s in SKIP_PARTS)]
@@ -1612,8 +1920,11 @@ def model_classes(wave):
             if isinstance(node, ast.ClassDef):
                 bases.setdefault(node.name, set()).update(getattr(b, "id", getattr(b, "attr", "")) for b in node.bases)
                 for item in node.body:
-                    if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and \
-                            item.target.id in wave.glob:
+                    if (
+                        isinstance(item, ast.AnnAssign)
+                        and isinstance(item.target, ast.Name)
+                        and item.target.id in wave.glob
+                    ):
                         fields[node.name].add(item.target.id)
 
     def is_model(name, seen=()):
@@ -1658,14 +1969,29 @@ def process(wave, keep, report, write, only=None):
 # an alias bound nearby, or the one table nearby that has the column. Tables that disagree stay a site, to fix by hand.
 
 NEAR = 12
-USUAL_ALIAS = {"t": "tasks", "tasks": "tasks", "m": "messages", "messages": "messages", "j": "jobs", "jobs": "jobs",
-               "a": "attempts", "attempts": "attempts", "cv": "conversations", "conversations": "conversations"}
-LEFT_TO_HAND = ("backend/events.py", "backend/finance/store/schema", "clients/agent_skill.py")   # NEW.x names a trigger's table
+USUAL_ALIAS = {
+    "t": "tasks",
+    "tasks": "tasks",
+    "m": "messages",
+    "messages": "messages",
+    "j": "jobs",
+    "jobs": "jobs",
+    "a": "attempts",
+    "attempts": "attempts",
+    "cv": "conversations",
+    "conversations": "conversations",
+}
+LEFT_TO_HAND = (
+    "backend/events.py",
+    "backend/finance/store/schema",
+    "clients/agent_skill.py",
+)  # NEW.x names a trigger's table
 
 
 def settle_sql_sites(wave, report, write):
     sys.path.insert(0, str(HERE))
     from gen_map import EVERY_TABLE, load_schema
+
     everywhere = {t: set(c) for t, c in load_schema(EVERY_TABLE)[0].items()}
     columns = {t: set(c) | everywhere.get(t, set()) for t, c in wave.schema.items()}
     for t, c in everywhere.items():
@@ -1686,7 +2012,7 @@ def settle_sql_sites(wave, report, write):
             _, no, name, _text = site
             per_table = wave.scoped.get(name, {})
             text = lines[no - 1] if no <= len(lines) else ""
-            window = " ".join(lines[max(0, no - NEAR):no + NEAR])
+            window = " ".join(lines[max(0, no - NEAR) : no + NEAR])
 
             def by_alias(m, window=window, per_table=per_table):
                 bound = re.search(rf"\b(?:FROM|JOIN|UPDATE)\s+(\w+)(?:\s+AS)?\s+{re.escape(m[1])}\b", window)
@@ -1695,7 +2021,9 @@ def settle_sql_sites(wave, report, write):
                 return f"{m[1]}.{new}" if new else m[0]
 
             fixed = re.sub(rf"\b(\w+)\.({re.escape(name)})\b", by_alias, text)
-            nearby = set(re.findall(r"(?:FROM|JOIN|UPDATE|INTO|TABLE)\s+(\w+)", window)) | set(re.findall(r'"(\w+)\(', text))
+            nearby = set(re.findall(r"(?:FROM|JOIN|UPDATE|INTO|TABLE)\s+(\w+)", window)) | set(
+                re.findall(r'"(\w+)\(', text)
+            )
             have = {t for t in nearby if name in columns.get(t, ())}
             if have and have <= set(per_table) and len({per_table[t] for t in have}) == 1:
                 new = per_table[sorted(have)[0]]
@@ -1720,21 +2048,26 @@ def main():
     parser.add_argument("--wave", required=True, choices=WAVE_ORDER)
     parser.add_argument("--check", action="store_true", help="exit 1 if names from waves <= N remain in code")
     parser.add_argument("--only", nargs="*", help="limit to paths starting with these prefixes")
-    parser.add_argument("--report-only", action="store_true",
-                        help="write report-wave<N>.md without changing any file (a wave mapped but not applied)")
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="write report-wave<N>.md without changing any file (a wave mapped but not applied)",
+    )
     args = parser.parse_args()
     data, waves, keep_data = load(args.wave)
     keep = Keep(keep_data)
     if args.check:
         failed = 0
-        for w in WAVE_ORDER[:WAVE_ORDER.index(args.wave) + 1]:
+        for w in WAVE_ORDER[: WAVE_ORDER.index(args.wave) + 1]:
             report = Report()
             changed = process(waves[w], keep, report, write=False, only=args.only)
             left = sum(report.renamed.values())
             gating = sum(len(report.sites.get(c, [])) for c in GATING)
-            if w not in ("1", "2"):     # a per-table wave: most of these are other tables' columns of the same name
-                print(f"wave {w}: {left} sites the codemod would rename, {gating} sites it cannot decide (not gating); "
-                      "scripts/cleanup/check_sql.py checks its SQL")
+            if w not in ("1", "2"):  # a per-table wave: most of these are other tables' columns of the same name
+                print(
+                    f"wave {w}: {left} sites the codemod would rename, {gating} sites it cannot decide (not gating); "
+                    "scripts/cleanup/check_sql.py checks its SQL"
+                )
                 continue
             print(f"wave {w}: {left} sites still to rename in {len(changed)} files; {gating} unresolved sites")
             for rel in changed[:30]:
@@ -1749,8 +2082,10 @@ def main():
         print("--only: report not written")
     else:
         write_report(HERE / f"report-wave{args.wave}.md", args.wave, report, None, args.report_only)
-    print(f"wave {args.wave}{' (report only)' if args.report_only else ''}: {sum(report.renamed.values())} renames in {len(changed)} files; "
-          + ", ".join(f"{c} {len(s)}" for c, s in sorted(report.sites.items())))
+    print(
+        f"wave {args.wave}{' (report only)' if args.report_only else ''}: {sum(report.renamed.values())} renames in {len(changed)} files; "
+        + ", ".join(f"{c} {len(s)}" for c, s in sorted(report.sites.items()))
+    )
     return 0
 
 

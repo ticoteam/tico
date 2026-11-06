@@ -1,4 +1,5 @@
 """Held answer prose derives copied-label provenance from the question it answers."""
+
 import json
 
 import pytest
@@ -21,20 +22,39 @@ from backend.tests.test_task_review import ask
 def held_answers(api, tid, fid, label):
     """Create holds through the pick, comment, ordinary-file and typed-answer production routes."""
     ordinary = post(api, f"tasks/{tid}/files", {"name": "held-public.txt", "text": "Public choice"})["file_id"]
-    pick = review_ask(api, "ops-test", [{"file": fid}, {"file": ordinary}], on="reader", parent=tid,
-                      topic="held-pick", private=False, pick=True, question="Which draft needs a held review?")
+    pick = review_ask(
+        api,
+        "ops-test",
+        [{"file": fid}, {"file": ordinary}],
+        on="reader",
+        parent=tid,
+        topic="held-pick",
+        private=False,
+        pick=True,
+        question="Which draft needs a held review?",
+    )
     question = ask("reader")
     question["questions"][0]["options"][0].update(label=label, file=fid + "@1")
-    comment = post(api, f"tasks/{tid}/comments", {"text": "Choose the draft", "ask": question}, token="ops-test")["comment"]
-    typed_question = post(api, f"tasks/{tid}/comments", {"text": "Name the draft", "ask": question}, token="ops-test")["comment"]
-    sibling = post(api, f"tasks/{tid}/files", {"name": "held-notes.txt", "text": "Public notes", "ask": question}, token="ops-test")
+    comment = post(api, f"tasks/{tid}/comments", {"text": "Choose the draft", "ask": question}, token="ops-test")[
+        "comment"
+    ]
+    typed_question = post(api, f"tasks/{tid}/comments", {"text": "Name the draft", "ask": question}, token="ops-test")[
+        "comment"
+    ]
+    sibling = post(
+        api, f"tasks/{tid}/files", {"name": "held-notes.txt", "text": "Public notes", "ask": question}, token="ops-test"
+    )
     text = "Never publish an unreviewed draft."
     api.app.state.judge = Judge(api.app.state.store, {text: label})
-    rule(api, {"kind": "internal", "text": text, "who": {"people": ["reader"]},
-               "if_broken": "escalate", "reviewer": "cara"})
-    cases = [(pick["task"]["id"], {"comment": pick["question"]["id"]}, "decision"),
-             (tid, {"comment": comment["id"]}, "verdict"),
-             (tid, {"file": sibling["file_id"], "version": 1}, "verdict")]
+    rule(
+        api,
+        {"kind": "internal", "text": text, "who": {"people": ["reader"]}, "if_broken": "escalate", "reviewer": "cara"},
+    )
+    cases = [
+        (pick["task"]["id"], {"task": pick["task"]["id"]}, "decision"),
+        (tid, {"comment": comment["id"]}, "verdict"),
+        (tid, {"file": sibling["file_id"], "version": 1}, "verdict"),
+    ]
     holds = []
     for task, target, qid in cases:
         result = post(api, f"tasks/{task}/answers", {"target": target, "answers": {qid: [label]}}, token="reader-test")
@@ -57,7 +77,9 @@ def test_held_and_replayed_answers_revoke_question_option_labels(api, send):
     tid, _, fid = public_page(api)
     reader = post(api, "access/people", {"name": "Reader", "email": "reader@acme.example"})
     assert reader["person"] == "reader"
-    api.app.state.store.settings.test_identities["reader-test"] = Identity("human:reader", "human", "reader@acme.example")
+    api.app.state.store.settings.test_identities["reader-test"] = Identity(
+        "human:reader", "human", "reader@acme.example"
+    )
     label = "Confidential draft"
     holds = held_answers(api, tid, fid, label)
     if send:
@@ -71,7 +93,12 @@ def test_held_and_replayed_answers_revoke_question_option_labels(api, send):
         if deleted:
             assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
         assert api.get("/api/v2/pages/" + fid, headers=headers("cara-test")).status_code == 404
-        for path in [*("rule-holds/" + hid for hid in holds), "rule-holds", f"tasks/{tid}/comments", f"tasks/{tid}/answers"]:
+        for path in [
+            *("rule-holds/" + hid for hid in holds),
+            "rule-holds",
+            f"tasks/{tid}/comments",
+            f"tasks/{tid}/answers",
+        ]:
             shown = json.dumps(get(api, path, token="cara-test"))
             assert label not in shown and fid not in shown, (path, shown)
 
@@ -88,17 +115,24 @@ def test_held_runner_answer_keeps_its_question_option_source(api):
     question["questions"][0]["options"][0].update(label=label, file=fid + "@1")
     # Give the already-claimed test turn this question as its input, as a runner claim would.
     with api.app.state.store.transaction() as c:
-        value = check_ask(c, tid, ReviewAsk.model_validate(question), api.app.state.auth, Identity("human:ana", "owner"))
+        value = check_ask(
+            c, tid, ReviewAsk.model_validate(question), api.app.state.auth, Identity("human:ana", "owner")
+        )
         asked = H.task_comment(c, "human:ana", tid, "Choose the draft", wake=False, ask=value)
-        c.execute("UPDATE jobs SET message_id=? WHERE id=(SELECT job_id FROM attempts WHERE id=?)",
-                  (asked["id"], attempt["id"]))
+        c.execute(
+            "UPDATE jobs SET message_id=? WHERE id=(SELECT job_id FROM attempts WHERE id=?)",
+            (asked["id"], attempt["id"]),
+        )
     text = "Never publish an unreviewed draft."
     api.app.state.judge = Judge(api.app.state.store, {text: label})
-    rule(api, {"kind": "internal", "text": text, "who": {"bots": ["ops"]},
-               "if_broken": "escalate", "reviewer": "cara"})
+    rule(api, {"kind": "internal", "text": text, "who": {"bots": ["ops"]}, "if_broken": "escalate", "reviewer": "cara"})
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "held-answer"}, token=machine["token"])
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": label, "last_seq": 0},
-         token=machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": label, "last_seq": 0},
+        token=machine["token"],
+    )
     with api.app.state.store.read() as c:
         row = c.execute("SELECT id,payload FROM org_rule_holds WHERE operation='reply'").fetchone()
         assert row and {"file": fid, "version": 1} in H._json(row["payload"], {})["body_sources"]
