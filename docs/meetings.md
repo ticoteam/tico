@@ -247,8 +247,9 @@ format is a `422` that names the problem.
   meeting (created items, the task it was shared to a bot as, and that task's follow-ups) and tasks linked with
   `POST /api/v2/meetings/{id}/tasks`, each once; dismissed proposals sit behind **Dismissed (n)**. The proposal list
   shows only tasks, so a proposed doc update or feature request has no row to act on there. A meeting row still counts
-  proposed doc updates and feature requests in a **N proposed** count, which shows only while nothing has been made from
-  the meeting and nothing is in progress, and it shows pushed ones as **N doc updates** or **N feature requests** chips.
+  proposed tasks, doc updates and feature requests in a **N proposed** count on the Shared tab, which shows only while
+  nothing has been made from the meeting and nothing is in progress; it shows pushed doc updates and feature requests as
+  **N doc updates** or **N feature requests** chips.
   The API still accepts both as `doc` and `feature` sections. A human adds items (with the quote and time they came
   from if they like), and the readers edit, Create or Dismiss them
   once the meeting is shared. Create makes ordinary Tico tasks, never a card in another tool: a task item becomes a
@@ -257,7 +258,7 @@ format is a `422` that names the problem.
   names none and you can send work to that bot. If it names no owner and `doc-updater` is absent or you cannot write
   to it, or it names someone who cannot own it or a bot you cannot write to, the push is refused. A refused item stays
   proposed, so it can be edited and pushed again. A feature request becomes a task for the person primary for the
-  product team in the roster, or for the environment owner when no one is. Product area,
+  product team in the roster, or, when no one is, for the roster's default user. Product area,
   app and label
   are optional: use your team's names or leave them blank. Existing B/F and CA/PA codes still work.
   A near-identical open task returns a link only if the sender can read it.
