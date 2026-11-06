@@ -476,7 +476,7 @@
   group: jobs2
   prompt: "Ask Analytics how many paid trials we had in October."
   hub:
-    - match: '^question ask (\S+ )?analytics\b'
+    - match: '^message send (\S+ )?analytics\b'
       out:
         answer: "318 paid trials started in October, from the billing export run on Nov 1."
         source: "billing export, run Nov 1"
@@ -487,9 +487,9 @@
         - {slug: analytics, display_name: Analytics, state: active, focus: "Idle"}
         - {slug: copywriter, display_name: Copywriter, state: active, focus: "Launch email draft 2"}
   must:
-    - '^question ask (\S+ )?analytics\b'
+    - '^message send (\S+ )?analytics\b'
   must_not:
-    - '^message send(?! -h\b| --help)'
+    - '^message send(?! analytics\b| -h\b| --help)'
     - '^task (create|close|update|bulk close)(?! -h\b| --help)'
     - '^approval (approve|decline)(?! -h\b| --help)'
   reply: |
