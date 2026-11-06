@@ -25,7 +25,7 @@ def turn(api, text="Please do it"):
         runner_, first = before
         post(api, f"attempts/{first['id']}/started", {"thread_id": f"turn-{first['id']}"}, token=runner_["token"])
         post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, token=runner_["token"])
-        say(api, text, "ana-test")
+        say(api, f"{text} (turn {first['id'][-6:]})", "ana-test")
         attempt = post(api, "jobs/claim", {}, token=runner_["token"])["attempt"]
     api.last_turn = (runner_, attempt)
     return attempt["token"]
