@@ -4107,6 +4107,7 @@ def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, m
         if reader not in before:
             _task_event(conn, task_id, actor, "reader", None, reader, "")
     # Who reads it decides whom its Blocked reason may name (task_holds._task_hold): the words are made again.
+    from . import task_holds
     task_holds.refresh(conn, task_id)
     return wanted
 
