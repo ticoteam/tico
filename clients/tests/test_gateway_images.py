@@ -284,6 +284,7 @@ def test_a_failed_or_given_up_video_saves_nothing(monkeypatch, tmp_path):
 
 def test_a_video_needs_an_out_file_an_mp4_name_and_a_job_id(video, tmp_path):
     job = "gv_" + "a" * 24
+    video.states = ["done"]
     with pytest.raises(ValueError, match="out is needed"):
         run(["gateway", "video-status", job])
     with pytest.raises(ValueError, match="mp4"):
