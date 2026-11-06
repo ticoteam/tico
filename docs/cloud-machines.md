@@ -85,6 +85,8 @@ belongs to one company, so it can have the helper.
 
 ## When a machine can't start
 
+*This section describes v0.5.85. Other parts of this page about Replace machine, or a create wait that survives restarts, describe later code; for v0.5.85, use the rules here.*
+
 When a bot's cloud machine can't start, the problem replaces the machine's state. It shows on the bot's page under
 **Computer**, on the work queued for the bot, and on the Health page (in Settings; its old address still opens it).
 When the bot has queued work and its machine is not connected to this server, Health lists that work as stuck if the
