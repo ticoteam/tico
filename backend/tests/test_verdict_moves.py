@@ -334,7 +334,7 @@ def test_the_merge_notice_runs_the_merge_and_never_asks_for_a_merged_line_first(
     assert len(woke) == 1 and woke[0]["refs"][V.HANDOFF] == "merge", woke
     body = woke[0]["body"]
     assert f"gh pr merge 412 --squash --match-head-commit {HEAD}" in body
-    assert "a repo with a merge queue queues the PR instead" in body
+    assert "repo with a merge queue queues the PR instead" in body
     assert "once GitHub reports the PR merged" in body
     assert "MERGED" not in body and "merged line" not in body
 
