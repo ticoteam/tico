@@ -119,7 +119,9 @@ class ClosingNeedsEdit(Case):
         """A bot's question waits on a person; "not now" is theirs to say even when they can't edit the task."""
         t = self.make(CMO, "Approve the launch budget?", CMO)
         self.refused("close", H.task_close, self.conn, CARA, t["id"])
-        # As a bot's wait on her leaves it (--on): a question task of hers under it, the bot still its owner.
+        # As a bot's wait on her leaves it (--on): a question task of hers under it, the bot still its owner. Closing
+        # the task closes that card, which bumps the task's version: a column the store adds (Store.initialize).
+        H.add_column(self.conn, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
         H.task_update(self.conn, CMO, t["id"], status="waiting", waiting_on=CARA,
                       note="Approve the launch budget? I'll book the ads after.")
         self.assertEqual(H.task_close(self.conn, CARA, t["id"], note="Not now")["status"], "closed")
