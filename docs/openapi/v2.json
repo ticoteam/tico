@@ -42388,6 +42388,121 @@
         ]
       }
     },
+    "/api/v2/threads/{thread_id}/reach": {
+      "get": {
+        "summary": "Who a message would reach, each with its mode, given `text` (its @mentions), `delivery` (steer when none), `defer_for` and `in_reply_to`; `outside` lists @mentions it would not reach, `adds_reader` a private task's new reader. Writes nothing",
+        "operationId": "getThreadReach",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "text",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Text"
+            }
+          },
+          {
+            "name": "delivery",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "steer",
+                    "queue",
+                    "defer"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Delivery"
+            }
+          },
+          {
+            "name": "defer_for",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Defer For"
+            }
+          },
+          {
+            "name": "in_reply_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "In Reply To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadReach"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Threads"
+        ]
+      }
+    },
     "/api/v2/threads/{thread_id}/read": {
       "post": {
         "summary": "Read up to `seq` in the thread; the highest mark wins, so a device that is ahead keeps its place",
@@ -77723,6 +77838,73 @@
           "next_cursor",
           "pinned",
           "threads"
+        ],
+        "additionalProperties": true
+      },
+      "ThreadReach": {
+        "type": "object",
+        "properties": {
+          "thread_id": {
+            "type": "string"
+          },
+          "way": {
+            "type": "string",
+            "enum": [
+              "steer",
+              "queue",
+              "defer"
+            ]
+          },
+          "reaches": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "mention, ask, dm, home, sub_thread, reply, follower or digest"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "steer",
+                    "queue",
+                    "defer",
+                    "digest"
+                  ]
+                },
+                "defer_for": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "adds_reader": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "actor",
+                "mode",
+                "reason"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "outside": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "outside",
+          "reaches",
+          "thread_id"
         ],
         "additionalProperties": true
       },

@@ -159,7 +159,6 @@ Check health runs as a [Maintenance](maintenance.md) step. It has no separate Sy
 | **Paused bot replies** | Lets bot replies the loop guard paused in a thread go, as many as its hour has room for. | Every 10 seconds | |
 | **Thread retention** | Deletes messages past the time their thread keeps them, in short batches. | Every 15 minutes | |
 | **Production checks** | Reads a few production invariants in plain code and shows each failing one on Health. | Every 15 minutes | |
-| **Thread routing** (AI) | Wakes the bots a person's unaddressed thread message is for, three at most. | As messages arrive | |
 | **Thread ranking** (AI) | Ranks threads with new messages from 1 to 10 for the Important view. | Every 5 minutes | |
 | **Bot thread digest** | Starts one run an hour for each bot with new messages in the threads it follows on digest. | Hourly | |
 | **Nightly memory tidy** | Proposes memory and knowledge edits for the pilot bots. | Nightly at 03:30 | |
@@ -188,7 +187,7 @@ Check health runs as a [Maintenance](maintenance.md) step. It has no separate Sy
 | **Sleep when idle** | Asks HQ to put this server to sleep once nobody has used it for the set time. | Every 5 minutes; every minute on a cell | sleep set, or a cell |
 | **Cloud machines** | Starts bots' cloud machines for work and stops them when idle. | Every 10 seconds | a Tico Cloud company |
 
-Every row shows its last run. **Meeting notes sync** and **Document sync** record one run per pass, **Thread routing** one per pass of waiting messages, **Start fresh when the topic changes** one per check, and **Start assigned tasks** one per start.
+Every row shows its last run. **Meeting notes sync** and **Document sync** record one run per pass, **Start fresh when the topic changes** one per check, and **Start assigned tasks** one per start.
 
 Not listed, because they are not timed jobs of their own: the automations engine (its runs are each automation's own), the workers that send webhooks and sync Finance's bank, books and Gateway (they act on queued work and show it on that work's page), the one-off backfills a release runs once, and the restart of a worker that stopped.
 

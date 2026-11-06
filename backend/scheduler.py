@@ -626,12 +626,6 @@ class Scheduler:
                 if mark is None or at - mark >= every:
                     self.marks[key] = at
                     run(self.store, self.execution.auth, at, failures)
-        # Thread messages waiting to be routed: on their own thread, since a tick never waits on the decision model.
-        try:
-            from . import thread_routing
-            thread_routing.kick(self.store)
-        except Exception as exc:
-            failures.append({"thread_routing": type(exc).__name__})
         # Bot wakes the loop guard held: they go by themselves as their root's rolling hour reopens. Plain SQL, no model.
         with SR.recording(self.store, "thread_loop_guard", failures) as run:
             from . import threads

@@ -1583,7 +1583,7 @@ def test_with_no_rule_in_force_bot_writes_resolve_no_audience(ruled, monkeypatch
     resolved = []
     monkeypatch.setattr(K, "company", lambda c: resolved.append("company") or [])
     monkeypatch.setattr(K, "mail_recipients", lambda c, addresses: resolved.append("mail") or [])
-    monkeypatch.setattr(H, "mentioned_people", lambda *a, **k: resolved.append("mentions") or [])
+    monkeypatch.setattr(threads, "mentioned_people", lambda *a, **k: resolved.append("mentions") or [])
     task = task_for_ops(api)
     post(api, f"tasks/{task['id']}/comments", {"text": "Ask @ana or ben@acme.example about it."}, token="ops-test")
     assert "held" not in post(api, "updates", {"body": "- Shipped the launch note."}, token="ops-test")

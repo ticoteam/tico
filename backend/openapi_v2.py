@@ -2722,6 +2722,14 @@ SCHEMAS.update({
                                        "description": "Where to fix what stops it (cant_reply only)"}},
                               required=["actor", "name", "state", "detail", "since", "run_id", "fix"]),
     "ThreadBotStatus": obj({"bots": items(ref("ThreadBotStatusRow"))}, required=["bots"]),
+    "ThreadReach": obj({"thread_id": "s", "way": {"type": "string", "enum": ["steer", "queue", "defer"]},
+                        "reaches": items(obj({"actor": "s",
+                                              "reason": {"type": "string", "description": "mention, ask, dm, home, "
+                                                         "sub_thread, reply, follower or digest"},
+                                              "mode": {"type": "string", "enum": ["steer", "queue", "defer", "digest"]},
+                                              "defer_for": "n", "adds_reader": "b"},
+                                             required=["actor", "reason", "mode"])),
+                        "outside": items({"type": "string"})}, required=["thread_id", "reaches", "outside"]),
     "ThreadCrumb": obj({"id": "s", "title": "s"}),
     "ThreadTimeline": obj({"thread": ref("ThreadView"), "breadcrumb": items(ref("ThreadCrumb")),
                            "messages": items({"type": "object"}), "next_cursor": "n",
@@ -2793,6 +2801,10 @@ STABLE.extend([
     ("/api/v2/threads/{thread_id}/bot-status", "get", "Threads", "getThreadBotStatus",
      "The bots the thread's root waits on, at most 5, oldest wait first: `working` (its current step), `up_next` "
      "(finishing other work first) or `cant_reply` (what stops it, and `fix`)", "ThreadBotStatus"),
+    ("/api/v2/threads/{thread_id}/reach", "get", "Threads", "getThreadReach",
+     "Who a message would reach, each with its mode, given `text` (its @mentions), `delivery` (steer when none), "
+     "`defer_for` and `in_reply_to`; `outside` lists @mentions it would not reach, `adds_reader` a private task's new "
+     "reader. Writes nothing", "ThreadReach"),
     ("/api/v2/threads/{thread_id}/members", "get", "Threads", "listThreadMembers",
      "Who a thread is for, a page at a time", "ThreadMembers"),
     ("/api/v2/threads/{thread_id}/members", "post", "Threads", "addThreadMember",

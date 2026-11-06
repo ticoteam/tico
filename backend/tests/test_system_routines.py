@@ -31,7 +31,7 @@ def test_every_built_in_job_is_listed_with_its_group_word_and_control_availabili
     assert {k for k, j in jobs.items() if j["controllable"]} == {
         "stale_review", "kpi_asks", "ask_deadlines", "task_manager_report",
         "bookkeeper_check", "memory_tidy"} - hidden
-    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "thread_routing", "thread_rank"}
+    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "thread_rank"}
     assert "learnings" not in jobs, "Learn runs in Maintenance"
     # Housekeeping has no switch; Task roundup and Learn run in Maintenance.
     assert all(j["needed"] == (j["group"] == "housekeeping" and not j["controllable"]) for j in jobs.values())

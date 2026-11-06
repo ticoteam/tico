@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS thread_followers (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, actor TEXT NOT NULL,
   following INTEGER NOT NULL DEFAULT 1 CHECK (following IN (0,1)),
   notify TEXT NOT NULL DEFAULT 'live' CHECK (notify IN ('live','mentions','digest','muted')),
-  reason TEXT NOT NULL DEFAULT 'manual',      -- posted|mentioned|task|joined|manual|starter
+  reason TEXT NOT NULL DEFAULT 'manual',      -- mentioned|replied|owner|joined|read|manual|starter (posted: old rows)
   last_read_seq INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE (thread_id, actor));
@@ -135,11 +135,6 @@ CREATE INDEX IF NOT EXISTS message_deliveries_loop ON message_deliveries(root_id
   WHERE cause='bot' AND recipient LIKE 'bot:%' AND mode IN ('steer','queue');
 CREATE INDEX IF NOT EXISTS message_deliveries_outside ON message_deliveries(state, next_attempt_at)
   WHERE recipient LIKE 'slack:%' OR recipient LIKE 'peer:%';
-
--- A message waiting for routing (§4.3 rule 4); the row goes when it is routed or given up on.
-CREATE TABLE IF NOT EXISTS thread_routings (
-  message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-  next_attempt_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 
 -- Who a message names (C2). Mentions never grant access; in_audience=0 rows produced a warning to the author.
 CREATE TABLE IF NOT EXISTS message_mentions (
@@ -333,10 +328,14 @@ threads.set_audience(c, principal, thread_id, audience, *, audience_group_id=Non
 threads.update(c, principal, thread_id, *, title=None, archived=None)
 threads.set_retention(c, principal, thread_id, days)           # a root's manager; days=None keeps messages for good
 ```
-- Posting (in a chat thread) or being mentioned sets `following=1` (reason posted|mentioned), over a row a read left at
-  `following=0`, keeping its read mark and notify level. A task's thread is followed by its owner (reason `owner`) and
-  whoever chose to (reason `manual`); posting there follows nobody (backend/task_followers.py, docs/tasks.md Followers). A DM delivery or a join only makes the row, so it
-  never undoes an unfollow.
+- Posting follows nobody, in chats and tasks alike (D4). Being @mentioned, or replied to, sets `following=1` (reason
+  `mentioned`, `replied`), over a row a read, a join or an unfollow left, keeping its read mark and notify level. A bot follows a chat at `mentions`, anyone else at `live`. A task's thread is
+  followed by its owner (reason `owner`), whoever chose to (reason `manual`) and whoever was @mentioned
+  (backend/task_followers.py, docs/tasks.md Followers). A chat's starter follows it; a DM delivery or a join only makes
+  the row (a person's joined row is a read mark, not a follow: §4.1), so it never undoes an unfollow.
+- On a private task's thread an in-audience @mention is anyone who reads the task; a mention of someone who does not
+  adds them to the task's Who can see (`threads.widen`, a task event anyone on the task can undo), a bot's only within
+  its reach (backend/reach.py), never a group.
 - A join reads up to now across the whole tree: the root followed, each sub-thread a read mark. A group joins by each of
   its people and bots not already reading; anyone already reading keeps what they have not read.
 - **Mentions and following never grant access.** A mention outside the audience writes `in_audience=0`, no
@@ -365,23 +364,39 @@ threads.apply_revision(c, origin, *, body=None, deleted=False) -> message view|N
 ## 4. C3: delivery
 
 ### 4.1 Recipients
-Deliveries are written, in the post's transaction, for: the `to_actor`; every in-audience mention, ask or assign;
-the other members of a `personal`/`participants` thread (DMs); bots chosen by the wake rule; outside destinations
-linked to the thread (`slack:<channel>`, written by those tracks through
-`threads.add_outside_delivery`). Never one row per follower: unread counts come from counters (§5).
+One message's deliveries are the **addressed** ∪ the **followers**, minus the author (`threads.plan`), written in the
+post's transaction, plus outside destinations linked to the thread (`slack:<channel>`, written by those tracks through
+`threads.add_outside_delivery`).
+- Addressed, reached at any level and on any way: the `to_actor`; every in-audience mention, ask or assign; the author
+  of the message it replies to (`in_reply_to`, people too); the other members of a `personal`/`participants` thread
+  (DMs); a Home's bot; a sub-thread's posters.
+- Followers (reason `follower`): the thread's `following=1` rows at `live` (a bot at `digest` gets its digest, §4.3).
+  `mentions` and `muted` get only what addresses them. On a chat a person's `joined`/`read` row is not a follow. A
+  private task's past reader keeps a row but is not reached.
+- A **system line** (D10: the keeper's task news and notices, roundups (`refs.no_mentions`), follow-up nudges and cards)
+  reaches only whom it addresses, never the followers (`threads.system_line`).
+- The mode comes from the message's way (`refs.send_way`, `refs.send_defer_for`; none named is Steer, D13): a bot gets
+  `steer`, `queue` or `defer` (until the deadline: 24h by default on a task's thread, never on a chat), a person
+  `queue` (notified). Defer never notifies no person follower and defers every bot follower, but reaches the addressed
+  queued. On a task's own thread the first bot given a turn is the message's `to_actor` (its job, ride-along and
+  `task_delegations` key off it); every other woken bot gets a carrier (§4.4).
+- `GET /api/v2/threads/{thread_id}/reach` (`threads.reaches`) answers the same list for a message not yet sent, given
+  `text`, `delivery`, `defer_for` and `in_reply_to`, writing nothing.
+
+Unread counts come from counters (§5), not one row per reader.
 
 ### 4.2 Modes, reasons and states
 - `mode`: `steer` (into the recipient's running turn in the same root), `queue` (start or queue a run; for a person,
   notify live), `defer` (the bot's next run, as `bot_to_bot`/`wake_rules.hold` do today), `digest` (batched), `none`
   (recorded; nothing wakes).
-- `reason`: `dm`, `mention`, `ask`, `assign`, `addressed`, `home`, `sub_thread`, `reply`, `routing`, `digest`, `member`,
-  `outside`.
+- `reason`: `dm`, `mention`, `ask`, `assign`, `addressed`, `home`, `sub_thread`, `reply`, `follower`, `digest`,
+  `member`, `outside`.
 - `state`: `pending` → `delivered` (claimed / shown) → `read`; `capped` (loop guard, resumes); `held` (an org-rule
   hold on the message, local only); `failed` (an outside destination out of retries, one Needs-you item); `moot`
   (deleted before delivery, or the recipient lost access).
 
 ### 4.3 Wake rule (in `backend/rules.py`, rule `thread_wake`)
-Per (message, bot), deduplicated, first match wins:
+Per (message, bot) that §4.1 reaches, deduplicated, first match wins:
 1. a DM, or an explicit @mention / ask / assign of the bot → `queue` (`steer` when it is running in that root); a person's
    @mention queues, and a plain @mention from a bot waits under `bot_to_bot` for the receiving bot's next run unless a
    wake rule says otherwise;
@@ -390,16 +405,14 @@ Per (message, bot), deduplicated, first match wins:
 3a. a reply (`in_reply_to`, §4.9) to the bot's message in the same root → `queue`, reason `reply` (`steer` when it is
    running in that root). A person's reply wakes it as a mention does; a bot's reply to another bot's message is judged
    like a bot's @mention (`bot_to_bot` may make it wait); a bot's reply to its own message wakes nothing (the author's
-   deliveries are dropped). Reasons 1-3 win when they also match, and a reply is not routed (rule 4);
-4. routing (the Slack gateway's decision model, ≤3 bots) when the message names nobody and the thread has several
-   bots → `queue` (`backend/thread_routing.py`);
+   deliveries are dropped). Reasons 1-3 win when they also match;
+4. a live following bot (reason `follower`) → the message's way (§4.1). A bot's plain post waits under `bot_to_bot` for
+   the follower's next run unless it has `needs_action` or @mentions it;
 5. a following bot with `notify=digest` → `digest`;
 6. otherwise none (no row).
 
-Rule 4 is asked after the post: a person's message that names no one writes one `thread_routings` row, and the
-scheduler's tick starts a worker when a row is due. With fewer than two candidate bots no model is called. With no
-decision model, the month's spend at its cap, or the person's daily decision cap reached, nobody is woken and the
-message stays in the thread. A bot's own unaddressed post is not routed.
+Routing is retired (D14): a chat message that names nobody reaches only the thread's live followers, and nothing asks
+a model whom it is for. A DM still always reaches its bot.
 
 Rule 5 is batched (`backend/thread_bot_digest.py`): every hour plain code writes one keeper notice per bot with `digest`
 deliveries waiting, naming the threads and their counts and none of their words, and settles those deliveries with it as
@@ -437,9 +450,8 @@ a note's words only to who may read the source (`threads.note_source_shown`): a 
 rights, a bot's run by what its session holds.
 
 Every message write fans out the same way, through `post` or a legacy writer (`hubdb.say`, runner replies, old
-routes): mentions, DM members, the Home's owner, sub-thread repliers and outside destinations, under the loop guard.
-A legacy write in a `task` thread leaves its mentions to the task rules, and a legacy notice or keeper write wakes no
-further bot.
+routes, `hubdb.task_comment`): §4.1's addressed and followers and outside destinations, under the loop guard. A legacy
+notice or keeper write wakes no further bot.
 
 ### 4.5 Loop guard
 `threads.LOOP_GUARD_PER_HOUR` (default 6, `TICO_THREAD_LOOP_GUARD`): bot-caused wakes (`cause='bot'`, bot
@@ -465,7 +477,8 @@ is refused as before; a further recipient gets no delivery, the message stays in
 warning `{"rule": "unsolicited_cap", "actor": ...}`.
 
 ### 4.8 Who routing asked
-Every person's message routing looks at writes one `message_routes` row (migration 0068): `bot_ids`, the bots it asked
+Routing is retired (§4.3); nothing writes new rows. Each person's message routing looked at before has one
+`message_routes` row (migration 0068): `bot_ids`, the bots it asked
 (`[]`: it asked nobody, had no model, hit a cap or gave up). Timelines show it as `"routed": {"to": [{"actor",
 "name"}]}`; a message routing never looked at has `"routed": null`. A change is a `threads` event `routed`
 (`message_id`, `routed`) to the message's readers. Deleting the message deletes its row.
