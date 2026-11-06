@@ -19,15 +19,6 @@ log = logging.getLogger(__name__)
 
 
 @contextmanager
-def from_action(rule_id):
-    token = _CHAIN.set(_CHAIN.get() or (rule_id,))
-    try:
-        yield
-    finally:
-        _CHAIN.reset(token)
-
-
-@contextmanager
 def pending(conn):
     current = _PENDING.get()
     if current is not None and current["conn"] is conn:

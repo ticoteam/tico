@@ -107,20 +107,19 @@ def test_a_routine_made_task_starts_no_task_trigger_and_history_says_skipped(api
     assert "Skipped" in why[0]["note"] and "this Task Trigger was skipped" in why[0]["note"]
 
 
-def test_initial_step_does_not_duplicate_a_chain_skip_history_line(api):
-    from backend import automations
+def test_an_automation_made_task_with_an_initial_step_has_one_chain_skip_line(api):
+    maker = make(api, {"type": "event", "name": "task.created"}, [SPAWN])
+    step_listener = make(api, {"type": "event", "name": "task.step_changed"}, [NOTE])
+    post(api, "tasks", {"owner": "ops", "title": "Start initial-step chain", "body": "Synthetic."})
 
-    task = post(api, "tasks", {"owner": "ops", "title": "Initial step", "body": "Synthetic."})
-    aid = make(api, {"type": "event", "name": "task.step_changed"}, [NOTE])
-    with api.app.state.store.transaction() as c:
-        row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
-        chain = (aid,)
-        automations._chained_task_event(c, row, {"event": {"name": "task.created", "subject": task["id"]}}, chain)
-        automations._chained_task_event(c, row, {"event": {"name": "task.step_changed", "subject": task["id"],
-                                                             "data": {"initial_step": True}}}, chain)
+    follow = sql(api, "SELECT id FROM tasks WHERE title='Follow up'")
+    assert len(follow) == 1 and started(api, maker) == 1
     rows = sql(api, "SELECT new,note FROM history_events WHERE subject_type='task' AND subject_id=? "
-                   "AND kind='automation' AND new=? AND note LIKE 'Automation % did not run:%'", (task["id"], aid))
+                   "AND kind='automation' AND new=? AND note LIKE 'Automation % did not run:%'",
+               (follow[0]["id"], step_listener))
     assert len(rows) == 1
+    assert "routine Test made this change" in rows[0]["note"]
+    assert "task-triggered automations run one level deep" in rows[0]["note"]
 
 
 def test_a_routine_started_bot_turn_still_starts_a_trigger_for_another_task(api):
@@ -235,14 +234,15 @@ def test_a_generic_event_rule_created_task_still_starts_task_event_automations(a
     assert len(runs(api, heard)["runs"]) == 1
 
 
-def test_private_task_event_redacts_text_and_refuses_create_and_webhook_actions(api):
+def test_private_task_event_redacts_text_and_refuses_create_and_webhook_actions(api, monkeypatch):
     import json
 
+    from backend import automation_actions as AA
     from backend.tests.test_webhooks import make as make_webhook
 
     secrets = {"title": "Private synthetic title", "body": "Private synthetic body"}
     created = make(api, {"type": "event", "name": "task.created"}, [{"id": "create", "type": "action",
-        "do": "create_task", "args": {"title": "{{task.title}}", "body": "{{task.body}}", "owner": "ops"}}])
+        "do": "create_task", "args": {"title": "Private follow-up", "body": "Copied: {{task.body}}", "owner": "ops"}}])
     hook = make_webhook(api, events=["custom.private-task"])
     webhooked = make(api, {"type": "event", "name": "task.created"}, [{"id": "send", "type": "action",
         "do": "call_webhook", "args": {"webhook": hook["id"], "type": "custom.private-task",
@@ -257,7 +257,9 @@ def test_private_task_event_redacts_text_and_refuses_create_and_webhook_actions(
         assert not H.task_private_readable(c, "human:ana", task)
     api.app.state.store.automations.drain()
 
-    assert len(runs(api, created)["runs"]) == 1
+    create_runs = runs(api, created)["runs"]
+    assert len(create_runs) == 1 and create_runs[0]["status"] == "failed"
+    assert "may not read task" in create_runs[0]["steps"][0]["outputs"]["detail"]
     assert len(runs(api, webhooked)["runs"]) == 1
     state = sql(api, "SELECT saved_state FROM automation_runs WHERE automation_id IN (?,?) ORDER BY automation_id",
                 (created, webhooked))
@@ -270,8 +272,27 @@ def test_private_task_event_redacts_text_and_refuses_create_and_webhook_actions(
         assert all(secret not in json.dumps(saved_state) for secret in secrets.values())
     assert not sql(api, "SELECT id FROM tasks WHERE id<>? AND (title=? OR body LIKE ?)",
                    (task["id"], secrets["title"], "%Private synthetic body%"))
+    assert not sql(api, "SELECT id FROM tasks WHERE id<>? AND title='Private follow-up'", (task["id"],))
     sends = sql(api, "SELECT body FROM webhook_sends WHERE webhook_id=?", (hook["id"],))
     assert sends == []
+
+    # Without the access guard, the literal title lets create_task pass validation and copy private text.
+    # Stub the insert so the regression proof never leaves a synthetic task behind in the fixture.
+    attempted = {}
+    def record_task_create(conn, actor, title, body, owner, **kwargs):
+        attempted.update(title=title, body=body, owner=owner)
+        return {"id": "guard-probe-task"}
+
+    with api.app.state.store.transaction() as c:
+        auto = {"id": created, "flow": {"owner": "person:ana", "trigger": {"type": "event", "name": "task.created"}}}
+        values = {"task": {"id": task["id"], "body": secrets["body"]}}
+        with monkeypatch.context() as unguarded:
+            unguarded.setattr(AA, "task_of", lambda *_: None)
+            unguarded.setattr(H, "task_create", record_task_create)
+            copied = AA._create_task(c, auto, "guard-probe", {
+                "title": "Private follow-up", "body": "Copied: " + secrets["body"], "owner": "bot:ops"}, values)
+    assert copied["ok"] and attempted["title"] == "Private follow-up"
+    assert secrets["body"] in attempted["body"]
 
 
 def test_fifty_task_event_runs_an_hour_pause_the_automation_until_it_is_reenabled(api):
