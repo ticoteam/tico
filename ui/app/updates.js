@@ -49,7 +49,7 @@ function pageUpdates() {
   const params = new URLSearchParams(S.route.split('?')[1] || '');
   const kind = params.get('kind') === 'weekly' ? 'weekly' : 'daily';
   const view = params.get('view') === 'archive' ? 'archive' : 'inbox';
-  // A link to one update (the Updates chat's, updGoLink) names its day, so the tree shows that day, and may ask for
+  // A link to one update (#/updates?kind=&day=&update=) names its day, so the tree shows that day, and may ask for
   // the whole org for this visit when the update's author is not below you; the page then goes to the update.
   const day = /^\d{4}-\d{2}-\d{2}$/.test(params.get('day') || '') ? params.get('day') : null;
   const target = params.get('update') || null;
@@ -61,11 +61,9 @@ function pageUpdates() {
   const cached = state.data = updCacheRead(state);
   state.loading = !cached; state.fromCache = !!cached;
   if (cached) updOrder(state, true);
-  // The feed is redrawn in its own column; the Updates chat beside it (ui/app/updates-chat.js) stays, with its
-  // conversation, while only the kind, the day or the view changes.
   const main = $('#main');
-  let col = main.querySelector(':scope > .upd-col');
-  if (!col || !UPDC?.el?.isConnected) { main.innerHTML = '<div class="upd-col"></div>'; col = main.firstElementChild; }
+  main.innerHTML = '<div class="upd-col"></div>';
+  const col = main.firstElementChild;
   col.innerHTML = `<div class="upd-page">
     <div class="upd-head">
       <h1>${view === 'archive' ? 'Archive' : 'Updates'}</h1>
@@ -439,14 +437,6 @@ function updLinkedRank(state) {
   if (!state.linked.size) return;
   state.order ||= new Map();
   for (const [id, {from}] of state.linked) state.order.set(id, (state.order.get(from) ?? -1) + 0.5);
-}
-// A link to one update (#/updates?kind=&day=&update=, the Updates chat's): when its card is on the page, go to it;
-// else open the page on its kind and day and go to it once the feed loads (pageUpdates `target`).
-function updGoLink(href) {
-  const q = new URLSearchParams(href.split('?')[1] || ''), id = q.get('update'), state = UPD;
-  const kind = q.get('kind') === 'weekly' ? 'weekly' : 'daily';
-  if (state && state.data && state.kind === kind && (state.list || []).some(u => u.id === id)) { void updGoTo(state, id); return; }
-  location.hash = href;
 }
 // Scrolled to and highlighted. In the tree its managers' cards open; an author not below you shows the whole org for
 // this visit; one a newer update replaced is in the Archive. In List or Archive, one not on the page is loaded and

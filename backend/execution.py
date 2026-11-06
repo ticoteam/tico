@@ -4072,8 +4072,8 @@ class Execution:
                             "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
                             "task_context": task_context.for_turn(c, self.auth, acting or bot_who, make_page_task or task),
                             **({"make_page": {"task": runner_wire.task(make_page_task)}} if making_page else {}),
-                            # Asked from the Updates chat: the recent updates that person may read and open, read now as
-                            # them (backend/updates_chat.py). None for every other turn.
+                            # place "updates": the recent updates that person may read and open, read now as them
+                            # (backend/updates_chat.py). None for every other turn.
                             "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
                             # The owner's earlier Strategy Bot chat is a session of its own (backend/rooms.py).
                             "config": rooms.session_config(conv, row["bot_id"], config),

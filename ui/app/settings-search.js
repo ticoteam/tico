@@ -294,10 +294,27 @@ function settingsSearchRevealRepo() {
   let target;
   try { target = JSON.parse(sessionStorage.getItem('tico.settings.search.repo-target') || 'null'); } catch {}
   if (!target?.repo) return;
-  const row = [...document.querySelectorAll('#set-repos [data-repo]')].find(item => item.dataset.repo === target.repo);
-  if (!row) return;
+  const repo = REPOS?.repositories?.find(item => item.full_name === target.repo);
+  if (!repo) return;
+  let row = [...document.querySelectorAll('#set-repos [data-repo]')].find(item => item.dataset.repo === target.repo);
+  if (!row) {
+    if (!repo.enabled) {
+      const filter = $('#set-repos [data-repos-filter]');
+      REPOS_SEARCH_REVEALED = REPOS_SEARCH_REVEALED || (!REPOS_OFF_OPEN && !filter?.value.trim());
+      REPOS_OFF_OPEN = true;
+      if (filter) filter.value = target.repo;
+    }
+    reposDrawList();
+    return;
+  }
+  if (target.target === 'repo.setup_command' && repo.enabled && !row.querySelector('[data-repo-setup]')) {
+    REPOS_OPEN.add(target.repo);
+    reposDrawList();
+    return;
+  }
   sessionStorage.removeItem('tico.settings.search.repo-target');
-  const control = row.querySelector(target.target === 'repo.setup_command' ? '[data-repo-setup]' : '[data-repo-tick]');
+  const control = row.querySelector(target.target === 'repo.setup_command' && repo.enabled ? '[data-repo-setup]' :
+    row.querySelector('[data-repo-open]') ? '[data-repo-open]' : '[data-repo-add]');
   row.scrollIntoView({block: 'center'});
   row.classList.add('settings-search-highlight');
   setTimeout(() => row.classList.remove('settings-search-highlight'), 1800);
