@@ -6,7 +6,7 @@ const {open} = require('./tasks-page.cjs');
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const {page, errors, posts, tasks} = await open(browser, {hash: '#/tasks?view=done'});
-    await page.locator('#task-view [data-view="done"]').click();
+    await page.waitForFunction(() => TASKS_ST.view === 'done');
     await page.locator('[data-task-key="tt-receipt"] .tl-title').click();
     const peek = page.locator('#task-peek');
     await peek.locator('[data-task-more]').click();
@@ -31,7 +31,7 @@ const {open} = require('./tasks-page.cjs');
     assert.deepEqual(errors, []);
     await page.close();
     const viewer = await open(browser, {hash: '#/tasks?view=done', mover: false});
-    await viewer.page.locator('#task-view [data-view="done"]').click();
+    await viewer.page.waitForFunction(() => TASKS_ST.view === 'done');
     await viewer.page.locator('[data-task-key="tt-receipt"] .tl-title').click();
     await viewer.page.locator('#task-peek [data-task-more]').click();
     assert.equal(await viewer.page.getByRole('menuitem', {name: 'Close task', exact: true}).count(), 1, 'a requester can accept without mover rights');

@@ -43,7 +43,7 @@ API key. One signed-in model is enough for the first result; Health lists the ot
    reports to the nearest hired manager above it until that manager is hired, then moves under it. On Content Marketer's
    page, press **Start onboarding**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
    to give it readers, publishing plans, topics, voice examples and privacy rules; review its first draft in chat.
-6. On **Tasks > New task**, assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
+6. On **Tasks**, press **+** (New task) and assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
    it Done with the draft file on the task. Read the draft, then close the task yourself: the requester closes it, not the bot.
 
 Success is a draft file on the task, read by a person, and a task you closed. The steps, and what to try next (meeting notes

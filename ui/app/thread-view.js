@@ -811,11 +811,15 @@ function thvComposerDraw(view) {
       <span class="p-sendbox"><button class="p-way p-icon" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Ways to send" title="Ways to send"><span class="nav-icon" aria-hidden="true">expand_more</span></button>` : ''}
       <button class="p-send p-send-icon" type="button" aria-label="Send" title="Send">${ICON_SEND}</button>${bot ? `
       <div class="p-menu p-ways" role="menu" aria-label="Ways to send" hidden></div></span>` : ''}</div>
+    ${composeFootHTML()}
     <div class="p-chips"></div>
     ${bot ? '<div class="p-cmd" hidden></div>' : ''}
     <div class="p-menu thv-mentions" role="listbox" aria-label="Mention" hidden></div>
     <div class="thv-lib" hidden></div></div>`;
   C.el = host.querySelector('.thv-ask');
+  // Follow and "Reaches N" under the box (pill.js composeReach): the way Send shows, the words' @mentions, the reply.
+  C.reach = composeReach(C.el.querySelector('.p-foot'), {thread: () => thvDm(view) ? '' : view.id,
+    mode: () => C.ways ? thvWayMode(view) : '', text: () => C.el.querySelector('.p-text').value, reply: () => view.replyTo});
   host.querySelector('.thv-replying').onclick = ev => { if (ev.target.closest('[data-reply-cancel]')) thvReplyStart(view, null); };
   const box = C.el.querySelector('.p-text'), file = C.el.querySelector('.p-file'), menu = C.el.querySelector('.thv-attach-menu');
   const grow = () => { box.style.height = 'auto'; box.style.height = Math.min(box.scrollHeight, 160) + 'px'; };
@@ -894,6 +898,7 @@ function thvReplyingDraw(view) {
 function thvReplyStart(view, m) {
   view.replyTo = m?.id || null;
   thvReplyingDraw(view);
+  thvFootSync(view);
   if (m) view.composer?.el.querySelector('.p-text')?.focus();
 }
 function thvComposerButtons(view) {
@@ -901,6 +906,7 @@ function thvComposerButtons(view) {
   if (!btn) return;
   const empty = !box.value.trim() && !C.files.length && !C.lib.length;
   btn.classList.toggle('p-off', empty);
+  thvFootSync(view);
   // While the bot runs, Stop takes Send's place (and the caret's) until something is typed: a message typed meanwhile
   // still goes to it.
   const stop = C.el.querySelector('.p-stop');
@@ -911,6 +917,27 @@ function thvComposerButtons(view) {
   if (caret) { caret.hidden = show; if (show) thvWaysMenu(view, false); }
   const says = C.stopping ? 'Stopping…' : 'Stop';
   stop.title = says; stop.setAttribute('aria-label', says);
+}
+// ----------------------------------------------------------------- Follow and who it reaches
+// A DM always reaches its members, so its composer offers neither. Elsewhere Follow shows until the viewer follows
+// (`me.follows`: a member who only joined a chat does not), kept per kind: a task's thread or a chat.
+const thvDm = view => !!view.opts.dm || threadIsDm(view.thread);
+function thvFootSync(view) {
+  const C = view.composer, foot = C?.el.querySelector('.p-foot'), me = view.thread?.me;
+  if (!foot) return;
+  const offer = !!view.id && !thvDm(view) && !!me && !(me.follows ?? me.following) && me.can_post !== false;
+  composeFollowPaint(foot, view.thread?.audience === 'task' ? 'task' : 'chat', offer);
+  C.reach?.update();
+}
+// Follow ticked: once the message is in, follow the thread (posting alone never does).
+async function thvFollowAfterSend(view) {
+  try {
+    const r = await put(thvPath(view.id) + '/follow', {notify: 'live'});
+    if (view.gone || !view.thread) return;
+    view.thread = {...view.thread, me: {...view.thread.me, following: true, follows: true, notify: r?.notify || 'live'}};
+    threadsPut(view.thread);
+    thvFootSync(view);
+  } catch (e) { toast(`Not followed: ${e.message}`, true); }
 }
 // ----------------------------------------------------------------- the ways to send (a bot's Home or DM)
 // Steer now, Queue, Defer with its durations, then Set as goal (deliveryMenuHTML, pill.js). Steer, Queue and Defer are
@@ -1152,16 +1179,17 @@ async function thvComposerSend(view) {
   // In a bot's Home or DM every message names the kept way (thread posts take delivery, backend/thread_api.py); in
   // goal mode with a file attached it goes as a message, that way too.
   const way = C.ways ? deliveryBody(thvSendMode(view)) : null;
+  const follow = composeFollowWanted(C.el.querySelector('.p-foot'));
   const files = C.files.splice(0), lib = C.lib.splice(0);
   const replyTo = view.messages.find(x => x.id === view.replyTo) || null;
   box.value = ''; box.style.height = ''; thvChips(view);
   THV_DRAFTS.delete(thvDraftKey(view));
   thvReplyStart(view, null);
-  await thvSend(view, {text, files, lib, way, replyTo});
+  await thvSend(view, {text, files, lib, way, replyTo, follow});
 }
 // One message out: a "Checking…" row while the rules check runs, then the message, or a held row the author can
 // edit, discard or (when the server allows) send anyway. A reply goes to this thread too, naming what it answers.
-async function thvSend(view, {text, files = [], lib = [], way = null, replyTo = null}) {
+async function thvSend(view, {text, files = [], lib = [], way = null, replyTo = null, follow = false}) {
   const p = {key: 'p' + (++THV_N), text, files, lib, replyTo: replyTo?.id || '', quote: replyTo ? thvQuoteFrom(replyTo) : null, state: 'checking'};
   view.pending.push(p);
   thvDraw(view, {stick: true});
@@ -1190,6 +1218,7 @@ async function thvSend(view, {text, files = [], lib = [], way = null, replyTo = 
       if (m) thvApplyMessage(view, {id: m.id, thread_id: m.thread_id, root_id: m.root_id, message: {...(replyTo && !m.in_reply_to ? {in_reply_to: replyTo.id} : {}), ...m}});
       else void thvRefresh(view);
       for (const w of r?.warnings || []) if (w.rule === 'mention_outside') toast(`${actorName(w.actor)} is not in this thread`, true);
+      if (follow && view.id) void thvFollowAfterSend(view);
       // Without the live stream, the bots' status is read once now; with it, `bot_status` events keep it.
       if (Array.isArray(view.botStatus) && !liveConnected()) void thvStatusRead(view);
     }

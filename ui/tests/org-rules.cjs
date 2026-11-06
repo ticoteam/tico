@@ -185,7 +185,10 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     assert.equal(live.repeats, 'once');
     assert.equal(live.status, 'upcoming');
     assert.equal(live.replaces, dueId);
-    // The ended row's address opens the live one.
+    // The ended row's address opens the live one. Open it only once the live row's panel has finished drawing:
+    // a draw still in flight when the hash moves back makes the ended row's open give way and never redirect.
+    await page.waitForFunction(id => document.querySelector('#ru-side')?.dataset.open?.startsWith('due:' + id + ':')
+      && document.querySelector('#ru-side select[name=repeats]')?.value === 'once', liveId, {timeout: t(10000)});
     await go(page, `#/rules/due?due=${dueId}`);
     await page.waitForFunction(id => location.hash.includes('due=' + id), liveId, {timeout: t(10000)});
 

@@ -47,12 +47,14 @@ def _card(ctx: Ctx, who: str, card_id: str) -> Any:
     card = SK.get(ctx.c, "fin_cards", card_id)
     if card is None or not sees(ctx, who, card):
         raise FinanceError(NOT_FOUND, "no such card")
+    if str(card["provider"] or "") == "brex":
+        raise invalid("a Brex card is read-only in Finance: change it in Brex")   # Brex is read, never written to
     return card
 
 
 def _program(ctx: Ctx, money_id: str | None) -> Any:
     programs = [m for m in SK.money_accounts(ctx.c, ctx.book.id) if str(m["kind"]) == "card_program"
-                and str(m["status"] or "active") == "active"]
+                and str(m["status"] or "active") == "active" and str(m["provider"] or "mercury") == "mercury"]
     if money_id:
         programs = [m for m in programs if str(m["id"]) == money_id]
     if not programs:

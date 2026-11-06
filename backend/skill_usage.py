@@ -9,8 +9,9 @@ A day that is partly pruned is never recomputed (its rollup was made while its r
 Reads count the days before the last rollup's day from the rollup and the rest from the raw rows, so a use shows at
 once. Who used a skill is for admins: anyone else sees the totals and their own rows only. A use links to its task or thread only when
 the caller may read that task or thread. Coverage says "unknown" where Tico has no data, never "unused": an install
-is unused only when its target reports staging (a receipt), has had the install for 30 days, reports usage (a
-person's skills helper with reporting on), and shows no use in those 30 days.
+is unused only when its target reports staging (a receipt), has had the install for 30 days, reports usage (a bot whose
+harness reports every skill use, `skill_events`; a person's skills helper with reporting on), and shows no use in those
+30 days.
 
 Skills a bot used that the directory does not have are a daily count by name and bot only
 (`unlisted_skill_usage_dailies`, written by backend/skill_runtime.py). Admins see them as `popular_elsewhere`; the rollup
@@ -22,8 +23,10 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import Query, Request
 
+from . import bot_settings as BS
 from . import hubdb as H
 from . import skills as SK
+from .harnesses import reports_skill_uses
 from .store import Problem
 
 KEEP_DAYS = 90
@@ -245,6 +248,15 @@ def _link(c, auth, who, viewer, row):
     return task_id, thread_id
 
 
+def _bots_reporting(c, bots):
+    """The bots, of `bots`, whose harness reports every skill their model uses (Claude Code's Skill calls); a Codex
+    bot reports only the skills its input names, so its installs stay unknown."""
+    if not bots:
+        return set()
+    declared = BS.read_many(c, bots)
+    return {b for b in bots if reports_skill_uses(declared.get(b, {}))}
+
+
 def coverage(c, auth, who, skill, at):
     """The installs the caller may see, each with its uses in the last 30 days and whether Tico can tell it is used:
     used | unused | unknown."""
@@ -256,10 +268,11 @@ def coverage(c, auth, who, skill, at):
         f"SELECT actor_type, actor_id, SUM(n) AS uses FROM ({sub}) GROUP BY actor_type, actor_id", args)}
     reporting = {r["person_id"] for r in c.execute(
         "SELECT DISTINCT person_id FROM skill_devices WHERE reporting_enabled=1 AND revoked_at IS NULL")}
+    reporting_bots = _bots_reporting(c, {r["target_id"] for r in rows if r["target_type"] == "Bot"})
     out = []
     for r in rows:
         uses = counts.get((r["target_type"], r["target_id"]), 0)
-        reports = r["target_type"] == "Bot" or r["target_id"] in reporting
+        reports = r["target_id"] in (reporting_bots if r["target_type"] == "Bot" else reporting)
         if uses:
             state = "used"
         elif r["staged_sha256"] and reports and r["created_at"] <= since:

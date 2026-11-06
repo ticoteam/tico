@@ -80,7 +80,7 @@ def sales(api):
 
 
 # ----------------------------------------------------------------------------- reads
-def test_every_read_names_a_new_bot_by_its_id_and_its_slug(api, sales):
+def test_every_read_and_bot_route_names_a_new_bot_by_its_id_and_its_slug(api, sales):
     for ref in (sales, "sales-helper", "bot:" + sales):
         row = get(api, "bots/" + ref)
         assert (row["id"], row["slug"]) == (sales, "sales-helper"), ref
@@ -90,11 +90,8 @@ def test_every_read_names_a_new_bot_by_its_id_and_its_slug(api, sales):
     assert (employee["slug"], employee["name"]) == ("sales-helper", "sales-helper")
     org = next(b for b in get(api, "org")["bots"] if b["id"] == sales)
     assert (org["slug"], org["name"]) == ("sales-helper", "sales-helper")
-
-
-def test_every_bot_route_answers_the_same_by_slug_and_by_id(api, sales):
-    """A read route that names a bot in its path finds it by either (a route that forgot resolve_bot answers 404
-    for the slug of a bot whose id is not its slug)."""
+    # A read route that names a bot in its path finds it by either (a route that forgot resolve_bot answers 404
+    # for the slug of a bot whose id is not its slug).
     differ, checked = [], 0
     for route in api.app.routes:
         path = getattr(route, "path", "")
