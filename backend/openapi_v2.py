@@ -3288,6 +3288,7 @@ SCHEMAS = {
             "area": "s",
             "kind": {"type": "string", "enum": ["product", "activity"]},
             "shipped_at": "s",
+            "published_at": "s",
             "unread": "b",
             "version": "s",
             "source": "s",

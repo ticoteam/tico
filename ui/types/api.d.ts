@@ -948,6 +948,7 @@ export type ChangelogEntry = {
   bullets: Array<string>;
   id: string;
   kind: "product" | "activity";
+  published_at?: string;
   shipped_at: string;
   source?: string;
   task_id?: string;
