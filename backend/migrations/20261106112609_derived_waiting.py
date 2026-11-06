@@ -28,11 +28,13 @@ def _columns(conn, table):
 def up(conn):
     have = _columns(conn, "tasks")
     if "waiting_on" in have:
-        conn.execute("CREATE TABLE IF NOT EXISTS task_waits_moved(task_id TEXT PRIMARY KEY, waiting_on TEXT NOT NULL, "
-                     "created_at TEXT NOT NULL)")
-        conn.execute("INSERT OR IGNORE INTO task_waits_moved(task_id, waiting_on, created_at) "
-                     "SELECT id, waiting_on, strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM tasks "
-                     f"WHERE coalesce(waiting_on,'')<>'' AND status IN ({','.join('?' * len(ACTIVE))})", ACTIVE)
+        staged = f"FROM tasks WHERE coalesce(waiting_on,'')<>'' AND status IN ({','.join('?' * len(ACTIVE))})"
+        # Only a file with waits to move gets the staging table: a new file never has one, and move_waits drops it.
+        if conn.execute(f"SELECT 1 {staged} LIMIT 1", ACTIVE).fetchone():
+            conn.execute("CREATE TABLE IF NOT EXISTS task_waits_moved(task_id TEXT PRIMARY KEY, waiting_on TEXT NOT NULL, "
+                         "created_at TEXT NOT NULL)")
+            conn.execute("INSERT OR IGNORE INTO task_waits_moved(task_id, waiting_on, created_at) "
+                         f"SELECT id, waiting_on, strftime('%Y-%m-%dT%H:%M:%fZ','now') {staged}", ACTIVE)
         for kind, name in conn.execute("SELECT type, name FROM sqlite_master WHERE tbl_name='tasks' "
                                        "AND type IN ('index','trigger') AND sql LIKE '%waiting_on%'").fetchall():
             conn.execute(f'DROP {kind.upper()} IF EXISTS "{name}"')

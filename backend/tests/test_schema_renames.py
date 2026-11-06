@@ -107,6 +107,9 @@ _HOLDS = importlib.import_module("backend.migrations.0075_task_holds")
 DROPPED = {("tasks", column) for column in _HOLDS.COLUMNS}
 DROPPED_INDEXES |= set(_HOLDS.OLD_INDEXES)
 DROPPED_TRIGGERS |= set(_HOLDS.OLD_TRIGGERS)
+# Dropped by backend/migrations/20261106112609_derived_waiting.py with tasks.waiting_on: who a task waits on is derived.
+DROPPED.add(("tasks", "waiting_on"))
+DROPPED_INDEXES.add("tasks_waiting_on")
 
 
 @pytest.fixture(scope="module")

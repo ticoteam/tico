@@ -86,6 +86,17 @@ def _migration(name):
     return module
 
 
+def test_a_file_with_no_waits_to_move_gets_no_staging_table(api):
+    up = _migration("20261106112609_derived_waiting").up
+    with api.app.state.store.transaction() as c:
+        done = H.task_create(c, "human:ana", "Old one", "", "bot:ops", lint=False, private=False)
+        c.execute("ALTER TABLE tasks ADD COLUMN waiting_on TEXT")
+        c.execute("UPDATE tasks SET status='done', waiting_on='human:ana' WHERE id=?", (done["id"],))
+        up(c)
+        assert "waiting_on" not in {r[1] for r in c.execute("PRAGMA table_info(tasks)")}
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='task_waits_moved'").fetchone()
+
+
 def test_the_migration_turns_old_waits_into_question_tasks_and_blockers(api):
     up = _migration("20261106112609_derived_waiting").up
     with api.app.state.store.transaction() as c:
