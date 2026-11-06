@@ -5,7 +5,7 @@
   "backend/app.py": {
     "B904": 3,
     "B905": 3,
-    "BLE001": 18,
+    "BLE001": 16,
     "F401": 5
   },
   "backend/ask_ingest.py": {
