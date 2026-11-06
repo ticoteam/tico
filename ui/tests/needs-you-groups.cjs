@@ -74,8 +74,10 @@ async function shot(target, name) {
       return route.fulfill({contentType: 'application/json', body: JSON.stringify({did: 'Gusto', task: 't-pick'})});
     });
     await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
-    await page.locator('#task-view [data-view="foryou"]').click();
-    assert.equal((await page.locator('#task-group .v').textContent()).trim(), 'Kind');
+    await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
+    await page.locator('#task-filter').click();
+    assert.equal((await page.locator('#task-filter-pop [data-pick-group][aria-checked=true]').textContent()).trim(), 'Kind');
+    await page.keyboard.press('Escape');
 
     // Groups in order, each with its count; approvals sit in the group their kind takes.
     const groups = await page.locator('#task-body [data-group]').evaluateAll(gs => gs.map(g => ({
@@ -84,7 +86,7 @@ async function shot(target, name) {
     assert.deepEqual(groups.map(g => [g.key, g.count]),
       [['need:decide', '1'], ['need:pay', '2'], ['need:connect', '1'], ['need:review', '2'], ['need:do', '1'], ['older', '1']], JSON.stringify(groups));
     assert.deepEqual(groups.map(g => g.label), ['Answer', 'Pay', 'Connect', 'Review', 'Do', 'Older questions']);
-    assert.equal(await page.locator('#task-tab-foryou .cnt').innerText(), '8');
+    assert.equal(await page.locator('#task-scope .cnt').innerText(), '8');
     const review = page.locator('#task-body [data-group="need:review"]');
     assert.ok((await review.textContent()).includes("Send: '$200 for each rental owner you introduce' to Jennie Ooten"));
     assert.ok((await page.locator('#task-body [data-group="need:pay"]').textContent()).includes('Pay $1,200: LinkedIn ads for October'));

@@ -6,14 +6,21 @@ chooses the status each step means. Types belong to the whole team. General keep
 each standard status except waiting and declined (below).
 
 Choose **Type** when creating a task, or change it in the task modal. A custom type shows a **Step**
-dropdown; General shows **Status**. Beside task search, **General** and **Dev tickets** select the task type; the arrow menu lists
-other types. A type is always selected, and Open and Board show only its tasks. The board
+dropdown; General shows **Status**. The Tasks header is one row: **Tasks**, the scope menu (**You** with its count, or
+the type in view, such as **General**), then search, the filter icon, the **List** and **Board** layout icons, the
+archive icon (**Finished**), **Catch up** when it shows, **⋯** and **+**. The scope menu lists **You**, then the types:
+**General**, **Roadmap**, **Engineering** (or **Dev tickets**) and the team's other types. Picking a type shows its
+open tasks in the layout last used (remembered per person); You is always a list, so the layout icons hide there. A
+type is always selected, and the list, the board and the finished tasks show only its tasks. The board
 uses that type's steps as columns. Leading backlog steps (open, before the first step with work under
 way) fold into one strip, as do the trailing done, closed and declined steps; click a strip to unfold
-it. A task that finishes leaves the board unless its finished steps are unfolded. The tabs are **You**,
-**Open** and **Board**; **More** at the end of the tab row holds **Snoozed**, **Done** (finished tasks) and
-**Closed** (closed ones), and any tab a narrow window or phone has no room for (Board first, then Open). While one
-of its views is open, More shows that view's name. On a desktop, drag a card to another column or to a new place
+it. A task that finishes leaves the board unless its finished steps are unfolded. The archive icon shows the type's
+finished tasks, with **Done**, **Closed** and **Snoozed** (while something is snoozed) beside it; pressing it again
+goes back. The filter icon's menu starts with **Group** (on a list) and then the fields to filter by; a number on the
+icon counts the filters on, and while any is on their chips show in a row under the header, with **Clear**. **⋯**
+holds **Select tasks**, **Stats** and **Pin to sidebar**. When the header has no room, the search folds to its icon
+first; on a phone it is always an icon. Old addresses keep working: `?view=foryou` is You, `?view=list` and
+`?view=board` that layout, `?view=done|closed|snoozed` the finished tasks, and `?type=` the type. On a desktop, drag a card to another column or to a new place
 in its column: it saves the step and `step_rank` at once, and a card dropped on a folded strip goes to
 the last backlog step or the first finished one. On a phone, change the step in the task's **Step**
 row. A card with an open blocker says **Blocked by** it across its top; click that to show only the
@@ -47,13 +54,13 @@ tasks start with that type. Clearing filters keeps the selected type. Older comb
 deleted types fall back to General.
 
 **You** lists and counts everything that needs you across every board: tasks, questions, waits, recent declines,
-approvals, asks and stale checks. The tab and Tasks navigation badges show the
+approvals, asks and stale checks. The scope button and Tasks navigation badges show the
 same count on desktop and phone; the badges hide at zero. Each row shows one face (whoever asks), the
 title with the bot's ask as a muted line under it, and the age; no status, since everything there is open.
 **Group: Kind** sorts it under **Answer**, **Pay**, **Connect**, **Review** and **Do**. Under **Asked by**, approvals, questions
 outside tasks and stale checks lead under **Approvals and questions**, with their own count.
 **Catch up** opens the answerable cards one at a time. It has no number and appears only when a card is
-available. Other rows open the full task. Board, search and task filters stay with Open and Board and
+available. Other rows open the full task. The type, search and task filters stay with the type's lists and
 never narrow this queue. Folded or merged tasks count only through their card. The count includes unread
 pages; answering removes an item immediately and Undo restores it. Live changes update the held rows.
 Thread mentions, unread DMs and held messages keep their own count in Threads; updates stay in Updates.
@@ -858,8 +865,8 @@ manager gains no snooze permission unless they also manage the owner or requeste
 
 Until that moment:
 
-- it is off the board, the Open list, Needs you, Decide and `hub task list`. **Snoozed** under the Tasks
-  page's **More** (listed while something is snoozed), `hub task list --snoozed only|all` and
+- it is off the board, the Open list, Needs you, Decide and `hub task list`. **Snoozed** beside the Tasks
+  page's archive icon (listed while something is snoozed), `hub task list --snoozed only|all` and
   `GET /api/v2/tasks?snoozed=only|all` list it; a read by id or number always finds it.
 - nothing automatic moves it: no stall wake or status check and no **Due:** reminder. Tico's notices about it reach its owner bot
   deferred, read on the bot's next run instead of starting one, and so does another bot's comment.
@@ -1588,11 +1595,11 @@ Pictures linked in task details, comments and threads (`![](https://…)` or a b
 own site, not through Tico. YouTube, Vimeo and Loom links open in the viewer.
 
 On the board, a task with a picture shows the newest one as a cover, and a dot marks an open
-question. **Pin to sidebar** in the Tasks bar's **⋯** menu (beside **Stats**) keeps the current view and filters under **Pipelines** in
+question. **Pin to sidebar** in the Tasks header's **⋯** menu (beside **Stats**) keeps the current view and filters under **Pipelines** in
 the left rail, for you only; **Unpin** there or ✕ on a pin removes it. Pins are links: nothing moves a task's step
 on its own.
 
-The person picker beside **Filter** says whose tasks the first tab shows. **Me** is the You list as
+On You, the face before search says whose list it is. **Me** is the You list as
 always, with its approvals and questions. Pick a teammate (people by team, each with a count; bots
 fold behind one line) to see what is on their plate: a waiting task with an open question task of theirs under it, or
 that they own when it waits on nobody, or a question asked of them. **Asked by them** shows what

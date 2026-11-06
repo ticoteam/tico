@@ -103,15 +103,16 @@ function decideFromPerson(it, shown) {
   if (!p || p === shown) return '';
   return p === myActor() ? 'You asked' : `From ${actorLabel(p)}`;
 }
-// The Needs you list's way in: Catch up, only on Needs you and only when there is a card. A phone has it in
-// the header, a wide screen in the filter bar, where the header's search keeps its room.
+// The Needs you list's way in: Catch up in the Tasks header, only on Needs you and only when there is a card.
 function decidePaintButton() {
   needsBadgePaint();
   const links = document.querySelectorAll('[data-go-through]');
   if (!links.length) return;
   const n = S.me?.role !== 'bot' && TASKS_ST && tasksNeedsQueue(TASKS_ST)
     ? needsCards(S.v2?.needs).filter(c => !decideGone(c.key)).length : 0;
-  for (const b of links) { b.hidden = !n; b.textContent = 'Catch up'; }
+  let changed = false;
+  for (const b of links) { changed ||= b.hidden !== !n; b.hidden = !n; b.textContent = 'Catch up'; }
+  if (changed && TASKS_ST) tasksHeadFit(TASKS_ST);     // the header row makes room for it, or gives it back
 }
 // The lists that show Needs you draw again: an answered card leaves them at once, and comes back on Undo.
 function needsListsRedraw() {

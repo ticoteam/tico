@@ -32,6 +32,9 @@ const TL_ICON = {
   dots: '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" focusable="false"><circle cx="3" cy="7" r="1.25" fill="currentColor"/><circle cx="7" cy="7" r="1.25" fill="currentColor"/><circle cx="11" cy="7" r="1.25" fill="currentColor"/></svg>',
   pin: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M5 1.8h4M5.6 1.8v3.6L3.6 8h6.8L8.4 5.4V1.8M7 8v4.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   caret: '<svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true" focusable="false"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  list: '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" focusable="false"><path d="M2.5 3.5h9M2.5 7h9M2.5 10.5h9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  board: '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" focusable="false"><rect x="1.8" y="2.2" width="2.9" height="9.6" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="5.55" y="2.2" width="2.9" height="6.6" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="9.3" y="2.2" width="2.9" height="8.1" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+  archive: '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" focusable="false"><rect x="1.8" y="2.3" width="10.4" height="3" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2.8 5.3v5.4a1 1 0 0 0 1 1h6.4a1 1 0 0 0 1-1V5.3M5.6 7.8h2.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   all: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><rect x="2" y="2" width="10" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4.6 7.2l1.7 1.6 3.2-3.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 // A bot in the address is `bot:<id>`; an old link's slug (or a bare name) is moved to its id.
@@ -204,7 +207,7 @@ function taskItems(state, view = state.view) {
   const out = (state.tasks || []).map(taskItem).filter(it => {
     if (it.lane !== 'company') return false;
     if (!taskPassesFilters(it.task, state.filters || {})) return false;
-    if (!taskPipelineMatches(it.task, state)) return false;
+    if (view !== 'foryou' && !taskPipelineMatches(it.task, state)) return false;
     if (state.q && !taskMatches(it, state.q)) return false;
     if (taskSnoozed(it.task) !== (view === 'snoozed')) return false;
     // A type's board has its working steps only, unless its finished steps are unfolded (taskBoardShows).
@@ -277,11 +280,13 @@ function tasksViewLabel(state, view) {
   const name = clipLine(tasksActorShort(key), 18);
   return asked ? `Asked by ${name}` : `Needs ${name}`;
 }
+// Whose list: the face (or Everyone's glyph) and a caret; the words are its label.
 function tasksWhoButtonHTML(state) {
   const key = tasksWhoKey(state), asked = state.side === 'asked';
   const words = key === 'me' ? 'Me' : key === 'all' ? 'Everyone' : tasksActorShort(key);
-  const face = key === 'all' ? `<span class="tl-gglyph">${TL_ICON.team}</span>` : actorFace(key === 'me' ? myActor() : key, 16);
-  return `<button type="button" class="tl-chip tl-chip-main tl-who" id="task-who" aria-haspopup="true" aria-label="${esc(`${asked ? 'Asked by' : 'Whose tasks'}: ${words}. Change`)}">${face}${asked ? '<span class="k">Asked by</span>' : ''}<span class="v">${esc(words)}</span>${TL_ICON.caret}</button>`;
+  const label = `Showing: ${asked ? 'Asked by ' : ''}${words}`;
+  const face = key === 'all' ? `<span class="tl-gglyph">${TL_ICON.team}</span>` : actorFace(key === 'me' ? myActor() : key, 18);
+  return `<button type="button" class="tl-who${asked ? ' asked' : ''}" id="task-who" aria-haspopup="true" aria-label="${esc(label)}" title="${esc(label)}">${face}${TL_ICON.caret}</button>`;
 }
 function tasksWhoSet(state, who, side = state.side) {
   side = side === 'asked' ? 'asked' : 'plate';
@@ -650,72 +655,83 @@ function tasksDoneHTML(items, state) {
 
 // ---- the toolbar: tabs with counts, search, new; then the filter chips and Group by. Drawn only when it changes,
 // so a load never closes a menu or takes the focus off a chip.
-function tasksTabsHTML(state) {
-  const counts = tasksCounts(state);
-  return TASK_VIEWS.filter(([k]) => TASK_TAB_VIEWS.includes(k)).map(([k]) => {
-    const on = k === state.view, n = counts[k], label = tasksViewLabel(state, k);
-    return `<button type="button" role="tab" id="task-tab-${k}" data-view="${k}" aria-selected="${on}" aria-controls="task-body" tabindex="${on ? 0 : -1}"${n != null ? ` aria-label="${esc(label)}, ${n}"` : ''}>${esc(label)}${n != null ? `<span class="cnt tnum${k === 'foryou' && n && tasksNeedsQueue(state, k) ? ' hot' : ''}" aria-hidden="true">${n}</span>` : ''}</button>`;
-  }).join('') + (!tasksNeedsQueue(state) && pipelineSelectedType(state)?.role === 'product-roadmap' ? '<a class="tl-ranked" href="#/roadmap">Ranked</a>' : '');
+// The scope button: You with its count (whose list it is: You, Needs Sam, Everyone), else the type in view.
+const tasksScopeLabel = state => state.view === 'foryou' ? tasksViewLabel(state, 'foryou') : taskPipelineLabel(state.type);
+function tasksScopePaint(state) {
+  const b = $('#task-scope');
+  if (!b) return false;
+  const label = tasksScopeLabel(state), n = state.view === 'foryou' ? tasksCounts(state).foryou : null;
+  b.setAttribute('aria-label', n != null ? `${label}, ${n}` : label);
+  $('#task-body')?.setAttribute('aria-label', label);
+  return tasksPaint(b, `<span class="tl-scope-l">${esc(label)}</span>${n != null ? `<span class="cnt tnum${n && tasksNeedsQueue(state) ? ' hot' : ''}" aria-hidden="true">${n}</span>` : ''}${TL_ICON.caret}`);
 }
-// The views in More: the tabs the row has no room for, then Snoozed (while something is snoozed, or it is open),
-// Done and Closed.
-function tasksMenuViews(state, counts = tasksCounts(state)) {
-  const hidden = new Set([...document.querySelectorAll('#task-view [role=tab][hidden]')].map(t => t.dataset.view));
-  return TASK_VIEWS.map(([k]) => k).filter(k => TASK_TAB_VIEWS.includes(k) ? hidden.has(k)
-    : k !== 'snoozed' || counts.snoozed || state.view === 'snoozed');
-}
-// The tab row never scrolls sideways: tabs it has no room for go into More, Board first, then Open; You always stays.
-// More names the view it holds while that view is open ("Done"), else it reads More. Measured again when the tabs are
-// redrawn, the view changes or the row is resized (tasks-page.js).
-function tasksTabsFit(state, force = false) {
-  const tabs = $('#task-view'), wrap = $('#task-view-more-wrap'), row = tabs?.parentElement;
-  if (!tabs || !wrap || TASKS_ST !== state) return;
-  const paintMore = () => {
-    const shown = tasksMenuViews(state).includes(state.view), label = shown ? tasksViewLabel(state, state.view) : '';
-    tasksPaint(wrap, `<button type="button" class="tl-views-more${shown ? ' on' : ''}" id="task-view-more" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(shown ? `More views, ${label} open` : 'More views')}"><span>${esc(label || 'More')}</span>${TL_ICON.caret}</button>`);
-  };
-  if (force || state.tabsFitView !== state.view) {
-    state.tabsFitView = state.view;
-    const drop = ['board', 'list'].map(k => tabs.querySelector(`[data-view="${k}"]`)).filter(Boolean);
-    for (const tab of drop) tab.hidden = false;
-    paintMore();
-    const over = () => tabs.scrollWidth - tabs.clientWidth > 1 || row.scrollWidth - row.clientWidth > 1;
-    for (const tab of drop) {
-      if (!over()) break;
-      tab.hidden = true;
-      paintMore();
-    }
-  } else paintMore();
-  const panel = $('#task-body'), on = tabs.querySelector(`[data-view="${state.view}"]:not([hidden])`);
-  panel?.setAttribute('aria-labelledby', on ? on.id : 'task-view-more');
-}
-// More's menu: each view it holds, with its count; picking one opens it.
-function tasksViewsMenu(state, anchor) {
-  const counts = tasksCounts(state);
-  tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="More views">${tasksMenuViews(state, counts).map(k => {
-    const on = k === state.view, n = counts[k];
-    return `<button type="button" role="menuitemradio" aria-checked="${on}" class="tl-mi" data-pick-view="${k}"><span>${esc(tasksViewLabel(state, k))}</span>${n ? `<span class="tl-mi-n tnum">${n}</span>` : ''}${on ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`;
-  }).join('')}</div>`, pop => {
+// Its menu: You, then the types (task-pipelines.js). A type opens its open tasks in the layout last used.
+function tasksScopeMenu(state, anchor) {
+  const you = state.view === 'foryou', n = tasksCounts(state).foryou;
+  const item = (attr, label, on, count = 0) => `<button type="button" role="menuitemradio" aria-checked="${on}" class="tl-mi" ${attr}><span>${esc(label)}</span>${count ? `<span class="tl-mi-n tnum">${count}</span>` : ''}${on ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`;
+  const sep = '<div class="tl-menu-sep" role="separator"></div>';
+  const types = taskPipelineScopeTypes();
+  tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Show">
+    ${item('data-scope="you"', tasksViewLabel(state, 'foryou'), you, n)}${sep}
+    ${types.map((t, i) => (t.other && !types[i - 1]?.other ? sep : '') + item(`data-task-type="${esc(t.id)}"`, t.label, !you && state.type === t.id)).join('')}</div>`, pop => {
     pop.onclick = ev => {
-      const b = ev.target.closest('[data-pick-view]'); if (!b) return;
-      const view = b.dataset.pickView;
+      const b = ev.target.closest('[data-scope], [data-task-type]'); if (!b) return;
       pop.hidePopover();
-      if (view !== state.view) tasksSetView(state, view);
-      ($(`#task-view [data-view="${view}"]:not([hidden])`) || $('#task-view-more'))?.focus();
+      if (b.dataset.scope) { if (state.view !== 'foryou') tasksSetView(state, 'foryou'); }
+      else tasksScopeType(state, b.dataset.taskType);
+      $('#task-scope')?.focus();
     };
   });
   anchor.setAttribute('aria-expanded', 'true');
 }
-// The bar's ⋯ menu: Stats (not for a bot) and Pin to sidebar, or Unpin when this view is pinned.
+// The finished feed's own views, in the archive button's place: Done, Closed, and Snoozed while something is snoozed.
+function tasksFinishedPaint(state) {
+  const seg = $('#task-finished');
+  if (!seg) return;
+  seg.hidden = !tasksArchived(state.view);
+  if (seg.hidden) return;
+  const snoozed = tasksCounts(state).snoozed || state.view === 'snoozed';
+  tasksPaint(seg, [['done', 'Done'], ['closed', 'Closed'], ...(snoozed ? [['snoozed', 'Snoozed']] : [])].map(([k, label]) =>
+    `<button type="button" data-view="${k}" aria-pressed="${state.view === k}">${label}</button>`).join(''));
+}
+// The header is one row. When it has no room, the search folds to its icon first, then the finished views move to the
+// head of the chips row; only then (a phone with Catch up) does the row wrap. Measured again when the row is resized
+// (tasks-page.js) and whenever its contents change.
+function tasksHeadFit(state) {
+  const head = $('#tasks-pane .tl-head'), seg = $('#task-finished'), bar = $('#task-bar');
+  if (!head || !seg || TASKS_ST !== state) return;
+  const scope = head.querySelector('.tl-scope-l');
+  head.classList.remove('s-fold', 'wrap');
+  if (seg.parentElement !== head.querySelector('.tl-finished-slot')) head.querySelector('.tl-finished-slot').append(seg);
+  // A phone's scope may shorten to "Gene…"; a wider header folds the search before it cuts the scope's name.
+  const phone = matchMedia(PHONE).matches;
+  const over = () => head.scrollWidth - head.clientWidth > 1 || (!phone && scope && scope.scrollWidth - scope.clientWidth > 1);
+  if (over()) head.classList.add('s-fold');
+  if (!seg.hidden && over()) bar.querySelector('.tl-finished-bar').append(seg);
+  if (head.scrollWidth - head.clientWidth > 1) head.classList.add('wrap');
+  bar.hidden = !bar.querySelector('#task-finished:not([hidden]), .tl-chip');
+  tasksBarEdge(bar);
+}
+// The ⋯ menu: Select tasks (where tasks can be picked), Stats (not for a bot), the ranked roadmap on the Roadmap type,
+// and Pin to sidebar, or Unpin when this view is pinned.
+const tasksSelectable = state => tasksCanSelect() && ['list', 'foryou', 'done', 'closed'].includes(state.view);
 function tasksMoreMenu(state, anchor) {
   const pinned = TASK_PINS.some(p => p.hash === tasksPinHash(state));
+  const ranked = state.view !== 'foryou' && pipelineSelectedType(state)?.role === 'product-roadmap';
   tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="More">
+    ${tasksSelectable(state) ? `<button type="button" role="menuitemcheckbox" aria-checked="${!!state.selectMode}" class="tl-mi" id="task-select-mode">${TL_ICON.all}<span>Select tasks</span>${state.selectMode ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>` : ''}
     ${S.me?.role === 'bot' ? '' : `<button type="button" role="menuitem" class="tl-mi" id="task-stats">${TL_ICON.chart}<span>Stats</span></button>`}
+    ${ranked ? `<a role="menuitem" class="tl-mi" id="task-ranked" href="#/roadmap">${TL_ICON.up}<span>Ranked</span></a>` : ''}
     <button type="button" role="menuitem" class="tl-mi" id="task-pin" data-pinned="${pinned}">${TL_ICON.pin}<span>${pinned ? 'Unpin' : 'Pin to sidebar'}</span></button></div>`, pop => {
     pop.onclick = ev => {
-      const b = ev.target.closest('#task-stats, #task-pin'); if (!b) return;
+      const b = ev.target.closest('#task-stats, #task-pin, #task-select-mode, #task-ranked'); if (!b) return;
       pop.hidePopover();
-      if (b.id === 'task-stats') taskStatsOpen(state);
+      if (b.id === 'task-ranked') return;
+      if (b.id === 'task-select-mode') {
+        state.selectMode = !state.selectMode;
+        if (!state.selectMode) tasksSelectionClear(state);
+        tasksTools(state); tasksSelectionPaint(state);
+      } else if (b.id === 'task-stats') taskStatsOpen(state);
       else tasksPinToggle(state);
     };
   });
@@ -731,25 +747,22 @@ function tasksPaint(el, html) {
   return true;
 }
 function tasksTools(state) {
-  const tabs = $('#task-view');
-  if (!tabs || TASKS_ST !== state) return;
+  const head = $('#tasks-pane .tl-head');
+  if (!head || TASKS_ST !== state) return;
   taskPipelineTools(state);
   // Someone this install does not know (an old link, a person who left) falls back to Me; Everyone asks nothing itself.
   if (state.who && state.who !== 'me' && (!tasksWhoKnown(state.who) || (state.who === 'all' && state.side === 'asked'))) {
     state.who = 'me'; state.memo = new Map(); tasksURLWrite(state);
   }
-  tasksTabsPaint(state);
-  // Board tools keep their state for Open and Board; the personal queue always shows the whole plate.
-  const queue = tasksNeedsQueue(state);
-  $('.tl-type-search')?.toggleAttribute('hidden', queue);
-  $('.tl-filters')?.toggleAttribute('hidden', queue);
+  tasksScopePaint(state);
+  // The personal queue always shows the whole plate: no search, no filters, only its grouping.
+  const queue = tasksNeedsQueue(state), you = state.view === 'foryou', archived = tasksArchived(state.view);
+  head.querySelector('.tl-search').hidden = queue;
   const who = $('#task-who-wrap');
-  if (who) {
-    who.hidden = state.view !== 'foryou';
-    if (!who.hidden) tasksPaint(who, tasksWhoButtonHTML(state));
-  }
+  who.hidden = !you;
+  if (!who.hidden) tasksPaint(who, tasksWhoButtonHTML(state));
   const chips = [];
-  for (const [field, name] of TASK_FILTER_FIELDS) {
+  for (const [field, name] of queue ? [] : TASK_FILTER_FIELDS) {
     const values = state.filters[field];
     if (!values?.length) continue;
     const opts = new Map(tasksFilterOptions(state, field).map(o => [o.value, o.label]));
@@ -758,26 +771,20 @@ function tasksTools(state) {
     chips.push(`<span class="tl-chip" data-chip="${field}"><button type="button" class="tl-chip-main" data-chip-edit="${field}" aria-haspopup="true" aria-label="${esc(`${name}: ${words.join(', ')}. Change`)}" title="${esc(`${name}: ${words.join(', ')}`)}"><span class="k">${esc(name)}</span><span class="v">${esc(shown)}</span></button><button type="button" class="tl-chip-x" data-chip-drop="${field}" aria-label="Remove ${esc(name)} filter">${TL_ICON.x}</button></span>`);
   }
   tasksPaint($('#task-chips'), chips.join(''));
-  const count = tasksActiveFilterCount(state);
-  const addBtn = $('#task-filter');
-  addBtn.classList.toggle('active', !!count);
-  addBtn.setAttribute('aria-label', count ? `Add filter, ${count} active` : 'Add filter');
+  const count = queue ? 0 : tasksActiveFilterCount(state);
+  const filter = $('#task-filter'), badge = filter.querySelector('.tl-fbadge');
+  filter.classList.toggle('active', !!count);
+  filter.setAttribute('aria-label', count ? `Filter, ${count} active` : 'Filter');
+  badge.hidden = !count; badge.textContent = count ? String(count) : '';
   $('#task-filter-clear').hidden = count === 0;
-  const groupable = state.view === 'list' || state.view === 'foryou';
-  $('#task-group-wrap').hidden = !groupable;
-  if (groupable) {
-    const by = tasksGroupBy(state), word = TASK_GROUPS.find(([k]) => k === by)?.[1] || by;
-    tasksPaint($('#task-group-wrap'), `<button type="button" class="tl-chip tl-chip-main tl-groupchip" id="task-group" aria-haspopup="true" aria-label="Group by: ${esc(word)}. Change">${TL_ICON.group}<span class="k">Group</span><span class="v">${esc(word)}</span>${TL_ICON.caret}</button>`);
-  }
-  const mode = $('#task-select-mode');
-  if (mode) {
-    mode.hidden = !tasksCanSelect() || !['list', 'foryou', 'done', 'closed'].includes(state.view);
-    mode.setAttribute('aria-pressed', String(!!state.selectMode));
-    mode.textContent = state.selectMode ? 'Done' : 'Select';
-  }
-  tasksBarEdge($('#task-bar'));
+  const layout = $('#task-layout');
+  layout.hidden = you || archived;
+  for (const b of layout.querySelectorAll('[data-layout]')) b.setAttribute('aria-pressed', String(b.dataset.layout === state.view));
+  tasksFinishedPaint(state);
+  $('#task-archive').setAttribute('aria-pressed', String(archived));
+  tasksHeadFit(state);
 }
-// A phone's filter bar scrolls sideways; while more of it is off to the right, its edge fades (task-list.css .more).
+// A phone's chips row scrolls sideways; while more of it is off to the right, its edge fades (task-list.css .more).
 const tasksBarEdge = bar => bar?.classList.toggle('more', bar.scrollWidth - bar.clientWidth - bar.scrollLeft > 1);
 // One popover for every menu on the page: a filter's values, the fields, Group by, and the bulk actions.
 // ↑/↓ move between its items (and in and out of its find box), Home/End jump, Enter picks, Esc closes.
@@ -841,26 +848,27 @@ function tasksFilterMenuLoaded(state) {
   const pop = $('#task-filter-pop');
   if (state.menuField && pop?.matches(':popover-open') && pop.querySelector('.tl-menu-none')) tasksFilterMenu(state, state.menuField, state.menuAnchor, false);
 }
+// The filter menu: how the list is grouped (on a list), then the fields to filter by (not on your own queue, which
+// always shows the whole plate). A field opens its values in the same menu.
 function tasksFieldMenu(state, anchor) {
-  const fields = TASK_FILTER_FIELDS;
-  tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Add filter"><div class="tl-menu-h" aria-hidden="true">Filter</div>
+  const groupable = state.view === 'list' || state.view === 'foryou', by = tasksGroupBy(state);
+  const group = !groupable ? '' : `<div class="tl-menu-h" aria-hidden="true">Group</div><div class="tl-gpicks" role="group" aria-label="Group by">
+    ${taskGroupsFor(state.view, state).map(([k, label]) => `<button type="button" role="menuitemradio" aria-checked="${k === by}" class="tl-mi tl-gpick" data-pick-group="${k}">${esc(label)}</button>`).join('')}</div>`;
+  const fields = tasksNeedsQueue(state) ? [] : TASK_FILTER_FIELDS;
+  tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Filter">${group}
+    ${fields.length ? `<div class="tl-menu-h" aria-hidden="true">Filter</div>` : ''}
     ${fields.map(([k, name]) => `<button type="button" role="menuitem" class="tl-mi" data-pick-field="${k}">${esc(name)}</button>`).join('')}</div>`, pop => {
     pop.onclick = ev => {
+      const g = ev.target.closest('[data-pick-group]');
+      if (g) {
+        pop.hidePopover();
+        state.group = {...state.group, [state.view]: g.dataset.pickGroup};
+        tasksRemember(state); tasksTools(state); tasksRender(state);
+        $('#task-filter')?.focus();
+        return;
+      }
       const b = ev.target.closest('[data-pick-field]'); if (!b) return;
       tasksFilterMenu(state, b.dataset.pickField, anchor, false);
-    };
-  });
-}
-function tasksGroupMenu(state, anchor) {
-  const by = tasksGroupBy(state);
-  tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Group by"><div class="tl-menu-h" aria-hidden="true">Group by</div>
-    ${taskGroupsFor(state.view, state).map(([k, label]) => `<button type="button" role="menuitemradio" aria-checked="${k === by}" class="tl-mi" data-pick-group="${k}"><span>${esc(label)}</span>${k === by ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div>`, pop => {
-    pop.onclick = ev => {
-      const b = ev.target.closest('[data-pick-group]'); if (!b) return;
-      pop.hidePopover();
-      state.group = {...state.group, [state.view]: b.dataset.pickGroup};
-      tasksRemember(state); tasksTools(state); tasksRender(state);
-      $('#task-group')?.focus();
     };
   });
 }
@@ -879,11 +887,12 @@ function tasksPrefsFromLocal(state) {
 function tasksPrefsApply(state, value) {
   if (!state.whoFixed && typeof value?.who === 'string' && value.who) state.who = value.who;
   if (!state.whoFixed && typeof value?.side === 'string') state.side = value.side === 'asked' ? 'asked' : 'plate';
+  if ((value?.layout === 'list' || value?.layout === 'board') && !tasksLayoutView(state.view)) state.layout = value.layout;
   if (value?.group && typeof value.group === 'object') state.group = {...state.group, ...value.group};
   if (Array.isArray(value?.collapsed)) state.collapsed = new Set(value.collapsed.map(String));
   if (Array.isArray(value?.folded)) state.folded = new Set(value.folded.map(String));
 }
-const tasksPrefsValue = state => ({who: state.who || 'me', side: state.side === 'asked' ? 'asked' : 'plate', group: state.group, collapsed: [...state.collapsed].slice(-200), folded: [...state.folded].slice(-200)});
+const tasksPrefsValue = state => ({layout: state.layout || 'list', who: state.who || 'me', side: state.side === 'asked' ? 'asked' : 'plate', group: state.group, collapsed: [...state.collapsed].slice(-200), folded: [...state.folded].slice(-200)});
 
 // ---- selection and bulk changes. What is selected is always what can be seen selected: a filter, a search or a fold
 // that hides a row drops it from the selection on the next draw.
@@ -931,7 +940,7 @@ function tasksBulkBar(state) {
   const bar = $('#task-bulk'); if (!bar) return;
   const n = state.selected.size;
   const undo = state.bulkUndo && state.bulkUndo.until > Date.now();
-  const show = tasksCanSelect() && (n || state.bulkMsg);
+  const show = tasksCanSelect() && (n || state.bulkMsg || state.selectMode);
   bar.hidden = !show;
   if (!show) { bar.innerHTML = ''; bar.dataset.html = ''; return; }
   const busy = !!state.bulkBusy, scope = n && state.bulkScope;
@@ -945,7 +954,7 @@ function tasksBulkBar(state) {
     <button type="button" data-bulk="close" class="danger"${busy ? ' disabled' : ''}>Close</button>` : ''}
     <span class="tl-bulk-msg${state.bulkFail?.size ? ' err' : ''}" role="status" aria-live="polite">${esc(state.bulkMsg || '')}</span>
     ${undo ? '<button type="button" data-bulk="undo" class="tl-bulk-undo">Undo</button>' : ''}
-    <button type="button" data-bulk="clear" class="tl-bulk-x" aria-label="${n ? 'Clear selection' : 'Dismiss'}" title="Clear (Esc)">${TL_ICON.x}<span>${n ? 'Clear' : ''}</span></button>`;
+    <button type="button" data-bulk="clear" class="tl-bulk-x" aria-label="${n ? 'Clear selection' : state.selectMode ? 'Done selecting' : 'Dismiss'}" title="Clear (Esc)">${TL_ICON.x}<span>${n ? 'Clear' : state.selectMode ? 'Done' : ''}</span></button>`;
   if (bar.dataset.html === html) return;          // the poll redraws the list; a focused button here keeps its focus
   const focused = bar.contains(document.activeElement) ? document.activeElement.dataset.bulk : '';
   bar.innerHTML = bar.dataset.html = html;
@@ -1117,7 +1126,7 @@ async function tasksBulkUndo(state) {
   tasksBulkSettle(state, 4000);
 }
 function tasksBulkMenu(state, kind, anchor) {
-  if (kind === 'clear') { tasksSelectionClear(state); return; }
+  if (kind === 'clear') { state.selectMode = false; tasksSelectionClear(state); return; }
   if (kind === 'undo') { void tasksBulkUndo(state); return; }
   if (kind === 'all') { const keys = tasksVisibleKeys(); tasksBulkSelectAll(state, keys, tasksListBase(state, keys), 'matching'); return; }
   if (kind === 'close') { void tasksBulkApply(state, {close: true, done: 'closed', already: 'closed'}, t => t.status === 'closed' ? null : {close: true}, {action: 'close'}); return; }
