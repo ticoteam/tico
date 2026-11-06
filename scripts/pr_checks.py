@@ -197,6 +197,8 @@ RUNNERS = {
 GLOBS = {"glob", "rglob", "iglob"}
 LISTINGS = {"iterdir", "listdir", "scandir", "walk"}
 OS_LISTINGS = {"os.listdir", "os.walk", "os.scandir", "glob.glob", "glob.iglob"}
+# Folders pytest makes for a test at run time. A path built from one is written into that folder, not the checkout.
+RUN_TIME_FOLDERS = {"tmp_path", "tmp_path_factory", "tmpdir"}
 # Calls that read, copy, run, hash or measure files; a listing in a function without one uses only names.
 CONTENT = {
     "read_text",
@@ -344,6 +346,22 @@ class DependencyMap:
                     return found
         return set()
 
+    @staticmethod
+    def run_time(node):
+        """Whether a path expression starts from a folder pytest makes at run time: `tmp_path / "backend/tests/x.py"`,
+        `Path(tmp_path, "scripts")`, `tmp_path.joinpath("ui")`. The literal parts after it name a file the test writes,
+        not one the checkout has, so the code reads none of them. A call that is only given tmp_path (run_script(tmp_path,
+        "scripts/x.py")) is not one: its strings still name what it runs."""
+        while isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            node = node.left
+        if isinstance(node, ast.Name):
+            return node.id in RUN_TIME_FOLDERS
+        if isinstance(node, ast.Call):
+            if dotted_name(node.func).rsplit(".", 1)[-1] in ("Path", "PurePath", "PosixPath"):
+                return bool(node.args) and DependencyMap.run_time(node.args[0])
+            return isinstance(node.func, ast.Attribute) and DependencyMap.run_time(node.func.value)
+        return False
+
     def path(self, token, runs, reads, bare_word=False, module=True):
         """A literal that names tracked files or folders: `a/b.json` by path suffix, `b.json` by name, and with
         bare_word (a path join, open(), subprocess argument) a plain name like `fixtures` or `tico` too."""
@@ -377,7 +395,9 @@ class DependencyMap:
 
     def paths_of(self, node):
         """The literal paths an expression names: `ROOT / "docs" / "api.md"` -> docs/api.md, a name bound to one,
-        Path("ui", "app"); the literal parts up to the first computed one."""
+        Path("ui", "app"); the literal parts up to the first computed one. Nothing built under a run-time folder counts."""
+        if self.run_time(node):
+            return set()
         if isinstance(node, ast.Name):
             return set(self.values.get(node.id, ()))
         if isinstance(node, ast.Call) and dotted_name(node.func).rsplit(".", 1)[-1] in (
@@ -448,6 +468,14 @@ class DependencyMap:
             id(b[0].value) for b in bodies if b and isinstance(b[0], ast.Expr) and isinstance(b[0].value, ast.Constant)
         }
         nested = {id(n.left) for n in nodes if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div)}
+        # The literal parts of a path built under a run-time folder: `tmp_path / "a" / "b"` and the literal arguments of
+        # `Path(tmp_path, "a")` or `tmp_path.joinpath("a")`. They name files the test writes; no other string is skipped.
+        built_at_run_time = set()
+        for n in nodes:
+            if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div) and self.run_time(n):
+                built_at_run_time |= {id(part) for part in self.chain(n)}
+            elif isinstance(n, ast.Call) and self.run_time(n):
+                built_at_run_time |= {id(a) for a in n.args if isinstance(a, ast.Constant)}
         scope = {}
         # Module-level names that hold a path found from __file__: ROOT = Path(__file__).parents[2]; DOCS = ROOT / "docs".
         # A name whose path joins a literal ("docs") names that folder, which its definition reads.
@@ -528,7 +556,12 @@ class DependencyMap:
                 runs_ |= self.module(module, bare=not node.level)
                 for alias in node.names:
                     runs_ |= self.module(module + "." + alias.name, bare=not node.level)
-            elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and id(node) not in nested:
+            elif (
+                isinstance(node, ast.BinOp)
+                and isinstance(node.op, ast.Div)
+                and id(node) not in nested
+                and not self.run_time(node)
+            ):
                 parts = self.chain(node)
                 if id(node) not in deferred | listed:
                     for found in self.paths_of(node):
@@ -556,7 +589,7 @@ class DependencyMap:
             elif isinstance(node, ast.Call):
                 function = dotted_name(node.func)
                 last = function.rsplit(".", 1)[-1]
-                if last in PATHLIKE:
+                if last in PATHLIKE and not self.run_time(node):
                     self.joined(node.args, runs_, reads_)
                 if last in RUNNERS or any(k.arg == "cwd" for k in node.keywords):
                     previous = None
@@ -626,6 +659,8 @@ class DependencyMap:
                         self.globs[path].update(t.rstrip("/").rsplit("/", 1)[-1] or "*" for t in patterns)
             elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
                 names.add(node.value)
+                if id(node) in built_at_run_time:
+                    continue
                 if "ls-files" in node.value and (
                     is_test(path) or "tests" in Path(path).parts or path.startswith("scripts/")
                 ):
@@ -743,6 +778,9 @@ class DependencyMap:
 
 # Changes that steer every test rather than particular ones: dependency pins and pytest's own configuration (conftest
 # hooks and autouse fixtures, pytest.ini).
+# The flaky-test ledger (scripts/flaky-tests.json). The root conftest.py reads it, but a change to it only alters the
+# retry of the tests it names, so it runs those and the tests that read it, not everything below the conftest.
+LEDGER = "scripts/flaky-tests.json"
 FULL_SUITE = ("pytest.ini", "package.json", "package-lock.json", ".gitignore")
 # How the checks run: the workflow, its installer and the browser system packages. A change runs the tests that read or
 # run them (the selector's own tests among them) and one short core browser script, so both kinds of check VM boot,
@@ -779,6 +817,16 @@ def full_suite(name):
         or Path(name).name == "conftest.py"
         or re.fullmatch(r"requirements[\w.-]*\.txt", Path(name).name) is not None
     )
+
+
+def ledger_files(root):
+    """The files the flaky-test ledger names: the test file of each pytest id, and each browser script. None when the
+    ledger cannot be read, so the change runs the full suite."""
+    try:
+        entries = json.loads((root / LEDGER).read_text(encoding="utf-8"))["tests"]
+        return {str(entry["id"]).partition("::")[0] for entry in entries}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None):
@@ -833,10 +881,26 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             "contracts": False,
             "reason": "documentation that no test or script reads",
         }
+    ledger = LEDGER in changed
+    if ledger:
+        names = ledger_files(root)
+        if names is None:
+            return {
+                **full,
+                "conformance": runner,
+                "reason": "unreadable flaky-test ledger: full default suite",
+                "uncertain": [LEDGER],
+            }
+        changed = [n for n in changed if n != LEDGER]
     data = [n for n in changed if read_only(n) and not graph.code(n)]
     affected = graph.affected([n for n in changed if n not in data], added) | (
         graph.read_by_tests(data, added) if data else set()
     )
+    if ledger:
+        # The root conftest reads the ledger too, but only the tests it names change, so the readers that are tests
+        # (and not the conftest's whole folder) join the named files; a named UI script runs even when it is not core.
+        affected |= names | {p for p in graph.readers(LEDGER, {LEDGER} if added is None else set(added)) if is_test(p)}
+        browser |= {Path(n).stem for n in names if n.startswith("ui/tests/") and n.endswith(".cjs")}
     python = sorted(p for p in affected if is_test(p) and not p.startswith("ui/"))
     if "--all" not in browser:
         scripts = {Path(p).stem for p in affected if Path(p).parent == Path("ui/tests") and p.endswith(".cjs")}

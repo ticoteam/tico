@@ -477,6 +477,73 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]
 
 
+def test_a_join_under_tmp_path_is_not_a_read_of_the_checkout_file_it_names(tmp_path):
+    # A test writes its own files under tmp_path, named like repository files: those joins read nothing in the checkout.
+    # A join from the checkout's own root is still a read, so the exemption stays narrow.
+    source(tmp_path, "backend/tests/test_task.py", "def test_task(): pass\n")
+    source(
+        tmp_path,
+        "backend/tests/test_writes.py",
+        "from pathlib import Path\n"
+        "def test_x(tmp_path):\n"
+        "    (tmp_path / 'backend/tests/test_task.py').write_text('')\n"
+        "    Path(tmp_path, 'backend/tests/test_task.py').read_text()\n"
+        "    tmp_path.joinpath('backend/tests/test_task.py').read_text()\n",
+    )
+    source(
+        tmp_path,
+        "backend/tests/test_reads.py",
+        "from pathlib import Path\n"
+        "ROOT = Path(__file__).parents[2]\n"
+        "def test_x(): (ROOT / 'backend/tests/test_task.py').read_text()\n",
+    )
+    # A helper that is only given tmp_path still names what it runs: the string is no join under the folder.
+    source(
+        tmp_path,
+        "backend/tests/test_calls.py",
+        "def run_script(root, name): pass\ndef test_x(tmp_path):\n    run_script(tmp_path, 'backend/tests/test_task.py')\n",
+    )
+    assert checks.selection(["backend/tests/test_task.py"], root=tmp_path, core=[])["python"] == [
+        "backend/tests/test_calls.py",
+        "backend/tests/test_reads.py",
+        "backend/tests/test_task.py",
+    ]
+
+
+def test_a_flaky_ledger_edit_runs_the_tests_it_names_and_its_readers_not_the_suite(tmp_path):
+    # The root conftest reads the ledger for every test, yet a ledger edit changes only the tests it names. It runs
+    # those, the tests that read the ledger (the checker's own test among them) and the named browser scripts, core or
+    # not; a conftest edit still runs the full suite, and an unreadable ledger runs it too.
+    source(
+        tmp_path,
+        "scripts/flaky-tests.json",
+        json.dumps({"tests": [{"id": "backend/tests/test_slow.py::test_a"}, {"id": "ui/tests/chat.cjs"}]}),
+    )
+    source(
+        tmp_path,
+        "conftest.py",
+        "import json\nfrom pathlib import Path\n"
+        "ROOT = Path(__file__).resolve().parent\n"
+        "LEDGER = json.loads((ROOT / 'scripts/flaky-tests.json').read_text())\n",
+    )
+    source(tmp_path, "backend/tests/test_slow.py", "def test_a(): pass\n")
+    source(tmp_path, "backend/tests/test_other.py", "def test_b(): pass\n")
+    source(
+        tmp_path,
+        "scripts/tests/test_flaky_ledger.py",
+        "from pathlib import Path\nLEDGER = Path(__file__).parents[2] / 'scripts/flaky-tests.json'\n"
+        "def test_x(): LEDGER.read_text()\n",
+    )
+    source(tmp_path, "ui/tests/chat.cjs", "// a browser script\n")
+    ledger = checks.selection(["scripts/flaky-tests.json"], root=tmp_path, core=[])
+    assert ledger["python"] == ["backend/tests/test_slow.py", "scripts/tests/test_flaky_ledger.py"]
+    assert ledger["browser"] == ["chat"]
+    assert checks.selection(["conftest.py"], root=tmp_path, core=[])["python"] is None
+    source(tmp_path, "scripts/flaky-tests.json", "{not json")
+    broken = checks.selection(["scripts/flaky-tests.json"], root=tmp_path, core=[])
+    assert broken["python"] is None and "scripts/flaky-tests.json" in broken["uncertain"]
+
+
 def test_docs_changelog_and_workflow_edits_run_the_tests_that_read_them_not_the_suite(tmp_path, mapped):
     # The manual reads docs/ and the app imports the manual: a page edit runs the tests that read docs/ and the tests of
     # the manual itself, not every test that imports the app. A deleted page still runs everything.

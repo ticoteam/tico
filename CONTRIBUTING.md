@@ -35,6 +35,12 @@ them too when you change what they cover. To run less while you work: `python -m
 for one file, `node scripts/ui-tests.cjs <name>` for one browser script. If you touch `app/`, also run `cargo check`
 there.
 
+A known intermittent test may be listed in `scripts/flaky-tests.json` with its owner, reason and exit date (at most 14
+days out). It then gets one retry, and each retry that passes is printed in the job summary. Once an entry's exit date
+passes, it stops getting the retry, so the test fails its queue group again until the owner fixes it or removes the
+entry. `python3 scripts/flaky_ledger.py` checks the ledger: a malformed entry always fails, and an expired entry only
+warns, unless the pull request changes the ledger, which then fails. Fix the test or remove the entry before its date.
+
 ## Before you push
 
 `scripts/check.sh` is the fast local gate. It runs each static check that applies to what you changed (the Python
