@@ -32,6 +32,7 @@ pub fn require_live(context: &workspace::Context) -> Result<()> {
 
 #[derive(Clone, Default)]
 pub struct ScreenShare(Arc<Mutex<Option<Arc<Session>>>>);
+type Authenticate = Arc<dyn Fn(Option<&str>) -> Result<String> + Send + Sync>;
 pub struct Session {
     pub store: Option<Store>,
     pub stopped: AtomicBool,
@@ -47,8 +48,10 @@ pub struct Session {
     access_token: Mutex<(u64, String)>,
     pub app: Option<tauri::AppHandle>,
     pub capture_id: String,
+    // Set only by the macOS screen observer (screen_macos.rs).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub selected: AtomicBool,
-    auth: Arc<dyn Fn(Option<&str>) -> Result<String> + Send + Sync>,
+    auth: Authenticate,
     audience: Mutex<String>,
     prefix: String,
     client: Client,
@@ -124,6 +127,8 @@ impl ScreenShare {
             .as_ref()
             .is_some_and(|s| s.meeting == id && !s.stopped.load(Ordering::Acquire))
     }
+    // The IPC command passes these inputs one by one; a struct would only regroup the same list.
+    #[allow(clippy::too_many_arguments)]
     pub fn begin(
         &self,
         app: tauri::AppHandle,
@@ -140,9 +145,9 @@ impl ScreenShare {
         );
         let mut current = self.0.lock().unwrap();
         ensure!(
-            !current
+            current
                 .as_ref()
-                .is_some_and(|s| !s.stopped.load(Ordering::Acquire)),
+                .is_none_or(|s| s.stopped.load(Ordering::Acquire)),
             "Stop the current screen share first"
         );
         let session = Arc::new(Session {
@@ -341,6 +346,7 @@ impl Session {
         }
         Ok(response)
     }
+    #[cfg(any(target_os = "macos", test))]
     fn heartbeat(self: &Arc<Self>, generation: String) {
         let session = self.clone();
         std::thread::spawn(move || {
@@ -367,6 +373,7 @@ impl Session {
             }
         });
     }
+    #[cfg(any(target_os = "macos", test))]
     pub fn publish(self: &Arc<Self>) {
         let session = self.clone();
         std::thread::spawn(move || {
