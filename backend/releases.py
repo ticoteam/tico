@@ -316,6 +316,63 @@ class Checker:
 
 CHECKER = Checker()
 
+RELEASES_URL = "https://api.github.com/repos/ticoteam/tico/releases?per_page=100"
+PUBLISHED_EVERY = 10 * 60  # the release list is asked for at most this often; the last answer is kept meanwhile
+
+
+class Published:
+    """Each release's GitHub publish time by version, for the Changelog's time line. One list call, made in the
+    background and never on a request's path. A failed call keeps the last answer; a version GitHub did not list has
+    no time, and its entry stays date-only."""
+
+    def __init__(self, clock=time.time):
+        self.clock = clock
+        self.lock = threading.Lock()
+        self.times = {}
+        self.checked = 0.0
+        self.running = False
+
+    def published(self, version):
+        """The publish time (ISO 8601) of `version`, or "" when unknown. Returns at once."""
+        now = self.clock()
+        if (
+            not self.running
+            and now - self.checked >= PUBLISHED_EVERY
+            and CHECKER.enabled()
+            and not os.environ.get("TICO_RELEASES_URL", "").strip()
+        ):
+            with self.lock:
+                if not self.running:
+                    self.running = True
+                    threading.Thread(target=self.refresh, daemon=True, name="release-times").start()
+        return self.times.get(version, "")
+
+    def refresh(self):
+        """One request for the release list, with the same headers and timeout as the newest-release check."""
+        try:
+            with _client(5) as http:
+                r = http.get(
+                    RELEASES_URL,
+                    headers={"Accept": "application/vnd.github+json", "User-Agent": "tico-update-check"},
+                )
+            if r.status_code != 200 or not isinstance(r.json(), list):
+                raise httpx.HTTPError("status %s" % r.status_code)
+            times = {}
+            for rel in r.json():
+                tag = str(rel.get("tag_name") or "") if isinstance(rel, dict) else ""
+                if parse(tag) and not rel.get("draft") and rel.get("published_at"):
+                    times[tag.lstrip("v")] = str(rel["published_at"])
+            with self.lock:
+                self.times = times
+        except Exception as exc:
+            log.debug("Release times unavailable: %s", type(exc).__name__)
+        finally:
+            self.checked = self.clock()
+            self.running = False
+
+
+PUBLISHED = Published()
+
 
 def managed():
     """Tico updates this server from outside (TICO_UPDATES=tico): there is nothing for the owner to run."""

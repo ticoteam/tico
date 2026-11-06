@@ -15,7 +15,7 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     const errors = [], posts = [], read = new Set();
     let failRead = false, failLoad = false, pageSize = 50, hold = null, dropRead = false;
     const entries = [
-      {id:'release-0.3.23', title:'Tico v0.3.23', version:'0.3.23', source:'release', kind:'product', shipped_at:'2026-10-05T15:42:00-07:00',
+      {id:'release-0.3.23', title:'Tico v0.3.23', version:'0.3.23', source:'release', kind:'product', shipped_at:'2026-10-05T00:00:00Z', published_at:'2026-10-05T15:42:00-07:00',
        bullets:['Relate tasks to each other, including follow-ups, duplicates and blockers.', 'Long chats show an outline so you can jump back to any prompt.', 'Task and conversation updates arrive as they happen.', 'See what each bot learned from its recent work.', 'Releases reach your team faster.'],
        url:'https://github.com/ticoteam/tico/releases/tag/v0.3.23'},
       {id:'release-0.3.22', title:'Tico v0.3.22', version:'0.3.22', source:'release', kind:'product', shipped_at:'2026-10-04T00:00:00Z',
