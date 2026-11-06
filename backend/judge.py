@@ -160,6 +160,13 @@ def tokens(usage):
     )
 
 
+def cache_writes(usage):
+    """Anthropic's cache-write tokens (`cache_creation_input_tokens`) from a provider's usage; 0 when it sends none."""
+    usage = usage if isinstance(usage, dict) else {}
+    value = usage.get("cache_creation_input_tokens")
+    return int(value) if _count(value) else 0
+
+
 # The dearest list price in `providers.PRICES` (USD per 1M input, output tokens): what a call to a model with no known
 # price is counted at, so no paid call counts $0 toward the cap.
 CEILING = (max(p[0] for p in providers.PRICES.values()), max(p[2] for p in providers.PRICES.values()))
@@ -195,8 +202,10 @@ def cost_usd(settings, model, usage):
         rate_in, rate_out = settings.decisions_jev_usd_per_mtok_input, settings.decisions_jev_usd_per_mtok_output
     elif priced(settings, model):
         if providers.per_request_long_tier(model):
-            # One request: its prompt (fresh and cached input together) pays the long-prompt tier when over it.
-            return round(providers.estimate_cost(model, fresh, cached, out, [(fresh, cached, out)]), 6)
+            # One request: its prompt pays the long-prompt tier when over it. The prompt is the uncached input, the cache
+            # writes (input, as providers.PRICES counts them) and the cache reads together; the threshold counts all three.
+            prompt = fresh + cache_writes(usage)
+            return round(providers.estimate_cost(model, prompt, cached, out, [(prompt, cached, out)]), 6)
         return round(providers.estimate_cost(model, fresh, cached, out), 6)
     else:
         rate_in, rate_out = CEILING
