@@ -236,7 +236,7 @@ jobs:
     # Every change, on both tiers: pinned ruff against its baseline (no new findings or suppressions), basedpyright on
     # the backend against its baseline (strict for new modules), migration names, the UI's generated API types, the
     # OpenAPI document, the runner wire contract, shell scripts (shellcheck) and workflows (actionlint). Seconds each
-    # once installed; tools are pinned.
+    # once installed; tools are pinned. The UI's strict TypeScript rule (scripts/check_ui_strict.py) runs here too.
     name: static checks
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || (github.event_name == 'merge_group' && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04') }}
@@ -286,6 +286,8 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: UI lint
         run: bash scripts/check_ui_lint.sh --base "$BASE_SHA"
+      - name: UI strict (new UI code is TypeScript; each .ts file type-checks strictly)
+        run: python3 scripts/check_ui_strict.py --base "$BASE_SHA"
       - name: UI routes
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_routes.sh --base "$BASE_SHA"
       - name: Runner wire contract
