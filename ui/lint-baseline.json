@@ -70,7 +70,7 @@
     "ui/app/settings-access.js": 3,
     "ui/app/settings-billing.js": 2,
     "ui/app/settings-bot-editor.js": 7,
-    "ui/app/settings-bots.js": 8,
+    "ui/app/settings-bots.js": 7,
     "ui/app/settings-devices.js": 1,
     "ui/app/settings-history.js": 3,
     "ui/app/settings-listening.js": 2,
