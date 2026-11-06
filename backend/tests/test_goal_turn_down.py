@@ -192,9 +192,52 @@ def test_a_yes_that_opens_with_no_is_not_a_no(api, words):
     assert proposals(api) == []
 
 
-def test_a_no_that_opens_like_a_yes_word_is_still_a_no(api):
+@pytest.mark.parametrize(
+    "words",
+    [
+        "No problem, leave it.",
+        "No problem, just leave it.",
+        "No problem, but leave it.",
+        "No problem at all, leave it.",
+    ],
+)
+def test_a_no_that_opens_like_a_yes_word_is_still_a_no(api, words):
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
-    r, attempt = turn(api, "coo", "ana-test", "No problem, leave it.")
+    r, attempt = turn(api, "coo", "ana-test", words)
     out = turn_down(api, attempt, suggestion(g["id"]))["proposal"]
-    assert (out["status"], out["decision_note"]) == ("rejected", "No problem, leave it.")
+    assert (out["status"], out["decision_note"]) == ("rejected", words)
+
+
+def measure(name, target):
+    """Another measure's waiting card on the same goal: its own name, its own target."""
+    return {
+        **suggestion(None)["payload"],
+        "kpi": {"name": name},
+        "target": {"kind": "improve", "target": target, "deadline": "2026-11-28"},
+    }
+
+
+def test_a_no_to_one_measure_leaves_another_measure_on_the_same_goal_waiting(api):
+    """Two suggestions on one goal, for two measures: the owner's "no" to one retires that one only."""
+    strategy_bot(api)
+    g = goal(api, "Get 100 companies to try Tico", owner="ops")
+    with api.app.state.store.transaction() as c:
+        tried = G.propose(c, G.AUTO_ACTOR, "goal_kpi", g["id"], payload=measure("Companies that tried Tico", 100))
+        signups = G.propose(c, G.AUTO_ACTOR, "goal_kpi", g["id"], payload=measure("Weekly signups", 20))
+    r, attempt = turn(api, "coo", "ana-test", "No, leave it.")
+    out = turn_down(api, attempt, suggestion(g["id"]))["proposal"]
+    assert out["id"] == tried["id"] and out["status"] == "rejected"
+    assert [p["id"] for p in proposals(api, "pending")] == [signups["id"]]
+
+
+def test_two_waiting_cards_on_the_same_measure_turn_nothing_down_and_ask_which_one(api):
+    strategy_bot(api)
+    g = goal(api, "Get 100 companies to try Tico", owner="ops")
+    with api.app.state.store.transaction() as c:
+        G.propose(c, G.AUTO_ACTOR, "goal_kpi", g["id"], payload=measure("Companies that tried Tico", 100))
+        G.propose(c, G.AUTO_ACTOR, "goal_kpi", g["id"], payload=measure("Companies that tried Tico", 50))
+    r, attempt = turn(api, "coo", "ana-test", "No, leave it.")
+    refused = turn_down(api, attempt, suggestion(g["id"]), expected=409)["error"]
+    assert refused["code"] == "conflict" and "which one" in refused["detail"]
+    assert len(proposals(api, "pending")) == 2 and not proposals(api, "rejected")

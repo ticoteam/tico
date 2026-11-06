@@ -1832,9 +1832,17 @@ def install(app, store, auth, mutate, settings):
                 kpi_or_404(c, who, body.kpi_id)
             if goal and not readable_goals(c, who, [goal]):
                 raise Problem("not_found", "Unknown goal", 404)
-            # The "no" refers to the card on screen for this goal and kind, whatever its words: that card is retired,
-            # not left under Needs you beside a second rejected row. A new suggestion is recorded only when there is none.
-            cards = G.pending_like(c, body.kind, body.goal_id, body.kpi_id)
+            # The "no" retires the card it refers to, whatever its words: the waiting card about the same measure,
+            # not left under Needs you beside a second rejected row. Two waiting cards it could mean: nothing is
+            # turned down, and the owner is asked which one.
+            cards = G.pending_like(c, body.kind, body.goal_id, body.kpi_id, body.payload)
+            if len(cards) > 1:
+                raise Problem(
+                    "conflict",
+                    "More than one suggestion like this is waiting on this goal, so nothing was turned down: "
+                    "ask the owner which one they mean",
+                    409,
+                )
             item = (
                 cards[0]
                 if cards
@@ -1844,8 +1852,8 @@ def install(app, store, auth, mutate, settings):
                 raise Problem(
                     "forbidden", "Whoever owns the goal or the KPI decides, and only a person, on their own click", 403
                 )
-            decided = [G.decide(c, who.actor, card["id"], "reject", note) for card in cards or [item]]
-            return {"proposal": reason_view(c, who, decided[0], hidden_owners(c, who))}
+            done = G.decide(c, who.actor, item["id"], "reject", note)
+            return {"proposal": reason_view(c, who, done, hidden_owners(c, who))}
 
         return mutate(request, body, work)
 

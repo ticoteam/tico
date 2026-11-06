@@ -248,7 +248,7 @@ TURN_DOWN_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "
 # A yes that opens with "no" (no problem, no worries) is not a turn-down; "no problem, leave it" still is.
 _NO_YES = (
     r"no\s+(?:problem|prob|worries|sweat|bother|stress|hurry|rush|trouble|biggie)\b"
-    r"(?![\s,.!]*(?:leave|skip|nope|nah|not|don'?t|do not)\b)"
+    r"(?![\s,.!]*(?:(?:just|but|at all)[\s,.!]*)*(?:leave|skip|nope|nah|not|don'?t|do not)\b)"
 )
 _NO_OPENING = re.compile(
     rf"\s*(?!{_NO_YES})(?:no|nope|nah|not (?:that|this|now|one)|leave (?:it|that|this)|skip (?:it|that|this)|"
