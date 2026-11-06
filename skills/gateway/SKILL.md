@@ -18,24 +18,24 @@ hub gateway catalog [query]
 
 Answers `{models, decisions, services, note}`. Prices are USD per 1M tokens, as input and output.
 
-- **models**: the picks a bot can run on. A pick is a **department** (General, Sales, Marketing,
-  Operations, Finance, Legal, Product, Engineering and the rest), a **level** (Low, Medium, High) and
-  **Fast** or not. Each row gives `id` (always the latest version), `pinned` (the same pick fixed at
+- **models**: the picks a bot can run on. A pick is a **level** (X-Low, Low, Medium, High, X-High) and
+  **Fast** or not: `tico-medium`, `tico-low-fast`. Each row gives `id` (always the latest version), `pinned` (the same pick fixed at
   today's version), the model underneath, its price, and `when`: one line on what the level is for.
 - **decisions**: the levels of the decision model behind `hub_decision_ask` (see the decisions skill).
 - **services**: what else the Gateway does, each with a status (`live`, `approval`, `next`, `later`,
   `planned`), a price and the tool that uses it.
 
-`query` keeps the rows whose words contain it: `hub gateway catalog sales`, `hub gateway catalog fast`.
+`query` keeps the rows whose words contain it: `hub gateway catalog high`, `hub gateway catalog fast`.
 An id without a version means the latest; add `-1.0` and so on to pin it. A pinned id keeps its model
-and price when a newer version ships; an unversioned one moves to it. The ids from before the tiers
-(`tico-cheap-1.1`, `tico-mid-1.0`, `tico-power-1.0`) still run, and are not offered.
+and price when a newer version ships; an unversioned one moves to it. An id from before the levels (with a
+department, or Cheap, Mid and Power) still runs, as the level it was.
 
-Images you view go to the models that read them: every pick except Low Fast, which reads text only.
+Images you view go to the models that read them: every pick except X-Low, X-Low Fast and Low Fast, which read
+text only.
 
-How to choose a level: Low for sorting, triage, short replies and routine checks; Medium for writing,
+How to choose a level: X-Low for bulk sorting and tagging; Low for triage, short replies and routine checks; Medium for writing,
 analysis and most turns; High for hard problems, long plans, tricky code or anything that commits money
-or words in the company's name. Fast costs more and answers sooner: use it when someone is waiting.
+or words in the company's name; X-High only when High is not enough. Fast costs more and answers sooner: use it when someone is waiting.
 Do not change your own model: an owner picks it in Settings > Bots. Say so when a different pick would
 help, with the price.
 

@@ -22,7 +22,7 @@ function gatewaySpendBar(c) {
 }
 // "$0.15 / $0.75": the catalog's price per 1M tokens in and out, which the table's head names once.
 const gatewayPerM = price => String(price || '').replace(/ per 1M$/, '');
-// Our prices by level and mode, never the model a level runs on. A level per row, by department only if one differs.
+// Our prices by level and mode, never the model a level runs on. A level per row.
 function gatewayPricesHTML(m) {
   if (!m?.levels?.length) return '';
   const cell = row => row ? `<td class="num" title="${esc(row.long || '')}">${esc(gatewayPerM(row.price))}</td>` : '<td class="num muted">—</td>';

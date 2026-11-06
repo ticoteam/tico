@@ -270,7 +270,7 @@ With the setting off, an approve the Assistant tries is refused with `403 approv
 sentence that you can turn it on in Settings > General, then puts it on a card.
 
 **Every proposal is shown for what it is.** The card's title is the server's own plain sentence (what changes and for
-whom, never the bot's words), e.g. "Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site
+whom, never the bot's words), e.g. "Security Engineer: read-only on tico (was write). Loses access to tico-site
 and tico-recorder."; a route with no sentence of its own still gets plain words ("Make a change to bot Ops"), never the method
 and path, and a setting's raw value ("all", "own") is never read out as a word: a field that holds a name (a model, a
 title) shows it, any other only names the field. A repository card made before this wording is titled from the request

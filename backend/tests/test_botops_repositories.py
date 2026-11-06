@@ -497,19 +497,13 @@ def test_a_repository_card_says_in_plain_words_what_changes():
     from backend.repositories import plain_change, plain_request
 
     org = "ticoteam/"
-    before = {
-        "effective": [
-            {"full_name": org + n, "access": "write"} for n in ("tico", "tico-marketing-site", "tico-recorder")
-        ]
-    }
+    before = {"effective": [{"full_name": org + n, "access": "write"} for n in ("tico", "tico-site", "tico-recorder")]}
     result = {
         "effective": [{"full_name": org + "tico", "access": "read"}],
-        "stopped": [
-            {"full_name": org + n, "access": "write"} for n in ("tico", "tico-marketing-site", "tico-recorder")
-        ],
+        "stopped": [{"full_name": org + n, "access": "write"} for n in ("tico", "tico-site", "tico-recorder")],
     }
     assert plain_change("Security Engineer", before, result) == (
-        "Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder."
+        "Security Engineer: read-only on tico (was write). Loses access to tico-site and tico-recorder."
     )
     gained = {
         "effective": [{"full_name": org + "tico", "access": "write"}, {"full_name": org + "docs", "access": "read"}],

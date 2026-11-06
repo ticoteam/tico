@@ -93,7 +93,7 @@
     person by hand stays until it is set back to automatic. It is short and correct, and does not
     change anything.
 
-- id: tico-marketing-board
+- id: tico-board-for-marketing
   group: tico
   prompt: "Where is the Marketing board?"
   hub: []

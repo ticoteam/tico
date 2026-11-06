@@ -2996,7 +2996,7 @@ mod tests {
         );
         // A Tico model signs in with the company's gateway key, so it needs no grant of its own.
         assert_eq!(
-            bot_key_problem("pi", &pi("tico-mid-1.0"), "none", &grants),
+            bot_key_problem("pi", &pi("tico-medium-1.0"), "none", &grants),
             None
         );
         let gemini = json!({"runtime": "gemini", "harness": "gemini", "model": "gemini-3.7-flash"});

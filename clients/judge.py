@@ -13,7 +13,7 @@ the whole contract, and it never changes:
 Four ways to reach it, one signature (`engine(state, questions, label=None) -> result`):
 
     gateway(key, url)      POST the Tico AI Gateway's decisions endpoint with a gateway key, as
-                           `tico-decide-1.0`; the hub server and the Slack gateway ask it first.
+                           `tico-decide-low`; the hub server and the Slack gateway ask it first.
     direct(api_key)        POST https://api.typesafe.ai/v1/systemone with a customer's own TypeSafe
                            key; the server's second choice, never set by default.
     through_hub(client)    POST /api/v2/decisions on the hub with the turn's own credential; the
@@ -52,14 +52,15 @@ from clients import gateway as G
 URL = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-latest"
 KEY_ENV = "TYPESAFE_API_KEY"
-# The Tico AI Gateway (Tico HQ): the same contract, answered as a Tico model. `tico-classify-1.0` is the Gateway's name
-# for a choice-mode classify; the app asks as `tico-decide-1.0` and keeps whichever of the two the Gateway answers as.
+# The Tico AI Gateway (Tico HQ): the same contract, answered as a Tico model. Low is `tico-decide-low`, the tier's current
+# version (Jev); a choice question (`hub_classify`'s spam check) is a Decide question like any other.
 GATEWAY_PROVIDER = "Tico AI Gateway"
-GATEWAY_MODEL = "tico-decide-1.0"
+GATEWAY_MODEL = "tico-decide-low"
 # How hard the Gateway thinks on a decision: Low is Jev, as it was before levels; Medium and High are language models and
 # take longer (the lineup's `tico-decide-{level}-1.0`, backend/gateway_tiers.py).
 DECIDE_LEVELS = ("low", "medium", "high")
-GATEWAY_MODELS = ("tico-decide-1.0", "tico-classify-1.0", "tico-classify-low", "tico-classify-low-1.0") + tuple(
+# The ids the Gateway may answer as: every Decide tier, auto and pinned.
+GATEWAY_MODELS = ("tico-decide-low-1.1",) + tuple(
     name for level in DECIDE_LEVELS for name in (f"tico-decide-{level}", f"tico-decide-{level}-1.0")
 )
 GATEWAY_PATH = "/v1/gateway/decisions"
@@ -81,7 +82,7 @@ def normalize_level(value):
 
 
 def decide_model(level):
-    """The id the Gateway is asked for at `level`. Low stays `tico-decide-1.0`, the id it has always been asked as."""
+    """The id the Gateway is asked for at `level`: Low's current version, or Medium or High pinned at 1.0."""
     level = normalize_level(level)
     return GATEWAY_MODEL if level == "low" else f"tico-decide-{level}-1.0"
 

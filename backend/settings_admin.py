@@ -393,7 +393,7 @@ class SettingsAdmin:
 
     def _template_gateway_model(self, c, slug, config):
         """A new bot that got the company's Gateway default only because it named no model of its own: its template's
-        `gateway:` block (level, fast) and its group's department pick the tier, as for any Gateway bot with no model."""
+        `gateway:` block (level, fast) picks the tier, as for any Gateway bot with no model."""
         from . import models_preset
         from .gateway_connection import is_tico
 

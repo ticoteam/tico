@@ -1,5 +1,5 @@
 """Decide on the Tico AI Gateway (backend/judge.py, clients/judge.py `gateway`): the server asks the Gateway as
-tico-decide-1.0 first, then a customer's own TypeSafe key, then the team's own LLM, then nothing, failing open at
+tico-decide-low first, then a customer's own TypeSafe key, then the team's own LLM, then nothing, failing open at
 every step. All against a fake Gateway, a fake TypeSafe and a fake Anthropic: nothing here leaves the machine."""
 
 import io
@@ -195,20 +195,20 @@ def ask(api):
 def test_with_a_gateway_key_a_decision_goes_to_the_gateway_as_tico_decide_and_the_audit_names_it(api, monkeypatch, net):
     wire(api, monkeypatch, own_key="ts-synthetic")
     shown = get(api, "judge")
-    assert shown["configured"] and shown["provider"] == "Tico AI Gateway" and shown["model"] == "tico-decide-1.0"
+    assert shown["configured"] and shown["provider"] == "Tico AI Gateway" and shown["model"] == "tico-decide-low"
     r = ask(api)
     assert r.status_code == 200, r.text
-    assert r.json()["model"] == "tico-decide-1.0" and r.json()["answers"]["bucket"]["choice"] == "reply"
+    assert r.json()["model"] == "tico-decide-low" and r.json()["answers"]["bucket"]["choice"] == "reply"
     ((url, sent_headers, body, timeout),) = net.requests  # one call, to the Gateway, and nothing else
     assert url == GATEWAY_URL and sent_headers["Authorization"] == "Bearer gw-synthetic" and timeout == 8
     assert body == {
         "state": {"subject": "Invoice 4471", "snippet": SECRET},
-        "model": "tico-decide-1.0",
+        "model": "tico-decide-low",
         "questions": QUESTIONS,
         "label": "mail-triage@1",
     }
     (detail,) = audits(api)
-    assert detail["provider"] == "Tico AI Gateway" and detail["model"] == "tico-decide-1.0"
+    assert detail["provider"] == "Tico AI Gateway" and detail["model"] == "tico-decide-low"
     assert "fallback" not in detail and SECRET not in json.dumps(detail)
     # The Gateway's own price is what the team's monthly cap counts.
     assert spends(api)[-1]["cost_usd"] == 0.000012 and detail["cost_usd"] == 0.000012
@@ -409,7 +409,7 @@ def test_an_unusable_answer_is_still_paid_for_and_counted_toward_the_cap_with_th
     assert r.status_code == 200 and r.json()["model"] == "claude-sonnet-5-5"
     llm_cost = B.cost_usd(store.settings, "claude-sonnet-5-5", {"input_tokens": 300, "output_tokens": 40})
     unusable, answered = spends(api)
-    assert unusable == {"label": "mail-triage@1", "model": "tico-decide-1.0", "cost_usd": 0.000012, "unusable": True}
+    assert unusable == {"label": "mail-triage@1", "model": "tico-decide-low", "cost_usd": 0.000012, "unusable": True}
     assert answered["model"] == "claude-sonnet-5-5" and answered["cost_usd"] == llm_cost and "unusable" not in answered
     assert audits(api)[-1]["cost_usd"] == round(0.000012 + llm_cost, 6) and B._RESERVED[0] == 0
 
@@ -419,7 +419,7 @@ def test_an_unusable_answer_is_still_paid_for_and_counted_toward_the_cap_with_th
     r = ask(api)
     assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable" and B._RESERVED[0] == 0
     assert [(row["model"], row.get("unusable")) for row in spends(api)[2:]] == [
-        ("tico-decide-1.0", True),
+        ("tico-decide-low", True),
         ("claude-sonnet-5-5", True),
     ]
     assert audits(api)[-1]["error"] == "shape" and audits(api)[-1]["cost_usd"] == round(0.000012 + llm_cost, 6)
@@ -438,7 +438,7 @@ def test_a_usage_that_cannot_be_read_is_counted_at_the_calls_most_not_as_nothing
     wire(api, monkeypatch)
     net.fail[GATEWAY_URL] = ("usage", usage)
     r = ask(api)
-    assert r.status_code == 200 and r.json()["model"] == "tico-decide-1.0"
+    assert r.status_code == 200 and r.json()["model"] == "tico-decide-low"
     most = B.reservation(
         api.app.state.store.settings, [J.GATEWAY_MODEL], {"subject": "Invoice 4471", "snippet": SECRET}, QUESTIONS
     )
@@ -476,7 +476,7 @@ def test_the_slack_gateway_counts_an_unusable_answer_with_the_one_after_it(hub, 
     gw.tick()
     spent = [json.loads(r["detail"]) for r in rows(hub, "SELECT detail FROM events WHERE action='judge.spend'")]
     assert [(row["model"], row.get("unusable")) for row in spent] == [
-        ("tico-decide-1.0", True),
+        ("tico-decide-low", True),
         ("claude-sonnet-5-5", None),
     ]
     detail = json.loads(rows(hub, "SELECT detail FROM events WHERE action='judge.call'")[-1]["detail"])
@@ -741,7 +741,7 @@ def test_the_server_reads_the_gateway_key_and_url_and_no_typesafe_key_by_default
     settings = Settings.from_env()
     assert settings.gateway_key == "gw-synthetic" and settings.gateway_url == GATEWAY_URL
     engine = B.primary_engine(settings)
-    assert engine.provider == "Tico AI Gateway" and engine.model == "tico-decide-1.0" and not hasattr(engine, "steps")
+    assert engine.provider == "Tico AI Gateway" and engine.model == "tico-decide-low" and not hasattr(engine, "steps")
     assert "gw-synthetic" not in repr(settings), "the key is kept out of the settings' repr"
     monkeypatch.setenv("TICO_GATEWAY_URL", "https://gateway.example/decide")
     assert Settings.from_env().gateway_url == "https://gateway.example/decide"
@@ -787,7 +787,7 @@ def test_slack_routing_asks_the_gateway_first_and_audits_it(hub, monkeypatch, ne
     gw.tick()
     assert net.requests and {r[0] for r in net.requests} == {GATEWAY_URL}
     detail = json.loads(rows(hub, "SELECT detail FROM events WHERE action='judge.call'")[-1]["detail"])
-    assert detail["provider"] == "Tico AI Gateway" and detail["model"] == "tico-decide-1.0"
+    assert detail["provider"] == "Tico AI Gateway" and detail["model"] == "tico-decide-low"
 
     net.fail[GATEWAY_URL] = 503
     assert gw.receive(envelope("and again", channel=DM, kind="message")) == "queued"
@@ -834,7 +834,7 @@ def _json(handler, status, payload):
 
 
 def _answers(handler):
-    _json(handler, 200, {"answers": answer_all(QUESTIONS), "model": "tico-decide-1.0"})
+    _json(handler, 200, {"answers": answer_all(QUESTIONS), "model": "tico-decide-low"})
 
 
 def test_decide_sends_the_gateway_key_only_where_it_is_set_never_through_a_redirect_or_a_loopback_proxy(monkeypatch):

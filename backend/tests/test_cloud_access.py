@@ -179,7 +179,7 @@ def test_frozen_holds_a_bot_on_a_tico_model_until_credit_lands(api, monkeypatch,
         assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
     assert row["why"].startswith("Out of credit") and row["fix"]["tab"] == "billing"
     cloud_access.apply(api.app.state.store, cloud_access.parse(signals("open")))
-    assert claim(api, machine, "ops")["config"]["model"] == "tico-general-medium-1.0"
+    assert claim(api, machine, "ops")["config"]["model"] == "tico-medium-1.0"
 
 
 @pytest.mark.parametrize("access", ["frozen", "locked", "open"])

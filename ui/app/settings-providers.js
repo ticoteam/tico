@@ -10,16 +10,16 @@ function providersModels(view, models, enabled, meeting = false) {
   const gateway = providersGatewayIds(view);
   // The saved default stays offered after its model retires, so a save about something else never moves it.
   const saved = view.default?.model || '';
-  // The Gateway's tiers are 60 rows; the company default offers General at each level, and a bot's own Model picker the rest.
+  // The company default offers each level's regular tier; a bot's own Model picker has Fast too.
   // The meeting models (Settings' Meeting model select) are only the meeting ones; a default or a bot's pick never is.
   const general = meeting ? model => !!model.meeting
-    : model => !model.tier || model.id === saved || (model.tier.department === 'general' && !model.tier.fast);
+    : model => !model.tier || model.id === saved || !model.tier.fast;
   return (models || []).filter(model => (!model.deprecated || model.id === saved) && enabled.includes(model.provider) && general(model))
     .map(model => ({id: model.id,
                     // A Tico model says what runs underneath it ("Claude Sonnet 5.5 underneath").
                     description: gateway.includes(model.provider) ? model.description || '' : '',
                     label: (modelWords(model.id) || `${labels[model.provider] || model.provider} · ${model.label}`)
-                      + (model.deprecated ? (model.lineup === 'old' ? '' : ' (retired)') : ''),
+                      + (model.deprecated ? ' (retired)' : ''),
                     recommended: (view.providers || []).some(row => row.recommended === model.id)}));
 }
 // The Tico AI Gateway's provider is on while its connection has a key, never ticked (backend/gateway_connection.py).

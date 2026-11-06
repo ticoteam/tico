@@ -43,9 +43,9 @@ REWRITE_BYTES = 64 * 1024  # the most of the model's answer read
 REWRITE_CHUNK = 8 * 1024  # read in pieces, so the deadline is checked as the answer arrives
 _REWRITES = threading.BoundedSemaphore(2)  # rewrites at once; a third keeps the composed text instead of queueing
 REWRITE_MODEL = "gemini-3.7-flash"
-# With no Gemini key (a hosted install), the Tico AI Gateway's General · Low tier at version 1.0 (Claude Haiku 5.5, the
-# cheapest general chat tier; backend/gateway_tiers.py). Pinned, so a later version never changes what a draft runs on.
-GATEWAY_REWRITE_MODEL = "tico-general-low-1.0"
+# With no Gemini key (a hosted install), the Tico AI Gateway's Low tier at version 1.0 (Claude Haiku 5.5;
+# backend/gateway_tiers.py). Pinned, so a later version never changes what a draft runs on.
+GATEWAY_REWRITE_MODEL = "tico-low-1.0"
 # Gateway models reason before they answer, and the reasoning counts against the cap: 400 left a rewrite (the longer
 # prompt) with no answer at all. The least reasoning, and room for it plus a 150-word answer.
 GATEWAY_MAX_TOKENS = 2000

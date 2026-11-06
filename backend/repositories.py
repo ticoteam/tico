@@ -629,7 +629,7 @@ def card_words(c, settings, auth, who, bot, body):
 
 def plain_change(name, before, result):
     """What a repository access change does, in one or two plain sentences for a person's Confirm card: `Security
-    Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.` `before` is
+    Engineer: read-only on tico (was write). Loses access to tico-site and tico-recorder.` `before` is
     `access()` before the change, `result` what `set_access` returned."""
     was = {r['full_name'].lower(): r for r in before['effective']}
     now = {r['full_name'].lower(): r for r in result['effective']}

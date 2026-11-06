@@ -10500,12 +10500,12 @@ def classify(api, args):
 # ----------------------------------------------------------------------------- the Tico AI Gateway
 @tool(
     "hub_gateway_catalog",
-    "The Tico AI Gateway's lineup, to choose from: chat models (a department, a level Low/Medium/High "
-    "and Fast, each with the model underneath, its price per 1M tokens and when to use it), decision levels, and services "
-    "(each with its status, price and the tools that use it). A model id without a version is the tier's current version; "
-    "add -<version> to pin it. `query` keeps the entries whose words match (a department, a level, a model, a service). "
-    "Read-only, from the catalog the app keeps; see skills/gateway/SKILL.md for how to choose.",
-    {"query": _s("Words to match, e.g. 'engineering high' or 'search'; omit for everything")},
+    "The Tico AI Gateway's lineup, to choose from: chat models (a level X-Low/Low/Medium/High/X-High and Fast, each with "
+    "the model underneath, its price per 1M tokens and when to use it), decision levels, and services (each with its "
+    "status, price and the tools that use it). A model id without a version is the tier's current version; add -<version> "
+    "to pin it. `query` keeps the entries whose words match (a level, a model, a service). Read-only, from the catalog the "
+    "app keeps; see skills/gateway/SKILL.md for how to choose.",
+    {"query": _s("Words to match, e.g. 'high fast' or 'search'; omit for everything")},
 )
 def gateway_catalog(api, args):
     return api.get("gateway/catalog", **({"query": str(args["query"])} if args.get("query") else {}))
