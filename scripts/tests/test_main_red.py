@@ -1,4 +1,5 @@
 import json
+import math
 import subprocess
 
 import pytest
@@ -8,6 +9,7 @@ from scripts import pr_checks as checks
 
 ROOT = mr.ROOT
 RED_SHA = "b" * 40
+TEST_A = "backend/tests/test_a.py::test_a"
 
 
 def git(root, *args):
@@ -45,6 +47,7 @@ class FakeApi:
         self.comments = []  # (number or path, body) for each comment
         self.closed = []
         self.created = []  # (title, labels)
+        self.issue_bodies = []  # the body of each issue opened
 
     def validation_runs(self):
         return self.runs
@@ -85,6 +88,7 @@ class FakeApi:
 
     def create_issue(self, title, body, labels):
         self.created.append((title, labels))
+        self.issue_bodies.append(body)
         return {"number": 9}
 
 
@@ -101,6 +105,19 @@ def run_of(conclusion, sha, created, run_id=1, branch="main", event="workflow_di
     }
 
 
+def red_of(sha, run_id=2):
+    return run_of("failure", sha, "2026-11-06T16:30:34Z", run_id=run_id)
+
+
+def api_for(green, red, log, extra_runs=()):
+    """A red run after a green one, with one failed job whose log is `log`."""
+    return FakeApi(
+        runs=[run_of("success", green, "2026-11-06T12:00:00Z", run_id=1), red_of(red), *extra_runs],
+        jobs=[{"id": 5, "name": "product", "conclusion": "failure"}],
+        logs={5: log},
+    )
+
+
 def pull_request(number, files, title="A change", author="", commits=()):
     return {
         "number": number,
@@ -112,26 +129,61 @@ def pull_request(number, files, title="A change", author="", commits=()):
     }
 
 
+def owned(owners):
+    """collect() for a chain of commits: owners maps a commit to the pull requests GitHub says merged it."""
+
+    def collect(api, git_, commits, subjects, repo):
+        prs, direct = {}, []
+        for sha in commits:
+            numbers = owners.get(sha, [])
+            if not numbers:
+                direct.append({"sha": sha, "subject": subjects.get(sha, ""), "files": git_.changed(sha)})
+            for number in numbers:
+                entry = prs.setdefault(number, pull_request(number, [], "change %d" % number, commits=[]))
+                entry["commits"].append(sha)
+                entry["files"].update(git_.changed(sha))
+        return prs, direct
+
+    return collect
+
+
+def chain(tmp_path, changed, count):
+    """A green commit on main, then count commits that each change `changed`: shas[i] is the i-th change. The tree is
+    BASE_FILES: backend/tests/test_a.py imports backend/util.py, and ui/tests/google-tab.cjs is a browser script."""
+    git(tmp_path, "init", "-q", "-b", "main")
+    green = commit(tmp_path, "green", BASE_FILES)
+    shas = [commit(tmp_path, "change %d" % index, {changed: "value %d\n" % index}) for index in range(count)]
+    return tmp_path, green, shas
+
+
+def failing_from(shas, first_bad):
+    """A probe for the bisect: the tests fail at shas[first_bad] and after it, and pass before it."""
+
+    def probe(workdir, git_, sha, tests):
+        return ("bad" if shas.index(sha) >= first_bad else "good"), [], "scripted"
+
+    return probe
+
+
+BASE_FILES = {
+    "backend/__init__.py": "",
+    "backend/util.py": "def helper():\n    return 1\n",
+    "backend/unused.py": "U = 1\n",
+    "backend/tests/__init__.py": "",
+    "backend/tests/test_a.py": "from backend.util import helper\n\n\ndef test_a():\n    assert helper()\n",
+    "backend/tests/test_b.py": "def test_b():\n    assert True\n",
+    "ui/app/mapped.js": "export const mapped = 1;\n",
+    "ui/app/other.js": "export const other = 2;\n",
+    "ui/tests/google-tab.cjs": "// a browser script\n",
+}
+
+
 @pytest.fixture
 def two_runs(tmp_path):
     """A tree where backend/tests/test_a.py imports backend/util.py, test_b.py imports nothing, and backend/unused.py is
     tracked and imported by nothing. A green commit, then a red change to util."""
     git(tmp_path, "init", "-q", "-b", "main")
-    green = commit(
-        tmp_path,
-        "green",
-        {
-            "backend/__init__.py": "",
-            "backend/util.py": "def helper():\n    return 1\n",
-            "backend/unused.py": "U = 1\n",
-            "backend/tests/__init__.py": "",
-            "backend/tests/test_a.py": "from backend.util import helper\n\n\ndef test_a():\n    assert helper()\n",
-            "backend/tests/test_b.py": "def test_b():\n    assert True\n",
-            "ui/app/mapped.js": "export const mapped = 1;\n",
-            "ui/app/other.js": "export const other = 2;\n",
-            "ui/tests/google-tab.cjs": "// a browser script\n",
-        },
-    )
+    green = commit(tmp_path, "green", BASE_FILES)
     red = commit(tmp_path, "red: a change to util", {"backend/util.py": "def helper():\n    return 2\n"})
     return tmp_path, green, red
 
@@ -261,7 +313,7 @@ def test_a_red_run_tells_each_suspect_once_and_leaves_the_others_alone(two_runs,
         ),
     )
     monkeypatch.setattr(mr.Git, "range", lambda self, base, head: ([red], False))
-    run = run_of("failure", red, "2026-11-06T16:30:34Z", run_id=2)
+    run = red_of(red)
     marker = "<!-- main-red-break %s -->" % green
 
     result = mr.alarm(api, run, root)
@@ -292,12 +344,160 @@ def test_a_refused_review_becomes_one_comment(two_runs, monkeypatch):
     monkeypatch.setattr(mr, "collect", lambda *args: ({902: pull_request(902, {"backend/util.py"}, commits=[red])}, []))
     monkeypatch.setattr(mr.Git, "range", lambda self, base, head: ([red], False))
 
-    result = mr.alarm(api, run_of("failure", red, "2026-11-06T16:30:34Z", run_id=2), root)
+    result = mr.alarm(api, red_of(red), root)
 
     assert result["told"][902].startswith("commented")
     assert [number for number, _ in api.posts] == [902]
     assert [path for path, _ in api.comments] == ["issues/902/comments"]
     assert "<!-- main-red-break %s -->" % green in api.comments[0][1]["body"]
+
+
+def test_three_or_fewer_suspects_are_each_reviewed_once_without_a_bisect(tmp_path, monkeypatch):
+    root, green, shas = chain(tmp_path, "backend/util.py", 3)
+    monkeypatch.setattr(mr, "collect", owned({sha: [900 + index] for index, sha in enumerate(shas)}))
+    api = api_for(green, shas[-1], "FAILED %s - AssertionError\n" % TEST_A)
+
+    result = mr.alarm(api, red_of(shas[-1]), root)
+
+    assert sorted(number for number, _ in api.posts) == [900, 901, 902]
+    assert "needs_bisect" not in result and result["bisect"] is None
+
+
+def test_more_than_three_suspects_leave_the_reviews_to_the_bisect_job(tmp_path, monkeypatch):
+    root, green, shas = chain(tmp_path, "backend/util.py", 6)
+    monkeypatch.setattr(mr, "collect", owned({sha: [900 + index] for index, sha in enumerate(shas)}))
+    api = api_for(green, shas[-1], "FAILED %s - AssertionError\n" % TEST_A)
+
+    result = mr.alarm(api, red_of(shas[-1]), root)
+
+    assert result["needs_bisect"] is True and result["bisect"] == "pending"
+    assert api.posts == []
+    assert "Bisecting 6 suspect pull requests" in api.issue_bodies[-1]
+    assert "#905" in api.issue_bodies[-1]
+
+
+def test_the_bisect_reviews_only_the_pull_request_where_the_tests_first_fail(tmp_path, monkeypatch):
+    root, green, shas = chain(tmp_path, "backend/util.py", 6)
+    monkeypatch.setattr(mr, "collect", owned({sha: [900 + index] for index, sha in enumerate(shas)}))
+    monkeypatch.setattr(mr, "probe_commit", failing_from(shas, 3))
+    api = api_for(green, shas[-1], "FAILED %s - AssertionError\n" % TEST_A)
+
+    result = mr.alarm(api, red_of(shas[-1]), root, bisecting=True)
+
+    assert result["bisect"] == "culprit"
+    assert [number for number, _ in api.posts] == [903]
+    body = api.issue_bodies[-1]
+    assert "First failing commit: `%s`" % shas[3][:9] in body
+    assert "Reviewed: #903." in body and "Not reviewed: #900, #901, #902, #904, #905." in body
+    assert "found this pull request's merge" in api.posts[0][1]["body"]
+
+
+def test_a_culprit_merge_of_many_pull_requests_gets_at_most_three_reviews(tmp_path, monkeypatch):
+    root, green, shas = chain(tmp_path, "backend/util.py", 6)
+    owners = {sha: [900 + index] for index, sha in enumerate(shas)}
+    owners[shas[3]] = [2003, 2004, 2005, 2006, 2007]
+    monkeypatch.setattr(mr, "collect", owned(owners))
+    monkeypatch.setattr(mr, "probe_commit", failing_from(shas, 3))
+    api = api_for(green, shas[-1], "FAILED %s - AssertionError\n" % TEST_A)
+
+    result = mr.alarm(api, red_of(shas[-1]), root, bisecting=True)
+
+    assert result["bisect"] == "culprit"
+    assert [number for number, _ in api.posts] == [2003, 2004, 2005]
+    assert "#2006, #2007." in api.issue_bodies[-1]
+
+
+def test_a_culprit_is_told_once_however_often_the_bisect_repeats(tmp_path, monkeypatch):
+    root, green, shas = chain(tmp_path, "backend/util.py", 6)
+    monkeypatch.setattr(mr, "collect", owned({sha: [900 + index] for index, sha in enumerate(shas)}))
+    monkeypatch.setattr(mr, "probe_commit", failing_from(shas, 3))
+    api = api_for(green, shas[-1], "FAILED %s - AssertionError\n" % TEST_A)
+    mr.alarm(api, red_of(shas[-1]), root, bisecting=True)
+    assert [number for number, _ in api.posts] == [903]
+
+    api.told = {903: [{"body": "<!-- main-red-break %s -->" % green}]}
+    api.posts = []
+    again = mr.alarm(api, red_of(shas[-1]), root, bisecting=True)
+
+    assert api.posts == [] and again["told"][903] == "already told"
+
+
+def test_a_mixed_probe_is_flaky_and_posts_nothing(tmp_path, monkeypatch):
+    root, green, shas = chain(tmp_path, "backend/util.py", 6)
+    monkeypatch.setattr(mr, "collect", owned({sha: [900 + index] for index, sha in enumerate(shas)}))
+
+    def mixed(workdir, git_, sha, tests):
+        if sha == shas[2]:
+            return "flaky", [TEST_A], "runs fail, pass"
+        return ("bad" if shas.index(sha) >= 3 else "good"), [], "scripted"
+
+    monkeypatch.setattr(mr, "probe_commit", mixed)
+    api = api_for(green, shas[-1], "FAILED %s - AssertionError\n" % TEST_A)
+
+    result = mr.alarm(api, red_of(shas[-1]), root, bisecting=True)
+
+    assert result["bisect"] == "flaky"
+    assert api.posts == []
+    body = api.issue_bodies[-1]
+    assert "scripts/flaky-tests.json" in body and "`%s`" % TEST_A in body
+
+
+def test_a_red_candidate_that_passes_twice_is_flaky_and_posts_nothing(tmp_path, monkeypatch):
+    root, green, shas = chain(tmp_path, "backend/util.py", 6)
+    monkeypatch.setattr(mr, "collect", owned({sha: [900 + index] for index, sha in enumerate(shas)}))
+    monkeypatch.setattr(mr, "probe_commit", lambda workdir, git_, sha, tests: ("good", [], "passed twice"))
+    api = api_for(green, shas[-1], "FAILED %s - AssertionError\n" % TEST_A)
+
+    result = mr.alarm(api, red_of(shas[-1]), root, bisecting=True)
+
+    assert result["bisect"] == "flaky" and api.posts == []
+    assert "passed twice at the red candidate" in api.issue_bodies[-1]
+
+
+def test_an_inconclusive_probe_posts_nothing_and_says_the_bisect_did_not_finish(tmp_path, monkeypatch):
+    root, green, shas = chain(tmp_path, "backend/util.py", 6)
+    monkeypatch.setattr(mr, "collect", owned({sha: [900 + index] for index, sha in enumerate(shas)}))
+    monkeypatch.setattr(mr, "probe_commit", lambda workdir, git_, sha, tests: ("inconclusive", [], "timed out"))
+    api = api_for(green, shas[-1], "FAILED %s - AssertionError\n" % TEST_A)
+
+    result = mr.alarm(api, red_of(shas[-1]), root, bisecting=True)
+
+    assert result["bisect"] == "inconclusive" and api.posts == []
+    assert "The bisect did not finish" in api.issue_bodies[-1]
+
+
+def test_a_newer_validation_run_supersedes_the_bisect_and_leaves_the_issue_alone(tmp_path, monkeypatch):
+    root, green, shas = chain(tmp_path, "backend/util.py", 6)
+    monkeypatch.setattr(mr, "collect", owned({sha: [900 + index] for index, sha in enumerate(shas)}))
+    api = api_for(green, shas[-1], "FAILED %s - AssertionError\n" % TEST_A)
+    newer = run_of("success", shas[-1], "2026-11-06T17:00:00Z", run_id=3)
+
+    def probe(workdir, git_, sha, tests):
+        api.runs.append(newer)  # a newer run finishes while this bisect is probing
+        return "bad", [], "scripted"
+
+    monkeypatch.setattr(mr, "probe_commit", probe)
+
+    result = mr.alarm(api, red_of(shas[-1]), root, bisecting=True)
+
+    assert result["bisect"] == "superseded" and "skipped" in result
+    assert api.posts == [] and api.issue_bodies == []
+
+
+def test_a_browser_script_break_is_not_bisected_and_gets_no_reviews(tmp_path, monkeypatch):
+    root, green, shas = chain(tmp_path, "ui/app/other.js", 6)
+    monkeypatch.setattr(mr, "collect", owned({sha: [900 + index] for index, sha in enumerate(shas)}))
+
+    def never(*args):
+        raise AssertionError("a browser script is not probed by the bisect")
+
+    monkeypatch.setattr(mr, "probe_commit", never)
+    api = api_for(green, shas[-1], "1 of 60 UI scripts failed: google-tab.cjs (3s)\n")
+
+    result = mr.alarm(api, red_of(shas[-1]), root)
+
+    assert "needs_bisect" not in result and api.posts == []
+    assert "Not bisected:" in api.issue_bodies[-1]
 
 
 def test_merge_queue_and_stale_runs_are_skipped(tmp_path):
@@ -348,9 +548,73 @@ def test_a_green_run_with_no_open_issue_does_nothing(two_runs):
     assert api.closed == [] and api.comments == []
 
 
-def test_the_workflow_runs_only_for_a_main_dispatch_and_reads_by_default():
+def test_two_runs_say_bad_good_flaky_or_inconclusive():
+    assert mr.classify({"a"}, {"a"}) == ("bad", [])
+    assert mr.classify(set(), set()) == ("good", [])
+    assert mr.classify({"a"}, set()) == ("flaky", ["a"])
+    assert mr.classify(None, set()) == ("inconclusive", [])
+
+
+def test_a_pytest_run_names_each_failed_node_id():
+    out = (
+        "FAILED backend/tests/test_x.py::test_a[None] - AssertionError: no\n"
+        "FAILED backend/tests/test_x.py::test_b - x\n"
+    )
+    assert set(mr.PYTEST_FAILED.findall(out)) == {
+        "backend/tests/test_x.py::test_a[None]",
+        "backend/tests/test_x.py::test_b",
+    }
+    assert mr.PYTEST_NODE.match(TEST_A) and not mr.PYTEST_NODE.match("google-tab.cjs")
+
+
+def test_the_bisect_finds_the_first_bad_commit_of_seventy_in_log_steps():
+    commits = ["c%02d" % index for index in range(70)]
+    found = mr.bisect(commits, "g0", [TEST_A], failing_from(commits, 41), lambda: False)
+
+    assert found["verdict"] == "culprit" and found["commit"] == "c41" and found["after"] == "c40"
+    assert len(found["steps"]) <= 1 + math.ceil(math.log2(len(commits)))
+
+
+def test_the_bisect_stops_at_a_mixed_probe_and_names_the_test():
+    commits = ["c%02d" % index for index in range(70)]
+
+    def probe(sha, tests):
+        if sha == "c34":
+            return "flaky", [TEST_A], "runs fail, pass"
+        return ("bad" if commits.index(sha) >= 41 else "good"), [], "scripted"
+
+    found = mr.bisect(commits, "g0", [TEST_A], probe, lambda: False)
+
+    assert found["verdict"] == "flaky" and found["names"] == [TEST_A] and found["commit"] == "c34"
+    assert found["steps"][-1]["result"] == "flaky"
+
+
+def test_a_bisect_out_of_time_gives_no_verdict():
+    commits = ["c%02d" % index for index in range(6)]
+    ticks = iter(range(0, 10**7, 500))
+
+    found = mr.bisect(
+        commits, "g0", [TEST_A], lambda sha, tests: ("bad", [], "scripted"), lambda: False, clock=lambda: next(ticks)
+    )
+
+    assert found["verdict"] == "inconclusive" and "budget" in found["reason"]
+    assert len(found["steps"]) == 1
+
+
+def test_the_bisect_budget_fits_the_job_and_each_step_fits_two_minutes():
+    assert mr.BISECT_LIMIT == 15 * 60
+    assert mr.REPEATS * mr.RUN_LIMIT + mr.BUILD_LIMIT == mr.STEP_LIMIT <= 120
+
+
+def test_the_workflow_hands_a_bisect_to_runs_on_and_runs_on_no_other_event():
     text = (ROOT / ".github/workflows/main-red.yml").read_text()
     assert "workflows: [Release validation]" in text
     assert "github.event.workflow_run.event == 'workflow_dispatch'" in text
     assert "github.event.workflow_run.head_branch == 'main'" in text
     assert "permissions:\n  contents: read" in text
+    assert "needs: alarm" in text and "needs.alarm.outputs.bisect == 'true'" in text
+    assert "group: main-red-bisect\n      cancel-in-progress: true" in text
+    assert "runner=4cpu-linux-x64" in text
+    assert "scripts/ci_install.sh python" in text
+    assert "--bisect" in text
+    assert "merge_group" not in text

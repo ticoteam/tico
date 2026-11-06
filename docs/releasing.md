@@ -75,8 +75,11 @@ Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays,
   by a manual run (below), which validates it again (a flaky check). A window still red at the next open carries on.
   The next window that ships closes the issue.
 - **Main is red.** A red Release validation run on main reviews, once per break, each merged pull request that changed
-  a file a failing test uses (a review, so Tico routes it to the pull request's owner), and keeps one open `main-red`
-  issue listing the suspects, the likely breaks and the likely flaky tests. The next green run on main closes it. See
+  a file a failing test uses (a review, so Tico routes it to the pull request's owner). With more than three such
+  pull requests and only pytest tests failing, the bisect job on RunsOn runs the failing tests at the commits between
+  the last green run and the red one, twice each, and reviews only the merge where they first fail. A mix of results is
+  flaky: nothing is reviewed, and the test is a candidate for `scripts/flaky-tests.json`. One open `main-red` issue lists
+  the suspects, the verdict and the likely flaky tests. The next green run on main closes it. See
   `scripts/main_red.py`.
 - **Canary and stable.** The canary is Tico Team's install, stable is TIDY's. Both are updated through their update
   keys ([Service keys](service-keys.md#update-keys)) with `GET`/`POST /api/v2/system/update`, never a browser or SSH.

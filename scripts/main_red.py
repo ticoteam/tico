@@ -10,24 +10,34 @@ the newest green run on main before it whose candidate is an ancestor of C:
   names no test is not attributed to anything.
 - A test is likely flaky when G has it and nothing it uses changed from G to C, by scripts/pr_checks.py's measured
   dependency map. Anything else is a likely break, and so is a test that G does not have.
-- Each pull request in the range that changed a file a likely break uses gets one review (COMMENT, never a request for
-  changes). Tico ingests pull request reviews (backend/github.py, pull_request_review), and a bot's review becomes a
-  note that wakes the pull request's owner. A review GitHub refuses becomes one comment instead. The marker names G,
-  so a pull request is told once per break, however often the red run repeats.
+- At most three suspects (pull requests that changed a file a likely break uses) each get one review (COMMENT, never a
+  request for changes). Tico ingests pull request reviews (backend/github.py, pull_request_review), and a bot's review
+  becomes a note that wakes the pull request's owner. A review GitHub refuses becomes one comment instead.
+- More than three suspects, and every likely break a pytest node id: the alarm leaves the reviews to the bisect job
+  (.github/workflows/main-red.yml, on RunsOn). The bisect runs the failing tests at the red candidate, then at the
+  midpoints of the first-parent commits in G..C, each run twice: both fail is bad, both pass is good, a mix is flaky.
+  Only the pull request of the first bad commit gets a review, at most three. A mix ends the bisect as flaky: no
+  review, and the test is named as a candidate for scripts/flaky-tests.json. A probe that cannot say, the 15 minute
+  budget running out, or a newer validation run finishing ends the bisect with no review.
+- The review marker names G, so a pull request is told once per break, however often the red run repeats.
 - One open issue, labelled main-red, shows the current state and is edited in place. The next green run on main
   closes it and says which of the failing tests passed again with nothing they use changed.
 
 Run it by hand against a run id, with --dry-run to print what it would post:
   GITHUB_REPOSITORY=ticoteam/tico GITHUB_TOKEN=... python3 scripts/main_red.py --run-id N --workdir DIR --dry-run
+The bisect alone, offline (no GitHub calls, no issue, no reviews), prints each probe:
+  python3 scripts/main_red.py --bisect-local GOOD RED --test NODE_ID --workdir DIR
 """
 
 import argparse
+import contextlib
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -45,9 +55,17 @@ GREEN = {"success"}
 AGGREGATE_JOBS = {"release-check", "test-timings"}  # they only compare the parts; the parts name the failures
 MAX_COMMITS = 150
 NO_BASELINE_COMMITS = 50
+MAX_REVIEWS = 3  # reviews per break: the culprit's pull requests, or every suspect when there are this few
+BISECT_OVER = 3  # more suspects than this, with every likely break a pytest node id: bisect instead of reviewing all
+REPEATS = 2  # runs of the failing tests at each commit the bisect probes
+RUN_LIMIT = 55  # seconds one pytest run may take
+BUILD_LIMIT = 10  # seconds the UI build may take
+STEP_LIMIT = REPEATS * RUN_LIMIT + BUILD_LIMIT  # seconds one probe may take: 120, two minutes
+BISECT_LIMIT = 15 * 60  # seconds a whole bisect may take
 UI_TEST = "ui/tests/%s.cjs"  # a browser script that UI_MAP names for a UI file
 ALL_UI = "ui/tests/*"  # any browser script: a UI file UI_MAP does not name
 PYTEST_FAILED = re.compile(r"\bFAILED (\S+::\S+)")
+PYTEST_NODE = re.compile(r"\S+\.py::\S+$")
 UI_FAILED = re.compile(r"\d+ of \d+ UI scripts failed: (.+?)(?: \(\d+s\))?\s*$")
 MESSAGE_PR = re.compile(r"Merge pull request #(\d+)\b|\(#(\d+)\)\s*$")
 STATE = re.compile(r"<!-- main-red-state (\{[^\n]*\}) -->")
@@ -111,6 +129,12 @@ class Git:
         commits = list(dict.fromkeys(line + merges))
         return commits[-MAX_COMMITS:], len(commits) > MAX_COMMITS
 
+    def line(self, base, head):
+        """The first-parent commits after base up to head, oldest first: one for each change that landed on main. The
+        head is the last one."""
+        commits = self.out("rev-list", "--first-parent", "--reverse", f"{base}..{head}").split()
+        return commits if commits[-1:] == [head] else commits + [head]
+
     def subjects(self, commits):
         if not commits:
             return {}
@@ -144,6 +168,14 @@ def short(sha):
     return (sha or "none")[:9]
 
 
+def newer_finished(run, runs):
+    """Whether a validation run created after this one has finished: its own run decides the issue, not this one."""
+    return any(
+        other["id"] != run["id"] and other.get("status") == "completed" and other["created_at"] > run["created_at"]
+        for other in runs
+    )
+
+
 def test_file(test):
     """The repository file a failing test is defined in: a UI script's file, or a pytest node id's path."""
     return "ui/tests/" + test if test.endswith(".cjs") else test.split("::", 1)[0]
@@ -152,6 +184,12 @@ def test_file(test):
 def test_def(test):
     """The function a pytest node id names, without its parameters (None for a UI script)."""
     return test.rsplit("::", 1)[-1].split("[", 1)[0] if "::" in test else None
+
+
+def defined_at(git, sha, test):
+    """Whether a commit has the test: its file, and the function a pytest node id names."""
+    path, name = test_file(test), test_def(test)
+    return git.has(sha, path) and (not name or bool(re.search(r"\bdef %s\b" % re.escape(name), git.text(sha, path))))
 
 
 def failing_tests(log):
@@ -207,10 +245,7 @@ def verdict(test, baseline, red, git, graph, cache):
     from there to the red candidate; "break" otherwise."""
     if baseline is None:
         return "break", "no green run on main to compare with"
-    path, name = test_file(test), test_def(test)
-    if not git.has(baseline, path) or (
-        name and not re.search(r"\bdef %s\b" % re.escape(name), git.text(baseline, path))
-    ):
+    if not defined_at(git, baseline, test):
         return "break", "not in green run %s (new or renamed)" % short(baseline)
     if hit(test, reach(graph, git.files(baseline, red), cache)):
         return "break", "a change since green run %s touches what it uses" % short(baseline)
@@ -282,55 +317,124 @@ def read_state(body):
         return None
 
 
-def render(report):
-    """The main-red issue's body: the state now, in plain words, and the state the next run reads back."""
-    lines = ["## main is red", ""]
-    lines.append("Release validation for main failed on `%s` ([run](%s))." % (short(report["red"]), report["run_url"]))
-    if report["baseline"]:
-        lines.append("Last green run on main: `%s`." % short(report["baseline"]))
-    else:
-        lines.append("No green run on main among the last validation runs; the range is the newest commits.")
-    lines.append(
-        "Range: %d commits, %d pull requests%s."
-        % (report["commits"], report["pull_requests"], ", capped" if report["capped"] else "")
-    )
-    breaks = [(test, reason) for test, (kind, reason) in report["tests"].items() if kind == "break"]
-    flaky = [(test, reason) for test, (kind, reason) in report["tests"].items() if kind == "flaky"]
-    if breaks:
-        lines += ["", "### Likely breaks"] + ["- `%s`: %s" % item for item in breaks]
-    if report["suspects"]:
-        lines += ["", "### Suspect pull requests (each got one review from the alarm)"]
-        lines += [
-            "- [#%d](%s) %s%s" % (n, s["url"], s["title"], " (by %s)" % s["author"] if s["author"] else "")
-            for n, s in sorted(report["suspects"].items())
-        ]
-    if report["direct"]:
-        lines += ["", "### Commits with no pull request (nothing is routed to anyone)"]
-        lines += ["- `%s` %s" % (c["sha"][:9], c["subject"]) for c in report["direct"]]
-    if flaky:
-        lines += ["", "### Likely flaky"] + ["- `%s`: %s" % item for item in flaky]
-    if report["unattributed"]:
-        lines += ["", "### Not attributed"] + [
-            "- %s: no test named in the log" % name for name in report["unattributed"]
-        ]
-    state = {
-        "baseline": report["baseline"],
-        "red": report["red"],
-        "run_url": report["run_url"],
-        "tests": {test: kind for test, (kind, _) in report["tests"].items()},
-    }
-    lines += ["", "<!-- main-red-state %s -->" % json.dumps(state, sort_keys=True)]
-    return "\n".join(lines) + "\n"
+def classify(first, second):
+    """What two runs of the failing tests say about one commit: bad when both fail, good when both pass, flaky when
+    one fails and the other passes. None is a run that could not say, and makes the probe inconclusive."""
+    if first is None or second is None:
+        return "inconclusive", []
+    if not first and not second:
+        return "good", []
+    if first and second:
+        return "bad", []
+    return "flaky", sorted(first | second)
 
 
-def review_body(report, test_names, marker):
+def describe(run):
+    return "no answer" if run is None else ("pass" if not run else "fail")
+
+
+def run_tests(workdir, tests):
+    """One pytest run of the tests, the way the python suite runs them (scripts/pr_checks.py): the node ids that
+    failed, or None when the run cannot say, because it ran past RUN_LIMIT or pytest stopped before the tests ran."""
+    command = [sys.executable, "-m", "pytest", "-q", "-n", str(checks.WORKERS), *checks.PYTEST_FLAGS, *tests]
+    try:
+        done = subprocess.run(command, cwd=workdir, capture_output=True, text=True, timeout=RUN_LIMIT, check=False)
+    except subprocess.TimeoutExpired:
+        return None
+    if done.returncode == 0:
+        return set()
+    failed = set(PYTEST_FAILED.findall(done.stdout + done.stderr))
+    return failed if done.returncode == 1 and failed else None
+
+
+def probe_commit(workdir, git, sha, tests):
+    """(result, names, note) for one commit: the tests it defines run there REPEATS times, in the checkout at workdir.
+    A commit that defines none of them passes them: the break is not there yet."""
+    present = [test for test in tests if defined_at(git, sha, test)]
+    if not present:
+        return "good", [], "defines none of the tests"
+    try:
+        subprocess.run(["git", "checkout", "--detach", "--force", sha], cwd=workdir, capture_output=True, check=True)
+        subprocess.run(
+            ["npm", "run", "--silent", "build:ui"],
+            cwd=workdir,
+            capture_output=True,
+            check=True,
+            timeout=BUILD_LIMIT,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        return "inconclusive", [], "checkout or UI build failed (%s)" % type(exc).__name__
+    runs = [run_tests(workdir, present) for _ in range(REPEATS)]
+    result, names = classify(*runs)
+    return result, names, "runs %s" % ", ".join(describe(run) for run in runs)
+
+
+def bisect(commits, good, tests, probe, superseded, clock=time.monotonic, limit=BISECT_LIMIT, step_limit=STEP_LIMIT):
+    """The first of commits (first-parent, oldest first, the last one the red candidate) where the failing tests fail.
+    probe(sha, tests) gives (result, names, note); superseded() says a newer validation run has finished. The candidate
+    is probed first: the failure must reproduce there. Then the commits are halved until one is left, each probe good
+    (both runs pass) or bad (both fail). A mix ends it as flaky. An inconclusive probe, the budget running out, or a
+    superseded run ends it with no verdict on any commit."""
+    started, steps = clock(), []
+
+    def finish(verdict, **fields):
+        return dict(verdict=verdict, steps=steps, **fields)
+
+    def probe_at(sha):
+        if superseded():
+            return "superseded", [], "a newer validation run finished"
+        if clock() - started + step_limit > limit:
+            return "budget", [], "the bisect ran out of its 15 minute budget"
+        began = clock()
+        result, names, note = probe(sha, tests)
+        steps.append({"sha": sha, "result": result, "names": names, "note": note, "seconds": round(clock() - began)})
+        return result, names, note
+
+    def stop(result, names, note, sha):
+        if result == "superseded":
+            return finish("superseded", reason=note)
+        if result == "budget":
+            return finish("inconclusive", reason=note)
+        if result == "flaky":
+            return finish("flaky", commit=sha, names=names, reason="one run failed and one passed at %s" % short(sha))
+        if result == "good":  # only the red candidate is stopped on a pass: the failure did not come back
+            return finish("flaky", commit=sha, names=list(tests), reason="the tests passed twice at the red candidate")
+        return finish("inconclusive", reason="the probe at %s could not say: %s" % (short(sha), note))
+
+    if good is None:
+        return finish("inconclusive", reason="no green run on main to start from")
+    if not commits:
+        return finish("inconclusive", reason="no commits between the green run and the red candidate")
+    lo, hi = -1, len(commits) - 1
+    result, names, note = probe_at(commits[hi])
+    if result != "bad":
+        return stop(result, names, note, commits[hi])
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        result, names, note = probe_at(commits[mid])
+        if result == "good":
+            lo = mid
+        elif result == "bad":
+            hi = mid
+        else:
+            return stop(result, names, note, commits[mid])
+    return finish("culprit", commit=commits[hi], after=commits[lo] if lo >= 0 else good, names=list(tests))
+
+
+def review_body(report, test_names, marker, culprit=None):
     tests = "\n".join("- `%s`" % test for test in test_names)
+    if culprit:
+        why = (
+            "The bisect of the red run's first-parent commits found this pull request's merge (`%s`) as the first commit "
+            "where these tests fail:" % short(culprit)
+        )
+    else:
+        why = "This pull request changed a file that the failing test(s) use, so it is a likely break:"
     return (
-        "Release validation for main failed on `%s` ([run](%s)). This pull request changed a file that the failing "
-        "test(s) use, so it is a likely break:\n\n%s\n\n"
+        "Release validation for main failed on `%s` ([run](%s)). %s\n\n%s\n\n"
         "Last green run on main: `%s`. This is the main-red alarm's note (scripts/main_red.py), not a request: nothing "
         "needs a reply. The issue \"%s\" stays open until main is green.\n\n%s"
-        % (short(report["red"]), report["run_url"], tests, short(report["baseline"]), ISSUE_TITLE, marker)
+        % (short(report["red"]), report["run_url"], why, tests, short(report["baseline"]), ISSUE_TITLE, marker)
     )
 
 
@@ -369,7 +473,88 @@ def upsert(api, body, dry_run):
     return "opened"
 
 
-def red(api, run, runs, git, root, dry_run):
+def bisect_lines(report):
+    """The issue's bisect section: what the bisect found, in plain words, and each probe it made."""
+    found = report["bisect"]
+    if not found:
+        return []
+    verdict = found["verdict"]
+    if verdict == "pending":
+        text = [
+            "Bisecting %d suspect pull requests on RunsOn; the bisect job updates this issue when it finishes."
+            % len(report["suspects"])
+        ]
+    elif verdict == "culprit":
+        pulls = ", ".join("#%d" % number for number in found.get("prs", [])) or "no pull request (a direct commit)"
+        text = [
+            "First failing commit: `%s`, after `%s`: %s. Found in %d probes."
+            % (short(found["commit"]), short(found["after"]), pulls, len(found["steps"]))
+        ]
+    elif verdict == "flaky":
+        text = [
+            "Flaky: %s. Candidate for scripts/flaky-tests.json (#2852): %s. No pull request was reviewed."
+            % (found["reason"], ", ".join("`%s`" % name for name in found["names"]))
+        ]
+    elif verdict == "not run":
+        text = ["Not bisected: %s. No pull request was reviewed." % found["reason"]]
+    else:
+        text = ["The bisect did not finish: %s. No pull request was reviewed." % found["reason"]]
+    probes = ["- `%s` %s (%s)" % (short(step["sha"]), step["result"], step["note"]) for step in found["steps"]]
+    return ["", "### Bisect"] + text + ([""] + probes if probes else [])
+
+
+def render(report):
+    """The main-red issue's body: the state now, in plain words, and the state the next run reads back."""
+    lines = ["## main is red", ""]
+    lines.append("Release validation for main failed on `%s` ([run](%s))." % (short(report["red"]), report["run_url"]))
+    if report["baseline"]:
+        lines.append("Last green run on main: `%s`." % short(report["baseline"]))
+    else:
+        lines.append("No green run on main among the last validation runs; the range is the newest commits.")
+    lines.append(
+        "Range: %d commits, %d pull requests%s."
+        % (report["commits"], report["pull_requests"], ", capped" if report["capped"] else "")
+    )
+    breaks = [(test, reason) for test, (kind, reason) in report["tests"].items() if kind == "break"]
+    flaky = [(test, reason) for test, (kind, reason) in report["tests"].items() if kind == "flaky"]
+    if breaks:
+        lines += ["", "### Likely breaks"] + ["- `%s`: %s" % item for item in breaks]
+    lines += bisect_lines(report)
+    if report["suspects"]:
+        lines += ["", "### Suspect pull requests"]
+        lines += [
+            "- [#%d](%s) %s%s" % (n, s["url"], s["title"], " (by %s)" % s["author"] if s["author"] else "")
+            for n, s in sorted(report["suspects"].items())
+        ]
+        if report["reviewed"]:
+            lines.append("Reviewed: %s." % ", ".join("#%d" % n for n in sorted(report["reviewed"])))
+        pending = report["bisect"] and report["bisect"]["verdict"] == "pending"
+        unreviewed = [n for n in sorted(report["suspects"]) if n not in report["reviewed"]]
+        if unreviewed and not pending:
+            lines.append("Not reviewed: %s." % ", ".join("#%d" % n for n in unreviewed))
+    if report["direct"]:
+        lines += ["", "### Commits with no pull request (nothing is routed to anyone)"]
+        lines += ["- `%s` %s" % (c["sha"][:9], c["subject"]) for c in report["direct"]]
+    if flaky:
+        lines += ["", "### Likely flaky"] + ["- `%s`: %s" % item for item in flaky]
+    if report["unattributed"]:
+        lines += ["", "### Not attributed"] + [
+            "- %s: no test named in the log" % name for name in report["unattributed"]
+        ]
+    state = {
+        "baseline": report["baseline"],
+        "red": report["red"],
+        "run_url": report["run_url"],
+        "tests": {test: kind for test, (kind, _) in report["tests"].items()},
+    }
+    lines += ["", "<!-- main-red-state %s -->" % json.dumps(state, sort_keys=True)]
+    return "\n".join(lines) + "\n"
+
+
+def red(api, run, runs, git, root, dry_run, bisecting=False):
+    """A red run: the suspects, and the reviews. With more than BISECT_OVER suspects and only pytest node ids as likely
+    breaks, the reviews wait for the bisect job (bisecting=False records that it is needed, and returns needs_bisect).
+    The bisect job (bisecting=True) bisects, and reviews only the pull request of the first bad commit."""
     sha = candidate(run)
     base = baseline(run, runs, git, sha)
     commits, capped = git.range(base, sha)
@@ -410,21 +595,53 @@ def red(api, run, runs, git, root, dry_run):
         "unattributed": unattributed,
         "suspects": suspects,
         "direct": direct_hits,
+        "bisect": None,
+        "reviewed": {},
     }
     result = {"state": "red", "red": sha, "baseline": base, "tests": verdicts, "suspects": sorted(suspects)}
-    result["issue"] = upsert(api, render(report), dry_run)
-    result["told"] = {}
-    for number, pr in sorted(suspects.items()):
-        marker = "<!-- main-red-break %s -->" % (base or "none")
-        body = review_body(report, pr["tests"], marker)
+    marker = "<!-- main-red-break %s -->" % (base or "none")
+    targets = []  # (pull request number, the tests it is named for, the commit the bisect found or None)
+    if len(suspects) <= BISECT_OVER:
+        targets = [(number, suspects[number]["tests"], None) for number in sorted(suspects)]
+    elif not breaks or not all(PYTEST_NODE.match(test) for test in breaks):
+        report["bisect"] = {
+            "verdict": "not run",
+            "reason": "the bisect runs pytest node ids only, and a browser script or an unnamed job is among the breaks",
+        }
+    elif not bisecting:
+        report["bisect"] = {"verdict": "pending"}
+        result["issue"] = upsert(api, render(report), dry_run)
+        result.update(bisect="pending", needs_bisect=True)
+        return result
+    else:
+
+        def superseded():
+            return newer_finished(run, api.validation_runs())
+
+        def probe(commit, names):
+            return probe_commit(root, git, commit, names)
+
+        found = bisect(git.line(base, sha) if base else [], base, breaks, probe, superseded)
+        if found["verdict"] == "superseded":
+            return dict(result, bisect="superseded", skipped="a newer validation run finished; its own run decides")
+        report["bisect"] = found
+        if found["verdict"] == "culprit":
+            culprits, _ = collect(api, git, [found["commit"]], git.subjects([found["commit"]]), api.repo)
+            found["prs"] = sorted(culprits)
+            targets = [(number, breaks, found["commit"]) for number in sorted(culprits)]
+    for number, names, culprit in targets[:MAX_REVIEWS]:
+        body = review_body(report, names, marker, culprit)
         if dry_run:
-            result["told"][number] = "dry run"
+            report["reviewed"][number] = "dry run"
             continue
         try:
-            result["told"][number] = tell(api, number, body, marker)
+            report["reviewed"][number] = tell(api, number, body, marker)
         except rt.Fail as exc:
-            result["told"][number] = "failed: %s" % exc
+            report["reviewed"][number] = "failed: %s" % exc
             result.setdefault("errors", []).append(str(exc))
+    result["told"] = report["reviewed"]
+    result["bisect"] = report["bisect"]["verdict"] if report["bisect"] else None
+    result["issue"] = upsert(api, render(report), dry_run)
     return result
 
 
@@ -438,10 +655,7 @@ def green(api, run, git, root, dry_run):
     sha = candidate(run)
     graph, cache, lines = None, {}, []
     for test in sorted(state.get("tests") or {}):
-        exists = git.has(sha, test_file(test)) and (
-            not test_def(test) or re.search(r"\bdef %s\b" % re.escape(test_def(test)), git.text(sha, test_file(test)))
-        )
-        if not exists or not state.get("red"):
+        if not defined_at(git, sha, test) or not state.get("red"):
             lines.append("- `%s`: not passing or not present at this green run" % test)
             continue
         graph = graph or checks.DependencyMap(Path(root))
@@ -461,7 +675,7 @@ def green(api, run, git, root, dry_run):
     return result
 
 
-def alarm(api, run, root, *, dry_run=False):
+def alarm(api, run, root, *, dry_run=False, bisecting=False):
     """What one finished Release validation run changes: the red run's issue and its tests, or the green run that
     closes it. Returns a summary (also printed by main)."""
     if run.get("event") != "workflow_dispatch" or run.get("head_branch") != "main":
@@ -471,34 +685,78 @@ def alarm(api, run, root, *, dry_run=False):
     if not candidate(run):
         return {"skipped": "the run name names no candidate commit"}
     runs = api.validation_runs()
-    if any(
-        other["id"] != run["id"] and other.get("status") == "completed" and other["created_at"] > run["created_at"]
-        for other in runs
-    ):
+    if newer_finished(run, runs):
         return {"skipped": "a newer validation run has finished; its own run tells the issue"}
     git = Git(root)
     if run["conclusion"] in GREEN:
         return green(api, run, git, root, dry_run)
-    return red(api, run, runs, git, root, dry_run)
+    return red(api, run, runs, git, root, dry_run, bisecting)
+
+
+@contextlib.contextmanager
+def checkout_of(workdir, sha):
+    """A worktree at sha. One that already exists is used as it is (the bisect job checks it out and installs it before
+    this runs); otherwise it is added here and removed afterwards."""
+    if Path(workdir).exists():
+        yield
+        return
+    subprocess.run(["git", "worktree", "add", "--detach", "--force", workdir, sha], check=True)
+    try:
+        yield
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", workdir], capture_output=True, check=False)
+
+
+def write_outputs(env, result, sha):
+    """The alarm job's outputs, for the bisect job: whether it runs, and the candidate it checks out."""
+    path = env.get("GITHUB_OUTPUT")
+    if path:
+        with open(path, "a", encoding="utf-8") as stream:
+            stream.write("bisect=%s\ncandidate=%s\n" % ("true" if result.get("needs_bisect") else "false", sha or ""))
 
 
 def main(argv=None, env=None):
     env = os.environ if env is None else env
     parser = argparse.ArgumentParser(description="Tell the owners of a red Release validation run on main.")
-    parser.add_argument("--run-id", type=int, required=True)
+    parser.add_argument("--run-id", type=int, help="the Release validation run to read")
     parser.add_argument("--workdir", required=True, help="where to check out the candidate (a git worktree)")
     parser.add_argument("--dry-run", action="store_true", help="print what would be posted; post nothing")
+    parser.add_argument("--bisect", action="store_true", help="the bisect job: bisect the range the alarm handed over")
+    parser.add_argument(
+        "--bisect-local",
+        nargs=2,
+        metavar=("GOOD", "RED"),
+        help="offline, with no GitHub calls: bisect the first-parent commits from GOOD to RED for --test on --workdir",
+    )
+    parser.add_argument("--test", action="append", default=[], help="a failing test's node id, with --bisect-local")
     args = parser.parse_args(argv)
+    if args.bisect_local:
+        if not args.test:
+            parser.error("--bisect-local needs at least one --test")
+        good, red_sha = args.bisect_local
+        with checkout_of(args.workdir, red_sha):
+            git = Git(args.workdir)
+            found = bisect(
+                git.line(good, red_sha),
+                good,
+                args.test,
+                lambda commit, names: probe_commit(args.workdir, git, commit, names),
+                lambda: False,
+            )
+            if found["verdict"] == "culprit":
+                found["subject"] = git.subjects([found["commit"]]).get(found["commit"], "")
+        print(json.dumps(found, indent=2, sort_keys=True))
+        return 0
+    if args.run_id is None:
+        parser.error("--run-id is required")
     api = Api(env["GITHUB_REPOSITORY"], env.get("GITHUB_TOKEN") or env.get("GH_TOKEN") or "")
     run = api.get("actions/runs/%d" % args.run_id)
     if run.get("event") != "workflow_dispatch" or run.get("head_branch") != "main" or not candidate(run):
         print(json.dumps({"skipped": "not a candidate run on main"}))
         return 0
-    subprocess.run(["git", "worktree", "add", "--detach", "--force", args.workdir, candidate(run)], check=True)
-    try:
-        result = alarm(api, run, args.workdir, dry_run=args.dry_run)
-    finally:
-        subprocess.run(["git", "worktree", "remove", "--force", args.workdir], capture_output=True, check=False)
+    with checkout_of(args.workdir, candidate(run)):
+        result = alarm(api, run, args.workdir, dry_run=args.dry_run, bisecting=args.bisect)
+    write_outputs(env, result, candidate(run))
     print(json.dumps(result, indent=2, sort_keys=True, default=sorted))
     return 1 if result.get("errors") else 0
 
