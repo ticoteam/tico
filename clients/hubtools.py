@@ -702,9 +702,7 @@ def tag_update(api, args):
        "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only its requester, owner and readers see it; bot defaults also apply"},
-       "readers": {"type": "array", "items": {"type": "string"},
-                   "description": "On a private task: who else sees it, people, bots or group:<id>s (a group by its "
-                                  "members now)"},
+       "readers": {"type": "array", "items": {"type": "string"}, "description": "Private: who else sees it: human:<id>, bot:<slug> or group:<id>"},
        "from_private": {"type": "boolean", "default": False,
                         "description": "From a run on your own private task with no person on it: a company-visible "
                                        "task for a bot, carrying only its own words (no 12 words copied from the private "
@@ -1397,24 +1395,22 @@ def task_link(api, args):
 
 
 READERS = {"type": "array", "items": {"type": "string"}, "minItems": 1,
-           "description": "People, bots or groups: human:<id>, bot:<slug> or group:<id>"}
+           "description": "human:<id>, bot:<slug> or group:<id>"}
 
 
-@tool("hub_task_readers_list", "Who can see a task: on a private one its requester, owner and readers (people, bots, "
-      "groups). A company task is seen by everyone.", {"id": TASK_ID}, required=("id",))
+@tool("hub_task_readers_list", "Who can see a task: its requester, owner and readers; everyone for a company task.",
+      {"id": TASK_ID}, required=("id",))
 def task_readers_list(api, args):
     return api.get(f"tasks/{args['id']}/readers")
 
 
-@tool("hub_task_readers_add", "Let more people, bots or groups see a private task. A group's members are read live, "
-      "so leaving the group takes the access away. Anyone who may change the task may; it is in the task's history.",
+@tool("hub_task_readers_add", "Let people, bots or groups see a private task (a group: whoever is in it now).",
       {"id": TASK_ID, "readers": READERS}, required=("id", "readers"), writes=True)
 def task_readers_add(api, args):
     return api.post(f"tasks/{args['id']}/readers", {"add": list(args["readers"])}, key=_key(args))
 
 
-@tool("hub_task_readers_remove", "Take people, bots or groups off a private task's readers: they stop seeing it. Its "
-      "requester and owner always see it.",
+@tool("hub_task_readers_remove", "Take readers off a private task.",
       {"id": TASK_ID, "readers": READERS}, required=("id", "readers"), writes=True)
 def task_readers_remove(api, args):
     return api.post(f"tasks/{args['id']}/readers", {"remove": list(args["readers"])}, key=_key(args))
@@ -8056,6 +8052,7 @@ ASSISTANT_HIDDEN = frozenset({
     "hub_credential_grant", "hub_credential_revoke", "hub_credential_delete", "hub_credential_set", "hub_credential_import",
     "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_call_token",
     "hub_sql", "hub_support_file", "hub_support_report", "hub_support_send", "hub_trigger_sign", "hub_message_redact",
+    "hub_task_readers_list",  # hub_task_show has the readers; the Assistant's listing is near its size cliff
 })
 
 
