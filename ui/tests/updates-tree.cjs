@@ -286,11 +286,10 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       assert.equal(await subs.count(), 7);
       assert.equal(await subs.nth(6).locator(':scope > .upd-none[data-upd-node="b:events"]').count(), 1, `${label}: its row under the line`);
       assert.equal(await subs.nth(6).locator('.upd-sub [data-upd="u-intern"]').count(), 1, `${label}: its report's card under its row`);
-      if (shots) for (const scheme of ['dark', 'light']) {
-        await p.emulateMedia({colorScheme: scheme});
+      if (shots) for (const scheme of ['light', 'dark']) {     // dark is the default; the page ends on it
+        await p.evaluate(v => window.ticoTheme.set(v), scheme);
         await p.screenshot({path: `${shots}/updates-tree-nones-${label}-${scheme}.png`, fullPage: true});
       }
-      await p.emulateMedia({colorScheme: null});
       // One line from the manager's avatar down the left of its reports, with an elbow into each one's avatar; it stops
       // at the last (tree-lines.css). Measured from the boxes: the rail runs under the middle of the manager's avatar,
       // and each elbow ends where the report's avatar starts.
