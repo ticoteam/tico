@@ -1838,3 +1838,85 @@ def test_batched_computer_load_and_overload_reads_answer_what_each_computer_read
     assert not loads[revoked]["overloaded"]
     assert overloads[busy]["ended_at"] == now - 50 and overloads[calm]["ended_at"] is None
     assert overloads[off] is None and overloads[revoked] is None
+
+
+def _asks(api, owner, askers, start=0):
+    """One open task for `owner` per entry of `askers`, each asked by that bot, titled apart."""
+    with api.app.state.store.transaction() as c:
+        for i, asker in enumerate(askers, start=start):
+            H.task_create(c, asker, f"Item {i} for {owner}", "x", owner, private=False)
+
+
+def test_a_plate_over_ten_warns_and_names_the_three_bots_asking_most(environment):
+    api = environment()
+    for slug in ("helper", "builder", "reviewer", "ops"):
+        add_bot(api, slug)
+    _asks(api, "human:morgan", ["bot:helper"] * 6 + ["bot:builder"] * 3 + ["bot:reviewer"] * 2 + ["bot:ops"])
+    check = health_of(api)[1]["needs_plate"]
+    assert check["status"] == "warn"
+    [item] = check["items"]
+    assert item["person"] == "human:morgan" and item["count"] == 12
+    assert [(a["bot"], a["count"]) for a in item["askers"]] == [
+        ("bot:helper", 6),
+        ("bot:builder", 3),
+        ("bot:reviewer", 2),
+    ]
+    assert "12 on Needs you" in check["summary"]
+
+
+def test_a_plate_of_ten_or_fewer_is_fine_and_over_twenty_five_is_bad(environment):
+    api = environment()
+    add_bot(api, "helper")
+    _asks(api, "human:morgan", ["bot:helper"] * 10)
+    assert "needs_plate" not in health_of(api)[1]
+    _asks(api, "human:morgan", ["bot:helper"] * 16, start=10)
+    check = health_of(api)[1]["needs_plate"]
+    assert check["status"] == "bad" and check["items"][0]["count"] == 26
+
+
+def test_a_person_sees_only_their_own_plate(environment):
+    api = environment()
+    add_bot(api, "helper")
+    _asks(api, "human:morgan", ["bot:helper"] * 11)
+    _asks(api, "human:quinn", ["bot:helper"] * 12)
+    everyone = health_of(api)[1]["needs_plate"]["items"]
+    assert sorted(item["person"] for item in everyone) == ["human:morgan", "human:quinn"]
+    quinn = health_of(api, as_person(api, "quinn"))[1]["needs_plate"]
+    assert [item["person"] for item in quinn["items"]] == ["human:quinn"] and quinn["items"][0]["count"] == 12
+    assert "Morgan" not in json.dumps(quinn)
+
+
+def test_an_idle_dev_ticket_warns_unless_a_run_is_live_or_queued(environment):
+    api = environment()
+    add_bot(api, "helper")
+    with api.app.state.store.transaction() as c:
+        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": "In Progress", "status": "doing"}], numbered=True)
+        idle = H.task_create(
+            c, "human:morgan", "Idle ticket", "x", "bot:helper", type=typ["id"], step="In Progress", private=False
+        )
+        busy = H.task_create(
+            c, "human:morgan", "Busy ticket", "x", "bot:helper", type=typ["id"], step="In Progress", private=False
+        )
+        H.task_create(
+            c, "human:morgan", "Fresh ticket", "x", "bot:helper", type=typ["id"], step="In Progress", private=False
+        )
+        c.execute(
+            "INSERT INTO conversations(id,kind,participants,created_at,task_id) VALUES('cvb','chat','[]',?,?)",
+            (H.now(), busy["id"]),
+        )
+        c.execute(
+            "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
+            "VALUES('mb','cvb','human:morgan','bot:helper','chat','keep going',?)",
+            (H.now(),),
+        )
+        enqueue_stored(c, "mb")
+        c.execute(
+            "UPDATE tasks SET updated_at=? WHERE id IN (?,?)",
+            (H.shift(H.now(), hours=-30), idle["id"], busy["id"]),
+        )
+    check = health_of(api)[1]["dev_board_idle"]
+    assert check["status"] == "warn"
+    [item] = check["items"]
+    assert item["task"] == idle["id"] and item["ticket"] == idle["number"]
+    assert item["step"] == "In Progress" and item["hours"] >= 29
+    assert item["fixes"][0]["href"] == "#/tasks/" + idle["id"]
