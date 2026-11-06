@@ -7729,9 +7729,9 @@ def _withdraw_waits(conn, actor, row):
             f"AND q.status IN ({','.join('?' * len(ACTIVE_STATUSES))}) ORDER BY q.created_at",
             (row["id"], row["owner_id"], *ACTIVE_STATUSES))):
         if all(not q.get("options") for q in question_tasks.fields(card)["questions"] or []):
-            # Closed as part of its parent's own change: the parent's owner made it, so no subtask notice wakes it.
+            # Closed as part of the task's own change, which its owner made: no subtask notice or answer wakes it.
             task_close(conn, actor, card["id"], note="Withdrawn: the task no longer waits on this", quiet=True,
-                       with_parent=row["id"])
+                       with_parent=row["id"], closing_tasks=(row["id"],))
 
 
 def _waits_on(conn, row, person):
