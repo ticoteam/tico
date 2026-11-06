@@ -6060,6 +6060,8 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     conv = conversation(conn, row["conversation_id"])
     if not conv:
         refuse(conn, actor, "not-found", f"task {task_id} has no conversation")
+    if (ask or answer_to) and not wake and not (is_bot(actor) and refs.get("needs_action") is True):
+        refs["quiet"] = True        # asks and answers keep their own routing (step 6): unwoken, they wait quietly
     if ask:
         target, routed = task_ask_route(conn, actor, row, {**refs, **ask})
         refs.update(routed)
