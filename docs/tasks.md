@@ -1148,8 +1148,8 @@ Subtasks can nest to any depth. Whoever files a subtask, person or bot, is its r
 worker finishes a subtask under a bot-owned task, its result returns directly to the immediate
 parent's owning bot, in that parent's task session. An active turn takes it as an input; otherwise
 the parent's next turn resumes there. That holds while the parent is Waiting on its other open subtasks: they
-do not hold one subtask's result back. Its other waits still do: a snooze, a person it waits on, an unanswered
-question, an undecided approval, a worktree, or a blocker that is not one of its subtasks. The result does not move
+do not hold one subtask's result back, a question task a person filed on it among them. Its other waits still do: a
+snooze, a question its owner asked a person that is still unanswered, an undecided approval, a worktree, or a blocker that is not one of its subtasks. The result does not move
 the parent out of Waiting. There is no requester delivery session on the completed
 subtask and no relay or `hub task run` needed. The worker keeps its own independent task session. A manager completing the worker's delegated
 subtask returns its result to the parent in the same way.
