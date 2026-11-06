@@ -45,12 +45,12 @@ function pageTasks(forced, openId = '') {
   main.innerHTML = `<div class="tasks-page"><div class="tasks-pane" id="tasks-pane">
       <header class="tl-head">
         <h1>Tasks</h1>
-        <div class="tl-tabs" id="task-view" role="tablist" aria-label="Task views"></div>
+        <div class="tl-views"><div class="tl-tabs" id="task-view" role="tablist" aria-label="Task views"></div><span id="task-view-more-wrap"></span></div>
         <span class="spacer"></span>
         <div class="tl-type-search"><div class="tl-types" id="task-type" role="group" aria-label="Task type"></div>
         <div class="tl-search">${TL_ICON.search}<input type="search" id="task-q" spellcheck="false" aria-label="Search tasks" placeholder="Search" autocomplete="off"><kbd aria-hidden="true">/</kbd></div></div>
         <button type="button" class="tl-decide tl-decide-head" data-go-through hidden></button>
-        <button class="primary tl-new" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}<span>New task</span></button>
+        <button class="primary tl-new" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}</button>
       </header>
       <div class="tl-bar" id="task-bar">
         <span class="tl-who-wrap" id="task-who-wrap" hidden></span>
@@ -59,8 +59,7 @@ function pageTasks(forced, openId = '') {
           <button type="button" class="linkish tl-clear" id="task-filter-clear" hidden>Clear</button></div>
         <span class="spacer"></span>
         <button type="button" class="tl-decide tl-decide-bar" data-go-through hidden></button>
-        ${S.me?.role === 'bot' ? '' : `<button type="button" class="tl-addf tl-ic" id="task-stats" aria-label="Task stats" title="Task stats">${TL_ICON.chart}</button>`}
-        <button type="button" class="tl-addf tl-ic tl-pin" id="task-pin" aria-pressed="false" aria-label="Pin to the sidebar" title="Pin to the sidebar">${TL_ICON.pin}</button>
+        <button type="button" class="tl-addf tl-ic" id="task-more" aria-haspopup="menu" aria-expanded="false" aria-label="More" title="More">${TL_ICON.dots}</button>
         <button type="button" class="tl-addf tl-selmode" id="task-select-mode" aria-pressed="false" hidden>Select</button>
         <span class="tl-groupby" id="task-group-wrap"></span>
       </div>
@@ -71,16 +70,20 @@ function pageTasks(forced, openId = '') {
     <div id="task-filter-pop" class="tl-pop" popover></div><div id="task-card-pops"></div>`;
   const bar = $('#task-bar');
   bar.onscroll = () => tasksBarEdge(bar);
-  if (window.ResizeObserver) new ResizeObserver(() => tasksBarEdge(bar)).observe(bar);
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => tasksBarEdge(bar)).observe(bar);
+    // A narrower row moves tabs into More; measured on the next frame, outside the observer's own delivery.
+    new ResizeObserver(() => requestAnimationFrame(() => tasksTabsFit(state, true))).observe($('#tasks-pane .tl-head'));
+  }
   $('#task-type').onclick = ev => {
     const button = ev.target.closest('[data-task-type]');
     if (button) taskPipelineSelect(state, button.dataset.taskType);
     else if (ev.target.closest('#task-type-more')) taskPipelineMenu(state, $('#task-type-more'));
   };
-  $('#task-pin').onclick = () => tasksPinToggle(state);
+  $('#task-more').onclick = ev => tasksMoreMenu(state, ev.currentTarget);
+  $('#task-view-more-wrap').onclick = ev => { const b = ev.target.closest('#task-view-more'); if (b) tasksViewsMenu(state, b); };
   // Catch up: the Needs you cards from the first, one at a time (decide.js).
   for (const b of document.querySelectorAll('#tasks-pane [data-go-through]')) b.onclick = () => decideGoThrough();
-  $('#task-stats')?.addEventListener('click', () => taskStatsOpen(state));
   $('#task-new').onclick = () => { const p = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); };
   const search = $('#task-q');
   search.oninput = () => {
@@ -106,7 +109,7 @@ function pageTasks(forced, openId = '') {
     tasksSetView(state, b.dataset.view);
   };
   tabs.onkeydown = ev => {
-    const list = [...tabs.querySelectorAll('[role=tab]')], at = list.indexOf(document.activeElement);
+    const list = [...tabs.querySelectorAll('[role=tab]:not([hidden])')], at = list.indexOf(document.activeElement);
     if (at < 0) return;
     const to = {ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: list.length - 1}[ev.key];
     if (to == null) return;
@@ -148,7 +151,7 @@ function pageTasks(forced, openId = '') {
   pop.addEventListener('keydown', tasksMenuKeys);
   pop.addEventListener('toggle', ev => {
     if (ev.newState !== 'closed') return;
-    $('#task-type-more')?.setAttribute('aria-expanded', 'false');
+    for (const id of ['#task-type-more', '#task-view-more', '#task-more']) $(id)?.setAttribute('aria-expanded', 'false');
     const anchor = state.menuAnchor; state.menuAnchor = null;
     if (anchor?.isConnected && (pop.contains(document.activeElement) || document.activeElement === document.body)) anchor.focus();
   });
@@ -564,7 +567,7 @@ function companyNeedGroups(items) {
   return [...groups.values()].sort((a, b) => a.firstNeed - b.firstNeed || a.firstRank - b.firstRank
     || String(b.updated_at).localeCompare(String(a.updated_at)) || actorLabel(a.actor).localeCompare(actorLabel(b.actor)));
 }
-function tasksTabsPaint(state) { tasksPaint($('#task-view'), tasksTabsHTML(state)); }
+function tasksTabsPaint(state) { const painted = tasksPaint($('#task-view'), tasksTabsHTML(state)); tasksTabsFit(state, painted); }
 // The body redraws on every load (the 30-second poll reloads the list): only rows that changed are replaced, so the
 // focus, the scroll, the cursor, the selection and the open peek all stay. A hidden row leaves the selection.
 // A `data-patch-key` node keeps what the person did in it (opened, typed) through redraws. With a `data-patch-sig` its
@@ -627,7 +630,7 @@ function tasksRender(state) {
     : active.id === 'board-more' ? '#board-more' : active.matches('[data-clear-filters]') ? '[data-clear-filters]' : '';
   decidePaintButton();
   el.dataset.view = state.view;
-  el.setAttribute('role', 'tabpanel'); el.setAttribute('aria-labelledby', 'task-tab-' + state.view);
+  el.setAttribute('role', 'tabpanel');
   const items = taskItems(state);
   let html = state.loading && !tasksFinishedView(state.view) && !items.length
     ? skelRows(6)

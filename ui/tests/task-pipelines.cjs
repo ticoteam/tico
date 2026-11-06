@@ -152,10 +152,13 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.reload();
     await boardLoaded();
     assert.equal(await page.locator('#task-body .bcard').count(), 3, 'folded again, finished work leaves the board');
-    // Done and Closed are their own tabs, Closed right after Done; each lists only its status.
-    assert.deepEqual((await page.locator('#task-view [role=tab]').allTextContents()).slice(-2), ['Done', 'Closed']);
+    // Done and Closed are their own views in the tab row's More, Closed right after Done; each lists only its status.
+    await page.locator('#task-view-more').click();
+    assert.deepEqual((await page.locator('#task-filter-pop [data-pick-view]').evaluateAll(b => b.map(x => x.textContent))).slice(-2), ['Done', 'Closed']);
+    await page.keyboard.press('Escape');
     for (const [view, title] of [['done', 'Finished campaign'], ['closed', 'Dropped campaign']]) {
-      await page.locator(`#task-view [data-view="${view}"]`).click();
+      await page.locator('#task-view-more').click();
+      await page.locator(`#task-filter-pop [data-pick-view="${view}"]`).click();
       await page.waitForFunction(title => [...document.querySelectorAll('#task-body .tl-title')].map(n => n.textContent).join('|') === title, title);
     }
     await page.locator('#task-view [data-view="board"]').click();

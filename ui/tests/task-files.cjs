@@ -218,19 +218,23 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
 
     // ---- Pin to sidebar, and unpin from its ✕
     assert.equal(await page.locator('#nav-pins').isHidden(), true);
+    const pinItem = async () => { await page.locator('#task-more').click(); return (await page.locator('#task-pin').innerText()).trim(); };
+    assert.equal(await pinItem(), 'Pin to sidebar');
     await page.locator('#task-pin').click();
     await page.locator('#pin-list a[href="#/tasks?type=general&view=board"]').waitFor();
     for (const mode of ['dark', 'light']) { await theme(mode); await shot(`board-covers-desktop-${mode}`); }
     await theme('dark');
     assert.equal(await page.locator('#nav-pins-h').textContent(), 'Pipelines');
     assert.match(await page.locator('#pin-list').innerText(), /General/);
-    assert.equal(await page.locator('#task-pin').getAttribute('aria-pressed'), 'true');
+    assert.equal(await pinItem(), 'Unpin', 'the ⋯ menu offers Unpin for a pinned view');
+    await page.keyboard.press('Escape');
     assert.deepEqual(posted.at(-1).body.value.items, [{hash: '#/tasks?type=general&view=board', name: 'General'}]);
     await page.locator('#pin-list .pin-row').hover();
     await page.locator('#pin-list [data-unpin="0"]').click();
     await page.waitForFunction(() => document.querySelector('#nav-pins').hidden);
     assert.deepEqual(posted.at(-1).body.value.items, []);
-    assert.equal(await page.locator('#task-pin').getAttribute('aria-pressed'), 'false');
+    assert.equal(await pinItem(), 'Pin to sidebar');
+    await page.keyboard.press('Escape');
 
     // ---- the strip: one tile per file at its newest version, sized, a skeleton until the thumb arrives
     { let release; thumbHold = {held: new Promise(r => { release = r; })}; thumbHold.release = release; }

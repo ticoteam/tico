@@ -1,4 +1,4 @@
-// Needs you on a busy company: grouped by what each item takes (Decide, Pay, Sign in or connect, Review and send, Do)
+// Needs you (the You tab) on a busy company: grouped by kind (Answer, Pay, Connect, Review, Do)
 // with a count per group, in the server's order (due first); an approval reads what it approves; a deadline shows as a
 // due chip; a card with folded duplicates says "+N"; an ask with a recommendation offers "Do what you recommend", which
 // posts once and closes the card. Its card (a tap on the row) leads with the same button (and R). Overview shows the count and how many
@@ -75,7 +75,7 @@ async function shot(target, name) {
     });
     await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
     await page.locator('#task-view [data-view="foryou"]').click();
-    assert.equal((await page.locator('#task-group .v').textContent()).trim(), 'What it takes');
+    assert.equal((await page.locator('#task-group .v').textContent()).trim(), 'Kind');
 
     // Groups in order, each with its count; approvals sit in the group their kind takes.
     const groups = await page.locator('#task-body [data-group]').evaluateAll(gs => gs.map(g => ({
@@ -83,7 +83,7 @@ async function shot(target, name) {
       count: g.querySelector('.tl-count, .tl-gcount, .count')?.textContent.trim()})));
     assert.deepEqual(groups.map(g => [g.key, g.count]),
       [['need:decide', '1'], ['need:pay', '2'], ['need:connect', '1'], ['need:review', '2'], ['need:do', '1'], ['older', '1']], JSON.stringify(groups));
-    assert.deepEqual(groups.map(g => g.label), ['Answer', 'Pay', 'Sign in or connect', 'Review and send', 'Do', 'Older questions']);
+    assert.deepEqual(groups.map(g => g.label), ['Answer', 'Pay', 'Connect', 'Review', 'Do', 'Older questions']);
     assert.equal(await page.locator('#task-tab-foryou .cnt').innerText(), '8');
     const review = page.locator('#task-body [data-group="need:review"]');
     assert.ok((await review.textContent()).includes("Send: '$200 for each rental owner you introduce' to Jennie Ooten"));
@@ -130,6 +130,6 @@ async function shot(target, name) {
     assert.equal(await strip.locator('.muted').textContent(), '6 went away on their own this week (3 expired, 1 withdrawn, 2 answered by your Assistant)');
     await shot(strip, 'overview-needs');
     assert.deepEqual(errors, []);
-    console.log('Needs you groups: what-it-takes groups with counts, titled approvals, due chips, folded duplicates, one-tap recommendation, overview strip');
+    console.log('Needs you groups: kind groups with counts, titled approvals, due chips, folded duplicates, one-tap recommendation, overview strip');
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});

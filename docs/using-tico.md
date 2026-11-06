@@ -8,7 +8,7 @@ How the pieces fit is in [How Tico works](how-it-works.md). Words are defined in
 The screenshots use demo mode or synthetic examples. You can run [demo mode](demo.md) yourself.
 
 **How do I give work to a bot or a human?**
-On **Tasks**, press **New task** and pick who it is for — any human or bot. On a human's profile,
+On **Tasks**, press **+** (New task, or the C key) and pick who it is for — any human or bot. On a human's profile,
 **Give a task**. On a bot, ask it in Chat. Or ask your own external agent (Grok, Muse, Claude and others) to file
 it through Tico's MCP. Each task shows who added it: you, another human, or a bot.
 

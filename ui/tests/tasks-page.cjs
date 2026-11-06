@@ -227,6 +227,12 @@ const groupBy = async (page, by) => {
   await page.locator(`#task-filter-pop [data-pick-group="${by}"]`).click();
   await page.waitForFunction(by => document.querySelector('#task-body .tl')?.dataset.groupBy === by, by);
 };
+// Snoozed, Done and Closed are in the tab row's More menu.
+const moreView = async (page, view) => {
+  await page.locator('#task-view-more').click();
+  await page.locator(`#task-filter-pop [data-pick-view="${view}"]`).click();
+  await page.waitForFunction(view => TASKS_ST.view === view, view);
+};
 const peekTitle = (page, text) => page.locator('#task-peek .tmodal-title', {hasText: text}).waitFor();
 const focusedKey = page => page.evaluate(() => document.activeElement?.closest('[data-task-key]')?.dataset.taskKey || document.activeElement?.className);
 // Runs the poll n times (refresh(false)) and waits for every list load it starts to finish drawing.
@@ -249,9 +255,13 @@ async function listAndTabs(browser) {
   const {page, errors, pref} = await open(browser);
   // Labelled tabs with counts, as a tab list; the count is part of each tab's name, after a comma.
   const tabs = await page.locator('#task-view [role=tab]').evaluateAll(ts => ts.map(t => [t.dataset.view, t.firstChild.textContent, t.querySelector('.cnt')?.textContent ?? null, t.getAttribute('aria-selected')]));
-  assert.deepEqual(tabs, [['foryou', 'Needs you', String(NEEDS_YOU), 'false'], ['list', 'Open', String(OPEN_COUNT), 'true'], ['board', 'Board', null, 'false'],
-    ['done', 'Done', null, 'false'], ['closed', 'Closed', null, 'false']]);
-  assert.equal(await page.locator('#task-view [data-view="foryou"]').getAttribute('aria-label'), `Needs you, ${NEEDS_YOU}`);
+  assert.deepEqual(tabs, [['foryou', 'You', String(NEEDS_YOU), 'false'], ['list', 'Open', String(OPEN_COUNT), 'true'], ['board', 'Board', null, 'false']]);
+  assert.equal(await page.locator('#task-view [data-view="foryou"]').getAttribute('aria-label'), `You, ${NEEDS_YOU}`);
+  // Done and Closed are in More at the end of the tab row; Snoozed joins them only while something is snoozed.
+  assert.equal((await page.locator('#task-view-more').innerText()).trim(), 'More');
+  await page.locator('#task-view-more').click();
+  assert.deepEqual(await page.locator('#task-filter-pop [data-pick-view]').evaluateAll(b => b.map(x => x.dataset.pickView)), ['done', 'closed']);
+  await page.keyboard.press('Escape');
   assert.equal(await page.locator('#task-view [data-view="routines"], #task-view [data-view="recurring"]').count(), 0, 'no Routines tab: routines are Automations');
   assert.equal(await page.locator('#task-view').getAttribute('role'), 'tablist');
   // "Needs you", then one "Needs <Name>" per other person a task waits on, "Needs someone", then Waiting and Doing.
@@ -914,7 +924,9 @@ async function snoozing(browser) {
   const {page, errors, posts} = await open(browser);
   const shown = async () => (await rowKeys(page)).includes('tt-deck');
   assert.ok(await shown());
-  assert.equal(await page.locator('#task-view [data-view="snoozed"]').count(), 0, 'no Snoozed tab while nothing is snoozed');
+  await page.locator('#task-view-more').click();
+  assert.equal(await page.locator('#task-filter-pop [data-pick-view="snoozed"]').count(), 0, 'no Snoozed in More while nothing is snoozed');
+  await page.keyboard.press('Escape');
   await page.locator('#task-body .tl-row[data-task-key="tt-deck"] [data-open-task]').click();
   await peekTitle(page, 'Review the launch deck');
   const peek = page.locator('#task-peek'), menu = peek.locator('.prop-pop');
@@ -925,7 +937,7 @@ async function snoozing(browser) {
   const sent = taskWrites(posts).at(-1);
   assert.equal(sent.p, '/api/v2/tasks/t-deck/snooze');
   assert.ok(Date.parse(sent.body.until) > Date.now(), 'tomorrow, at the start of the day');
-  await page.locator('#task-view [data-view="snoozed"]').click();
+  await moreView(page, 'snoozed');
   await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 1);
   assert.match(await page.locator('#task-body .tl-row .tl-due').innerText(), /^Snoozed to /);
   await page.locator('#task-body .tl-row [data-open-task]').click();
@@ -946,7 +958,7 @@ async function wakeNotes(browser) {
     {...base, id: 't-noted', title: 'Noted snooze', holds: [{kind: 'snoozed', reason: long, since: null, until: inDays(3), by: 'human:ana'}],
       milestone_waits: [wait('Check the migration')]},
     {...base, id: 't-bare', title: 'Bare snooze', holds: [{kind: 'snoozed', reason: null, since: null, until: inDays(3), by: 'human:ana'}], milestone_waits: [wait()]}]});
-  await page.locator('#task-view [data-view="snoozed"]').click();
+  await moreView(page, 'snoozed');
   const chips = async (key, title) => {
     await page.locator(`#task-body [data-task-key="${key}"] [data-open-task]`).click();
     await peekTitle(page, title);
@@ -1025,11 +1037,11 @@ async function privateParent(browser) {
   await page.close();
 }
 async function views(browser) {
-  // Needs you: what waits on you, grouped by what it takes, or by who asks. A bot's heading has a visible Chat link; a
+  // You: what waits on you, grouped by kind, or by who asks. A bot's heading has a visible Chat link; a
   // person's has none.
   const {page, errors} = await open(browser, {hash: '#/tasks', byNeed: true});
   assert.equal(await page.locator('[role=tab][aria-selected=true]').getAttribute('data-view'), 'foryou');
-  assert.equal(await page.locator('#task-group .v').innerText(), 'What it takes');
+  assert.equal(await page.locator('#task-group .v').innerText(), 'Kind');
   await page.locator('#task-group').click();
   await page.locator('[data-pick-group="requester"]').click();
   assert.deepEqual(await groupNames(page), ['WRITER', 'ENGINEER', 'SUPPORT', 'SAM', 'BOTOPS'], 'whoever asked most recently first');
@@ -1040,7 +1052,7 @@ async function views(browser) {
   assert.equal(await chat.isVisible(), true, 'shown without hovering');
   assert.equal(await page.locator('.tl-group[data-group="a:human:sam"] .tl-gchat').count(), 0, 'no chat link for a person');
   await shot(page, 'needs-you-dark');
-  await page.locator('#task-view [data-view="done"]').click();
+  await moreView(page, 'done');
   await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 2);
   assert.deepEqual(await page.locator('#task-body .tl-row > .task-status').evaluateAll(s => s.map(x => x.dataset.status)), ['done', 'done']);
   assert.match(await page.locator('#task-body .tl-age').first().getAttribute('title'), /^Done /);
@@ -1048,13 +1060,13 @@ async function views(browser) {
   assert.equal(await page.locator('#task-group-wrap').isHidden(), true);
   await shot(page, 'done-dark');
   // Closed, right after Done: only closed work, laid out the same.
-  await page.locator('#task-view [data-view="closed"]').click();
+  await moreView(page, 'closed');
   await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 1);
   assert.deepEqual(await page.locator('#task-body .tl-row > .task-status').evaluateAll(s => s.map(x => x.dataset.status)), ['closed']);
   assert.match(await page.locator('#task-body .tl-age').first().getAttribute('title'), /^Closed /);
   assert.equal(await page.locator('#task-group-wrap').isHidden(), true);
   assert.deepEqual(errors, []);
-  console.log('Needs you, Done, Closed: ok');
+  console.log('You, Done, Closed: ok');
   await page.close();
 }
 
@@ -1081,15 +1093,15 @@ async function plates(browser) {
   await page.waitForFunction(() => document.querySelector('[data-task-key="tt-demo"] .task-status')?.dataset.status === 'doing');
   assert.equal(posts.find(x => x.p.endsWith('/t-demo'))?.body.status, 'doing');
   await page.evaluate(() => { location.hash = '#/tasks?who=human:zed'; });
-  await page.waitForFunction(() => document.querySelector('#task-view [data-view="foryou"]')?.firstChild.textContent === 'Needs you');
+  await page.waitForFunction(() => document.querySelector('#task-view [data-view="foryou"]')?.firstChild.textContent === 'You');
   assert.deepEqual(errors, []);
   console.log('plates: ok');
   await page.close();
 }
 
 async function waitingOnYou(browser) {
-  // A bot's task set waiting on you (`--on`) is in Needs you under that bot, whoever filed it, with a short "Waiting" chip
-  // and no buttons other rows lack.
+  // A bot's task set waiting on you (`--on`) is in You under that bot, whoever filed it: one face (the bot), what it
+  // waits for as a muted line under the title, no status or "Waiting" chip, and no buttons other rows lack.
   const host = {...fixtures().find(x => x.id === 't-inbox'), id: 't-host', title: 'Restart the build host', owner_id: 'bot:engineer',
     requester_id: 'bot:botops', waiting_on: 'human:ana', note: 'It refuses SSH since the update.', person_ask: 'Can you restart the build host?', updated_at: at(5)};
   const sams = {...host, id: 't-sams', title: 'Rotate the deploy key', waiting_on: 'human:sam'};
@@ -1102,11 +1114,13 @@ async function waitingOnYou(browser) {
   assert.equal(await page.locator('#task-view [data-view="foryou"] .cnt').innerText(), String(NEEDS_YOU + 2), 'both waits and open questions count');
   const row = page.locator('.tl-group[data-group="a:bot:engineer"] [data-task-key="tt-host"]');
   assert.equal(await row.count(), 1);
-  assert.equal(await row.locator('.tl-waiting').innerText(), 'Waiting');
-  assert.equal(await page.locator('#task-body .tl-waiting').count(), 1, 'only on what waits on you');
-  assert.equal(await row.locator('.task-status').count(), 0, 'the chip is its status: "Waiting" once');
-  assert.equal(await page.locator('[data-task-key="tt-sams"]').count(), 0, 'what waits on Sam is not in your Needs you');
-  // (the status chip aside: this row's "Waiting" chip stands in for it)
+  assert.equal(await page.locator('#task-body .tl-waiting, #task-body .task-status, #task-body .tl-status-pad').count(), 0, 'no status in You');
+  assert.equal(await row.locator('.tl-ask').innerText(), 'It refuses SSH since the update.');
+  assert.equal(await row.locator('.tl-note').count(), 0, 'not inline');
+  const tokens = await page.evaluate(() => ['--muted', '--wait'].map(v => { const d = document.createElement('i'); d.style.color = `var(${v})`; document.body.append(d); const c = getComputedStyle(d).color; d.remove(); return c; }));
+  assert.equal(await row.locator('.tl-ask').evaluate(n => getComputedStyle(n).color), tokens[0], 'muted, not amber');
+  assert.deepEqual(await row.locator('.tl-people .tl-face').evaluateAll(f => f.map(x => x.title)), ['Engineer'], 'one face: whoever asks');
+  assert.equal(await page.locator('[data-task-key="tt-sams"]').count(), 0, 'what waits on Sam is not in your You list');
   const buttons = r => page.locator(`[data-task-key="${r}"] button:not(.tl-status)`).evaluateAll(b => b.map(x => x.className));
   assert.deepEqual(await buttons('tt-host'), await buttons('tt-access'), 'no status buttons of its own');
   assert.deepEqual(errors, []);
@@ -1235,6 +1249,58 @@ async function phone(browser) {
   await page.close();
 }
 
+async function phoneViews(browser) {
+  // The tab row on a phone never scrolls sideways: You, Open and Board, then More with Snoozed, Done and Closed. A row
+  // too narrow for every tab moves Board, then Open, into More; You stays, and the arrow keys skip what moved.
+  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
+  const row = page.locator('#tasks-pane .tl-views');
+  assert.equal(await row.evaluate(r => r.scrollWidth <= r.clientWidth + 1 && !/auto|scroll/.test(getComputedStyle(r).overflowX)), true, 'the tab row does not scroll');
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'no sideways page scroll');
+  const visible = () => page.locator('#task-view [role=tab]:not([hidden])').evaluateAll(ts => ts.map(t => t.dataset.view));
+  assert.equal((await visible())[0], 'foryou');
+  // You rows on a phone: the face, the title (with its ask), the age; no chips squeeze the title.
+  assert.ok(await page.locator('#task-body .tl-queue .tl-row').count() > 0);
+  assert.equal(await page.locator('#task-body .tl-queue .tl-chips:visible, #task-body .tl-queue .task-status').count(), 0);
+  await shot(page, 'phone-you-dark');
+  // Done is in More; picking it opens Done, and More names it.
+  await page.locator('#task-view-more').click();
+  assert.deepEqual(await page.locator('#task-filter-pop [data-pick-view]').evaluateAll(b => b.map(x => x.dataset.pickView)), ['done', 'closed']);
+  await shot(page, 'phone-more-views-dark');
+  await page.locator('#task-filter-pop [data-pick-view="done"]').click();
+  await page.waitForFunction(() => TASKS_ST.view === 'done' && /view=done/.test(location.hash));
+  await page.waitForFunction(() => document.querySelector('#task-view-more')?.textContent.trim() === 'Done');
+  assert.equal(await page.locator('#task-view-more').evaluate(b => b.classList.contains('on')), true, 'styled as selected');
+  assert.equal(await page.locator('#task-view [aria-selected=true]').count(), 0);
+  assert.equal(await page.locator('#task-body').getAttribute('aria-labelledby'), 'task-view-more');
+  await page.locator('#task-view [data-view="foryou"]').click();
+  await page.waitForFunction(() => TASKS_ST.view === 'foryou' && document.querySelector('#task-view-more')?.textContent.trim() === 'More');
+  // Room for You and Open only: Board moves into More.
+  await page.evaluate(() => {
+    const row = document.querySelector('#tasks-pane .tl-views'), tab = k => document.querySelector(`#task-view [data-view="${k}"]`);
+    row.style.flexBasis = 'auto';
+    row.style.maxWidth = (tab('foryou').offsetWidth + tab('list').offsetWidth + document.querySelector('#task-view-more').offsetWidth + 16) + 'px';
+    tasksTabsFit(TASKS_ST, true);
+  });
+  assert.deepEqual(await visible(), ['foryou', 'list']);
+  assert.equal(await row.evaluate(r => r.scrollWidth <= r.clientWidth + 1), true, 'still no scroll');
+  await page.locator('#task-view [data-view="foryou"]').focus();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => TASKS_ST.view === 'list');
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => TASKS_ST.view === 'foryou', null, {timeout: 5000});
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.view), 'foryou', 'the keys skip the tab in More');
+  await page.locator('#task-view-more').click();
+  assert.deepEqual(await page.locator('#task-filter-pop [data-pick-view]').evaluateAll(b => b.map(x => x.dataset.pickView)), ['board', 'done', 'closed']);
+  await page.locator('#task-filter-pop [data-pick-view="board"]').click();
+  await page.waitForFunction(() => TASKS_ST.view === 'board' && document.querySelector('#task-view-more')?.textContent.trim() === 'Board');
+  // Narrower still: Open goes too; You always stays.
+  await page.evaluate(() => { document.querySelector('#tasks-pane .tl-views').style.maxWidth = '120px'; tasksTabsFit(TASKS_ST, true); });
+  assert.deepEqual(await visible(), ['foryou']);
+  assert.deepEqual(errors, []);
+  console.log('phone views: ok');
+  await page.close();
+}
+
 // ---- the re-check (scratchpad/r2/recheck/probe.cjs, as tests)
 async function recheckSaves(browser) {
   // N1: a quick second edit is never lost. Saves queue per task, each with the version the last one returned; the
@@ -1332,7 +1398,7 @@ async function recheckLists(browser) {
   // N4 / R2-4: Done keeps its own paging. While it shows, the poll fetches only its first page (picking up newly finished
   // tasks), never the rest; its selection survives.
   await page.locator('#task-bulk [data-bulk="clear"]').click();
-  await page.locator('#task-view [data-view="done"]').click();
+  await moreView(page, 'done');
   await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 2);
   await page.locator('[data-task-key="tt-sso"] .tl-check').click();
   const doneAsks = [];
@@ -1502,12 +1568,12 @@ async function taskCheckBack(browser) {
   console.log('task follow-up date and expected result: ok');
 }
 
-module.exports = {open, fixtures};
+module.exports = {open, fixtures, moreView};
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, wakeNotes, deferredWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal, renamedBot, taskCheckBack}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, wakeNotes, deferredWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, phoneViews, recheckSaves, recheckLists, recheckPhone, recheckFinal, renamedBot, taskCheckBack}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

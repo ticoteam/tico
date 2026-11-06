@@ -19,11 +19,19 @@
 .tl-status:hover{background:var(--surface2);color:var(--ink)}
 .tl-status:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 
-/* ---- toolbar: title, labelled tabs with counts, search, new task */
+/* ---- toolbar: title, labelled tabs with counts and More, search, new task */
 .tl-head{display:flex;flex-wrap:wrap;align-items:center;gap:12px;row-gap:8px;min-height:32px}
 .tl-head h1{flex:none;font-size:var(--t-lg);margin:0 4px 0 0;white-space:nowrap}
 .tl-head .spacer,.tl-bar .spacer{flex:1}
-.tl-tabs{flex:none;display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+/* The tab row and its More menu (task-list.js tasksTabsFit): it never scrolls; a tab with no room moves into More. */
+.tl-views{flex:none;display:inline-flex;align-items:center;gap:2px;min-width:0;max-width:100%;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden}
+#task-view-more-wrap{display:contents}
+.tl-tabs{flex:0 1 auto;display:inline-flex;gap:2px;min-width:0;overflow:hidden}
+.tl-tabs [role=tab][hidden]{display:none}
+.tl-views-more{flex:none;display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 8px 0 10px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-base)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
+.tl-views-more:hover,.tl-views-more[aria-expanded=true]{color:var(--ink)}
+.tl-views-more.on{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
+.tl-views-more:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .tl-tabs [role=tab]{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-base)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
 .tl-tabs [role=tab]:hover{color:var(--ink)}
 .tl-tabs [role=tab][aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
@@ -47,7 +55,7 @@
 .tl-search input:placeholder-shown::-webkit-search-cancel-button{display:none}   /* an empty field keeps its room for the placeholder */
 .tl-search kbd{flex:none;font:var(--t-xs)/16px var(--sans);padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--muted)}
 .tl-search:focus-within kbd{display:none}
-.tl-new{flex:none;display:inline-flex;align-items:center;gap:6px;height:var(--ctl);padding:0 12px;border-radius:var(--r-ctl);font-size:var(--t-base);font-weight:600;white-space:nowrap}
+.tl-new{flex:none;display:inline-grid;place-items:center;width:var(--ctl);height:var(--ctl);padding:0;border-radius:var(--r-ctl)}
 
 /* ---- the filter bar: removable chips, Filter, Group by */
 .tl-bar{display:flex;align-items:center;gap:8px;min-height:38px;padding:4px 0 6px}
@@ -137,6 +145,10 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-open{flex:0 1 auto;min-width:0;display:flex;align-items:center;height:30px;padding:0;border:0;background:none;color:var(--ink);font:500 var(--t-base)/var(--lh-tight) var(--sans);text-align:left;cursor:pointer}
 .tl-open:focus{outline:0}
 .tl-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* You: what the bot asks, as a muted second line under the title */
+.tl-row.tl-two .tl-open{flex:1 1 auto;height:auto;min-height:30px;padding:4px 0}
+.tl-lines{display:flex;flex-direction:column;gap:1px;min-width:0}
+.tl-ask{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm);font-weight:400}
 .tl-row[style*="--depth:1"] .tl-open,.tl-row[style*="--depth:2"] .tl-open,.tl-row[style*="--depth:3"] .tl-open{font-weight:400}
 .tl-note{flex:1 1 0;min-width:0;display:flex;align-items:center;gap:5px;margin-left:4px;color:var(--muted);font-size:var(--t-sm);overflow:hidden}
 .tl-note-ic{flex:none;display:inline-flex;opacity:.8}
@@ -267,12 +279,11 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 /* ---- a narrower list (the peek open, a small window): fewer things per line */
 @container tasks (max-width:920px){
   .tl-head{flex-wrap:wrap;row-gap:8px}
-  .tl-tabs{order:5;flex-basis:100%;max-width:100%;overflow-x:auto}
+  .tl-views{order:5;flex-basis:100%}
+  .tl-views-more{margin-left:auto}
   .tl-type-search{flex:0 1 440px}
 }
 @container tasks (max-width:900px){
-  .tl-new span{display:none}
-  .tl-new{padding:0 9px}
   .tl-search{flex-basis:150px}
   .tl-search kbd{display:none}
   .tl-row .tlabel{display:none}
@@ -287,7 +298,6 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tl-types{flex:0 1 auto;min-width:0;overflow:hidden}
   .tl-types button{flex:0 1 auto;min-width:0;padding:0 7px;overflow:hidden}
   #task-type-more span{max-width:80px;min-width:0}
-  .tl-tabs{order:5;max-width:100%;overflow-x:auto;scrollbar-width:none}
   .tl-note-text,.tl-due{display:none}
 }
 /* A phone: an empty search is its icon, so the type keeps its words; tapped (or holding words) it covers the type row */
@@ -317,7 +327,9 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tl-check{display:none}
   #task-body.has-sel .tl-check{display:inline-block;width:18px;height:18px;opacity:1}
   .tl-check-room{display:none}
-  .tl-need > .tl-status-pad{display:none}
+  /* You on a phone: the face, the title with its ask, the age; nothing else takes the title's room */
+  .tl-queue .tl-chips,.tl-queue .tl-rec{display:none}
+  .tl-ask{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;line-height:var(--lh)}
   #task-body.has-sel .tl-check-room{display:block;width:18px}
   .tl-chips .tlabel{display:none}
   .tl-bar{overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap}
@@ -337,6 +349,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   #task-peek .tmodal-head{gap:6px;padding-left:12px}
   #task-peek .tmodal-head>.tnum{display:none}
   .tl-tabs [role=tab]{padding:0 8px;gap:4px}
+  .tl-views-more{padding:0 6px 0 8px}
   .tl-head{gap:8px}
   body.task-peek-open{overflow:hidden}
   .tl-pop{inset:auto 0 0 0!important;width:100%;max-height:72vh;border-radius:16px 16px 0 0;padding:8px 8px max(12px,env(safe-area-inset-bottom))}
