@@ -92,6 +92,10 @@ class FinanceActionRequest(Contract):
     dry_run: bool = False
 
 
+# The payload field of each action kind that names Library files to attach (backend/finance/documents.py).
+FILE_FIELDS = {"attach": "file_ids", "bill_create": "attachments", "bill_update": "attachments"}
+
+
 class FinanceBooksRequest(Contract):
     """Connect QuickBooks or Xero: HQ holds the app's secret and sends the browser to the provider's consent page."""
 
@@ -1060,11 +1064,30 @@ def install(app, store, auth, mutate):
             )
         )
 
+    def readable_files(request, who, body):
+        """The Library files an action files (attach's `file_ids`, a bill's `attachments`) must exist and be ones the
+        asker may read (files.file_visible, the check every file read makes), before anything is attached: Finance's
+        own records hold only the ids. A deleted file is gone. The refusal names the first id that fails."""
+        field = FILE_FIELDS.get(body.kind)
+        ids = body.payload.get(field) if field else None
+        if not isinstance(ids, list):
+            return  # absent or malformed: the action's own checks answer
+        files, cache = request.app.state.files, {}
+        with store.read() as c:
+            for fid in ids:
+                if not isinstance(fid, str):
+                    continue
+                row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+                if row is None or row["state"] == "deleted" or not files.visible(c, who, row, cache):
+                    raise Problem("not_found", f"No such file in the Library: {fid[:80]}", 404)
+
     @app.post("/api/v2/finance/actions")
     def finance_act(request: Request, body: FinanceActionRequest):
         """Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key
-        is the action's key, so a retry never acts twice. `dry_run` writes nothing and says what would happen."""
+        is the action's key, so a retry never acts twice. `dry_run` writes nothing and says what would happen. Files it
+        attaches must be Library files the asker may read."""
         who = viewer(request)
+        readable_files(request, who, body)
         audit_private_read(request, who.actor)  # the receipt and a dry run both carry the action's impact (spec 7.5)
         key = (request.headers.get("idempotency-key") or "").strip()
         if body.dry_run:
