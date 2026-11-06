@@ -1,4 +1,5 @@
 """Unsubscribe eligibility, network boundary and retry safety; no real mail or network."""
+
 import json
 import os
 import sqlite3
@@ -30,19 +31,28 @@ class Unsubscribe(unittest.TestCase):
                 with self.assertRaises(u.Unsupported):
                     u.public_address('example.org')
 
+
 class RulesPipeline(unittest.TestCase):
     def test_protected_mail_never_unsubscribes(self):
         from connectors.mail import rules
-        rs = [{'id': 'protect', 'when': {}, 'do': {'never_archive': True}},
-              {'id': 'subscription', 'when': {}, 'do': {'unsubscribe': True, 'archive': True}}]
+
+        rs = [
+            {'id': 'protect', 'when': {}, 'do': {'never_archive': True}},
+            {'id': 'subscription', 'when': {}, 'do': {'unsubscribe': True, 'archive': True}},
+        ]
         plan = rules.apply(rs, {})
         self.assertFalse(plan['unsubscribe'])
         self.assertFalse(plan['archive'])
 
 
 def news(sender="news@example.org", labels=("INBOX", "UNREAD"), to=BOX):
-    headers = {"From": f"Sender <{sender}>", "To": to, "Subject": "Weekly digest", "Message-ID": "<w-1@example.org>",
-               "Date": "Tue, 27 Oct 2026 09:00:00 -0700"}
+    headers = {
+        "From": f"Sender <{sender}>",
+        "To": to,
+        "Subject": "Weekly digest",
+        "Message-ID": "<w-1@example.org>",
+        "Date": "Tue, 27 Oct 2026 09:00:00 -0700",
+    }
     return fake.message("m1", "t1", headers, body="Weekly news.", labels=labels)
 
 
@@ -73,9 +83,11 @@ class UnsubscribeAction(unittest.TestCase):
         self.addCleanup(self.conn.close)
         self.audits, self.posts, self.code, self.roster = [], [], 202, []
         self.real_one_click = actions._one_click_url
-        for patcher in (patch.object(u, "post", side_effect=self._post),
-                        patch.object(access, "roster_mailboxes", side_effect=lambda roster=None: list(self.roster)),
-                        patch.object(actions, "_one_click_url", return_value=UNSUB_URL)):
+        for patcher in (
+            patch.object(u, "post", side_effect=self._post),
+            patch.object(access, "roster_mailboxes", side_effect=lambda roster=None: list(self.roster)),
+            patch.object(actions, "_one_click_url", return_value=UNSUB_URL),
+        ):
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -87,15 +99,27 @@ class UnsubscribeAction(unittest.TestCase):
 
     def perform(self, *messages, action_id="ma_1", mailbox=BOX, internal=("acme.example",)):
         gmail = gm.Gmail(fake.FakeGmailService(list(messages) or [news()]), mailbox, sleep=lambda s: None)
-        return actions.perform(Ctx(gmail, self.conn, self.audits, mailbox=mailbox, internal=internal),
-                               {"id": action_id, "mailbox": mailbox, "msg_id": "m1", "action": "unsubscribe", "args": {}})
+        return actions.perform(
+            Ctx(gmail, self.conn, self.audits, mailbox=mailbox, internal=internal),
+            {"id": action_id, "mailbox": mailbox, "msg_id": "m1", "action": "unsubscribe", "args": {}},
+        )
 
     def synced_send(self, to=(), cc=(), labels=("SENT",), deleted=None, sender=BOX):
         """One synced message of the mailbox in another thread, as the sync writes it to mail.db's messages table."""
-        self.conn.execute("INSERT INTO messages (mailbox, msg_id, thread_id, from_addr, to_json, cc_json, labels_json, "
-                          "deleted_at) VALUES (?,?,?,?,?,?,?,?)",
-                          (BOX, "sent-1", "t-other", sender, json.dumps(list(to)), json.dumps(list(cc)),
-                           json.dumps(list(labels)), deleted))
+        self.conn.execute(
+            "INSERT INTO messages (mailbox, msg_id, thread_id, from_addr, to_json, cc_json, labels_json, "
+            "deleted_at) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                BOX,
+                "sent-1",
+                "t-other",
+                sender,
+                json.dumps(list(to)),
+                json.dumps(list(cc)),
+                json.dumps(list(labels)),
+                deleted,
+            ),
+        )
 
     def test_an_accepted_request_is_ok_and_posted_once(self):
         self.assertEqual(self.perform(), {"ok": True, "detail": "unsubscribed"})
@@ -116,8 +140,9 @@ class UnsubscribeAction(unittest.TestCase):
 
     def test_a_sender_that_refuses_the_one_click_is_manual_required_and_not_retried(self):
         self.code = 400
-        self.assertEqual(self.perform(), {"ok": False, "retry": False,
-                                          "detail": "not confirmed by the sender: manual_required"})
+        self.assertEqual(
+            self.perform(), {"ok": False, "retry": False, "detail": "not confirmed by the sender: manual_required"}
+        )
         self.assertEqual(len(self.posts), 1)
 
     def test_a_message_without_a_one_click_link_is_refused_before_any_post(self):
@@ -128,63 +153,95 @@ class UnsubscribeAction(unittest.TestCase):
 
     def test_without_a_raw_copy_the_unsubscribe_needs_a_manual_step(self):
         with patch.object(actions, "_one_click_url", self.real_one_click):
-            self.assertEqual(self.perform(), {"ok": False, "retry": False,
-                                              "detail": "Raw message unavailable; manual unsubscribe needed."})
+            self.assertEqual(
+                self.perform(),
+                {"ok": False, "retry": False, "detail": "Raw message unavailable; manual unsubscribe needed."},
+            )
         self.assertEqual(self.posts, [])
 
     def test_starred_mail_is_kept_without_a_post(self):
         starred = news(labels=("INBOX", "UNREAD", "STARRED"))
-        self.assertEqual(self.perform(starred), {"ok": False, "retry": False,
-                                                 "detail": "not unsubscribing: the message is starred"})
+        self.assertEqual(
+            self.perform(starred), {"ok": False, "retry": False, "detail": "not unsubscribing: the message is starred"}
+        )
         self.assertEqual(self.posts, [])
 
     def test_internal_mail_is_kept_without_a_post(self):
-        self.assertEqual(self.perform(news(sender="ops@acme.example")),
-                         {"ok": False, "retry": False, "detail": "not unsubscribing: the mail is internal"})
+        self.assertEqual(
+            self.perform(news(sender="ops@acme.example")),
+            {"ok": False, "retry": False, "detail": "not unsubscribing: the mail is internal"},
+        )
         self.assertEqual(self.posts, [])
 
     def test_a_sender_on_the_people_roster_is_kept_without_a_post(self):
         self.roster = ["News@Example.org"]
-        self.assertEqual(self.perform(), {"ok": False, "retry": False,
-                                          "detail": "not unsubscribing: the sender is on the people roster"})
+        self.assertEqual(
+            self.perform(),
+            {"ok": False, "retry": False, "detail": "not unsubscribing: the sender is on the people roster"},
+        )
         self.assertEqual(self.posts, [])
 
     def test_a_sender_the_mailbox_already_writes_to_is_kept_without_a_post(self):
         db.claim_send(self.conn, "send-1", "ana", BOX, "", ["news@example.org"], "Weekly digest")
-        self.assertEqual(self.perform(), {"ok": False, "retry": False,
-                                          "detail": "not unsubscribing: the mailbox already writes to the sender"})
+        self.assertEqual(
+            self.perform(),
+            {"ok": False, "retry": False, "detail": "not unsubscribing: the mailbox already writes to the sender"},
+        )
         self.assertEqual(self.posts, [])
 
     def test_a_thread_the_mailbox_answered_counts_as_known_without_a_post(self):
-        reply = fake.message("m2", "t1", {"From": f"Ana <{BOX}>", "To": "news@example.org",
-                                          "Subject": "Re: Weekly digest", "Message-ID": "<r-1@acme.example>",
-                                          "Date": "Tue, 27 Oct 2026 10:00:00 -0700"}, body="Thanks.", labels=("SENT",))
-        self.assertEqual(self.perform(news(), reply), {"ok": False, "retry": False,
-                                                       "detail": "not unsubscribing: the mailbox already writes to the sender"})
+        reply = fake.message(
+            "m2",
+            "t1",
+            {
+                "From": f"Ana <{BOX}>",
+                "To": "news@example.org",
+                "Subject": "Re: Weekly digest",
+                "Message-ID": "<r-1@acme.example>",
+                "Date": "Tue, 27 Oct 2026 10:00:00 -0700",
+            },
+            body="Thanks.",
+            labels=("SENT",),
+        )
+        self.assertEqual(
+            self.perform(news(), reply),
+            {"ok": False, "retry": False, "detail": "not unsubscribing: the mailbox already writes to the sender"},
+        )
         self.assertEqual(self.posts, [])
 
     def test_internal_mail_from_a_team_domain_is_kept_without_a_post(self):
-        self.assertEqual(self.perform(news(sender="ops@team.example", to="ana@team.example"),
-                                      mailbox="ana@team.example", internal=("team.example",)),
-                         {"ok": False, "retry": False, "detail": "not unsubscribing: the mail is internal"})
+        self.assertEqual(
+            self.perform(
+                news(sender="ops@team.example", to="ana@team.example"),
+                mailbox="ana@team.example",
+                internal=("team.example",),
+            ),
+            {"ok": False, "retry": False, "detail": "not unsubscribing: the mail is internal"},
+        )
         self.assertEqual(self.posts, [])
 
     def test_a_sender_the_mailbox_wrote_to_in_another_thread_is_kept_without_a_post(self):
         self.synced_send(to=["news@example.org"])
-        self.assertEqual(self.perform(), {"ok": False, "retry": False,
-                                          "detail": "not unsubscribing: the mailbox already writes to the sender"})
+        self.assertEqual(
+            self.perform(),
+            {"ok": False, "retry": False, "detail": "not unsubscribing: the mailbox already writes to the sender"},
+        )
         self.assertEqual(self.posts, [])
 
     def test_a_sender_the_mailbox_copied_on_its_own_mail_is_kept_without_a_post(self):
         self.synced_send(to=["someone@example.org"], cc=["news@example.org"])
-        self.assertEqual(self.perform(), {"ok": False, "retry": False,
-                                          "detail": "not unsubscribing: the mailbox already writes to the sender"})
+        self.assertEqual(
+            self.perform(),
+            {"ok": False, "retry": False, "detail": "not unsubscribing: the mailbox already writes to the sender"},
+        )
         self.assertEqual(self.posts, [])
 
     def test_a_second_recipient_of_a_send_counts_as_known_without_a_post(self):
         db.claim_send(self.conn, "send-1", "ana", BOX, "", ["first@x.example", "news@example.org"], "Weekly digest")
-        self.assertEqual(self.perform(), {"ok": False, "retry": False,
-                                          "detail": "not unsubscribing: the mailbox already writes to the sender"})
+        self.assertEqual(
+            self.perform(),
+            {"ok": False, "retry": False, "detail": "not unsubscribing: the mailbox already writes to the sender"},
+        )
         self.assertEqual(self.posts, [])
 
     def test_a_draft_to_the_sender_does_not_count_as_known(self):
@@ -208,21 +265,42 @@ class UnsubscribeAction(unittest.TestCase):
         self.assertEqual(self.posts, [UNSUB_URL])
 
     def test_with_no_internal_domains_known_on_this_computer_nothing_is_unsubscribed_from(self):
-        self.assertEqual(self.perform(internal=()), {"ok": False, "retry": False,
-                                                     "detail": "not unsubscribing: internal domains unknown on this computer"})
+        self.assertEqual(
+            self.perform(internal=()),
+            {"ok": False, "retry": False, "detail": "not unsubscribing: internal domains unknown on this computer"},
+        )
         self.assertEqual(self.posts, [])
 
     def test_a_draft_in_the_thread_does_not_make_the_sender_known(self):
-        draft = fake.message("m2", "t1", {"From": f"Ana <{BOX}>", "To": "news@example.org",
-                                          "Subject": "Re: Weekly digest", "Message-ID": "<d-1@acme.example>",
-                                          "Date": "Tue, 27 Oct 2026 10:00:00 -0700"}, body="Not sent.", labels=("DRAFT",))
+        draft = fake.message(
+            "m2",
+            "t1",
+            {
+                "From": f"Ana <{BOX}>",
+                "To": "news@example.org",
+                "Subject": "Re: Weekly digest",
+                "Message-ID": "<d-1@acme.example>",
+                "Date": "Tue, 27 Oct 2026 10:00:00 -0700",
+            },
+            body="Not sent.",
+            labels=("DRAFT",),
+        )
         self.assertEqual(self.perform(news(), draft), {"ok": True, "detail": "unsubscribed"})
         self.assertEqual(self.posts, [UNSUB_URL])
 
     def test_inbound_mail_spoofing_the_owners_from_in_the_thread_does_not_make_the_sender_known(self):
-        spoof = fake.message("m2", "t1", {"From": f"Ana <{BOX}>", "To": "news@example.org",
-                                          "Subject": "Re: Weekly digest", "Message-ID": "<s-1@example.org>",
-                                          "Date": "Tue, 27 Oct 2026 10:00:00 -0700"}, body="Not from her.",
-                             labels=("INBOX", "UNREAD"))
+        spoof = fake.message(
+            "m2",
+            "t1",
+            {
+                "From": f"Ana <{BOX}>",
+                "To": "news@example.org",
+                "Subject": "Re: Weekly digest",
+                "Message-ID": "<s-1@example.org>",
+                "Date": "Tue, 27 Oct 2026 10:00:00 -0700",
+            },
+            body="Not from her.",
+            labels=("INBOX", "UNREAD"),
+        )
         self.assertEqual(self.perform(news(), spoof), {"ok": True, "detail": "unsubscribed"})
         self.assertEqual(self.posts, [UNSUB_URL])

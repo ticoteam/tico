@@ -19,6 +19,7 @@ Control endpoints under /_fake/ are not Xero's:
 
   python3 scripts/fake_xero.py --port 18792
 """
+
 import argparse
 import json
 import re
@@ -32,12 +33,33 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-ENDPOINTS = ("Accounts", "Contacts", "Items", "TrackingCategories", "Invoices", "CreditNotes", "Payments",
-             "ManualJournals", "BankTransactions", "BankTransfers", "Overpayments", "Prepayments")
-ID_KEY = {"Accounts": "AccountID", "Contacts": "ContactID", "Items": "ItemID", "Invoices": "InvoiceID",
-          "CreditNotes": "CreditNoteID",
-          "Payments": "PaymentID", "ManualJournals": "ManualJournalID", "BankTransactions": "BankTransactionID",
-          "BankTransfers": "BankTransferID", "Overpayments": "OverpaymentID", "Prepayments": "PrepaymentID"}
+ENDPOINTS = (
+    "Accounts",
+    "Contacts",
+    "Items",
+    "TrackingCategories",
+    "Invoices",
+    "CreditNotes",
+    "Payments",
+    "ManualJournals",
+    "BankTransactions",
+    "BankTransfers",
+    "Overpayments",
+    "Prepayments",
+)
+ID_KEY = {
+    "Accounts": "AccountID",
+    "Contacts": "ContactID",
+    "Items": "ItemID",
+    "Invoices": "InvoiceID",
+    "CreditNotes": "CreditNoteID",
+    "Payments": "PaymentID",
+    "ManualJournals": "ManualJournalID",
+    "BankTransactions": "BankTransactionID",
+    "BankTransfers": "BankTransferID",
+    "Overpayments": "OverpaymentID",
+    "Prepayments": "PrepaymentID",
+}
 ACCOUNT_TYPES = {"BANK", "CURRENT", "CURRLIAB", "EQUITY", "EXPENSE", "REVENUE", "FIXED", "SALES", "OVERHEADS"}
 PAGE = 100
 PREFIX = "/api.xro/2.0/"
@@ -49,8 +71,17 @@ TENANT = ["acme-tenant"]
 
 def reset() -> None:
     STATE.clear()
-    STATE.update({"books": {e: [] for e in ENDPOINTS}, "calls": [], "keys": {}, "expire": False, "throttle": 0,
-                  "next_id": 100, "lose": 0})
+    STATE.update(
+        {
+            "books": {e: [] for e in ENDPOINTS},
+            "calls": [],
+            "keys": {},
+            "expire": False,
+            "throttle": 0,
+            "next_id": 100,
+            "lose": 0,
+        }
+    )
 
 
 def now_ms() -> str:
@@ -63,8 +94,12 @@ def ms_of(value: object) -> int | None:
 
 
 def _error(message: str) -> tuple[int, dict[str, object]]:
-    return 400, {"ErrorNumber": 10, "Type": "ValidationException", "Message": "A validation exception occurred",
-                 "Elements": [{"ValidationErrors": [{"Message": message}]}]}
+    return 400, {
+        "ErrorNumber": 10,
+        "Type": "ValidationException",
+        "Message": "A validation exception occurred",
+        "Elements": [{"ValidationErrors": [{"Message": message}]}],
+    }
 
 
 def _balanced(lines: object) -> bool:
@@ -112,7 +147,9 @@ def _amounts(row: dict[str, object]) -> None:
         if isinstance(line, dict) and "LineAmount" not in line and "UnitAmount" in line:
             line["LineAmount"] = f"{Decimal(str(line.get('Quantity', 1))) * Decimal(str(line['UnitAmount'])):.2f}"
     if "Total" not in row:
-        row["Total"] = f"{sum((Decimal(str(line.get('LineAmount', 0))) for line in lines if isinstance(line, dict)), Decimal(0)):.2f}"
+        row["Total"] = (
+            f"{sum((Decimal(str(line.get('LineAmount', 0))) for line in lines if isinstance(line, dict)), Decimal(0)):.2f}"
+        )
 
 
 def _defaults(endpoint: str, row: dict[str, object]) -> None:
@@ -141,7 +178,9 @@ def _check(endpoint: str, row: dict[str, object]) -> str:
         return "A bank account and at least one line item are required"
     if endpoint == "BankTransactions" and not _has_id(row.get("Contact"), "ContactID"):
         return "A contact is required"
-    if endpoint == "Invoices" and (row.get("Type") not in ("ACCREC", "ACCPAY") or not _has_id(row.get("Contact"), "ContactID")):
+    if endpoint == "Invoices" and (
+        row.get("Type") not in ("ACCREC", "ACCPAY") or not _has_id(row.get("Contact"), "ContactID")
+    ):
         return "An invoice needs a type and a contact"
     if endpoint == "CreditNotes" and not _has_id(row.get("Contact"), "ContactID"):
         return "A credit note needs a contact"
@@ -225,7 +264,7 @@ def allocate(note_id: str, body: dict[str, Any], key: str) -> tuple[int, dict[st
 
 def listing(endpoint: str, query: dict[str, str], since: int | None) -> tuple[int, dict[str, object]]:
     rows = [dict(r) for r in STATE["books"][endpoint]]  # type: ignore[index,union-attr]
-    if endpoint == "BankTransfers":           # no paging and no change time: the whole list, deleted ones when asked
+    if endpoint == "BankTransfers":  # no paging and no change time: the whole list, deleted ones when asked
         if query.get("includeDeleted") != "true":
             rows = [r for r in rows if r.get("Status") != "DELETED"]
         return 200, {endpoint: rows}
@@ -244,15 +283,16 @@ def listing(endpoint: str, query: dict[str, str], since: int | None) -> tuple[in
         for row in rows:
             got = paid.get(str(row.get("InvoiceID")), Decimal(0))
             row["AmountPaid"] = got
-            row["AmountDue"] = (Decimal(0) if row.get("Status") in ("VOIDED", "DELETED")
-                                else Decimal(str(row.get("Total") or 0)) - got)
+            row["AmountDue"] = (
+                Decimal(0) if row.get("Status") in ("VOIDED", "DELETED") else Decimal(str(row.get("Total") or 0)) - got
+            )
     order = query.get("order", "")
     if order:
         rows.sort(key=lambda r: ms_of(r.get("UpdatedDateUTC")) or 0, reverse=order.endswith("DESC"))
     if endpoint == "Accounts":
         return 200, {"Accounts": rows}
     page = max(int(query.get("page") or 1), 1)
-    return 200, {endpoint: rows[(page - 1) * PAGE:page * PAGE]}
+    return 200, {endpoint: rows[(page - 1) * PAGE : page * PAGE]}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -284,7 +324,7 @@ class Handler(BaseHTTPRequestHandler):
         return found if isinstance(found, dict) else {}
 
     def _route(self, method: str) -> None:
-        self._lose_reply = False          # a keep-alive connection's last write never leaks into this request
+        self._lose_reply = False  # a keep-alive connection's last write never leaks into this request
         url = urlsplit(self.path)
         query = {k: v[0] for k, v in parse_qs(url.query).items()}
         body = self._body()
@@ -294,9 +334,19 @@ class Handler(BaseHTTPRequestHandler):
             self._lose_reply = method != "GET"
             key = self.headers.get("Idempotency-Key", "")
             since_header = self.headers.get("If-Modified-Since", "")
-            STATE["calls"].append({"method": method, "path": url.path, "query": query,  # type: ignore[attr-defined]
-                                   "idempotency_key": key, "if_modified_since": since_header})
-            if not self.headers.get("Authorization", "").startswith("Bearer ") or len(self.headers["Authorization"]) < 8:
+            STATE["calls"].append(
+                {
+                    "method": method,
+                    "path": url.path,
+                    "query": query,  # type: ignore[attr-defined]
+                    "idempotency_key": key,
+                    "if_modified_since": since_header,
+                }
+            )
+            if (
+                not self.headers.get("Authorization", "").startswith("Bearer ")
+                or len(self.headers["Authorization"]) < 8
+            ):
                 return self._send(401, {"Message": "Unauthorized"})
             if self.headers.get("xero-tenant-id") != TENANT[0]:
                 return self._send(403, {"Message": "Forbidden: unknown tenant"})
@@ -308,7 +358,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(429, {"Message": "rate limit exceeded"}, {"Retry-After": "1"})
             if not url.path.startswith(PREFIX):
                 return self._send(404, {})
-            parts = url.path[len(PREFIX):].strip("/").split("/")
+            parts = url.path[len(PREFIX) :].strip("/").split("/")
             if method == "GET" and len(parts) == 1:
                 since = None
                 if since_header:

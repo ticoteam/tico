@@ -71,7 +71,11 @@ const TOOLS: &str = "read,bash,edit,write,grep,find,ls";
 
 /// The catalog ids, sorted (readiness `models`).
 pub fn model_names() -> Vec<String> {
-    let mut names: Vec<String> = MODELS.iter().chain(GATEWAY_MODELS).map(|(k, _)| k.to_string()).collect();
+    let mut names: Vec<String> = MODELS
+        .iter()
+        .chain(GATEWAY_MODELS)
+        .map(|(k, _)| k.to_string())
+        .collect();
     names.sort();
     names
 }
@@ -79,8 +83,16 @@ pub fn model_names() -> Vec<String> {
 /// The OpenRouter id for a catalog id; one that is already OpenRouter's (or unknown) passes through.
 pub fn model_for(model: Option<&str>) -> String {
     let m = model.unwrap_or_default().trim();
-    let m = if m.is_empty() || m == "default" { DEFAULT_MODEL } else { m };
-    MODELS.iter().find(|(k, _)| *k == m).map_or(m, |(_, v)| v).to_string()
+    let m = if m.is_empty() || m == "default" {
+        DEFAULT_MODEL
+    } else {
+        m
+    };
+    MODELS
+        .iter()
+        .find(|(k, _)| *k == m)
+        .map_or(m, |(_, v)| v)
+        .to_string()
 }
 
 /// Whether `model` is one of the Tico AI Gateway's, run as pi's `tico` provider.
@@ -92,6 +104,7 @@ pub fn is_gateway(model: Option<&str>) -> bool {
 /// token read from GATEWAY_KEY_ENV when pi makes a request. It holds no secret. The models take text and tools only
 /// here: `gateway_models_json_for` adds images for a model the catalog says reads them. They reason, so pi sends the bot's effort as `reasoning_effort`; pi drops it for a model not marked `reasoning`. The Gateway
 /// takes none, minimal, low, medium, high and xhigh, so pi's `max` (`effort_for`) goes as `xhigh`.
+#[cfg(test)]
 pub fn gateway_models_json(url: &str) -> Value {
     gateway_models_json_for(url, None, &Value::Null)
 }
@@ -100,8 +113,14 @@ pub fn gateway_models_json(url: &str) -> Value {
 /// for that model, backend/models_preset.py `with_gateway_inputs`) lists `image` for `id`. PDFs are not a pi input and
 /// are left out. A model the server says nothing about (an older server) is text only.
 fn gateway_input_for(inputs: &Value, id: &str) -> Vec<&'static str> {
-    let image = inputs[id].as_array().is_some_and(|kinds| kinds.iter().any(|k| k.as_str() == Some("image")));
-    if image { vec!["text", "image"] } else { vec!["text"] }
+    let image = inputs[id]
+        .as_array()
+        .is_some_and(|kinds| kinds.iter().any(|k| k.as_str() == Some("image")));
+    if image {
+        vec!["text", "image"]
+    } else {
+        vec!["text"]
+    }
 }
 
 /// `gateway_models_json` that also names `model`, the one this turn asks for, when it is not among the old ids: the
@@ -110,7 +129,9 @@ fn gateway_input_for(inputs: &Value, id: &str) -> Vec<&'static str> {
 /// server sent none.
 pub fn gateway_models_json_for(url: &str, model: Option<&str>, inputs: &Value) -> Value {
     let url = url.trim().trim_end_matches('/');
-    let asked = model.map(str::trim).filter(|m| m.starts_with("tico-") && !GATEWAY_MODELS.iter().any(|(id, _)| id == m));
+    let asked = model
+        .map(str::trim)
+        .filter(|m| m.starts_with("tico-") && !GATEWAY_MODELS.iter().any(|(id, _)| id == m));
     let models: Vec<Value> = GATEWAY_MODELS
         .iter()
         .map(|(id, name)| (*id, *name))
@@ -130,17 +151,35 @@ pub fn gateway_models_json_for(url: &str, model: Option<&str>, inputs: &Value) -
 /// else `<workspace>/runtime/pi-agent/<bot>`. Every turn's holds its `mcp.json` (`mcp_json`); a Gateway turn's holds
 /// `models.json` and `settings.json` too (`gateway_models_json_for`, the turn's own pi settings).
 pub(crate) fn gateway_agent_dir(settings: &Settings, env: &Env) -> Option<PathBuf> {
-    let models = gateway_models_json_for(env.get(GATEWAY_URL_ENV).map(String::as_str).unwrap_or_default(), settings.model.as_deref(), &settings.gateway_inputs);
+    let models = gateway_models_json_for(
+        env.get(GATEWAY_URL_ENV)
+            .map(String::as_str)
+            .unwrap_or_default(),
+        settings.model.as_deref(),
+        &settings.gateway_inputs,
+    );
     let settings_json = json!({"retry": {"enabled": false}, "shellCommandPrefix": format!("unset {GATEWAY_KEY_ENV}")});
-    let settings_json = with_compaction(settings_json, Some(GATEWAY_CONTEXT_WINDOW), &settings.compact_at);
-    write_agent_dir(settings, env, json!({"models.json": models, "settings.json": settings_json}))
+    let settings_json = with_compaction(
+        settings_json,
+        Some(GATEWAY_CONTEXT_WINDOW),
+        &settings.compact_at,
+    );
+    write_agent_dir(
+        settings,
+        env,
+        json!({"models.json": models, "settings.json": settings_json}),
+    )
 }
 
 /// The agent directory of a turn on another provider: its `mcp.json`, and a `settings.json` that says only what its
 /// model's compaction needs (`{}` where the model's window is not known, so a stale one is cleared).
 fn agent_dir(settings: &Settings, env: &Env) -> Option<PathBuf> {
     let window = openrouter_context_window(&model_for(settings.model.as_deref()));
-    write_agent_dir(settings, env, json!({"settings.json": with_compaction(json!({}), window, &settings.compact_at)}))
+    write_agent_dir(
+        settings,
+        env,
+        json!({"settings.json": with_compaction(json!({}), window, &settings.compact_at)}),
+    )
 }
 
 /// The context window of an OpenRouter model, where Tico knows it. None for every model for now (nothing in the runner
@@ -168,17 +207,42 @@ fn with_compaction(mut settings: Value, window: Option<i64>, compact_at: &Value)
 
 /// Writes `files` (name -> JSON) and the turn's `mcp.json` into the turn's agent directory; the directory's path, or None.
 fn write_agent_dir(settings: &Settings, env: &Env, mut files: Value) -> Option<PathBuf> {
-    let root = env.get("HUB_WORKSPACE").filter(|w| !w.is_empty()).cloned().unwrap_or_else(|| if settings.cwd.is_empty() { ".".into() } else { settings.cwd.clone() });
-    let bot = if settings.slug.is_empty() { "pi" } else { settings.slug.as_str() };
-    let dir = env.get(GATEWAY_DIR_ENV).filter(|d| !d.is_empty()).map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(root).join("runtime").join("pi-agent").join(bot));
+    let root = env
+        .get("HUB_WORKSPACE")
+        .filter(|w| !w.is_empty())
+        .cloned()
+        .unwrap_or_else(|| {
+            if settings.cwd.is_empty() {
+                ".".into()
+            } else {
+                settings.cwd.clone()
+            }
+        });
+    let bot = if settings.slug.is_empty() {
+        "pi"
+    } else {
+        settings.slug.as_str()
+    };
+    let dir = env
+        .get(GATEWAY_DIR_ENV)
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(root)
+                .join("runtime")
+                .join("pi-agent")
+                .join(bot)
+        });
     files["mcp.json"] = mcp_json(settings, env);
     // The agent directory can be changed by the turn. Prepare it as that unprivileged user;
     // no privileged open or write may follow a link planted by a harness or a sibling. Isolated (-I): with no HOME,
     // Python finds the passwd home, the shared one, and would run a sibling's user site as the turn user.
     let mut child = crate::isolation::std_command_as(settings.identity, crate::env::python())
         .env_clear()
-        .args(["-I", "-c", r#"import json,os,sys,secrets
+        .args([
+            "-I",
+            "-c",
+            r#"import json,os,sys,secrets
 root=sys.argv[1]
 os.makedirs(root,mode=0o700,exist_ok=True)
 body=json.load(sys.stdin)
@@ -188,15 +252,22 @@ for name,value in body.items():
  fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
  with os.fdopen(fd,'w') as out: json.dump(value,out)
  os.replace(tmp,final)
-"#, &dir.display().to_string()])
-        .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
-        .spawn().ok()?;
+"#,
+            &dir.display().to_string(),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
     {
         use std::io::Write;
         let body = serde_json::to_vec(&files).ok()?;
         child.stdin.take()?.write_all(&body).ok()?;
     }
-    if !child.wait().ok()?.success() { return None; }
+    if !child.wait().ok()?.success() {
+        return None;
+    }
     Some(dir)
 }
 
@@ -205,7 +276,11 @@ for name,value in body.items():
 /// by name. An SSE server (a repository's, not the bot's: those are filtered by the manifest) is left out, since pi
 /// refuses it. Secrets stay `${VAR}`: the hub's variables are named there and pi reads them from the turn's environment.
 pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
-    let project = if settings.cwd.is_empty() { None } else { std::fs::read_to_string(std::path::Path::new(&settings.cwd).join(".mcp.json")).ok() };
+    let project = if settings.cwd.is_empty() {
+        None
+    } else {
+        std::fs::read_to_string(std::path::Path::new(&settings.cwd).join(".mcp.json")).ok()
+    };
     let project = project
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .and_then(|v| v.get("mcpServers").and_then(Value::as_object).cloned())
@@ -220,7 +295,12 @@ pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
         .collect();
     servers.extend(crate::mcp::pi_config(&settings.mcp_servers));
     if let Some(hub) = hub_mcp_server(env) {
-        let vars: serde_json::Map<String, Value> = hub["env"].as_object().into_iter().flatten().map(|(k, _)| (k.clone(), json!(format!("${{{k}}}")))).collect();
+        let vars: serde_json::Map<String, Value> = hub["env"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, _)| (k.clone(), json!(format!("${{{k}}}"))))
+            .collect();
         servers.insert("hub".into(), json!({"command": hub["command"], "args": hub["args"], "env": vars, "exposure": "direct"}));
     }
     // pi starts a stdio server with the whole process environment, so the Gateway key (hidden from bash by
@@ -230,7 +310,11 @@ pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
     for (name, row) in servers.iter_mut() {
         if row.get("command").is_some() {
             let mut own = row["env"].as_object().cloned().unwrap_or_default();
-            for key in MCP_BLANKED_ENV.iter().copied().filter(|k| *k != "HUB_TOKEN" || name.as_str() != "hub") {
+            for key in MCP_BLANKED_ENV
+                .iter()
+                .copied()
+                .filter(|k| *k != "HUB_TOKEN" || name.as_str() != "hub")
+            {
                 if !own.contains_key(key) {
                     own.insert(key.into(), json!(""));
                 }
@@ -244,7 +328,14 @@ pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
 
 /// The variables a stdio MCP server is started without: the model provider keys a pi turn may hold, and the hub's token
 /// (every server but the hub, which gets it through `${HUB_TOKEN}`). The Gateway key is blanked separately, always.
-const MCP_BLANKED_ENV: &[&str] = &["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "HUB_TOKEN"];
+const MCP_BLANKED_ENV: &[&str] = &[
+    "OPENROUTER_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "XAI_API_KEY",
+    "GEMINI_API_KEY",
+    "HUB_TOKEN",
+];
 
 /// Loopback hosts, added to NO_PROXY for a Gateway turn. pi sends every request through the environment's proxy
 /// (a CONNECT tunnel, even for plain http), so a proxy without a loopback bypass would carry a plain-http local
@@ -253,8 +344,15 @@ const LOOPBACK: &[&str] = &["localhost", "127.0.0.1", "::1"];
 
 fn bypass_proxy_for_loopback(env: &mut Env) {
     for name in ["NO_PROXY", "no_proxy"] {
-        let mut hosts: Vec<String> =
-            env.get(name).map(|v| v.split(',').map(|h| h.trim().to_string()).filter(|h| !h.is_empty()).collect()).unwrap_or_default();
+        let mut hosts: Vec<String> = env
+            .get(name)
+            .map(|v| {
+                v.split(',')
+                    .map(|h| h.trim().to_string())
+                    .filter(|h| !h.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
         for host in LOOPBACK {
             if !hosts.iter().any(|h| h.eq_ignore_ascii_case(host)) {
                 hosts.push(host.to_string());
@@ -285,18 +383,36 @@ const GATEWAY_ERRORS: &[(&str, &str)] = &[
 pub fn gateway_code(text: &str) -> Option<&'static str> {
     let lower = text.to_lowercase();
     let squeezed: String = lower.chars().filter(|c| !c.is_whitespace()).collect();
-    GATEWAY_ERRORS.iter().find(|(code, _)| squeezed.contains(&format!("\"code\":\"{code}\""))).map(|(code, _)| *code).or_else(|| {
-        GATEWAY_ERRORS.iter().find(|(code, said)| lower.contains(code) || lower.contains(said)).map(|(code, _)| *code)
-    })
-    .or_else(|| lower.contains("gateway cap reached").then_some("cap_reached"))
+    GATEWAY_ERRORS
+        .iter()
+        .find(|(code, _)| squeezed.contains(&format!("\"code\":\"{code}\"")))
+        .map(|(code, _)| *code)
+        .or_else(|| {
+            GATEWAY_ERRORS
+                .iter()
+                .find(|(code, said)| lower.contains(code) || lower.contains(said))
+                .map(|(code, _)| *code)
+        })
+        .or_else(|| {
+            lower
+                .contains("gateway cap reached")
+                .then_some("cap_reached")
+        })
 }
 
 /// The Gateway's own message in a refusal pi printed as `<status>: {"code": .., "message": ..}`, if it has one.
 fn gateway_said(text: &str) -> Option<String> {
     let body = &text[text.find('{')?..];
     let error: Value = serde_json::from_str(body).ok()?;
-    let error = if error["error"].is_object() { &error["error"] } else { &error };
-    error["message"].as_str().map(|m| m.trim().chars().take(200).collect()).filter(|m: &String| !m.is_empty())
+    let error = if error["error"].is_object() {
+        &error["error"]
+    } else {
+        &error
+    };
+    error["message"]
+        .as_str()
+        .map(|m| m.trim().chars().take(200).collect())
+        .filter(|m: &String| !m.is_empty())
 }
 
 /// A model error of a turn on the Tico AI Gateway in words a person reads, ending with the Gateway's code; anything
@@ -305,7 +421,9 @@ fn gateway_said(text: &str) -> Option<String> {
 /// the runner's limit and sign-in rules (hosts/mod.rs) classify them; the server
 /// (backend/execution.py) decides from the code what is retried, when.
 pub fn plain_error(text: &str) -> String {
-    let Some(code) = gateway_code(text) else { return text.to_string() };
+    let Some(code) = gateway_code(text) else {
+        return text.to_string();
+    };
     match code {
         "cap_reached" => "Gateway cap reached: this gateway key has used its monthly spend limit (cap_reached)".into(),
         // One plain message for both: a person can't tell a revoked key from a mistyped one, and needn't.
@@ -315,7 +433,7 @@ pub fn plain_error(text: &str) -> String {
         "out_of_credit" => {
             "Tico models are paused: this company is out of credit. Your bots use their other models until credit is added (out_of_credit)".into()
         }
-        "unknown_model" => "Tico AI Gateway: this model isn't offered; Settings > Gateway lists the picks (unknown_model)".into(),
+        "unknown_model" => "Tico AI Gateway: this model isn't offered; Settings > Models lists the picks (unknown_model)".into(),
         "no_route" => "Tico AI Gateway: no Tico route for this request (no_route)".into(),
         "upstream_unavailable" => "Tico AI Gateway is unavailable, try again (upstream_unavailable)".into(),
         _ => {
@@ -334,11 +452,26 @@ pub fn effort_for(effort: Option<&str>) -> &'static str {
 }
 
 fn first(u: &Value, keys: &[&str]) -> i64 {
-    keys.iter().map(|k| int_of(&u[*k])).find(|v| *v != 0).unwrap_or(0)
+    keys.iter()
+        .map(|k| int_of(&u[*k]))
+        .find(|v| *v != 0)
+        .unwrap_or(0)
 }
 
-const INPUT: &[&str] = &["input", "input_tokens", "inputTokens", "prompt_tokens", "promptTokens"];
-const OUTPUT: &[&str] = &["output", "output_tokens", "outputTokens", "completion_tokens", "completionTokens"];
+const INPUT: &[&str] = &[
+    "input",
+    "input_tokens",
+    "inputTokens",
+    "prompt_tokens",
+    "promptTokens",
+];
+const OUTPUT: &[&str] = &[
+    "output",
+    "output_tokens",
+    "outputTokens",
+    "completion_tokens",
+    "completionTokens",
+];
 
 /// (input, output, total) from a Pi/OpenRouter usage object.
 pub fn usage_tokens(usage: &Value) -> (i64, i64, i64) {
@@ -359,8 +492,16 @@ pub fn usage_increment(usage: &Value) -> Value {
 
 /// The run's granted key; outside a turn (no bot environment) also the machine's, as local diagnostics read it.
 pub fn openrouter_key(env: &Env, local: bool) -> String {
-    let process = if local { std::env::var("OPENROUTER_API_KEY").ok() } else { None };
-    if let Some(v) = [env.get("OPENROUTER_API_KEY").cloned(), process].into_iter().flatten().find(|v| !v.trim().is_empty()) {
+    let process = if local {
+        std::env::var("OPENROUTER_API_KEY").ok()
+    } else {
+        None
+    };
+    if let Some(v) = [env.get("OPENROUTER_API_KEY").cloned(), process]
+        .into_iter()
+        .flatten()
+        .find(|v| !v.trim().is_empty())
+    {
         return v.trim().to_string();
     }
     if !local {
@@ -393,19 +534,38 @@ pub fn sign_in(assignments: &[Value]) -> (&'static str, String) {
     if missing.is_empty() {
         ("ready", "OpenRouter API key configured".into())
     } else {
-        ("missing", format!("OpenRouter API key grant required ({})", missing.join(", ")))
+        (
+            "missing",
+            format!("OpenRouter API key grant required ({})", missing.join(", ")),
+        )
     }
 }
 
 /// `<workspace>/runtime/pi-sessions/<bot>`, made on first use (the bot user's, when isolated).
 pub fn session_dir(bot: &str, settings: &Settings) -> PathBuf {
-    let root = settings.env.get("HUB_WORKSPACE").filter(|w| !w.is_empty()).cloned().unwrap_or_else(|| if settings.cwd.is_empty() { ".".into() } else { settings.cwd.clone() });
-    let path = PathBuf::from(root).join("runtime").join("pi-sessions").join(if bot.is_empty() { "pi" } else { bot });
+    let root = settings
+        .env
+        .get("HUB_WORKSPACE")
+        .filter(|w| !w.is_empty())
+        .cloned()
+        .unwrap_or_else(|| {
+            if settings.cwd.is_empty() {
+                ".".into()
+            } else {
+                settings.cwd.clone()
+            }
+        });
+    let path = PathBuf::from(root)
+        .join("runtime")
+        .join("pi-sessions")
+        .join(if bot.is_empty() { "pi" } else { bot });
     let _ = crate::isolation::mkdir(&path, 0o777);
     // A leased turn user writes here through the shared group; the supervisor's umask left it owner-writable only,
     // and earlier threads' session files may be owner-only too.
     if settings.identity.is_some() {
-        if let Err(e) = crate::turn_users::share_workspace_blocking(std::slice::from_ref(&path)) { crate::util::log(&format!("Tico runner: {e}")); }
+        if let Err(e) = crate::turn_users::share_workspace_blocking(std::slice::from_ref(&path)) {
+            crate::util::log(&format!("Tico runner: {e}"));
+        }
     }
     path
 }
@@ -415,7 +575,9 @@ fn assistant_text(message: &Value) -> String {
     match message {
         Value::String(s) if !s.trim().is_empty() => s.clone(),
         Value::Object(m) => {
-            if !matches!(m.get("role"), None | Some(Value::Null)) && m.get("role") != Some(&json!("assistant")) {
+            if !matches!(m.get("role"), None | Some(Value::Null))
+                && m.get("role") != Some(&json!("assistant"))
+            {
                 return String::new();
             }
             match m.get("content") {
@@ -424,7 +586,12 @@ fn assistant_text(message: &Value) -> String {
                     .iter()
                     .filter_map(|b| match b {
                         Value::String(s) => Some(s.clone()),
-                        Value::Object(b) if b.get("type").is_none_or(|t| t.is_null() || t == "text") && truthy(b.get("text")) => Some(text_of(&b["text"])),
+                        Value::Object(b)
+                            if b.get("type").is_none_or(|t| t.is_null() || t == "text")
+                                && truthy(b.get("text")) =>
+                        {
+                            Some(text_of(&b["text"]))
+                        }
                         _ => None,
                     })
                     .collect(),
@@ -445,12 +612,28 @@ impl Wire for Pi {
         let s = &t.settings;
         let mut argv = cmd.to_vec();
         let gateway = is_gateway(s.model.as_deref());
-        let model = if gateway { s.model.clone().unwrap_or_default().trim().to_string() } else { model_for(s.model.as_deref()) };
+        let model = if gateway {
+            s.model.clone().unwrap_or_default().trim().to_string()
+        } else {
+            model_for(s.model.as_deref())
+        };
         argv.extend(
             [
-                "--mode", "rpc", "--provider", if gateway { GATEWAY_PROVIDER } else { PROVIDER }, "--model", &model,
-                "--thinking", effort_for(effort.or(s.effort.as_deref())), "--tools", TOOLS, "--session-id", thread_id,
-                "--session-dir", &session_dir(&t.bot, s).display().to_string(), "--approve",
+                "--mode",
+                "rpc",
+                "--provider",
+                if gateway { GATEWAY_PROVIDER } else { PROVIDER },
+                "--model",
+                &model,
+                "--thinking",
+                effort_for(effort.or(s.effort.as_deref())),
+                "--tools",
+                TOOLS,
+                "--session-id",
+                thread_id,
+                "--session-dir",
+                &session_dir(&t.bot, s).display().to_string(),
+                "--approve",
             ]
             .map(String::from),
         );
@@ -491,7 +674,10 @@ impl Wire for Pi {
                 if truthy(m.get("usage")) {
                     let (inp, out, total) = usage_tokens(&msg["usage"]);
                     if total != 0 {
-                        turn.emit("tokens", json!({"input": inp, "output": out, "total": total}));
+                        turn.emit(
+                            "tokens",
+                            json!({"input": inp, "output": out, "total": total}),
+                        );
                     }
                 }
             }
@@ -501,12 +687,21 @@ impl Wire for Pi {
                 if gateway {
                     turn.extra["gateway"] = json!(true);
                 }
-                let failed = done["role"] == "assistant" && done["stopReason"] == "error" && truthy(done.get("errorMessage"));
-                let partial = if failed { assistant_text(done) } else { String::new() };
+                let failed = done["role"] == "assistant"
+                    && done["stopReason"] == "error"
+                    && truthy(done.get("errorMessage"));
+                let partial = if failed {
+                    assistant_text(done)
+                } else {
+                    String::new()
+                };
                 if failed && gateway && !partial.trim().is_empty() {
                     // The Gateway's stream broke after it began: the reply keeps what came, and says it was cut off.
                     let said = plain_error(&text_of(&done["errorMessage"]));
-                    turn.reply = format!("{}\n\n(The Tico AI Gateway cut this reply off: {said})", partial.trim_end());
+                    turn.reply = format!(
+                        "{}\n\n(The Tico AI Gateway cut this reply off: {said})",
+                        partial.trim_end()
+                    );
                     turn.emit("message", json!({"text": turn.reply, "final": false}));
                     turn.extra["cut_off"] = json!(true);
                     return;
@@ -540,18 +735,35 @@ impl Wire for Pi {
                 }
             }
             "error" => {
-                let err = [m.get("error"), m.get("message")].into_iter().flatten().find(|v| truthy(Some(v))).cloned().unwrap_or(json!("pi error"));
+                let err = [m.get("error"), m.get("message")]
+                    .into_iter()
+                    .flatten()
+                    .find(|v| truthy(Some(v)))
+                    .cloned()
+                    .unwrap_or(json!("pi error"));
                 let text = match &err {
-                    Value::Object(e) => e.get("message").filter(|v| truthy(Some(v))).map(text_of).unwrap_or_else(|| err.to_string()),
+                    Value::Object(e) => e
+                        .get("message")
+                        .filter(|v| truthy(Some(v)))
+                        .map(text_of)
+                        .unwrap_or_else(|| err.to_string()),
                     other => text_of(other),
                 };
-                turn.error = if truthy(turn.extra.get("gateway")) { plain_error(&text) } else { text };
+                turn.error = if truthy(turn.extra.get("gateway")) {
+                    plain_error(&text)
+                } else {
+                    text
+                };
             }
             "agent_end" => turn.ended = true,
             // pi compacted the session (threshold, overflow or /compact); an aborted or failed one has no result.
             "compaction_end" if truthy(m.get("result")) => turn.compacted = true,
             kind @ ("tool_execution_start" | "tool_execution_end") => {
-                let name = m.get("toolName").filter(|v| truthy(Some(v))).cloned().unwrap_or(json!(""));
+                let name = m
+                    .get("toolName")
+                    .filter(|v| truthy(Some(v)))
+                    .cloned()
+                    .unwrap_or(json!(""));
                 turn.emit("tool", json!({"name": name, "tool": name, "phase": kind}));
             }
             _ => {}
@@ -628,7 +840,12 @@ impl Kept {
 
 impl Pool {
     pub fn new(dir: PathBuf, limit: usize) -> Pool {
-        Pool { dir, limit, idle: crate::warm::IDLE, kept: Mutex::new(HashMap::new()) }
+        Pool {
+            dir,
+            limit,
+            idle: crate::warm::IDLE,
+            kept: Mutex::new(HashMap::new()),
+        }
     }
 
     fn kept(&self) -> std::sync::MutexGuard<'_, HashMap<String, Kept>> {
@@ -653,9 +870,21 @@ impl Pool {
         let gone: Vec<Kept> = {
             let mut kept = self.kept();
             // A process on this user from a thread the conversation has left goes, as does an older one on the thread.
-            let left: Vec<String> = kept.iter().filter(|(_, k)| !held.is_empty() && k.owner == owner).map(|(t, _)| t.clone()).collect();
+            let left: Vec<String> = kept
+                .iter()
+                .filter(|(_, k)| !held.is_empty() && k.owner == owner)
+                .map(|(t, _)| t.clone())
+                .collect();
             let mut gone: Vec<Kept> = left.iter().filter_map(|t| kept.remove(t)).collect();
-            gone.extend(kept.insert(thread, Kept { proc, used: Instant::now(), owner, held }));
+            gone.extend(kept.insert(
+                thread,
+                Kept {
+                    proc,
+                    used: Instant::now(),
+                    owner,
+                    held,
+                },
+            ));
             gone
         };
         for k in gone {
@@ -667,7 +896,9 @@ impl Pool {
     /// The turn user and relay kept with `owner`'s process, for its next attempt; the process stays for its host.
     pub fn reclaim(&self, owner: &str) -> Option<Held> {
         let mut kept = self.kept();
-        let k = kept.values_mut().find(|k| k.owner == owner && !k.held.is_empty() && k.proc.alive())?;
+        let k = kept
+            .values_mut()
+            .find(|k| k.owner == owner && !k.held.is_empty() && k.proc.alive())?;
         k.used = Instant::now();
         Some(std::mem::take(&mut k.held))
     }
@@ -676,7 +907,11 @@ impl Pool {
     pub async fn evict(&self) -> bool {
         let oldest = {
             let mut kept = self.kept();
-            let thread = kept.iter().filter(|(_, k)| !k.held.is_empty()).min_by_key(|(_, k)| k.used).map(|(t, _)| t.clone());
+            let thread = kept
+                .iter()
+                .filter(|(_, k)| !k.held.is_empty())
+                .min_by_key(|(_, k)| k.used)
+                .map(|(t, _)| t.clone());
             thread.and_then(|t| kept.remove(&t))
         };
         let Some(oldest) = oldest else { return false };
@@ -688,11 +923,16 @@ impl Pool {
     pub async fn prune(&self, close: bool) {
         let stopping: Vec<Kept> = {
             let mut kept = self.kept();
-            let mut idle: Vec<(String, Instant)> = kept.iter().map(|(k, e)| (k.clone(), e.used)).collect();
+            let mut idle: Vec<(String, Instant)> =
+                kept.iter().map(|(k, e)| (k.clone(), e.used)).collect();
             idle.sort_by_key(|(_, used)| *used);
             let mut out = vec![];
             for (thread, used) in idle {
-                if close || kept.len() > self.limit || used.elapsed() >= self.idle || !kept[&thread].proc.alive() {
+                if close
+                    || kept.len() > self.limit
+                    || used.elapsed() >= self.idle
+                    || !kept[&thread].proc.alive()
+                {
                     out.extend(kept.remove(&thread));
                 }
             }
@@ -700,7 +940,11 @@ impl Pool {
         };
         for k in stopping {
             // A turn user's cleanup sweeps its files: off the runner's tick, but awaited when the runner stops.
-            if close || k.held.is_empty() { k.end().await } else { tokio::spawn(k.end()); }
+            if close || k.held.is_empty() {
+                k.end().await
+            } else {
+                tokio::spawn(k.end());
+            }
         }
     }
 
@@ -708,13 +952,22 @@ impl Pool {
     fn home(&self) -> Result<PathBuf, String> {
         use std::os::unix::fs::PermissionsExt;
         let home = self.dir.join(uuid::Uuid::new_v4().simple().to_string());
-        std::fs::create_dir_all(&home).map_err(|e| format!("could not make pi's token folder: {e}"))?;
-        let mode = if crate::isolation::enabled() { 0o711 } else { 0o700 };
+        std::fs::create_dir_all(&home)
+            .map_err(|e| format!("could not make pi's token folder: {e}"))?;
+        let mode = if crate::isolation::enabled() {
+            0o711
+        } else {
+            0o700
+        };
         for path in [&self.dir, &home] {
-            if !std::fs::symlink_metadata(path).map_err(|e| e.to_string())?.is_dir() {
+            if !std::fs::symlink_metadata(path)
+                .map_err(|e| e.to_string())?
+                .is_dir()
+            {
                 return Err("pi's token folders must not be symbolic links".into());
             }
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(|e| format!("could not prepare pi's token folder: {e}"))?;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+                .map_err(|e| format!("could not prepare pi's token folder: {e}"))?;
         }
         Ok(home)
     }
@@ -802,12 +1055,19 @@ impl Proc {
         if self.alive() {
             self.stopper.terminate(STOP_GRACE);
             let mut exited = self.exited.clone();
-            let _ = tokio::time::timeout(STOP_GRACE + Duration::from_secs(1), exited.wait_for(|e| *e)).await;
+            let _ =
+                tokio::time::timeout(STOP_GRACE + Duration::from_secs(1), exited.wait_for(|e| *e))
+                    .await;
         }
     }
 
-    async fn read(me: Weak<Proc>, stdout: Option<tokio::process::ChildStdout>, exited: oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
-                  stderr: crate::run_diagnostics::Stderr, done: watch::Sender<bool>) {
+    async fn read(
+        me: Weak<Proc>,
+        stdout: Option<tokio::process::ChildStdout>,
+        exited: oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
+        stderr: crate::run_diagnostics::Stderr,
+        done: watch::Sender<bool>,
+    ) {
         if let Some(stdout) = stdout {
             // Records end at LF only: pi's JSON strings may hold other line separators.
             let mut lines = BufReader::new(stdout);
@@ -851,13 +1111,21 @@ impl Proc {
                 }
                 let Some(run) = live.run.as_mut().filter(|r| !id.is_empty() && r.ask == id) else {
                     if msg["success"] == false {
-                        log(&format!("pi: {} failed: {}", text_of(&msg["command"]), text_of(&msg["error"])));
+                        log(&format!(
+                            "pi: {} failed: {}",
+                            text_of(&msg["command"]),
+                            text_of(&msg["error"])
+                        ));
                     }
                     return;
                 };
                 if msg["success"] != true {
                     let error = text_of(&msg["error"]);
-                    run.state.error = if error.is_empty() { format!("pi refused the {}", text_of(&msg["command"])) } else { error };
+                    run.state.error = if error.is_empty() {
+                        format!("pi refused the {}", text_of(&msg["command"]))
+                    } else {
+                        error
+                    };
                     return self.settle(live);
                 }
                 // A compaction ends at its `compaction_end`; a prompt pi handled itself starts no run.
@@ -870,29 +1138,44 @@ impl Proc {
             }
             // A dialog from an extension waits for its answer: none comes from a turn.
             "extension_ui_request" => {
-                if matches!(msg["method"].as_str(), Some("select" | "confirm" | "input" | "editor")) {
+                if matches!(
+                    msg["method"].as_str(),
+                    Some("select" | "confirm" | "input" | "editor")
+                ) {
                     self.send(json!({"type": "extension_ui_response", "id": msg["id"], "cancelled": true}));
                 }
                 return;
             }
             "queue_update" => {
-                live.queued = ["steering", "followUp"].iter().flat_map(|k| msg[*k].as_array().cloned().unwrap_or_default()).map(|m| text_of(&m)).filter(|m| !m.is_empty()).collect();
+                live.queued = ["steering", "followUp"]
+                    .iter()
+                    .flat_map(|k| msg[*k].as_array().cloned().unwrap_or_default())
+                    .map(|m| text_of(&m))
+                    .filter(|m| !m.is_empty())
+                    .collect();
                 return;
             }
             "agent_settled" => {
                 let queued = std::mem::take(&mut live.queued);
-                let Some(run) = live.run.as_mut().filter(|r| !r.compact) else { return };
-                if msg["aborted"] != true && !queued.is_empty() && !run.host.interrupted(&run.turn) {
+                let Some(run) = live.run.as_mut().filter(|r| !r.compact) else {
+                    return;
+                };
+                if msg["aborted"] != true && !queued.is_empty() && !run.host.interrupted(&run.turn)
+                {
                     // What was steered in after the run's last model call is still pi's: it runs on, in this turn.
                     run.ask = uuid::Uuid::new_v4().to_string();
                     self.send(json!({"type": "clear_queue"}));
-                    self.send(json!({"type": "prompt", "id": run.ask, "message": queued.join("\n\n")}));
+                    self.send(
+                        json!({"type": "prompt", "id": run.ask, "message": queued.join("\n\n")}),
+                    );
                     return;
                 }
                 run.aborted = msg["aborted"] == true;
                 return self.settle(live);
             }
-            "compaction_end" if msg["reason"] == "manual" && live.run.as_ref().is_some_and(|r| r.compact) => {
+            "compaction_end"
+                if msg["reason"] == "manual" && live.run.as_ref().is_some_and(|r| r.compact) =>
+            {
                 let run = live.run.as_mut().unwrap();
                 let (result, error) = (&msg["result"], text_of(&msg["errorMessage"]));
                 if result.is_object() || error.contains("Already compacted") {
@@ -900,12 +1183,17 @@ impl Proc {
                         let (input, output, total) = usage_tokens(&result["usage"]);
                         run.state.emit("tokens", json!({"input": input, "output": output, "total": total, "usage": usage_increment(&result["usage"])}));
                     }
-                    run.state.context = Some(int_of(&result["estimatedTokensAfter"])).filter(|c| *c > 0);
+                    run.state.context =
+                        Some(int_of(&result["estimatedTokensAfter"])).filter(|c| *c > 0);
                     (run.state.compacted, run.state.session) = (true, true);
                 } else if msg["aborted"] == true {
                     run.aborted = true;
                 } else {
-                    run.state.error = if error.is_empty() { "pi could not compact the session".into() } else { error };
+                    run.state.error = if error.is_empty() {
+                        "pi could not compact the session".into()
+                    } else {
+                        error
+                    };
                 }
                 return self.settle(live);
             }
@@ -945,11 +1233,31 @@ fn fingerprint(argv: &[String], env: &Env, s: &Settings) -> String {
     if let Some(at) = argv.iter().position(|a| a == "--thinking") {
         argv.drain(at..(at + 2).min(argv.len()));
     }
-    let rest: Env = env.iter().filter(|(k, _)| *k != "HUB_TOKEN").map(|(k, v)| (k.clone(), v.clone())).collect();
+    let rest: Env = env
+        .iter()
+        .filter(|(k, _)| *k != "HUB_TOKEN")
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     // A leased user's checkout groups are its process's from the start (crate::checkout_groups).
-    let groups = s.identity.map(|(uid, _)| crate::checkout_groups::granted(uid));
-    let text = json!([argv, rest, s.cwd, s.identity, groups, mcp_json(s, env), s.compact_at, s.gateway_inputs]).to_string();
-    ring::digest::digest(&ring::digest::SHA256, text.as_bytes()).as_ref().iter().map(|b| format!("{b:02x}")).collect()
+    let groups = s
+        .identity
+        .map(|(uid, _)| crate::checkout_groups::granted(uid));
+    let text = json!([
+        argv,
+        rest,
+        s.cwd,
+        s.identity,
+        groups,
+        mcp_json(s, env),
+        s.compact_at,
+        s.gateway_inputs
+    ])
+    .to_string();
+    ring::digest::digest(&ring::digest::SHA256, text.as_bytes())
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[derive(Default)]
@@ -979,7 +1287,14 @@ pub struct PiHost(Arc<Shared>);
 
 impl PiHost {
     pub fn new(bot: &str, cmd: Vec<String>, tx: Events, pool: Arc<Pool>) -> Self {
-        PiHost(Arc::new(Shared { allocation: super::Allocation::default(), bot: bot.into(), cmd, tx, pool, inner: Mutex::new(Inner::default()) }))
+        PiHost(Arc::new(Shared {
+            allocation: super::Allocation::default(),
+            bot: bot.into(),
+            cmd,
+            tx,
+            pool,
+            inner: Mutex::new(Inner::default()),
+        }))
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -1023,8 +1338,15 @@ impl PiHost {
     pub async fn release(&self, completed: bool, owner: &str, mut held: Held) -> Held {
         let procs: Vec<(String, Arc<Proc>)> = self.inner().procs.drain().collect();
         for (thread, p) in procs {
-            if completed && p.alive() && p.live().run.is_none() && (p.identity.is_none() || !held.is_empty()) {
-                self.0.pool.keep(thread, owner.into(), p, std::mem::take(&mut held)).await;
+            if completed
+                && p.alive()
+                && p.live().run.is_none()
+                && (p.identity.is_none() || !held.is_empty())
+            {
+                self.0
+                    .pool
+                    .keep(thread, owner.into(), p, std::mem::take(&mut held))
+                    .await;
             } else {
                 p.stop().await;
             }
@@ -1041,14 +1363,22 @@ impl PiHost {
     }
 
     fn record(&self, thread_id: &str, settings: &Settings, started: bool) -> String {
-        let t = Thread { bot: settings.slug.clone(), settings: settings.clone(), started };
+        let t = Thread {
+            bot: settings.slug.clone(),
+            settings: settings.clone(),
+            started,
+        };
         self.inner().threads.insert(thread_id.into(), t);
         thread_id.into()
     }
 
     /// A thread this host started, once pi took its first prompt (a resumed one counts as confirmed).
     pub fn confirmed(&self, thread_id: &str) -> Option<String> {
-        self.inner().threads.get(thread_id).filter(|t| t.started).map(|_| thread_id.to_string())
+        self.inner()
+            .threads
+            .get(thread_id)
+            .filter(|t| t.started)
+            .map(|_| thread_id.to_string())
     }
 
     /// Whether pi compacted `thread_id`'s session in a turn since this was last asked.
@@ -1062,7 +1392,11 @@ impl PiHost {
     }
 
     pub fn active_turn(&self, thread_id: &str) -> Option<String> {
-        self.inner().turn.as_ref().filter(|(t, _)| t == thread_id).map(|(_, turn)| turn.clone())
+        self.inner()
+            .turn
+            .as_ref()
+            .filter(|(t, _)| t == thread_id)
+            .map(|(_, turn)| turn.clone())
     }
 
     fn interrupted(&self, turn: &str) -> bool {
@@ -1070,19 +1404,40 @@ impl PiHost {
     }
 
     /// The pi command, its environment written (its agent directory), for `settings`.
-    fn command(&self, argv: &[String], settings: &Settings, env: &Env) -> std::io::Result<tokio::process::Command> {
-        if settings.identity.is_some() && is_gateway(settings.model.as_deref()) && !env.contains_key("PI_CODING_AGENT_DIR") {
-            return Err(std::io::Error::other("cannot prepare the private Gateway configuration"));
+    fn command(
+        &self,
+        argv: &[String],
+        settings: &Settings,
+        env: &Env,
+    ) -> std::io::Result<tokio::process::Command> {
+        if settings.identity.is_some()
+            && is_gateway(settings.model.as_deref())
+            && !env.contains_key("PI_CODING_AGENT_DIR")
+        {
+            return Err(std::io::Error::other(
+                "cannot prepare the private Gateway configuration",
+            ));
         }
         let mut command = crate::isolation::command_as(settings.identity, &argv[0]);
-        command.args(&argv[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).current_dir(&settings.cwd).env_clear().envs(env);
+        command
+            .args(&argv[1..])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .current_dir(&settings.cwd)
+            .env_clear()
+            .envs(env);
         super::new_group(&mut command);
         Ok(command)
     }
 
     /// The process a turn's pi starts as, with its stderr going to this host (the Gateway isolation probe).
     #[allow(dead_code)]
-    pub(crate) fn launch(&self, argv: &[String], settings: &Settings) -> std::io::Result<(tokio::process::Child, crate::run_diagnostics::Stderr)> {
+    pub(crate) fn launch(
+        &self,
+        argv: &[String],
+        settings: &Settings,
+    ) -> std::io::Result<(tokio::process::Child, crate::run_diagnostics::Stderr)> {
         let env = Pi::env(settings);
         let mut child = self.command(argv, settings, &env)?.spawn()?;
         self.0.allocation.mark();
@@ -1090,15 +1445,33 @@ impl PiHost {
         Ok((child, stderr))
     }
 
-    fn spawn(&self, argv: &[String], settings: &Settings, env: &Env, key: String, home: PathBuf, thinking: &str) -> std::io::Result<Arc<Proc>> {
+    fn spawn(
+        &self,
+        argv: &[String],
+        settings: &Settings,
+        env: &Env,
+        key: String,
+        home: PathBuf,
+        thinking: &str,
+    ) -> std::io::Result<Arc<Proc>> {
         let mut child = self.command(argv, settings, env)?.spawn()?;
         self.0.allocation.mark();
         let sink: Arc<Mutex<Option<Events>>> = Arc::default();
         let to = sink.clone();
-        let stderr = crate::run_diagnostics::Stderr::capture_with(&mut child, move |value| {
-            if let Some(tx) = to.lock().unwrap_or_else(|p| p.into_inner()).as_ref() { let _ = tx.send(value); }
-        }, env);
-        log(&format!("pi[{}]: started pid {}", self.0.bot, child.id().map_or("?".into(), |p| p.to_string())));
+        let stderr = crate::run_diagnostics::Stderr::capture_with(
+            &mut child,
+            move |value| {
+                if let Some(tx) = to.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+                    let _ = tx.send(value);
+                }
+            },
+            env,
+        );
+        log(&format!(
+            "pi[{}]: started pid {}",
+            self.0.bot,
+            child.id().map_or("?".into(), |p| p.to_string())
+        ));
         let stdout = child.stdout.take();
         let mut stdin = child.stdin.take();
         let (lines, mut rx) = mpsc::unbounded_channel::<String>();
@@ -1112,15 +1485,38 @@ impl PiHost {
         });
         let (stopper, exited) = super::own(child);
         let (done, dead) = watch::channel(false);
-        let live = Live { thinking: thinking.into(), ..Default::default() };
-        let proc = Arc::new(Proc { key, stdin: lines, stopper, exited: dead, home, identity: settings.identity, sink, live: Mutex::new(live) });
-        tokio::spawn(Proc::read(Arc::downgrade(&proc), stdout, exited, stderr, done));
+        let live = Live {
+            thinking: thinking.into(),
+            ..Default::default()
+        };
+        let proc = Arc::new(Proc {
+            key,
+            stdin: lines,
+            stopper,
+            exited: dead,
+            home,
+            identity: settings.identity,
+            sink,
+            live: Mutex::new(live),
+        });
+        tokio::spawn(Proc::read(
+            Arc::downgrade(&proc),
+            stdout,
+            exited,
+            stderr,
+            done,
+        ));
         Ok(proc)
     }
 
     /// The thread's process for this turn: the one this attempt or the pool holds when it was started as this turn
     /// would start it, else a new one on the same session.
-    async fn process(&self, thread_id: &str, t: &Thread, thinking: &str) -> Result<Arc<Proc>, String> {
+    async fn process(
+        &self,
+        thread_id: &str,
+        t: &Thread,
+        thinking: &str,
+    ) -> Result<Arc<Proc>, String> {
         let argv = Pi::argv(&self.0.cmd, thread_id, t, Some(thinking));
         let mut env = Pi::env(&t.settings);
         let key = fingerprint(&argv, &env, &t.settings);
@@ -1143,21 +1539,37 @@ impl PiHost {
         let file = home.join("lease-token");
         crate::warm::write_token_for(&file, &token, t.settings.identity);
         env.insert("HUB_TOKEN".into(), format!("tico-file:{}", file.display()));
-        let proc = self.spawn(&argv, &t.settings, &env, key, home, thinking).map_err(|e| e.to_string())?;
+        let proc = self
+            .spawn(&argv, &t.settings, &env, key, home, thinking)
+            .map_err(|e| e.to_string())?;
         self.inner().procs.insert(thread_id.into(), proc.clone());
         Ok(proc)
     }
 
-    pub async fn start_turn(&self, thread_id: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
+    pub async fn start_turn(
+        &self,
+        thread_id: &str,
+        text: &str,
+        effort: Option<&str>,
+    ) -> Result<String, HostError> {
         self.begin(thread_id, Some(text), effort).await
     }
 
     /// Compacts the thread's session (`compact_first`, `/compact`): a turn that ends at pi's `compaction_end`.
-    pub async fn compact(&self, thread_id: &str, effort: Option<&str>) -> Result<String, HostError> {
+    pub async fn compact(
+        &self,
+        thread_id: &str,
+        effort: Option<&str>,
+    ) -> Result<String, HostError> {
         self.begin(thread_id, None, effort).await
     }
 
-    async fn begin(&self, thread_id: &str, text: Option<&str>, effort: Option<&str>) -> Result<String, HostError> {
+    async fn begin(
+        &self,
+        thread_id: &str,
+        text: Option<&str>,
+        effort: Option<&str>,
+    ) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
         let mut t = {
             let mut inner = self.inner();
@@ -1167,7 +1579,11 @@ impl PiHost {
             if inner.turn.is_some() {
                 return Err(failed("pi host already has a turn running"));
             }
-            let t = inner.threads.get(thread_id).cloned().ok_or_else(|| failed(format!("unknown pi thread {thread_id}")))?;
+            let t = inner
+                .threads
+                .get(thread_id)
+                .cloned()
+                .ok_or_else(|| failed(format!("unknown pi thread {thread_id}")))?;
             inner.turn = Some((thread_id.into(), turn.clone()));
             t
         };
@@ -1182,7 +1598,12 @@ impl PiHost {
                 return Err(failed(format!("could not start pi: {e}")));
             }
         };
-        self.emit(event("status", Some(thread_id), None, json!({"state": "active"})));
+        self.emit(event(
+            "status",
+            Some(thread_id),
+            None,
+            json!({"state": "active"}),
+        ));
         let mut live = proc.live();
         if live.thinking != thinking {
             proc.send(json!({"type": "set_thinking_level", "level": thinking}));
@@ -1191,8 +1612,21 @@ impl PiHost {
         let ask = uuid::Uuid::new_v4().to_string();
         *proc.sink.lock().unwrap_or_else(|p| p.into_inner()) = Some(self.0.tx.clone());
         live.queued.clear();
-        let state = Turn { bot: self.0.bot.clone(), cmd: self.0.cmd.clone(), ..Default::default() };
-        live.run = Some(Run { host: self.clone(), thread: thread_id.into(), turn: turn.clone(), ask: ask.clone(), state, compact: text.is_none(), confirmed: false, aborted: false });
+        let state = Turn {
+            bot: self.0.bot.clone(),
+            cmd: self.0.cmd.clone(),
+            ..Default::default()
+        };
+        live.run = Some(Run {
+            host: self.clone(),
+            thread: thread_id.into(),
+            turn: turn.clone(),
+            ask: ask.clone(),
+            state,
+            compact: text.is_none(),
+            confirmed: false,
+            aborted: false,
+        });
         let command = match text {
             Some(text) => json!({"type": "prompt", "id": ask, "message": text}),
             None => json!({"type": "compact", "id": ask}),
@@ -1214,7 +1648,12 @@ impl PiHost {
                 t.started = true;
             }
             // A new thread is saved, and the one it replaces let go, only now (execute.rs Fresh).
-            self.emit(event("thread_confirmed", Some(&run.thread), Some(&run.turn), json!({})));
+            self.emit(event(
+                "thread_confirmed",
+                Some(&run.thread),
+                Some(&run.turn),
+                json!({}),
+            ));
         }
         for (kind, fields) in run.state.out.drain(..) {
             self.emit(event(kind, Some(&run.thread), Some(&run.turn), fields));
@@ -1240,18 +1679,46 @@ impl PiHost {
         };
         let model_error = truthy(state.extra.get("model_error"));
         if interrupted {
-            self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "interrupted"})));
+            self.emit(event(
+                "turn_completed",
+                Some(tid),
+                Some(turn),
+                json!({"status": "interrupted"}),
+            ));
         } else if let Some((rc, stderr)) = exit {
-            let error = if state.error.is_empty() { crate::run_diagnostics::process_reason(rc, &stderr) } else { state.error.clone() };
+            let error = if state.error.is_empty() {
+                crate::run_diagnostics::process_reason(rc, &stderr)
+            } else {
+                state.error.clone()
+            };
             self.emit(event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": is_limit(&error), "exit_code": rc, "process_exit": true})));
         } else if !model_error && state.error.is_empty() && !run.aborted {
             if !state.reply.is_empty() {
-                self.emit(event("message", Some(tid), Some(turn), json!({"text": state.reply, "final": true})));
+                self.emit(event(
+                    "message",
+                    Some(tid),
+                    Some(turn),
+                    json!({"text": state.reply, "final": true}),
+                ));
             }
-            self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "completed"})));
+            self.emit(event(
+                "turn_completed",
+                Some(tid),
+                Some(turn),
+                json!({"status": "completed"}),
+            ));
         } else {
-            let error = if state.error.is_empty() { "pi stopped the turn before it ended".to_string() } else { state.error.clone() };
-            self.emit(event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": is_limit(&error)})));
+            let error = if state.error.is_empty() {
+                "pi stopped the turn before it ended".to_string()
+            } else {
+                state.error.clone()
+            };
+            self.emit(event(
+                "turn_failed",
+                Some(tid),
+                Some(turn),
+                json!({"error": error, "limit": is_limit(&error)}),
+            ));
         }
         self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
     }
@@ -1260,7 +1727,9 @@ impl PiHost {
     pub fn interrupt(&self, turn_id: &str) {
         let proc = {
             let mut inner = self.inner();
-            let Some((tid, _)) = inner.turn.clone().filter(|(_, t)| t == turn_id) else { return };
+            let Some((tid, _)) = inner.turn.clone().filter(|(_, t)| t == turn_id) else {
+                return;
+            };
             inner.interrupted.insert(turn_id.into());
             inner.procs.get(&tid).cloned()
         };
@@ -1279,18 +1748,35 @@ impl PiHost {
     /// over, a compaction, or ended before pi read the message in, which is then taken back out of pi's queue.
     pub async fn steer(&self, thread_id: &str, turn_id: &str, text: &str) -> Result<(), HostError> {
         let refused = || HostError::SteerRefused("the pi turn has ended".into());
-        let running = |p: &Proc| p.live().run.as_ref().is_some_and(|r| r.turn == turn_id && !r.compact);
+        let running = |p: &Proc| {
+            p.live()
+                .run
+                .as_ref()
+                .is_some_and(|r| r.turn == turn_id && !r.compact)
+        };
         // Never with the host's lock held: pi's reader takes the process's lock, then the host's.
         let proc = self.inner().procs.get(thread_id).cloned();
         let proc = proc.filter(|p| running(p)).ok_or_else(refused)?;
-        let reply = proc.ask(json!({"type": "steer", "message": text})).await.map_err(|e| failed(format!("pi took no steer: {e}")))?;
+        let reply = proc
+            .ask(json!({"type": "steer", "message": text}))
+            .await
+            .map_err(|e| failed(format!("pi took no steer: {e}")))?;
         if reply["success"] != true {
-            return Err(failed(format!("pi refused the message: {}", text_of(&reply["error"]))));
+            return Err(failed(format!(
+                "pi refused the message: {}",
+                text_of(&reply["error"])
+            )));
         }
         if !running(&proc) {
             // The turn ended as pi took it: still in pi's queue, it is the next turn's; gone from it, pi read it in.
-            let cleared = proc.ask(json!({"type": "clear_queue"})).await.unwrap_or_default();
-            if cleared["data"]["steering"].as_array().is_none_or(|q| q.iter().any(|m| text_of(m) == text)) {
+            let cleared = proc
+                .ask(json!({"type": "clear_queue"}))
+                .await
+                .unwrap_or_default();
+            if cleared["data"]["steering"]
+                .as_array()
+                .is_none_or(|q| q.iter().any(|m| text_of(m) == text))
+            {
                 return Err(refused());
             }
         }
@@ -1383,34 +1869,60 @@ while True:
     pub fn fake(dir: &Path, fixture: &Path) -> Vec<String> {
         let path = dir.join("pi");
         crate::util::write_script(&path, FAKE);
-        vec![path.display().to_string(), fixture.display().to_string(), dir.display().to_string()]
+        vec![
+            path.display().to_string(),
+            fixture.display().to_string(),
+            dir.display().to_string(),
+        ]
     }
 
     /// The records of one of its JSON-lines logs.
     pub fn logged(dir: &Path, name: &str) -> Vec<Value> {
-        std::fs::read_to_string(dir.join(name)).unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+        std::fs::read_to_string(dir.join(name))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()
     }
 
     /// Whether the idle pool still owns this conversation's lease or relay.
     pub fn has_held(pool: &super::Pool, owner: &str) -> bool {
-        pool.kept().values().any(|k| k.owner == owner && !k.held.is_empty())
+        pool.kept()
+            .values()
+            .any(|k| k.owner == owner && !k.held.is_empty())
     }
 
     /// A fake pi in `dir`, kept in `pool` for `owner` with `held` after one turn that completed.
-    pub async fn kept(pool: std::sync::Arc<super::Pool>, dir: &Path, owner: &str, held: super::Held) {
+    pub async fn kept(
+        pool: std::sync::Arc<super::Pool>,
+        dir: &Path,
+        owner: &str,
+        held: super::Held,
+    ) {
         let fixture = dir.join("kept.jsonl");
         std::fs::write(&fixture, r#"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]}}"#).unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let host = super::PiHost::new("acme", fake(dir, &fixture), tx, pool);
         host.start();
-        let mut s = crate::hosts::Settings { cwd: dir.display().to_string(), model: Some("kimi-k3".into()), slug: "acme".into(), ..Default::default() };
-        for (k, v) in [("PATH", "/usr/bin:/bin".to_string()), ("HUB_WORKSPACE", dir.display().to_string()), ("OPENROUTER_API_KEY", "or-synthetic".into())] {
+        let mut s = crate::hosts::Settings {
+            cwd: dir.display().to_string(),
+            model: Some("kimi-k3".into()),
+            slug: "acme".into(),
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("PATH", "/usr/bin:/bin".to_string()),
+            ("HUB_WORKSPACE", dir.display().to_string()),
+            ("OPENROUTER_API_KEY", "or-synthetic".into()),
+        ] {
             s.env.insert(k.into(), v);
         }
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "hello", None).await.unwrap();
         while let Some(ev) = rx.recv().await {
-            if ev["kind"] == "turn_completed" { break; }
+            if ev["kind"] == "turn_completed" {
+                break;
+            }
         }
         assert!(host.release(true, owner, held).await.is_empty());
     }
@@ -1437,12 +1949,23 @@ mod tests {
             let (tx, mut rx) = mpsc::unbounded_channel();
             let host = PiHost::new("acme", fake(&dir, &path), tx, pool(&dir));
             host.start();
-            let mut s = Settings { cwd: dir.display().to_string(), model: Some("kimi-k3".into()), slug: "acme".into(), ..Default::default() };
-            for (k, v) in [("PATH", "/usr/bin:/bin".to_string()), ("HUB_WORKSPACE", dir.display().to_string()), ("OPENROUTER_API_KEY", " or-key ".into())] {
+            let mut s = Settings {
+                cwd: dir.display().to_string(),
+                model: Some("kimi-k3".into()),
+                slug: "acme".into(),
+                ..Default::default()
+            };
+            for (k, v) in [
+                ("PATH", "/usr/bin:/bin".to_string()),
+                ("HUB_WORKSPACE", dir.display().to_string()),
+                ("OPENROUTER_API_KEY", " or-key ".into()),
+            ] {
                 s.env.insert(k.into(), v);
             }
             let thread = host.start_thread(&s);
-            host.start_turn(&thread, "hello", Some("xhigh")).await.unwrap();
+            host.start_turn(&thread, "hello", Some("xhigh"))
+                .await
+                .unwrap();
             assert_eq!(turn_events(&mut rx).await, expected, "{}", path.display());
             host.stop().await;
             let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
@@ -1453,7 +1976,10 @@ mod tests {
             );
             assert!(sessions.is_dir());
         }
-        assert_eq!(std::fs::read_to_string(dir.join("prompt-0")).unwrap(), "hello");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("prompt-0")).unwrap(),
+            "hello"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1463,25 +1989,39 @@ mod tests {
     }
 
     async fn gateway_turn_on(model: &str, lines: &[&str]) -> (Vec<Value>, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("fake-pi-gw-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("fake-pi-gw-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let fixture = dir.join("gateway.jsonl");
         std::fs::write(&fixture, lines.join("\n")).unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
         let host = PiHost::new("acme", fake(&dir, &fixture), tx, pool(&dir));
         host.start();
-        let mut s = Settings { cwd: dir.display().to_string(), model: Some(model.into()), slug: "acme".into(), ..Default::default() };
-        for (k, v) in [("PATH", "/usr/bin:/bin".to_string()), ("HUB_WORKSPACE", dir.display().to_string()), (GATEWAY_KEY_ENV, "tgw-synthetic-fixture".into()), (GATEWAY_URL_ENV, "https://gw.example/v1/gateway/".into())] {
+        let mut s = Settings {
+            cwd: dir.display().to_string(),
+            model: Some(model.into()),
+            slug: "acme".into(),
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("PATH", "/usr/bin:/bin".to_string()),
+            ("HUB_WORKSPACE", dir.display().to_string()),
+            (GATEWAY_KEY_ENV, "tgw-synthetic-fixture".into()),
+            (GATEWAY_URL_ENV, "https://gw.example/v1/gateway/".into()),
+        ] {
             s.env.insert(k.into(), v);
         }
         let thread = host.start_thread(&s);
-        host.start_turn(&thread, "hello", Some("high")).await.unwrap();
+        host.start_turn(&thread, "hello", Some("high"))
+            .await
+            .unwrap();
         let events = turn_events(&mut rx).await;
         host.stop().await;
         (events, dir)
     }
 
-    const SESSION: &str = r#"{"type":"session","version":3,"id":"0b5c2f1e-3a4d-4e6f-8a9b-0c1d2e3f4a5b"}"#;
+    const SESSION: &str =
+        r#"{"type":"session","version":3,"id":"0b5c2f1e-3a4d-4e6f-8a9b-0c1d2e3f4a5b"}"#;
 
     #[tokio::test]
     async fn a_tico_model_runs_on_the_gateway_and_its_cap_reads_as_gateway_cap_reached() {
@@ -1494,22 +2034,38 @@ mod tests {
             r#"{"type":"agent_end"}"#,
         ]).await;
         // No zero token count: a refused call did nothing, so the server may treat the turn as having done nothing.
-        assert_eq!(events, vec![
-            json!({"kind": "status", "state": "active"}),
-            json!({"kind": "thread_confirmed"}),
-            json!({"kind": "turn_failed", "error": "Gateway cap reached: this gateway key has used its monthly spend limit (cap_reached)", "limit": true}),
-            json!({"kind": "status", "state": "idle"}),
-        ]);
+        assert_eq!(
+            events,
+            vec![
+                json!({"kind": "status", "state": "active"}),
+                json!({"kind": "thread_confirmed"}),
+                json!({"kind": "turn_failed", "error": "Gateway cap reached: this gateway key has used its monthly spend limit (cap_reached)", "limit": true}),
+                json!({"kind": "status", "state": "idle"}),
+            ]
+        );
         let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
-        assert!(args.lines().last().unwrap().starts_with("--mode rpc --provider tico --model tico-mid-1.0 --thinking high"), "{args}");
+        assert!(
+            args.lines()
+                .last()
+                .unwrap()
+                .starts_with("--mode rpc --provider tico --model tico-mid-1.0 --thinking high"),
+            "{args}"
+        );
         // pi's models.json names the Gateway and the key's variable, never the key; pi itself never retries.
-        let written = std::fs::read_to_string(dir.join("runtime/pi-agent/acme/models.json")).unwrap();
+        let written =
+            std::fs::read_to_string(dir.join("runtime/pi-agent/acme/models.json")).unwrap();
         assert!(!written.contains("tgw-synthetic-fixture"));
         let models: Value = serde_json::from_str(&written).unwrap();
-        assert_eq!(models["providers"]["tico"]["baseUrl"], "https://gw.example/v1/gateway");
+        assert_eq!(
+            models["providers"]["tico"]["baseUrl"],
+            "https://gw.example/v1/gateway"
+        );
         assert_eq!(models["providers"]["tico"]["apiKey"], "$TICOAI_GATEWAY_KEY");
         assert_eq!(models["providers"]["tico"]["api"], "openai-completions");
-        let settings: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("runtime/pi-agent/acme/settings.json")).unwrap()).unwrap();
+        let settings: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("runtime/pi-agent/acme/settings.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(settings["retry"]["enabled"], false);
         // Every bash command pi runs starts without the key in its environment.
         assert_eq!(settings["shellCommandPrefix"], "unset TICOAI_GATEWAY_KEY");
@@ -1527,23 +2083,51 @@ mod tests {
             r#"{"type":"agent_end"}"#,
         ]).await;
         // A person reads a sentence, not the Gateway's JSON; `limit` sends the turn to the bot's fallback.
-        assert_eq!(events, vec![
-            json!({"kind": "status", "state": "active"}),
-            json!({"kind": "thread_confirmed"}),
-            json!({"kind": "turn_failed", "error": "Tico models are paused: this company is out of credit. Your bots use their other models until credit is added (out_of_credit)", "limit": true}),
-            json!({"kind": "status", "state": "idle"}),
-        ]);
+        assert_eq!(
+            events,
+            vec![
+                json!({"kind": "status", "state": "active"}),
+                json!({"kind": "thread_confirmed"}),
+                json!({"kind": "turn_failed", "error": "Tico models are paused: this company is out of credit. Your bots use their other models until credit is added (out_of_credit)", "limit": true}),
+                json!({"kind": "status", "state": "idle"}),
+            ]
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn a_bot_still_on_retired_cheap_1_0_keeps_running_on_the_gateway() {
-        let (_, dir) = gateway_turn_on("tico-cheap-1.0", &[SESSION, r#"{"type":"agent_start"}"#, r#"{"type":"agent_end"}"#]).await;
+        let (_, dir) = gateway_turn_on(
+            "tico-cheap-1.0",
+            &[
+                SESSION,
+                r#"{"type":"agent_start"}"#,
+                r#"{"type":"agent_end"}"#,
+            ],
+        )
+        .await;
         let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
-        assert!(args.lines().last().unwrap().starts_with("--mode rpc --provider tico --model tico-cheap-1.0 "), "{args}");
-        let models: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("runtime/pi-agent/acme/models.json")).unwrap()).unwrap();
-        let ids: Vec<&str> = models["providers"]["tico"]["models"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
-        assert!(ids.contains(&"tico-cheap-1.0") && ids.contains(&"tico-cheap-1.1"), "{ids:?}");
+        assert!(
+            args.lines()
+                .last()
+                .unwrap()
+                .starts_with("--mode rpc --provider tico --model tico-cheap-1.0 "),
+            "{args}"
+        );
+        let models: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("runtime/pi-agent/acme/models.json")).unwrap(),
+        )
+        .unwrap();
+        let ids: Vec<&str> = models["providers"]["tico"]["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect();
+        assert!(
+            ids.contains(&"tico-cheap-1.0") && ids.contains(&"tico-cheap-1.1"),
+            "{ids:?}"
+        );
         // What a person is told to pick names only the current lineup.
         assert!(!plain_error(r#"400: {"code":"unknown_model"}"#).contains("Cheap 1.0"));
         std::fs::remove_dir_all(dir).unwrap();
@@ -1555,12 +2139,26 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(".mcp.json"), r#"{"mcpServers": {"repo": {"command": "npx", "args": ["x"]}, "legacy": {"type": "sse", "url": "https://old.example/sse"}, "hub": {"command": "stale"}}}"#).unwrap();
         let ws = dir.display().to_string();
-        let mut s = Settings { cwd: ws.clone(), model: Some("kimi-k3".into()), slug: "acme".into(), ..Default::default() };
-        for (k, v) in [("PATH", "/usr/bin:/bin"), ("HUB_WORKSPACE", ws.as_str()), ("HUB_API_URL", "http://hub.invalid"), ("HUB_TOKEN", "hub-token-synthetic"),
-                       ("HUB_BOT", "acme"), ("OPENROUTER_API_KEY", "or-synthetic"), ("LINEAR_API_KEY", "linear-synthetic")] {
+        let mut s = Settings {
+            cwd: ws.clone(),
+            model: Some("kimi-k3".into()),
+            slug: "acme".into(),
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("PATH", "/usr/bin:/bin"),
+            ("HUB_WORKSPACE", ws.as_str()),
+            ("HUB_API_URL", "http://hub.invalid"),
+            ("HUB_TOKEN", "hub-token-synthetic"),
+            ("HUB_BOT", "acme"),
+            ("OPENROUTER_API_KEY", "or-synthetic"),
+            ("LINEAR_API_KEY", "linear-synthetic"),
+        ] {
             s.env.insert(k.into(), v.into());
         }
-        s.mcp_servers = vec![json!({"name": "linear", "url": "https://mcp.linear.app/mcp", "transport": "http", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}})];
+        s.mcp_servers = vec![
+            json!({"name": "linear", "url": "https://mcp.linear.app/mcp", "transport": "http", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}}),
+        ];
         let env = Pi::env(&s);
         let agent = PathBuf::from(&env["PI_CODING_AGENT_DIR"]);
         assert_eq!(agent, dir.join("runtime/pi-agent/acme"));
@@ -1571,11 +2169,29 @@ mod tests {
         }
         let config: Value = serde_json::from_str(&written).unwrap();
         let servers = &config["mcpServers"];
-        assert_eq!(servers["linear"], json!({"url": "https://mcp.linear.app/mcp", "exposure": "direct", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}}));
-        assert_eq!(servers["repo"], json!({"command": "npx", "args": ["x"], "exposure": "direct", "env": {"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}}));
-        assert!(servers.get("legacy").is_none(), "an SSE server of the repository is left out");
-        assert_eq!(servers["hub"]["command"], crate::hosts::hub_mcp_server(&s.env).unwrap()["command"]);
-        assert_eq!((&servers["hub"]["env"]["HUB_TOKEN"], &servers["hub"]["exposure"]), (&json!("${HUB_TOKEN}"), &json!("direct")));
+        assert_eq!(
+            servers["linear"],
+            json!({"url": "https://mcp.linear.app/mcp", "exposure": "direct", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}})
+        );
+        assert_eq!(
+            servers["repo"],
+            json!({"command": "npx", "args": ["x"], "exposure": "direct", "env": {"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}})
+        );
+        assert!(
+            servers.get("legacy").is_none(),
+            "an SSE server of the repository is left out"
+        );
+        assert_eq!(
+            servers["hub"]["command"],
+            crate::hosts::hub_mcp_server(&s.env).unwrap()["command"]
+        );
+        assert_eq!(
+            (
+                &servers["hub"]["env"]["HUB_TOKEN"],
+                &servers["hub"]["exposure"]
+            ),
+            (&json!("${HUB_TOKEN}"), &json!("direct"))
+        );
         // Every stdio server's environment names the Gateway key empty, so pi's inherited copy never reaches it.
         for stdio in ["repo", "hub"] {
             assert_eq!(servers[stdio]["env"][GATEWAY_KEY_ENV], json!(""), "{stdio}");
@@ -1586,23 +2202,43 @@ mod tests {
     }
 
     #[test]
-    fn a_stdio_mcp_server_starts_without_the_model_keys_or_hub_token_unless_its_own_env_names_them() {
-        let dir = std::env::temp_dir().join(format!("pi-mcp-env-{}", uuid::Uuid::new_v4().simple()));
+    fn a_stdio_mcp_server_starts_without_the_model_keys_or_hub_token_unless_its_own_env_names_them()
+    {
+        let dir =
+            std::env::temp_dir().join(format!("pi-mcp-env-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(".mcp.json"), r#"{"mcpServers": {"repo": {"command": "npx", "args": ["x"]}, "tool": {"command": "uvx", "args": ["y"], "env": {"ANTHROPIC_API_KEY": "anthropic-synthetic", "TICOAI_GATEWAY_KEY": "gateway-synthetic"}}}}"#).unwrap();
         let ws = dir.display().to_string();
-        let mut s = Settings { cwd: ws.clone(), model: Some("kimi-k3".into()), slug: "acme".into(), ..Default::default() };
-        for (k, v) in [("PATH", "/usr/bin:/bin"), ("HUB_WORKSPACE", ws.as_str()), ("HUB_API_URL", "http://hub.invalid"), ("HUB_TOKEN", "hub-token-synthetic"),
-                       ("HUB_BOT", "acme"), ("OPENROUTER_API_KEY", "or-synthetic"), (GATEWAY_KEY_ENV, "gateway-synthetic")] {
+        let mut s = Settings {
+            cwd: ws.clone(),
+            model: Some("kimi-k3".into()),
+            slug: "acme".into(),
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("PATH", "/usr/bin:/bin"),
+            ("HUB_WORKSPACE", ws.as_str()),
+            ("HUB_API_URL", "http://hub.invalid"),
+            ("HUB_TOKEN", "hub-token-synthetic"),
+            ("HUB_BOT", "acme"),
+            ("OPENROUTER_API_KEY", "or-synthetic"),
+            (GATEWAY_KEY_ENV, "gateway-synthetic"),
+        ] {
             s.env.insert(k.into(), v.into());
         }
         let env = s.env.clone();
         let config = mcp_json(&s, &env);
         let servers = &config["mcpServers"];
         // A repository server that names nothing gets every blanked variable empty, the Gateway key included.
-        assert_eq!(servers["repo"]["env"], json!({"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}));
+        assert_eq!(
+            servers["repo"]["env"],
+            json!({"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""})
+        );
         // Its own env keeps the one it names, but never the Gateway key.
-        assert_eq!(servers["tool"]["env"], json!({"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "anthropic-synthetic", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}));
+        assert_eq!(
+            servers["tool"]["env"],
+            json!({"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "anthropic-synthetic", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""})
+        );
         // The hub keeps its token through `${HUB_TOKEN}`, and the model keys stay blank for it too.
         assert_eq!(servers["hub"]["env"]["HUB_TOKEN"], json!("${HUB_TOKEN}"));
         assert_eq!(servers["hub"]["env"]["OPENROUTER_API_KEY"], json!(""));
@@ -1612,12 +2248,25 @@ mod tests {
     #[test]
     fn each_assistant_message_is_one_priced_request_and_they_add_up_to_the_totals() {
         let mut meter = crate::execute::Meter::default();
-        for usage in [json!({"input": 5_000, "cacheRead": 115_000, "output": 2_000}), json!({"input": 1_000, "cacheRead": 50_000, "output": 800})] {
+        for usage in [
+            json!({"input": 5_000, "cacheRead": 115_000, "output": 2_000}),
+            json!({"input": 1_000, "cacheRead": 50_000, "output": 800}),
+        ] {
             meter.add(&json!({"usage": usage_increment(&usage)}));
         }
         let report = meter.report("tico-mid-1.0", "pi", "api").unwrap();
-        assert_eq!((report["input_tokens"].clone(), report["cached_tokens"].clone(), report["output_tokens"].clone()), (json!(6_000), json!(165_000), json!(2_800)));
-        assert_eq!(report["requests"], json!([[5_000, 115_000, 2_000], [1_000, 50_000, 800]]));
+        assert_eq!(
+            (
+                report["input_tokens"].clone(),
+                report["cached_tokens"].clone(),
+                report["output_tokens"].clone()
+            ),
+            (json!(6_000), json!(165_000), json!(2_800))
+        );
+        assert_eq!(
+            report["requests"],
+            json!([[5_000, 115_000, 2_000], [1_000, 50_000, 800]])
+        );
     }
 
     #[test]
@@ -1625,10 +2274,19 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pi-proxy-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let ws = dir.display().to_string();
-        let mut s = Settings { cwd: ws.clone(), model: Some("tico-mid-1.0".into()), ..Default::default() };
-        for (k, v) in [("PATH", "/usr/bin:/bin"), ("HUB_WORKSPACE", ws.as_str()), (GATEWAY_KEY_ENV, "tgw-synthetic-fixture"),
-                       (GATEWAY_URL_ENV, "http://127.0.0.1:8080/v1/gateway"), ("HTTP_PROXY", "http://proxy.example:3128"),
-                       ("NO_PROXY", "corp.example, LOCALHOST")] {
+        let mut s = Settings {
+            cwd: ws.clone(),
+            model: Some("tico-mid-1.0".into()),
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("PATH", "/usr/bin:/bin"),
+            ("HUB_WORKSPACE", ws.as_str()),
+            (GATEWAY_KEY_ENV, "tgw-synthetic-fixture"),
+            (GATEWAY_URL_ENV, "http://127.0.0.1:8080/v1/gateway"),
+            ("HTTP_PROXY", "http://proxy.example:3128"),
+            ("NO_PROXY", "corp.example, LOCALHOST"),
+        ] {
             s.env.insert(k.into(), v.to_string());
         }
         let env = Pi::env(&s);
@@ -1658,9 +2316,18 @@ mod tests {
         ]).await;
         std::fs::remove_dir_all(dir).unwrap();
         let said = "Hello there, friend\n\n(The Tico AI Gateway cut this reply off: Tico AI Gateway is unavailable, try again (upstream_unavailable))";
-        assert!(!events.iter().any(|e| e["kind"] == "turn_failed"), "{events:?}");
-        assert!(events.contains(&json!({"kind": "message", "text": said, "final": true})), "{events:?}");
-        assert!(events.contains(&json!({"kind": "turn_completed", "status": "completed"})), "{events:?}");
+        assert!(
+            !events.iter().any(|e| e["kind"] == "turn_failed"),
+            "{events:?}"
+        );
+        assert!(
+            events.contains(&json!({"kind": "message", "text": said, "final": true})),
+            "{events:?}"
+        );
+        assert!(
+            events.contains(&json!({"kind": "turn_completed", "status": "completed"})),
+            "{events:?}"
+        );
     }
 
     #[test]
@@ -1668,7 +2335,10 @@ mod tests {
         use crate::hosts::{is_auth_rejected, is_limit};
         // As pi prints a refusal (`<status>: <the error object>`) and an error inside a stream (its message only).
         let refusal = |status: u16, code: &str, message: &str| {
-            format!("{status}: {}", json!({"code": code, "message": message, "type": "x", "param": null}))
+            format!(
+                "{status}: {}",
+                json!({"code": code, "message": message, "type": "x", "param": null})
+            )
         };
         let table: &[(u16, &str, &str, &str)] = &[
             (429, "cap_reached", "The Tico AI Gateway's monthly cap is reached.", "Gateway cap reached: this gateway key has used its monthly spend limit (cap_reached)"),
@@ -1676,7 +2346,7 @@ mod tests {
             (401, "unknown_key", "Unknown gateway key.", "Tico AI Gateway: key not recognised (api key invalid: unknown_key)"),
             (429, "rate_limited", "Too many refused keys from this address. Try again later.", "Tico AI Gateway: rate limited; retrying after the Gateway's requested wait (rate_limited)"),
             (429, "out_of_credit", "Tico models are paused: this company is out of credit.", "Tico models are paused: this company is out of credit. Your bots use their other models until credit is added (out_of_credit)"),
-            (400, "unknown_model", "Unknown model. Tico models: tico-cheap-1.0, tico-mid-1.0, tico-power-1.0.", "Tico AI Gateway: this model isn't offered; Settings > Gateway lists the picks (unknown_model)"),
+            (400, "unknown_model", "Unknown model. Tico models: tico-cheap-1.0, tico-mid-1.0, tico-power-1.0.", "Tico AI Gateway: this model isn't offered; Settings > Models lists the picks (unknown_model)"),
             (400, "unsupported_field", "Tico models here take text and tools only: no images, audio, files or more than one choice.", "Tico AI Gateway refused the request as sent: Tico models here take text and tools only: no images, audio, files or more than one choice. (unsupported_field)"),
             (400, "bad_request", "The request is not a chat completion the gateway can send.", "Tico AI Gateway refused the request as sent: The request is not a chat completion the gateway can send. (bad_request)"),
             (400, "upstream_refused", "The model refused this request as it was sent.", "Tico AI Gateway refused the request as sent: The model refused this request as it was sent. (upstream_refused)"),
@@ -1689,27 +2359,63 @@ mod tests {
             assert_eq!(gateway_code(message), Some(*code), "{code} inside a stream");
             // What the runner and server classify by: a cap or rate limit is a limit, a refused key a refused sign-in,
             // and nothing else is either.
-            assert_eq!(is_limit(&said), matches!(*code, "cap_reached" | "rate_limited" | "out_of_credit"), "{code}");
-            assert_eq!(is_auth_rejected(&said), matches!(*code, "revoked_key" | "unknown_key"), "{code}");
-            assert!(!crate::hosts::rejection_reason(&said).contains("[redacted]"), "{code}");
+            assert_eq!(
+                is_limit(&said),
+                matches!(*code, "cap_reached" | "rate_limited" | "out_of_credit"),
+                "{code}"
+            );
+            assert_eq!(
+                is_auth_rejected(&said),
+                matches!(*code, "revoked_key" | "unknown_key"),
+                "{code}"
+            );
+            assert!(
+                !crate::hosts::rejection_reason(&said).contains("[redacted]"),
+                "{code}"
+            );
         }
         // Not the Gateway's: as it came.
-        assert_eq!(plain_error("429 rate limit: slow down"), "429 rate limit: slow down");
-        assert_eq!(gateway_models_json("")["providers"]["tico"]["baseUrl"], GATEWAY_DEFAULT_URL);
+        assert_eq!(
+            plain_error("429 rate limit: slow down"),
+            "429 rate limit: slow down"
+        );
+        assert_eq!(
+            gateway_models_json("")["providers"]["tico"]["baseUrl"],
+            GATEWAY_DEFAULT_URL
+        );
         // pi sends `reasoning_effort` only for a model marked `reasoning` (checked against pi 1.3.0 and a local fake
         // chat endpoint: low, high and max went as low, high and xhigh; unmarked, none went); text in, as the Gateway.
-        for model in gateway_models_json("")["providers"]["tico"]["models"].as_array().unwrap() {
-            assert_eq!((&model["reasoning"], &model["thinkingLevelMap"]["max"], &model["input"]),
-                       (&json!(true), &json!("xhigh"), &json!(["text"])), "{model}");
+        for model in gateway_models_json("")["providers"]["tico"]["models"]
+            .as_array()
+            .unwrap()
+        {
+            assert_eq!(
+                (
+                    &model["reasoning"],
+                    &model["thinkingLevelMap"]["max"],
+                    &model["input"]
+                ),
+                (&json!(true), &json!("xhigh"), &json!(["text"])),
+                "{model}"
+            );
         }
         // A tier or version the runner was not built with is named for the turn that asks for it, once.
-        let ids = |m: Option<&str>| -> Vec<String> { gateway_models_json_for("", m, &Value::Null)["providers"]["tico"]["models"].as_array().unwrap()
-            .iter().map(|v| v["id"].as_str().unwrap().to_string()).collect() };
-        assert!(ids(Some("tico-marketing-medium-fast-1.0")).contains(&"tico-marketing-medium-fast-1.0".to_string()));
+        let ids = |m: Option<&str>| -> Vec<String> {
+            gateway_models_json_for("", m, &Value::Null)["providers"]["tico"]["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert!(ids(Some("tico-marketing-medium-fast-1.0"))
+            .contains(&"tico-marketing-medium-fast-1.0".to_string()));
         assert_eq!(ids(Some("tico-mid-1.0")).len(), GATEWAY_MODELS.len());
         assert_eq!(ids(Some("kimi-k3")).len(), GATEWAY_MODELS.len());
         // A Tico-model bot needs no OpenRouter grant on its computer.
-        let (state, _) = sign_in(&[json!({"bot": "gw-only-bot", "config": {"runtime": "pi", "model": "tico-mid-1.0"}})]);
+        let (state, _) = sign_in(&[
+            json!({"bot": "gw-only-bot", "config": {"runtime": "pi", "model": "tico-mid-1.0"}}),
+        ]);
         assert_eq!(state, "ready");
         assert!(model_names().contains(&"tico-power-1.0".to_string()));
     }
@@ -1717,21 +2423,38 @@ mod tests {
     #[test]
     fn a_gateway_model_takes_images_only_where_the_server_says_it_reads_them() {
         let inputs_of = |models: &Value, id: &str| -> Value {
-            models["providers"]["tico"]["models"].as_array().unwrap().iter().find(|m| m["id"] == id).unwrap()["input"].clone()
+            models["providers"]["tico"]["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["id"] == id)
+                .unwrap()["input"]
+                .clone()
         };
         let sent = json!({"tico-marketing-medium-1.0": ["text", "image", "pdf"],
                           "tico-marketing-low-fast-1.0": ["text"], "tico-power-1.0": ["text", "image", "pdf"]});
         let both = ["tico-marketing-medium-1.0", "tico-marketing-low-fast-1.0"];
         let models = |ask: &str| gateway_models_json_for("", Some(ask), &sent);
         // A Claude-backed tier: text and image (a PDF is not a pi input).
-        assert_eq!(inputs_of(&models(both[0]), both[0]), json!(["text", "image"]));
+        assert_eq!(
+            inputs_of(&models(both[0]), both[0]),
+            json!(["text", "image"])
+        );
         // Low Fast reads text only.
         assert_eq!(inputs_of(&models(both[1]), both[1]), json!(["text"]));
         // An old id in the built-in list takes what the server says of it, and text where it says nothing.
-        assert_eq!(inputs_of(&models(both[0]), "tico-power-1.0"), json!(["text", "image"]));
+        assert_eq!(
+            inputs_of(&models(both[0]), "tico-power-1.0"),
+            json!(["text", "image"])
+        );
         assert_eq!(inputs_of(&models(both[0]), "tico-mid-1.0"), json!(["text"]));
         // No value (an older server), or one that lists no image: text only, for every model.
-        for none in [Value::Null, json!({}), json!({"tico-marketing-medium-1.0": []}), json!({"tico-marketing-medium-1.0": "image"})] {
+        for none in [
+            Value::Null,
+            json!({}),
+            json!({"tico-marketing-medium-1.0": []}),
+            json!({"tico-marketing-medium-1.0": "image"}),
+        ] {
             let models = gateway_models_json_for("", Some(both[0]), &none);
             for model in models["providers"]["tico"]["models"].as_array().unwrap() {
                 assert_eq!(model["input"], json!(["text"]), "{model}");
@@ -1753,16 +2476,30 @@ mod tests {
 
     #[test]
     fn a_gateway_turn_compacts_at_compact_at_and_keeps_its_retry_and_shell_settings() {
-        let dir = std::env::temp_dir().join(format!("pi-compact-gw-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("pi-compact-gw-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let ws = dir.display().to_string();
-        let mut s = Settings { cwd: ws.clone(), model: Some("tico-mid-1.0".into()), slug: "acme".into(), compact_at: json!(150_000), ..Default::default() };
-        for (k, v) in [("PATH", "/usr/bin:/bin"), ("HUB_WORKSPACE", ws.as_str()), (GATEWAY_KEY_ENV, "tgw-synthetic-fixture"), (GATEWAY_URL_ENV, "https://gw.example/v1/gateway")] {
+        let mut s = Settings {
+            cwd: ws.clone(),
+            model: Some("tico-mid-1.0".into()),
+            slug: "acme".into(),
+            compact_at: json!(150_000),
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("PATH", "/usr/bin:/bin"),
+            ("HUB_WORKSPACE", ws.as_str()),
+            (GATEWAY_KEY_ENV, "tgw-synthetic-fixture"),
+            (GATEWAY_URL_ENV, "https://gw.example/v1/gateway"),
+        ] {
             s.env.insert(k.into(), v.into());
         }
         let env = Pi::env(&s);
         let agent = PathBuf::from(&env["PI_CODING_AGENT_DIR"]);
-        let settings: Value = serde_json::from_str(&std::fs::read_to_string(agent.join("settings.json")).unwrap()).unwrap();
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(agent.join("settings.json")).unwrap())
+                .unwrap();
         // The Gateway's window (200,000) less Compact at; the retry and the key-hiding shell prefix are still there.
         assert_eq!(settings["compaction"]["reserveTokens"], 50_000);
         assert_eq!(settings["retry"]["enabled"], false);
@@ -1772,30 +2509,55 @@ mod tests {
 
     #[test]
     fn an_openrouter_turn_keeps_pis_compaction_until_its_model_has_a_known_window() {
-        let dir = std::env::temp_dir().join(format!("pi-compact-or-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("pi-compact-or-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let ws = dir.display().to_string();
-        let mut s = Settings { cwd: ws.clone(), model: Some("kimi-k3".into()), slug: "acme".into(), compact_at: json!(150_000), ..Default::default() };
-        for (k, v) in [("PATH", "/usr/bin:/bin"), ("HUB_WORKSPACE", ws.as_str()), ("OPENROUTER_API_KEY", "or-synthetic")] {
+        let mut s = Settings {
+            cwd: ws.clone(),
+            model: Some("kimi-k3".into()),
+            slug: "acme".into(),
+            compact_at: json!(150_000),
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("PATH", "/usr/bin:/bin"),
+            ("HUB_WORKSPACE", ws.as_str()),
+            ("OPENROUTER_API_KEY", "or-synthetic"),
+        ] {
             s.env.insert(k.into(), v.into());
         }
         let env = Pi::env(&s);
         let agent = PathBuf::from(&env["PI_CODING_AGENT_DIR"]);
         // No window is known for an OpenRouter model yet, so pi's own reserve stands and no Gateway setting is left over.
-        assert_eq!(std::fs::read_to_string(agent.join("settings.json")).unwrap().trim(), "{}");
+        assert_eq!(
+            std::fs::read_to_string(agent.join("settings.json"))
+                .unwrap()
+                .trim(),
+            "{}"
+        );
         // Where a window is known, the same mapping applies (a 1,000,000-token window and Compact at 600,000).
-        assert_eq!(with_compaction(json!({}), Some(1_000_000), &json!(600_000))["compaction"]["reserveTokens"], 400_000);
+        assert_eq!(
+            with_compaction(json!({}), Some(1_000_000), &json!(600_000))["compaction"]
+                ["reserveTokens"],
+            400_000
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_compaction_with_a_result_marks_the_turn_and_one_that_failed_or_aborted_does_not() {
         let mut turn = Turn::default();
-        Pi::on_event(&json!({"type": "compaction_end", "reason": "threshold", "aborted": false, "willRetry": false,
-                             "result": {"summary": "Earlier work.", "tokensBefore": 180_000}}), &mut turn);
+        Pi::on_event(
+            &json!({"type": "compaction_end", "reason": "threshold", "aborted": false, "willRetry": false,
+                             "result": {"summary": "Earlier work.", "tokensBefore": 180_000}}),
+            &mut turn,
+        );
         assert!(turn.compacted);
-        for end in [json!({"type": "compaction_end", "reason": "threshold", "aborted": true, "willRetry": false}),
-                    json!({"type": "compaction_end", "reason": "threshold", "aborted": false, "errorMessage": "Summary failed", "willRetry": false})] {
+        for end in [
+            json!({"type": "compaction_end", "reason": "threshold", "aborted": true, "willRetry": false}),
+            json!({"type": "compaction_end", "reason": "threshold", "aborted": false, "errorMessage": "Summary failed", "willRetry": false}),
+        ] {
             let mut turn = Turn::default();
             Pi::on_event(&end, &mut turn);
             assert!(!turn.compacted, "{end}");
@@ -1806,14 +2568,18 @@ mod tests {
     #[test]
     fn the_newest_requests_prompt_and_reply_are_the_sessions_context() {
         let mut turn = Turn::default();
-        Pi::on_event(&json!({"type": "message_end", "message": {"role": "assistant", "provider": "openrouter", "stopReason": "stop", "content": [],
-                             "usage": {"input": 120, "output": 9, "cacheRead": 40, "cacheWrite": 0}}}), &mut turn);
+        Pi::on_event(
+            &json!({"type": "message_end", "message": {"role": "assistant", "provider": "openrouter", "stopReason": "stop", "content": [],
+                             "usage": {"input": 120, "output": 9, "cacheRead": 40, "cacheWrite": 0}}}),
+            &mut turn,
+        );
         assert_eq!(turn.context, Some(169));
     }
 
     #[tokio::test]
     async fn a_turn_that_compacts_the_session_is_recorded_for_its_thread_once() {
-        let dir = std::env::temp_dir().join(format!("fake-pi-compact-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("fake-pi-compact-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let fixture = dir.join("compact.jsonl");
         std::fs::write(&fixture, [r#"{"type":"agent_start"}"#, r#"{"type":"compaction_start","reason":"threshold"}"#,
@@ -1834,21 +2600,42 @@ mod tests {
     }
 
     fn rpc_settings(dir: &std::path::Path, extra: &[(&str, &str)]) -> Settings {
-        let mut s = Settings { cwd: dir.display().to_string(), model: Some("kimi-k3".into()), slug: "acme".into(), ..Default::default() };
-        for (k, v) in [("PATH", "/usr/bin:/bin"), ("HUB_WORKSPACE", dir.display().to_string().as_str()), ("OPENROUTER_API_KEY", "or-synthetic")].into_iter().chain(extra.iter().copied()) {
+        let mut s = Settings {
+            cwd: dir.display().to_string(),
+            model: Some("kimi-k3".into()),
+            slug: "acme".into(),
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("PATH", "/usr/bin:/bin"),
+            ("HUB_WORKSPACE", dir.display().to_string().as_str()),
+            ("OPENROUTER_API_KEY", "or-synthetic"),
+        ]
+        .into_iter()
+        .chain(extra.iter().copied())
+        {
             s.env.insert(k.into(), v.into());
         }
         s
     }
 
     /// A fake pi on `lines` in a new folder, a host on `pool` (or the folder's own), and the host's events.
-    fn rpc_host(lines: &[&str], pool: Option<Arc<Pool>>) -> (PathBuf, PiHost, mpsc::UnboundedReceiver<Value>) {
-        let dir = std::env::temp_dir().join(format!("fake-pi-rpc-{}", uuid::Uuid::new_v4().simple()));
+    fn rpc_host(
+        lines: &[&str],
+        pool: Option<Arc<Pool>>,
+    ) -> (PathBuf, PiHost, mpsc::UnboundedReceiver<Value>) {
+        let dir =
+            std::env::temp_dir().join(format!("fake-pi-rpc-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let fixture = dir.join("turn.jsonl");
         std::fs::write(&fixture, lines.join("\n")).unwrap();
         let (tx, rx) = mpsc::unbounded_channel();
-        let host = PiHost::new("acme", fake(&dir, &fixture), tx, pool.unwrap_or_else(|| self::pool(&dir)));
+        let host = PiHost::new(
+            "acme",
+            fake(&dir, &fixture),
+            tx,
+            pool.unwrap_or_else(|| self::pool(&dir)),
+        );
         host.start();
         (dir, host, rx)
     }
@@ -1860,22 +2647,39 @@ mod tests {
     }
 
     fn sessions(dir: &std::path::Path) -> Vec<String> {
-        std::fs::read_to_string(dir.join("args.log")).unwrap().lines()
-            .map(|l| l.split_whitespace().skip_while(|a| *a != "--session-id").nth(1).unwrap_or_default().to_string()).collect()
+        std::fs::read_to_string(dir.join("args.log"))
+            .unwrap()
+            .lines()
+            .map(|l| {
+                l.split_whitespace()
+                    .skip_while(|a| *a != "--session-id")
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect()
     }
 
     fn token_file(dir: &std::path::Path) -> PathBuf {
-        PathBuf::from(text_of(&logged(dir, "starts.log")[0]["token"]).strip_prefix("tico-file:").unwrap())
+        PathBuf::from(
+            text_of(&logged(dir, "starts.log")[0]["token"])
+                .strip_prefix("tico-file:")
+                .unwrap(),
+        )
     }
 
     #[tokio::test]
-    async fn a_threads_turns_share_one_pi_that_waits_in_the_pool_between_attempts_with_its_token_blanked() {
+    async fn a_threads_turns_share_one_pi_that_waits_in_the_pool_between_attempts_with_its_token_blanked(
+    ) {
         let (dir, host, mut rx) = rpc_host(&[REPLY], None);
         let thread = host.start_thread(&rpc_settings(&dir, &[("HUB_TOKEN", "synthetic-turn-1")]));
         for _ in 0..2 {
             host.start_turn(&thread, "hello", None).await.unwrap();
             let events = turn_events(&mut rx).await;
-            assert!(events.contains(&json!({"kind": "turn_completed", "status": "completed"})), "{events:?}");
+            assert!(
+                events.contains(&json!({"kind": "turn_completed", "status": "completed"})),
+                "{events:?}"
+            );
             // Usage is still priced per message, and the newest request is the session's size.
             assert!(events.contains(&json!({"kind": "tokens", "input": 120, "output": 9, "total": 129, "usage": {"input": 160, "cached": 40, "output": 9, "requests": [[120, 40, 9]]}})), "{events:?}");
             assert_eq!(host.context_tokens(&thread), Some(169));
@@ -1890,21 +2694,38 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let next = PiHost::new("acme", host.0.cmd.clone(), tx, host.0.pool.clone());
         next.start();
-        next.resume_thread(&thread, &rpc_settings(&dir, &[("HUB_TOKEN", "synthetic-turn-2")]));
+        next.resume_thread(
+            &thread,
+            &rpc_settings(&dir, &[("HUB_TOKEN", "synthetic-turn-2")]),
+        );
         next.start_turn(&thread, "again", None).await.unwrap();
-        assert!(turn_events(&mut rx).await.contains(&json!({"kind": "turn_completed", "status": "completed"})));
-        assert_eq!((logged(&dir, "starts.log").len(), std::fs::read_to_string(&file).unwrap()), (1, "synthetic-turn-2".to_string()));
+        assert!(turn_events(&mut rx)
+            .await
+            .contains(&json!({"kind": "turn_completed", "status": "completed"})));
+        assert_eq!(
+            (
+                logged(&dir, "starts.log").len(),
+                std::fs::read_to_string(&file).unwrap()
+            ),
+            (1, "synthetic-turn-2".to_string())
+        );
         assert_eq!(sessions(&dir), vec![thread.clone(); 3]);
         next.release(true, OWNER, Held::default()).await;
         // The runner stopping stops it, and its token folder goes with it.
         host.0.pool.prune(true).await;
-        assert_eq!(std::fs::read_to_string(dir.join("exits.log")).unwrap().trim(), text_of(&logged(&dir, "starts.log")[0]["pid"]));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("exits.log"))
+                .unwrap()
+                .trim(),
+            text_of(&logged(&dir, "starts.log")[0]["pid"])
+        );
         assert!(!file.exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
-    async fn a_turn_started_differently_restarts_pi_on_the_same_session_and_a_new_effort_is_set_in_place() {
+    async fn a_turn_started_differently_restarts_pi_on_the_same_session_and_a_new_effort_is_set_in_place(
+    ) {
         let (dir, host, mut rx) = rpc_host(&[REPLY], None);
         let thread = host.start_thread(&rpc_settings(&dir, &[]));
         let turn = |effort: Option<&'static str>| {
@@ -1916,9 +2737,13 @@ mod tests {
         turn(Some("max")).await;
         turn_events(&mut rx).await;
         assert_eq!(logged(&dir, "starts.log").len(), 1);
-        assert!(logged(&dir, "in.jsonl").contains(&json!({"type": "set_thinking_level", "level": "max"})));
+        assert!(logged(&dir, "in.jsonl")
+            .contains(&json!({"type": "set_thinking_level", "level": "max"})));
         // A new secret, then a new model: each starts pi again, the one before it stopped.
-        host.resume_thread(&thread, &rpc_settings(&dir, &[("LINEAR_API_KEY", "linear-synthetic")]));
+        host.resume_thread(
+            &thread,
+            &rpc_settings(&dir, &[("LINEAR_API_KEY", "linear-synthetic")]),
+        );
         turn(Some("max")).await;
         turn_events(&mut rx).await;
         let mut s = rpc_settings(&dir, &[("LINEAR_API_KEY", "linear-synthetic")]);
@@ -1926,33 +2751,80 @@ mod tests {
         host.resume_thread(&thread, &s);
         turn(Some("max")).await;
         let events = turn_events(&mut rx).await;
-        assert!(events.contains(&json!({"kind": "turn_completed", "status": "completed"})), "{events:?}");
+        assert!(
+            events.contains(&json!({"kind": "turn_completed", "status": "completed"})),
+            "{events:?}"
+        );
         let starts = logged(&dir, "starts.log");
         assert_eq!(starts.len(), 3);
-        assert_eq!(std::fs::read_to_string(dir.join("exits.log")).unwrap().lines().collect::<Vec<_>>(), vec![text_of(&starts[0]["pid"]), text_of(&starts[1]["pid"])]);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("exits.log"))
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            vec![text_of(&starts[0]["pid"]), text_of(&starts[1]["pid"])]
+        );
         assert_eq!(sessions(&dir), vec![thread.clone(); 4]);
-        assert!(std::fs::read_to_string(dir.join("args.log")).unwrap().lines().last().unwrap().contains("--model qwen/qwen3-coder --thinking max"));
+        assert!(std::fs::read_to_string(dir.join("args.log"))
+            .unwrap()
+            .lines()
+            .last()
+            .unwrap()
+            .contains("--model qwen/qwen3-coder --thinking max"));
         host.stop().await;
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
-    async fn a_message_for_a_running_turn_is_a_steer_and_one_pi_had_not_used_runs_on_in_the_same_turn() {
+    async fn a_message_for_a_running_turn_is_a_steer_and_one_pi_had_not_used_runs_on_in_the_same_turn(
+    ) {
         for deliver in [true, false] {
-            let lines: &[&str] = if deliver { &["WAIT", "DELIVER", REPLY] } else { &["WAIT", REPLY] };
+            let lines: &[&str] = if deliver {
+                &["WAIT", "DELIVER", REPLY]
+            } else {
+                &["WAIT", REPLY]
+            };
             let (dir, host, mut rx) = rpc_host(lines, None);
             let thread = host.start_thread(&rpc_settings(&dir, &[]));
             let turn = host.start_turn(&thread, "hello", None).await.unwrap();
-            host.steer(&thread, &turn, "Also check the logs").await.unwrap();
+            host.steer(&thread, &turn, "Also check the logs")
+                .await
+                .unwrap();
             let events = turn_events(&mut rx).await;
-            assert_eq!(kinds(&events).iter().filter(|k| *k == "turn_completed").count(), 1, "{events:?}");
-            assert!(logged(&dir, "in.jsonl").iter().any(|c| c["type"] == "steer" && c["message"] == "Also check the logs"));
+            assert_eq!(
+                kinds(&events)
+                    .iter()
+                    .filter(|k| *k == "turn_completed")
+                    .count(),
+                1,
+                "{events:?}"
+            );
+            assert!(logged(&dir, "in.jsonl")
+                .iter()
+                .any(|c| c["type"] == "steer" && c["message"] == "Also check the logs"));
             // Steered in after pi's last model call: pi is prompted with it, still in this turn.
-            let prompts: Vec<String> = (0..3).filter_map(|n| std::fs::read_to_string(dir.join(format!("prompt-{n}"))).ok()).collect();
-            assert_eq!(prompts, if deliver { vec!["hello".to_string()] } else { vec!["hello".to_string(), "Also check the logs".into()] });
-            assert!(deliver || logged(&dir, "in.jsonl").iter().any(|c| c["type"] == "clear_queue"));
+            let prompts: Vec<String> = (0..3)
+                .filter_map(|n| std::fs::read_to_string(dir.join(format!("prompt-{n}"))).ok())
+                .collect();
+            assert_eq!(
+                prompts,
+                if deliver {
+                    vec!["hello".to_string()]
+                } else {
+                    vec!["hello".to_string(), "Also check the logs".into()]
+                }
+            );
+            assert!(
+                deliver
+                    || logged(&dir, "in.jsonl")
+                        .iter()
+                        .any(|c| c["type"] == "clear_queue")
+            );
             // After the turn, a message is for the next one.
-            assert!(matches!(host.steer(&thread, &turn, "late").await, Err(HostError::SteerRefused(_))));
+            assert!(matches!(
+                host.steer(&thread, &turn, "late").await,
+                Err(HostError::SteerRefused(_))
+            ));
             host.stop().await;
             std::fs::remove_dir_all(dir).unwrap();
         }
@@ -1964,7 +2836,9 @@ mod tests {
         let thread = host.start_thread(&rpc_settings(&dir, &[]));
         let turn = host.start_turn(&thread, "hello", None).await.unwrap();
         host.interrupt(&turn);
-        assert!(turn_events(&mut rx).await.contains(&json!({"kind": "turn_completed", "status": "interrupted"})));
+        assert!(turn_events(&mut rx)
+            .await
+            .contains(&json!({"kind": "turn_completed", "status": "interrupted"})));
         assert!(logged(&dir, "in.jsonl").contains(&json!({"type": "abort"})));
         assert!(!dir.join("exits.log").exists());
         host.stop().await;
@@ -1978,8 +2852,13 @@ mod tests {
         host.compact(&thread, None).await.unwrap();
         let events = turn_events(&mut rx).await;
         assert!(events.contains(&json!({"kind": "tokens", "input": 9000, "output": 700, "total": 9700, "usage": {"input": 9000, "cached": 0, "output": 700, "requests": [[9000, 0, 700]]}})), "{events:?}");
-        assert_eq!(kinds(&events).iter().rev().nth(1).unwrap(), "turn_completed");
-        assert!(logged(&dir, "in.jsonl").iter().any(|c| c["type"] == "compact"));
+        assert_eq!(
+            kinds(&events).iter().rev().nth(1).unwrap(),
+            "turn_completed"
+        );
+        assert!(logged(&dir, "in.jsonl")
+            .iter()
+            .any(|c| c["type"] == "compact"));
         assert!(host.compacted(&thread));
         assert_eq!(host.context_tokens(&thread), Some(12_000));
         // One pi could not do fails as pi said, and nothing is marked compacted.
@@ -1994,16 +2873,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_pi_that_exits_fails_its_turn_and_the_next_turn_starts_it_again_on_the_same_session() {
+    async fn a_pi_that_exits_fails_its_turn_and_the_next_turn_starts_it_again_on_the_same_session()
+    {
         let (dir, host, mut rx) = rpc_host(&["EXIT 3"], None);
         let thread = host.start_thread(&rpc_settings(&dir, &[]));
         host.start_turn(&thread, "hello", None).await.unwrap();
         let events = turn_events(&mut rx).await;
-        let failed = events.iter().find(|e| e["kind"] == "turn_failed").unwrap_or_else(|| panic!("{events:?}"));
-        assert_eq!((&failed["exit_code"], &failed["process_exit"]), (&json!(3), &json!(true)));
+        let failed = events
+            .iter()
+            .find(|e| e["kind"] == "turn_failed")
+            .unwrap_or_else(|| panic!("{events:?}"));
+        assert_eq!(
+            (&failed["exit_code"], &failed["process_exit"]),
+            (&json!(3), &json!(true))
+        );
         std::fs::write(dir.join("turn.jsonl"), REPLY).unwrap();
         host.start_turn(&thread, "again", None).await.unwrap();
-        assert!(turn_events(&mut rx).await.contains(&json!({"kind": "turn_completed", "status": "completed"})));
+        assert!(turn_events(&mut rx)
+            .await
+            .contains(&json!({"kind": "turn_completed", "status": "completed"})));
         assert_eq!(logged(&dir, "starts.log").len(), 2);
         assert_eq!(sessions(&dir), vec![thread.clone(); 2]);
         host.stop().await;
@@ -2012,21 +2900,39 @@ mod tests {
 
     #[tokio::test]
     async fn a_kept_pi_is_stopped_once_idle_and_one_whose_turn_failed_is_not_kept() {
-        let idle = Arc::new(Pool { dir: std::env::temp_dir().join(format!("fake-pi-idle-{}", uuid::Uuid::new_v4().simple())), limit: 4, idle: Duration::ZERO, kept: Mutex::default() });
+        let idle = Arc::new(Pool {
+            dir: std::env::temp_dir()
+                .join(format!("fake-pi-idle-{}", uuid::Uuid::new_v4().simple())),
+            limit: 4,
+            idle: Duration::ZERO,
+            kept: Mutex::default(),
+        });
         let (dir, host, mut rx) = rpc_host(&[REPLY], Some(idle.clone()));
         let thread = host.start_thread(&rpc_settings(&dir, &[]));
         host.start_turn(&thread, "hello", None).await.unwrap();
         turn_events(&mut rx).await;
         host.release(true, OWNER, Held::default()).await;
         assert!(idle.kept().is_empty());
-        assert_eq!(std::fs::read_to_string(dir.join("exits.log")).unwrap().lines().count(), 1);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("exits.log"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
         let (other, host, mut rx) = rpc_host(&[REPLY], None);
         let thread = host.start_thread(&rpc_settings(&other, &[]));
         host.start_turn(&thread, "hello", None).await.unwrap();
         turn_events(&mut rx).await;
         host.release(false, OWNER, Held::default()).await;
         assert!(host.0.pool.kept().is_empty());
-        assert_eq!(std::fs::read_to_string(other.join("exits.log")).unwrap().lines().count(), 1);
+        assert_eq!(
+            std::fs::read_to_string(other.join("exits.log"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
         for d in [dir, other, idle.dir.clone()] {
             std::fs::remove_dir_all(d).ok();
         }
@@ -2035,7 +2941,11 @@ mod tests {
     /// The first line of the relay's answer to a model call with `token`; None once nothing listens there.
     async fn relay_answer(url: &str, token: &str) -> Option<String> {
         use tokio::io::AsyncReadExt;
-        let mut socket = tokio::net::TcpStream::connect(url.trim_start_matches("http://").split('/').next().unwrap()).await.ok()?;
+        let mut socket = tokio::net::TcpStream::connect(
+            url.trim_start_matches("http://").split('/').next().unwrap(),
+        )
+        .await
+        .ok()?;
         let request = format!("POST /gateway/chat/completions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nContent-Length: 2\r\n\r\n{{}}");
         socket.write_all(request.as_bytes()).await.ok()?;
         let mut out = String::new();
@@ -2044,71 +2954,148 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_gateway_pi_keeps_its_relay_between_turns_closed_to_calls_and_both_go_when_it_is_evicted() {
+    async fn a_gateway_pi_keeps_its_relay_between_turns_closed_to_calls_and_both_go_when_it_is_evicted(
+    ) {
         const GATEWAY: &str = "http://127.0.0.1:9/v1/gateway";
-        let relay = crate::gateway_relay::start(GATEWAY, "tgw-synthetic-1".into(), None).await.unwrap();
+        let relay = crate::gateway_relay::start(GATEWAY, "tgw-synthetic-1".into(), None)
+            .await
+            .unwrap();
         let (url, token) = (relay.url.clone(), relay.token.clone());
         let (dir, host, mut rx) = rpc_host(&[REPLY], None);
         let pool = host.0.pool.clone();
         let agent = dir.join("agent").display().to_string();
         let gateway = |hub: &str| {
-            let mut s = rpc_settings(&dir, &[("HUB_TOKEN", hub), (GATEWAY_URL_ENV, &url), (GATEWAY_KEY_ENV, &token), (GATEWAY_DIR_ENV, &agent)]);
+            let mut s = rpc_settings(
+                &dir,
+                &[
+                    ("HUB_TOKEN", hub),
+                    (GATEWAY_URL_ENV, &url),
+                    (GATEWAY_KEY_ENV, &token),
+                    (GATEWAY_DIR_ENV, &agent),
+                ],
+            );
             s.model = Some("tico-mid-1.0".into());
             s
         };
         let thread = host.start_thread(&gateway("synthetic-turn-1"));
         host.start_turn(&thread, "hello", None).await.unwrap();
-        assert!(turn_events(&mut rx).await.contains(&json!({"kind": "turn_completed", "status": "completed"})));
+        assert!(turn_events(&mut rx)
+            .await
+            .contains(&json!({"kind": "turn_completed", "status": "completed"})));
         // During a turn the relay passes calls on (nothing answers at GATEWAY).
-        assert_eq!(relay_answer(&url, &token).await.as_deref(), Some("HTTP/1.1 502 Bad Gateway"));
-        let back = host.release(true, OWNER, Held { user: None, relay: Some(relay) }).await;
+        assert_eq!(
+            relay_answer(&url, &token).await.as_deref(),
+            Some("HTTP/1.1 502 Bad Gateway")
+        );
+        let back = host
+            .release(
+                true,
+                OWNER,
+                Held {
+                    user: None,
+                    relay: Some(relay),
+                },
+            )
+            .await;
         assert!(back.is_empty(), "the kept pi takes the relay");
         // Between turns it refuses every call, its own token or not.
-        assert_eq!(relay_answer(&url, &token).await.as_deref(), Some("HTTP/1.1 503 Service Unavailable"));
+        assert_eq!(
+            relay_answer(&url, &token).await.as_deref(),
+            Some("HTTP/1.1 503 Service Unavailable")
+        );
         assert!(pool.reclaim("acme\nchat:other").is_none());
         // The conversation's next attempt reclaims it, resumes it with its own key, and runs on the same pi.
         let mut held = pool.reclaim(OWNER).unwrap();
         assert!(pool.reclaim(OWNER).is_none());
         let relay = held.relay.as_mut().unwrap();
-        assert!(!relay.resume("https://elsewhere.example/v1/gateway", "tgw-synthetic-2".into(), None), "another Gateway takes a relay of its own");
+        assert!(
+            !relay.resume(
+                "https://elsewhere.example/v1/gateway",
+                "tgw-synthetic-2".into(),
+                None
+            ),
+            "another Gateway takes a relay of its own"
+        );
         assert!(relay.resume(GATEWAY, "tgw-synthetic-2".into(), None));
-        assert_eq!((relay.url.as_str(), relay.token.as_str()), (url.as_str(), token.as_str()));
-        assert_eq!(relay_answer(&url, &token).await.as_deref(), Some("HTTP/1.1 502 Bad Gateway"));
+        assert_eq!(
+            (relay.url.as_str(), relay.token.as_str()),
+            (url.as_str(), token.as_str())
+        );
+        assert_eq!(
+            relay_answer(&url, &token).await.as_deref(),
+            Some("HTTP/1.1 502 Bad Gateway")
+        );
         let (tx, mut rx) = mpsc::unbounded_channel();
         let next = PiHost::new("acme", host.0.cmd.clone(), tx, pool.clone());
         next.start();
         next.resume_thread(&thread, &gateway("synthetic-turn-2"));
         next.start_turn(&thread, "again", None).await.unwrap();
-        assert!(turn_events(&mut rx).await.contains(&json!({"kind": "turn_completed", "status": "completed"})));
+        assert!(turn_events(&mut rx)
+            .await
+            .contains(&json!({"kind": "turn_completed", "status": "completed"})));
         assert_eq!(logged(&dir, "starts.log").len(), 1, "one pi for both turns");
         assert!(next.release(true, OWNER, held).await.is_empty());
-        assert_eq!(relay_answer(&url, &token).await.as_deref(), Some("HTTP/1.1 503 Service Unavailable"));
+        assert_eq!(
+            relay_answer(&url, &token).await.as_deref(),
+            Some("HTTP/1.1 503 Service Unavailable")
+        );
         // A turn short of a turn user stops the idle pi and gets its user; its relay is stopped, its token useless.
         assert!(pool.evict().await);
         assert!(!pool.evict().await, "nothing else holds a user");
         assert_eq!(relay_answer(&url, &token).await, None);
-        assert_eq!(std::fs::read_to_string(dir.join("exits.log")).unwrap().trim(), text_of(&logged(&dir, "starts.log")[0]["pid"]));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("exits.log"))
+                .unwrap()
+                .trim(),
+            text_of(&logged(&dir, "starts.log")[0]["pid"])
+        );
         assert!(pool.kept().is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn a_leased_pi_is_kept_only_with_its_user_and_relay_and_hands_them_back_when_not_kept() {
-        let relay = crate::gateway_relay::start("http://127.0.0.1:9/v1/gateway", "tgw-synthetic".into(), None).await.unwrap();
+        let relay = crate::gateway_relay::start(
+            "http://127.0.0.1:9/v1/gateway",
+            "tgw-synthetic".into(),
+            None,
+        )
+        .await
+        .unwrap();
         let (url, token) = (relay.url.clone(), relay.token.clone());
         let (dir, host, mut rx) = rpc_host(&[REPLY], None);
         let thread = host.start_thread(&rpc_settings(&dir, &[]));
         host.start_turn(&thread, "hello", None).await.unwrap();
         turn_events(&mut rx).await;
         // A turn that failed keeps nothing: the relay goes back to the attempt, which stops it.
-        let mut back = host.release(false, OWNER, Held { user: None, relay: Some(relay) }).await;
+        let mut back = host
+            .release(
+                false,
+                OWNER,
+                Held {
+                    user: None,
+                    relay: Some(relay),
+                },
+            )
+            .await;
         assert!(back.relay.is_some() && host.0.pool.kept().is_empty());
-        assert_eq!(relay_answer(&url, &token).await.as_deref(), Some("HTTP/1.1 502 Bad Gateway"));
+        assert_eq!(
+            relay_answer(&url, &token).await.as_deref(),
+            Some("HTTP/1.1 502 Bad Gateway")
+        );
         back.relay.as_mut().unwrap().stop().await;
         // A process that runs as a leased user and comes back without its user and relay is not kept either.
         let leased = host.0.pool.home().unwrap();
-        let proc = Proc { key: String::new(), stdin: mpsc::unbounded_channel().0, stopper: super::super::Stopper(mpsc::unbounded_channel().0), exited: watch::channel(false).1,
-                          home: leased.clone(), identity: Some((10100, 10002)), sink: Arc::default(), live: Mutex::default() };
+        let proc = Proc {
+            key: String::new(),
+            stdin: mpsc::unbounded_channel().0,
+            stopper: super::super::Stopper(mpsc::unbounded_channel().0),
+            exited: watch::channel(false).1,
+            home: leased.clone(),
+            identity: Some((10100, 10002)),
+            sink: Arc::default(),
+            live: Mutex::default(),
+        };
         host.inner().procs.insert(thread.clone(), Arc::new(proc));
         assert!(host.release(true, OWNER, Held::default()).await.is_empty());
         assert!(host.0.pool.kept().is_empty() && !leased.exists());
@@ -2120,9 +3107,23 @@ mod tests {
         assert_eq!(model_for(None), "deepseek/deepseek-v4.1-flash");
         assert_eq!(model_for(Some("default")), "deepseek/deepseek-v4.1-flash");
         assert_eq!(model_for(Some("qwen/qwen3-coder")), "qwen/qwen3-coder");
-        assert_eq!((effort_for(Some("Medium")), effort_for(Some("high")), effort_for(Some("max")), effort_for(None)), ("low", "high", "max", "low"));
-        assert_eq!(usage_tokens(&json!({"promptTokens": "7", "output": 0, "completion_tokens": 3})), (7, 3, 10));
-        assert_eq!(usage_increment(&json!({"input": 5, "cacheRead": 4, "cacheWrite": 1, "output": 2})), json!({"input": 10, "cached": 4, "output": 2, "requests": [[6, 4, 2]]}));
+        assert_eq!(
+            (
+                effort_for(Some("Medium")),
+                effort_for(Some("high")),
+                effort_for(Some("max")),
+                effort_for(None)
+            ),
+            ("low", "high", "max", "low")
+        );
+        assert_eq!(
+            usage_tokens(&json!({"promptTokens": "7", "output": 0, "completion_tokens": 3})),
+            (7, 3, 10)
+        );
+        assert_eq!(
+            usage_increment(&json!({"input": 5, "cacheRead": 4, "cacheWrite": 1, "output": 2})),
+            json!({"input": 10, "cached": 4, "output": 2, "requests": [[6, 4, 2]]})
+        );
         let mut env = Env::new();
         assert_eq!(openrouter_key(&env, false), "");
         env.insert("OPENROUTER_API_KEY".into(), " k ".into());

@@ -11,6 +11,7 @@
      #/tools/address/<id>, #/tools/address/outbox     one mailing address, letters out  │ (ui/app/inboxes*.js)
      #/tools/settings[/<section>], #/tools/messages   mail and number settings, texts   ┘
      #/tools/keys[/<service> | /credentials/<id>]     every credential, by tool (ui/app/redesign-library.js)
+     #/tools/webhooks[/<id>]                          outgoing webhooks, and one (ui/app/settings-webhooks.js)
      #/tools/<service>                                a declared tool's page, Slack's and GitHub's (same file)
    The old homes of all of it redirect here (toolsRoute): Library › Tools and › Connections, Settings › Inboxes and
    the tabs it replaced, #/integrations and #/credentials.
@@ -34,6 +35,7 @@ const TOOLS_ICONS = {api: 'api', mailbox: 'mail', number: 'sms', address: 'local
 const TOOLS_TONE = {ok: 'ok', wait: 'waiting', fail: 'fail', run: 'in-progress', idle: ''};
 const TOOLS_WHO_SHOWN = 4;
 let TL = null;   // {run, rows, counts, error, q, show}
+const TOOLS_PRIVATE = ' <span class="pill tt-private" data-private>Private</span>';
 const toolsPill = status => `<span class="pill${TOOLS_TONE[status?.tone] ? ' ' + TOOLS_TONE[status.tone] : ''} tt-status" data-tone="${esc(status?.tone || 'idle')}"><span class="tt-dot" aria-hidden="true"></span>${esc(status?.text || '')}</span>`;
 // One face: a bot's avatar, or a person's photo or initials.
 const toolsFace = (w, size = 22) => w.kind === 'bot' ? avatar(w.id, size)
@@ -102,7 +104,7 @@ function toolsDraw() {
   box.innerHTML = err + `<table class="tt-list"><thead><tr><th>Tool</th><th>Way in</th><th>Who can use it</th><th>Status</th><th aria-hidden="true"></th></tr></thead>
     <tbody>${shown.map(r => `<tr data-tl-row="${esc(r.id)}" data-tl-kind="${esc(r.kind)}"${r.needs_you ? ' data-tl-needs' : ''}>
       <td class="tt-tool"><a href="${esc(r.href || '#/tools')}"><span class="tt-tile" aria-hidden="true"><span class="nav-icon">${TOOLS_ICONS[r.kind] || 'link'}</span></span>
-        <span class="tt-nm"><strong>${esc(r.name)}</strong>${r.detail ? `<span class="muted">${esc(r.detail)}</span>` : ''}</span></a></td>
+        <span class="tt-nm"><strong>${esc(r.name)}${r.private ? TOOLS_PRIVATE : ''}</strong>${r.detail ? `<span class="muted">${esc(r.detail)}</span>` : ''}</span></a></td>
       <td class="tt-way">${r.way ? `<span class="pill">${esc(r.way)}</span>` : ''}</td>
       <td class="tt-who">${toolsWhoHTML(r)}</td>
       <td class="tt-st">${toolsPill(r.status)}</td>
@@ -121,7 +123,8 @@ function toolsDraw() {
 function toolsAddMenu() {
   const admin = settingsIsAdmin();
   const kinds = Object.values(INBOX_KINDS).filter(k => k.add && (!k.add.admin || admin)).sort((a, b) => a.order - b.order);
-  const items = [...(S.me?.credential_access || admin ? [['api', 'API']] : []), ...kinds.map(k => ['kind:' + k.key, k.add.label])];
+  const items = [...(S.me?.credential_access || admin ? [['api', 'API']] : []), ...kinds.map(k => ['kind:' + k.key, k.add.label]),
+    ['webhook', 'Outgoing webhook']];
   if (!items.length) return '';
   return `<details class="tt-add" data-tl-add><summary class="primary small">Add tool</summary><div class="tt-add-menu" role="menu">
     ${items.map(([k, label]) => `<button type="button" role="menuitem" data-tl-add-item="${esc(k)}">${esc(label)}</button>`).join('')}</div></details>`;
@@ -132,6 +135,7 @@ function toolsAddBind(root) {
     b.closest('details').removeAttribute('open');
     const item = b.dataset.tlAddItem;
     if (item === 'api') { toolsApiCreate(); return; }
+    if (item === 'webhook') { location.hash = WH_HOOKS_ROUTE; void whHookDialog(null); return; }
     INBOX_KINDS[item.slice(5)]?.add?.open(inboxesCtx(IB.run));
   });
 }
@@ -167,6 +171,7 @@ function toolsRoute(r) {
   if (!parts.length) { pageTools(); return true; }
   if (parts[0] === 'api' && parts[1]) { pageToolApi(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
   if (parts[0] === 'keys') { pageRdTools(); return true; }
+  if (parts[0] === 'webhooks') { pageToolWebhooks(parts[1] || ''); return true; }
   const view = inboxesRoute(parts);
   if (view !== null) { toolsInboxPage(view); return true; }
   pageToolService(parts.join('/'));

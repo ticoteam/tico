@@ -105,7 +105,7 @@ Values (`TASK_STATUSES`):
 
 - `open`: not started. Owners may set it.
 - `doing`: being worked on.
-- `waiting`: parked on something else (`waiting_on`). The task stays in its working step and shows a Waiting tag.
+- `waiting`: parked on something else: a subtask, a blocker (a person's open question task is one), an approval or an outside wait. The task stays in its working step and shows a Waiting tag.
 - `review`: work is finished and waiting for review or QA. Owners may set it.
 - `ready`: the hub has learned the work is ready, for example its pull request merged. Set by movers and the keeper, never by an owning bot.
 - `done`: finished work. Shown under Done.
@@ -158,7 +158,7 @@ Transitions:
 - `leased`, `running` or `input` to `queued` or `uncertain`: the attempt's lease expires or the attempt ends without a result. `queued` when nothing was done yet, `uncertain` otherwise (`execution.py` expiry and end-of-attempt paths).
 - On an attempt's end, each job takes the attempt's outcome state, or `canceled` for jobs a stop canceled (`execution.py`).
 - `running` or `input` to `uncertain`, and `leased` to `queued`: hub restart (`backend/backup.py`).
-- `queued` to `completed`: a person answers before any bot runs (`backend/app.py`, `UPDATE jobs SET state='completed' WHERE ... AND state='queued'`).
+- `queued` to `completed`: a person answers before any bot runs (`backend/bot_status_routes.py`, `UPDATE jobs SET state='completed' WHERE ... AND state='queued'`).
 - Any open state to `canceled`: stop, task closed or declined, duplicate wake, quota or wake presets (`app_delivery.py`, `delivery.py`, `demo.py`, `chat_goals.py`, `execution.py`).
 
 Enforcement: trigger on insert and update of `state`. NOT NULL, default `queued`.
@@ -522,7 +522,7 @@ Without a CHECK (not constrained here; values are whatever the code writes):
   `seats.request_state`, `seat_requests.state`, `service_jobs.state`, `slack_events.state`, `slack_posts.state`,
   `worktree_waits.state`, `check_waits.state`, `calendar_actions.status`, `intake_items.status`, `support_tickets.status`,
   `rule_suggestions.status`, `runner_versions.update_state`, `runner_harness_actions.state`, `update_queue.state`,
-  `mail_items.state`, `mail_items.status`, `market_*.status`, `memory_tidy_cards.status`, `inbound_inboxes.state`, `bills_inbound.state`,
+  `mail_items.state`, `mail_items.status`, `market_*.status`, `inbound_inboxes.state`, `bills_inbound.state`,
   `learning_runs.status`, `lens_runs.status`, `listen_runs.status`, `flight_slow.status`, `redesign_migrations.state`,
   `task_trash.status`, `assistant_actions.status`, `automation_mail_actions.state`, `ask_ingest_items.outcome`,
   `batches.state`, `attempts.outcome`, `schedule_occurrences.outcome`, `stale_suggestions.verdict`, `stall_triage.outcome`,

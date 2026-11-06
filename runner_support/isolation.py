@@ -14,6 +14,7 @@ environment the runner already passes, and asks for its GitHub token over a sock
 It stays off wherever TICO_RUNNER_BOT_UID is unset: a Mac runner is a trust group of one user
 (SECURITY.md), and so is an image started the way it was before this. Bots still share the `bot` user.
 """
+
 import os
 import subprocess
 from pathlib import Path
@@ -43,7 +44,14 @@ def wrap(args, kwargs):
     who = identity()
     if not who or not isinstance(args, (list, tuple)):
         return args, kwargs
-    prefix = [SETPRIV, f"--reuid={who[0]}", f"--regid={who[1]}", "--clear-groups", "--inh-caps=-all", "--ambient-caps=-all"]
+    prefix = [
+        SETPRIV,
+        f"--reuid={who[0]}",
+        f"--regid={who[1]}",
+        "--clear-groups",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+    ]
     return [*prefix, *args], {**kwargs, "umask": 0o002}
 
 
@@ -76,6 +84,7 @@ def chown(path, *, recursive=False):
 def mkdir(path, mode=0o700):
     """`mkdir -p` where every directory it creates belongs to the bot user when isolation is on."""
     from clients.repo_safety import outside_installation
+
     outside_installation(path)
     path = Path(path)
     missing = []
@@ -87,5 +96,3 @@ def mkdir(path, mode=0o700):
     for part in missing:
         chown(part)
     return path
-
-

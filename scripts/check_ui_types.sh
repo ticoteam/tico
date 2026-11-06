@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Checks that the generated API types match backend/openapi_v2.py and that the type-checked UI files compile.
-# The UI has no build step; tsc runs with noEmit, so this only reads files.
+# Checks that the generated API types match backend/openapi_v2.py, and that tsc (checkJs, ui/tsconfig.json) finds
+# nothing in the UI's .js and .ts files beyond ui/types-baseline.json. tsc only type-checks (noEmit): esbuild compiles
+# the .ts files (npm run build:ui, scripts/build-ui.cjs) without checking types, so this script is the type gate.
+# ui/observability-vendors.js is left out: it is the bundler entry for the npm packages posthog-js and @sentry/browser,
+# so its findings would depend on whether node_modules is installed, and CI runs this before npm ci. Pass --base
+# origin/main on a pull request so a baseline that grew fails too (scripts/ui_baseline.py).
+#   scripts/check_ui_types.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 scripts/gen_ui_types.py --check
-npx --yes -p typescript@5.9.3 tsc -p ui/tsconfig.json
+python3 scripts/ui_baseline.py tsc --check "$@"
 echo "ui types: ok"

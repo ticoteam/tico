@@ -26,6 +26,7 @@ release came from ships that way; a merged link in another repository stays `mer
 contains the merge and then its revert (a change dropped after QA failed) does not ship it: GitHub is
 asked whether the pull request's own lines are still there at the release commit (`change_kept`).
 """
+
 import asyncio
 import base64
 import hashlib
@@ -47,7 +48,7 @@ from .store import Problem
 from . import bot_settings as BS
 from . import pr_identity as PR
 
-PATH = "/api/v2/github/webhook"   # under /api/v2: the runner hostname routes only that prefix
+PATH = "/api/v2/github/webhook"  # under /api/v2: the runner hostname routes only that prefix
 PR_LINK = re.compile(r"^https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)/?$", re.IGNORECASE)
 COMMIT_LINK = re.compile(r"^https://github\.com/([\w.-]+)/([\w.-]+)/commit/([0-9a-f]{7,40})/?$", re.IGNORECASE)
 
@@ -65,8 +66,16 @@ def _links_for(c, url):
     identity = PR.identity(url)
     if not identity:
         return []
-    return [p for p in H._rows(c.execute("SELECT * FROM task_links WHERE kind='pr' AND lower(repo)=? AND number=?",
-                                        (f"{identity[1]}/{identity[2]}", identity[3]))) if PR.same(p, url)]
+    return [
+        p
+        for p in H._rows(
+            c.execute(
+                "SELECT * FROM task_links WHERE kind='pr' AND lower(repo)=? AND number=?",
+                (f"{identity[1]}/{identity[2]}", identity[3]),
+            )
+        )
+        if PR.same(p, url)
+    ]
 
 
 def _due(c, task, burst):
@@ -77,6 +86,7 @@ def _due(c, task, burst):
 
 def _save_burst(c, task, burst, **parts):
     from .repositories import save_metadata
+
     kept = {k: v for k, v in {**burst, **parts, "due": _due(c, task, burst)}.items() if v or k == "due"}
     save_metadata(c, "github-task-wake:" + task["id"], kept)
 
@@ -91,18 +101,26 @@ def queue_wake(c, task, item, batch=None, handoff=None):
     message so one can never lift or lower another. `handoff` (a merge conflict) puts the burst first in the owner's
     queue (backend/verdict_moves.py) and stays on it until it is sent."""
     from .repositories import metadata
+
     burst = metadata(c, "github-task-wake:" + task["id"])
     items = burst.get("items", [])
     if item not in items:
         items = (items + [item[:1000]])[-50:]
     kind = batch if not burst.get("items") or burst.get("batch") == batch else None
-    _save_burst(c, task, {k: v for k, v in burst.items() if k != "batch"}, items=items, **({"batch": kind} if kind else {}),
-                **({"handoff": handoff} if handoff else {}))
+    _save_burst(
+        c,
+        task,
+        {k: v for k, v in burst.items() if k != "batch"},
+        items=items,
+        **({"batch": kind} if kind else {}),
+        **({"handoff": handoff} if handoff else {}),
+    )
 
 
 def queue_note(c, task, item):
     """A review or comment on the pull request that is not from a person: a note for the owner's next run."""
     from .repositories import metadata
+
     burst = metadata(c, "github-task-wake:" + task["id"])
     notes = burst.get("notes", [])
     if item not in notes:
@@ -115,6 +133,7 @@ def queue_checks_done(c, task, head, result, item, armed):
     the link's `wake_once`, which the same event answers. A result still waiting to be sent for the same head is
     replaced (a suite GitHub never announced finished late), and keeps an arming it already answered."""
     from .repositories import metadata
+
     burst = metadata(c, "github-task-wake:" + task["id"])
     older = [d for d in burst.get("done", []) if d["head"] == head]
     done = [d for d in burst.get("done", []) if d["head"] != head]
@@ -125,6 +144,7 @@ def queue_checks_done(c, task, head, result, item, armed):
 
 def _preset_owner(c, task):
     from . import wake_presets
+
     owner = str(task.get("owner_id") or "")
     if not owner.startswith("bot:"):
         return False
@@ -147,6 +167,7 @@ def flush_wakes(c):
     from .repositories import metadata
     from .review_gate import engineering
     from . import step_flow, verdict_moves
+
     sent = []
     for row in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'github-task-wake:%'").fetchall():
         with isolated(c, "github_wake", row["key"]):
@@ -157,19 +178,43 @@ def flush_wakes(c):
             live = bool(task and task["status"] in (*H.ACTIVE_STATUSES, "blocked"))
             if live:
                 if burst.get("items"):
-                    H._wake(c, task, task["owner_id"], "\n".join(burst["items"]),
-                            {verdict_moves.HANDOFF: burst["handoff"]} if burst.get("handoff") else
-                            {"wake_batch": burst["batch"]} if burst.get("batch") else None, trigger="pr_checks")
+                    H._wake(
+                        c,
+                        task,
+                        task["owner_id"],
+                        "\n".join(burst["items"]),
+                        {verdict_moves.HANDOFF: burst["handoff"]}
+                        if burst.get("handoff")
+                        else {"wake_batch": burst["batch"]}
+                        if burst.get("batch")
+                        else None,
+                        trigger="pr_checks",
+                    )
                 if burst.get("notes"):
-                    H._wake(c, task, task["owner_id"], "\n".join(burst["notes"]), {"wake": "pr_review"}, trigger="pr_checks")
+                    H._wake(
+                        c, task, task["owner_id"], "\n".join(burst["notes"]), {"wake": "pr_review"}, trigger="pr_checks"
+                    )
                 for done in burst.get("done", []):
                     # A failed check on a bot's ticket on a board with a flow is its builder's hand-off, at any step.
-                    failed = done["result"] == "fail" and H.is_bot(task["owner_id"]) and (
-                        engineering(c, task) or step_flow.has_flow(c, task.get("type_id")))
-                    H._wake(c, task, task["owner_id"], done["item"],
-                            {"wake": "pr_checks_done", "pr_head": done["head"], "pr_result": done["result"],
-                             **({"pr_armed": True} if done.get("armed") else {}),
-                             **({verdict_moves.HANDOFF: "failed_check"} if failed else {})}, trigger="pr_checks")
+                    failed = (
+                        done["result"] == "fail"
+                        and H.is_bot(task["owner_id"])
+                        and (engineering(c, task) or step_flow.has_flow(c, task.get("type_id")))
+                    )
+                    H._wake(
+                        c,
+                        task,
+                        task["owner_id"],
+                        done["item"],
+                        {
+                            "wake": "pr_checks_done",
+                            "pr_head": done["head"],
+                            "pr_result": done["result"],
+                            **({"pr_armed": True} if done.get("armed") else {}),
+                            **({verdict_moves.HANDOFF: "failed_check"} if failed else {}),
+                        },
+                        trigger="pr_checks",
+                    )
             c.execute("DELETE FROM registry_metadata WHERE key=?", (row["key"],))
             if live:
                 sent.append(task["id"])
@@ -182,6 +227,7 @@ def _review_role(c, task, payload, role):
     A withdrawn request takes the person off; a request GitHub drops because their review arrived
     leaves them on, so the opened and refresh paths only add."""
     from . import task_roles as TRo
+
     action, role = str(payload.get("action") or ""), TRo.role_name(role)
     if not role or task["status"] in ("done", "closed"):
         return False
@@ -192,6 +238,7 @@ def _review_role(c, task, payload, role):
     else:
         return False
     from .views import roster
+
     by_login = {}
     for p in roster(c)["people"]:
         if p.get("github") and not p.get("hidden"):
@@ -204,12 +251,21 @@ def _review_role(c, task, payload, role):
     if not people:
         return False
     have = TRo.roles_of(c, task["id"]).get(role, [])
-    want = ([who for who in have if who not in people] if action == "review_request_removed"
-            else have + [who for who in people if who not in have])
+    want = (
+        [who for who in have if who not in people]
+        if action == "review_request_removed"
+        else have + [who for who in people if who not in have]
+    )
     if want == have:
         return False
-    return TRo.set_roles(c, H.KEEPER, task["id"], {role: want}, mover=True,
-                         note="GitHub review " + ("request withdrawn" if action == "review_request_removed" else "requested"))
+    return TRo.set_roles(
+        c,
+        H.KEEPER,
+        task["id"],
+        {role: want},
+        mover=True,
+        note="GitHub review " + ("request withdrawn" if action == "review_request_removed" else "requested"),
+    )
 
 
 # The branch `hub task worktree add` names: tico/<the task's first 8 id characters>-<title slug>.
@@ -235,10 +291,16 @@ def register_worktree_pr(c, pr):
     if not app or str(app["org"] or "").lower() != match.group(1).lower():
         return set()
     made = set()
-    for row in H._rows(c.execute("SELECT id,task_id,detail FROM task_links WHERE kind='worktree' AND lower(repo)=? "
-                                 "AND branch=?", (repo.lower(), branch))):
-        if not c.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=?",
-                         (row["task_id"], repo.lower(), int(match.group(3)))).fetchone():
+    for row in H._rows(
+        c.execute(
+            "SELECT id,task_id,detail FROM task_links WHERE kind='worktree' AND lower(repo)=? AND branch=?",
+            (repo.lower(), branch),
+        )
+    ):
+        if not c.execute(
+            "SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=?",
+            (row["task_id"], repo.lower(), int(match.group(3))),
+        ).fetchone():
             link = H.task_link(c, H.KEEPER, row["task_id"], url)
             made.add(link["id"])
             H.event(c, H.KEEPER, "worktree.pr_registered", row["task_id"], {"url": url, "branch": branch})
@@ -258,10 +320,17 @@ def health_wait_reason(link, detail, *, check_flow=False):
         return ""
     if link.get("mergeable") == "conflict":
         return "conflict"
-    reviewed = (detail.get("health_reviewed_head") == detail.get("head_sha")
-                if "health_reviewed_head" in detail else bool(link.get("review_state")))
-    if (link.get("state") == "open" and link.get("mergeable") == "clean"
-            and link.get("checks") == "passing" and (check_flow or not reviewed)):
+    reviewed = (
+        detail.get("health_reviewed_head") == detail.get("head_sha")
+        if "health_reviewed_head" in detail
+        else bool(link.get("review_state"))
+    )
+    if (
+        link.get("state") == "open"
+        and link.get("mergeable") == "clean"
+        and link.get("checks") == "passing"
+        and (check_flow or not reviewed)
+    ):
         return "review"
     return ""
 
@@ -279,6 +348,7 @@ def record_health_wait(link, detail, *, check_flow=False):
 
 def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=False):
     from .review_gate import engineering
+
     pr = payload.get("pull_request") or {}
     url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
     action = str(payload.get("action") or "")
@@ -288,8 +358,17 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         task = H.task(c, link["task_id"])
         if not task:
             continue
-        state = "merged" if pr.get("merged") else ("closed" if pr.get("state") == "closed" or action == "closed"
-                else "draft" if pr.get("draft") or action == "converted_to_draft" else "open")
+        state = (
+            "merged"
+            if pr.get("merged")
+            else (
+                "closed"
+                if pr.get("state") == "closed" or action == "closed"
+                else "draft"
+                if pr.get("draft") or action == "converted_to_draft"
+                else "open"
+            )
+        )
         if link["state"] == "shipped" and state == "merged":
             state = "shipped"
         detail = H._json(link.get("detail"), {}) or {}
@@ -308,13 +387,22 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         match = PR_LINK.match(url)
         # A GitHub event is activity for the stale-PR find; an internal refresh of the PR's state is not.
         activity = H.now() if action != "refresh" else link.get("activity_at")
-        c.execute("UPDATE task_links SET state=?,mergeable=?,repo=?,number=?,branch=?,updated_at=?,activity_at=?,"
-                  "pr_sha=coalesce(?,pr_sha),pr_merged_at=coalesce(?,pr_merged_at) WHERE id=?",
-                  (state, mergeable, match.group(1) + "/" + match.group(2) if match else None,
-                   int(match.group(3)) if match else pr.get("number"), (pr.get("head") or {}).get("ref"), H.now(),
-                   activity,
-                   pr.get("merge_commit_sha") if state == "merged" else None,
-                   pr.get("merged_at") or H.now() if state == "merged" else None, link["id"]))
+        c.execute(
+            "UPDATE task_links SET state=?,mergeable=?,repo=?,number=?,branch=?,updated_at=?,activity_at=?,"
+            "pr_sha=coalesce(?,pr_sha),pr_merged_at=coalesce(?,pr_merged_at) WHERE id=?",
+            (
+                state,
+                mergeable,
+                match.group(1) + "/" + match.group(2) if match else None,
+                int(match.group(3)) if match else pr.get("number"),
+                (pr.get("head") or {}).get("ref"),
+                H.now(),
+                activity,
+                pr.get("merge_commit_sha") if state == "merged" else None,
+                pr.get("merged_at") or H.now() if state == "merged" else None,
+                link["id"],
+            ),
+        )
         author = str((pr.get("user") or {}).get("login") or "").lower()
         if author:
             detail["author_login"] = author
@@ -333,41 +421,60 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
                 detail["health_reviewed_head"] = ""
                 c.execute("UPDATE task_links SET checks='pending' WHERE id=?", (link["id"],))
             detail["head_sha"] = head_sha
-            login = (str((payload.get("sender") or {}).get("login") or "").lower()
-                     if action == "synchronize" else str(payload.get("head_login") or "").lower())
+            login = (
+                str((payload.get("sender") or {}).get("login") or "").lower()
+                if action == "synchronize"
+                else str(payload.get("head_login") or "").lower()
+            )
             if login:
                 if login == detail.get("author_login"):
                     detail["head_login"] = login
                 else:
                     detail.pop("head_login", None)
         wake_once = False
-        if (state == "merged" and link["state"] != "merged" and match
-                and f"{match.group(1)}/{match.group(2)}".lower() != str(release_repo).lower()):
+        if (
+            state == "merged"
+            and link["state"] != "merged"
+            and match
+            and f"{match.group(1)}/{match.group(2)}".lower() != str(release_repo).lower()
+        ):
             # Only the release's own repository ships, so a merge elsewhere is the last result an armed link gets.
-            wake_once = fire_once(detail, f"Merged: {link['title']}; it is not in the repository Tico releases, "
-                                          f"so no shipped wake follows {url}")
+            wake_once = fire_once(
+                detail,
+                f"Merged: {link['title']}; it is not in the repository Tico releases, so no shipped wake follows {url}",
+            )
         conflict_head = detail.get("head_sha") or "unknown"
         conflict_wake = mergeable == "conflict" and detail.get("conflict_head") != conflict_head
         if mergeable == "conflict":
             detail["conflict_head"] = conflict_head
         elif mergeable == "clean":
             detail.pop("conflict_head", None)
-        record_health_wait({**link, "state": state, "mergeable": mergeable,
-                            **({"checks": "pending"} if new_head else {})}, detail,
-                           check_flow=step_flow.has_flow(c, task.get("type_id")))
+        record_health_wait(
+            {**link, "state": state, "mergeable": mergeable, **({"checks": "pending"} if new_head else {})},
+            detail,
+            check_flow=step_flow.has_flow(c, task.get("type_id")),
+        )
         c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
         if state == "merged" and link["state"] not in ("merged", "shipped") and not read_refresh:
             # The merge the builder was woken for: a ticket whose last check passed goes to Pending Release.
             from . import verdict_moves
+
             verdict_moves.merged(c, task)
         elif new_head and action == "synchronize" and state == "open":
             # A push at a check step whose check already finished needs a check of the new head.
             from . import check_pools, verdict_moves
+
             check_pools.safely(c, verdict_moves.new_head, task)
         current = c.execute("SELECT * FROM task_links WHERE id=?", (link["id"],)).fetchone()
-        changed = [field for field in ("state", "repo", "number", "branch", "checks") if current[field] != link.get(field)]
+        changed = [
+            field for field in ("state", "repo", "number", "branch", "checks") if current[field] != link.get(field)
+        ]
         # GitHub computes unknown mergeability after a push, without a corresponding user action.
-        if link.get("mergeable") in ("clean", "conflict") and mergeable in ("clean", "conflict") and link["mergeable"] != mergeable:
+        if (
+            link.get("mergeable") in ("clean", "conflict")
+            and mergeable in ("clean", "conflict")
+            and link["mergeable"] != mergeable
+        ):
             changed.append("mergeable")
         if new_head:
             changed.append("head")
@@ -377,15 +484,26 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         if mergeable == "conflict":
             item += ": Merge conflict"
         if changed:
-            H._task_event(c, task["id"], H.KEEPER, "github", f"{link['title']} {link.get('state') or 'unknown'}", item,
-                          f"GitHub: {item} ({', '.join(changed)})")
+            H._task_event(
+                c,
+                task["id"],
+                H.KEEPER,
+                "github",
+                f"{link['title']} {link.get('state') or 'unknown'}",
+                item,
+                f"GitHub: {item} ({', '.join(changed)})",
+            )
         if wake_once:
             queue_wake(c, task, detail["wake_once_fired"]["item"])
-        if (state == "closed" and link["state"] != state and link["id"] not in registered
-                or conflict_wake):
+        if state == "closed" and link["state"] != state and link["id"] not in registered or conflict_wake:
             # Closed without merging is news; a conflict is a blocker on the bot's own work.
-            queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None,
-                       handoff="merge_conflict" if conflict_wake else None)
+            queue_wake(
+                c,
+                task,
+                item,
+                "completion" if not conflict_wake and not wake_once else None,
+                handoff="merge_conflict" if conflict_wake else None,
+            )
         if not read_refresh:
             _review_role(c, task, payload, review_role)
         H.event(c, H.KEEPER, "github.pull_request", task["id"], {"action": action, "url": url})
@@ -393,6 +511,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
     if pr.get("merged"):
         # Tasks waiting for this merge get their one wake; the PR's own task keeps its step (backend/milestone_waits.py).
         from . import milestone_waits
+
         target = milestone_waits.pr_target(url)
         woken = milestone_waits.happened(c, "pr_merged", target[0], url) if target else []
     return {"pr": url, "action": action, "tasks": len(links), **({"milestone_woken": woken} if woken else {})}
@@ -402,14 +521,20 @@ def release(c, payload, release_repo=""):
     """A release published: tasks waiting for its tag get their one wake (backend/milestone_waits.py), and the Dev
     tickets it carries are followed up once (backend/release_flow.py)."""
     from . import milestone_waits
+
     rel = payload.get("release") or {}
     repo = str((payload.get("repository") or {}).get("full_name") or "")
     tag = str(rel.get("tag_name") or "")
     if payload.get("action") != "published" or rel.get("draft") or not repo or not tag:
         return {"release": tag, "action": payload.get("action"), "woken": []}
     target = milestone_waits.release_target(f"{repo}@{tag}")
-    woken = milestone_waits.happened(c, "release_published", target[0], str(rel.get("html_url") or ""),
-                                      release_repo=release_repo) if target else []
+    woken = (
+        milestone_waits.happened(
+            c, "release_published", target[0], str(rel.get("html_url") or ""), release_repo=release_repo
+        )
+        if target
+        else []
+    )
     return {"release": tag, "action": "published", "woken": woken}
 
 
@@ -424,9 +549,17 @@ def _own_comment(c, task, payload, key, detail):
     config = c.execute(BS.ONE_SQL, (H.actor_id(task["owner_id"]),)).fetchone()
     bot_login = (H._json(config[0], {}) or {}).get("github_login", "") if config else ""
     via_app = (payload.get(key) or {}).get("performed_via_github_app") or {}
-    return (app and str(via_app.get("slug") or "").lower() == str(app[0]).lower()
-            or login in {author, str(bot_login).lower(), head_login if head_login == author else "",
-                         (str(app[0]) + "[bot]").lower() if app else ""})
+    return (
+        app
+        and str(via_app.get("slug") or "").lower() == str(app[0]).lower()
+        or login
+        in {
+            author,
+            str(bot_login).lower(),
+            head_login if head_login == author else "",
+            (str(app[0]) + "[bot]").lower() if app else "",
+        }
+    )
 
 
 def by_person(c, payload, key):
@@ -436,8 +569,9 @@ def by_person(c, payload, key):
     login = str((obj.get("user") or {}).get("login") or "").lower()
     if not login or login.endswith("[bot]") or obj.get("performed_via_github_app"):
         return False
-    return not c.execute(f"SELECT 1 FROM bot_config bc {BS.JOIN} WHERE lower(s.github_login)=? LIMIT 1",
-                         (login,)).fetchone()
+    return not c.execute(
+        f"SELECT 1 FROM bot_config bc {BS.JOIN} WHERE lower(s.github_login)=? LIMIT 1", (login,)
+    ).fetchone()
 
 
 def _suite_key(suite, run):
@@ -447,14 +581,24 @@ def _suite_key(suite, run):
 
 
 def _check_state(result):
-    """One check's result as the link keeps it: passing, pending or failing."""
-    return "passing" if result in ("success", "neutral", "skipped") else (
-           "pending" if result in ("pending", "queued", "in_progress", "requested", "waiting") else "failing")
+    """One check's result as the link keeps it: passing, skipped, pending or failing."""
+    return (
+        "passing"
+        if result in ("success", "neutral")
+        else "skipped"
+        if result == "skipped"
+        else ("pending" if result in ("pending", "queued", "in_progress", "requested", "waiting") else "failing")
+    )
 
 
 def _overall(checks):
-    """A head's checks as one state: failing if any failed, else pending if any is still going, else passing."""
-    return "failing" if "failing" in checks.values() else "pending" if "pending" in checks.values() else "passing"
+    """A head's checks as one state: failing if any failed, else pending if any is still going, else passing. A head
+    whose every check was skipped has not been checked (a draft pull request's run skips every job, and nothing on
+    main requires a check), so it reads pending: an all-skipped head never reads green."""
+    states = set(checks.values())
+    return (
+        "failing" if "failing" in states else "pending" if "pending" in states or states <= {"skipped"} else "passing"
+    )
 
 
 CHECKS_KEPT = 100
@@ -484,7 +628,7 @@ def _dropped(checks, kept):
     """The worst state of a non-passing check that the stored copy `kept` leaves out, or None. The copy cannot show it,
     so the link keeps this marker (`checks_dropped`) until a fresh read from GitHub (`apply_checks`) stores the head's
     whole list again: the head reads no better than this while the copy's own checks turn green."""
-    gone = [state for key, state in checks.items() if key not in kept and state != "passing"]
+    gone = [state for key, state in checks.items() if key not in kept and state not in ("passing", "skipped")]
     return "failing" if "failing" in gone else "pending" if gone else None
 
 
@@ -509,16 +653,19 @@ def _finish(c, task, link, detail, full, checks):
     ends the same way says nothing new, unless the bot armed the link again to hear that re-run. Returns (head, outcome)
     either way: a head green again after a check came late (a suite requested after the rest passed) is still green for
     the ticket's move (verdict_moves.checks_done, once per head itself)."""
-    failed = list(dict.fromkeys(k[6:].split("#")[0] if k.startswith("suite:") else k
-                                for k, v in checks.items() if v == "failing"))
+    failed = list(
+        dict.fromkeys(k[6:].split("#")[0] if k.startswith("suite:") else k for k, v in checks.items() if v == "failing")
+    )
     outcome = "fail" if failed else "pass"
     finished = detail.get("checks_done", [])
     if f"{full}:{outcome}" in finished and not detail.get("wake_once"):
         return full, outcome
     detail["checks_done"] = list(dict.fromkeys(finished + [f"{full}:{outcome}"]))[-10:]
     sha = full[:12]
-    done = (f"Checks finished on {link['title']}: {'failed (' + ', '.join(failed) + ')' if failed else 'passed'} "
-            f"{link['url']}/checks" + (f" at {sha}" if sha else ""))
+    done = (
+        f"Checks finished on {link['title']}: {'failed (' + ', '.join(failed) + ')' if failed else 'passed'} "
+        f"{link['url']}/checks" + (f" at {sha}" if sha else "")
+    )
     armed = fire_once(detail, done)
     queue_checks_done(c, task, full, outcome, done, armed)
     return full, outcome
@@ -536,6 +683,7 @@ def read_checks(service, headers, repo, head):
     that has sat `STUCK_SUITE_MINUTES`, which is not pending (a completed one keeps its conclusion, failed or not). None when GitHub's answer is incomplete or there is nothing on the head
     (a fresh read never turns a head with no checks green)."""
     base = f"/repos/{quote(repo, safe='/')}/commits/{quote(head, safe='')}"
+
     def pages(path, field):
         rows = []
         for page in range(1, 11):
@@ -547,19 +695,30 @@ def read_checks(service, headers, repo, head):
             if len(got) < 100:
                 return rows
         return None
-    suites, runs, statuses = pages("/check-suites", "check_suites"), pages("/check-runs", "check_runs"), pages("/status", "statuses")
+
+    suites, runs, statuses = (
+        pages("/check-suites", "check_suites"),
+        pages("/check-runs", "check_runs"),
+        pages("/status", "statuses"),
+    )
     if suites is None or runs is None or statuses is None:
         return None
     stuck_before = H.parse_ts(H.shift(H.now(), minutes=-STUCK_SUITE_MINUTES))
     checks = {}
     for suite in suites:
         created = H.parse_ts(suite.get("created_at"))
-        if (suite.get("status") != "completed" and not suite.get("latest_check_runs_count")
-                and created and created <= stuck_before):
+        if (
+            suite.get("status") != "completed"
+            and not suite.get("latest_check_runs_count")
+            and created
+            and created <= stuck_before
+        ):
             continue
         checks[_suite_key(suite, suite)] = _check_state(suite.get("conclusion") or suite.get("status") or "pending")
     for run in runs:
-        checks[str(run.get("name") or "Checks")[:200]] = _check_state(run.get("conclusion") or run.get("status") or "pending")
+        checks[str(run.get("name") or "Checks")[:200]] = _check_state(
+            run.get("conclusion") or run.get("status") or "pending"
+        )
     for status in statuses:
         checks[str(status.get("context") or "Checks")[:200]] = _check_state(status.get("state") or "pending")
     return checks or None
@@ -570,9 +729,9 @@ def _fresh_checks(service, repo, head):
     return read_checks(service, {"Authorization": "Bearer " + token}, repo, head)
 
 
-PENDING_READ_EVERY_S = 600      # one fresh read per pending link per ten minutes
+PENDING_READ_EVERY_S = 600  # one fresh read per pending link per ten minutes
 PENDING_READS_PER_PASS = 10
-_pending_reads = {}             # link id -> monotonic time its next read is due
+_pending_reads = {}  # link id -> monotonic time its next read is due
 _pending_lock = threading.Lock()
 
 
@@ -588,15 +747,22 @@ def refresh_pending_checks(service):
         if not app:
             return []
         marks = ",".join("?" * len(H.ACTIVE_STATUSES))
-        rows = H._rows(c.execute(
-            "SELECT l.id,l.repo,l.number,l.updated_at,l.checks,json_extract(l.detail,'$.head_sha') AS head "
-            "FROM task_links l "
-            "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
-            "WHERE l.kind='pr' AND l.state='open' AND (l.checks='pending' "
-            "OR json_extract(l.detail,'$.checks_dropped') IS NOT NULL) AND l.number IS NOT NULL AND r.reachable=1 "
-            f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) AND coalesce(l.updated_at,l.created_at)<? "
-            "ORDER BY coalesce(l.updated_at,l.created_at),l.id LIMIT 200",
-            (str(app["org"] or "").lower() + "/%", *H.ACTIVE_STATUSES, H.shift(H.now(), minutes=-STUCK_SUITE_MINUTES))))
+        rows = H._rows(
+            c.execute(
+                "SELECT l.id,l.repo,l.number,l.updated_at,l.checks,json_extract(l.detail,'$.head_sha') AS head "
+                "FROM task_links l "
+                "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
+                "WHERE l.kind='pr' AND l.state='open' AND (l.checks='pending' "
+                "OR json_extract(l.detail,'$.checks_dropped') IS NOT NULL) AND l.number IS NOT NULL AND r.reachable=1 "
+                f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) AND coalesce(l.updated_at,l.created_at)<? "
+                "ORDER BY coalesce(l.updated_at,l.created_at),l.id LIMIT 200",
+                (
+                    str(app["org"] or "").lower() + "/%",
+                    *H.ACTIVE_STATUSES,
+                    H.shift(H.now(), minutes=-STUCK_SUITE_MINUTES),
+                ),
+            )
+        )
     now = time.monotonic()
     with _pending_lock:
         for gone in set(_pending_reads) - {r["id"] for r in rows}:
@@ -643,15 +809,16 @@ def apply_checks(c, link_id, head, checks, since=None):
     _set_dropped(detail, dropped)
     finished = state != "pending" and state != link.get("checks")
     finished_head = _finish(c, task, link, detail, head, checks) if finished else None
-    record_health_wait({**link, "checks": state}, detail,
-                       check_flow=step_flow.has_flow(c, task.get("type_id")))
-    c.execute("UPDATE task_links SET checks=?,detail=?,updated_at=? WHERE id=?",
-              (state, json.dumps(detail), H.now(), link_id))
+    record_health_wait({**link, "checks": state}, detail, check_flow=step_flow.has_flow(c, task.get("type_id")))
+    c.execute(
+        "UPDATE task_links SET checks=?,detail=?,updated_at=? WHERE id=?", (state, json.dumps(detail), H.now(), link_id)
+    )
     if state != link.get("checks"):
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
         H.event(c, H.KEEPER, "github.checks_read", task["id"], {"url": link["url"], "head": head, "checks": state})
     if finished_head:
         from . import verdict_moves
+
         verdict_moves.checks_done(c, task, *finished_head)
     return state
 
@@ -662,19 +829,30 @@ def pr_signal(c, event, payload):
     pr = payload.get("pull_request") or {}
     signal = payload.get("check_run") or payload.get("check_suite") or payload
     prs = signal.get("pull_requests") or ([pr] if pr else [])
+
     def base_repo(p):
-        base = ((p.get("base") or {}).get("repo") or {})
-        return base.get("full_name") or (repo.rsplit("/", 1)[0] + "/" + base["name"] if base.get("name") and "/" in repo else repo)
-    urls = {p.get("html_url") or f"https://github.com/{base_repo(p)}/pull/{p['number']}"
-            for p in prs if p.get("number") or p.get("html_url")}
+        base = (p.get("base") or {}).get("repo") or {}
+        return base.get("full_name") or (
+            repo.rsplit("/", 1)[0] + "/" + base["name"] if base.get("name") and "/" in repo else repo
+        )
+
+    urls = {
+        p.get("html_url") or f"https://github.com/{base_repo(p)}/pull/{p['number']}"
+        for p in prs
+        if p.get("number") or p.get("html_url")
+    }
     links = []
     for url in urls:
         links.extend(_links_for(c, url))
     if event == "status" or event in ("check_run", "check_suite") and not prs:
         # Fork checks and commit statuses can omit the PR list.
         sha = payload.get("sha") if event == "status" else signal.get("head_sha")
-        links = H._rows(c.execute("SELECT * FROM task_links WHERE kind='pr' AND lower(repo)=? "
-                                  "AND json_extract(detail,'$.head_sha')=?", (repo.lower(), sha)))
+        links = H._rows(
+            c.execute(
+                "SELECT * FROM task_links WHERE kind='pr' AND lower(repo)=? AND json_extract(detail,'$.head_sha')=?",
+                (repo.lower(), sha),
+            )
+        )
     for link in links:
         task = H.task(c, link["task_id"])
         if not task:
@@ -689,13 +867,19 @@ def pr_signal(c, event, payload):
                 continue
             state = _check_state(signal.get("conclusion") or signal.get("state") or "pending")
             checks = detail.get("checks", {})
-            name = (_suite_key(signal, signal) if event == "check_suite"
-                    else str(signal.get("name") or signal.get("context") or "Checks")[:200])
+            name = (
+                _suite_key(signal, signal)
+                if event == "check_suite"
+                else str(signal.get("name") or signal.get("context") or "Checks")[:200]
+            )
             left_pending = checks.get(name) == "pending" and state != "pending"
             checks[name] = state
             own = (signal.get("check_suite") or {}) if event == "check_run" else {}
-            if own and own.get("status") != "completed" and (
-                    signal.get("status") != "completed" or checks.get(_suite_key(own, signal), "pending") == "pending"):
+            if (
+                own
+                and own.get("status") != "completed"
+                and (signal.get("status") != "completed" or checks.get(_suite_key(own, signal), "pending") == "pending")
+            ):
                 # A run says its suite is still running even when that suite's `requested` never came here. A run
                 # that is still going reopens it (a re-run keeps the suite id); a finished run delivered after its
                 # suite completed is a stale snapshot and does not.
@@ -709,12 +893,20 @@ def pr_signal(c, event, payload):
             # single run or commit status may be one of many. A run or status that finishes after a suite already has
             # can be the last one, so it counts too.
             suite_done = any(k.startswith("suite:") and v != "pending" for k, v in checks.items())
-            if ((event == "check_suite" and signal.get("status") == "completed" and state != "pending"
-                    or event != "check_suite" and left_pending and (
-                        suite_done or not any(k.startswith("suite:") for k in checks)))
-                    and "pending" not in checks.values()
-                    # A copy that dropped a check cannot finish the head green: only its own failure finishes it.
-                    and (not dropped or "failing" in checks.values())):
+            if (
+                (
+                    event == "check_suite"
+                    and signal.get("status") == "completed"
+                    and state != "pending"
+                    or event != "check_suite"
+                    and left_pending
+                    and (suite_done or not any(k.startswith("suite:") for k in checks))
+                )
+                and "pending" not in checks.values()
+                and not set(checks.values()) <= {"skipped"}
+                # A copy that dropped a check cannot finish the head green: only its own failure finishes it.
+                and (not dropped or "failing" in checks.values())
+            ):
                 # GitHub sends a suite's `requested` only to its own App, so a single run or status still pending
                 # is often the only sign that another service's checks are not done.
                 full = str(signal.get("head_sha") or payload.get("sha") or detail.get("head_sha") or "")
@@ -736,8 +928,15 @@ def pr_signal(c, event, payload):
             fields["review_state"] = state
             if payload.get("action") != "dismissed" and not _own_comment(c, task, payload, "review", detail):
                 detail["health_reviewed_head"] = review.get("commit_id") or detail.get("head_sha") or ""
-            wake = fresh and payload.get("action") != "dismissed" and (
-                state == "changes_requested" or state == "commented" and not _own_comment(c, task, payload, "review", detail))
+            wake = (
+                fresh
+                and payload.get("action") != "dismissed"
+                and (
+                    state == "changes_requested"
+                    or state == "commented"
+                    and not _own_comment(c, task, payload, "review", detail)
+                )
+            )
             item = f"Review {state.replace('_', ' ')} on {label}"
             batch, who_key = "review", "review"
             if fresh and payload.get("action") == "submitted" and state in ("approved", "changes_requested"):
@@ -758,25 +957,30 @@ def pr_signal(c, event, payload):
                     continue
                 comments[comment_id] = action
                 detail["comments"] = dict(list(comments.items())[-100:])
-            fields["pending_comments"] = max(0, (link.get("pending_comments") or 0) + (1 if action == "created" else -1))
+            fields["pending_comments"] = max(
+                0, (link.get("pending_comments") or 0) + (1 if action == "created" else -1)
+            )
             wake = action == "created" and not _own_comment(c, task, payload, "comment", detail)
             item = f"{fields['pending_comments']} review comments on {label}"
             batch, who_key = "review", "comment"
         if event in ("pull_request_review", "pull_request_review_comment"):
-            fields["activity_at"] = H.now()      # the stale-PR find's clock (automation_actions FIND)
+            fields["activity_at"] = H.now()  # the stale-PR find's clock (automation_actions FIND)
         changed = any(value != link.get(field) for field, value in fields.items())
         record_health_wait({**link, **fields}, detail, check_flow=step_flow.has_flow(c, task.get("type_id")))
         fields.update(detail=json.dumps(detail), updated_at=H.now())
         if changed:
             c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
-        c.execute("UPDATE task_links SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?",
-                  (*fields.values(), link["id"]))
+        c.execute(
+            "UPDATE task_links SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?",
+            (*fields.values(), link["id"]),
+        )
         if finished_head:
             # Green at a Fixes step moves the ticket on; green where the last check approved wakes the merge.
             from . import verdict_moves
+
             verdict_moves.checks_done(c, task, *finished_head)
         if wake and batch == "review" and not by_person(c, payload, who_key):
-            queue_note(c, task, item)       # a bot's or an App's review is news for the next run, not a wake
+            queue_note(c, task, item)  # a bot's or an App's review is news for the next run, not a wake
         elif wake:
             queue_wake(c, task, item, batch)
     return {"tasks": len({l["task_id"] for l in links})}
@@ -787,15 +991,23 @@ def creation_paths(service, pr, headers):
     with service.store.read() as c:
         links = _links_for(c, pr.get("html_url", ""))
         from .review_gate import engineering
+
         if links:
-            needed = any(engineering(c, H.task(c, l["task_id"])) and
-                         (H._json(l.get("detail"), {}) or {}).get("qa_default_pending") for l in links)
+            needed = any(
+                engineering(c, H.task(c, l["task_id"]))
+                and (H._json(l.get("detail"), {}) or {}).get("qa_default_pending")
+                for l in links
+            )
         else:
             head = pr.get("head") or {}
             repo = (head.get("repo") or {}).get("full_name")
-            needed = any(engineering(c, H.task(c, r[0])) for r in c.execute(
-                "SELECT task_id FROM task_links WHERE kind='worktree' AND lower(repo)=lower(?) AND branch=?",
-                (repo, head.get("ref"))))
+            needed = any(
+                engineering(c, H.task(c, r[0]))
+                for r in c.execute(
+                    "SELECT task_id FROM task_links WHERE kind='worktree' AND lower(repo)=lower(?) AND branch=?",
+                    (repo, head.get("ref")),
+                )
+            )
     if not needed:
         return None
     match = PR_LINK.match(pr.get("html_url", ""))
@@ -803,8 +1015,12 @@ def creation_paths(service, pr, headers):
         return None
     paths, count = [], 0
     for page in range(1, 31):
-        response = service._call("GET", f"/repos/{match[1]}/{match[2]}/pulls/{match[3]}/files",
-                                 headers=headers, params={"per_page": 100, "page": page})
+        response = service._call(
+            "GET",
+            f"/repos/{match[1]}/{match[2]}/pulls/{match[3]}/files",
+            headers=headers,
+            params={"per_page": 100, "page": page},
+        )
         if response.status_code != 200:
             raise ValueError("PR files unavailable for QA default")
         files = response.json()
@@ -825,6 +1041,7 @@ def apply_creation_qa(c, pr, paths):
     if paths is None:
         return
     from . import qa_defaults
+
     qa_defaults.pr_created(c, pr, paths)
     for link in _links_for(c, pr["html_url"]):
         detail = H._json(link.get("detail"), {}) or {}
@@ -842,15 +1059,20 @@ def refresh_task_prs(service, task_id):
         if getattr(service, "pr_refresh_running", False):
             return
         cache = getattr(service, "pr_refresh_cache", {})
-        cached = [repo + "#" + str(number) for (repo, number), entry in cache.items()
-                  if entry.get("next", 0) > time.monotonic()]
+        cached = [
+            repo + "#" + str(number)
+            for (repo, number), entry in cache.items()
+            if entry.get("next", 0) > time.monotonic()
+        ]
         with service.store.read() as c:
             app = service.row(c)
             if not app:
                 return
-            sql = ("SELECT l.* FROM task_links l JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
-                   "WHERE l.task_id=? AND l.kind='pr' AND l.number IS NOT NULL AND r.reachable=1 "
-                   "AND lower(l.repo) LIKE ?")
+            sql = (
+                "SELECT l.* FROM task_links l JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
+                "WHERE l.task_id=? AND l.kind='pr' AND l.number IS NOT NULL AND r.reachable=1 "
+                "AND lower(l.repo) LIKE ?"
+            )
             args = [task_id, str(app["org"] or "").lower() + "/%"]
             if cached:
                 sql += " AND (lower(l.repo)||'#'||l.number) NOT IN (" + ",".join("?" * len(cached)) + ")"
@@ -871,8 +1093,11 @@ def refresh_task_prs(service, task_id):
                 success = False
                 try:
                     token, _ = service.mint([link["repo"]], {"pull_requests": "read", "contents": "read"})
-                    response = service._call("GET", f"/repos/{quote(link['repo'], safe='/')}/pulls/{link['number']}",
-                                             headers={"Authorization": "Bearer " + token})
+                    response = service._call(
+                        "GET",
+                        f"/repos/{quote(link['repo'], safe='/')}/pulls/{link['number']}",
+                        headers={"Authorization": "Bearer " + token},
+                    )
                     if response.status_code == 200:
                         pr = response.json()
                         pr["html_url"] = link["url"]
@@ -880,13 +1105,21 @@ def refresh_task_prs(service, task_id):
                         head_login = None
                         if head:
                             try:
-                                commit_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name") or link["repo"]
-                                commit = service._call("GET", f"/repos/{quote(commit_repo, safe='/')}/commits/{quote(head, safe='')}",
-                                                       headers={"Authorization": "Bearer " + token})
+                                commit_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name") or link[
+                                    "repo"
+                                ]
+                                commit = service._call(
+                                    "GET",
+                                    f"/repos/{quote(commit_repo, safe='/')}/commits/{quote(head, safe='')}",
+                                    headers={"Authorization": "Bearer " + token},
+                                )
                                 if commit.status_code == 200:
                                     data = commit.json()
-                                    head_login = str((data.get("author") or {}).get("login") or
-                                                     (data.get("committer") or {}).get("login") or "").lower()
+                                    head_login = str(
+                                        (data.get("author") or {}).get("login")
+                                        or (data.get("committer") or {}).get("login")
+                                        or ""
+                                    ).lower()
                             except Exception:
                                 logging.getLogger("tico.github").debug("Head identity unavailable for %s #%s", *key)
                         # Pending checks, and a copy that dropped a check, are read afresh: a suite that never starts sends
@@ -899,13 +1132,19 @@ def refresh_task_prs(service, task_id):
                             except Exception:
                                 logging.getLogger("tico.github").debug("Checks unavailable for %s #%s", *key)
                         with service.store.transaction() as c:
-                            current = c.execute("SELECT updated_at FROM task_links WHERE id=?", (link["id"],)).fetchone()
+                            current = c.execute(
+                                "SELECT updated_at FROM task_links WHERE id=?", (link["id"],)
+                            ).fetchone()
                             if not current or current[0] != link.get("updated_at"):
                                 success = True
                                 continue
-                            pull_request(c, {"action": "refresh", "pull_request": pr, "head_login": head_login},
-                                         review_role=service.settings.github_review_role,
-                                         release_repo=service.settings.release_repo, read_refresh=True)
+                            pull_request(
+                                c,
+                                {"action": "refresh", "pull_request": pr, "head_login": head_login},
+                                review_role=service.settings.github_review_role,
+                                release_repo=service.settings.release_repo,
+                                read_refresh=True,
+                            )
                             if checks:
                                 apply_checks(c, link["id"], head, checks)
                         success = True
@@ -916,18 +1155,26 @@ def refresh_task_prs(service, task_id):
                         failures = 0 if success else min(cache.get(key, {}).get("failures", 0) + 1, 5)
                         if key not in cache and len(cache) >= 512:
                             cache.pop(next(iter(cache)))
-                        cache[key] = {"failures": failures, "next": time.monotonic() + (180 if success else min(300 * 2 ** (failures - 1), 3600))}
+                        cache[key] = {
+                            "failures": failures,
+                            "next": time.monotonic() + (180 if success else min(300 * 2 ** (failures - 1), 3600)),
+                        }
         finally:
             with service.lock:
                 service.pr_refresh_running = False
+
     threading.Thread(target=refresh, name="tico-pr-refresh", daemon=True).start()
 
 
 def _worktree_detail(service, repo, branch, change):
     """Apply `change(detail)` to every worktree link on this repository branch, in its own write."""
     with service.store.transaction() as c:
-        for row in H._rows(c.execute("SELECT id,detail FROM task_links WHERE kind='worktree' AND lower(repo)=? "
-                                     "AND branch=?", (repo.lower(), branch))):
+        for row in H._rows(
+            c.execute(
+                "SELECT id,detail FROM task_links WHERE kind='worktree' AND lower(repo)=? AND branch=?",
+                (repo.lower(), branch),
+            )
+        ):
             detail = H._json(row["detail"], {}) or {}
             change(detail)
             c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), row["id"]))
@@ -950,13 +1197,20 @@ def _open_draft(service, repo, branch, worktree):
         _pr_error(service, repo, branch, failed + " (no GitHub token for it)")
         return []
     try:
-        response = service._call("POST", f"/repos/{quote(repo, safe='/')}/pulls",
-                                 headers={"Authorization": "Bearer " + token},
-                                 json={"title": (worktree.get("title") or branch)[:200], "head": branch,
-                                       "base": worktree.get("base") or "main", "draft": True,
-                                       "body": "Opened as a draft by Tico at this task branch's first push. Mark it "
-                                               "ready for review (`gh pr ready`) and edit it (`gh pr edit`) when the "
-                                               "work is."})
+        response = service._call(
+            "POST",
+            f"/repos/{quote(repo, safe='/')}/pulls",
+            headers={"Authorization": "Bearer " + token},
+            json={
+                "title": (worktree.get("title") or branch)[:200],
+                "head": branch,
+                "base": worktree.get("base") or "main",
+                "draft": True,
+                "body": "Opened as a draft by Tico at this task branch's first push. Mark it "
+                "ready for review (`gh pr ready`) and edit it (`gh pr edit`) when the "
+                "work is.",
+            },
+        )
     except Exception:
         _pr_error(service, repo, branch, failed + " (GitHub did not answer)")
         return []
@@ -970,8 +1224,12 @@ def _remote_work(service, repo, branch, base, auth):
     """How many commits the branch has on GitHub that its base does not: None when GitHub has no such branch, the
     evidence a missed push webhook leaves behind and the line between a task's own work and a branch only moved to
     newer main."""
-    response = service._call("GET", f"/repos/{quote(repo, safe='/')}/compare/{quote(base, safe='')}...{quote(branch, safe='')}",
-                             headers=auth, params={"per_page": 1})
+    response = service._call(
+        "GET",
+        f"/repos/{quote(repo, safe='/')}/compare/{quote(base, safe='')}...{quote(branch, safe='')}",
+        headers=auth,
+        params={"per_page": 1},
+    )
     if response.status_code == 404:
         return None
     if response.status_code != 200:
@@ -988,7 +1246,10 @@ def reconcile_worktree_prs(service):
     again after 15 minutes when it has no pull request, or as soon as a new head is pushed or reported."""
     with service.lock:
         now = time.monotonic()
-        if getattr(service, "worktree_reconcile_running", False) or getattr(service, "worktree_reconcile_next", 0) > now:
+        if (
+            getattr(service, "worktree_reconcile_running", False)
+            or getattr(service, "worktree_reconcile_next", 0) > now
+        ):
             return
         service.worktree_reconcile_next = now + 180
         cache = service.__dict__.setdefault("worktree_reconcile_cache", {})
@@ -997,36 +1258,60 @@ def reconcile_worktree_prs(service):
             if not app:
                 return
             org = str(app["org"] or "").lower() + "/%"
-            held = ("EXISTS (SELECT 1 FROM repositories r WHERE lower(r.full_name)=lower({0}.repo) AND r.reachable=1) "
-                    "AND lower({0}.repo) LIKE ?")
+            held = (
+                "EXISTS (SELECT 1 FROM repositories r WHERE lower(r.full_name)=lower({0}.repo) AND r.reachable=1) "
+                "AND lower({0}.repo) LIKE ?"
+            )
             # Both lists are as long as the worktrees the cap allows, so no row limit can leave one unread.
-            links = H._rows(c.execute(
-                "SELECT p.* FROM task_links p WHERE p.kind='pr' AND p.number IS NOT NULL "
-                "AND coalesce(p.state,'open') NOT IN ('merged','closed','shipped') AND " + held.format("p") +
-                " AND (json_extract(p.detail,'$.qa_default_pending')=1 OR EXISTS "
-                "(SELECT 1 FROM task_links w WHERE w.task_id=p.task_id AND w.kind='worktree' "
-                "AND coalesce(w.state,'unknown')<>'removed'))", (org,)))
+            links = H._rows(
+                c.execute(
+                    "SELECT p.* FROM task_links p WHERE p.kind='pr' AND p.number IS NOT NULL "
+                    "AND coalesce(p.state,'open') NOT IN ('merged','closed','shipped') AND "
+                    + held.format("p")
+                    + " AND (json_extract(p.detail,'$.qa_default_pending')=1 OR EXISTS "
+                    "(SELECT 1 FROM task_links w WHERE w.task_id=p.task_id AND w.kind='worktree' "
+                    "AND coalesce(w.state,'unknown')<>'removed'))",
+                    (org,),
+                )
+            )
             branches = {}
-            for w in H._rows(c.execute(
-                "SELECT w.repo,w.branch,w.detail,CASE WHEN coalesce(t.private,0)=0 THEN t.title END AS title,"
-                "(SELECT r.default_branch FROM repositories r WHERE lower(r.full_name)=lower(w.repo)) AS base "
-                "FROM task_links w JOIN tasks t ON t.id=w.task_id WHERE w.kind='worktree' "
-                "AND coalesce(w.state,'unknown')<>'removed' AND w.branch LIKE 'tico/%' AND " + held.format("w") +
-                " AND NOT EXISTS (SELECT 1 FROM task_links p WHERE p.task_id=w.task_id AND p.kind='pr' "
-                "AND lower(p.repo)=lower(w.repo) AND p.branch=w.branch)", (org,))):
+            for w in H._rows(
+                c.execute(
+                    "SELECT w.repo,w.branch,w.detail,CASE WHEN coalesce(t.private,0)=0 THEN t.title END AS title,"
+                    "(SELECT r.default_branch FROM repositories r WHERE lower(r.full_name)=lower(w.repo)) AS base "
+                    "FROM task_links w JOIN tasks t ON t.id=w.task_id WHERE w.kind='worktree' "
+                    "AND coalesce(w.state,'unknown')<>'removed' AND w.branch LIKE 'tico/%' AND "
+                    + held.format("w")
+                    + " AND NOT EXISTS (SELECT 1 FROM task_links p WHERE p.task_id=w.task_id AND p.kind='pr' "
+                    "AND lower(p.repo)=lower(w.repo) AND p.branch=w.branch)",
+                    (org,),
+                )
+            ):
                 b = branches.setdefault((w["repo"], w["branch"]), {**w, "title": None, "heads": set()})
                 b["title"] = min(filter(None, (b["title"], w["title"])), default=None)
                 b["heads"].update(H.worktree_heads(H._json(w["detail"], {}) or {}))
             branches = list(branches.values())
+
         def ready(kind, repo, key, heads=None):
             seen = cache.get((kind, repo, key))
             return not seen or seen["next"] <= now or heads is not None and seen.get("heads") != heads
+
         def last(item):
             return (cache.get(item[:3]) or {}).get("last", 0)
-        prs = sorted((("pr", l["repo"], l["number"], l) for l in links if ready("pr", l["repo"], l["number"])), key=last)
+
+        prs = sorted(
+            (("pr", l["repo"], l["number"], l) for l in links if ready("pr", l["repo"], l["number"])), key=last
+        )
         heads = {(b["repo"], b["branch"]): sorted(b["heads"]) for b in branches}
-        found = sorted((("branch", b["repo"], b["branch"], b) for b in branches if WORKTREE_BRANCH.match(b["branch"])
-                        and ready("branch", b["repo"], b["branch"], heads[(b["repo"], b["branch"])])), key=last)
+        found = sorted(
+            (
+                ("branch", b["repo"], b["branch"], b)
+                for b in branches
+                if WORKTREE_BRANCH.match(b["branch"])
+                and ready("branch", b["repo"], b["branch"], heads[(b["repo"], b["branch"])])
+            ),
+            key=last,
+        )
         due = [item for pair in itertools.zip_longest(prs, found) for item in pair if item][:20]
         if not due:
             return
@@ -1048,8 +1333,12 @@ def reconcile_worktree_prs(service):
                         found = [response.json()] if response.status_code == 200 else []
                         retry = 180 if response.status_code == 200 else 900
                     else:
-                        response = service._call("GET", path, headers=auth, params={
-                            "head": repo.split("/")[0] + ":" + key, "state": "all", "per_page": 10})
+                        response = service._call(
+                            "GET",
+                            path,
+                            headers=auth,
+                            params={"head": repo.split("/")[0] + ":" + key, "state": "all", "per_page": 10},
+                        )
                         if response.status_code != 200:
                             raise RuntimeError(f"GitHub {response.status_code}")
                         found = response.json() if isinstance(response.json(), list) else []
@@ -1058,8 +1347,14 @@ def reconcile_worktree_prs(service):
                             known = heads[(repo, key)]
                             ahead = _remote_work(service, repo, key, link["base"] or "main", auth)
                             # What GitHub held when asked covers every head known before asking.
-                            _worktree_detail(service, repo, key, lambda detail: detail.update(
-                                remote={"ahead": ahead or 0, "absent": ahead is None, "heads": known, "at": H.now()}))
+                            _worktree_detail(
+                                service,
+                                repo,
+                                key,
+                                lambda detail: detail.update(
+                                    remote={"ahead": ahead or 0, "absent": ahead is None, "heads": known, "at": H.now()}
+                                ),
+                            )
                             if ahead:
                                 found = _open_draft(service, repo, key, link)
                                 retry = 180 if found else 900
@@ -1069,26 +1364,40 @@ def reconcile_worktree_prs(service):
                         with service.store.transaction() as c:
                             for pr in found:
                                 if kind == "pr":
-                                    current = c.execute("SELECT updated_at FROM task_links WHERE id=?", (link["id"],)).fetchone()
+                                    current = c.execute(
+                                        "SELECT updated_at FROM task_links WHERE id=?", (link["id"],)
+                                    ).fetchone()
                                     if not current or current[0] != link.get("updated_at"):
                                         continue
                                     pr["html_url"] = link["url"]
                                 match = PR_LINK.match(str(pr.get("html_url") or "").split("?")[0].rstrip("/"))
                                 # A webhook that wrote or registered this pull request while it was being read holds
                                 # newer facts, for every task it is linked to.
-                                if match and c.execute(
+                                if (
+                                    match
+                                    and c.execute(
                                         "SELECT 1 FROM task_links WHERE kind='pr' AND lower(repo)=? AND number=? "
-                                        "AND updated_at>=?", (f"{match.group(1)}/{match.group(2)}".lower(),
-                                                           int(match.group(3)), started)).fetchone():
+                                        "AND updated_at>=?",
+                                        (f"{match.group(1)}/{match.group(2)}".lower(), int(match.group(3)), started),
+                                    ).fetchone()
+                                ):
                                     continue
-                                pull_request(c, {"action": "refresh", "pull_request": pr},
-                                             review_role=service.settings.github_review_role,
-                                             release_repo=service.settings.release_repo)
+                                pull_request(
+                                    c,
+                                    {"action": "refresh", "pull_request": pr},
+                                    review_role=service.settings.github_review_role,
+                                    release_repo=service.settings.release_repo,
+                                )
                                 apply_creation_qa(c, pr, paths_by_url.get(pr.get("html_url")))
                     except Exception:
                         if registering:
-                            _pr_error(service, repo, key, f"The pull request for {key} was found but linking it to "
-                                                          "the task failed; the next pass links it")
+                            _pr_error(
+                                service,
+                                repo,
+                                key,
+                                f"The pull request for {key} was found but linking it to "
+                                "the task failed; the next pass links it",
+                            )
                         raise
                 except Exception:
                     logging.getLogger("tico.github").exception("Worktree PR reconcile failed for %s %s", repo, key)
@@ -1096,11 +1405,15 @@ def reconcile_worktree_prs(service):
                 with service.lock:
                     if (kind, repo, key) not in cache and len(cache) >= 512:
                         cache.pop(next(iter(cache)))
-                    cache[(kind, repo, key)] = {"next": time.monotonic() + retry, "last": time.monotonic(),
-                                                "heads": heads.get((repo, key)) if kind == "branch" else None}
+                    cache[(kind, repo, key)] = {
+                        "next": time.monotonic() + retry,
+                        "last": time.monotonic(),
+                        "heads": heads.get((repo, key)) if kind == "branch" else None,
+                    }
         finally:
             with service.lock:
                 service.worktree_reconcile_running = False
+
     threading.Thread(target=reconcile, name="tico-worktree-pr-reconcile", daemon=True).start()
 
 
@@ -1111,27 +1424,39 @@ def push(c, payload):
     default = str((payload.get("repository") or {}).get("default_branch") or "main")
     head_commit = payload.get("head_commit") or {}
     head_sha = str(head_commit.get("id") or payload.get("after") or "")
-    login = str((payload.get("sender") or {}).get("login") or
-                (head_commit.get("committer") or {}).get("username") or
-                (head_commit.get("author") or {}).get("username") or "").lower()
+    login = str(
+        (payload.get("sender") or {}).get("login")
+        or (head_commit.get("committer") or {}).get("username")
+        or (head_commit.get("author") or {}).get("username")
+        or ""
+    ).lower()
     if head_sha and login:
-        for link in H._rows(c.execute("SELECT id,detail FROM task_links WHERE kind='pr' AND lower(repo)=? "
-                                       "AND json_extract(detail,'$.head_sha')=?", (repo.lower(), head_sha))):
+        for link in H._rows(
+            c.execute(
+                "SELECT id,detail FROM task_links WHERE kind='pr' AND lower(repo)=? "
+                "AND json_extract(detail,'$.head_sha')=?",
+                (repo.lower(), head_sha),
+            )
+        ):
             detail = H._json(link["detail"], {}) or {}
             if login == detail.get("author_login"):
                 detail["head_login"] = login
             else:
                 detail.pop("head_login", None)
             c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
-    branch = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ""
+    branch = ref[len("refs/heads/") :] if ref.startswith("refs/heads/") else ""
     if WORKTREE_BRANCH.match(branch) and not payload.get("deleted") and head_sha:
         # A worktree branch's first push asks for its draft pull request; the background pass opens or reuses it
         # (reconcile_worktree_prs), so nothing here calls GitHub inside the write and the push's checks run as usual.
-        for link in H._rows(c.execute("SELECT id,detail FROM task_links WHERE kind='worktree' AND lower(repo)=? "
-                                       "AND branch=?", (repo.lower(), branch))):
+        for link in H._rows(
+            c.execute(
+                "SELECT id,detail FROM task_links WHERE kind='worktree' AND lower(repo)=? AND branch=?",
+                (repo.lower(), branch),
+            )
+        ):
             detail = H._json(link["detail"], {}) or {}
             detail.update(pushed=head_sha, pushed_at=detail.get("pushed_at") or H.now(), pushed_last_at=H.now())
-            detail.pop("stale_push_cleared", None)     # a release names only a stale push the newest push left behind
+            detail.pop("stale_push_cleared", None)  # a release names only a stale push the newest push left behind
             c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
     if ref != "refs/heads/" + default:
         return {"ref": ref, "commits": 0}
@@ -1147,18 +1472,19 @@ def push(c, payload):
     return {"ref": ref, "commits": n}
 
 
-DEPLOY_QUERY = ("SELECT l.*,p.seq AS merge_seq FROM task_links l JOIN tasks t ON t.id=l.task_id "
-               "LEFT JOIN main_pushes p ON p.sha=l.pr_sha "
-               "WHERE l.kind='pr' AND l.state='merged' AND l.url LIKE ? ESCAPE '\\' "
-               "AND l.pr_sha IS NOT NULL AND t.status NOT IN ('done','closed')")
+DEPLOY_QUERY = (
+    "SELECT l.*,p.seq AS merge_seq FROM task_links l JOIN tasks t ON t.id=l.task_id "
+    "LEFT JOIN main_pushes p ON p.sha=l.pr_sha "
+    "WHERE l.kind='pr' AND l.state='merged' AND l.url LIKE ? ESCAPE '\\' "
+    "AND l.pr_sha IS NOT NULL AND t.status NOT IN ('done','closed')"
+)
 
 
 def refresh_deployed_tasks(service):
     """Verify release ancestry outside transactions, then mark the contained links shipped."""
     settings = service.settings
     repo, commit = settings.release_repo.lower(), settings.release_commit
-    if (settings.rehearsal or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo)
-            or not re.fullmatch(r"[0-9a-f]{40}", commit)):
+    if settings.rehearsal or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         return
     with service.lock:
         now = time.monotonic()
@@ -1171,15 +1497,25 @@ def refresh_deployed_tasks(service):
                 return
             if not c.execute("SELECT 1 FROM repositories WHERE lower(full_name)=? AND reachable=1", (repo,)).fetchone():
                 return
-            shas = [r[0] for r in c.execute(
-                "SELECT DISTINCT l.pr_sha FROM task_links l JOIN tasks t ON t.id=l.task_id "
-                "WHERE t.status NOT IN ('done','closed') AND l.kind='pr' AND l.state='merged' AND lower(l.repo)=? "
-                "AND l.pr_sha IS NOT NULL", (repo,))]
+            shas = [
+                r[0]
+                for r in c.execute(
+                    "SELECT DISTINCT l.pr_sha FROM task_links l JOIN tasks t ON t.id=l.task_id "
+                    "WHERE t.status NOT IN ('done','closed') AND l.kind='pr' AND l.state='merged' AND lower(l.repo)=? "
+                    "AND l.pr_sha IS NOT NULL",
+                    (repo,),
+                )
+            ]
         keys = [(repo, sha, commit) for sha in shas if sha != commit and re.fullmatch(r"[0-9a-f]{40}", sha)]
         cache = getattr(service, "deploy_refresh_cache", {})
-        due = sorted((key for key in keys if not cache.get(key, {}).get("verified")
-                      and cache.get(key, {}).get("next", 0) <= now),
-                     key=lambda key: cache.get(key, {}).get("next", 0))[:20]
+        due = sorted(
+            (
+                key
+                for key in keys
+                if not cache.get(key, {}).get("verified") and cache.get(key, {}).get("next", 0) <= now
+            ),
+            key=lambda key: cache.get(key, {}).get("next", 0),
+        )[:20]
         service.deploy_refresh_cache = cache
         service.deploy_refresh_running = True
 
@@ -1193,19 +1529,31 @@ def refresh_deployed_tasks(service):
                 try:
                     if token is None:
                         token, _ = service.mint([repo], {"contents": "read"}, diagnose=False)
-                    response = service._call("GET", f"/repos/{quote(repo, safe='/')}/compare/{key[1]}...{commit}",
-                                             params={"per_page": 1}, headers={"Authorization": "Bearer " + token})
+                    response = service._call(
+                        "GET",
+                        f"/repos/{quote(repo, safe='/')}/compare/{key[1]}...{commit}",
+                        params={"per_page": 1},
+                        headers={"Authorization": "Bearer " + token},
+                    )
                     if response.status_code == 200:
                         data = response.json()
-                        verified = (data.get("status") in ("ahead", "identical")
-                                    and (data.get("base_commit") or {}).get("sha") == key[1]
-                                    and (data.get("merge_base_commit") or {}).get("sha") == key[1])
-                    if verified and change_kept(lambda path, **params: _read(service, token, path, params),
-                                                repo, key[1], commit) is False:
+                        verified = (
+                            data.get("status") in ("ahead", "identical")
+                            and (data.get("base_commit") or {}).get("sha") == key[1]
+                            and (data.get("merge_base_commit") or {}).get("sha") == key[1]
+                        )
+                    if (
+                        verified
+                        and change_kept(
+                            lambda path, **params: _read(service, token, path, params), repo, key[1], commit
+                        )
+                        is False
+                    ):
                         # Both commits are fixed, so the answer is too: never asked again for this release.
                         verified, reverted = False, True
-                        logging.getLogger("tico.github").info("Release %s reverts %s in %s: not shipped",
-                                                              commit[:12], key[1][:12], repo)
+                        logging.getLogger("tico.github").info(
+                            "Release %s reverts %s in %s: not shipped", commit[:12], key[1][:12], repo
+                        )
                 except Exception:
                     verified = False
                     logging.getLogger("tico.github").warning("Release ancestry unavailable for %s at %s", repo, key[1])
@@ -1226,6 +1574,7 @@ def refresh_deployed_tasks(service):
         finally:
             with service.lock:
                 service.deploy_refresh_running = False
+
     threading.Thread(target=refresh, name="tico-deploy-refresh", daemon=True).start()
 
 
@@ -1260,7 +1609,7 @@ def _hunks(patch):
 def _contains(lines, block):
     """`block` appears in `lines` as a run of consecutive lines."""
     n = len(block)
-    return any(lines[i:i + n] == block for i in range(len(lines) - n + 1) if lines[i] == block[0])
+    return any(lines[i : i + n] == block for i in range(len(lines) - n + 1) if lines[i] == block[0])
 
 
 def _read(service, token, path, params):
@@ -1286,7 +1635,7 @@ def change_kept(get, repo, merge, release):
         return None
     parents = commit.get("parents") or []
     files = commit.get("files") or []
-    if len(parents) > 1:   # a merge commit: the pull request is what it changed on top of main
+    if len(parents) > 1:  # a merge commit: the pull request is what it changed on top of main
         files = (get(f"{base}/compare/{parents[0]['sha']}...{merge}") or {}).get("files") or []
     files = [f for f in files if f.get("filename") not in NOTES_FILES]
     product = [f for f in files if not TEST_PATH.search(f["filename"])]
@@ -1314,22 +1663,25 @@ def change_kept(get, repo, merge, release):
             continue
         new, sha = at_release(f["filename"])
         if sha and f.get("status") != "removed" and sha == f.get("sha"):
-            return True    # the file is as the merge left it
+            return True  # the file is as the merge left it
         old = at_release(f.get("previous_filename") or f["filename"])[0]
         for before, after in hunks:
             if after and _contains(new, after):
-                return True    # this part of the change is still there
+                return True  # this part of the change is still there
             if before and not _contains(old, before):
-                return True    # changed again since: not a revert
+                return True  # changed again since: not a revert
     return None if unknown else False
 
 
 def checked_on_github(c, settings, repo):
     """`refresh_deployed_tasks` can ask GitHub about this release, so it decides what ships, reverts included."""
     app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
-    return bool(not settings.rehearsal and app and repo.split("/")[0].lower() == str(app["org"]).lower()
-                and c.execute("SELECT 1 FROM repositories WHERE lower(full_name)=? AND reachable=1",
-                              (repo.lower(),)).fetchone())
+    return bool(
+        not settings.rehearsal
+        and app
+        and repo.split("/")[0].lower() == str(app["org"]).lower()
+        and c.execute("SELECT 1 FROM repositories WHERE lower(full_name)=? AND reachable=1", (repo.lower(),)).fetchone()
+    )
 
 
 def ship_deployed(c, settings, *, ancestry=None):
@@ -1338,11 +1690,18 @@ def ship_deployed(c, settings, *, ancestry=None):
     if not commit or not repo:
         return []
     # Push order alone can't see a revert; it ships only where GitHub can't be asked.
-    here = (ancestry is None and not checked_on_github(c, settings, repo)
-            and c.execute("SELECT seq FROM main_pushes WHERE sha=?", (commit,)).fetchone())
+    here = (
+        ancestry is None
+        and not checked_on_github(c, settings, repo)
+        and c.execute("SELECT seq FROM main_pushes WHERE sha=?", (commit,)).fetchone()
+    )
     shipped = []
-    candidates = H._rows(c.execute(DEPLOY_QUERY,
-        ("https://github.com/" + repo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/pull/%",)))
+    candidates = H._rows(
+        c.execute(
+            DEPLOY_QUERY,
+            ("https://github.com/" + repo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/pull/%",),
+        )
+    )
 
     def included(link):
         match = PR_LINK.match(link["url"])
@@ -1365,8 +1724,12 @@ def ship_deployed(c, settings, *, ancestry=None):
                 queue_wake(c, H.task(c, link["task_id"]), item)
             evidence = {"release": commit, "url": link["url"]}
             if (repo.lower(), link["pr_sha"], commit) in (ancestry or ()):
-                evidence["ancestry"] = {"repository": repo.lower(), "merge": link["pr_sha"], "deployed": commit,
-                                        "comparison": f"https://github.com/{repo}/compare/{link['pr_sha']}...{commit}"}
+                evidence["ancestry"] = {
+                    "repository": repo.lower(),
+                    "merge": link["pr_sha"],
+                    "deployed": commit,
+                    "comparison": f"https://github.com/{repo}/compare/{link['pr_sha']}...{commit}",
+                }
             H.event(c, H.KEEPER, "github.shipped", link["task_id"], evidence)
             if link["task_id"] not in shipped:
                 shipped.append(link["task_id"])
@@ -1393,6 +1756,7 @@ def install_github(app, settings, store):
             return {"ok": True}
         if event in ("installation", "installation_repositories"):
             from .repositories import queue_sync
+
             # Accepting new permissions arrives here: a turn asks for all its reads again at once.
             app.state.github_app.live.pop("turn-reads", None)
             app.state.github_app.live.pop("workflows-refused", None)
@@ -1400,8 +1764,9 @@ def install_github(app, settings, store):
             return {"ok": True}
         with store.transaction() as c:
             if event == "pull_request":
-                result = pull_request(c, payload, review_role=settings.github_review_role,
-                                      release_repo=settings.release_repo)
+                result = pull_request(
+                    c, payload, review_role=settings.github_review_role, release_repo=settings.release_repo
+                )
             elif event in ("check_run", "check_suite", "status", "pull_request_review", "pull_request_review_comment"):
                 result = pr_signal(c, event, payload)
             elif event == "push":

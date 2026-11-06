@@ -30,11 +30,14 @@ def parse(value):
             continue
         match = ORIGIN.fullmatch(origin)
         if not match or "*" in origin:
-            raise RuntimeError("TICO_CORS_ORIGINS holds exact origins such as https://app.acme.com "
-                               "(scheme, host, optional port; no path, no wildcard): got " + part.strip())
+            raise RuntimeError(
+                "TICO_CORS_ORIGINS holds exact origins such as https://app.acme.com "
+                "(scheme, host, optional port; no path, no wildcard): got " + part.strip()
+            )
         if match.group(1) == "http" and (urlparse(origin).hostname or "") not in ("localhost", "127.0.0.1", "::1"):
-            raise RuntimeError("TICO_CORS_ORIGINS allows http only for localhost, 127.0.0.1 and [::1]; "
-                               "use https for " + origin)
+            raise RuntimeError(
+                "TICO_CORS_ORIGINS allows http only for localhost, 127.0.0.1 and [::1]; use https for " + origin
+            )
         if origin not in origins:
             origins.append(origin)
     return tuple(origins)
@@ -55,13 +58,22 @@ class Cors:
         origin = request.get("origin")
         allowed = origin is not None and origin in self.origins
         if allowed and scope["method"] == "OPTIONS" and "access-control-request-method" in request:
-            asked = {h.strip().lower() for h in request.get("access-control-request-headers", "").split(",") if h.strip()}
+            asked = {
+                h.strip().lower() for h in request.get("access-control-request-headers", "").split(",") if h.strip()
+            }
             if request["access-control-request-method"] not in METHODS or not asked <= self.headers:
                 return await PlainTextResponse("Disallowed CORS request", status_code=400)(scope, receive, send)
-            reply = PlainTextResponse("OK", headers={
-                "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true",
-                "Access-Control-Allow-Methods": ", ".join(METHODS), "Access-Control-Allow-Headers": ", ".join(HEADERS),
-                "Access-Control-Max-Age": "600", "Vary": "Origin"})
+            reply = PlainTextResponse(
+                "OK",
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Allow-Methods": ", ".join(METHODS),
+                    "Access-Control-Allow-Headers": ", ".join(HEADERS),
+                    "Access-Control-Max-Age": "600",
+                    "Vary": "Origin",
+                },
+            )
             return await reply(scope, receive, send)
 
         async def add(message):
@@ -73,6 +85,7 @@ class Cors:
                     headers["Access-Control-Allow-Credentials"] = "true"
                     headers["Access-Control-Expose-Headers"] = ", ".join(EXPOSED)
             await send(message)
+
         await self.app(scope, receive, add)
 
 

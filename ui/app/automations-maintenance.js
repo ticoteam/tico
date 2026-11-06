@@ -1,6 +1,7 @@
 /* ui/app/automations-maintenance.js — Maintenance: Tico's one scheduled upkeep run, as a built-in row on the Automations
    list and its own screen (#/automations/maintenance[/runs]): the run's schedule, pause and monthly cap, each step's
-   switch, "How often" and number of bots, Run now, and the run history with each step's line.
+   switch, "How often" and number of bots, Run now, and the run history with each step's line. Beside it, System jobs
+   (#/automations/system-jobs): every job Tico runs on its own and the task rules, drawn by ui/app/settings-recurring.js.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    Payloads: backend/maintenance.py (GET/PATCH /api/v2/maintenance, GET /maintenance/runs, POST /maintenance/run).
    Anyone signed in reads it; `can_change` (an owner or an admin) decides whether the controls work. */
@@ -20,6 +21,8 @@ const AU_MAINT_BETA = new Set(['learn']);
 const AU_MAINT_PRIVACY = '#/settings/general/settings-privacy';
 const AU_MAINT_RUNS_PAGE = 25;
 
+const AU_SYSJOBS = 'system-jobs';
+const AU_BUILTIN_PILL = '<span class="pill">Built-in</span>';
 const auMaintOk = m => !!m && Array.isArray(m.steps) && !!m.settings;
 const auMaintStep = key => (AU?.maint?.steps || []).find(s => s.key === key);
 const auMaintSchedule = s => (AU_MAINT_SCHEDULES.find(([k]) => k === s) || [, 'Every hour'])[1];
@@ -41,10 +44,10 @@ function auMaintRow(m) {
     ...(last ? {last_run: {id: last.id, started_at: last.started_at, status: auMaintRunStatus(last)}} : {}),
     next_run: m.next_run_at || null};
 }
-// The list with Maintenance first; an older hub (no steps) leaves it as it is.
+// The list with Maintenance and System jobs beside it first; an older hub (no steps) leaves it as it is.
 function auMaintList(list, m) {
   if (!auMaintOk(m)) return list;
-  return [auMaintRow(m), ...list.filter(a => a.id !== AU_MAINT)];
+  return [auMaintRow(m), auSysJobsRow(), ...list.filter(a => a.id !== AU_MAINT && a.id !== AU_SYSJOBS)];
 }
 // A fresh listing (a save, Run now's follow): kept, the list row matched, and what is shown drawn again. A follow's
 // refresh leaves Settings as it is while a field there is being edited, so a value not yet saved is not lost.
@@ -308,4 +311,21 @@ function auMaintChange(e) {
     if (!(n >= 1 && n <= 20)) { toast('1 to 20 bots', true); auDrawPane(); return; }
     void auMaintStepSave(d.mtBots, {max_bots: n});
   }
+}
+
+// -------------------------------------------------------------------------------------------- System jobs
+// The other built-in row: every job Tico runs on its own and the task rules (GET /api/v2/system-routines), with their
+// switches, schedules, Run now and New task rule (ui/app/settings-recurring.js). Anyone signed in reads it; the server's
+// `can_change` decides each row's controls.
+function auSysJobsRow() {
+  return {id: AU_SYSJOBS, name: 'System jobs', kind: 'system', builtin: true, readonly: true, owner_id: AU_MAINT_OWNER,
+    enabled: true, trigger: {type: 'system'}, steps: [], description: 'What Tico runs on its own', can_edit: false, can_pause: false};
+}
+function auSysJobsHead(hd) {
+  hd.innerHTML = `<h2 class="au-name">System jobs</h2>${AU_BUILTIN_PILL}`;
+}
+// A redraw of the screen keeps the list (and a half-typed time in it); renderSystemRoutines reads it again at most once a minute.
+function auSysJobsPane(pane) {
+  if (!pane.querySelector('#set-system-routines')) pane.innerHTML = `<div class="sysr-au" id="set-system-routines">${skelRows(3, {card: true, dot: false})}</div>`;
+  void renderSystemRoutines();
 }

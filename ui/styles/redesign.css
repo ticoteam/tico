@@ -1,17 +1,17 @@
 /* The app's shell (ui/app/redesign.js, ui/app/strategy-budget.js): what keys off html.redesign (set at boot) or a class
    only that code adds. */
 
-/* Sidebar: what moved out of the rail. Library's pages sit under it. */
+/* Sidebar: what moved out of the rail. Company's and Library's pages sit under them. */
 html.redesign #nav-inboxes-section{display:none!important}
 /* Rows and folds as this browser last left them, marked on <html> by ui/theme.js before the first paint and kept with
    the rows by ui/app/redesign.js (rdNavPaint, rdLibSync) after, so the app's code never moves a row. */
 html:not(.nav-finance) #nav-finance,html:not(.nav-welcome) #nav-welcome{display:none}
-html.nav-lib-shut #rd-lib,html:not(.nav-rules-open) #rd-rules{display:none}
-html.nav-lib-shut .rd-lib-toggle:not(.rd-rules-toggle) .section-chev{transform:none}
+html.nav-lib-shut #rd-lib,html.nav-co-shut #rd-co,html:not(.nav-rules-open) #rd-rules{display:none}
+html.nav-lib-shut .rd-lib-toggle:not(.rd-rules-toggle):not(.rd-co-toggle) .section-chev,html.nav-co-shut .rd-co-toggle .section-chev{transform:none}
 html.nav-rules-open .rd-rules-toggle .section-chev{transform:var(--chev-open)}
 .rd-lib{display:flex;flex-direction:column}
 .rd-lib[hidden]{display:none}
-/* Library folds: the Team section's chevron, on a small square beside the link (the sidebar's other row buttons). */
+/* Company and Library fold: the Team section's chevron, on a small square beside the link (the sidebar's other row buttons). */
 .rd-lib-toggle{flex:none;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
 .rd-lib-toggle:hover{background:var(--surface2);color:var(--ink)}
 .rd-lib-toggle:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}

@@ -27,6 +27,7 @@ def feed(monkeypatch, version):
     def answer(request):
         asked.append(str(request.url))
         return httpx.Response(200, json={"version": version, "platforms": {}})
+
     monkeypatch.setattr(R, "TRANSPORT", httpx.MockTransport(answer))
     R.LATEST.refresh()
     return asked
@@ -38,8 +39,9 @@ def recorder(token="ben-test", version="0.2.0", install=MAC):
 
 def rows(api, person="ben"):
     with api.app.state.store.read() as c:
-        return {r["install_id"]: dict(r) for r in c.execute(
-            "SELECT * FROM recorder_installs WHERE person_id=?", (person,))}
+        return {
+            r["install_id"]: dict(r) for r in c.execute("SELECT * FROM recorder_installs WHERE person_id=?", (person,))
+        }
 
 
 def mine(api, token="ben-test"):
@@ -92,9 +94,12 @@ def test_the_newest_version_comes_from_the_updater_feed_and_a_failed_fetch_says_
     asked = feed(monkeypatch, "0.3.0")
     assert asked == [R.FEED_URL]
     assert R.LATEST.version == "0.3.0"
-    for answer in (lambda request: httpx.Response(500), lambda request: httpx.Response(200, text="<html>"),
-                   lambda request: httpx.Response(200, json={"version": "nightly"}),
-                   lambda request: (_ for _ in ()).throw(httpx.ConnectError("offline"))):
+    for answer in (
+        lambda request: httpx.Response(500),
+        lambda request: httpx.Response(200, text="<html>"),
+        lambda request: httpx.Response(200, json={"version": "nightly"}),
+        lambda request: (_ for _ in ()).throw(httpx.ConnectError("offline")),
+    ):
         monkeypatch.setattr(R, "TRANSPORT", httpx.MockTransport(answer))
         R.LATEST.refresh()
         # The last good answer stays, the next try waits, and the page still loads.
@@ -109,13 +114,21 @@ def test_the_newest_version_comes_from_the_updater_feed_and_a_failed_fetch_says_
 def test_a_person_sees_the_download_until_a_copy_is_seen_and_the_update_line_only_when_behind(api, monkeypatch):
     feed(monkeypatch, "0.3.0")
     nothing = mine(api)
-    assert nothing == {"version": "", "last_seen_at": None, "recent": False, "latest": "0.3.0",
-                       "update_available": False, "download_url": R.DOWNLOAD_URL}
+    assert nothing == {
+        "version": "",
+        "last_seen_at": None,
+        "recent": False,
+        "latest": "0.3.0",
+        "update_available": False,
+        "download_url": R.DOWNLOAD_URL,
+    }
     api.get("/api/v2/meetings/settings", headers=recorder(version="0.2.9"))
     behind = mine(api)
     assert behind["recent"] and behind["version"] == "0.2.9" and behind["update_available"]
     document = api.get("/api/v2/openapi.json", headers=headers()).json()
-    schema = document["paths"]["/api/v2/meetings/recorder"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    schema = document["paths"]["/api/v2/meetings/recorder"]["get"]["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ]
     assert conforms(behind, schema, document) is None
     # The copy used last decides: a laptop on the newest one ends the line, though the old Mac is still listed.
     api.get("/api/v2/meetings/settings", headers=recorder(version="0.3.0", install=LAPTOP))

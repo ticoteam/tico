@@ -4,13 +4,14 @@ A secrets-file value like `op://vault/Upfluence/password` is read from 1Password
 service-account token in `secrets/_shared.env` (OP_SERVICE_ACCOUNT_TOKEN). The token is
 read-only on the company's vault and is stripped from the turn's environment afterwards.
 """
+
 import os
 import subprocess
 import sys
 from datetime import datetime
 
-OP_REF = "op://"                # a secrets-file value like op://vault/Upfluence/password is read
-                                # from 1Password when the run starts
+OP_REF = "op://"  # a secrets-file value like op://vault/Upfluence/password is read
+# from 1Password when the run starts
 OP_TIMEOUT_S = 20
 # This machine's own keys: consumed here, never handed to a run.
 SECRET_KEYS = ("OPENROUTER_API_KEY", "HUB_INGEST_TOKEN", "OP_SERVICE_ACCOUNT_TOKEN")
@@ -35,15 +36,21 @@ def resolve_op_refs(env, run=None):
     out = {}
     if not token:
         for k in refs:
-            env[k] = ""; out[k] = "OP_SERVICE_ACCOUNT_TOKEN is not set in secrets/_shared.env"
+            env[k] = ""
+            out[k] = "OP_SERVICE_ACCOUNT_TOKEN is not set in secrets/_shared.env"
         log("op: " + next(iter(out.values())))
         return out
     cache = {}
     for k, ref in refs.items():
         if ref not in cache:
             try:
-                r = run(["op", "read", "--no-newline", ref], capture_output=True, text=True,
-                        timeout=OP_TIMEOUT_S, env={**os.environ, "OP_SERVICE_ACCOUNT_TOKEN": token})
+                r = run(
+                    ["op", "read", "--no-newline", ref],
+                    capture_output=True,
+                    text=True,
+                    timeout=OP_TIMEOUT_S,
+                    env={**os.environ, "OP_SERVICE_ACCOUNT_TOKEN": token},
+                )
                 if r.returncode == 0 and r.stdout != "":
                     cache[ref] = (True, r.stdout)
                 else:
@@ -55,8 +62,10 @@ def resolve_op_refs(env, run=None):
                 cache[ref] = (False, f"op read timed out after {OP_TIMEOUT_S}s")
         ok, val = cache[ref]
         if ok:
-            env[k] = val; out[k] = "ok"
+            env[k] = val
+            out[k] = "ok"
         else:
-            env[k] = ""; out[k] = val
+            env[k] = ""
+            out[k] = val
             log(f"op: {k} did not resolve from 1Password: {val}")
     return out

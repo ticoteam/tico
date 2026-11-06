@@ -1,0 +1,7 @@
+# One-time ruff format commit (uvx ruff@0.15.9 format, layout only; see ruff.toml [format]). Blame skips it:
+# GitHub reads this file; locally run `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
+# scripts/format_rebase.sh takes the first commit listed here as the format commit.
+04cc8a56875b5c06c8481ca233eae12ead90c7e9
+# rustfmt 1.92.0: runner-rs and app/ (#2790)
+92f707458e3843d22762ae6f484141b7534cb5dc
+1a210f89e76f27eab18ef605c682bccaa7d38c6a

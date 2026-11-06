@@ -9,6 +9,7 @@ nothing.
 `webhook_sends` row for each endpoint that should hear of it, so a rolled-back change tells nobody. The workers in
 backend/webhook_delivery.py post them after the commit. A producer calls it with one line and it never raises on that
 path: a failure is rolled back to a savepoint, logged, and the producer's own write goes on."""
+
 import base64
 import hashlib
 import json
@@ -32,7 +33,7 @@ from .webhooks_schema import SCHEMA  # noqa: F401  (hubdb.MIGRATIONS applies it)
 
 log = logging.getLogger(__name__)
 
-MAX_PER_EVENT = 20              # endpoints one event reaches; the rest are skipped and Health says so
+MAX_PER_EVENT = 20  # endpoints one event reaches; the rest are skipped and Health says so
 MAX_PER_PERSON = 50
 MAX_DATA = 64 * 1024
 LISTED = 100
@@ -75,6 +76,7 @@ def use(auth, base="", settings=None):
 # ------------------------------------------------------------------------------------------------- names and shapes
 def _catalog():
     from . import event_catalog
+
     return event_catalog
 
 
@@ -116,8 +118,12 @@ def clean_events(events):
             if not _outbound(catalog, name):
                 raise Problem("webhook", f"{name} is not sent to webhooks: use a rule with forward", 422)
             item = name
-        elif item != "*" and catalog and not item.startswith("custom.") and not any(
-                matches(item, n) for n, e in catalog.EVENTS.items() if e.outbound):
+        elif (
+            item != "*"
+            and catalog
+            and not item.startswith("custom.")
+            and not any(matches(item, n) for n, e in catalog.EVENTS.items() if e.outbound)
+        ):
             raise Problem("webhook", f"{item} matches no event Tico sends", 422)
         if item not in out:
             out.append(item)
@@ -163,13 +169,19 @@ def links_for(type_, subject, data):
 
 
 def envelope(type_, subject, data, timestamp):
-    return {"type": type_, "version": version_of(type_), "timestamp": timestamp, "data": data,
-            "links": links_for(type_, subject, data)}
+    return {
+        "type": type_,
+        "version": version_of(type_),
+        "timestamp": timestamp,
+        "data": data,
+        "links": links_for(type_, subject, data),
+    }
 
 
 def body_of(env):
     # A delivered body names a run as the API does (backend/runs.py): its attempt_id keys read run_id.
     from .runs import public_json
+
     return public_json(json.dumps(env, separators=(",", ":"), ensure_ascii=False))
 
 
@@ -254,6 +266,7 @@ def _thread_view(c, actor, type_, subject, data, cache):
     if type_ == "message.held":
         subject = (data or {}).get("thread_id") or subject
     from . import threads
+
     if not threads.readable(c, threads.viewer(auth, who), subject):
         return None
     return data or {}
@@ -268,6 +281,7 @@ def listening(c):
 
 def _is_strategy_bot(actor):
     from . import strategy_bot
+
     return actor == H.bot_actor(strategy_bot.SLUG)
 
 
@@ -282,9 +296,11 @@ def _event_row(c, event_id, type_, subject, data, actor, skipped=0, only=""):
     payload = json.dumps(data, separators=(",", ":"), default=str)
     if len(payload) > MAX_DATA:
         payload = json.dumps({"truncated": True, "bytes": len(payload)})
-    c.execute("INSERT OR IGNORE INTO webhook_events(id,type,subject,version,payload,actor,skipped,created_at,only_id) "
-              "VALUES(?,?,?,?,?,?,?,?,?)", (event_id, type_, str(subject), version_of(type_), payload, actor, skipped,
-                                             H.now(), only))
+    c.execute(
+        "INSERT OR IGNORE INTO webhook_events(id,type,subject,version,payload,actor,skipped,created_at,only_id) "
+        "VALUES(?,?,?,?,?,?,?,?,?)",
+        (event_id, type_, str(subject), version_of(type_), payload, actor, skipped, H.now(), only),
+    )
 
 
 def _queue(c, hook, event_id, type_, subject, data, at=None):
@@ -293,9 +309,11 @@ def _queue(c, hook, event_id, type_, subject, data, at=None):
     if len(json.dumps(data, default=str)) > MAX_DATA:
         data = {"truncated": True}
     body = body_of(envelope(type_, str(subject), data, at or stamp))
-    return c.execute("INSERT OR IGNORE INTO webhook_sends(id,event_id,webhook_id,type,subject,body,state,attempts,"
-                     "next_attempt_at,created_at) VALUES(?,?,?,?,?,?,'ready',0,?,?)",
-                     ("wh_" + uuid.uuid4().hex[:24], event_id, hook["id"], type_, str(subject), body, stamp, stamp)).rowcount
+    return c.execute(
+        "INSERT OR IGNORE INTO webhook_sends(id,event_id,webhook_id,type,subject,body,state,attempts,"
+        "next_attempt_at,created_at) VALUES(?,?,?,?,?,?,'ready',0,?,?)",
+        ("wh_" + uuid.uuid4().hex[:24], event_id, hook["id"], type_, str(subject), body, stamp, stamp),
+    ).rowcount
 
 
 def _event_id(type_, subject, revision):
@@ -362,6 +380,7 @@ def _publish_only(c, type_, subject, data, actor, only, revision):
         raise Refused("The Strategy Bot does not send webhooks")
     if H.is_bot(actor):
         from .email_sending import sends_on_own
+
         if not sends_on_own(c, H.actor_id(actor)):
             raise Refused("This bot may not send outside: its send switch is off")
     name = canonical(type_)
@@ -409,6 +428,7 @@ def passes(c, filt, facts):
         return False
     if filt.get("departments") and "owner_id" in facts and _state.get("settings") is not None:
         from . import task_rules
+
         try:
             mine = task_rules.department_of(c, _state["settings"], facts["owner_id"])
         except Exception:
@@ -454,6 +474,7 @@ def clean_filter(c, filt):
         known = None
         if _state.get("settings") is not None:
             from . import task_rules
+
             known = {d["id"] for d in task_rules.departments(_state["settings"])}
         for item in filt.departments:
             if known is not None and item not in known:
@@ -528,8 +549,11 @@ def headers_of(hook):
 def open_headers(c, vault, hook_id, stored):
     """The headers to send: a secret's value opened. Name to value. A secret whose value was cleared has none to send
     (`needs_value`), so the send waits instead (webhook_delivery.deliver)."""
-    return {h["name"]: (vault.cipher.unseal(c, _context(hook_id, h["name"]), h["value"]) if h["secret"] else h["value"])
-            for h in stored if not h.get("needs")}
+    return {
+        h["name"]: (vault.cipher.unseal(c, _context(hook_id, h["name"]), h["value"]) if h["secret"] else h["value"])
+        for h in stored
+        if not h.get("needs")
+    }
 
 
 def needs_value(stored):
@@ -592,6 +616,7 @@ def may_send(c, who, hook, name):
     if who.role != "bot" or _is_strategy_bot(who.actor):
         raise Problem("forbidden", "Only people and bots with sending switched on send webhooks", 403)
     from .email_sending import sends_on_own
+
     if not sends_on_own(c, H.actor_id(who.actor)):
         raise Problem("forbidden", "Sending is off for this bot; a person turns it on in its mail settings", 403)
     if not subscribed(json.loads(hook["events"]), name):
@@ -626,8 +651,11 @@ def counts(c, ids):
     since = H.shift(H.now(), days=-7)
     marks = ",".join("?" * len(ids))
     out = {i: {"delivered": 0, "failed": 0, "pending": 0} for i in ids}
-    for row in c.execute(f"SELECT webhook_id, state, count(*) n FROM webhook_sends WHERE webhook_id IN ({marks}) AND "
-                         f"(state IN ('ready','sending') OR next_attempt_at>=?) GROUP BY webhook_id, state", (*ids, since)):
+    for row in c.execute(
+        f"SELECT webhook_id, state, count(*) n FROM webhook_sends WHERE webhook_id IN ({marks}) AND "
+        f"(state IN ('ready','sending') OR next_attempt_at>=?) GROUP BY webhook_id, state",
+        (*ids, since),
+    ):
         key = {"delivered": "delivered", "failed": "failed", "ready": "pending", "sending": "pending"}.get(row["state"])
         if key:
             out[row["webhook_id"]][key] += row["n"]
@@ -637,27 +665,59 @@ def counts(c, ids):
 def view(hook, who, tally=None):
     mine = is_person(who) and (hook["created_by"] == who.actor or is_admin(who))
     grace = hook["secret_prev_until"] if hook["secret_prev"] and (hook["secret_prev_until"] or "") > H.now() else None
-    return {"id": hook["id"], "name": hook["name"], "url": hook["url"] if mine else _origin(hook["url"]),
-            "host": hook["host"], "events": json.loads(hook["events"]), "enabled": bool(hook["enabled"]),
-            "paused_reason": hook["paused_reason"], "rate_per_hour": hook["rate_per_hour"],
-            "allow_http": bool(hook["allow_http"]), "created_by": hook["created_by"],
-            "requested_by": hook["requested_by"] or None, "created_at": hook["created_at"], "updated_at": hook["updated_at"],
-            "revision": hook["revision"], "old_secret_until": grace, "can_change": mine,
-            "filter": {"departments": [], "bots": [], "task_types": [], **filter_of(hook)},
-            "headers": [{"name": h["name"], "secret": h["secret"],
-                         **(({"set": False, "needs_value": True} if h.get("needs") else {"set": True}) if h["secret"]
-                            else {"value": h["value"]})}
-                        for h in headers_of(hook)] if mine else [],
-            "disabled_at": hook["disabled_at"], "disabled_reason": hook["disabled_reason"] or None,
-            "last_7_days": tally or {"delivered": 0, "failed": 0, "pending": 0}}
+    return {
+        "id": hook["id"],
+        "name": hook["name"],
+        "url": hook["url"] if mine else _origin(hook["url"]),
+        "host": hook["host"],
+        "events": json.loads(hook["events"]),
+        "enabled": bool(hook["enabled"]),
+        "paused_reason": hook["paused_reason"],
+        "rate_per_hour": hook["rate_per_hour"],
+        "allow_http": bool(hook["allow_http"]),
+        "created_by": hook["created_by"],
+        "requested_by": hook["requested_by"] or None,
+        "created_at": hook["created_at"],
+        "updated_at": hook["updated_at"],
+        "revision": hook["revision"],
+        "old_secret_until": grace,
+        "can_change": mine,
+        "filter": {"departments": [], "bots": [], "task_types": [], **filter_of(hook)},
+        "headers": [
+            {
+                "name": h["name"],
+                "secret": h["secret"],
+                **(
+                    ({"set": False, "needs_value": True} if h.get("needs") else {"set": True})
+                    if h["secret"]
+                    else {"value": h["value"]}
+                ),
+            }
+            for h in headers_of(hook)
+        ]
+        if mine
+        else [],
+        "disabled_at": hook["disabled_at"],
+        "disabled_reason": hook["disabled_reason"] or None,
+        "last_7_days": tally or {"delivered": 0, "failed": 0, "pending": 0},
+    }
 
 
 def send_view(row):
-    return {"id": row["id"], "webhook_id": row["webhook_id"], "event_id": row["event_id"], "type": row["type"],
-            "subject": row["subject"], "state": row["state"], "attempts": row["attempts"],
-            "last_status": row["last_status"], "last_error": row["last_error"],
-            "next_attempt_at": row["next_attempt_at"] if row["state"] == "ready" else None, "created_at": row["created_at"],
-            "delivered_at": row["delivered_at"]}
+    return {
+        "id": row["id"],
+        "webhook_id": row["webhook_id"],
+        "event_id": row["event_id"],
+        "type": row["type"],
+        "subject": row["subject"],
+        "state": row["state"],
+        "attempts": row["attempts"],
+        "last_status": row["last_status"],
+        "last_error": row["last_error"],
+        "next_attempt_at": row["next_attempt_at"] if row["state"] == "ready" else None,
+        "created_at": row["created_at"],
+        "delivered_at": row["delivered_at"],
+    }
 
 
 def listing(c, who, limit=LISTED, offset=0):
@@ -728,7 +788,9 @@ class WebhookSince(Contract):
 
 
 class WebhookReplay(WebhookSince):
-    after: str = Field(default="", max_length=200)      # with `since`: where the last round stopped (its next_since / next_after)
+    after: str = Field(
+        default="", max_length=200
+    )  # with `since`: where the last round stopped (its next_since / next_after)
 
 
 def new_secret():
@@ -756,30 +818,60 @@ def owner_only_http(who, allow_http):
 
 
 def _spec(body):
-    return {"name": body.name, "url": body.url, "events": clean_events(body.events), "rate_per_hour": body.rate_per_hour,
-            "allow_http": body.allow_http, "filter": body.filter.model_dump() if body.filter else {}}
+    return {
+        "name": body.name,
+        "url": body.url,
+        "events": clean_events(body.events),
+        "rate_per_hour": body.rate_per_hour,
+        "allow_http": body.allow_http,
+        "filter": body.filter.model_dump() if body.filter else {},
+    }
 
 
 def _insert(c, vault, who, spec, owner, requested_by="", headers=()):
     host = check_address(spec["url"], spec["allow_http"])
-    if c.execute("SELECT count(*) FROM webhooks WHERE created_by=? AND deleted_at IS NULL", (owner,)).fetchone()[0] >= MAX_PER_PERSON:
+    if (
+        c.execute("SELECT count(*) FROM webhooks WHERE created_by=? AND deleted_at IS NULL", (owner,)).fetchone()[0]
+        >= MAX_PER_PERSON
+    ):
         raise Problem("webhook", f"One person has at most {MAX_PER_PERSON} webhook endpoints", 409)
     hook_id, secret, now = "ep_" + uuid.uuid4().hex[:12], new_secret(), H.now()
     filt = clean_filter(c, FilterIn(**spec["filter"]) if spec.get("filter") else None)
     stored = clean_headers(c, vault, hook_id, headers)
-    c.execute("INSERT INTO webhooks(id,name,url,host,enabled,events,secret,rate_per_hour,allow_http,created_by,"
-              "requested_by,created_at,updated_at,filter,headers) VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?)",
-              (hook_id, spec["name"], spec["url"], host, json.dumps(spec["events"]),
-               vault.cipher.seal(c, D.sealed_as(hook_id), secret), spec["rate_per_hour"], int(spec["allow_http"]),
-               owner, requested_by, now, now, json.dumps(filt), json.dumps(stored)))
+    c.execute(
+        "INSERT INTO webhooks(id,name,url,host,enabled,events,secret,rate_per_hour,allow_http,created_by,"
+        "requested_by,created_at,updated_at,filter,headers) VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?)",
+        (
+            hook_id,
+            spec["name"],
+            spec["url"],
+            host,
+            json.dumps(spec["events"]),
+            vault.cipher.seal(c, D.sealed_as(hook_id), secret),
+            spec["rate_per_hour"],
+            int(spec["allow_http"]),
+            owner,
+            requested_by,
+            now,
+            now,
+            json.dumps(filt),
+            json.dumps(stored),
+        ),
+    )
     H.event(c, who.actor, "webhook.created", hook_id, {"name": spec["name"], "host": host, "for": owner})
     return {**view(c.execute("SELECT * FROM webhooks WHERE id=?", (hook_id,)).fetchone(), who), "secret": secret}
 
 
 def _approval_payload(spec):
     digest = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
-    return {"to": spec["url"], "cc": "", "subject": f"Create webhook endpoint {spec['name']}", "body_sha256": digest,
-            "mailbox": "webhooks", "webhook": spec}
+    return {
+        "to": spec["url"],
+        "cc": "",
+        "subject": f"Create webhook endpoint {spec['name']}",
+        "body_sha256": digest,
+        "mailbox": "webhooks",
+        "webhook": spec,
+    }
 
 
 def create(c, vault, who, body):
@@ -796,9 +888,11 @@ def create(c, vault, who, body):
         raise Problem("forbidden", "A person sets custom headers; a bot asks without them", 403)
     payload = _approval_payload(spec)
     digest = H.payload_hash(payload)
-    approved = c.execute("SELECT * FROM approvals WHERE payload_hash=? AND requested_by_id=? AND kind='send' AND "
-                         "decision='approved' AND consumed_at IS NULL ORDER BY decided_at LIMIT 1",
-                         (digest, who.actor)).fetchone()
+    approved = c.execute(
+        "SELECT * FROM approvals WHERE payload_hash=? AND requested_by_id=? AND kind='send' AND "
+        "decision='approved' AND consumed_at IS NULL ORDER BY decided_at LIMIT 1",
+        (digest, who.actor),
+    ).fetchone()
     if approved:
         H.approval_consume(c, who.actor, approved["id"])
         return _insert(c, vault, who, spec, approved["decided_by_id"], requested_by=who.actor)
@@ -894,20 +988,35 @@ def update(c, who, hook_id, body, vault=None):
         raise destinations.held("webhook", moved, kept, hook["revision"], hook["name"])
     destinations.require_tap(who, moved)
     if moved and option == destinations.CLEAR:
-        headers = [{"name": h["name"], "secret": True, "value": "", "needs": True} if h["name"] in kept else h
-                   for h in headers]
+        headers = [
+            {"name": h["name"], "secret": True, "value": "", "needs": True} if h["name"] in kept else h for h in headers
+        ]
     enabled, reason = hook["enabled"], hook["paused_reason"] or ""
     if needs_value(headers):
         if enabled or reason == NEEDS_VALUE:
-            enabled, reason = 0, NEEDS_VALUE              # nothing goes out without the header (Product: pause)
+            enabled, reason = 0, NEEDS_VALUE  # nothing goes out without the header (Product: pause)
         # An endpoint already paused or turned off for another reason keeps that reason, so typing the values again
         # never turns back on what someone paused on purpose.
     elif reason == NEEDS_VALUE:
-        enabled, reason = 1, ""                           # every cleared value was typed again or removed
-    c.execute("UPDATE webhooks SET name=?, url=?, host=?, events=?, rate_per_hour=?, allow_http=?, "
-              "filter=?, headers=?, enabled=?, paused_reason=?, revision=revision+1, updated_at=? WHERE id=?",
-              (name, url, host, json.dumps(events), body.rate_per_hour or hook["rate_per_hour"], int(allow),
-               json.dumps(filt), json.dumps(headers), enabled, reason, H.now(), hook_id))
+        enabled, reason = 1, ""  # every cleared value was typed again or removed
+    c.execute(
+        "UPDATE webhooks SET name=?, url=?, host=?, events=?, rate_per_hour=?, allow_http=?, "
+        "filter=?, headers=?, enabled=?, paused_reason=?, revision=revision+1, updated_at=? WHERE id=?",
+        (
+            name,
+            url,
+            host,
+            json.dumps(events),
+            body.rate_per_hour or hook["rate_per_hour"],
+            int(allow),
+            json.dumps(filt),
+            json.dumps(headers),
+            enabled,
+            reason,
+            H.now(),
+            hook_id,
+        ),
+    )
     H.event(c, who.actor, "webhook.updated", hook_id, {"name": name})
     if moved:
         destinations.record(c, who, "webhook", hook_id, moved, kept, option, hook["revision"] + 1)
@@ -922,9 +1031,16 @@ def rotate(c, vault, who, hook_id):
     may_manage(who, hook)
     old = vault.cipher.unseal(c, D.sealed_as(hook_id), hook["secret"])
     secret = new_secret()
-    c.execute("UPDATE webhooks SET secret=?, secret_prev=?, secret_prev_until=?, revision=revision+1, updated_at=? WHERE id=?",
-              (vault.cipher.seal(c, D.sealed_as(hook_id), secret), vault.cipher.seal(c, D.sealed_as(hook_id, True), old),
-               H.shift(H.now(), hours=GRACE), H.now(), hook_id))
+    c.execute(
+        "UPDATE webhooks SET secret=?, secret_prev=?, secret_prev_until=?, revision=revision+1, updated_at=? WHERE id=?",
+        (
+            vault.cipher.seal(c, D.sealed_as(hook_id), secret),
+            vault.cipher.seal(c, D.sealed_as(hook_id, True), old),
+            H.shift(H.now(), hours=GRACE),
+            H.now(),
+            hook_id,
+        ),
+    )
     H.event(c, who.actor, "webhook.rotated", hook_id, {})
     return {**view(_row(c, hook_id), who, counts(c, [hook_id]).get(hook_id)), "secret": secret}
 
@@ -932,8 +1048,10 @@ def rotate(c, vault, who, hook_id):
 def pause(c, who, hook_id, reason=""):
     hook = _row(c, hook_id)
     may_manage(who, hook)
-    c.execute("UPDATE webhooks SET enabled=0, paused_reason=?, revision=revision+1, updated_at=? WHERE id=?",
-              (reason or f"Paused by {who.actor}", H.now(), hook_id))
+    c.execute(
+        "UPDATE webhooks SET enabled=0, paused_reason=?, revision=revision+1, updated_at=? WHERE id=?",
+        (reason or f"Paused by {who.actor}", H.now(), hook_id),
+    )
     H.event(c, who.actor, "webhook.paused", hook_id, {})
     return view(_row(c, hook_id), who, counts(c, [hook_id]).get(hook_id))
 
@@ -942,10 +1060,17 @@ def resume(c, who, hook_id):
     hook = _row(c, hook_id)
     may_manage(who, hook)
     if needs_value(headers_of(hook)):
-        raise Problem("needs_value", "Type the value of " + ", ".join(needs_value(headers_of(hook))) + " again, or remove "
-                      "it, before turning this endpoint back on", 409)
-    c.execute("UPDATE webhooks SET enabled=1, paused_reason='', disabled_at=NULL, disabled_reason='', failing_since=NULL, "
-              "revision=revision+1, updated_at=? WHERE id=?", (H.now(), hook_id))
+        raise Problem(
+            "needs_value",
+            "Type the value of " + ", ".join(needs_value(headers_of(hook))) + " again, or remove "
+            "it, before turning this endpoint back on",
+            409,
+        )
+    c.execute(
+        "UPDATE webhooks SET enabled=1, paused_reason='', disabled_at=NULL, disabled_reason='', failing_since=NULL, "
+        "revision=revision+1, updated_at=? WHERE id=?",
+        (H.now(), hook_id),
+    )
     H.event(c, who.actor, "webhook.resumed", hook_id, {})
     _refresh(c)
     return view(_row(c, hook_id), who, counts(c, [hook_id]).get(hook_id))
@@ -956,11 +1081,15 @@ def delete(c, who, hook_id):
     the cleanup removes them."""
     hook = _row(c, hook_id)
     may_manage(who, hook)
-    canceled = c.execute("UPDATE webhook_sends SET state='canceled', last_error='The endpoint was deleted', "
-                          "next_attempt_at=?, claimed_at=NULL WHERE webhook_id=? AND state IN ('ready','sending')",
-                          (H.now(), hook_id)).rowcount
-    c.execute("UPDATE webhooks SET deleted_at=?, enabled=0, secret='', secret_prev='', headers='[]', updated_at=? WHERE id=?",
-              (H.now(), H.now(), hook_id))
+    canceled = c.execute(
+        "UPDATE webhook_sends SET state='canceled', last_error='The endpoint was deleted', "
+        "next_attempt_at=?, claimed_at=NULL WHERE webhook_id=? AND state IN ('ready','sending')",
+        (H.now(), hook_id),
+    ).rowcount
+    c.execute(
+        "UPDATE webhooks SET deleted_at=?, enabled=0, secret='', secret_prev='', headers='[]', updated_at=? WHERE id=?",
+        (H.now(), H.now(), hook_id),
+    )
     H.event(c, who.actor, "webhook.deleted", hook_id, {"canceled": canceled})
     return {"id": hook_id, "deleted": True, "canceled": canceled}
 
@@ -1016,8 +1145,11 @@ def one_send(c, who, hook_id, send_id):
     row = c.execute("SELECT * FROM webhook_sends WHERE id=? AND webhook_id=?", (send_id, hook_id)).fetchone()
     if not row:
         raise Problem("not_found", "Send not found", 404)
-    attempts = c.execute("SELECT n,created_at,timestamp_sent,status,ms,response_head,error FROM webhook_attempts WHERE send_id=? "
-                         "ORDER BY n DESC LIMIT 50", (send_id,)).fetchall()
+    attempts = c.execute(
+        "SELECT n,created_at,timestamp_sent,status,ms,response_head,error FROM webhook_attempts WHERE send_id=? "
+        "ORDER BY n DESC LIMIT 50",
+        (send_id,),
+    ).fetchall()
     return {**send_view(row), "attempt_log": [dict(a) for a in attempts]}
 
 
@@ -1033,8 +1165,10 @@ def retry(c, who, hook_id, send_id):
         raise Problem("webhook", "That send is still being tried", 409)
     if row["state"] == "withheld":
         raise Problem("webhook", "A rehearsal copy sends nothing", 409)
-    c.execute("UPDATE webhook_sends SET state='ready', attempts=0, next_attempt_at=?, claimed_at=NULL, last_error='' WHERE id=?",
-              (H.now(), send_id))
+    c.execute(
+        "UPDATE webhook_sends SET state='ready', attempts=0, next_attempt_at=?, claimed_at=NULL, last_error='' WHERE id=?",
+        (H.now(), send_id),
+    )
     H.event(c, who.actor, "webhook.retried", send_id, {"webhook": hook_id})
     _refresh(c)
     return send_view(c.execute("SELECT * FROM webhook_sends WHERE id=?", (send_id,)).fetchone())
@@ -1069,12 +1203,20 @@ def recover_failed(c, who, hook_id, since):
     still drops the repeat). At most REPLAY_BATCH at a time; `more` says run it again."""
     _working(c, who, hook_id)
     at = _since(since)
-    ids = [r["id"] for r in c.execute("SELECT id FROM webhook_sends WHERE webhook_id=? AND state='failed' AND next_attempt_at>=? "
-                                      "ORDER BY next_attempt_at LIMIT ?", (hook_id, at, REPLAY_BATCH + 1))]
+    ids = [
+        r["id"]
+        for r in c.execute(
+            "SELECT id FROM webhook_sends WHERE webhook_id=? AND state='failed' AND next_attempt_at>=? "
+            "ORDER BY next_attempt_at LIMIT ?",
+            (hook_id, at, REPLAY_BATCH + 1),
+        )
+    ]
     more, ids = len(ids) > REPLAY_BATCH, ids[:REPLAY_BATCH]
     for send_id in ids:
-        c.execute("UPDATE webhook_sends SET state='ready', attempts=0, next_attempt_at=?, claimed_at=NULL, last_error='' WHERE id=?",
-                  (H.now(), send_id))
+        c.execute(
+            "UPDATE webhook_sends SET state='ready', attempts=0, next_attempt_at=?, claimed_at=NULL, last_error='' WHERE id=?",
+            (H.now(), send_id),
+        )
     H.event(c, who.actor, "webhook.recovered", hook_id, {"since": at, "sends": len(ids)})
     if ids:
         _refresh(c)
@@ -1092,10 +1234,14 @@ def replay_missing(c, who, hook_id, since, after=""):
     hook = _working(c, who, hook_id)
     at = _since(since)
     events, filt = json.loads(hook["events"]), filter_of(hook)
-    where, params = ("created_at>=?", [at]) if not after else ("(created_at>? OR (created_at=? AND id>?))", [at, at, after])
-    rows = c.execute(f"SELECT * FROM webhook_events e WHERE {where} AND (only_id='' OR only_id=?) AND NOT EXISTS("
-                     "SELECT 1 FROM webhook_sends s WHERE s.event_id=e.id AND s.webhook_id=?) ORDER BY created_at, id LIMIT ?",
-                     (*params, hook_id, hook_id, REPLAY_BATCH + 1)).fetchall()
+    where, params = (
+        ("created_at>=?", [at]) if not after else ("(created_at>? OR (created_at=? AND id>?))", [at, at, after])
+    )
+    rows = c.execute(
+        f"SELECT * FROM webhook_events e WHERE {where} AND (only_id='' OR only_id=?) AND NOT EXISTS("
+        "SELECT 1 FROM webhook_sends s WHERE s.event_id=e.id AND s.webhook_id=?) ORDER BY created_at, id LIMIT ?",
+        (*params, hook_id, hook_id, REPLAY_BATCH + 1),
+    ).fetchall()
     more, rows = len(rows) > REPLAY_BATCH, rows[:REPLAY_BATCH]
     cache, queued = {}, 0
     for row in rows:
@@ -1113,8 +1259,15 @@ def replay_missing(c, who, hook_id, since, after=""):
     H.event(c, who.actor, "webhook.replayed", hook_id, {"since": at, "sends": queued})
     if queued:
         _refresh(c)
-    return {"webhook": hook_id, "since": at, "checked": len(rows), "queued": queued, "more": more,
-            "next_since": rows[-1]["created_at"] if more else None, "next_after": rows[-1]["id"] if more else None}
+    return {
+        "webhook": hook_id,
+        "since": at,
+        "checked": len(rows),
+        "queued": queued,
+        "more": more,
+        "next_since": rows[-1]["created_at"] if more else None,
+        "next_after": rows[-1]["id"] if more else None,
+    }
 
 
 def enable(c, who, hook_id):
@@ -1124,8 +1277,10 @@ def enable(c, who, hook_id):
     offer = None
     if hook["disabled_at"]:
         since = hook["failing_since"] or H.shift(hook["disabled_at"], days=-DISABLE_DAYS)
-        failed = c.execute("SELECT count(*) FROM webhook_sends WHERE webhook_id=? AND state='failed' AND next_attempt_at>=?",
-                           (hook_id, since)).fetchone()[0]
+        failed = c.execute(
+            "SELECT count(*) FROM webhook_sends WHERE webhook_id=? AND state='failed' AND next_attempt_at>=?",
+            (hook_id, since),
+        ).fetchone()[0]
         offer = {"since": since, "failed": failed}
     shown = resume(c, who, hook_id)
     return {"webhook": shown, "recover": offer}
@@ -1139,21 +1294,34 @@ def auto_disable(c, now=None):
     now = now or H.now()
     window = H.shift(now, days=-DISABLE_DAYS)
     off = []
-    for hook in c.execute("SELECT * FROM webhooks WHERE enabled=1 AND deleted_at IS NULL AND failing_since<=?", (window,)).fetchall():
-        row = c.execute("SELECT count(*) n, max(created_at) latest FROM webhook_attempts WHERE webhook_id=? AND created_at>=?",
-                        (hook["id"], hook["failing_since"])).fetchone()
+    for hook in c.execute(
+        "SELECT * FROM webhooks WHERE enabled=1 AND deleted_at IS NULL AND failing_since<=?", (window,)
+    ).fetchall():
+        row = c.execute(
+            "SELECT count(*) n, max(created_at) latest FROM webhook_attempts WHERE webhook_id=? AND created_at>=?",
+            (hook["id"], hook["failing_since"]),
+        ).fetchone()
         if not row["n"] or row["latest"] <= H.shift(hook["failing_since"], hours=DISABLE_SPAN_HOURS):
             continue
         reason = f"Every delivery failed for {DISABLE_DAYS} days"
-        c.execute("UPDATE webhooks SET enabled=0, disabled_at=?, disabled_reason=?, paused_reason=?, revision=revision+1, "
-                  "updated_at=? WHERE id=?", (now, reason, reason, now, hook["id"]))
+        c.execute(
+            "UPDATE webhooks SET enabled=0, disabled_at=?, disabled_reason=?, paused_reason=?, revision=revision+1, "
+            "updated_at=? WHERE id=?",
+            (now, reason, reason, now, hook["id"]),
+        )
         H.event(c, H.KEEPER, "webhook.auto_disabled", hook["id"], {"name": hook["name"], "attempts": row["n"]})
         try:
             c.execute("SAVEPOINT webhook_disable")
-            task = H.task_create(c, H.KEEPER, f"Webhook {hook['name']} was turned off",
-                                 f"Every attempt to reach it failed for {DISABLE_DAYS} days, so Tico stopped sending. "
-                                 f"Fix the address, then turn it on in Settings > Webhooks or `hub webhook enable {hook['id']}`; "
-                                 f"Tico then offers to send again what it held back.", hook["created_by"], lint=False)
+            task = H.task_create(
+                c,
+                H.KEEPER,
+                f"Webhook {hook['name']} was turned off",
+                f"Every attempt to reach it failed for {DISABLE_DAYS} days, so Tico stopped sending. "
+                f"Fix the address, then turn it on in Tools › Webhooks or `hub webhook enable {hook['id']}`; "
+                f"Tico then offers to send again what it held back.",
+                hook["created_by"],
+                lint=False,
+            )
             c.execute("UPDATE webhooks SET notify_task=? WHERE id=?", (task["id"], hook["id"]))
             c.execute("RELEASE webhook_disable")
         except Exception:
@@ -1172,15 +1340,25 @@ def health_summary(c):
     names = {r["id"]: r["name"] for r in c.execute("SELECT id,name FROM webhooks WHERE deleted_at IS NULL")}
     if not names:
         return {"failed": [], "flaky": [], "skipped": 0, "disabled": []}
-    failed = [names[r["webhook_id"]] for r in c.execute(
-        "SELECT DISTINCT webhook_id FROM webhook_sends WHERE state='failed' AND next_attempt_at>=?", (day,)) if r["webhook_id"] in names]
+    failed = [
+        names[r["webhook_id"]]
+        for r in c.execute(
+            "SELECT DISTINCT webhook_id FROM webhook_sends WHERE state='failed' AND next_attempt_at>=?", (day,)
+        )
+        if r["webhook_id"] in names
+    ]
     flaky = []
-    for r in c.execute("SELECT webhook_id, count(*) n, sum(CASE WHEN status BETWEEN 200 AND 299 THEN 0 ELSE 1 END) bad "
-                       "FROM webhook_attempts WHERE created_at>=? GROUP BY webhook_id", (day,)):
+    for r in c.execute(
+        "SELECT webhook_id, count(*) n, sum(CASE WHEN status BETWEEN 200 AND 299 THEN 0 ELSE 1 END) bad "
+        "FROM webhook_attempts WHERE created_at>=? GROUP BY webhook_id",
+        (day,),
+    ):
         if r["webhook_id"] in names and r["n"] >= 5 and r["bad"] * 2 > r["n"] and names[r["webhook_id"]] not in failed:
             flaky.append(names[r["webhook_id"]])
     skipped = c.execute("SELECT count(*) FROM webhook_events WHERE skipped>0 AND created_at>=?", (day,)).fetchone()[0]
-    off = [r["name"] for r in c.execute("SELECT name FROM webhooks WHERE disabled_at IS NOT NULL AND deleted_at IS NULL")]
+    off = [
+        r["name"] for r in c.execute("SELECT name FROM webhooks WHERE disabled_at IS NOT NULL AND deleted_at IS NULL")
+    ]
     return {"failed": failed, "flaky": flaky, "skipped": skipped, "disabled": off}
 
 
@@ -1199,10 +1377,20 @@ def install(app, settings, store, auth, mutate):
             if result.get("webhook") and "secret" in result["webhook"]:
                 shown["secret"] = result["webhook"].pop("secret")
             return result
-        out = request.app.state.vault.change(request.state.identity, request.url.path,
-                                             request.headers.get("idempotency-key"), body, lambda c, who: None, run)
+
+        out = request.app.state.vault.change(
+            request.state.identity,
+            request.url.path,
+            request.headers.get("idempotency-key"),
+            body,
+            lambda c, who: None,
+            run,
+        )
         if out.get("webhook") is not None:
-            out = {**out, "webhook": {**out["webhook"], "replayed": not shown, **({"secret": shown["secret"]} if shown else {})}}
+            out = {
+                **out,
+                "webhook": {**out["webhook"], "replayed": not shown, **({"secret": shown["secret"]} if shown else {})},
+            }
         return out
 
     def person_or_bot(who):
@@ -1227,6 +1415,7 @@ def install(app, settings, store, auth, mutate):
         def make(c):
             made = create(c, request.app.state.vault, who, body)
             return made if "approval" in made else {"webhook": made}
+
         return once(request, body, make)
 
     @app.get("/api/v2/webhooks/{hook_id}")
@@ -1237,21 +1426,34 @@ def install(app, settings, store, auth, mutate):
         with store.read() as c:
             hook = _reach(c, who, hook_id)
             shown = view(hook, who, counts(c, [hook_id]).get(hook_id))
-            recent = [] if who.role == "bot" else [dict(r) for r in c.execute(
-                "SELECT send_id,n,created_at,status,ms,error FROM webhook_attempts WHERE webhook_id=? ORDER BY created_at DESC, n DESC LIMIT 10",
-                (hook_id,))]
+            recent = (
+                []
+                if who.role == "bot"
+                else [
+                    dict(r)
+                    for r in c.execute(
+                        "SELECT send_id,n,created_at,status,ms,error FROM webhook_attempts WHERE webhook_id=? ORDER BY created_at DESC, n DESC LIMIT 10",
+                        (hook_id,),
+                    )
+                ]
+            )
             return {"webhook": shown, "recent_attempts": recent}
 
     @app.post("/api/v2/webhooks/{hook_id}/update")
     def webhook_update(request: Request, hook_id: str, body: WebhookUpdate):
         """Change the name, address, events, rate or (for the owner) the plain-http switch."""
-        return mutate(request, body, lambda c: {"webhook": update(c, request.state.identity, hook_id, body,
-                                                                  request.app.state.vault)})
+        return mutate(
+            request,
+            body,
+            lambda c: {"webhook": update(c, request.state.identity, hook_id, body, request.app.state.vault)},
+        )
 
     @app.post("/api/v2/webhooks/{hook_id}/rotate")
     def webhook_rotate(request: Request, hook_id: str, body: M.Empty):
         """A new secret, shown once; the old one keeps signing beside it for 24 hours."""
-        return once(request, body, lambda c: {"webhook": rotate(c, request.app.state.vault, request.state.identity, hook_id)})
+        return once(
+            request, body, lambda c: {"webhook": rotate(c, request.app.state.vault, request.state.identity, hook_id)}
+        )
 
     @app.post("/api/v2/webhooks/{hook_id}/pause")
     def webhook_pause(request: Request, hook_id: str, body: Pause):
@@ -1277,7 +1479,9 @@ def install(app, settings, store, auth, mutate):
     def webhook_replay(request: Request, hook_id: str, body: WebhookReplay):
         """Send the events since a date that this endpoint should have had and has no send for. At most 500 events a
         round; when `more`, send `next_since` and `next_after` back as `since` and `after` for the next round."""
-        return mutate(request, body, lambda c: replay_missing(c, request.state.identity, hook_id, body.since, body.after))
+        return mutate(
+            request, body, lambda c: replay_missing(c, request.state.identity, hook_id, body.since, body.after)
+        )
 
     @app.post("/api/v2/webhooks/{hook_id}/delete")
     def webhook_delete(request: Request, hook_id: str, body: M.Empty):

@@ -55,8 +55,18 @@ SIGN_OUT_RUNTIMES = manifests.with_capability("sign_out")
 CONNECT_RUNTIMES = manifests.with_capability("subscription_connect")
 # What a row asks the runner to do. A runner without SIGN_OUT_CAPABILITY knows only `sign_in`, so it is never
 # handed another kind: it would start a sign-in instead.
-KINDS = ("sign_in", "switch", "sign_out", "use_shared_key", "clear_key", "use_key", "to_subscription", "remove", "to_key",
-         "connect")
+KINDS = (
+    "sign_in",
+    "switch",
+    "sign_out",
+    "use_shared_key",
+    "clear_key",
+    "use_key",
+    "to_subscription",
+    "remove",
+    "to_key",
+    "connect",
+)
 SIGN_OUT_CAPABILITY = "model_sign_out_v1"
 # A runner that clears and uses a computer's key (runner-rs/src/login.rs); an older one is asked to update first.
 KEYS_CAPABILITY = "model_keys_v1"
@@ -89,11 +99,18 @@ WIRE_STATE = {"canceled": "cancelled"}
 ORDER = {state: i for i, state in enumerate(("requested", "starting", "waiting", "finishing", "signed_in", "failed"))}
 ORDER.update(signed_out=ORDER["signed_in"], done=ORDER["signed_in"])
 # The verdicts each kind may end with; any other is refused as the runner's mistake.
-VERDICTS = {"sign_in": ("signed_in", "failed"), "switch": ("signed_in", "failed"),
-            "sign_out": ("signed_out", "failed"), "use_shared_key": ("done", "failed"),
-            "clear_key": ("signed_out", "failed"), "use_key": ("done", "failed"),
-            "to_subscription": ("signed_in", "failed"), "remove": ("done", "failed"),
-            "to_key": ("done", "failed"), "connect": ("failed",)}
+VERDICTS = {
+    "sign_in": ("signed_in", "failed"),
+    "switch": ("signed_in", "failed"),
+    "sign_out": ("signed_out", "failed"),
+    "use_shared_key": ("done", "failed"),
+    "clear_key": ("signed_out", "failed"),
+    "use_key": ("done", "failed"),
+    "to_subscription": ("signed_in", "failed"),
+    "remove": ("done", "failed"),
+    "to_key": ("done", "failed"),
+    "connect": ("failed",),
+}
 MAX_LINES, MAX_LINE = 12, 200
 ONLINE_SECONDS = 60
 PASTE_RE = re.compile(r"^[A-Za-z0-9_\-#.~%+=/]{6,600}$")
@@ -130,8 +147,12 @@ def clean_url(url):
     url = str(url or "").strip()
     if not url:
         return ""
-    if len(url) > 2048 or not url.startswith("https://") or re.search(r"[\s\x00-\x1f\x7f<>\"']", url) \
-            or "@" in url.split("/")[2]:
+    if (
+        len(url) > 2048
+        or not url.startswith("https://")
+        or re.search(r"[\s\x00-\x1f\x7f<>\"']", url)
+        or "@" in url.split("/")[2]
+    ):
         return ""
     return url
 
@@ -145,39 +166,65 @@ def sweep(c):
     """Expire what ran out of time; forget what nobody needs any more."""
     now = H.now()
     from . import computer_keys
-    for row in c.execute(f"SELECT id FROM model_logins WHERE {KEY_JOBS_SQL} AND {ACTIVE_SQL} AND expires_at<?",
-                         (now,)).fetchall():
+
+    for row in c.execute(
+        f"SELECT id FROM model_logins WHERE {KEY_JOBS_SQL} AND {ACTIVE_SQL} AND expires_at<?", (now,)
+    ).fetchall():
         computer_keys.discard(c, row["id"])
-    c.execute("UPDATE model_logins SET state='expired', url='', user_code='', pending_code=NULL, updated_at=? "
-              f"WHERE {ACTIVE_SQL} AND expires_at<?", (now, now))
+    c.execute(
+        "UPDATE model_logins SET state='expired', url='', user_code='', pending_code=NULL, updated_at=? "
+        f"WHERE {ACTIVE_SQL} AND expires_at<?",
+        (now, now),
+    )
     # What a Connect that is over would have become: the job names no value, and nothing reads this once it has ended.
     if H._has_table(c, "subscription_connects"):
-        c.execute("DELETE FROM subscription_connects WHERE login_id NOT IN "
-                  f"(SELECT id FROM model_logins WHERE {ACTIVE_SQL})")
+        c.execute(
+            f"DELETE FROM subscription_connects WHERE login_id NOT IN (SELECT id FROM model_logins WHERE {ACTIVE_SQL})"
+        )
     c.execute("DELETE FROM model_logins WHERE created_at<?", (H.shift(now, days=-1),))
 
 
 def sweep_due(c):
     """Whether `sweep` has anything to change: a poll reads without the write lock when it has not."""
     now = H.now()
-    return bool(c.execute(f"SELECT 1 FROM model_logins WHERE ({ACTIVE_SQL} AND expires_at<?) OR created_at<? LIMIT 1",
-                          (now, H.shift(now, days=-1))).fetchone())
+    return bool(
+        c.execute(
+            f"SELECT 1 FROM model_logins WHERE ({ACTIVE_SQL} AND expires_at<?) OR created_at<? LIMIT 1",
+            (now, H.shift(now, days=-1)),
+        ).fetchone()
+    )
 
 
 def view(row):
     state = row["state"]
-    return {"id": row["id"], "kind": row["kind"], "runner_id": row["runner_id"], "runtime": row["runtime"],
-            "profile": row["profile"], "state": state, "url": row["url"], "code": row["user_code"],
-            "lines": json.loads(row["lines"] or "[]"), "message": row["message"],
-            "accepts_code": row["runtime"] in PASTE_RUNTIMES and state == "waiting",
-            "code_sent": bool(row["code_sent"]), "created_at": row["created_at"], "updated_at": row["updated_at"],
-            "expires_at": row["expires_at"]}
+    return {
+        "id": row["id"],
+        "kind": row["kind"],
+        "runner_id": row["runner_id"],
+        "runtime": row["runtime"],
+        "profile": row["profile"],
+        "state": state,
+        "url": row["url"],
+        "code": row["user_code"],
+        "lines": json.loads(row["lines"] or "[]"),
+        "message": row["message"],
+        "accepts_code": row["runtime"] in PASTE_RUNTIMES and state == "waiting",
+        "code_sent": bool(row["code_sent"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "expires_at": row["expires_at"],
+    }
 
 
 def _operator(c, who, rid, auth=None):
     runner = _runner(c, rid)
-    if not (who.role == "owner" or auth and auth.bot_admin(who)
-            or who.role == "human" and H.actor_id(who.actor) == runner["owner_id"]):
+    if not (
+        who.role == "owner"
+        or auth
+        and auth.bot_admin(who)
+        or who.role == "human"
+        and H.actor_id(who.actor) == runner["owner_id"]
+    ):
         raise Problem("forbidden", "You cannot sign a model in on this computer", 403)
 
 
@@ -186,9 +233,13 @@ def _person_only(who, what):
     as itself, and not with the rights of the person it works for (its delegated identity keeps `via` "botops", even
     on a person's click on a card it proposed). Checked before anything is queued, marked or recorded."""
     from .onboarding import BOTOPS
+
     if "bot:" + BOTOPS in (who.actor, who.task_actor) or who.via == "botops":
-        raise Problem("forbidden", f"BotOps cannot {what}: it stops the bots on that login. Ask the person to do it "
-                      "in Settings > Computers", 403)
+        raise Problem(
+            "forbidden",
+            f"BotOps cannot {what}: it stops the bots on that login. Ask the person to do it in Settings > Computers",
+            403,
+        )
 
 
 def _runner(c, rid):
@@ -237,33 +288,57 @@ def _queue(c, who, runner, runtime, profile, kind, what):
     """(row, new): a new row for the runner to run, or the one already running for this login. One thing at a time
     per login: a sign-out never races a sign-in on the same files."""
     from .subscriptions import login_upgrade
+
     if not profile and (problem := login_upgrade(runner, runtime=runtime)):
         raise Problem("runner_version", problem, 409)
     sweep(c)
-    running = c.execute(f"SELECT * FROM model_logins WHERE runner_id=? AND runtime=? AND profile=? AND {ACTIVE_SQL}",
-                        (runner["id"], runtime, profile)).fetchone()
+    running = c.execute(
+        f"SELECT * FROM model_logins WHERE runner_id=? AND runtime=? AND profile=? AND {ACTIVE_SQL}",
+        (runner["id"], runtime, profile),
+    ).fetchone()
     if running and running["kind"] == kind:
         return running, False
     if running:
-        raise Problem("state", "Something else is running for this login on that computer; cancel it or wait for it "
-                      "to finish", 409)
+        raise Problem(
+            "state",
+            "Something else is running for this login on that computer; cancel it or wait for it to finish",
+            409,
+        )
     # A removal can delete the subscription's whole folder, so it runs alone on it: no other tool signs in there
     # meanwhile, and it does not start while one is.
-    if profile and c.execute(f"SELECT 1 FROM model_logins WHERE runner_id=? AND profile=? AND runtime<>? AND {ACTIVE_SQL} "
-                             "AND (kind='remove' OR ?='remove')", (runner["id"], profile, runtime, kind)).fetchone():
+    if (
+        profile
+        and c.execute(
+            f"SELECT 1 FROM model_logins WHERE runner_id=? AND profile=? AND runtime<>? AND {ACTIVE_SQL} "
+            "AND (kind='remove' OR ?='remove')",
+            (runner["id"], profile, runtime, kind),
+        ).fetchone()
+    ):
         raise Problem("state", f"Something else is running on {profile} on that computer; wait for it to finish", 409)
     if not _online(runner):
         raise Problem("offline", f"That computer is offline, so it cannot {what}", 409)
-    if (kind != "sign_in" and not _signs_out(runner) or kind in KEY_KINDS and not _handles_keys(runner)
-            or kind == "to_subscription" and not _switches_type(runner) or kind == "remove" and not _removes(runner)
-            or kind == "to_key" and not _switches_to_key(runner) or kind == "connect" and not connects(runner)):
+    if (
+        kind != "sign_in"
+        and not _signs_out(runner)
+        or kind in KEY_KINDS
+        and not _handles_keys(runner)
+        or kind == "to_subscription"
+        and not _switches_type(runner)
+        or kind == "remove"
+        and not _removes(runner)
+        or kind == "to_key"
+        and not _switches_to_key(runner)
+        or kind == "connect"
+        and not connects(runner)
+    ):
         raise Problem("runner_version", f"Update {runner['label']} to {what} from here", 409)
     now = H.now()
     lid = H.new_id()
-    c.execute("INSERT INTO model_logins(id,runner_id,runtime,profile,state,created_at,updated_at,expires_at,requested_by,kind) "
-              "VALUES(?,?,?,?,?,?,?,?,?,?)",
-              (lid, runner["id"], runtime, profile, "requested", now, now, H.shift(now, seconds=LIFETIME), who.actor,
-               kind))
+    c.execute(
+        "INSERT INTO model_logins(id,runner_id,runtime,profile,state,created_at,updated_at,expires_at,requested_by,kind) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (lid, runner["id"], runtime, profile, "requested", now, now, H.shift(now, seconds=LIFETIME), who.actor, kind),
+    )
     return _login(c, runner["id"], lid), True
 
 
@@ -276,16 +351,29 @@ def start(c, who, rid, runtime, profile="", auth=None, switch=False, to=""):
         raise Problem("kind", "Switch to subscription is for the computer's own login, on its own", 422)
     if profile:
         # One login per AI tool per computer, used by all its bots: a different account means another computer.
-        raise Problem("one_login", "Each computer has one login per AI tool, used by all its bots. Sign in the "
-                      "computer's login; for a different account, add another computer", 422)
+        raise Problem(
+            "one_login",
+            "Each computer has one login per AI tool, used by all its bots. Sign in the "
+            "computer's login; for a different account, add another computer",
+            422,
+        )
     kind = "to_subscription" if to else "switch" if switch else "sign_in"
-    what = {"to_subscription": "switch to a subscription", "switch": "switch accounts", "sign_in": "start a sign-in"}[kind]
+    what = {"to_subscription": "switch to a subscription", "switch": "switch accounts", "sign_in": "start a sign-in"}[
+        kind
+    ]
     if kind in SIDE_KINDS:
         _person_only(who, what)
     _operator(c, who, rid, auth)
     if runtime not in RUNTIMES:
-        raise Problem("kind", "Browser sign-in works for " + ", ".join(RUNTIMES[:-1]) + " and " + RUNTIMES[-1]
-                      + "; set other runtimes up from the computer's terminal", 422)
+        raise Problem(
+            "kind",
+            "Browser sign-in works for "
+            + ", ".join(RUNTIMES[:-1])
+            + " and "
+            + RUNTIMES[-1]
+            + "; set other runtimes up from the computer's terminal",
+            422,
+        )
     if kind in SIDE_KINDS and runtime not in SIGN_OUT_RUNTIMES:
         raise Problem("kind", f"You can't {what} from here for " + runtime, 422)
     runner = _runner(c, rid)
@@ -294,37 +382,59 @@ def start(c, who, rid, runtime, profile="", auth=None, switch=False, to=""):
     # login while it reads "The API key is still in use" (a page drawn before the Clear key, #1298).
     if kind == "to_subscription" and cleared(c, rid, runtime):
         gone = "its key was cleared" if runtime in key_cleared_logins(c, rid) else "it is signed out"
-        raise Problem("state", f"{runtime} on {runner['label']} has no API key to switch from: {gone}. Sign in "
-                      "instead", 409)
+        raise Problem(
+            "state", f"{runtime} on {runner['label']} has no API key to switch from: {gone}. Sign in instead", 409
+        )
     if kind in SIDE_KINDS and runner["platform"] in manifests.caps(runtime).get("switch_unavailable_on", []):
-        raise Problem("kind", f"You can't {what} for {runtime} on {runner['label']} from here: it keeps the "
-                      "login in the system keychain. Sign out, then sign in", 422)
+        raise Problem(
+            "kind",
+            f"You can't {what} for {runtime} on {runner['label']} from here: it keeps the "
+            "login in the system keychain. Sign out, then sign in",
+            422,
+        )
     row, new = _queue(c, who, runner, runtime, profile, kind, what)
     if new:
         from .subscription_refresh import invalidate_signin
+
         invalidate_signin(c, rid, profile, runtime, row["created_at"])
-        H.event(c, who.actor, {"to_subscription": "runner.login.to_subscription", "switch": "runner.login.switch",
-                               "sign_in": "runner.login.start"}[kind], rid, {"runtime": runtime})
+        H.event(
+            c,
+            who.actor,
+            {
+                "to_subscription": "runner.login.to_subscription",
+                "switch": "runner.login.switch",
+                "sign_in": "runner.login.start",
+            }[kind],
+            rid,
+            {"runtime": runtime},
+        )
     return view(row)
 
 
 def cleared(c, rid, runtime, profile=""):
     """Whether a person signed this login out (the shared key stays away from it until they sign in again)."""
-    return bool(c.execute("SELECT 1 FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=?",
-                          (rid, runtime, profile)).fetchone())
+    return bool(
+        c.execute(
+            "SELECT 1 FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=?", (rid, runtime, profile)
+        ).fetchone()
+    )
 
 
 def key_off(c, rid, runtime, profile=""):
     """Whether this login was switched to a subscription: the shared key stays away until Use the shared key."""
-    return bool(c.execute("SELECT 1 FROM model_login_key_off WHERE runner_id=? AND runtime=? AND profile=?",
-                          (rid, runtime, profile)).fetchone())
+    return bool(
+        c.execute(
+            "SELECT 1 FROM model_login_key_off WHERE runner_id=? AND runtime=? AND profile=?", (rid, runtime, profile)
+        ).fetchone()
+    )
 
 
 def cleared_logins(c, rid):
     """{runtime: [profile, ...]} signed out by a person on this computer ("" is the computer's own login)."""
     out = {}
-    for row in c.execute("SELECT runtime, profile FROM model_login_cleared WHERE runner_id=? ORDER BY runtime, profile",
-                         (rid,)):
+    for row in c.execute(
+        "SELECT runtime, profile FROM model_login_cleared WHERE runner_id=? ORDER BY runtime, profile", (rid,)
+    ):
         out.setdefault(row["runtime"], []).append(row["profile"])
     return out
 
@@ -339,15 +449,21 @@ def cleared_by_runner(c):
 
 def key_cleared_logins(c, rid):
     """[runtime, ...] whose computer login a person cleared the key of (Clear key, not Sign out): "No key · Add key"."""
-    return [row["runtime"] for row in c.execute(
-        "SELECT runtime FROM model_login_cleared WHERE runner_id=? AND profile='' AND clear_key=1 ORDER BY runtime", (rid,))]
+    return [
+        row["runtime"]
+        for row in c.execute(
+            "SELECT runtime FROM model_login_cleared WHERE runner_id=? AND profile='' AND clear_key=1 ORDER BY runtime",
+            (rid,),
+        )
+    ]
 
 
 def key_cleared_by_runner(c):
     """{runner_id: key_cleared_logins(...)} for every computer in one pass (Operations listing)."""
     out = {}
     for row in c.execute(
-            "SELECT runner_id, runtime FROM model_login_cleared WHERE profile='' AND clear_key=1 ORDER BY runtime"):
+        "SELECT runner_id, runtime FROM model_login_cleared WHERE profile='' AND clear_key=1 ORDER BY runtime"
+    ):
         out.setdefault(row["runner_id"], []).append(row["runtime"])
     return out
 
@@ -364,10 +480,14 @@ def sign_out(c, who, rid, runtime, profile="", auth=None):
     if not new:
         return view(row)
     now = H.now()
-    c.execute("INSERT INTO model_login_cleared(runner_id,runtime,profile,cleared_at,cleared_by) VALUES(?,?,?,?,?) "
-              "ON CONFLICT(runner_id,runtime,profile) DO UPDATE SET cleared_at=excluded.cleared_at, "
-              "cleared_by=excluded.cleared_by", (rid, runtime, profile, now, who.actor))
+    c.execute(
+        "INSERT INTO model_login_cleared(runner_id,runtime,profile,cleared_at,cleared_by) VALUES(?,?,?,?,?) "
+        "ON CONFLICT(runner_id,runtime,profile) DO UPDATE SET cleared_at=excluded.cleared_at, "
+        "cleared_by=excluded.cleared_by",
+        (rid, runtime, profile, now, who.actor),
+    )
     from .subscription_refresh import invalidate_signin
+
     invalidate_signin(c, rid, profile, runtime, now)
     H.event(c, who.actor, "runner.login.sign_out", rid, {"runtime": runtime, "profile": profile})
     return view(row)
@@ -395,6 +515,7 @@ def _share_with(c, who, runner_ids, credential_id, here, runtime):
     subscription there no longer holds it back (`_resume`). The grant rows themselves tell every runner to fetch its
     keys again (backend/events.py)."""
     from .computer_keys import SHARED_WITH, names
+
     rows = []
     for rid in dict.fromkeys([here, *runner_ids]):
         row = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
@@ -404,22 +525,35 @@ def _share_with(c, who, runner_ids, credential_id, here, runtime):
     marked = [row for row in rows if cleared(c, row["id"], runtime) or key_off(c, row["id"], runtime)]
     for row in marked:
         if not _online(row):
-            raise Problem("offline", f"{row['label']} is offline, and its key was cleared or switched to a "
-                          "subscription from here, so it cannot take the shared key until it is back", 409)
+            raise Problem(
+                "offline",
+                f"{row['label']} is offline, and its key was cleared or switched to a "
+                "subscription from here, so it cannot take the shared key until it is back",
+                409,
+            )
         if not _signs_out(row):
             raise Problem("runner_version", f"Update {row['label']} to use the shared key from here", 409)
     now = H.now()
     allowed = names(runtime)
     for row in rows:
         subject = SHARED_WITH + row["id"]
-        for other in c.execute("SELECT g.id FROM credential_grants g JOIN credentials cr ON cr.id=g.credential_id "
-                               "WHERE g.subject=? AND g.revoked_at IS NULL AND g.credential_id<>? AND cr.env IN (%s)"
-                               % ",".join("?" * len(allowed)), (subject, credential_id, *allowed)).fetchall():
-            c.execute("UPDATE credential_grants SET revoked_at=?, revoked_by=? WHERE id=?", (now, who.actor, other["id"]))
-        if not c.execute("SELECT 1 FROM credential_grants WHERE credential_id=? AND subject=? AND revoked_at IS NULL",
-                         (credential_id, subject)).fetchone():
-            c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)",
-                      (H.new_id(), credential_id, subject, who.actor, now))
+        for other in c.execute(
+            "SELECT g.id FROM credential_grants g JOIN credentials cr ON cr.id=g.credential_id "
+            "WHERE g.subject=? AND g.revoked_at IS NULL AND g.credential_id<>? AND cr.env IN (%s)"
+            % ",".join("?" * len(allowed)),
+            (subject, credential_id, *allowed),
+        ).fetchall():
+            c.execute(
+                "UPDATE credential_grants SET revoked_at=?, revoked_by=? WHERE id=?", (now, who.actor, other["id"])
+            )
+        if not c.execute(
+            "SELECT 1 FROM credential_grants WHERE credential_id=? AND subject=? AND revoked_at IS NULL",
+            (credential_id, subject),
+        ).fetchone():
+            c.execute(
+                "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)",
+                (H.new_id(), credential_id, subject, who.actor, now),
+            )
     for row in marked:
         _resume(c, who, row, runtime)
     # In the order every list of computers here uses.
@@ -441,6 +575,7 @@ def share_key(c, who, rid, runtime, key, env="", share=(), auth=None, vault=None
     fetch, as a new "Every computer" key is (no per-computer check: that queue is one computer's)."""
     from . import computer_keys
     from .credentials import require_admin
+
     _person_only(who, "share a key")
     _operator(c, who, rid, auth)
     _key_runtime(runtime)
@@ -458,15 +593,36 @@ def share_key(c, who, rid, runtime, key, env="", share=(), auth=None, vault=None
     cid, now = H.new_id(), H.now()
     ciphertext, nonce = vault.cipher.encrypt(c, cid, value)
     preview = value[:3] + "…" + value[-3:] if len(value) >= 12 else "••••••"
-    c.execute("INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,updated_by,"
-              "created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-              (cid, f"{env} shared from {runner['label']}", "api_key", env, preview, ciphertext, nonce,
-               "computers:" + rid, now, now, who.actor, who.actor))
+    c.execute(
+        "INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,updated_by,"
+        "created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            cid,
+            f"{env} shared from {runner['label']}",
+            "api_key",
+            env,
+            preview,
+            ciphertext,
+            nonce,
+            "computers:" + rid,
+            now,
+            now,
+            who.actor,
+            who.actor,
+        ),
+    )
     rows = _share_with(c, who, share, cid, rid, runtime)
-    H.event(c, who.actor, "computer_key.shared", rid, {"runtime": runtime, "env": env, "credential": cid,
-                                                       "computers": [row["id"] for row in rows]})
-    return {"shared": {"id": cid, "env": env, "preview": preview},
-            "computers": [{"id": row["id"], "label": row["label"], "online": _online(row)} for row in rows]}
+    H.event(
+        c,
+        who.actor,
+        "computer_key.shared",
+        rid,
+        {"runtime": runtime, "env": env, "credential": cid, "computers": [row["id"] for row in rows]},
+    )
+    return {
+        "shared": {"id": cid, "env": env, "preview": preview},
+        "computers": [{"id": row["id"], "label": row["label"], "online": _online(row)} for row in rows],
+    }
 
 
 def attach_shared_key(c, who, rid, runtime, credential_id, auth=None, vault=None):
@@ -474,21 +630,29 @@ def attach_shared_key(c, who, rid, runtime, credential_id, auth=None, vault=None
     computer, or with others by name). A credential administrator's change, as sharing it was."""
     from . import computer_keys
     from .credentials import COMPUTERS, require_admin
+
     _person_only(who, "use a shared key")
     _operator(c, who, rid, auth)
     _key_runtime(runtime)
     require_admin(c, who, vault.admins)
     runner = _runner(c, rid)
     row = c.execute("SELECT * FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (credential_id,)).fetchone()
-    shared = row and c.execute("SELECT 1 FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL AND "
-                               "(subject=? OR subject LIKE ?)", (credential_id, COMPUTERS,
-                                                                 computer_keys.SHARED_WITH + "%")).fetchone()
+    shared = (
+        row
+        and c.execute(
+            "SELECT 1 FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL AND "
+            "(subject=? OR subject LIKE ?)",
+            (credential_id, COMPUTERS, computer_keys.SHARED_WITH + "%"),
+        ).fetchone()
+    )
     if not shared or row["env"] not in computer_keys.names(runtime):
         raise Problem("credential", f"Choose a shared {runtime} key", 422)
     _share_with(c, who, (), credential_id, rid, runtime)
     H.event(c, who.actor, "computer_key.attached", rid, {"runtime": runtime, "credential": credential_id})
-    return {"shared": {"id": row["id"], "env": row["env"], "preview": row["preview"]},
-            "computers": [{"id": r["id"], "label": r["label"]} for r in _shared_users(c, runner, runtime)]}
+    return {
+        "shared": {"id": row["id"], "env": row["env"], "preview": row["preview"]},
+        "computers": [{"id": r["id"], "label": r["label"]} for r in _shared_users(c, runner, runtime)],
+    }
 
 
 def shared_choices(c, runtime):
@@ -496,14 +660,25 @@ def shared_choices(c, runtime):
     every}], never a value."""
     from . import computer_keys
     from .credentials import COMPUTERS
+
     out = []
-    for row in c.execute("SELECT cr.id, cr.name, cr.env, cr.preview, max(g.subject=?) AS every FROM credentials cr "
-                         "JOIN credential_grants g ON g.credential_id=cr.id AND g.revoked_at IS NULL "
-                         "WHERE cr.ciphertext IS NOT NULL AND (g.subject=? OR g.subject LIKE ?) GROUP BY cr.id "
-                         "ORDER BY lower(cr.name), cr.id", (COMPUTERS, COMPUTERS, computer_keys.SHARED_WITH + "%")):
+    for row in c.execute(
+        "SELECT cr.id, cr.name, cr.env, cr.preview, max(g.subject=?) AS every FROM credentials cr "
+        "JOIN credential_grants g ON g.credential_id=cr.id AND g.revoked_at IS NULL "
+        "WHERE cr.ciphertext IS NOT NULL AND (g.subject=? OR g.subject LIKE ?) GROUP BY cr.id "
+        "ORDER BY lower(cr.name), cr.id",
+        (COMPUTERS, COMPUTERS, computer_keys.SHARED_WITH + "%"),
+    ):
         if row["env"] in computer_keys.names(runtime):
-            out.append({"id": row["id"], "name": row["name"], "env": row["env"], "preview": row["preview"],
-                        "every": bool(row["every"])})
+            out.append(
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "env": row["env"],
+                    "preview": row["preview"],
+                    "every": bool(row["every"]),
+                }
+            )
     return out
 
 
@@ -514,6 +689,7 @@ def affected_bots(c, who, rid, runtime, profile, settings, auth=None, every=Fals
     runner = _runner(c, rid)
     if not profile:
         from .subscriptions import login_upgrade
+
         if problem := login_upgrade(runner, runtime=runtime):
             raise Problem("runner_version", problem, 409)
     return {"runtime": runtime, "profile": profile, "bots": _bots_on(c, rid, runtime, profile, settings, every)}
@@ -524,6 +700,7 @@ def _bots_on(c, rid, runtime, profile, settings, every):
     from . import providers
     from .shared_bots import follow
     from .subscriptions import computer_logins
+
     runner = c.execute('SELECT readiness,capabilities FROM runners_with_state WHERE id=?', (rid,)).fetchone()
     ready = H._json(runner['readiness'], {}) or {}
     current = computer_logins(runner, ready)
@@ -534,9 +711,12 @@ def _bots_on(c, rid, runtime, profile, settings, every):
     record = providers.load(c, settings)
     out = []
     active = "" if every else "AND b.state='active' "
-    for row in c.execute(f"SELECT a.bot, b.display_name, {BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
-                         f"{active}LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} WHERE a.runner_id=? "
-                         "ORDER BY a.bot", (rid,)):
+    for row in c.execute(
+        f"SELECT a.bot, b.display_name, {BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+        f"{active}LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} WHERE a.runner_id=? "
+        "ORDER BY a.bot",
+        (rid,),
+    ):
         try:
             config = providers.fill(record, follow(c, row["bot"], json.loads(row["config"] or "{}")))
         except ValueError:
@@ -552,8 +732,7 @@ def _names(names):
 
 
 def _in_use(bots):
-    return (f"{_names([b['name'] for b in bots])} run on it. Move them to another connection on the Bots page "
-            "first")
+    return f"{_names([b['name'] for b in bots])} run on it. Move them to another connection on the Bots page first"
 
 
 def hold_removals(c, settings, bots=None):
@@ -561,20 +740,37 @@ def hold_removals(c, settings, bots=None):
     computer: a placement, a model or tool change, the company's default, a shared bot's original. Called after the
     change is written, inside its transaction, so the refusal undoes it. A removal is held from its ask to its end,
     the commit point and the deletion after it included."""
-    for row in c.execute(f"SELECT runner_id, runtime, profile FROM model_logins WHERE kind='remove' AND {ACTIVE_SQL}").fetchall():
-        on = [b for b in _bots_on(c, row["runner_id"], row["runtime"], row["profile"], settings, True)
-              if bots is None or b["bot"] in bots]
+    for row in c.execute(
+        f"SELECT runner_id, runtime, profile FROM model_logins WHERE kind='remove' AND {ACTIVE_SQL}"
+    ).fetchall():
+        on = [
+            b
+            for b in _bots_on(c, row["runner_id"], row["runtime"], row["profile"], settings, True)
+            if bots is None or b["bot"] in bots
+        ]
         if on:
-            label = (c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone() or ["the computer"])[0]
-            raise Problem("removing", f"{row['profile']} is being removed from {label}, and {_names([b['name'] for b in on])} "
-                          "would run on it. Wait until it is removed, or choose another connection on the Bots page", 409,
-                          extra={"bots": on})
+            label = (
+                c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone() or ["the computer"]
+            )[0]
+            raise Problem(
+                "removing",
+                f"{row['profile']} is being removed from {label}, and {_names([b['name'] for b in on])} "
+                "would run on it. Wait until it is removed, or choose another connection on the Bots page",
+                409,
+                extra={"bots": on},
+            )
 
 
 def removing(c, rid, profile):
     """Whether `profile` is being taken off computer `rid` (a removal not yet ended): no bot chooses it meanwhile."""
-    return bool(profile) and c.execute(f"SELECT 1 FROM model_logins WHERE runner_id=? AND profile=? AND kind='remove' "
-                                       f"AND {ACTIVE_SQL}", (rid, profile)).fetchone() is not None
+    return (
+        bool(profile)
+        and c.execute(
+            f"SELECT 1 FROM model_logins WHERE runner_id=? AND profile=? AND kind='remove' AND {ACTIVE_SQL}",
+            (rid, profile),
+        ).fetchone()
+        is not None
+    )
 
 
 def remove(c, who, rid, runtime, profile, settings, auth=None):
@@ -583,7 +779,9 @@ def remove(c, who, rid, runtime, profile, settings, auth=None):
     _person_only(who, "remove a subscription")
     _operator(c, who, rid, auth)
     if not profile:
-        raise Problem("kind", "Only a named subscription can be removed; sign the computer's own login out instead", 422)
+        raise Problem(
+            "kind", "Only a named subscription can be removed; sign the computer's own login out instead", 422
+        )
     if runtime not in SIGN_OUT_RUNTIMES:
         raise Problem("kind", "Removing a subscription from here isn't available for " + runtime, 422)
     runner = _runner(c, rid)
@@ -619,8 +817,7 @@ def submit_code(c, who, rid, lid, code, auth=None):
         raise Problem("kind", "That does not look like the code the sign-in page showed", 422)
     if row["code_sent"]:
         raise Problem("state", "A code was already sent; start a new sign-in to try again", 409)
-    c.execute("UPDATE model_logins SET pending_code=?, code_sent=1, updated_at=? WHERE id=?",
-              (code, H.now(), lid))
+    c.execute("UPDATE model_logins SET pending_code=?, code_sent=1, updated_at=? WHERE id=?", (code, H.now(), lid))
     return view(_login(c, rid, lid))
 
 
@@ -635,10 +832,14 @@ def cancel(c, who, rid, lid, auth=None):
         raise Problem("state", f"The new {what} is already being put in place, so it can't be canceled now", 409)
     if row["kind"] in KEY_JOBS and row["state"] in ACTIVE:
         from .computer_keys import discard
+
         discard(c, lid)
     if row["state"] in ACTIVE:
-        c.execute("UPDATE model_logins SET state='canceled', url='', user_code='', pending_code=NULL, updated_at=? "
-                  "WHERE id=?", (H.now(), lid))
+        c.execute(
+            "UPDATE model_logins SET state='canceled', url='', user_code='', pending_code=NULL, updated_at=? "
+            "WHERE id=?",
+            (H.now(), lid),
+        )
         H.event(c, who.actor, "runner.login.cancel", rid, {"runtime": row["runtime"]})
     return view(_login(c, rid, lid))
 
@@ -647,11 +848,20 @@ def pending(c, runner_id, swept=True):
     """What this runner should be running: every live sign-in, and a pasted code not yet taken."""
     if swept:
         sweep(c)
-    rows = c.execute(f"SELECT * FROM model_logins WHERE runner_id=? AND {ACTIVE_SQL} ORDER BY created_at",
-                     (runner_id,)).fetchall()
-    return [{"id": r["id"], "runtime": r["runtime"], "profile": r["profile"], "expires_at": r["expires_at"],
-             **({"kind": r["kind"]} if r["kind"] != "sign_in" else {}),
-             **({"code": r["pending_code"]} if r["pending_code"] else {})} for r in rows]
+    rows = c.execute(
+        f"SELECT * FROM model_logins WHERE runner_id=? AND {ACTIVE_SQL} ORDER BY created_at", (runner_id,)
+    ).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "runtime": r["runtime"],
+            "profile": r["profile"],
+            "expires_at": r["expires_at"],
+            **({"kind": r["kind"]} if r["kind"] != "sign_in" else {}),
+            **({"code": r["pending_code"]} if r["pending_code"] else {}),
+        }
+        for r in rows
+    ]
 
 
 def report(c, runner_id, lid, body, settings=None):
@@ -671,18 +881,23 @@ def report(c, runner_id, lid, body, settings=None):
     if body.state == "finishing" and row["kind"] == "remove" and row["state"] != "finishing":
         bots = _bots_on(c, runner_id, row["runtime"], row["profile"], settings, True)
         if bots:
-            c.execute("UPDATE model_logins SET state='failed', message=?, updated_at=? WHERE id=?",
-                      (redact(_in_use(bots)), H.now(), lid))
+            c.execute(
+                "UPDATE model_logins SET state='failed', message=?, updated_at=? WHERE id=?",
+                (redact(_in_use(bots)), H.now(), lid),
+            )
             H.event(c, "runner:" + runner_id, "runner.login.failed", runner_id, {"runtime": row["runtime"]})
             return {"state": "failed"}
     if body.state == "finishing" and row["state"] != "finishing":
         # From here it cannot be canceled, and it has a little time of its own to finish in.
-        c.execute("UPDATE model_logins SET expires_at=MAX(expires_at, ?) WHERE id=?",
-                  (H.shift(H.now(), seconds=FINISH_SECONDS), lid))
+        c.execute(
+            "UPDATE model_logins SET expires_at=MAX(expires_at, ?) WHERE id=?",
+            (H.shift(H.now(), seconds=FINISH_SECONDS), lid),
+        )
         if row["kind"] == "use_key":
             # The computer checked the new key and puts it in place only once this is taken: it is this computer's
             # key from now, so a key fetch made meanwhile hands it out, not the one it replaces.
             from . import computer_keys
+
             computer_keys.confirm(c, row["runner_id"], lid)
     state = body.state if ORDER[body.state] >= ORDER[row["state"]] else row["state"]
     terminal = state in ("signed_in", "signed_out", "done", "failed")
@@ -693,9 +908,11 @@ def report(c, runner_id, lid, body, settings=None):
     # Connect keeps no lines: what it prints ends with the credential itself.
     lines = [] if row["kind"] == "connect" else clean_lines(body.lines) or json.loads(row["lines"] or "[]")
     pending_code = None if terminal or body.code_taken else row["pending_code"]
-    c.execute("UPDATE model_logins SET state=?, url=?, user_code=?, lines=?, message=?, pending_code=?, "
-              "updated_at=? WHERE id=?",
-              (state, url, code, json.dumps(lines), redact(body.message), pending_code, H.now(), lid))
+    c.execute(
+        "UPDATE model_logins SET state=?, url=?, user_code=?, lines=?, message=?, pending_code=?, "
+        "updated_at=? WHERE id=?",
+        (state, url, code, json.dumps(lines), redact(body.message), pending_code, H.now(), lid),
+    )
     if terminal:
         H.event(c, "runner:" + runner_id, "runner.login." + state, row["runner_id"], {"runtime": row["runtime"]})
     # Switch to API key: only now is the key this computer's and the switch's marks lifted (confirm). Until the runner
@@ -703,6 +920,7 @@ def report(c, runner_id, lid, body, settings=None):
     # on the computer, has nothing to undo here.
     if terminal and row["kind"] in KEY_JOBS:
         from . import computer_keys
+
         if state == "done":
             computer_keys.confirm(c, row["runner_id"], lid)
         else:
@@ -710,33 +928,49 @@ def report(c, runner_id, lid, body, settings=None):
     # A person signed this login in again: it is no longer signed out on purpose. A sign-out that did not take
     # leaves the login as it was, so it is not marked either.
     if (state == "signed_in" or state == "failed" and row["kind"] == "sign_out") and terminal:
-        c.execute("DELETE FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=?",
-                  (row["runner_id"], row["runtime"], row["profile"]))
+        c.execute(
+            "DELETE FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=?",
+            (row["runner_id"], row["runtime"], row["profile"]),
+        )
     # Removed: nothing of it stays here to fill a line again (its sign-out mark, its manual weekly reading).
     if state == "done" and row["kind"] == "remove":
         from .subscriptions import weekly_key
-        c.execute("DELETE FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=?",
-                  (row["runner_id"], row["runtime"], row["profile"]))
-        c.execute("DELETE FROM registry_metadata WHERE key=?",
-                  (weekly_key(row["runner_id"], row["profile"], row["runtime"]),))
+
+        c.execute(
+            "DELETE FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=?",
+            (row["runner_id"], row["runtime"], row["profile"]),
+        )
+        c.execute(
+            "DELETE FROM registry_metadata WHERE key=?", (weekly_key(row["runner_id"], row["profile"], row["runtime"]),)
+        )
     # Switched to a subscription: the key is off this login from now on (the runner has deleted its copies), and the
     # computer's own key is deleted from the vault, as Clear key does.
     if state == "signed_in" and row["kind"] == "to_subscription":
         from . import computer_keys
+
         computer_keys.delete(c, row["runner_id"], row["runtime"])
-        c.execute("INSERT INTO model_login_key_off(runner_id,runtime,profile,set_at,set_by) VALUES(?,?,?,?,?) "
-                  "ON CONFLICT(runner_id,runtime,profile) DO UPDATE SET set_at=excluded.set_at, set_by=excluded.set_by",
-                  (row["runner_id"], row["runtime"], row["profile"], H.now(), row["requested_by"]))
+        c.execute(
+            "INSERT INTO model_login_key_off(runner_id,runtime,profile,set_at,set_by) VALUES(?,?,?,?,?) "
+            "ON CONFLICT(runner_id,runtime,profile) DO UPDATE SET set_at=excluded.set_at, set_by=excluded.set_by",
+            (row["runner_id"], row["runtime"], row["profile"], H.now(), row["requested_by"]),
+        )
     # A login switched to another account or key (or the key put back): a usage limit held on the old one is not the
     # new one's, so its bots are freed and one probe turn tests it (execution.lift_after_login_switch).
-    if settings is not None and terminal and state in ("signed_in", "done") and row["kind"] in ("switch", "to_subscription", "to_key", "use_key"):
+    if (
+        settings is not None
+        and terminal
+        and state in ("signed_in", "done")
+        and row["kind"] in ("switch", "to_subscription", "to_key", "use_key")
+    ):
         from .execution import lift_after_login_switch
+
         lift_after_login_switch(c, settings, H.KEEPER, runner_id, row["runtime"])
     return {"state": state}
 
 
 def _key_runtime(runtime):
     from .computer_keys import RUNTIMES as KEY_RUNTIMES
+
     if runtime not in KEY_RUNTIMES:
         raise Problem("kind", "A key signs in only " + ", ".join(KEY_RUNTIMES) + " on a computer", 422)
 
@@ -752,6 +986,7 @@ def _shared_users(c, runner, runtime):
     """The computers the shared key `runner` runs `runtime` on serves (`computer_keys.users`), it included; [] when it
     runs on no shared key."""
     from . import computer_keys
+
     return computer_keys.users(c, runner, runtime)
 
 
@@ -769,6 +1004,7 @@ def key_info(c, who, rid, runtime, auth=None, vault=None):
     and whether this person may change it there. Previews only, never a value."""
     from . import computer_keys
     from .credentials import COMPUTERS, administrator, granted
+
     _operator(c, who, rid, auth)
     _key_runtime(runtime)
     runner = _runner(c, rid)
@@ -777,18 +1013,38 @@ def key_info(c, who, rid, runtime, auth=None, vault=None):
     shared = None if own else computer_keys.uses_shared(c, runner, runtime)
     # The computer's last report can still say "shared" after the key stopped serving it (cleared here, its grant
     # revoked, the key deleted) until its next heartbeat: then no shared key is described.
-    source = ("computer" if own else "shared" if shared else
-              "" if reported.get("source") == "shared" else reported.get("source") or "")
+    source = (
+        "computer"
+        if own
+        else "shared"
+        if shared
+        else ""
+        if reported.get("source") == "shared"
+        else reported.get("source") or ""
+    )
     # A company key's name and preview are a credential administrator's to read, as in Credentials; the computer's
     # operator still reads its own key's.
     key_admin = bool(vault and administrator(c, who, vault.admins))
-    out = {"runtime": runtime, "source": source, "name": own["env"] if own else reported.get("name", "") if source else "",
-           "preview": own["preview"] if own else shared["preview"] if shared and key_admin else "",
-           "cleared": cleared(c, rid, runtime), "names": list(computer_keys.names(runtime)), "computers": []}
+    out = {
+        "runtime": runtime,
+        "source": source,
+        "name": own["env"] if own else reported.get("name", "") if source else "",
+        "preview": own["preview"] if own else shared["preview"] if shared and key_admin else "",
+        "cleared": cleared(c, rid, runtime),
+        "names": list(computer_keys.names(runtime)),
+        "computers": [],
+    }
     if source == "shared":
-        out["computers"] = [{"id": row["id"], "label": row["label"], "online": _online(row),
-                             "updated": _handles_keys(row), "may": _may(c, who, row, auth)}
-                            for row in _shared_users(c, runner, runtime)]
+        out["computers"] = [
+            {
+                "id": row["id"],
+                "label": row["label"],
+                "online": _online(row),
+                "updated": _handles_keys(row),
+                "may": _may(c, who, row, auth),
+            }
+            for row in _shared_users(c, runner, runtime)
+        ]
         out["shared"] = {"env": shared["env"], "every": shared["id"] in granted(c, COMPUTERS)}
         if key_admin:
             out["shared"].update(id=shared["id"], name=shared["name"])
@@ -804,6 +1060,7 @@ def _clear_here(c, who, runner, runtime, queue):
     included) signs it in again, and the runner is told to delete its copies, at once (`queue`) or, offline, at its
     next key fetch (`clear_key` on the mark). Returns the job, or None when it waits for the computer."""
     from . import computer_keys
+
     rid = runner["id"]
     row = None
     if queue:
@@ -820,10 +1077,14 @@ def mark_key_cleared(c, who, rid, runtime):
     """No key signs `runtime` in on this computer again until a person adds one or chooses the shared key, and its next
     key fetch tells it to delete its copies and log out a login a key made (`clear_key`)."""
     now = H.now()
-    c.execute("INSERT INTO model_login_cleared(runner_id,runtime,profile,cleared_at,cleared_by,clear_key) "
-              "VALUES(?,?,?,?,?,1) ON CONFLICT(runner_id,runtime,profile) DO UPDATE SET cleared_at=excluded.cleared_at, "
-              "cleared_by=excluded.cleared_by, clear_key=1", (rid, runtime, "", now, who.actor))
+    c.execute(
+        "INSERT INTO model_login_cleared(runner_id,runtime,profile,cleared_at,cleared_by,clear_key) "
+        "VALUES(?,?,?,?,?,1) ON CONFLICT(runner_id,runtime,profile) DO UPDATE SET cleared_at=excluded.cleared_at, "
+        "cleared_by=excluded.cleared_by, clear_key=1",
+        (rid, runtime, "", now, who.actor),
+    )
     from .subscription_refresh import invalidate_signin
+
     invalidate_signin(c, rid, "", runtime, now)
 
 
@@ -837,24 +1098,40 @@ def clear_key(c, who, rid, runtime, scope="this", auth=None):
     _key_runtime(runtime)
     runner = _runner(c, rid)
     if scope != "all":
-        return {"computers": [{"id": rid, "label": runner["label"], "login": view(_clear_here(c, who, runner, runtime, True)),
-                               "waiting": False}]}
+        return {
+            "computers": [
+                {
+                    "id": rid,
+                    "label": runner["label"],
+                    "login": view(_clear_here(c, who, runner, runtime, True)),
+                    "waiting": False,
+                }
+            ]
+        }
     rows = _shared_users(c, runner, runtime)
     if not rows:
         raise Problem("state", "This computer does not use a shared key", 409)
     refused = [row["label"] for row in rows if not _may(c, who, row, auth)]
     if refused:
-        raise Problem("forbidden", "You cannot change the key on " + ", ".join(refused) + "; clear it on this computer "
-                      "only, or ask an admin", 403)
+        raise Problem(
+            "forbidden",
+            "You cannot change the key on " + ", ".join(refused) + "; clear it on this computer only, or ask an admin",
+            403,
+        )
     # Offline too: an older runner has no clear_key handler, so a mark left for it would never clear its copy.
     stale = [row["label"] for row in rows if not _handles_keys(row)]
     if stale:
-        raise Problem("runner_version", "Update " + ", ".join(stale) + " to clear its key from here, or delete the "
-                      "shared key in Tools > Keys", 409)
+        raise Problem(
+            "runner_version",
+            "Update " + ", ".join(stale) + " to clear its key from here, or delete the shared key in Tools > Keys",
+            409,
+        )
     out = []
     for row in rows:
         job = _clear_here(c, who, row, runtime, _online(row))
-        out.append({"id": row["id"], "label": row["label"], "login": view(job) if job else None, "waiting": job is None})
+        out.append(
+            {"id": row["id"], "label": row["label"], "login": view(job) if job else None, "waiting": job is None}
+        )
     return {"computers": out}
 
 
@@ -867,6 +1144,7 @@ def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vaul
     the key is in place the subscription is signed out."""
     from . import computer_keys
     from .credentials import require_admin
+
     _person_only(who, "switch to an API key" if switch else "change a key")
     _operator(c, who, rid, auth)
     _key_runtime(runtime)
@@ -879,12 +1157,17 @@ def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vaul
         if runtime not in SIGN_OUT_RUNTIMES or not (caps.get("api_key_login") or caps.get("api_key_check")):
             raise Problem("kind", "You can't switch to an API key from here for " + runtime, 422)
         if runner["platform"] in caps.get("switch_unavailable_on", []):
-            raise Problem("kind", f"You can't switch {runtime} to an API key on {runner['label']} from here: it keeps "
-                          "the login in the system keychain. Sign out, then add a key", 422)
+            raise Problem(
+                "kind",
+                f"You can't switch {runtime} to an API key on {runner['label']} from here: it keeps "
+                "the login in the system keychain. Sign out, then add a key",
+                422,
+            )
         row, new = _queue(c, who, runner, runtime, "", "to_key", "switch to an API key")
         if not new:
-            raise Problem("state", "A switch to an API key is already running on that computer; wait for it to finish",
-                          409)
+            raise Problem(
+                "state", "A switch to an API key is already running on that computer; wait for it to finish", 409
+            )
         stored = computer_keys.store(c, vault, who, runner, runtime, key, row["id"], env)
         H.event(c, who.actor, "runner.login.to_key", rid, {"runtime": runtime})
         return {**view(row), "key": stored}
@@ -901,19 +1184,28 @@ def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vaul
         if env not in computer_keys.names(runtime):
             raise Problem("env", f"A {runtime} key is stored as " + " or ".join(computer_keys.names(runtime)), 422)
         if env not in shared:
-            raise Problem("env", "The shared key is " + " and ".join(shared) + ", not " + env + "; replace it as that "
-                          "kind, or add a " + env + " in Tools > Keys", 409)
+            raise Problem(
+                "env",
+                "The shared key is " + " and ".join(shared) + ", not " + env + "; replace it as that "
+                "kind, or add a " + env + " in Tools > Keys",
+                409,
+            )
         row = shared[env]
         value = str(key or "").strip()
         if not value or len(value) > 4000 or any(ch in value for ch in "\r\n\0"):
             raise Problem("credential", "Paste the key as one line", 422)
         ciphertext, nonce = vault.cipher.encrypt(c, row["id"], value)
         preview = value[:3] + "…" + value[-3:] if len(value) >= 12 else "••••••"
-        c.execute("UPDATE credentials SET ciphertext=?, nonce=?, preview=?, revision=revision+1, updated_at=?, updated_by=? "
-                  "WHERE id=?", (ciphertext, nonce, preview, H.now(), who.actor, row["id"]))
+        c.execute(
+            "UPDATE credentials SET ciphertext=?, nonce=?, preview=?, revision=revision+1, updated_at=?, updated_by=? "
+            "WHERE id=?",
+            (ciphertext, nonce, preview, H.now(), who.actor, row["id"]),
+        )
         H.event(c, who.actor, "credential.updated", row["id"], {"secret_changed": True, "via": "computers"})
-        return {"shared": {"id": row["id"], "env": row["env"], "preview": preview},
-                "computers": [{"id": r["id"], "label": r["label"], "online": _online(r)} for r in served]}
+        return {
+            "shared": {"id": row["id"], "env": row["env"], "preview": preview},
+            "computers": [{"id": r["id"], "label": r["label"], "online": _online(r)} for r in served],
+        }
     row, new = _queue(c, who, runner, runtime, "", "use_key", "use a new key")
     if not new:
         raise Problem("state", "A new key is already being checked on that computer; wait for it to finish", 409)

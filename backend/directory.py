@@ -15,6 +15,7 @@ A pull always produces a plan first (adds, updates, leaves). The first sync, and
 would mark more than `mass_leave_limit` people left, is applied only with the owner's confirmation
 of that exact plan (`plan_hash`); the interval sync holds instead and says why.
 """
+
 import hashlib
 import json
 import os
@@ -39,7 +40,7 @@ SOURCES = ("", "google", "entra", "scim")
 DEFAULT_LIMIT = 10
 DEFAULT_INTERVAL = 360
 AAD = b"tico-directory:v1"
-PHOTO_BUDGET = 200          # photos fetched per run; the rest arrive on a later sync
+PHOTO_BUDGET = 200  # photos fetched per run; the rest arrive on a later sync
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS directory_credentials(
  source TEXT PRIMARY KEY, ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, hint TEXT NOT NULL DEFAULT '',
@@ -49,9 +50,18 @@ CREATE TABLE IF NOT EXISTS directory_credentials(
 
 # ------------------------------------------------------------------------------------ settings
 def _blank():
-    return {"source": "", "filter": {"groups": [], "org_units": [], "domains": []},
-            "interval_minutes": DEFAULT_INTERVAL, "mass_leave_limit": DEFAULT_LIMIT, "confirmed": False,
-            "revision": 0, "updated": "", "updated_by": "", "last": {}, "scim": {}}
+    return {
+        "source": "",
+        "filter": {"groups": [], "org_units": [], "domains": []},
+        "interval_minutes": DEFAULT_INTERVAL,
+        "mass_leave_limit": DEFAULT_LIMIT,
+        "confirmed": False,
+        "revision": 0,
+        "updated": "",
+        "updated_by": "",
+        "last": {},
+        "scim": {},
+    }
 
 
 def load(c):
@@ -64,8 +74,10 @@ def load(c):
 
 
 def save(c, cfg):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (KEY, json.dumps(cfg, sort_keys=True)))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (KEY, json.dumps(cfg, sort_keys=True)),
+    )
 
 
 def _lines(values, lower=False):
@@ -100,11 +112,19 @@ def plan(roster, records, source, owner_email, complete, retired=()):
         p = by_email.get(email)
         if p is None:
             if r["active"] and email in retired:
-                out["skipped"].append({"email": email, "reason": "the owner's old sign-in address; add it by hand if "
-                                       "it is someone else"})
+                out["skipped"].append(
+                    {"email": email, "reason": "the owner's old sign-in address; add it by hand if it is someone else"}
+                )
             elif r["active"]:
-                out["adds"].append({"email": email, "name": r["name"], "title": r["title"],
-                                    "manager": r.get("manager") or "", "external_id": r.get("external_id") or ""})
+                out["adds"].append(
+                    {
+                        "email": email,
+                        "name": r["name"],
+                        "title": r["title"],
+                        "manager": r.get("manager") or "",
+                        "external_id": r.get("external_id") or "",
+                    }
+                )
             continue
         mine = p["directory"] == source
         if not r["active"]:
@@ -134,8 +154,9 @@ def plan(roster, records, source, owner_email, complete, retired=()):
         for p in people:
             if p["directory"] == source and not p["hidden"] and p["email"] and p["email"] not in seen:
                 _leave(out, p, owner_email, "no longer in the directory scope")
-    out["hash"] = hashlib.sha256(json.dumps(
-        {k: out[k] for k in ("adds", "updates", "restores", "leaves")}, sort_keys=True).encode()).hexdigest()[:24]
+    out["hash"] = hashlib.sha256(
+        json.dumps({k: out[k] for k in ("adds", "updates", "restores", "leaves")}, sort_keys=True).encode()
+    ).hexdigest()[:24]
     return out
 
 
@@ -169,8 +190,16 @@ def apply(c, actor, source, p, roster, now=None):
     for a in p["adds"]:
         if any(x["email"] == a["email"] for x in people):
             continue
-        row = P._person({"id": Access._new_id(c, a["email"]), "name": a["name"], "email": a["email"],
-                         "title": a["title"], "directory": source, "external_id": a["external_id"]})
+        row = P._person(
+            {
+                "id": Access._new_id(c, a["email"]),
+                "name": a["name"],
+                "email": a["email"],
+                "title": a["title"],
+                "directory": source,
+                "external_id": a["external_id"],
+            }
+        )
         people.append(row)
         index[row["id"]] = len(people) - 1
         Access._sync_human(c, row)
@@ -188,8 +217,13 @@ def apply(c, actor, source, p, roster, now=None):
             row[field] = new
         people[i] = P._person(row)
         Access._sync_human(c, people[i])
-        H.event(c, actor, "directory.person_updated", u["id"],
-                {"email": u["email"], "source": source, "fields": sorted(u["changes"])})
+        H.event(
+            c,
+            actor,
+            "directory.person_updated",
+            u["id"],
+            {"email": u["email"], "source": source, "fields": sorted(u["changes"])},
+        )
         done["updates"] += 1
         touched.append(u["email"])
         if "manager" in u["changes"]:
@@ -206,15 +240,20 @@ def apply(c, actor, source, p, roster, now=None):
             continue
         row = Access.leave(c, people, people[i])
         people[i] = {**row, "directory_left": True}
-        H.event(c, actor, "directory.person_left", lv["id"],
-                {"email": lv["email"], "source": source, "reason": lv["reason"]})
+        H.event(
+            c,
+            actor,
+            "directory.person_left",
+            lv["id"],
+            {"email": lv["email"], "source": source, "reason": lv["reason"]},
+        )
         done["leaves"] += 1
     for pid, ref in managers:
         boss = _find(people, ref)
         if not boss or boss["id"] == pid:
             continue
         at, seen = boss["id"], set()
-        while at and at not in seen and at != pid:      # never move someone under their own report
+        while at and at not in seen and at != pid:  # never move someone under their own report
             seen.add(at)
             at = people[index[at]]["reports_to"] if at in index else ""
         if at == pid:
@@ -266,7 +305,11 @@ def _credential_blob(source, body):
             info = json.loads(body.service_account_json)
         except ValueError:
             info = None
-        if not isinstance(info, dict) or not info.get("client_email") or "PRIVATE KEY" not in str(info.get("private_key")):
+        if (
+            not isinstance(info, dict)
+            or not info.get("client_email")
+            or "PRIVATE KEY" not in str(info.get("private_key"))
+        ):
             raise Problem("credentials", "Paste the service account's JSON key file", 422)
         admin = Access._valid_email(body.admin_email)
         keep = {k: info[k] for k in ("client_email", "private_key", "token_uri", "client_id") if k in info}
@@ -289,10 +332,15 @@ class Directory:
     # -- credentials, encrypted like the GitHub App key (same key, its own context string)
     def put_credentials(self, c, actor, source, blob, hint):
         nonce = os.urandom(12)
-        sealed = AESGCM(self.github_app.secret_key(c, replacing="directory:" + source)).encrypt(nonce, json.dumps(blob).encode(), AAD + source.encode())
-        c.execute("INSERT INTO directory_credentials VALUES(?,?,?,?,?,?) ON CONFLICT(source) DO UPDATE SET "
-                  "ciphertext=excluded.ciphertext, nonce=excluded.nonce, hint=excluded.hint, created_at=excluded.created_at, "
-                  "created_by=excluded.created_by", (source, sealed, nonce, hint, H.now(), actor))
+        sealed = AESGCM(self.github_app.secret_key(c, replacing="directory:" + source)).encrypt(
+            nonce, json.dumps(blob).encode(), AAD + source.encode()
+        )
+        c.execute(
+            "INSERT INTO directory_credentials VALUES(?,?,?,?,?,?) ON CONFLICT(source) DO UPDATE SET "
+            "ciphertext=excluded.ciphertext, nonce=excluded.nonce, hint=excluded.hint, created_at=excluded.created_at, "
+            "created_by=excluded.created_by",
+            (source, sealed, nonce, hint, H.now(), actor),
+        )
 
     def credentials(self, c, source):
         row = c.execute("SELECT * FROM directory_credentials WHERE source=?", (source,)).fetchone()
@@ -303,10 +351,16 @@ class Directory:
         except Problem:
             raise
         except Exception:
-            raise Problem("directory_unavailable", "The stored directory credentials could not be decrypted", 503) from None
+            raise Problem(
+                "directory_unavailable", "The stored directory credentials could not be decrypted", 503
+            ) from None
         if blob is None:
-            raise Problem("directory_unavailable", "The directory sync credentials need github-app.key, which is missing "
-                          "from the data volume: restore it from the backup made with this database", 503)
+            raise Problem(
+                "directory_unavailable",
+                "The directory sync credentials need github-app.key, which is missing "
+                "from the data volume: restore it from the backup made with this database",
+                503,
+            )
         return json.loads(blob)
 
     def hint(self, c, source):
@@ -317,12 +371,23 @@ class Directory:
     def view(self, c):
         cfg = load(c)
         scim = cfg["scim"] or {}
-        return {"source": cfg["source"], "filter": cfg["filter"], "interval_minutes": cfg["interval_minutes"],
-                "mass_leave_limit": cfg["mass_leave_limit"], "confirmed": cfg["confirmed"], "revision": cfg["revision"],
-                "last": cfg["last"],
-                "credentials": {s: {"configured": bool(self.hint(c, s)), "hint": self.hint(c, s)} for s in ("google", "entra")},
-                "scim": {"enabled": bool(scim.get("token_hash")), "created_at": scim.get("created", ""),
-                         "url": self.settings.public_url + "/scim/v2"}}
+        return {
+            "source": cfg["source"],
+            "filter": cfg["filter"],
+            "interval_minutes": cfg["interval_minutes"],
+            "mass_leave_limit": cfg["mass_leave_limit"],
+            "confirmed": cfg["confirmed"],
+            "revision": cfg["revision"],
+            "last": cfg["last"],
+            "credentials": {
+                s: {"configured": bool(self.hint(c, s)), "hint": self.hint(c, s)} for s in ("google", "entra")
+            },
+            "scim": {
+                "enabled": bool(scim.get("token_hash")),
+                "created_at": scim.get("created", ""),
+                "url": self.settings.public_url + "/scim/v2",
+            },
+        }
 
     def configure(self, c, actor, body):
         cfg = load(c)
@@ -339,22 +404,43 @@ class Directory:
             raise Problem("credentials", "Add this source's credentials first", 422)
         if body.source == "scim" and not (cfg["scim"] or {}).get("token_hash"):
             raise Problem("credentials", "Create the SCIM token first", 422)
-        flt = {"groups": _lines(body.filter.groups), "org_units": _lines(body.filter.org_units),
-               "domains": [d.lstrip("@") for d in _lines(body.filter.domains, lower=True)]}
-        after = {**cfg, "source": body.source, "filter": flt, "interval_minutes": body.interval_minutes,
-                 "mass_leave_limit": body.mass_leave_limit, "revision": cfg["revision"] + 1,
-                 "updated": H.now(), "updated_by": actor,
-                 # A different source or scope is a different first sync.
-                 "confirmed": cfg["confirmed"] and cfg["source"] == body.source and cfg["filter"] == flt}
+        flt = {
+            "groups": _lines(body.filter.groups),
+            "org_units": _lines(body.filter.org_units),
+            "domains": [d.lstrip("@") for d in _lines(body.filter.domains, lower=True)],
+        }
+        after = {
+            **cfg,
+            "source": body.source,
+            "filter": flt,
+            "interval_minutes": body.interval_minutes,
+            "mass_leave_limit": body.mass_leave_limit,
+            "revision": cfg["revision"] + 1,
+            "updated": H.now(),
+            "updated_by": actor,
+            # A different source or scope is a different first sync.
+            "confirmed": cfg["confirmed"] and cfg["source"] == body.source and cfg["filter"] == flt,
+        }
         save(c, after)
-        H.event(c, actor, "directory.configured", "",
-                {"source": body.source, "filter": flt, "interval_minutes": body.interval_minutes,
-                 "mass_leave_limit": body.mass_leave_limit, "credentials_changed": body.credentials is not None})
+        H.event(
+            c,
+            actor,
+            "directory.configured",
+            "",
+            {
+                "source": body.source,
+                "filter": flt,
+                "interval_minutes": body.interval_minutes,
+                "mass_leave_limit": body.mass_leave_limit,
+                "credentials_changed": body.credentials is not None,
+            },
+        )
         return after["revision"]
 
     def new_scim_token(self, c, actor):
         import secrets
         from .store import digest
+
         token = "scim_" + secrets.token_urlsafe(32)
         cfg = load(c)
         cfg["scim"] = {"token_hash": digest(token), "created": H.now()}
@@ -365,7 +451,9 @@ class Directory:
     # -- pull
     def fetch(self, source):
         if self.settings.rehearsal:
-            raise Problem("rehearsal", "Directory sync is off in a rehearsal: it would read the company's directory", 409)
+            raise Problem(
+                "rehearsal", "Directory sync is off in a rehearsal: it would read the company's directory", 409
+            )
         with self.store.read() as c:
             cfg, creds = load(c), None
             if cfg["source"] != source or source not in Sources.FETCH:
@@ -380,16 +468,24 @@ class Directory:
         records, _ = self.fetch(source)
         with self.store.read() as c:
             from .views import roster
-            found = plan(roster(c), records, source, Access.load_owner(c, self.settings)["email"], True,
-                         Access.retired_emails(c))
+
+            found = plan(
+                roster(c), records, source, Access.load_owner(c, self.settings)["email"], True, Access.retired_emails(c)
+            )
         return self._describe(cfg, found)
 
     @staticmethod
     def _describe(cfg, found):
-        needs = {"first": not cfg["confirmed"] and any(found[k] for k in ("adds", "updates", "restores", "leaves")),
-                 "mass_leave": len(found["leaves"]) > cfg["mass_leave_limit"]}
-        return {"plan": found, "counts": counts(found), "needs_confirmation": needs,
-                "mass_leave_limit": cfg["mass_leave_limit"]}
+        needs = {
+            "first": not cfg["confirmed"] and any(found[k] for k in ("adds", "updates", "restores", "leaves")),
+            "mass_leave": len(found["leaves"]) > cfg["mass_leave_limit"],
+        }
+        return {
+            "plan": found,
+            "counts": counts(found),
+            "needs_confirmation": needs,
+            "mass_leave_limit": cfg["mass_leave_limit"],
+        }
 
     def run(self, actor, confirm=False, plan_hash="", auto=False):
         """Fetch, plan and (when the rules allow) apply. Returns the described plan plus `applied`."""
@@ -406,30 +502,62 @@ class Directory:
 
             def work(c):
                 from .views import roster
+
                 cfg = load(c)
                 live = roster(c)
-                found = plan(live, records, source, Access.load_owner(c, self.settings)["email"], True,
-                             Access.retired_emails(c))
+                found = plan(
+                    live, records, source, Access.load_owner(c, self.settings)["email"], True, Access.retired_emails(c)
+                )
                 described = self._describe(cfg, found)
                 need = described["needs_confirmation"]
                 held = (need["first"] or need["mass_leave"]) and not (confirm and plan_hash == found["hash"])
                 if held:
                     if confirm:
-                        described["stale"] = True       # they confirmed a plan that has since changed
+                        described["stale"] = True  # they confirmed a plan that has since changed
                     if auto and cfg["last"].get("held_hash") != found["hash"]:
-                        H.event(c, actor, "directory.sync_held", "", {"source": source, "counts": described["counts"], "needs": need})
-                    cfg["last"] = {"at": H.now(), "ok": True, "auto": auto, "held": True, "held_hash": found["hash"],
-                                   "counts": described["counts"]}
+                        H.event(
+                            c,
+                            actor,
+                            "directory.sync_held",
+                            "",
+                            {"source": source, "counts": described["counts"], "needs": need},
+                        )
+                    cfg["last"] = {
+                        "at": H.now(),
+                        "ok": True,
+                        "auto": auto,
+                        "held": True,
+                        "held_hash": found["hash"],
+                        "counts": described["counts"],
+                    }
                     save(c, cfg)
                     return {**described, "applied": False}
                 done, touched = apply(c, actor, source, found, live)
                 cfg["confirmed"] = cfg["confirmed"] or bool(confirm)
-                cfg["last"] = {"at": H.now(), "ok": True, "auto": auto, "held": False, "counts": described["counts"], "applied": done}
+                cfg["last"] = {
+                    "at": H.now(),
+                    "ok": True,
+                    "auto": auto,
+                    "held": False,
+                    "counts": described["counts"],
+                    "applied": done,
+                }
                 save(c, cfg)
-                H.event(c, actor, "directory.synced", "", {"source": source, "auto": auto, "applied": done,
-                                                           "protected": [x["email"] for x in found["protected"]]})
+                H.event(
+                    c,
+                    actor,
+                    "directory.synced",
+                    "",
+                    {
+                        "source": source,
+                        "auto": auto,
+                        "applied": done,
+                        "protected": [x["email"] for x in found["protected"]],
+                    },
+                )
                 result["touched"] = touched
                 return {**described, "applied": True, "done": done}
+
             out = self._tx(work)
             self._photos(source, creds, records, result.get("touched") or [])
             return out
@@ -469,6 +597,7 @@ class Directory:
             if not self.due(c):
                 return
         from . import system_routines
+
         run = system_routines.Run("directory_sync")
         try:
             self.run("directory", auto=True)
@@ -479,21 +608,28 @@ class Directory:
             run.error = system_routines.failure_words(exc)
             raise
         finally:
-            if record:                                     # the server's own timer, not a test's direct call
+            if record:  # the server's own timer, not a test's direct call
                 system_routines.write(self.store, run)
 
 
 # A failed sync's words on the System routines row, which every member can read: fixed words by the refusal's code and
 # at most the vendor's HTTP status, never the refusal's text (a vendor's error body names the app, tenant and scope;
 # it stays on the owner-only directory page).
-FAILED_WORDS = {"directory_google": "Google refused the request", "directory_entra": "Microsoft Entra refused the request",
-                "directory_scim": "the SCIM source refused the request", "credentials": "credentials missing",
-                "directory_unavailable": "the saved credentials could not be read", "rehearsal": "off in a rehearsal"}
+FAILED_WORDS = {
+    "directory_google": "Google refused the request",
+    "directory_entra": "Microsoft Entra refused the request",
+    "directory_scim": "the SCIM source refused the request",
+    "credentials": "credentials missing",
+    "directory_unavailable": "the saved credentials could not be read",
+    "rehearsal": "off in a rehearsal",
+}
 
 
 def failure_words(exc):
     words = FAILED_WORDS.get(getattr(exc, "code", ""), "the directory refused")
-    status = re.search(r"\((\d{3})\)", str(getattr(exc, "detail", "") or "")) if exc.code.startswith("directory_") else None
+    status = (
+        re.search(r"\((\d{3})\)", str(getattr(exc, "detail", "") or "")) if exc.code.startswith("directory_") else None
+    )
     return "Failed: " + words + (f" ({status.group(1)})" if status else "")
 
 

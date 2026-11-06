@@ -135,7 +135,7 @@ see [Meetings](meetings.md)), `release.published`, `market.insight.urgent`, `str
 
 ## Webhooks
 
-An incoming webhook (Settings → Webhooks → Incoming) gives an address anything can POST to. An automation with a
+An incoming webhook (Automations → Incoming webhooks) gives an address anything can POST to. An automation with a
 Webhook trigger runs on each call; add `filters` to the trigger (for example `webhook.type` is `invoice.paid`) to act on
 some calls only. Signatures, presets, the hourly limit, kept calls and **Run again** are on [Webhooks](webhooks.md).
 Recipes: [GitHub](webhooks-github.md), [Stripe](webhooks-stripe.md), [Zapier, Make and n8n](webhooks-zapier-make-n8n.md).

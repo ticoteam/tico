@@ -29,7 +29,7 @@ from .updates import ZONE
 GAP = timedelta(minutes=30)
 WEEKS = 12
 HOURS_PER_PERSON = 40
-CACHE_S = 60                        # the Overview may open often; the answer is an estimate and keeps a minute
+CACHE_S = 60  # the Overview may open often; the answer is an estimate and keeps a minute
 
 
 def stamp(at):
@@ -90,8 +90,9 @@ def sampled(c, rid):
     def at(seq):
         # The first event at or after `seq`: an old run's text pieces are swept (store.sweep_deltas), leaving gaps.
         if seq not in times:
-            row = c.execute("SELECT created_at FROM attempt_events WHERE attempt_id=? AND seq>=? ORDER BY seq LIMIT 1",
-                            (rid, seq)).fetchone()
+            row = c.execute(
+                "SELECT created_at FROM attempt_events WHERE attempt_id=? AND seq>=? ORDER BY seq LIMIT 1", (rid, seq)
+            ).fetchone()
             times[seq] = H.parse_ts(row[0]) if row else None
         return times[seq]
 
@@ -115,8 +116,8 @@ class Counter:
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.done = {}              # run id -> ((started, finished), its stretches), for finished runs in the window
-        self.answer = None          # (monotonic time, answer)
+        self.done = {}  # run id -> ((started, finished), its stretches), for finished runs in the window
+        self.answer = None  # (monotonic time, answer)
 
     def spans(self, c, rows, now):
         """Working stretches for each run row (id, started, finished)."""
@@ -145,7 +146,7 @@ class Counter:
             if finished:
                 keep[rid] = (key, out[rid])
         with self.lock:
-            self.done = keep        # runs that left the window drop out here
+            self.done = keep  # runs that left the window drop out here
         return out
 
     def count(self, c, now=None):
@@ -155,30 +156,52 @@ class Counter:
         for _ in range(WEEKS - 1):
             earliest = week_start(earliest - timedelta(days=1))
         lo = min(earliest, now - timedelta(days=7))
-        first = c.execute("SELECT MIN(created_at) FROM attempts WHERE (job_id IS NULL OR trigger IS NOT NULL)").fetchone()[0]
+        first = c.execute(
+            "SELECT MIN(created_at) FROM attempts WHERE (job_id IS NULL OR trigger IS NOT NULL)"
+        ).fetchone()[0]
         people = len(P.visible_people(views.roster(c)))
         human = people * HOURS_PER_PERSON
         # Runs finished inside the window or still going, by the `attempts_settled` index: a run that started weeks
         # before the window still counts for the time it worked inside it.
-        rows = c.execute("SELECT id, created_at AS started_at, settled_at AS finished_at FROM attempts "
-                         "WHERE settled_at > ? AND created_at < ? UNION ALL SELECT id, created_at, settled_at FROM attempts "
-                         "WHERE settled_at IS NULL AND (job_id IS NULL OR trigger IS NOT NULL) AND created_at < ?",
-                         (stamp(lo), stamp(now), stamp(now))).fetchall()
+        rows = c.execute(
+            "SELECT id, created_at AS started_at, settled_at AS finished_at FROM attempts "
+            "WHERE settled_at > ? AND created_at < ? UNION ALL SELECT id, created_at, settled_at FROM attempts "
+            "WHERE settled_at IS NULL AND (job_id IS NULL OR trigger IS NOT NULL) AND created_at < ?",
+            (stamp(lo), stamp(now), stamp(now)),
+        ).fetchall()
         spans = [s for run in self.spans(c, rows, now).values() for s in run]
         week_from = max(earliest, week_start(H.parse_ts(first))) if first else None
         weeks, at = [], week_from
         while at is not None and at <= this_week:
             end = next_week(at)
             hours = round(overlap(spans, at, min(end, now)) / 3600, 2)
-            weeks.append({"week": at.date().isoformat(), "bot_hours": hours, "people": people,
-                          "human_hours": human, "ratio": ratio(hours, human), "so_far": end > now})
+            weeks.append(
+                {
+                    "week": at.date().isoformat(),
+                    "bot_hours": hours,
+                    "people": people,
+                    "human_hours": human,
+                    "ratio": ratio(hours, human),
+                    "so_far": end > now,
+                }
+            )
             at = end
         last7 = round(overlap(spans, now - timedelta(days=7), now) / 3600, 2)
-        return {"zone": str(ZONE), "now": stamp(now), "first_run": first, "people": people,
-                "hours_per_person": HOURS_PER_PERSON, "gap_minutes": int(GAP.total_seconds() // 60),
-                "last_7_days": {"bot_hours": last7, "human_hours": human, "ratio": ratio(last7, human),
-                                "full": bool(first) and H.parse_ts(first) <= now - timedelta(days=7)},
-                "weeks": weeks}
+        return {
+            "zone": str(ZONE),
+            "now": stamp(now),
+            "first_run": first,
+            "people": people,
+            "hours_per_person": HOURS_PER_PERSON,
+            "gap_minutes": int(GAP.total_seconds() // 60),
+            "last_7_days": {
+                "bot_hours": last7,
+                "human_hours": human,
+                "ratio": ratio(last7, human),
+                "full": bool(first) and H.parse_ts(first) <= now - timedelta(days=7),
+            },
+            "weeks": weeks,
+        }
 
     def cached(self, c):
         with self.lock:
@@ -198,6 +221,6 @@ def install(app, store, auth):
     def bot_hours(request: Request):
         """The Overview's bot hours against human hours: the last 7 days and one row a week (Monday to Sunday in the
         company's time zone) for up to 12 weeks. Totals only, the same for every person."""
-        views.human_only(request.state.identity)    # the Overview is a page for people
+        views.human_only(request.state.identity)  # the Overview is a page for people
         with store.read_transaction() as c:
             return counter.cached(c)

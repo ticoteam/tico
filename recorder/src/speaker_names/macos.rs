@@ -229,10 +229,8 @@ fn browser_windows(bundles: &mut BTreeMap<i32, Option<String>>) -> Vec<(i32, boo
         else {
             continue;
         };
-        if !seen.contains_key(&pid) {
-            let id = bundles.remove(&pid).unwrap_or_else(|| bundle(pid));
-            seen.insert(pid, id);
-        }
+        seen.entry(pid)
+            .or_insert_with(|| bundles.remove(&pid).unwrap_or_else(|| bundle(pid)));
     }
     *bundles = seen;
     bundles

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Create an independent UTC timestamped migration: new_migration.py <name> [--py]."""
+
 import argparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path

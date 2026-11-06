@@ -6,6 +6,7 @@ valid). The server adds four fields the page passes back untouched and the compa
 `undo` (the draft before BotOps's last change), `chat` (the conversation so far), `removed` (bots taken off the chart,
 so they are not added back unasked) and `pending` (teams BotOps has suggested removing). Anything else is refused.
 """
+
 import copy
 import datetime as dt
 import json
@@ -46,8 +47,8 @@ REVIEW = {row["id"]: row["label"] for row in VOCAB["review"]}
 TOOLS = {row["id"]: row["label"] for row in VOCAB["tools"]}
 HARNESSES = {row["id"]: row["name"] for row in VOCAB["harnesses"]}
 DIRECTIONS = tuple(VOCAB["directions"])
-SECTIONS = tuple(VOCAB["sections"][2:])        # serve, sell, know, not: the strategy's four sections
-METHODS = tuple(VOCAB["methods"])              # how a segment was sized (tico backend/market_spend.py METHODS)
+SECTIONS = tuple(VOCAB["sections"][2:])  # serve, sell, know, not: the strategy's four sections
+METHODS = tuple(VOCAB["methods"])  # how a segment was sized (tico backend/market_spend.py METHODS)
 POST_SOURCES = tuple(VOCAB["post_sources"])
 POST_TAGS = tuple(VOCAB["post_tags"])
 
@@ -60,8 +61,21 @@ OPTIONAL = ("strategy",)
 BET_ID = re.compile(r"b[1-9]")
 URL = re.compile(r"https?://\S+", re.I)
 YEARS = (1990, 2100)
-BOT_FIELDS = ("id", "template", "title", "dept", "lead", "core", "reason", "start", "routine", "tools", "about", "runtime",
-              "existing")
+BOT_FIELDS = (
+    "id",
+    "template",
+    "title",
+    "dept",
+    "lead",
+    "core",
+    "reason",
+    "start",
+    "routine",
+    "tools",
+    "about",
+    "runtime",
+    "existing",
+)
 # `team` is the name of the group a bot or seat goes in when the file is imported (backend/company_import.py). Absent or
 # blank, the group is the one its template belongs to, as it always was.
 BOT_OPTIONAL = ("isNew", "reports_to", "first_job", "person", "team")
@@ -96,9 +110,16 @@ class DraftError(ValueError):
 
 def blank():
     """setup.js `blankDraft()`."""
-    return {"step": "company", "company": {"name": "", "about": "", "signals": []}, "people": [], "bots": [], "goals": [],
-            "rules": {"mode": "defaults", "never": list(RULES), "review": "one"}, "tools": {"mode": "defaults", "connect": []},
-            "seq": 1}
+    return {
+        "step": "company",
+        "company": {"name": "", "about": "", "signals": []},
+        "people": [],
+        "bots": [],
+        "goals": [],
+        "rules": {"mode": "defaults", "never": list(RULES), "review": "one"},
+        "tools": {"mode": "defaults", "connect": []},
+        "seq": 1,
+    }
 
 
 def dept_of(role):
@@ -137,7 +158,9 @@ def manager_of(draft, bot):
         return chosen
     if bot["core"]:
         return owner_id(draft)
-    human = next((p for p in draft["people"] if p["dept"] == bot["dept"] and not p["owner"] and HEAD.search(p["role"])), None)
+    human = next(
+        (p for p in draft["people"] if p["dept"] == bot["dept"] and not p["owner"] and HEAD.search(p["role"])), None
+    )
     if bot["lead"]:
         return human["id"] if human else owner_id(draft)
     lead = next((x for x in draft["bots"] if x["dept"] == bot["dept"] and x["lead"] and x is not bot), None)
@@ -216,8 +239,12 @@ def _choices(value, field, allowed, limit=None):
 
 
 def number(value, field):
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
-            or abs(value) > LIMITS["number"]:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or abs(value) > LIMITS["number"]
+    ):
         raise DraftError("%s must be a number" % field)
     return int(value) if float(value).is_integer() else float(value)
 
@@ -235,17 +262,21 @@ def date(value, field):
 def _bot(raw, at):
     field = "bots[%d]" % at
     _keys(raw, field, BOT_FIELDS, BOT_OPTIONAL)
-    bot = {"id": _id(raw["id"], field + ".id"),
-           "template": None if raw["template"] is None else _id(raw["template"], field + ".template"),
-           "title": _text(raw["title"], field + ".title", LIMITS["title"], empty=False),
-           "dept": raw["dept"], "lead": _bool(raw["lead"], field + ".lead"), "core": _bool(raw["core"], field + ".core"),
-           "reason": _text(raw["reason"], field + ".reason", LIMITS["reason"]),
-           "start": _bool(raw["start"], field + ".start"),
-           "routine": _text(raw["routine"], field + ".routine", LIMITS["routine"]),
-           "tools": [_id(t, field + ".tools") for t in _list(raw["tools"], field + ".tools", 12)],
-           "about": _text(raw["about"], field + ".about", LIMITS["summary"]),
-           "runtime": None if raw["runtime"] is None else _id(raw["runtime"], field + ".runtime"),
-           "existing": _bool(raw["existing"], field + ".existing")}
+    bot = {
+        "id": _id(raw["id"], field + ".id"),
+        "template": None if raw["template"] is None else _id(raw["template"], field + ".template"),
+        "title": _text(raw["title"], field + ".title", LIMITS["title"], empty=False),
+        "dept": raw["dept"],
+        "lead": _bool(raw["lead"], field + ".lead"),
+        "core": _bool(raw["core"], field + ".core"),
+        "reason": _text(raw["reason"], field + ".reason", LIMITS["reason"]),
+        "start": _bool(raw["start"], field + ".start"),
+        "routine": _text(raw["routine"], field + ".routine", LIMITS["routine"]),
+        "tools": [_id(t, field + ".tools") for t in _list(raw["tools"], field + ".tools", 12)],
+        "about": _text(raw["about"], field + ".about", LIMITS["summary"]),
+        "runtime": None if raw["runtime"] is None else _id(raw["runtime"], field + ".runtime"),
+        "existing": _bool(raw["existing"], field + ".existing"),
+    }
     if bot["dept"] not in DEPARTMENTS:
         raise DraftError(field + ".dept is not a department")
     if bot["existing"] and bot["runtime"] not in HARNESSES:
@@ -274,9 +305,13 @@ def _bot(raw, at):
 def _person(raw, at):
     field = "people[%d]" % at
     _keys(raw, field, PERSON_FIELDS, ("isNew",))
-    person = {"id": _id(raw["id"], field + ".id"), "name": _text(raw["name"], field + ".name", LIMITS["name"]),
-              "role": _text(raw["role"], field + ".role", LIMITS["role"]), "dept": raw["dept"],
-              "owner": _bool(raw["owner"], field + ".owner")}
+    person = {
+        "id": _id(raw["id"], field + ".id"),
+        "name": _text(raw["name"], field + ".name", LIMITS["name"]),
+        "role": _text(raw["role"], field + ".role", LIMITS["role"]),
+        "dept": raw["dept"],
+        "owner": _bool(raw["owner"], field + ".owner"),
+    }
     if person["dept"] is not None and person["dept"] not in DEPARTMENTS:
         raise DraftError(field + ".dept is not a department")
     if raw.get("isNew") is True:
@@ -293,12 +328,20 @@ def aim(raw, field):
     for key in set(raw) - set(AIM[direction]):
         if key in ("target", "baseline", "deadline", "min", "max") and raw[key] is not None:
             raise DraftError("%s.%s doesn't go with direction %s" % (field, key, direction))
-    out = {"measure": _text(raw.get("measure") or "", field + ".measure", LIMITS["measure"]).strip(),
-           "unit": _text(raw.get("unit") or "", field + ".unit", LIMITS["unit"]).strip(), "direction": direction}
+    out = {
+        "measure": _text(raw.get("measure") or "", field + ".measure", LIMITS["measure"]).strip(),
+        "unit": _text(raw.get("unit") or "", field + ".unit", LIMITS["unit"]).strip(),
+        "direction": direction,
+    }
     for key in AIM[direction]:
         value = raw.get(key)
-        out[key] = None if value is None else date(value, field + "." + key) if key == "deadline" \
+        out[key] = (
+            None
+            if value is None
+            else date(value, field + "." + key)
+            if key == "deadline"
             else number(value, field + "." + key)
+        )
     if direction == "range" and None not in (out["min"], out["max"]) and out["min"] > out["max"]:
         raise DraftError(field + ".min is above max")
     return out
@@ -306,10 +349,18 @@ def aim(raw, field):
 
 def _goal(raw, at):
     field = "goals[%d]" % at
-    _keys(raw, field, ("id", "title", "owner", "measure"),
-          GOAL_FIELDS + ("target", "baseline", "deadline", "min", "max", "isNew", "bet") + GOAL_LAYER)
-    goal = {"id": _id(raw["id"], field + ".id"), "title": _text(raw["title"], field + ".title", LIMITS["goal_title"]),
-            "owner": _id(raw["owner"], field + ".owner"), **aim(raw, field)}
+    _keys(
+        raw,
+        field,
+        ("id", "title", "owner", "measure"),
+        GOAL_FIELDS + ("target", "baseline", "deadline", "min", "max", "isNew", "bet") + GOAL_LAYER,
+    )
+    goal = {
+        "id": _id(raw["id"], field + ".id"),
+        "title": _text(raw["title"], field + ".title", LIMITS["goal_title"]),
+        "owner": _id(raw["owner"], field + ".owner"),
+        **aim(raw, field),
+    }
     if raw.get("level") is not None:
         if raw["level"] not in LEVELS:
             raise DraftError(field + ".level must be company, group or role")
@@ -340,8 +391,8 @@ def _url(value, field, empty=True):
     try:
         parts = urlsplit(value) if URL.fullmatch(value) else None
         good = parts is not None and bool(parts.hostname) and "@" not in parts.netloc
-        parts and parts.port                    # "https://host:abc" raises here
-    except ValueError:                          # "https://[" and other addresses urlsplit can't read
+        parts and parts.port  # "https://host:abc" raises here
+    except ValueError:  # "https://[" and other addresses urlsplit can't read
         good = False
     if not good:
         raise DraftError(field + " must be an http or https address, with no user name or password")
@@ -368,8 +419,13 @@ def _bet_row(raw, at):
 def _usd(value, field):
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
-            or not float(value).is_integer() or not 0 <= value <= 1e15:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not float(value).is_integer()
+        or not 0 <= value <= 1e15
+    ):
         raise DraftError(field + " must be a whole number of dollars or null")
     return int(value)
 
@@ -380,32 +436,47 @@ def _segment(raw, at):
     method = raw.get("method") or "top_down"
     if method not in METHODS:
         raise DraftError(field + ".method is not a sizing method")
-    out = {"key": _id(raw["key"], field + ".key"), "name": _text(raw.get("name", ""), field + ".name", LIMITS["segment_name"]),
-           "parent": None if raw.get("parent") is None else _id(raw["parent"], field + ".parent"),
-           "usd": _usd(raw.get("usd"), field + ".usd"), "method": method,
-           "arithmetic": _text(raw.get("arithmetic", ""), field + ".arithmetic", LIMITS["arithmetic"]),
-           "evidence": [_url(u, field + ".evidence", empty=False)
-                        for u in _list(raw.get("evidence", []), field + ".evidence", LIMITS["evidence"])],
-           "ours": _bool(raw.get("ours", False), field + ".ours"), "next": _bool(raw.get("next", False), field + ".next")}
+    out = {
+        "key": _id(raw["key"], field + ".key"),
+        "name": _text(raw.get("name", ""), field + ".name", LIMITS["segment_name"]),
+        "parent": None if raw.get("parent") is None else _id(raw["parent"], field + ".parent"),
+        "usd": _usd(raw.get("usd"), field + ".usd"),
+        "method": method,
+        "arithmetic": _text(raw.get("arithmetic", ""), field + ".arithmetic", LIMITS["arithmetic"]),
+        "evidence": [
+            _url(u, field + ".evidence", empty=False)
+            for u in _list(raw.get("evidence", []), field + ".evidence", LIMITS["evidence"])
+        ],
+        "ours": _bool(raw.get("ours", False), field + ".ours"),
+        "next": _bool(raw.get("next", False), field + ".next"),
+    }
     if not out["evidence"]:
-        out["usd"] = None       # a size stands only on its evidence: never an invented number
+        out["usd"] = None  # a size stands only on its evidence: never an invented number
     return out
 
 
 def _player(raw, at):
     field = "strategy.market.players[%d]" % at
     _keys(raw, field, ("name",), ("url", "segments"))
-    return {"name": _text(raw["name"], field + ".name", LIMITS["player_name"]), "url": _url(raw.get("url", ""), field + ".url"),
-            "segments": [_id(s, field + ".segments") for s in _list(raw.get("segments", []), field + ".segments",
-                                                                    LIMITS["segments"])]}
+    return {
+        "name": _text(raw["name"], field + ".name", LIMITS["player_name"]),
+        "url": _url(raw.get("url", ""), field + ".url"),
+        "segments": [
+            _id(s, field + ".segments") for s in _list(raw.get("segments", []), field + ".segments", LIMITS["segments"])
+        ],
+    }
 
 
 def _post(raw, at):
     field = "strategy.listening.posts[%d]" % at
     _keys(raw, field, ("url",), ("source", "title", "when", "tag"))
-    out = {"source": raw.get("source") or "web", "url": _url(raw["url"], field + ".url", empty=False),
-           "title": _text(raw.get("title", ""), field + ".title", LIMITS["post_title"]),
-           "when": _day(raw.get("when", ""), field + ".when"), "tag": raw.get("tag") or "market"}
+    out = {
+        "source": raw.get("source") or "web",
+        "url": _url(raw["url"], field + ".url", empty=False),
+        "title": _text(raw.get("title", ""), field + ".title", LIMITS["post_title"]),
+        "when": _day(raw.get("when", ""), field + ".when"),
+        "tag": raw.get("tag") or "market",
+    }
     if out["source"] not in POST_SOURCES or out["tag"] not in POST_TAGS:
         raise DraftError(field + " has an unknown source or tag")
     return out
@@ -423,25 +494,38 @@ def _strategy(raw):
     year = definition.get("year")
     if year is not None and (isinstance(year, bool) or not isinstance(year, int) or not YEARS[0] <= year <= YEARS[1]):
         raise DraftError("strategy.market.definition.year must be a year")
-    out = {"summary": _text(raw.get("summary", ""), "strategy.summary", LIMITS["strategy_line"]),
-           "vision": _text(raw.get("vision", ""), "strategy.vision", LIMITS["strategy_line"]),
-           "sections": {k: _text(sections.get(k, ""), "strategy.sections." + k, LIMITS["section"]) for k in SECTIONS},
-           "bets": [_bet_row(b, i) for i, b in enumerate(_list(raw.get("bets", []), "strategy.bets", LIMITS["bets"]))],
-           "market": {"definition": {"root": _text(definition.get("root", ""), "strategy.market.definition.root",
-                                                   LIMITS["market_root"]),
-                                     "in": _text(definition.get("in", ""), "strategy.market.definition.in",
-                                                 LIMITS["market_scope"]),
-                                     "out": _text(definition.get("out", ""), "strategy.market.definition.out",
-                                                  LIMITS["market_scope"]),
-                                     "year": year},
-                      "segments": [_segment(s, i) for i, s in enumerate(_list(market.get("segments", []),
-                                                                             "strategy.market.segments", LIMITS["segments"]))],
-                      "players": [_player(p, i) for i, p in enumerate(_list(market.get("players", []),
-                                                                           "strategy.market.players", LIMITS["players"]))]},
-           "listening": {"requests": [_text(r, "strategy.listening.requests", LIMITS["request"]) for r in
-                                      _list(listening.get("requests", []), "strategy.listening.requests", LIMITS["requests"])],
-                         "posts": [_post(p, i) for i, p in enumerate(_list(listening.get("posts", []),
-                                                                          "strategy.listening.posts", LIMITS["posts"]))]}}
+    out = {
+        "summary": _text(raw.get("summary", ""), "strategy.summary", LIMITS["strategy_line"]),
+        "vision": _text(raw.get("vision", ""), "strategy.vision", LIMITS["strategy_line"]),
+        "sections": {k: _text(sections.get(k, ""), "strategy.sections." + k, LIMITS["section"]) for k in SECTIONS},
+        "bets": [_bet_row(b, i) for i, b in enumerate(_list(raw.get("bets", []), "strategy.bets", LIMITS["bets"]))],
+        "market": {
+            "definition": {
+                "root": _text(definition.get("root", ""), "strategy.market.definition.root", LIMITS["market_root"]),
+                "in": _text(definition.get("in", ""), "strategy.market.definition.in", LIMITS["market_scope"]),
+                "out": _text(definition.get("out", ""), "strategy.market.definition.out", LIMITS["market_scope"]),
+                "year": year,
+            },
+            "segments": [
+                _segment(s, i)
+                for i, s in enumerate(_list(market.get("segments", []), "strategy.market.segments", LIMITS["segments"]))
+            ],
+            "players": [
+                _player(p, i)
+                for i, p in enumerate(_list(market.get("players", []), "strategy.market.players", LIMITS["players"]))
+            ],
+        },
+        "listening": {
+            "requests": [
+                _text(r, "strategy.listening.requests", LIMITS["request"])
+                for r in _list(listening.get("requests", []), "strategy.listening.requests", LIMITS["requests"])
+            ],
+            "posts": [
+                _post(p, i)
+                for i, p in enumerate(_list(listening.get("posts", []), "strategy.listening.posts", LIMITS["posts"]))
+            ],
+        },
+    }
     _unique(out["bets"], "strategy.bets")
     segments = out["market"]["segments"]
     keys = [s["key"] for s in segments]
@@ -462,19 +546,26 @@ def _strategy(raw):
 
 def blank_strategy():
     """setup.js `blankStrategy()`: the block before anything is drafted."""
-    return {"summary": "", "vision": "", "sections": {k: "" for k in SECTIONS}, "bets": [],
-            "market": {"definition": {"root": "", "in": "", "out": "", "year": None}, "segments": [], "players": []},
-            "listening": {"requests": [], "posts": []}}
+    return {
+        "summary": "",
+        "vision": "",
+        "sections": {k: "" for k in SECTIONS},
+        "bets": [],
+        "market": {"definition": {"root": "", "in": "", "out": "", "year": None}, "segments": [], "players": []},
+        "listening": {"requests": [], "posts": []},
+    }
 
 
 def has_strategy(draft):
     """Whether a draft holds a strategy worth writing down: some text, a bet, a segment or a request in its block."""
+
     def filled(value):
         if isinstance(value, dict):
             return any(filled(v) for k, v in value.items() if k != "year")
         if isinstance(value, list):
             return bool(value)
         return value not in ("", None, False)
+
     return filled(draft.get("strategy") or {})
 
 
@@ -509,17 +600,30 @@ def check(raw, snapshot=False):
         raise DraftError("rules.review is not a review level")
     draft = {
         "step": raw["step"],
-        "company": {"name": _text(company["name"], "company.name", LIMITS["name"]),
-                    "about": _text(company["about"], "company.about", LIMITS["about"]),
-                    "signals": _choices(company["signals"], "company.signals", SIGNALS)},
+        "company": {
+            "name": _text(company["name"], "company.name", LIMITS["name"]),
+            "about": _text(company["about"], "company.about", LIMITS["about"]),
+            "signals": _choices(company["signals"], "company.signals", SIGNALS),
+        },
         "people": [_person(p, i) for i, p in enumerate(_list(raw["people"], "people", LIMITS["people"]))],
-        "bots": [_bot(b, i) for i, b in enumerate(b for b in _list(raw["bots"], "bots", LIMITS["bots"])
-                                                   if not (isinstance(b, dict) and b.get("template") in RETIRED
-                                                           and not b.get("existing")))],
+        "bots": [
+            _bot(b, i)
+            for i, b in enumerate(
+                b
+                for b in _list(raw["bots"], "bots", LIMITS["bots"])
+                if not (isinstance(b, dict) and b.get("template") in RETIRED and not b.get("existing"))
+            )
+        ],
         "goals": [_goal(g, i) for i, g in enumerate(_list(raw["goals"], "goals", LIMITS["goals"]))],
-        "rules": {"mode": rules["mode"], "never": [r for r in RULES if r in _choices(rules["never"], "rules.never", RULES)],
-                  "review": rules["review"]},
-        "tools": {"mode": tools["mode"], "connect": [t for t in TOOLS if t in _choices(tools["connect"], "tools.connect", TOOLS)]},
+        "rules": {
+            "mode": rules["mode"],
+            "never": [r for r in RULES if r in _choices(rules["never"], "rules.never", RULES)],
+            "review": rules["review"],
+        },
+        "tools": {
+            "mode": tools["mode"],
+            "connect": [t for t in TOOLS if t in _choices(tools["connect"], "tools.connect", TOOLS)],
+        },
         "seq": seq,
     }
     if raw.get("strategy") is not None:
@@ -561,8 +665,12 @@ def check(raw, snapshot=False):
         for i, row in enumerate(_list(raw["removed"], "removed", LIMITS["removed"])):
             field = "removed[%d]" % i
             _keys(row, field, ("template", "title"))
-            draft["removed"].append({"template": None if row["template"] is None else _id(row["template"], field + ".template"),
-                                     "title": _text(row["title"], field + ".title", LIMITS["title"])})
+            draft["removed"].append(
+                {
+                    "template": None if row["template"] is None else _id(row["template"], field + ".template"),
+                    "title": _text(row["title"], field + ".title", LIMITS["title"]),
+                }
+            )
     if not snapshot:
         if raw.get("undo") is not None:
             draft["undo"] = check(raw["undo"], snapshot=True)
@@ -573,7 +681,9 @@ def check(raw, snapshot=False):
                 _keys(message, field, ("who", "text"))
                 if message["who"] not in ("me", "bot"):
                     raise DraftError(field + ".who is me or bot")
-                draft["chat"].append({"who": message["who"], "text": _text(message["text"], field + ".text", LIMITS["chat_text"])})
+                draft["chat"].append(
+                    {"who": message["who"], "text": _text(message["text"], field + ".text", LIMITS["chat_text"])}
+                )
         if "pending" in raw:
             pending = _list(raw["pending"], "pending", LIMITS["pending"])
             if len(set(map(str, pending))) != len(pending):

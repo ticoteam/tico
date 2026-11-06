@@ -13,6 +13,7 @@ live runner score the same way.
 Real cases hold a customer's words and live outside this public repository (`--cases`); `cases/` here holds only a
 made-up example.
 """
+
 import hashlib
 import json
 import re
@@ -24,7 +25,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "botops"))
-import score  # noqa: E402  (the BotOps scorers)
+import score  # (the BotOps scorers)
 
 # A replayed task has settled when it reaches one of these and its bot is not running.
 SETTLED = ("waiting", "review", "ready", "done", "closed", "declined")
@@ -40,7 +41,8 @@ SECRET = re.compile(
     r"xox[abpr]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{30,}|A[KS]IA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
     r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.|[Bb]earer\s+[A-Za-z0-9._~+/=-]{16,}|"
     r"(?i:(?:password|passwd|secret|api[_-]?key|aws_secret_access_key)\s*[:=]\s*\S{6,})|"
-    r"https?://[^/\s:@]+:[^/\s@]+@|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|\+\d[\d ().-]{8,}\d)")
+    r"https?://[^/\s:@]+:[^/\s@]+@|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|\+\d[\d ().-]{8,}\d)"
+)
 
 
 def sha(text):
@@ -102,29 +104,57 @@ def questions(detail, bot):
         if m.get("kind") == "ask" and m["sender_id"] == "bot:" + bot and m.get("deleted_at") is None:
             to = (m.get("ask") or {}).get("who") or m.get("recipient_id")
             if _person(to):
-                found.append({"id": m["id"], "task": detail["task"]["id"], "to": to, "ask": m.get("ask"),
-                              "created_at": m["created_at"], "open": not m.get("answers")})
+                found.append(
+                    {
+                        "id": m["id"],
+                        "task": detail["task"]["id"],
+                        "to": to,
+                        "ask": m.get("ask"),
+                        "created_at": m["created_at"],
+                        "open": not m.get("answers"),
+                    }
+                )
     for q in found:
         q["open"] = q["open"] and q["id"] not in replied
+    task = detail.get("task") or {}
+    if task.get("questions") and task.get("requester_id") == "bot:" + bot and _person(task.get("owner_id")):
+        # A question task: the question rides on the task the person owns, open until they close it.
+        found.append(
+            {
+                "id": task["id"],
+                "task": task["id"],
+                "to": task["owner_id"],
+                "ask": {"questions": task["questions"], "target": {"task": task["id"]}},
+                "created_at": task.get("asked_at") or task["created_at"],
+                "open": task.get("status") not in SETTLED_ASK,
+            }
+        )
     return found
 
 
 def cards(card_details, bot):
     """The child tasks that put a question to a person: owned by the person, or holding the bot's question to one
     (a question card is owned by the bot that asked and waits on the person). Each is one step for the person."""
-    return [d for d in card_details if _person(d["task"].get("owner_id")) or _person(d["task"].get("waiting_on"))
-            or questions(d, bot)]
+    return [
+        d
+        for d in card_details
+        if _person(d["task"].get("owner_id")) or _person(d["task"].get("waiting_on")) or questions(d, bot)
+    ]
 
 
 def bot_runs(detail, bot):
     """The case's bot's runs on the task, oldest first: another bot's turns on it are not this bot's work."""
-    return sorted((r for r in detail.get("runs") or [] if r.get("started_at") and r.get("bot") in (bot, "bot:" + bot)),
-                  key=lambda r: r["started_at"])
+    return sorted(
+        (r for r in detail.get("runs") or [] if r.get("started_at") and r.get("bot") in (bot, "bot:" + bot)),
+        key=lambda r: r["started_at"],
+    )
 
 
 def attached(files, bot):
     """Names of the files the bot attached or changed: any version by the bot. The same rule on both sides."""
-    return [f["name"] for f in files.get("files") or [] if any(v.get("by") == "bot:" + bot for v in f.get("versions") or [])]
+    return [
+        f["name"] for f in files.get("files") or [] if any(v.get("by") == "bot:" + bot for v in f.get("versions") or [])
+    ]
 
 
 def side(detail, files, bot, card_details=()):
@@ -136,23 +166,39 @@ def side(detail, files, bot, card_details=()):
     start = when(runs[0]["started_at"]) if runs else None
     seen, transcript = set(), []
     for m in sorted((detail.get("messages") or []) + (detail.get("comments") or []), key=lambda m: m["created_at"]):
-        if m["id"] in seen or m.get("kind") == "notice" or m.get("deleted_at") or not start or when(m["created_at"]) < start:
+        if (
+            m["id"] in seen
+            or m.get("kind") == "notice"
+            or m.get("deleted_at")
+            or not start
+            or when(m["created_at"]) < start
+        ):
             continue
         seen.add(m["id"])
         if m["sender_id"] == "bot:" + bot:
             transcript.append(["bot", m["body"]])
         elif _person(m["sender_id"]):
             transcript.append(["person", m["body"]])
-    minutes = sum((when(r["finished_at"]) - when(r["started_at"])).total_seconds() for r in runs if r.get("finished_at")) / 60
+    minutes = (
+        sum((when(r["finished_at"]) - when(r["started_at"])).total_seconds() for r in runs if r.get("finished_at")) / 60
+    )
     asked = cards(card_details, bot)
     open_questions = [q for d in (detail, *asked) for q in questions(d, bot) if q["open"]]
-    return {"status": detail["task"]["status"], "transcript": transcript, "files": attached(files, bot),
-            "runs": len(runs), "minutes": round(minutes, 1),
-            "person_steps": sum(1 for who, _ in transcript if who == "person") + len(asked),
-            "open_questions": sorted(open_questions, key=lambda q: q["created_at"]),
-            "open_cards": [d["task"]["id"] for d in asked if _person(d["task"].get("owner_id"))
-                           and d["task"].get("status") not in SETTLED_ASK],
-            "running": not runs or any(not r.get("finished_at") for r in runs)}
+    return {
+        "status": detail["task"]["status"],
+        "transcript": transcript,
+        "files": attached(files, bot),
+        "runs": len(runs),
+        "minutes": round(minutes, 1),
+        "person_steps": sum(1 for who, _ in transcript if who == "person") + len(asked),
+        "open_questions": sorted(open_questions, key=lambda q: q["created_at"]),
+        "open_cards": [
+            d["task"]["id"]
+            for d in asked
+            if _person(d["task"].get("owner_id")) and d["task"].get("status") not in SETTLED_ASK
+        ],
+        "running": not runs or any(not r.get("finished_at") for r in runs),
+    }
 
 
 def as_started(detail, start):
@@ -167,8 +213,11 @@ def as_started(detail, start):
             criteria = json.loads(criteria)
         except ValueError:
             criteria = [criteria]
-    return {"title": value.get("title") or task["title"], "body": value.get("body", task.get("body")) or "",
-            "acceptance_criteria": criteria or []}
+    return {
+        "title": value.get("title") or task["title"],
+        "body": value.get("body", task.get("body")) or "",
+        "acceptance_criteria": criteria or [],
+    }
 
 
 def split(detail, files, instructions, bot=None, card_details=()):
@@ -183,10 +232,17 @@ def split(detail, files, instructions, bot=None, card_details=()):
     if detail.get("has_more"):
         raise ValueError("the task has more messages than one read returns, so its opening may be missing")
     start = when(runs[0]["started_at"])
-    opening = [{"from": "person", "text": m["body"]}
-               for m in sorted({m["id"]: m for m in (detail.get("messages") or []) + (detail.get("comments") or [])}.values(),
-                               key=lambda m: m["created_at"])
-               if _person(m["sender_id"]) and m.get("kind") != "notice" and not m.get("deleted_at") and when(m["created_at"]) < start]
+    opening = [
+        {"from": "person", "text": m["body"]}
+        for m in sorted(
+            {m["id"]: m for m in (detail.get("messages") or []) + (detail.get("comments") or [])}.values(),
+            key=lambda m: m["created_at"],
+        )
+        if _person(m["sender_id"])
+        and m.get("kind") != "notice"
+        and not m.get("deleted_at")
+        and when(m["created_at"]) < start
+    ]
     mine = set(attached(files, bot))
     opened = []
     for f in files.get("files") or []:
@@ -209,8 +265,13 @@ def split(detail, files, instructions, bot=None, card_details=()):
         "conversation": opening,
         "files": opened,
         "person": [],
-        "done": [{"status": ["done", "review", "ready", "closed"] if status in ("done", "review", "ready", "closed")
-                  else [status]}],
+        "done": [
+            {
+                "status": ["done", "review", "ready", "closed"]
+                if status in ("done", "review", "ready", "closed")
+                else [status]
+            }
+        ],
         "limits": {},
         "original": {k: original[k] for k in ("status", "transcript", "files", "runs", "minutes", "person_steps")},
     }
@@ -218,7 +279,7 @@ def split(detail, files, instructions, bot=None, card_details=()):
 
 # ------------------------------------------------------------------ scoring, the same for both sides
 def check(predicate, outcome, facts):
-    (name, args), = ({predicate: {}} if isinstance(predicate, str) else predicate).items()
+    ((name, args),) = ({predicate: {}} if isinstance(predicate, str) else predicate).items()
     if name == "status":
         wanted = [args] if isinstance(args, str) else list(args)
         return name, outcome["status"] in wanted, f"ended {outcome['status']}"
@@ -236,16 +297,25 @@ def measure(case, outcome):
     said = [t for who, t in transcript if who == "bot"]
     facts = score.Facts(None, None, said)
     checks = [check(p, outcome, facts) for p in case.get("done") or []]
-    numbers = {"person_steps": int(outcome.get("person_steps") or 0),
-               "jargon": sum(len(score.jargon_words(t)) for t in said),
-               "duplicates": score.duplicates(transcript), "sent_elsewhere": score.sent_elsewhere(said),
-               "runs": int(outcome.get("runs") or 0)}
+    numbers = {
+        "person_steps": int(outcome.get("person_steps") or 0),
+        "jargon": sum(len(score.jargon_words(t)) for t in said),
+        "duplicates": score.duplicates(transcript),
+        "sent_elsewhere": score.sent_elsewhere(said),
+        "runs": int(outcome.get("runs") or 0),
+    }
     limits = case.get("limits") or {}
     over = {k: v for k, v in numbers.items() if v > limits.get(k, 10**6)}
     done = all(held for _, held, _ in checks)
-    return {"done": done, "passed": done and not over, "over_limit": over, "status": outcome.get("status"),
-            "minutes": outcome.get("minutes"), "checks": [{"check": n, "held": h, **({} if h else {"why": w})}
-                                                          for n, h, w in checks], **numbers}
+    return {
+        "done": done,
+        "passed": done and not over,
+        "over_limit": over,
+        "status": outcome.get("status"),
+        "minutes": outcome.get("minutes"),
+        "checks": [{"check": n, "held": h, **({} if h else {"why": w})} for n, h, w in checks],
+        **numbers,
+    }
 
 
 def compare(before, after):
@@ -263,19 +333,35 @@ def compare(before, after):
 def report(rows, title, prompt_note=""):
     """The release-preparation report: counts, then regressions, then wins, then the full table."""
     count = {v: sum(1 for r in rows if r["verdict"] == v) for v in ("win", "regression", "mixed", "same", "error")}
-    lines = [f"# {title}", "", prompt_note, "" if prompt_note else None,
-             f"{len(rows)} case{'' if len(rows) == 1 else 's'}: {count['win']} wins, {count['regression']} regressions, {count['mixed']} mixed, "
-             f"{count['same']} same" + (f", {count['error']} could not run" if count["error"] else "") + ".", ""]
-    for verdict, heading in (("regression", "Regressions"), ("error", "Could not run"), ("win", "Wins"),
-                             ("mixed", "Mixed")):
+    lines = [
+        f"# {title}",
+        "",
+        prompt_note,
+        "" if prompt_note else None,
+        f"{len(rows)} case{'' if len(rows) == 1 else 's'}: {count['win']} wins, {count['regression']} regressions, {count['mixed']} mixed, "
+        f"{count['same']} same" + (f", {count['error']} could not run" if count["error"] else "") + ".",
+        "",
+    ]
+    for verdict, heading in (
+        ("regression", "Regressions"),
+        ("error", "Could not run"),
+        ("win", "Wins"),
+        ("mixed", "Mixed"),
+    ):
         picked = [r for r in rows if r["verdict"] == verdict]
         if picked:
             lines += [f"## {heading}", ""] + [f"- **{r['id']}**: {'; '.join(r['why']) or '—'}" for r in picked] + [""]
-    lines += ["## Every case", "", "| Case | Verdict | Status (was → now) | Done | Steps | Jargon | Dupes | Settings | Runs | Minutes |",
-              "|---|---|---|---|---|---|---|---|---|---|"]
+    lines += [
+        "## Every case",
+        "",
+        "| Case | Verdict | Status (was → now) | Done | Steps | Jargon | Dupes | Settings | Runs | Minutes |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
     for r in rows:
         b, a = r.get("before") or {}, r.get("after") or {}
-        pair = lambda k: f"{b.get(k, '—')} → {a.get(k, '—')}"  # noqa: E731
-        lines.append(f"| {r['id']} | {r['verdict']} | {pair('status')} | {pair('done')} | {pair('person_steps')} | "
-                     f"{pair('jargon')} | {pair('duplicates')} | {pair('sent_elsewhere')} | {pair('runs')} | {pair('minutes')} |")
+        pair = lambda k: f"{b.get(k, '—')} → {a.get(k, '—')}"
+        lines.append(
+            f"| {r['id']} | {r['verdict']} | {pair('status')} | {pair('done')} | {pair('person_steps')} | "
+            f"{pair('jargon')} | {pair('duplicates')} | {pair('sent_elsewhere')} | {pair('runs')} | {pair('minutes')} |"
+        )
     return "\n".join(line for line in lines if line is not None) + "\n"

@@ -52,14 +52,17 @@ export type Answer = {
 
 export type ApiTool = {
   access: Array<{
+  fixed?: boolean;
   initials: string;
-  kind: "bot" | "person";
+  kind: "bot" | "person" | "finance";
   last_used_at: string | null;
   level: "read" | "read_write";
   name: string;
   subject: string;
 }>;
+  audience?: AccessAudience | null;
   can_manage: boolean;
+  can_set_audience: boolean;
   checks: Array<{
   checked_at: string;
   detail: string;
@@ -74,20 +77,20 @@ export type ApiTool = {
   name: string;
   preview: string;
 }>;
+  private: boolean;
   recent: Array<Record<string, unknown>>;
+  seen_by?: Array<{
+  id: string;
+  kind: "person" | "group" | "bot" | "finance";
+  name: string;
+  subject: string;
+  why: "Owner" | "Listed" | "Can use it";
+}>;
   status: {
   text: string;
   tone: "ok" | "wait" | "fail" | "run" | "idle";
 };
-  tool: {
-  auth_scheme: string;
-  base_url: string;
-  check_path: string;
-  delivery: "proxy" | "computer";
-  id: string;
-  name: string;
-  service: string;
-};
+  tool: ApiToolSettings;
 };
 
 export type ApiToolActivity = {
@@ -99,6 +102,17 @@ export type ApiToolActivity = {
   kind: "call" | "use";
   result: "sent" | "refused" | "failed" | "use";
 }>;
+};
+
+export type ApiToolSettings = {
+  auth_scheme: string;
+  base_url: string;
+  check_path: string;
+  delivery: "proxy" | "computer";
+  id: string;
+  name: string;
+  private: boolean;
+  service: string;
 };
 
 export type ApprovalCreate = {
@@ -1695,6 +1709,81 @@ export type FinanceActionRequest = {
   payload?: Record<string, unknown>;
 };
 
+export type FinanceAdAccount = {
+  active: boolean;
+  bot_slug: string | null;
+  currency: string;
+  external_id: string;
+  id: string;
+  name: string;
+  tool_id: string;
+};
+
+export type FinanceAdAccountPatch = {
+  bot_slug: string | null;
+};
+
+export type FinanceAdAccounts = {
+  accounts: Array<{
+  active: boolean;
+  bot_slug: string | null;
+  currency: string;
+  external_id: string;
+  id: string;
+  month_to_date: number;
+  name: string;
+}>;
+  books_lines: Array<{
+  code: string;
+  id: string;
+  name: string;
+}>;
+  elsewhere: {
+  tool_id?: string;
+  tool_name?: string;
+} | null;
+  import: {
+  account_id: string;
+  account_name: string;
+  enabled: boolean;
+  every_hours: number;
+  history_from: string;
+  last_error: string;
+  last_import_at: string | null;
+  run_requested: boolean;
+  saved: boolean;
+  status: "never" | "ok" | "reconnect" | "failed";
+};
+  month: string;
+  month_label: string;
+  platform: "google_ads" | "meta_ads";
+  platform_label: string;
+  slots: Array<{
+  credential_id: string;
+  label: string;
+  options: Array<{
+  id: string;
+  name: string;
+}>;
+  required: boolean;
+  slot: string;
+}>;
+  tool_id: string;
+  tool_name: string;
+};
+
+export type FinanceAdImportRequest = {
+  account_id?: string | null;
+  credentials?: Record<string, string | null> | null;
+  enabled: boolean;
+  history_from?: string | null;
+  tool_id: string;
+};
+
+export type FinanceAdRunRequest = {
+  tool_id: string;
+};
+
 export type FinanceBalanceSheet = {
   as_of: string;
   assets: Array<{
@@ -1852,8 +1941,9 @@ export type FinanceCloseChecklist = {
 export type FinanceConnectionRequest = {
   approver_email?: string | null;
   credential_id: string;
+  history_from?: string | null;
   name?: string | null;
-  provider?: "mercury" | "stripe";
+  provider?: "mercury" | "stripe" | "brex";
   server_ip?: string | null;
   token_creator_email?: string | null;
 };
@@ -2827,6 +2917,68 @@ export type Health = {
   stuck?: Array<Record<string, unknown>>;
 };
 
+export type HeartbeatBeat = {
+  did: number;
+  failed: number;
+  id: string;
+  last_repeated_at: string | null;
+  repeats: number;
+  started_at: string;
+  steps: Array<{
+  error?: string | null;
+  key: string;
+  ms: number;
+  name?: string;
+  text?: string | null;
+}>;
+  total_ms: number;
+};
+
+export type HeartbeatStep = {
+  can_change: boolean;
+  did_24h: number;
+  every: string;
+  every_s: number | null;
+  failed_24h: number;
+  failing: boolean;
+  key: string;
+  kind: "due" | "recovery" | "poll";
+  kind_name: string;
+  last_did: string | null;
+  last_did_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  last_ms: number | null;
+  last_result: string | null;
+  last_run_at: string | null;
+  name: string;
+  on: boolean;
+  runs_24h: number;
+  switch: boolean;
+};
+
+export type HeartbeatUpdate = {
+  interval_s: number;
+};
+
+export type HeartbeatView = {
+  beats: Array<HeartbeatBeat>;
+  beats_24h: number;
+  can_change: boolean;
+  interval_max: number;
+  interval_min: number;
+  interval_s: number;
+  kinds: Array<{
+  key: string;
+  name: string;
+}>;
+  last_beat_at: string | null;
+  next: string | null;
+  quiet_beats: number;
+  quiet_since_at: string | null;
+  steps: Array<HeartbeatStep>;
+};
+
 export type HeldAction = {
   action: string;
 };
@@ -3672,44 +3824,6 @@ export type MemberAdd = {
   role?: string;
 };
 
-export type MemoryTidyCard = {
-  bot: string;
-  cost_usd: number;
-  created_at: string;
-  diary: string;
-  diff?: string;
-  expires_at: string;
-  id: string;
-  keep_available: boolean;
-  keep_pending?: boolean;
-  kind: "memory_tidy";
-  memory_commit: string;
-  model: string;
-  reason: string;
-  requester_id: string;
-  reviewer: string;
-  status: "open" | "withdrawn" | "discarded" | "kept";
-  title: string;
-};
-
-export type MemoryTidyCardResult = {
-  card: MemoryTidyCard;
-};
-
-export type MemoryTidyCards = {
-  cards: Array<MemoryTidyCard>;
-};
-
-export type MemoryTidyDecision = {
-  decision: "keep" | "discard";
-};
-
-export type MemoryTidyPilot = {
-  bot: string;
-  effort?: "low";
-  model: string;
-};
-
 export type Message = {
   answer?: ReviewAnswer;
   answers?: Array<string | ReviewAnswer>;
@@ -3724,7 +3838,7 @@ export type Message = {
   id: string;
   in_reply_to: string | null;
   kind: string;
-  recipient_id: string;
+  recipient_id: string | null;
   recipient_name?: string;
   refs: Record<string, unknown>;
   run?: {
@@ -4607,6 +4721,7 @@ export type ReviewSettings = {
 export type ReviewTarget = {
   comment?: string | null;
   file?: string | null;
+  task?: string | null;
   version?: number | null;
 };
 
@@ -4916,6 +5031,51 @@ export type SentAs = {
 export type ServiceKeyCreate = {
   label: string;
   scope?: "tasks" | "update";
+};
+
+export type SkillApprove = {
+  acknowledged?: boolean;
+};
+
+export type SkillDecline = {
+  reason: string;
+};
+
+export type SkillFile = {
+  content: string;
+  path: string;
+};
+
+export type SkillInstall = {
+  pinned_version?: number | null;
+  target_id: string;
+  target_type: "Bot" | "Human";
+  version_policy?: "latest" | "pinned";
+};
+
+export type SkillInstallBulk = {
+  pinned_version?: number | null;
+  targets: Array<SkillTarget>;
+  version_policy?: "latest" | "pinned";
+};
+
+export type SkillPropose = {
+  base_version?: number | null;
+  files: Array<SkillFile>;
+  name: string;
+  note?: string;
+  source?: SkillSource | null;
+  task_id?: string | null;
+};
+
+export type SkillSource = {
+  repo_path?: string | null;
+  url?: string | null;
+};
+
+export type SkillTarget = {
+  target_id: string;
+  target_type: "Bot" | "Human";
 };
 
 export type SlackLink = {
@@ -5265,10 +5425,16 @@ export type Suggestion = {
   title: string;
 };
 
+export type SystemRoutineSaved = {
+  job: HeartbeatStep | {
+  key: string;
+  name: string;
+};
+};
+
 export type SystemRoutineUpdate = {
   at?: string | null;
   on?: boolean | null;
-  pilots?: Array<MemoryTidyPilot> | null;
   preset?: "15m" | "hourly" | "4h" | "daily" | "business" | null;
 };
 
@@ -5326,6 +5492,7 @@ export type TakeRecommendation = {
 
 export type Task = {
   acceptance_criteria?: Array<string>;
+  answer?: Record<string, unknown> | null;
   body?: string;
   check_back?: {
   at: string;
@@ -5345,6 +5512,7 @@ export type Task = {
   external_requesters?: number;
   holds: Array<TaskHold>;
   id: string;
+  if_no_answer?: Record<string, unknown> | null;
   important_requesters?: number;
   internal_requesters?: number;
   labels: Array<string>;
@@ -5357,6 +5525,7 @@ export type Task = {
   private?: boolean;
   public_summary?: string;
   public_title?: string;
+  questions?: Array<Record<string, unknown>> | null;
   readers?: Array<string>;
   relations?: Record<string, Array<{
   direction: string;
@@ -5368,8 +5537,10 @@ export type Task = {
   requester_count?: number;
   requester_id: string;
   requester_name?: string;
+  review?: Record<string, unknown> | null;
   roles?: Record<string, Array<string>>;
   size?: number | null;
+  spend?: Record<string, unknown> | null;
   status: string;
   step?: TaskStep | null;
   step_id?: string | null;
@@ -5540,6 +5711,7 @@ export type TaskCreate = {
   delivery?: "steer" | "queue" | "defer" | null;
   due?: string | null;
   effort?: string | null;
+  follow?: boolean;
   from_private?: boolean;
   goal_id?: string | null;
   harness?: string | null;
@@ -6033,6 +6205,19 @@ export type ThreadRail = {
   threads: Array<ThreadView>;
 };
 
+export type ThreadReach = {
+  outside: Array<string>;
+  reaches: Array<{
+  actor: string;
+  adds_reader?: boolean;
+  defer_for?: string | null;
+  mode: "steer" | "queue" | "defer" | "digest";
+  reason: string;
+}>;
+  thread_id: string;
+  way?: "steer" | "queue" | "defer";
+};
+
 export type ThreadReactions = Array<{
   actors: Array<unknown>;
   count: number;
@@ -6162,6 +6347,7 @@ export type ToolIndexRow = {
   kind: "api" | "mailbox" | "number" | "address" | "slack" | "github" | "meetings" | "listening" | "webhook" | "declared" | "website";
   name: string;
   needs_you: boolean;
+  private?: boolean;
   status: {
   text: string;
   tone: "ok" | "wait" | "fail" | "run" | "idle";
@@ -6588,6 +6774,16 @@ export type WebhookWakeUrlSet = {
   url: string | null;
 };
 
+export type backend__api_tools__ToolUpdate = {
+  audience?: AccessAudience | null;
+  auth_scheme?: string | null;
+  base_url?: string | null;
+  check_path?: string | null;
+  delivery?: string | null;
+  name?: string | null;
+  service?: string | null;
+};
+
 export type backend__company_page__api_editions__Correction = {
   note?: string;
   sections: Array<Record<string, unknown>>;
@@ -6858,6 +7054,14 @@ export type ApplyDisclosurePresetParams = {
 };
 export type ApplyDisclosurePresetBody = Preset;
 export type ApplyDisclosurePresetResponse = unknown;
+
+/** POST /api/v2/skills/proposals/{pid}/approve */
+export type ApproveSkillProposalParams = {
+  "Idempotency-Key": string;
+  pid: string;
+};
+export type ApproveSkillProposalBody = SkillApprove;
+export type ApproveSkillProposalResponse = unknown;
 
 /** POST /api/v2/kpis/{kid}/archive */
 export type ArchiveKpiParams = {
@@ -7330,14 +7534,6 @@ export type DecideGoalProposalParams = {
 export type DecideGoalProposalBody = GoalProposalDecision;
 export type DecideGoalProposalResponse = GoalProposalResult;
 
-/** POST /api/v2/memory-tidy/cards/{ident}/decide */
-export type DecideMemoryTidyCardParams = {
-  "Idempotency-Key": string;
-  ident: string;
-};
-export type DecideMemoryTidyCardBody = MemoryTidyDecision;
-export type DecideMemoryTidyCardResponse = MemoryTidyCardResult;
-
 /** POST /api/v2/stale-review/{suggestion_id} */
 export type DecideStaleSuggestionParams = {
   "Idempotency-Key": string;
@@ -7345,6 +7541,14 @@ export type DecideStaleSuggestionParams = {
 };
 export type DecideStaleSuggestionBody = StaleDecision;
 export type DecideStaleSuggestionResponse = unknown;
+
+/** POST /api/v2/skills/proposals/{pid}/decline */
+export type DeclineSkillProposalParams = {
+  "Idempotency-Key": string;
+  pid: string;
+};
+export type DeclineSkillProposalBody = SkillDecline;
+export type DeclineSkillProposalResponse = unknown;
 
 /** DELETE /api/v2/audiences/{audience_id} */
 export type DeleteAudienceParams = {
@@ -8184,6 +8388,14 @@ export type GetHealthFindingsParams = Record<string, never>;
 export type GetHealthFindingsBody = never;
 export type GetHealthFindingsResponse = unknown;
 
+/** GET /api/v2/heartbeat */
+export type GetHeartbeatParams = {
+  before?: string | null;
+  limit?: number;
+};
+export type GetHeartbeatBody = never;
+export type GetHeartbeatResponse = HeartbeatView;
+
 /** GET /api/v2/inbound/cursor */
 export type GetInboundCursorParams = {
   inbox_ids?: string | null;
@@ -8315,13 +8527,6 @@ export type GetMeetingTranscriptParams = {
 };
 export type GetMeetingTranscriptBody = never;
 export type GetMeetingTranscriptResponse = unknown;
-
-/** GET /api/v2/memory-tidy/cards/{ident} */
-export type GetMemoryTidyCardParams = {
-  ident: string;
-};
-export type GetMemoryTidyCardBody = never;
-export type GetMemoryTidyCardResponse = MemoryTidyCardResult;
 
 /** GET /api/v2/messages/{mid} */
 export type GetMessageParams = {
@@ -8510,6 +8715,43 @@ export type GetSeatAgentParams = {
 export type GetSeatAgentBody = never;
 export type GetSeatAgentResponse = SeatAgent;
 
+/** GET /api/v2/skills/{name} */
+export type GetSkillParams = {
+  name: string;
+};
+export type GetSkillBody = never;
+export type GetSkillResponse = unknown;
+
+/** GET /api/v2/skills/bundles/{sha256} */
+export type GetSkillBundleParams = {
+  sha256: string;
+};
+export type GetSkillBundleBody = never;
+export type GetSkillBundleResponse = unknown;
+
+/** GET /api/v2/skills/proposals/{pid} */
+export type GetSkillProposalParams = {
+  pid: string;
+};
+export type GetSkillProposalBody = never;
+export type GetSkillProposalResponse = unknown;
+
+/** GET /api/v2/skills/{name}/usage */
+export type GetSkillUsageParams = {
+  days?: number;
+  name: string;
+};
+export type GetSkillUsageBody = never;
+export type GetSkillUsageResponse = unknown;
+
+/** GET /api/v2/skills/{name}/versions/{number} */
+export type GetSkillVersionParams = {
+  name: string;
+  number: number;
+};
+export type GetSkillVersionBody = never;
+export type GetSkillVersionResponse = unknown;
+
 /** GET /api/v2/sleep */
 export type GetSleepWhenIdleParams = Record<string, never>;
 export type GetSleepWhenIdleBody = never;
@@ -8616,6 +8858,17 @@ export type GetThreadHomeParams = {
 };
 export type GetThreadHomeBody = never;
 export type GetThreadHomeResponse = ThreadView;
+
+/** GET /api/v2/threads/{thread_id}/reach */
+export type GetThreadReachParams = {
+  defer_for?: string | null;
+  delivery?: "steer" | "queue" | "defer" | null;
+  in_reply_to?: string | null;
+  text?: string;
+  thread_id: string;
+};
+export type GetThreadReachBody = never;
+export type GetThreadReachResponse = ThreadReach;
 
 /** GET /api/v2/threads/{thread_id}/timeline */
 export type GetThreadTimelineParams = {
@@ -8792,6 +9045,22 @@ export type ImportReadersParams = {
 };
 export type ImportReadersBody = ReaderImport;
 export type ImportReadersResponse = unknown;
+
+/** POST /api/v2/skills/{name}/installs */
+export type InstallSkillParams = {
+  "Idempotency-Key": string;
+  name: string;
+};
+export type InstallSkillBody = SkillInstall;
+export type InstallSkillResponse = unknown;
+
+/** POST /api/v2/skills/{name}/installs/bulk */
+export type InstallSkillForTargetsParams = {
+  "Idempotency-Key": string;
+  name: string;
+};
+export type InstallSkillForTargetsBody = SkillInstallBulk;
+export type InstallSkillForTargetsResponse = unknown;
 
 /** POST /api/v2/calls/{call_id}/join */
 export type JoinCallParams = {
@@ -9172,6 +9441,13 @@ export type ListFinanceActionKindsParams = {
 export type ListFinanceActionKindsBody = never;
 export type ListFinanceActionKindsResponse = FinanceActionKinds;
 
+/** GET /api/v2/finance/ad-accounts */
+export type ListFinanceAdAccountsParams = {
+  tool_id: string;
+};
+export type ListFinanceAdAccountsBody = never;
+export type ListFinanceAdAccountsResponse = FinanceAdAccounts;
+
 /** GET /api/v2/finance/bills */
 export type ListFinanceBillsParams = {
   aging?: "current" | "1_30" | "31_60" | "61_90" | "over_90" | null;
@@ -9531,11 +9807,6 @@ export type ListMeetingsParams = {
 export type ListMeetingsBody = never;
 export type ListMeetingsResponse = MeetingReviewList;
 
-/** GET /api/v2/memory-tidy/cards */
-export type ListMemoryTidyCardsParams = Record<string, never>;
-export type ListMemoryTidyCardsBody = never;
-export type ListMemoryTidyCardsResponse = MemoryTidyCards;
-
 /** GET /api/v2/conversations/{cid}/messages */
 export type ListMessagesParams = {
   before?: string | null;
@@ -9556,6 +9827,11 @@ export type ListModelSubscriptionsResponse = ModelSubscriptionList;
 export type ListModelsParams = Record<string, never>;
 export type ListModelsBody = never;
 export type ListModelsResponse = unknown;
+
+/** GET /api/v2/skills/installed */
+export type ListMySkillInstallsParams = Record<string, never>;
+export type ListMySkillInstallsBody = never;
+export type ListMySkillInstallsResponse = unknown;
 
 /** GET /api/v2/me/tokens */
 export type ListMyTokensParams = Record<string, never>;
@@ -9754,6 +10030,38 @@ export type ListSeatsResponse = SeatList;
 export type ListServiceKeysParams = Record<string, never>;
 export type ListServiceKeysBody = never;
 export type ListServiceKeysResponse = unknown;
+
+/** GET /api/v2/skills/install-targets */
+export type ListSkillInstallTargetsParams = Record<string, never>;
+export type ListSkillInstallTargetsBody = never;
+export type ListSkillInstallTargetsResponse = unknown;
+
+/** GET /api/v2/skills/installs */
+export type ListSkillInstallsParams = {
+  target_id: string;
+  target_type: string;
+};
+export type ListSkillInstallsBody = never;
+export type ListSkillInstallsResponse = unknown;
+
+/** GET /api/v2/skills/proposals */
+export type ListSkillProposalsParams = {
+  status?: string | null;
+};
+export type ListSkillProposalsBody = never;
+export type ListSkillProposalsResponse = unknown;
+
+/** GET /api/v2/skills/usage */
+export type ListSkillUsageParams = {
+  days?: number;
+};
+export type ListSkillUsageBody = never;
+export type ListSkillUsageResponse = unknown;
+
+/** GET /api/v2/skills */
+export type ListSkillsParams = Record<string, never>;
+export type ListSkillsBody = never;
+export type ListSkillsResponse = unknown;
 
 /** GET /api/v2/slack/links */
 export type ListSlackLinksParams = {
@@ -10160,6 +10468,13 @@ export type ProposeAssistantActionParams = {
 };
 export type ProposeAssistantActionBody = AssistantAction;
 export type ProposeAssistantActionResponse = AssistantActionResult;
+
+/** POST /api/v2/skills/proposals */
+export type ProposeSkillParams = {
+  "Idempotency-Key": string;
+};
+export type ProposeSkillBody = SkillPropose;
+export type ProposeSkillResponse = void;
 
 /** POST /api/v2/editions/{edition_id}/publish */
 export type PublishEditionParams = {
@@ -10687,6 +11002,14 @@ export type RequestSlackLinkParams = {
 export type RequestSlackLinkBody = LinkRequest;
 export type RequestSlackLinkResponse = SlackLink;
 
+/** POST /api/v2/skills/proposals/{pid}/rescreen */
+export type RescreenSkillProposalParams = {
+  "Idempotency-Key": string;
+  pid: string;
+};
+export type RescreenSkillProposalBody = Empty;
+export type RescreenSkillProposalResponse = unknown;
+
 /** POST /api/v2/tasks/{tid}/comments/{mid}/resolve */
 export type ResolveTaskQuestionParams = {
   "Idempotency-Key": string;
@@ -10883,6 +11206,13 @@ export type RunAutomationParams = {
 export type RunAutomationBody = RunNow | null;
 export type RunAutomationResponse = AutomationRunNow;
 
+/** POST /api/v2/finance/ad-imports/run */
+export type RunFinanceAdImportParams = {
+  "Idempotency-Key": string;
+};
+export type RunFinanceAdImportBody = FinanceAdRunRequest;
+export type RunFinanceAdImportResponse = FinanceAdAccounts;
+
 /** POST /api/v2/maintenance/run */
 export type RunMaintenanceParams = {
   "Idempotency-Key": string;
@@ -10897,6 +11227,18 @@ export type RunSystemRoutineParams = {
 };
 export type RunSystemRoutineBody = Empty;
 export type RunSystemRoutineResponse = unknown;
+
+/** POST /api/v2/finance/ad-imports */
+export type SaveFinanceAdImportParams = {
+  "Idempotency-Key": string;
+};
+export type SaveFinanceAdImportBody = FinanceAdImportRequest;
+export type SaveFinanceAdImportResponse = FinanceAdAccounts;
+
+/** PUT /api/v2/heartbeat */
+export type SaveHeartbeatParams = Record<string, never>;
+export type SaveHeartbeatBody = HeartbeatUpdate;
+export type SaveHeartbeatResponse = HeartbeatView;
 
 /** PATCH /api/v2/maintenance */
 export type SaveMaintenanceParams = {
@@ -10917,7 +11259,7 @@ export type SaveSystemRoutineParams = {
   key: string;
 };
 export type SaveSystemRoutineBody = SystemRoutineUpdate;
-export type SaveSystemRoutineResponse = SystemRoutineUpdate;
+export type SaveSystemRoutineResponse = SystemRoutineSaved;
 
 /** GET /api/v2/context/search */
 export type SearchDocsParams = {
@@ -11606,6 +11948,14 @@ export type UnfollowThreadParams = {
 export type UnfollowThreadBody = never;
 export type UnfollowThreadResponse = ThreadFollow;
 
+/** DELETE /api/v2/skills/installs/{iid} */
+export type UninstallSkillParams = {
+  "Idempotency-Key": string;
+  iid: string;
+};
+export type UninstallSkillBody = never;
+export type UninstallSkillResponse = unknown;
+
 /** POST /api/v2/goals/{gid}/kpis/{kid}/unlink */
 export type UnlinkGoalKpiParams = {
   "Idempotency-Key": string;
@@ -11647,6 +11997,14 @@ export type UnsnoozeTaskParams = {
 };
 export type UnsnoozeTaskBody = Empty;
 export type UnsnoozeTaskResponse = TaskResult;
+
+/** PATCH /api/v2/api-tools/{tool_id} */
+export type UpdateApiToolParams = {
+  "Idempotency-Key": string;
+  tool_id: string;
+};
+export type UpdateApiToolBody = backend__api_tools__ToolUpdate;
+export type UpdateApiToolResponse = ApiToolSettings;
 
 /** PATCH /api/v2/audiences/{audience_id} */
 export type UpdateAudienceParams = {
@@ -11710,6 +12068,14 @@ export type UpdateEditionParams = {
 };
 export type UpdateEditionBody = EditionBody;
 export type UpdateEditionResponse = unknown;
+
+/** PATCH /api/v2/finance/ad-accounts/{ad_account_id} */
+export type UpdateFinanceAdAccountParams = {
+  "Idempotency-Key": string;
+  ad_account_id: string;
+};
+export type UpdateFinanceAdAccountBody = FinanceAdAccountPatch;
+export type UpdateFinanceAdAccountResponse = FinanceAdAccount;
 
 /** POST /api/v2/goals/{gid} */
 export type UpdateGoalParams = {
@@ -11952,3 +12318,11 @@ export type WithdrawRuleHoldParams = {
 };
 export type WithdrawRuleHoldBody = HoldEmpty;
 export type WithdrawRuleHoldResponse = unknown;
+
+/** POST /api/v2/skills/proposals/{pid}/withdraw */
+export type WithdrawSkillProposalParams = {
+  "Idempotency-Key": string;
+  pid: string;
+};
+export type WithdrawSkillProposalBody = Empty;
+export type WithdrawSkillProposalResponse = unknown;

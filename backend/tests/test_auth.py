@@ -17,7 +17,7 @@ _KEY = []
 
 @pytest.fixture
 def signing(api):
-    if not _KEY:                                    # RSA key generation is slow; one key serves the module
+    if not _KEY:  # RSA key generation is slow; one key serves the module
         _KEY.append(rsa.generate_private_key(public_exponent=65537, key_size=2048))
     key = _KEY[0]
     auth = api.app.state.auth
@@ -26,10 +26,18 @@ def signing(api):
     jwks = Mock()
     jwks.get_signing_key_from_jwt.return_value = SimpleNamespace(key=key.public_key())
     auth.proxy = CloudflareAccess(auth.settings, jwks=jwks)
+
     def token(**changes):
-        claims = {"iss": auth.settings.access_issuer, "aud": auth.settings.access_audience,
-                  "sub": "person-id", "email": "ben@acme.example", "iat": int(time.time()), "exp": int(time.time()) + 600}
+        claims = {
+            "iss": auth.settings.access_issuer,
+            "aud": auth.settings.access_audience,
+            "sub": "person-id",
+            "email": "ben@acme.example",
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 600,
+        }
         return jwt.encode({**claims, **changes}, key, algorithm="RS256")
+
     return token
 
 
@@ -46,7 +54,10 @@ def test_access_requires_expected_issuer_audience_and_freshness(api, signing, ch
 
 
 def test_valid_but_unrostered_email_is_not_admitted(api, signing):
-    assert api.get("/api/v2/me", headers={"Cf-Access-Jwt-Assertion": signing(email="unknown@acme.example")}).status_code == 403
+    assert (
+        api.get("/api/v2/me", headers={"Cf-Access-Jwt-Assertion": signing(email="unknown@acme.example")}).status_code
+        == 403
+    )
 
 
 def test_local_owner_bearer_rejected_when_token_wrong(api):
@@ -71,16 +82,19 @@ def _turn(actor="bot:coo"):
 def test_chat_history_stays_scoped_to_the_run():
     # The reason the wall exists: a task run must not read a person's chat with the bot.
     from backend.auth import _own_ask_to_a_person
+
     assert _own_ask_to_a_person(_turn(), _row(kind="chat")) is False
 
 
 def test_a_task_conversation_is_not_let_through_this_door():
     from backend.auth import _own_ask_to_a_person
+
     assert _own_ask_to_a_person(_turn(), _row(task_id="t-1")) is False
 
 
 def test_a_bot_cannot_reach_an_ask_it_is_not_in():
     from backend.auth import _own_ask_to_a_person
+
     assert _own_ask_to_a_person(_turn("bot:cpo"), _row()) is False
 
 
@@ -88,6 +102,7 @@ def test_bot_reads_task_leaves_an_autocommit_connection_as_it_found_it(api):
     """A notice's read check (hubdb.bot_reads_task) on a connection with no transaction open opens none that stays open."""
     from backend import auth as A
     from backend.store import H
+
     store = api.app.state.store
     with store.transaction() as c:
         task = H.task_create(c, "human:ana", "Check the vendor list", "", "bot:ops", lint=False, private=False)
@@ -95,5 +110,5 @@ def test_bot_reads_task_leaves_an_autocommit_connection_as_it_found_it(api):
         assert not c.in_transaction
         assert A.bot_reads_task(c, "bot:ops", H.task(c, task["id"]))
         assert not c.in_transaction
-        assert not A.bot_reads_task(c, "bot:ops", {**H.task(c, task["id"]), "id": "missing"})     # refused, too
+        assert not A.bot_reads_task(c, "bot:ops", {**H.task(c, task["id"]), "id": "missing"})  # refused, too
         assert not c.in_transaction

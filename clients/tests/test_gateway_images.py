@@ -28,10 +28,15 @@ def sent(monkeypatch):
 
         def post(self, path, body, key=None):
             calls.append((path, body))
-            return {"model": "tico-images-1.0", "category": body["category"],
-                    "images": [{"mime": "image/png", "b64": base64.b64encode(MADE + bytes([n])).decode()}
-                               for n in range(body["count"])],
-                    "usage": {"cost_usd": 0.05}}
+            return {
+                "model": "tico-images-1.0",
+                "category": body["category"],
+                "images": [
+                    {"mime": "image/png", "b64": base64.b64encode(MADE + bytes([n])).decode()}
+                    for n in range(body["count"])
+                ],
+                "usage": {"cost_usd": 0.05},
+            }
 
     monkeypatch.setattr(remotecli, "Client", FakeClient)
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
@@ -46,11 +51,24 @@ def test_images_are_saved_beside_each_other_with_a_sidecar_for_each(sent, tmp_pa
     ref = tmp_path / "ref.png"
     ref.write_bytes(PNG)
     out = tmp_path / "shots" / "frame.png"
-    result = run(["gateway", "image", "a kettle", "--category", "character", "--ref", str(ref), "--count", "2",
-                  "--out", str(out)])
+    result = run(
+        [
+            "gateway",
+            "image",
+            "a kettle",
+            "--category",
+            "character",
+            "--ref",
+            str(ref),
+            "--count",
+            "2",
+            "--out",
+            str(out),
+        ]
+    )
     assert [Path(p).name for p in result["saved"]] == ["frame.png", "frame-2.png"]
     assert out.read_bytes() == MADE + b"\x00" and (out.parent / "frame-2.png").read_bytes() == MADE + b"\x01"
-    (path, body), = sent
+    ((path, body),) = sent
     assert path == "gateway/images" and body["category"] == "character" and body["count"] == 2
     assert body["images"] == ["data:image/png;base64," + base64.b64encode(PNG).decode()]
     assert "out" not in body and "refs" not in body
@@ -85,7 +103,9 @@ def test_the_output_names_and_the_image_types_are_read_from_the_bytes_and_the_na
     assert [p.name for p in hubtools.image_outputs("shots/a.png", 3)] == ["a.png", "a-2.png", "a-3.png"]
     assert [p.name for p in hubtools.image_outputs("shots/a", 2)] == ["a.png", "a-2.png"]
     assert hubtools.image_type(PNG) == "image/png" and hubtools.image_type(b"\xff\xd8\xff\xe0x") == "image/jpeg"
-    assert hubtools.image_type(b"RIFF\x00\x00\x00\x00WEBPVP8 ") == "image/webp" and hubtools.image_type(b"GIF89a") is None
+    assert (
+        hubtools.image_type(b"RIFF\x00\x00\x00\x00WEBPVP8 ") == "image/webp" and hubtools.image_type(b"GIF89a") is None
+    )
 
 
 def test_the_client_sends_the_gateways_shape_and_keeps_only_the_images(monkeypatch):
@@ -93,17 +113,38 @@ def test_the_client_sends_the_gateways_shape_and_keeps_only_the_images(monkeypat
 
     def post(url, body, headers, timeout, opener):
         sent.update(url=url, body=body, headers=headers, timeout=timeout)
-        return 200, {"model": "tico-images-1.0", "category": "photo", "images": [
-            {"mime": "image/png", "b64": "AAAA"}, {"mime": "image/png"}, "junk"],
-            "usage": {"cost_usd": 0.07}, "provider": "openai"}, ""
+        return (
+            200,
+            {
+                "model": "tico-images-1.0",
+                "category": "photo",
+                "images": [{"mime": "image/png", "b64": "AAAA"}, {"mime": "image/png"}, "junk"],
+                "usage": {"cost_usd": 0.07},
+                "provider": "openai",
+            },
+            "",
+        )
+
     monkeypatch.setattr(G, "_post", post)
-    status, answer, code = G.image("https://gateway.example.test/v1/gateway", "tgw-key", "a fox", "photo", [],
-                                   "1920x1080", 2, {"X-Tico-Bot": "ops"})
+    status, answer, code = G.image(
+        "https://gateway.example.test/v1/gateway",
+        "tgw-key",
+        "a fox",
+        "photo",
+        [],
+        "1920x1080",
+        2,
+        {"X-Tico-Bot": "ops"},
+    )
     assert (status, code) == (200, "")
     assert sent["url"] == "https://gateway.example.test/v1/gateway/images" and sent["timeout"] == 130
     assert sent["body"] == {"prompt": "a fox", "category": "photo", "count": 2, "size": "1920x1080"}
     assert sent["headers"] == {"Authorization": "Bearer tgw-key", "X-Tico-Bot": "ops"}
-    assert answer == {"model": "tico-images-1.0", "category": "photo", "images": [{"mime": "image/png", "b64": "AAAA"}],
-                      "usage": {"cost_usd": 0.07}}
+    assert answer == {
+        "model": "tico-images-1.0",
+        "category": "photo",
+        "images": [{"mime": "image/png", "b64": "AAAA"}],
+        "usage": {"cost_usd": 0.07},
+    }
     monkeypatch.setattr(G, "_post", lambda *args: (404, {}, "not_found"))
     assert G.image("https://gateway.example.test/v1/gateway", "k", "x", "storyboard") == (404, {}, "not_found")

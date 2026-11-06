@@ -1,10 +1,12 @@
-// Offline regression for Settings > Repositories and a bot's Repositories (docs: PLAN sections 1 and 2). Fixtures only.
-//  - the list shows ticked and unticked repositories, hides bot repos until asked, marks a setup command read from
-//    tico.json or conductor.json and a repository GitHub no longer lists; a tick, a setup command, New bots get and
-//    Refresh each send their request;
-//  - the bot editor's Repositories: Own repo only, All ticked repos with Read or Write, Chosen repos with Read or Write
+// Offline regression for Settings > General › Repositories and a bot's Repositories (docs: PLAN sections 1 and 2). Fixtures only.
+//  - In use lists the ticked repositories one line each, a tap opening the setup command and Remove; Not in use stays one
+//    line until searched or opened, hides bot repos until asked, draws at most 100 rows; a setup command read from
+//    tico.json or conductor.json and a repository GitHub no longer lists are marked; Add, Remove, a setup command,
+//    New bots get and Refresh each send their request;
+//  - the bot editor's Repositories: Their own repo, All repos in use with Read or Write, Chosen repos with Read or Write
 //    per repository, each change a PUT with the whole choice; Effective lists what the bot reaches;
-//  - a member sees the same, read only; with GitHub not connected the page is one line.
+//  - the card is for owners and admins (a member's link says so; a bot's owner reads the bot's choice, read only);
+//    with GitHub not connected the card is one line.
 // REPO_SHOTS=<dir> also saves the screenshots the owner approves.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -22,7 +24,7 @@ function fixtures() {
     repositories: [
       repo('acme/web', {enabled: true, setup_command: 'pnpm install', setup_source: 'tico.json'}),
       repo('acme/api', {enabled: true, setup_command: 'uv sync', setup_source: 'conductor.json'}),
-      repo('acme/mobile', {enabled: true, default_branch: 'develop'}),
+      repo('acme/mobile', {enabled: true, default_branch: 'develop', reachable: false}),
       repo('acme/infra', {setup_command: 'make setup', setup_source: 'settings'}),
       repo('acme/design-system', {enabled: true, setup_command: 'npm ci', setup_source: 'settings'}),
       repo('acme/docs-site'),
@@ -31,8 +33,10 @@ function fixtures() {
       repo('acme/sdk-js', {enabled: true, setup_command: 'npm ci', setup_source: 'tico.json'}),
       repo('acme/sdk-python', {setup_command: 'uv sync', setup_source: 'tico.json'}),
       repo('acme/marketing-site', {setup_command: 'bun install', setup_source: 'conductor.json'}),
-      repo('acme/bot-release-captain', {bot_repo: true}),
+      repo('acme/bot-release-captain', {bot_repo: true, enabled: true}),
       repo('acme/bot-support', {bot_repo: true}),
+      // A real organization's long tail: Not in use must stay short and fast with it.
+      ...Array.from({length: 150}, (_, i) => repo(`acme/service-${String(i + 1).padStart(3, '0')}`)),
     ],
     new_bot_default: 'own', github_connected: true,
     // Create product repositories is on for a bot nobody switched off, as the server says.
@@ -50,7 +54,7 @@ const effective = (data) => {
 };
 
 // A save as the server reads it (backend set_access): an option left out of a write grant or a ticked repository keeps
-// what is stored, an explicit true or false sets it, and Read for all ticked repos clears their ticks.
+// what is stored, an explicit true or false sets it, and Read for all repos in use clears their ticks.
 const FLAGS = ['run_workflows', 'edit_workflows'];
 const kept = (bot, body) => {
   const out = {};
@@ -142,7 +146,8 @@ async function open(browser, {role = 'owner', admin = false, connected = true, v
   });
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('https://tico-ui.test/#/repositories');
-  await page.waitForFunction(() => S.route === '#/settings' && SETTINGS_TAB === 'repos');
+  // Repositories is a card on General now; its old address opens General.
+  await page.waitForFunction(() => S.route === '#/settings' && SETTINGS_TAB === 'general');
   return {page, errors, writes, data};
 }
 const shot = async (page, name) => { if (SHOTS) await page.screenshot({path: path.join(SHOTS, name), fullPage: false}); };
@@ -157,53 +162,101 @@ const lastWrite = (writes, p) => [...writes].reverse().find(w => w.p === p)?.bod
 
 async function owner(browser) {
   const {page, errors, writes} = await open(browser);
-  const rows = page.locator('#set-repos .repo-row');
-  await rows.first().waitFor();
-  // Bot repos stay out of the list until asked for.
-  assert.equal(await rows.count(), 11);
-  assert.equal(await page.locator('#set-repos [data-repo="acme/bot-support"]').count(), 0);
-  assert.equal(await page.locator('#set-repos [data-repos-filter]').isVisible(), true, 'the filter shows past ten repositories');
-  const web = page.locator('#set-repos [data-repo="acme/web"]');
-  assert.equal(await web.locator('[data-repo-tick]').isChecked(), true);
-  assert.equal(await web.locator('.repo-branch').innerText(), 'main');
-  assert.equal(await web.locator('[data-repo-setup]').inputValue(), 'pnpm install');
-  assert.equal(await web.locator('.repo-src').innerText(), 'tico.json');
-  assert.equal(await page.locator('#set-repos [data-repo="acme/infra"] .repo-src').count(), 0, 'no hint when the command was set here');
-  assert.match(await page.locator('#set-repos [data-repo="acme/legacy-billing"]').innerText(), /Not reachable/);
-  assert.equal(await page.locator('#set-repos [data-repo="acme/web"] .repo-warn').count(), 0);
+  const on = page.locator('#set-repos [data-repos-on] > .repo-row'), off = page.locator('#set-repos [data-repos-off] > .repo-row');
+  const row = name => page.locator(`#set-repos [data-repo="${name}"]`);
+  await on.first().waitFor();
+  // The old tab's address opens General, scrolled to the card once it is drawn; no Repositories tab is left.
+  assert.equal(await page.locator('#set-repos').evaluate(el => el.closest('.settings-pane').id), 'settings-general');
+  assert.equal(await page.locator('[data-settings-tab="repos"]').count(), 0);
+  await page.waitForFunction(() => { const r = document.querySelector('#set-repos').getBoundingClientRect(); return r.top < innerHeight && r.bottom > 0; });
+  // In use: the seven ticked repositories, one line each, no setup inputs until a row opens; Not in use: one closed line.
+  assert.deepEqual(await on.evaluateAll(els => els.map(el => el.dataset.repo)),
+    ['acme/api', 'acme/bot-release-captain', 'acme/data-pipeline', 'acme/design-system', 'acme/mobile', 'acme/sdk-js', 'acme/web']);
+  assert.equal(await page.locator('#set-repos [data-repos-on-n]').innerText(), '7');
+  assert.match(await row('acme/bot-release-captain').innerText(), /bot/);
+  assert.equal(await page.locator('#set-repos [data-repos-off-n]').innerText(), '155', 'bot repos stay out of the count');
+  assert.equal(await off.count(), 0);
+  assert.equal(await page.locator('#set-repos [data-repos-off-body]').isVisible(), false);
+  assert.equal(await page.locator('#set-repos [data-repo-setup]').count(), 0, 'no setup inputs up front');
+  assert.equal(await page.locator('#set-repos [data-product-repo]').isVisible(), false, 'the create form is closed');
+  assert.equal(await row('acme/web').locator('.repo-branch').innerText(), 'main');
+  assert.match(await row('acme/mobile').innerText(), /Not reachable/);
+  assert.equal(await row('acme/web').locator('.repo-warn').count(), 0);
+  const lineHeights = await on.evaluateAll(els => els.map(el => el.getBoundingClientRect().height));
+  assert.ok(lineHeights.every(h => h <= 32), `one dense line per repository (${lineHeights})`);
+  // A tap opens the row in place: the setup command (and where it was read from) and Remove.
+  await row('acme/web').locator('[data-repo-open]').click();
+  assert.equal(await row('acme/web').locator('[data-repo-open]').getAttribute('aria-expanded'), 'true');
+  assert.equal(await row('acme/web').locator('[data-repo-setup]').inputValue(), 'pnpm install');
+  assert.equal(await row('acme/web').locator('[data-repo-setup]').evaluate(el => el === document.activeElement), true);
+  assert.equal(await row('acme/web').locator('.repo-src').innerText(), 'tico.json');
+  assert.equal(await row('acme/web').locator('[data-repo-remove]').count(), 1);
+  assert.equal(await page.locator('#set-repos [data-repo-setup]').count(), 1, 'only the open row draws its input');
+  await row('acme/design-system').locator('[data-repo-open]').click();
+  assert.equal(await row('acme/design-system').locator('.repo-src').count(), 0, 'no hint when the command was set here');
+  await row('acme/design-system').locator('[data-repo-open]').click();
+  assert.equal(await row('acme/design-system').locator('[data-repo-setup]').count(), 0, 'a second tap closes it');
+  // A bot's own repository says whose it is, from the roster already loaded.
+  await row('acme/bot-release-captain').locator('[data-repo-open]').click();
+  assert.equal(await row('acme/bot-release-captain').locator('.repo-used').innerText(), 'Used by Release Captain');
+  await row('acme/bot-release-captain').locator('[data-repo-open]').click();
+  // Not in use opens without a search: at most 100 rows, the rest behind the search.
+  await page.locator('#set-repos [data-repos-off-toggle]').click();
+  assert.equal(await off.count(), 100);
+  assert.match(await page.locator('#set-repos [data-repos-off] > .empty').innerText(), /^55 more/);
+  assert.match(await row('acme/legacy-billing').innerText(), /Not reachable/);
+  assert.equal(await row('acme/legacy-billing').locator('[data-repo-add]').count(), 1);
+  await page.evaluate(() => document.querySelector('#set-repos').scrollIntoView({block: 'start'}));
+  await settled(page);
   await shot(page, 'settings-repositories-desktop-dark.png');
   await page.locator('[data-theme-choice=light]').click();
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
   await settled(page);
   await shot(page, 'settings-repositories-desktop-light.png');
   await page.locator('[data-theme-choice=dark]').click();
-
+  // Bot repos join Not in use when asked for.
   await page.locator('#set-repos [data-repos-bots]').check();
-  assert.equal(await rows.count(), 13);
-  assert.match(await page.locator('#set-repos [data-repo="acme/bot-support"]').innerText(), /bot/);
+  assert.match(await row('acme/bot-support').innerText(), /bot/);
   await page.locator('#set-repos [data-repos-bots]').uncheck();
-  assert.equal(await rows.count(), 11);
+  assert.equal(await row('acme/bot-support').count(), 0);
+  await page.locator('#set-repos [data-repos-off-toggle]').click();
+  assert.equal(await off.count(), 0);
 
-  // A tick, a setup command (Enter saves), New bots get and Refresh each send their request.
-  await page.locator('#set-repos [data-repo="acme/infra"] [data-repo-tick]').check();
-  await page.waitForFunction(() => REPOS.repositories.find(r => r.full_name === 'acme/infra').enabled);
-  assert.deepEqual(lastWrite(writes, '/api/v2/repositories/acme/infra'), {enabled: true});
-  assert.equal(await page.locator('#set-repos [data-repo="acme/infra"] [data-repo-tick]').isChecked(), true);
-  const webSetup = page.locator('#set-repos [data-repo="acme/web"] [data-repo-setup]');
+  // A setup command (Enter saves) sends its request; set here, the file hint goes.
+  const webSetup = row('acme/web').locator('[data-repo-setup]');
   await webSetup.fill('pnpm install --frozen-lockfile'); await webSetup.press('Enter');
   await page.waitForFunction(() => REPOS.repositories.find(r => r.full_name === 'acme/web').setup_source === 'settings');
   assert.deepEqual(lastWrite(writes, '/api/v2/repositories/acme/web'), {setup_command: 'pnpm install --frozen-lockfile'});
-  assert.equal(await page.locator('#set-repos [data-repo="acme/web"] .repo-src').count(), 0, 'set here now: the file hint goes');
-  await page.locator('#set-repos label:has(input[name=repos_new_bot][value=all])').click();
+  assert.equal(await row('acme/web').locator('.repo-src').count(), 0, 'set here now: the file hint goes');
+  // Typing in the closed Not in use filters it; Add moves the repository to In use, Remove moves it back.
+  const filter = page.locator('#set-repos [data-repos-filter]');
+  await filter.fill('infra');
+  assert.deepEqual(await off.evaluateAll(els => els.map(el => el.dataset.repo)), ['acme/infra']);
+  await row('acme/infra').locator('[data-repo-add]').click();
+  await page.waitForFunction(() => REPOS.repositories.find(r => r.full_name === 'acme/infra').enabled);
+  assert.deepEqual(lastWrite(writes, '/api/v2/repositories/acme/infra'), {enabled: true});
+  assert.equal(await page.locator('#set-repos [data-repos-on] [data-repo="acme/infra"]').count(), 1);
+  assert.equal(await page.locator('#set-repos [data-repos-on-n]').innerText(), '8');
+  assert.equal(await off.count(), 0);
+  await row('acme/infra').locator('[data-repo-open]').click();
+  await row('acme/infra').locator('[data-repo-remove]').click();
+  await page.waitForFunction(() => !REPOS.repositories.find(r => r.full_name === 'acme/infra').enabled);
+  assert.deepEqual(lastWrite(writes, '/api/v2/repositories/acme/infra'), {enabled: false});
+  assert.deepEqual(await off.evaluateAll(els => els.map(el => el.dataset.repo)), ['acme/infra'], 'back under Not in use');
+  await row('acme/infra').locator('[data-repo-add]').click();
+  await page.waitForFunction(() => REPOS.repositories.find(r => r.full_name === 'acme/infra').enabled);
+  await filter.fill('sdk');
+  assert.deepEqual(await off.evaluateAll(els => els.map(el => el.dataset.repo)), ['acme/sdk-python'], 'the search reads Not in use only');
+  await filter.press('Escape');
+  assert.equal(await off.count(), 0, 'Escape clears the search and closes the list');
+  // New bots get, then Refresh: each sends its request, and the choice stays.
+  await page.locator('#set-repos select[name=repos_new_bot]').selectOption('all');
   await page.waitForFunction(() => REPOS.new_bot_default === 'all');
   assert.deepEqual(lastWrite(writes, '/api/v2/repositories/settings'), {new_bot_default: 'all'});
   await page.locator('#set-repos [data-repos-refresh]').click();
   await page.waitForFunction(() => document.querySelector('#set-repos [data-repos-refresh]')?.textContent === 'Refresh');
   assert.ok(writes.some(w => w.p === '/api/v2/repositories/refresh'));
-  assert.equal(await page.locator('#set-repos input[name=repos_new_bot][value=all]').isChecked(), true);
-  await page.locator('#set-repos [data-repos-filter]').fill('sdk');
-  assert.equal(await rows.count(), 2);
-  await page.locator('#set-repos [data-repos-filter]').fill('');
+  assert.equal(await page.locator('#set-repos select[name=repos_new_bot]').inputValue(), 'all');
 
   // The bot editor: Chosen repos lists the ticked repos (no bot repos), each with Read or Write.
   await page.evaluate(() => settingsEditBot('release-captain'));
@@ -254,12 +307,12 @@ async function owner(browser) {
   await box.locator('[data-brepo="acme/web"] [data-brepo-pick]').uncheck();
   await page.waitForFunction(() => !/acme\/web/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
   assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories').chosen.map(c => c.full_name), ['acme/api', 'acme/mobile']);
-  // All ticked repos carries Read or Write; Own repo only leaves just the bot's own.
+  // All repos in use carries Read or Write; Their own repo leaves just the bot's own.
   await box.locator('label:has(input[type=radio][value=all])').first().click();
   await box.locator('.brepo-all').waitFor();
   await page.waitForFunction(() => /acme\/sdk-js write/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
   assert.equal(lastWrite(writes, '/api/v2/bots/release-captain/repositories').mode, 'all');
-  // Dev 641: All ticked repos lists its repositories, each with Run workflows and Edit workflow files of its own,
+  // Dev 641: All repos in use lists its repositories, each with Run workflows and Edit workflow files of its own,
   // kept apart from Chosen repos' ticks (acme/mobile's Run workflows there was turned off above).
   const allRuns = name => box.locator(`[data-brepo-all="${name}"] [data-brepo-run]`);
   assert.deepEqual(await box.locator('[data-brepo-all]').evaluateAll(els => els.map(el => el.dataset.brepoAll)),
@@ -274,7 +327,7 @@ async function owner(browser) {
   assert.equal(await box.locator('[data-brepo-all="acme/web"] [data-brepo-edit]').isChecked(), false);
   await settled(page);
   await shot(page, 'bot-repositories-all-desktop-dark.png');
-  // Read for all ticked repos: the options stay, greyed, with the reason; the tick goes.
+  // Read for all repos in use: the options stay, greyed, with the reason; the tick goes.
   await box.locator('.brepo-all label:has(input[value=read])').click();
   await page.waitForFunction(() => /acme\/sdk-js read/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
   assert.deepEqual((({mode, all_access, all_repos}) => ({mode, all_access, all_repos}))(lastWrite(writes, '/api/v2/bots/release-captain/repositories')),
@@ -283,7 +336,7 @@ async function owner(browser) {
   assert.equal(await box.locator('[data-brepo-all] input:not(:disabled)').count(), 0);
   assert.equal(await allRuns('acme/web').isChecked(), false);
   assert.match(await box.locator('[data-brepo-why]').innerText(), /need Write/);
-  assert.match(await box.locator('[data-brepo-all="acme/web"] label:has([data-brepo-run])').getAttribute('title'), /Needs Write for all ticked repos/);
+  assert.match(await box.locator('[data-brepo-all="acme/web"] label:has([data-brepo-run])').getAttribute('title'), /Needs Write for all repos in use/);
   await settled(page);
   await shot(page, 'bot-repositories-all-read-desktop-dark.png');
   await box.locator('label:has(input[type=radio][value=own])').click();
@@ -295,7 +348,7 @@ async function owner(browser) {
   await page.keyboard.press('ArrowRight');
   await page.waitForFunction(() => document.querySelector('#bot-editor input[type=radio][value=all]')?.checked);
   // The radio moves at once; its save reaches the mock a moment later, so wait for the save itself.
-  await until(() => lastWrite(writes, '/api/v2/bots/release-captain/repositories').mode === 'all', 'the All ticked repos save');
+  await until(() => lastWrite(writes, '/api/v2/bots/release-captain/repositories').mode === 'all', 'the All repos in use save');
   // Then for its answer: that redraws the section, and a redraw between Space's keydown and keyup drops the tick.
   // The change redrew the section blank, so 'Saved' now is this save's.
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
@@ -331,7 +384,10 @@ async function owner(browser) {
 async function productCreate(browser) {
   const {page, errors, writes} = await open(browser);
   const section = page.locator('#set-repos [data-product-repo]');
-  await section.waitFor();
+  await section.waitFor({state: 'attached'});
+  assert.equal(await section.isVisible(), false);
+  await page.locator('#set-repos [data-product-repo-open]').click();
+  assert.equal(await page.locator('#set-repos [data-product-repo-name]').evaluate(el => el === document.activeElement), true);
   await section.locator('[data-product-repo-name]').fill('tico-recorder');
   await section.locator('[data-product-repo-preview]').click();
   await section.locator('[data-product-repo-create]').waitFor({state: 'visible'});
@@ -352,7 +408,7 @@ async function productCreate(browser) {
 async function saves(browser) {
   const {page, errors, writes, data} = await open(browser);
   data.bot = {mode: 'all', all_access: 'write', chosen: []};
-  // Ticked, not marked as a bot's, but named like one: All ticked repos does not reach it, so it has no row.
+  // Ticked, not marked as a bot's, but named like one: All repos in use does not reach it, so it has no row.
   data.repositories.push(repo('acme/bot-notes', {enabled: true}));
   await page.evaluate(() => settingsEditBot('release-captain'));
   const box = page.locator('#bot-editor [data-bot-repos]');
@@ -360,7 +416,7 @@ async function saves(browser) {
   assert.equal(await box.locator('[data-brepo-all="acme/bot-notes"]').count(), 0);
   assert.equal(await box.locator('[data-brepo-all="acme/web"]').count(), 1);
   const status = () => box.locator('[data-brepo-status]').innerText();
-  // A refused mode change: back to All ticked repos, the reason kept.
+  // A refused mode change: back to All repos in use, the reason kept.
   data.refuse = 'Only owners and admins change this';
   await box.locator('label:has(input[type=radio][value=own])').click();
   await page.waitForFunction(() => document.querySelector('#bot-editor input[type=radio][value=all]')?.checked);
@@ -438,7 +494,7 @@ async function saves(browser) {
     return {control, sent: writes.slice(start).map(w => w.body)};
   };
   await box.locator('.brepo-all label:has(input[value=write])').click();
-  await until(() => data.bot.all_access === 'write' && data.bot.mode === 'all', 'Write for all ticked repos');
+  await until(() => data.bot.all_access === 'write' && data.bot.mode === 'all', 'Write for all repos in use');
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
   for (const [option, attr] of [['run_workflows', 'data-brepo-run'], ['edit_workflows', 'data-brepo-edit']]) {
     const {control, sent} = await quickUntick(option, attr, '[data-brepo-all="acme/web"]');
@@ -464,13 +520,9 @@ async function saves(browser) {
 
 async function member(browser) {
   const {page, errors, writes} = await open(browser, {role: 'member'});
-  await page.locator('#set-repos .repo-row').first().waitFor();
-  assert.equal(await page.locator('#set-repos [data-product-repo]').count(), 0, 'product creation is Owner-only');
-  assert.equal(await page.locator('#set-repos [data-repo-tick]:not([disabled])').count(), 0);
-  assert.equal(await page.locator('#set-repos [data-repo-setup]:not([readonly])').count(), 0);
-  assert.equal(await page.locator('#set-repos input[name=repos_new_bot]:not([disabled])').count(), 0);
-  assert.equal(await page.locator('#set-repos [data-repos-refresh]').isDisabled(), true);
-  assert.equal(await page.locator('#set-repos [data-repos-bots]').isDisabled(), false, 'showing bot repos is only a view');
+  // The Repositories card on General is for owners and admins: a member's link to it says so.
+  await page.locator('#settings-denied').waitFor();
+  assert.equal(await page.locator('#set-repos').count(), 0);
   // One of the bot's owners opens its settings: the same choice, read only.
   await page.evaluate(() => settingsEditBot('release-captain'));
   const box = page.locator('#bot-editor [data-bot-repos]');
@@ -505,15 +557,24 @@ async function notConnected(browser) {
 async function phone(browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
   await page.locator('#set-repos .repo-row').first().waitFor();
+  await page.locator('#set-repos [data-repo="acme/web"] [data-repo-open]').click();
+  await page.locator('#set-repos [data-repos-filter]').fill('acme/');
+  await page.locator('#set-repos [data-repos-filter]').blur();
+  await page.locator('#set-repos [data-repo="acme/legacy-billing"]').waitFor();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(overflow <= 0, `no sideways scroll on a phone (${overflow}px)`);
-  await page.locator('#settings-repos').scrollIntoViewIfNeeded();
-  await page.evaluate(() => document.querySelector('#settings-tabs').scrollIntoView({block: 'start'}));
+  await page.evaluate(() => document.querySelector('#set-repos').scrollIntoView({block: 'start'}));
   await shot(page, 'settings-repositories-phone-dark.png');
+  await page.evaluate(() => document.querySelector('#set-repos .repos-off-head').scrollIntoView({block: 'start'}));
+  await shot(page, 'settings-repositories-phone-not-in-use-dark.png');
   await page.evaluate(() => settingsEditBot('release-captain'));
   const box = page.locator('#bot-editor [data-bot-repos]');
   await box.locator('.brepo-row').first().waitFor();
   await box.evaluate(el => el.scrollIntoView({block: 'start'}));
+  // The bot's page replaced Settings: nothing of it is left under the editor to show through once the route's
+  // cross-fade (ui/app/router.js) has ended, so the screenshot waits for that.
+  await settled(page);
+  assert.equal(await page.locator('#set-repos').count(), 0, 'Settings is gone from the page');
   await shot(page, 'bot-repositories-chosen-phone-dark.png');
   assert.deepEqual(errors, []);
   await page.close();

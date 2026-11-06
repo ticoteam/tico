@@ -49,8 +49,10 @@ def test_only_a_person_who_manages_the_bot_turns_sending_on(api, botops):
 
 
 def test_a_refused_botops_write_names_the_person_and_the_place_not_go_ahead(api, botops):
-    hint = ("A person who manages ops turns its mail sending on in Settings > Bots > ops > Mail sending, "
-            "or with `hub bot mail ops --send`")
+    hint = (
+        "A person who manages ops turns its mail sending on in Settings > Bots > ops > Mail sending, "
+        "or with `hub bot mail ops --send`"
+    )
     own = _wake(api, botops)
     r = act(api, own, "POST", "bots/ops/mail-settings", {"outbound_send": True}, ref=None)
     assert r.status_code == 403 and r.json()["error"]["fix"] == hint, r.text

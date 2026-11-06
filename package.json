@@ -2,6 +2,8 @@
   "name": "tico-observability",
   "private": true,
   "scripts": {
+    "build:ui": "node scripts/build-ui.cjs",
+    "watch:ui": "node scripts/build-ui.cjs --watch",
     "build:observability": "esbuild ui/observability-vendors.js --bundle --format=esm --minify --outfile=ui/assets/observability-vendors.js",
     "check:observability": "node --check ui/observability.js && node --check ui/observability-vendors.js",
     "screenshots": "node scripts/screenshots",
@@ -12,6 +14,7 @@
     "posthog-js": "1.438.11"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.6.2",
     "esbuild": "0.28.2",
     "playwright": "1.64.1"
   }

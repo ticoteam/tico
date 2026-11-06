@@ -79,7 +79,7 @@ pub(crate) fn response(response: reqwest::blocking::Response) -> Result<Value> {
             status.as_u16()
         );
     }
-    Ok(serde_json::from_slice(&bytes).context("The server returned invalid JSON")?)
+    serde_json::from_slice(&bytes).context("The server returned invalid JSON")
 }
 pub fn transcribe_audio(config: &Settings, key: &str, bytes: &[u8]) -> Result<String> {
     Ok(transcribe_words(config, key, bytes, false)?.0)
@@ -857,8 +857,9 @@ impl Tico {
                 let mut item_version = delivery.receipt["items"][&item.id]["version"]
                     .as_u64()
                     .unwrap_or(1);
-                if item_id.is_empty() && delivery.receipt["uploads"][&item.id].is_null() {
-                    if let Some(existing) = listing["sections"][section]
+                if item_id.is_empty()
+                    && delivery.receipt["uploads"][&item.id].is_null()
+                    && let Some(existing) = listing["sections"][section]
                         .as_array()
                         .into_iter()
                         .flatten()
@@ -869,10 +870,9 @@ impl Tico {
                                 && row["detail"] == *detail
                                 && row["status"] != "dismissed"
                         })
-                    {
-                        item_id = existing["id"].as_str().unwrap_or("").into();
-                        item_version = existing["version"].as_u64().unwrap_or(1);
-                    }
+                {
+                    item_id = existing["id"].as_str().unwrap_or("").into();
+                    item_version = existing["version"].as_u64().unwrap_or(1);
                 }
                 let upload = delivery.receipt["uploads"][&item.id]
                     .get("body")
@@ -1465,7 +1465,7 @@ fn refused_audience(error: anyhow::Error, audience: &str) -> anyhow::Error {
     }
 }
 fn import_body(record: &Recording, context: &MeetingContext, audience: &str) -> Value {
-    let mut body = json!({"title":record.title,"source":"tico-recorder","external_id":record.id,"started_at":record.started_at,"duration_seconds":record.chunks.iter().map(|chunk|chunk.end_ms).max().unwrap_or(0).div_ceil(1000),"private":audience != "team","review":"live","notes":context.notes,"participants":context.participants,"transcript":transcript::lines(&record).iter().map(|line|json!({"speaker":line.speaker,"start_ms":line.start_ms,"end_ms":line.end_ms,"text":line.text})).collect::<Vec<_>>()});
+    let mut body = json!({"title":record.title,"source":"tico-recorder","external_id":record.id,"started_at":record.started_at,"duration_seconds":record.chunks.iter().map(|chunk|chunk.end_ms).max().unwrap_or(0).div_ceil(1000),"private":audience != "team","review":"live","notes":context.notes,"participants":context.participants,"transcript":transcript::lines(record).iter().map(|line|json!({"speaker":line.speaker,"start_ms":line.start_ms,"end_ms":line.end_ms,"text":line.text})).collect::<Vec<_>>()});
     // Tico takes calendar attendees as participants; it has no calendar field.
     let attendees = context.calendar["attendees"]
         .as_array()

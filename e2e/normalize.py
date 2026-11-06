@@ -4,6 +4,7 @@ Ids the scenario made are replaced by their names (`<task>`); other ids become `
 first appear in one response, so a reference between two rows in the same response stays visible. Timestamps, hashes
 and cursors become fixed words, and floats are rounded to six places. Nothing else changes: a field that moves, appears or disappears still shows.
 """
+
 import re
 
 TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z")
@@ -22,8 +23,10 @@ VOLATILE_DURATION = re.compile(r"(^|_)(seconds|secs|ms|s|duration|elapsed|latenc
 class Normalizer:
     def __init__(self, names):
         # Longest first, so an id that contains another never gets half-replaced.
-        self.names = sorted(((value, name) for name, value in names.items() if isinstance(value, str) and value),
-                            key=lambda pair: -len(pair[0]))
+        self.names = sorted(
+            ((value, name) for name, value in names.items() if isinstance(value, str) and value),
+            key=lambda pair: -len(pair[0]),
+        )
         # A short id is the first eight characters of a uuid (a task's `short_id`): replaced only when it is the whole value.
         self.short = {value[:8]: name for value, name in self.names if UUID.fullmatch(value)}
         self.labels = {}
@@ -46,8 +49,12 @@ class Normalizer:
     def __call__(self, value, key=None):
         if key in OPAQUE_WHEN_TEXT and isinstance(value, str):
             return "<opaque>"
-        if key in VOLATILE or (isinstance(key, str) and VOLATILE_DURATION.search(key)
-                               and isinstance(value, (int, float)) and not isinstance(value, bool)):
+        if key in VOLATILE or (
+            isinstance(key, str)
+            and VOLATILE_DURATION.search(key)
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        ):
             return "<volatile>"
         if isinstance(value, dict):
             return {(self.text(k) if isinstance(k, str) else k): self(v, k) for k, v in value.items()}

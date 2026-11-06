@@ -31,7 +31,7 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 | BotOps (built-in) | Sets up and fixes bots, computers, Tools and Credentials | Sidebar | “Add a bot that answers #support” |
 | Librarian (built-in) | Answers from your docs and the Tico manual, with sources | Ask the Librarian on Docs and on Strategy's Market tab | “What is our refund limit?” |
 | Strategy Bot (built-in) | Keeps KPIs and goal colours current | Top of Goals; ask your Assistant | “Why is this goal yellow?” |
-| Task Manager (built-in) | Tidies tasks hourly on weekdays: closes what is done, fixes drifted steps, one Needs-you line per department | Its “Task check” tasks; Settings → System | `hub task-manager status` |
+| Task Manager (built-in) | Tidies tasks hourly on weekdays: closes what is done, fixes drifted steps, one Needs-you line per department | Its “Task check” tasks; its bot page → Settings | `hub task-manager status` |
 | Your bots | Do the team's work from their Instructions | Team in the sidebar: its Home or a task | “Draft replies to the open tickets” |
 | Message bots (Beta) | Work a human's email or a Slack channel | Message bots in the sidebar | “Sort today's email” |
 
@@ -53,7 +53,7 @@ Words are defined in the [Glossary](glossary.md).
   note; a `lane` (`company` or `product`), a `rank` in its owner's queue, labels, links (a pull
   request first), and relations to other tasks (a parent, blockers, related, duplicates, follow-ups). States: `open`, `doing`,
   `waiting`, `review`, `ready`, `done`, `closed`, `declined` (`review` and `ready` belong to the
-  product lane). The owner marks it `done`; only the requester, a person who can edit it, or the person it waits on closes it. Every
+  product lane). The owner marks it `done`; only the requester or a person who can edit it closes it. Every
   task has a comment thread, on the record with the author.
 - **Message** — one line in a thread. Kinds: `say`, `ask`, `answer`, `notice`, `steer`. How it reaches a bot
   is one of three ways ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)): **Steer** goes into the bot's
@@ -285,7 +285,14 @@ becomes *Interrupted*. Fifteen minutes later (after the runner's own chance to r
 scheduler settles what needs no eyes: a delivery whose task is already done or closed is dismissed,
 and a run whose host reports its tool calls, that only read (files, searches, web pages, subagents
 that only read) and consumed no approval, is resumed once, each with a note in the job's recovery
-record (`job.auto_reconcile` in the event log). A busy bot's runs are settled too: the scheduler waits only
+record (`job.auto_reconcile` in the event log). A run whose lease lapsed (its computer dropped) counts shell calls as
+reads too when it wrote nothing to Tico and the computer judged each whole line read-only: every part of it (between
+`|`, `;`, `&&`, `||` and newlines) is setup such as `cd` or `export`, a program that only reads (`grep`, `cat`, `wc`)
+or a `hub` read (`hub task list`, `hub needs-you show`), with no outside action, no output to a file and no `$(...)`,
+backtick or heredoc. `curl -X POST ... && hub task list` is held, and so is any line from a computer too old to judge
+it. When such a
+run that answered a person's message is held instead, that person gets one notice in the chat: it stopped, and when
+it will pick up again. A busy bot's runs are settled too: the scheduler waits only
 while a live run of the bot is on the same task (or the same thread, or the same task session). An operator can choose
 **Try again** or **Don’t retry** in Stopped runs; while such a run is still live, Tico saves the choice and applies it
 when that lane frees. BotOps’s review is done as soon as all its recovery choices are saved. Tico records the live-work dependency
@@ -446,7 +453,7 @@ resumes the old primary; unknown effects and final answers keep their settlement
 erase an already recorded continuation decision. The result field is sent only when the server advertises `source_continue`;
 older runners are not handed these continuations. Other turns try the bot's own provider first, so the
 bot moves back on its own once the limit resets. The owner turns this off in **Settings → Models**
-(*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
+(*Fall back when a plan runs out*, `auto_fallback`). Company › Campus lists how many bots are on a fallback and
 since when, and how many are limited.
 
 **Held runs after a usage limit (Unreleased).** Safe runs previously held after the primary hit its limit and the fallback failed to start recover automatically.

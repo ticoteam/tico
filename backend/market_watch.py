@@ -11,6 +11,7 @@ token to read the list.
 The fetch runs on a daemon thread outside any database transaction; each result is written in its own short one.
 The first read of a page is its baseline and files nothing. Rows are never deleted: stopping a watch ends it.
 """
+
 import difflib
 import hashlib
 import json
@@ -33,15 +34,15 @@ from .store import Problem
 log = logging.getLogger("tico.market_watch")
 
 KINDS = ("pricing", "careers", "changelog", "docs", "home", "other")
-MAX_ACTIVE = 200            # active watches
-BATCH = 50                  # pages read per check, the longest-unchecked first
-TEXT_MAX = 50_000           # of a page's normalized text kept for the next comparison
-MIN_CHANGE = 40             # characters added or removed before a change counts
-EXCERPT_MAX = 1_200         # of the diff kept as the evidence's quote
-LINES_MAX = 3_000           # lines compared; a longer page is cut before the diff
+MAX_ACTIVE = 200  # active watches
+BATCH = 50  # pages read per check, the longest-unchecked first
+TEXT_MAX = 50_000  # of a page's normalized text kept for the next comparison
+MIN_CHANGE = 40  # characters added or removed before a change counts
+EXCERPT_MAX = 1_200  # of the diff kept as the evidence's quote
+LINES_MAX = 3_000  # lines compared; a longer page is cut before the diff
 STATUSES = ("ok", "error", "blocked")
 DAY_KEY = "market.watch.checked"
-ACTOR = H.KEEPER            # who writes what a check finds
+ACTOR = H.KEEPER  # who writes what a check finds
 
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS market_watches (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, url TEXT NOT NULL, "
@@ -73,7 +74,9 @@ NOISE = re.compile(
     r"^(?:[\d\s.,:;/\\|+*#%$€£–—-]+"
     rf"|(?:{MONTHS}\.?\s+)?\d{{1,2}}(?:st|nd|rd|th)?,?\s+(?:{MONTHS}\.?\s+)?\d{{4}}"
     rf"|{MONTHS}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?"
-    r"|(?:©|\(c\)|copyright)\b.*)$", re.I)
+    r"|(?:©|\(c\)|copyright)\b.*)$",
+    re.I,
+)
 
 
 def normalize(text):
@@ -113,7 +116,7 @@ def excerpt(removed, added):
         for line in lines:
             piece = f"{sign} {line}"
             if len(piece) + 1 > left:
-                piece = piece[:max(0, left - 2)].rstrip() + "…"
+                piece = piece[: max(0, left - 2)].rstrip() + "…"
             if left < 4:
                 return "\n".join(out)
             out.append(piece)
@@ -135,7 +138,7 @@ def read(url):
     except F.FetchError as exc:
         blocked = exc.code in ("scheme", "userinfo", "url", "port", "private_address")
         return {"status": "blocked" if blocked else "error", "error": f"{exc.code}: {exc.message}"[:300]}
-    except Exception as exc:       # a page can be anything: the watch says so and the rest still run
+    except Exception as exc:  # a page can be anything: the watch says so and the rest still run
         return {"status": "error", "error": type(exc).__name__}
 
 
@@ -168,6 +171,7 @@ def add(c, actor, entity_id, url, kind):
     """A new watch. The caller has checked the writer. The address passes the same guard the doc fetcher applies
     before any DNS lookup (a name that resolves to an internal address is refused by the fetch itself, every time)."""
     from . import strategy_setup
+
     if kind not in KINDS:
         raise Problem("validation", f"a watched page is {'|'.join(KINDS)}, not {kind}", 422)
     try:
@@ -184,9 +188,19 @@ def add(c, actor, entity_id, url, kind):
         raise Problem("exists", "That page is already watched", 409)
     if c.execute("SELECT count(*) FROM market_watches WHERE active=1").fetchone()[0] >= MAX_ACTIVE:
         raise Problem("limit", f"At most {MAX_ACTIVE} pages are watched at once; stop one first", 409)
-    row = {"id": H.new_id(), "entity_id": entity_id, "url": url, "kind": kind, "created_by": actor, "created_at": H.now()}
-    c.execute("INSERT INTO market_watches (id, entity_id, url, kind, active, created_by, created_at) "
-              "VALUES (:id, :entity_id, :url, :kind, 1, :created_by, :created_at)", row)
+    row = {
+        "id": H.new_id(),
+        "entity_id": entity_id,
+        "url": url,
+        "kind": kind,
+        "created_by": actor,
+        "created_at": H.now(),
+    }
+    c.execute(
+        "INSERT INTO market_watches (id, entity_id, url, kind, active, created_by, created_at) "
+        "VALUES (:id, :entity_id, :url, :kind, 1, :created_by, :created_at)",
+        row,
+    )
     H.event(c, actor, "market.watch.add", row["id"], {"entity": entity_id, "kind": kind})
     return row_of(get(c, row["id"]))
 
@@ -204,34 +218,45 @@ def stop(c, actor, watch_id):
 # ----------------------------------------------------------------------------- checking
 def due(c, limit=BATCH):
     """The active watches to read now, the longest unchecked first (never checked first of all)."""
-    return [dict(r) for r in c.execute(
-        "SELECT id, entity_id, url, kind FROM market_watches WHERE active=1 "
-        "ORDER BY checked_at IS NOT NULL, checked_at, id LIMIT ?", (limit,))]
+    return [
+        dict(r)
+        for r in c.execute(
+            "SELECT id, entity_id, url, kind FROM market_watches WHERE active=1 "
+            "ORDER BY checked_at IS NOT NULL, checked_at, id LIMIT ?",
+            (limit,),
+        )
+    ]
 
 
 def record(c, watch, result):
     """One page's result, in the caller's short transaction. Returns True when it filed an insight."""
     row = get(c, watch["id"])
     if not row or not row["active"]:
-        return False                # stopped while it was being read
+        return False  # stopped while it was being read
     now = H.now()
     if result["status"] != "ok":
-        c.execute("UPDATE market_watches SET checked_at=?, last_status=?, error=? WHERE id=?",
-                  (now, result["status"], result.get("error") or "", row["id"]))
+        c.execute(
+            "UPDATE market_watches SET checked_at=?, last_status=?, error=? WHERE id=?",
+            (now, result["status"], result.get("error") or "", row["id"]),
+        )
         return False
     text = result["text"]
     fresh = digest(text)
-    if row["last_hash"] is None:    # the baseline
-        c.execute("UPDATE market_watches SET checked_at=?, last_status='ok', error=NULL, last_hash=?, last_text=? WHERE id=?",
-                  (now, fresh, text, row["id"]))
+    if row["last_hash"] is None:  # the baseline
+        c.execute(
+            "UPDATE market_watches SET checked_at=?, last_status='ok', error=NULL, last_hash=?, last_text=? WHERE id=?",
+            (now, fresh, text, row["id"]),
+        )
         return False
     c.execute("UPDATE market_watches SET checked_at=?, last_status='ok', error=NULL WHERE id=?", (now, row["id"]))
     if row["last_hash"] == fresh:
-        return False                # nothing new
+        return False  # nothing new
     removed, added = changes(row["last_text"] or "", text)
     if size_of(removed, added) < MIN_CHANGE:
-        return False                # too small to report; the baseline stays, so slow edits add up
-    c.execute("UPDATE market_watches SET changed_at=?, last_hash=?, last_text=? WHERE id=?", (now, fresh, text, row["id"]))
+        return False  # too small to report; the baseline stays, so slow edits add up
+    c.execute(
+        "UPDATE market_watches SET changed_at=?, last_hash=?, last_text=? WHERE id=?", (now, fresh, text, row["id"])
+    )
     file_change(c, row, removed, added, fresh)
     return True
 
@@ -240,14 +265,39 @@ def file_change(c, watch, removed, added, fresh):
     entity = MK.entity(c, watch["entity_id"])
     name = (entity or {}).get("name") or watch["entity_id"]
     quote = excerpt(removed, added)
-    evidence, _ = MK.create_evidence(c, ACTOR, source_url=watch["url"], source_kind="page-change", captured_at=H.now(),
-                                     quote=quote, our_read=f"The {watch['kind']} page of {name} changed.")
-    insight = MK.report(c, ACTOR, kind="property-change", about=name, claim=f"Page changed: {name} {watch['kind']}",
-                        source_url=watch["url"], quote=quote, source_ref=f"watch:{watch['id']}:{fresh[:12]}")
+    evidence, _ = MK.create_evidence(
+        c,
+        ACTOR,
+        source_url=watch["url"],
+        source_kind="page-change",
+        captured_at=H.now(),
+        quote=quote,
+        our_read=f"The {watch['kind']} page of {name} changed.",
+    )
+    insight = MK.report(
+        c,
+        ACTOR,
+        kind="property-change",
+        about=name,
+        claim=f"Page changed: {name} {watch['kind']}",
+        source_url=watch["url"],
+        quote=quote,
+        source_ref=f"watch:{watch['id']}:{fresh[:12]}",
+    )
     # Recorded for the weekly delta, but no fit check: a diff is not yet a market fact. A bet trips when the Librarian
     # applies the insight to the entity (market.apply_insight), never on the raw change.
-    MK._event(c, "entity", watch["entity_id"], ACTOR, f"page.{watch['kind']}", None,
-              f"changed: {host_of(watch['url'])}", insight["id"], evidence["id"], trip=False)
+    MK._event(
+        c,
+        "entity",
+        watch["entity_id"],
+        ACTOR,
+        f"page.{watch['kind']}",
+        None,
+        f"changed: {host_of(watch['url'])}",
+        insight["id"],
+        evidence["id"],
+        trip=False,
+    )
     return insight
 
 
@@ -289,6 +339,7 @@ def start(store):
 
     def work():
         from . import system_routines as SR
+
         run = SR.Run("market_watch")
         try:
             found = run_checks(store)
@@ -299,6 +350,7 @@ def start(store):
         finally:
             _RUNNING.release()
             SR.write(store, run)
+
     spawn(work)
     return True
 
@@ -308,8 +360,10 @@ def claim(c, day):
     found = c.execute("SELECT value FROM registry_metadata WHERE key=?", (DAY_KEY,)).fetchone()
     if found and (json.loads(found[0]) or {}).get("day") == day:
         return False
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (DAY_KEY, json.dumps({"day": day, "at": H.now()})))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (DAY_KEY, json.dumps({"day": day, "at": H.now()})),
+    )
     return True
 
 

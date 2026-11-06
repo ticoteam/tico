@@ -1,6 +1,6 @@
 /* Settings > Health: what needs attention right now (backend/health.py). Everything shown is what
-   GET /api/v2/health computed; the only local state is which page is open. What needs looking at also shows as
-   lines under the account button's one status dot (ui/app/heartbeat.js), never in the main navigation. */
+   GET /api/v2/health computed; the only local state is which page is open. General's Health line counts it and opens
+   the full page (#/settings/health); Health has no tab of its own. */
 'use strict';
 let HL = null;
 let HL_LOAD = 0;
@@ -28,6 +28,7 @@ async function hlRefresh() {
   // The sidebar's "New version" reads the same answer, so it never lags the page beside it.
   if (HL?.update && S.config) { S.config = {...S.config, update: HL.update}; window.renderNewVersion?.(); }
   hlNav();
+  hlSummaryDraw();
   hlPageDraw();
   window.overviewStuckDraw?.();
   return HL;
@@ -39,10 +40,38 @@ window.hlComputers = () => HL && HL.audience !== 'human' ? HL.computers : null;
 window.hlNav = function hlNav() {
   const attention = HL?.attention || 0;
   document.querySelectorAll('[data-hl-alert]').forEach(dot => { dot.hidden = !attention; });
-  const tab = document.querySelector('[data-settings-tab="health"]');
-  if (tab) { if (attention) tab.setAttribute('aria-label', `Health, ${attention} to look at`); else tab.removeAttribute('aria-label'); }
+  const details = document.querySelector('[data-hl-details]');
+  if (details) { if (attention) details.setAttribute('aria-label', `Health details, ${attention} to look at`); else details.removeAttribute('aria-label'); }
   window.renderAccountStatus?.();
 };
+
+// General's Health line (ui/app/settings.js #settings-health-line): the checks counted by severity, with Settings' own
+// issues (one a person must act on is urgent, the rest FYI), the release line with Update while one is out, and
+// Details for the full page. Before the checks load it is the label and Details alone.
+function hlCounts() {
+  const checks = HL?.checks || [], issues = typeof SETTINGS_DATA !== 'undefined' && SETTINGS_DATA.issues || [];
+  const n = status => checks.filter(check => check.status === status).length, person = issues.filter(needsPerson).length;
+  return {urgent: n('bad') + person, fix: n('warn'), fyi: n('info') + issues.length - person};
+}
+window.hlSummaryDraw = hlSummaryDraw;
+function hlSummaryDraw() {
+  const host = $('#settings-health-line');
+  if (!host) return;
+  const {urgent, fix, fyi} = hlCounts(), loaded = !!HL;
+  const fyiWords = fyi ? `<span class="muted" data-hl-count="fyi">${fyi} FYI</span>` : '';
+  const counts = !loaded ? '' : urgent || fix ? [urgent && `<span class="err" data-hl-count="urgent">${urgent} urgent</span>`,
+    fix && `<span class="settings-health-fix" data-hl-count="fix">${fix} to fix</span>`, fyiWords].filter(Boolean).join(' · ')
+    : `<span class="ok" data-hl-count="ok">All good</span>${fyiWords ? ' · ' + fyiWords : ''}`;
+  // The same Update now as Health's Version row and the sidebar (notices.js): the owner's, unless Tico runs updates.
+  const u = S.config?.update, busy = typeof nvBusy !== 'undefined' && nvBusy;
+  const update = S.me?.role === 'owner' && u?.available && u.latest && !u.managed && typeof nvStart === 'function'
+    ? `<button class="primary" type="button" data-hl-update${busy ? ' disabled' : ''}>Update</button>` : '';
+  const version = u?.available && u.latest ? `<span class="settings-health-version" data-hl-version>${esc(nvVersion(u.latest))} available</span>${update}` : '';
+  host.innerHTML = `<div class="settings-health-row"><strong>Health</strong><span class="hl-alert" data-hl-alert${HL?.attention ? '' : ' hidden'}></span>
+    <span class="settings-health-counts tnum" data-hl-counts>${counts}</span>${version}
+    <a class="settings-health-details" href="#/settings/health" data-hl-details${HL?.attention ? ` aria-label="Health details, ${HL.attention} to look at"` : ''}>Details ›</a></div>
+    ${update || busy ? `<div data-hl-update-out>${typeof NV_OUT_HTML === 'string' ? NV_OUT_HTML : ''}</div>` : ''}`;
+}
 
 const HL_ICONS = {ok: 'check_circle', warn: 'warning', bad: 'error', info: 'radio_button_unchecked', unknown: 'help'};
 let HL_CHECKING = false;

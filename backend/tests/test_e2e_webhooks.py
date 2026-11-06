@@ -18,12 +18,26 @@ from backend.tests.test_webhooks import publish, verify
 
 # The "Start something" recipe of docs/webhooks-zapier-make-n8n.md, with the trigger's type taken from the body's `type`.
 RECIPE = {
-    "name": "Order paid", "owner": "bot:ops", "enabled": True,
-    "trigger": {"type": "webhook", "id": "zapier-orders",
-                "filters": [{"field": "webhook.type", "op": "is", "value": "order.paid"}]},
-    "steps": [{"id": "wake", "type": "action", "enabled": True, "do": "wake_bot",
-               "args": {"bot": "ops", "text": "Order {{webhook.data.id}} paid: {{webhook.data.total}} from "
-                                              "{{webhook.data.customer}}"}}],
+    "name": "Order paid",
+    "owner": "bot:ops",
+    "enabled": True,
+    "trigger": {
+        "type": "webhook",
+        "id": "zapier-orders",
+        "filters": [{"field": "webhook.type", "op": "is", "value": "order.paid"}],
+    },
+    "steps": [
+        {
+            "id": "wake",
+            "type": "action",
+            "enabled": True,
+            "do": "wake_bot",
+            "args": {
+                "bot": "ops",
+                "text": "Order {{webhook.data.id}} paid: {{webhook.data.total}} from {{webhook.data.customer}}",
+            },
+        }
+    ],
 }
 PAID = {"type": "order.paid", "id": "ord_1001", "total": 42, "customer": "ada@acme.example"}
 
@@ -62,7 +76,10 @@ def receiver():
 
 def messages_to(api, actor):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT body, refs FROM messages WHERE recipient_id=? ORDER BY created_at", (actor,))]
+        return [
+            dict(r)
+            for r in c.execute("SELECT body, refs FROM messages WHERE recipient_id=? ORDER BY created_at", (actor,))
+        ]
 
 
 @pytest.mark.slow
@@ -74,15 +91,19 @@ def test_a_zapier_shaped_post_over_http_starts_the_automation_its_recipe_names(a
     address = live + urlsplit(trigger["url"]).path
     with httpx.Client(trust_env=False, timeout=10) as client:
         paid = client.post(address, json=PAID, headers={"Idempotency-Key": "ord_1001"})
-        refunded = client.post(address, json={"type": "order.refunded", "id": "ord_1002", "total": 5,
-                                              "customer": "ada@acme.example"})
+        refunded = client.post(
+            address, json={"type": "order.refunded", "id": "ord_1002", "total": 5, "customer": "ada@acme.example"}
+        )
     assert paid.status_code == 202, paid.text
     assert refunded.status_code == 202, refunded.text
     woke = messages_to(api, "bot:ops")
     assert len(woke) == 1
     # The call's values reach the bot as quoted data blocks, never as text of the prompt itself.
-    for field, value in (("webhook.data.id", "ord_1001"), ("webhook.data.total", "42"),
-                         ("webhook.data.customer", "ada@acme.example")):
+    for field, value in (
+        ("webhook.data.id", "ord_1001"),
+        ("webhook.data.total", "42"),
+        ("webhook.data.customer", "ada@acme.example"),
+    ):
         assert f'field="{field}">\n{value}\n' in woke[0]["body"], woke[0]["body"][:300]
     assert json.loads(woke[0]["refs"])["automation"] == aid
     assert len(get(api, f"automations/{aid}/runs")["runs"]) == 1, "the refund's type does not match the filter"
@@ -97,14 +118,16 @@ def test_a_task_done_reaches_a_local_receiver_signed_for_an_independent_verifier
     publish(api, "task.done", task["id"], {"id": task["id"], "title": "Acme outbound"}, "bot:ops", revision="r1")
 
     store, vault = api.app.state.store, api.app.state.vault
-    while D.step(store, vault):            # the delivery worker's loop, on the real transport
+    while D.step(store, vault):  # the delivery worker's loop, on the real transport
         pass
 
     assert len(receiver.received) == 1
     headers_, body = receiver.received[0]
     assert verify(secret, headers_, body), "the receiver's independent check refused our signature"
-    assert D.signature(secret, headers_["webhook-id"], int(headers_["webhook-timestamp"]), body) == \
-        headers_["webhook-signature"].split(" ")[0]
+    assert (
+        D.signature(secret, headers_["webhook-id"], int(headers_["webhook-timestamp"]), body)
+        == headers_["webhook-signature"].split(" ")[0]
+    )
     sent = json.loads(body)
     sent = json.loads(body)
     assert sent["type"] == "task.done" and sent["data"]["id"] == task["id"]

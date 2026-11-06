@@ -7,7 +7,7 @@
 // (or ⌘J) opens a panel beside the rail, rising from the bottom left; on a phone the Liquid Dot in the middle of the tab bar opens it as a sheet over
 // the page, and closes it again. It is the same conversation as the Assistant page (#/assistant): GET /v2/assistant
 // reads it and POST /v2/assistant/messages sends with the page the person is on (`page`), so the turn knows what "this"
-// means. Like the Updates chat it keeps its own small state, never the bot pages' (chat.js V2C), and drops the
+// means. It keeps its own small state, never the bot pages' (chat.js V2C), and drops the
 // Assistant page's cached copy when it sends.
 // What waits on the person from anyone else sits in the thread by when it was asked, like every other line: a Confirm
 // card a bot such as BotOps left in its own chat (GET /v2/assistant `pending`), and bots' questions (Needs you),

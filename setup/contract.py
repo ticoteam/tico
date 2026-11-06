@@ -2,6 +2,7 @@
 
 Kept in one place so a change on the Docker side is a change here and nowhere else.
 """
+
 from __future__ import annotations
 
 import os
@@ -26,8 +27,12 @@ RUNNER_IMAGE = "ghcr.io/ticoteam/tico-runner"
 RUNNER_CONTAINER = "tico-runner"
 RUNNER_VOLUME = "tico-runner"
 RUNNER_DIR = "/opt/tico-runner"
-ENROLLMENTS_PATH = "/api/v2/enrollments"  # POST, owner auth: {"code", "expires_at", "operator"}; codes last 15 minutes, single use
-COMPUTERS_PATH = "/api/v2/operations"  # GET, owner auth: {"machines": [{label, last_seen_at, revoked_at}], "server_time"}
+ENROLLMENTS_PATH = (
+    "/api/v2/enrollments"  # POST, owner auth: {"code", "expires_at", "operator"}; codes last 15 minutes, single use
+)
+COMPUTERS_PATH = (
+    "/api/v2/operations"  # GET, owner auth: {"machines": [{label, last_seen_at, revoked_at}], "server_time"}
+)
 ONLINE_SECONDS = 60  # a computer is online when it reported in this recently (backend/onboarding.py)
 
 HEALTH_PATH = "/healthz"
@@ -48,25 +53,67 @@ OIDC_HOSTS = {"google": "accounts.google.com", "microsoft": "login.microsoftonli
 KEY_ALLOWED_DOMAIN = "TICO_OIDC_ALLOWED_DOMAINS"  # comma-separated
 DECISIONS_KEYS = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY"}
 
-SECRET_KEYS = frozenset({
-    "TICO_OIDC_CLIENT_SECRET", "CLOUDFLARE_TUNNEL_TOKEN", "LITESTREAM_SECRET_ACCESS_KEY", "TICO_GATEWAY_INVITE",
-    "TICO_INBOUND_KEY", "TICO_INBOUND_URL", "TICO_VISUAL_SECRET", "TICO_COMPANY_FILE_B64",
-    *DECISIONS_KEYS.values(),
-})
+SECRET_KEYS = frozenset(
+    {
+        "TICO_OIDC_CLIENT_SECRET",
+        "CLOUDFLARE_TUNNEL_TOKEN",
+        "LITESTREAM_SECRET_ACCESS_KEY",
+        "TICO_GATEWAY_INVITE",
+        "TICO_INBOUND_KEY",
+        "TICO_INBOUND_URL",
+        "TICO_VISUAL_SECRET",
+        "TICO_COMPANY_FILE_B64",
+        *DECISIONS_KEYS.values(),
+    }
+)
 # Sent to the server only: the private copy of the .env setup keeps on this computer leaves these out.
 SERVER_ONLY_KEYS = frozenset({"TICO_GATEWAY_INVITE"})
 
 # Order they appear in the written .env.
 ENV_ORDER = (
-    "TICO_DOMAIN_ALIASES", "TICO_PUBLIC_URL", "TICO_CORS_ORIGINS", "TICO_HQ_URL", "TICO_GATEWAY_URL",
-    "TICO_VISUAL_ORIGIN", "TICO_VISUAL_SAME_ORIGIN", "TICO_CADDY_VISUALS", "TICO_VISUAL_SECRET", "TICO_READER_ORIGIN",
-    "TICO_TRUSTED_PROXIES", "TICO_CLIENT_IP_HEADER", "TICO_EDGE_SUBNET", "TICO_EDGE_DYNAMIC_RANGE",
-    "TICO_CADDY_ADDRESS", "TICO_CLOUDFLARED_ADDRESS",
-    "TICO_TEAM_NAME", "TICO_COMPANY_NAME", "TICO_OWNER_EMAIL", "COMPOSE_PROFILES", "TICO_DOMAIN", "TICO_RUNNER_URL", "CLOUDFLARE_TUNNEL_TOKEN",
-    "TICO_AUTH_PROXY", "TICO_OIDC_ISSUER", "TICO_OIDC_CLIENT_ID", "TICO_OIDC_CLIENT_SECRET", KEY_ALLOWED_DOMAIN, "TICO_OIDC_LABEL",
-    "TICO_ACCESS_ISSUER", "TICO_ACCESS_AUDIENCE", "TICO_HOSTED", "TICO_OWNER_LINK_HASH", "TICO_INSTALL_PRESET",
-    "TICO_SAMPLE_COMPANY", "TICO_MODELS_PRESET", "TICO_SUPPORT", "TICO_GATEWAY_INVITE", "TICO_INBOUND_KEY", "TICO_INBOUND_URL",
-    *DECISIONS_KEYS.values(), "TICO_UPDATER_URL", "TICO_TAG",
+    "TICO_DOMAIN_ALIASES",
+    "TICO_PUBLIC_URL",
+    "TICO_CORS_ORIGINS",
+    "TICO_HQ_URL",
+    "TICO_GATEWAY_URL",
+    "TICO_VISUAL_ORIGIN",
+    "TICO_VISUAL_SAME_ORIGIN",
+    "TICO_CADDY_VISUALS",
+    "TICO_VISUAL_SECRET",
+    "TICO_READER_ORIGIN",
+    "TICO_TRUSTED_PROXIES",
+    "TICO_CLIENT_IP_HEADER",
+    "TICO_EDGE_SUBNET",
+    "TICO_EDGE_DYNAMIC_RANGE",
+    "TICO_CADDY_ADDRESS",
+    "TICO_CLOUDFLARED_ADDRESS",
+    "TICO_TEAM_NAME",
+    "TICO_COMPANY_NAME",
+    "TICO_OWNER_EMAIL",
+    "COMPOSE_PROFILES",
+    "TICO_DOMAIN",
+    "TICO_RUNNER_URL",
+    "CLOUDFLARE_TUNNEL_TOKEN",
+    "TICO_AUTH_PROXY",
+    "TICO_OIDC_ISSUER",
+    "TICO_OIDC_CLIENT_ID",
+    "TICO_OIDC_CLIENT_SECRET",
+    KEY_ALLOWED_DOMAIN,
+    "TICO_OIDC_LABEL",
+    "TICO_ACCESS_ISSUER",
+    "TICO_ACCESS_AUDIENCE",
+    "TICO_HOSTED",
+    "TICO_OWNER_LINK_HASH",
+    "TICO_INSTALL_PRESET",
+    "TICO_SAMPLE_COMPANY",
+    "TICO_MODELS_PRESET",
+    "TICO_SUPPORT",
+    "TICO_GATEWAY_INVITE",
+    "TICO_INBOUND_KEY",
+    "TICO_INBOUND_URL",
+    *DECISIONS_KEYS.values(),
+    "TICO_UPDATER_URL",
+    "TICO_TAG",
 )
 # The hosted owner's sign-in link: the page on the server, and the command that replaces the link (backend/owner_link.py).
 OWNER_LINK_PATH = "/auth/owner-link"

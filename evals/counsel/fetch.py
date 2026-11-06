@@ -5,6 +5,7 @@ hand-written there. Run once to refresh the corpus; the eval reads the stored te
 
     python3 evals/counsel/fetch.py [--only slug,slug]
 """
+
 import argparse
 import datetime
 import html
@@ -19,33 +20,76 @@ HERE = Path(__file__).resolve().parent
 CAP = 60_000
 UA = "Mozilla/5.0 (compatible; TicoCounselEval/1.0; +https://tico.dev)"
 SOURCES = [
-    ("twilio-messaging-policy", "https://www.twilio.com/en-us/legal/messaging-policy", "Twilio Messaging Policy", "vendor"),
+    (
+        "twilio-messaging-policy",
+        "https://www.twilio.com/en-us/legal/messaging-policy",
+        "Twilio Messaging Policy",
+        "vendor",
+    ),
     ("twilio-aup", "https://www.twilio.com/en-us/legal/aup", "Twilio Acceptable Use Policy", "vendor"),
-    ("whatsapp-business-policy", "https://www.whatsapp.com/legal/business-policy", "WhatsApp Business Policy", "vendor"),
+    (
+        "whatsapp-business-policy",
+        "https://www.whatsapp.com/legal/business-policy",
+        "WhatsApp Business Policy",
+        "vendor",
+    ),
     ("meta-platform-terms", "https://developers.facebook.com/terms/", "Meta Platform Terms", "vendor"),
     ("stripe-restricted", "https://stripe.com/legal/restricted-businesses", "Stripe Restricted Businesses", "vendor"),
     ("stripe-ssa", "https://stripe.com/legal/ssa", "Stripe Services Agreement", "vendor"),
     ("google-ads-policies", "https://support.google.com/adspolicy/answer/6008942", "Google Ads Policies", "vendor"),
     ("slack-api-terms", "https://slack.com/terms-of-service/api", "Slack API Terms", "vendor"),
-    ("github-aup", "https://docs.github.com/en/site-policy/acceptable-use-policies/github-acceptable-use-policies",
-     "GitHub Acceptable Use Policies", "vendor"),
+    (
+        "github-aup",
+        "https://docs.github.com/en/site-policy/acceptable-use-policies/github-acceptable-use-policies",
+        "GitHub Acceptable Use Policies",
+        "vendor",
+    ),
     ("aws-customer-agreement", "https://aws.amazon.com/agreement/", "AWS Customer Agreement", "vendor"),
-    ("apple-app-review", "https://developer.apple.com/app-store/review/guidelines/", "Apple App Review Guidelines",
-     "vendor"),
-    ("common-paper-csa", "https://commonpaper.com/standards/cloud-service-agreement/", "Common Paper Cloud Service Agreement",
-     "other"),
+    (
+        "apple-app-review",
+        "https://developer.apple.com/app-store/review/guidelines/",
+        "Apple App Review Guidelines",
+        "vendor",
+    ),
+    (
+        "common-paper-csa",
+        "https://commonpaper.com/standards/cloud-service-agreement/",
+        "Common Paper Cloud Service Agreement",
+        "other",
+    ),
     ("common-paper-dpa", "https://commonpaper.com/standards/data-processing-agreement/", "Common Paper DPA", "other"),
-    ("ftc-can-spam", "https://www.ftc.gov/business-guidance/resources/can-spam-act-compliance-guide-business",
-     "FTC CAN-SPAM Compliance Guide", "government"),
-    ("ftc-health-breach", "https://www.ftc.gov/legal-library/browse/rules/health-breach-notification-rule",
-     "FTC Health Breach Notification Rule", "government"),
+    (
+        "ftc-can-spam",
+        "https://www.ftc.gov/business-guidance/resources/can-spam-act-compliance-guide-business",
+        "FTC CAN-SPAM Compliance Guide",
+        "government",
+    ),
+    (
+        "ftc-health-breach",
+        "https://www.ftc.gov/legal-library/browse/rules/health-breach-notification-rule",
+        "FTC Health Breach Notification Rule",
+        "government",
+    ),
     ("anthropic-aup", "https://www.anthropic.com/legal/aup", "Anthropic Usage Policy", "vendor"),
-    ("ecfr-tcpa-64-1200", "https://www.ecfr.gov/current/title-47/chapter-I/subchapter-B/part-64/subpart-L/section-64.1200",
-     "47 CFR 64.1200 (TCPA rules)", "government"),
-    ("twilio-a2p-10dlc", "https://www.twilio.com/docs/messaging/compliance/a2p-10dlc", "Twilio A2P 10DLC Guide", "vendor"),
+    (
+        "ecfr-tcpa-64-1200",
+        "https://www.ecfr.gov/current/title-47/chapter-I/subchapter-B/part-64/subpart-L/section-64.1200",
+        "47 CFR 64.1200 (TCPA rules)",
+        "government",
+    ),
+    (
+        "twilio-a2p-10dlc",
+        "https://www.twilio.com/docs/messaging/compliance/a2p-10dlc",
+        "Twilio A2P 10DLC Guide",
+        "vendor",
+    ),
     ("hubspot-terms", "https://www.hubspot.com/terms-of-service", "HubSpot Terms of Service", "vendor"),
-    ("ecfr-coppa-312", "https://www.ecfr.gov/current/title-16/chapter-I/subchapter-C/part-312",
-     "16 CFR 312 (COPPA rule)", "government"),
+    (
+        "ecfr-coppa-312",
+        "https://www.ecfr.gov/current/title-16/chapter-I/subchapter-C/part-312",
+        "16 CFR 312 (COPPA rule)",
+        "government",
+    ),
     ("commonpaper-mutual-nda", "https://commonpaper.com/standards/mutual-nda/", "Common Paper Mutual NDA", "other"),
 ]
 
@@ -113,8 +157,14 @@ def main(argv):
         (HERE / "docs" / f"{slug}.txt").write_text(text + "\n", encoding="utf-8")
         meta_path = HERE / f"{slug}.json"
         meta = json.loads(meta_path.read_text()) if meta_path.exists() else {"expected": []}
-        meta.update({"url": url, "fetched_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                     "from": {"name": name, "kind": kind}, "truncated": truncated})
+        meta.update(
+            {
+                "url": url,
+                "fetched_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "from": {"name": name, "kind": kind},
+                "truncated": truncated,
+            }
+        )
         meta.setdefault("expected", [])
         meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         print(f"{slug}: {len(text)} characters{' (truncated)' if truncated else ''}")

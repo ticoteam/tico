@@ -87,6 +87,14 @@ const rdInLibrary = r => [DOCS, MEETINGS, '#/library'].some(base => rdUnder((r |
 function rdLibRemember(open) { try { localStorage.setItem(RD_LIB_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdLibSaved() { try { return localStorage.getItem(RD_LIB_KEY) !== 'closed'; } catch { return true; } }
 const rdLibOpen = () => RD_LIB.inside || rdLibSaved();
+// Company folds the same way: open unless folded here, opened while Strategy, Finance or Growth is showing (its own
+// page, #/home, shows its row whatever the fold).
+const RD_CO_KEY = 'tico.nav.company';
+const RD_CO = {inside: false, was: false};
+const rdInCompany = r => ['#/strategy', GR_ROUTE, FIN_ROUTE].some(base => rdUnder((r || '').split('?')[0], base));
+function rdCoRemember(open) { try { localStorage.setItem(RD_CO_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
+function rdCoSaved() { try { return localStorage.getItem(RD_CO_KEY) !== 'closed'; } catch { return true; } }
+const rdCoOpen = () => RD_CO.inside || rdCoSaved();
 // Rules folds the other way round: folded unless this browser opened it, opened while a Rules page is showing.
 const RD_RULES_KEY = 'tico.nav.rules';
 const RD_RULES = {inside: false, was: false};
@@ -95,7 +103,8 @@ function rdRulesSaved() { try { return localStorage.getItem(RD_RULES_KEY) === 'o
 const rdRulesOpen = () => RD_RULES.inside || rdRulesSaved();
 function rdLibSync() {
   rdRulesSync();
-  const subs = document.getElementById('rd-lib'), toggle = document.querySelector('.rd-lib-toggle:not(.rd-rules-toggle)');
+  rdCoSync();
+  const subs = document.getElementById('rd-lib'), toggle = document.querySelector('#side .rd-lib-toggle:not(.rd-rules-toggle):not(.rd-co-toggle)');
   if (!subs || !toggle) return;
   const here = rdInLibrary(S.route);
   if (here && !RD_LIB.was) RD_LIB.inside = true;
@@ -104,6 +113,18 @@ function rdLibSync() {
   const open = rdLibOpen();
   subs.hidden = !open;
   document.documentElement.classList.toggle('nav-lib-shut', !open);   // ui/theme.js set it for the first paint
+  toggle.setAttribute('aria-expanded', String(open));
+}
+function rdCoSync() {
+  const subs = document.getElementById('rd-co'), toggle = document.querySelector('#side .rd-co-toggle');
+  if (!subs || !toggle) return;
+  const here = rdInCompany(S.route);
+  if (here && !RD_CO.was) RD_CO.inside = true;
+  if (!here) RD_CO.inside = false;
+  RD_CO.was = here;
+  const open = rdCoOpen();
+  subs.hidden = !open;
+  document.documentElement.classList.toggle('nav-co-shut', !open);   // ui/theme.js set it for the first paint
   toggle.setAttribute('aria-expanded', String(open));
 }
 function rdRulesSync() {
@@ -119,7 +140,8 @@ function rdRulesSync() {
   toggle.setAttribute('aria-expanded', String(open));
 }
 // The folds' chevrons.
-$('#side .rd-lib-toggle:not(.rd-rules-toggle)').onclick = () => { const open = rdLibOpen(); RD_LIB.inside = false; rdLibRemember(!open); rdLibSync(); };
+$('#side .rd-lib-toggle:not(.rd-rules-toggle):not(.rd-co-toggle)').onclick = () => { const open = rdLibOpen(); RD_LIB.inside = false; rdLibRemember(!open); rdLibSync(); };
+$('#side .rd-co-toggle').onclick = () => { const open = rdCoOpen(); RD_CO.inside = false; rdCoRemember(!open); rdLibSync(); };
 $('#side .rd-rules-toggle').onclick = () => { const open = rdRulesOpen(); RD_RULES.inside = false; rdRulesRemember(!open); rdLibSync(); };
 // The current page's highlight for what the redesign adds or moves (sidebar.js asks, after its own checks).
 function redesignNavCurrent(nav) {
@@ -127,6 +149,7 @@ function redesignNavCurrent(nav) {
   if (nav === 'automations') return rdUnder(r, RD_AUTOMATIONS);
   if (nav === 'tools') return rdUnder(r, TOOLS_ROUTE);
   if (nav === 'files') return rdUnder(r, RD_FILES);
+  if (nav === 'skills') return rdUnder(r, SKILLS_ROUTE);
   if (nav === 'strategy') return rdUnder(r, '#/strategy');
   if (nav === 'growth') return rdUnder(r, GR_ROUTE);
   if (nav === 'finance') return rdUnder(r, FIN_ROUTE);
@@ -156,6 +179,7 @@ function redesignRoute(r) {
   if (rdUnder(r, BRAND_ROUTE)) { pageBrand(); return true; }   // ui/app/brand-page.js
   if (rdUnder(r, GR_ROUTE)) { pageGrowth(); return true; }   // ui/app/growth-page.js
   if (rdUnder(r, RULES_ROUTE)) { pageRules(); return true; }   // ui/app/org-rules.js
+  if (skillsRoute(r)) return true;   // Library › Skills (ui/app/skills.js)
   if (pagesRoute(r)) return true;   // Library › Files and #/page/<id> (ui/app/pages.js)
   if (rdUnder(r, RD_GOALS)) { pageGoals(); return true; }
   if (rdUnder(r, RD_ORG)) { pageRdOrg(); return true; }
@@ -173,6 +197,7 @@ function redesignAfterRoute() {
   if (!rdUnder(S.route || '', TOOLS_ROUTE)) toolsStop();
   if (!rdUnder(S.route || '', RULES_ROUTE)) rulesStop();
   pagesStop(S.route || '');
+  skillsStop(S.route || '');
   rdLibSync();
   financeStop();
   growthStop();

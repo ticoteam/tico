@@ -6,11 +6,11 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import fake                    # noqa: E402  (puts the hub on sys.path)
+import fake  # noqa: E402  (puts the hub on sys.path)
 
-from connectors.mail import Refused                                  # noqa: E402
-from connectors.mail import access, policy as pl                     # noqa: E402
-from backend.people import load as load_people                      # noqa: E402
+from connectors.mail import Refused  # noqa: E402
+from connectors.mail import access, policy as pl  # noqa: E402
+from backend.people import load as load_people  # noqa: E402
 
 INFLUENCER = """
 name: influencer
@@ -46,26 +46,36 @@ class Tree(unittest.TestCase):
             d = self.root / f"emp-{slug}"
             d.mkdir()
             (d / "employee.yaml").write_text(text)
-        self._saved = (access.PROJECTS, access._roster, access.SERVER_ACCESS, access.RUNNER_ACCESS,
-                       pl.RUNNER_GET, pl.SERVER_GET)
+        self._saved = (
+            access.PROJECTS,
+            access._roster,
+            access.SERVER_ACCESS,
+            access.RUNNER_ACCESS,
+            pl.RUNNER_GET,
+            pl.SERVER_GET,
+        )
         access.PROJECTS = self.root
         access._roster = lambda: load_people(ROSTER)
-        self.answers = {}                                # slug -> what the fake Tico answers
+        self.answers = {}  # slug -> what the fake Tico answers
         access.SERVER_ACCESS = lambda slug: self.answers.get(slug) or {"mailboxes": []}
         access.LEASED = False
         access.forget()
 
     def tearDown(self):
-        (access.PROJECTS, access._roster, access.SERVER_ACCESS, access.RUNNER_ACCESS,
-         pl.RUNNER_GET, pl.SERVER_GET) = self._saved
+        (access.PROJECTS, access._roster, access.SERVER_ACCESS, access.RUNNER_ACCESS, pl.RUNNER_GET, pl.SERVER_GET) = (
+            self._saved
+        )
         access.LEASED = False
         access.forget()
         self.dir.cleanup()
 
     def grant(self, slug, boxes, company=None):
         """Tico answers `slug` with these {address: level}."""
-        self.answers[slug] = {"principal": f"bot:{slug}", "company": company or dict(fake.MAIL_COMPANY),
-                              "mailboxes": [{"address": a, "level": lv} for a, lv in boxes.items()]}
+        self.answers[slug] = {
+            "principal": f"bot:{slug}",
+            "company": company or dict(fake.MAIL_COMPANY),
+            "mailboxes": [{"address": a, "level": lv} for a, lv in boxes.items()],
+        }
 
 
 class Server(Tree):
@@ -96,7 +106,7 @@ class Server(Tree):
     def test_bot_yaml_only_narrows(self):
         self.grant("influencer", {ANA: "read_write"})
         _, verbs = access.resolve("influencer", ANA, "draft")
-        self.assertNotIn("send", verbs)                  # can: [read, draft] keeps sending out
+        self.assertNotIn("send", verbs)  # can: [read, draft] keeps sending out
         self.assertIn("organize", verbs)
         self.grant("reader", {ANA: "read_write"})
         self.assertEqual(access.resolve("reader", ANA, "read")[1], ["read"])
@@ -155,8 +165,10 @@ class Server(Tree):
                 calls.append(path)
                 return {"mailboxes": [{"address": ANA, "level": "read"}]}
 
-        with mock.patch.dict(os.environ, {"HUB_API_URL": "http://tico", "HUB_TOKEN": "tok"}), \
-                mock.patch("clients.tico.Client", Client):
+        with (
+            mock.patch.dict(os.environ, {"HUB_API_URL": "http://tico", "HUB_TOKEN": "tok"}),
+            mock.patch("clients.tico.Client", Client),
+        ):
             self.assertEqual(access.readable_mailboxes("influencer"), [ANA])
             access.readable_mailboxes("influencer")
         self.assertEqual(calls, [("http://tico", "tok"), "mail/access"])
@@ -171,8 +183,10 @@ class Server(Tree):
             def get(self, path):
                 raise OSError("down")
 
-        with mock.patch.dict(os.environ, {"HUB_API_URL": "http://tico", "HUB_TOKEN": "tok"}), \
-                mock.patch("clients.tico.Client", Client):
+        with (
+            mock.patch.dict(os.environ, {"HUB_API_URL": "http://tico", "HUB_TOKEN": "tok"}),
+            mock.patch("clients.tico.Client", Client),
+        ):
             with self.assertRaises(Refused):
                 access.resolve("influencer", ANA, "read")
 
@@ -208,7 +222,7 @@ class Connector(Tree):
 
 class PersonCompany(Tree):
     def test_a_persons_run_reads_what_tico_may_do_from_its_answer(self):
-        pl.SERVER_GET = lambda slug: None                # not a bot: no mail setting
+        pl.SERVER_GET = lambda slug: None  # not a bot: no mail setting
         self.answers["ana"] = {"mailboxes": [], "company": {"organize_mail": True, "send_mail": False}}
         self.assertEqual(pl.company("ana"), {"organize_mail": True, "send_mail": False, "change_calendar": True})
         self.answers["ana"] = {"mailboxes": []}

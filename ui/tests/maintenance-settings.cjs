@@ -7,7 +7,7 @@
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const {openAutomations, PHONE, DESKTOP, sideways} = require('./support/automations-fake.cjs');
+const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs');
 
 const until = async (fn, what, ms = 6000) => {
   for (const end = Date.now() + ms; !(await fn());) {
@@ -321,11 +321,32 @@ async function themed(page, name) {
       await page.close();
     }
 
+    // System jobs sits beside Maintenance: a built-in row that opens in place on Tico's own jobs (settings-recurring.js).
+    for (const [viewport, size] of [[DESKTOP, 'desktop'], [PHONE, 'phone']]) {
+      const {page, errors} = await openAutomations(browser, {viewport, maintenance: true});
+      await page.waitForSelector('tr.au-row[data-row="system-jobs"]');
+      for (const id of ['maintenance', 'system-jobs'])
+        assert.equal(await page.locator(`tr.au-row[data-row="${id}"] .pill`, {hasText: 'Built-in'}).count(), 1, id + ' says Built-in');
+      assert.equal(await page.locator('tr.au-row[data-row="system-jobs"]').evaluate(r => r.previousElementSibling?.dataset.row || r.previousElementSibling?.dataset.agrp), 'maintenance');
+      await page.evaluate(() => window.ticoTheme.set('dark'));
+      assert.equal(await sideways(page), false);
+      await shot(page, `automations-builtins-${size}-dark`);
+      await page.locator('tr.au-row[data-row="system-jobs"] a').click();
+      await page.waitForSelector('[data-system-routine="stale_review"]');
+      assert.equal(await page.locator('#au-root').getAttribute('data-screen'), 'detail');
+      assert.equal(await page.locator('.au-hd .au-name').innerText(), 'System jobs');
+      assert.equal(await page.locator('[data-system-routine]').count(), 2);
+      assert.equal(await sideways(page), false);
+      await shot(page, `automations-system-jobs-${size}-dark`);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
     // A hub without Maintenance: the list is as it was.
     {
       const {page, errors} = await openAutomations(browser, {viewport: DESKTOP});
       await page.waitForSelector('tr.au-row');
-      assert.equal(await page.locator('tr.au-row[data-row="maintenance"]').count(), 0);
+      assert.equal(await page.locator('tr.au-row[data-row="maintenance"], tr.au-row[data-row="system-jobs"]').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }

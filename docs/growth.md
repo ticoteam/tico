@@ -1,6 +1,6 @@
 # Growth
 
-Growth (`#/growth`, under Strategy in the sidebar) is a place of cards, like the Dashboard: what each channel spent, how
+Growth (`#/growth`, under Company in the sidebar) is a place of cards, like the Dashboard: what each channel spent, how
 many customers it brought, how many stayed, what a customer was worth, the funnel, the channels, and the marketing tests.
 Anyone may read it; the owner and admins arrange it, and a bot acting as itself does too, pinning only the cards it
 made. **Sources**, the systems each number comes from, is linked from the page (the owner and admins find it in
