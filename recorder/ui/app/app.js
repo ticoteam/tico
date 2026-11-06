@@ -1139,6 +1139,8 @@
     html += `<div class="settings-group"><div class="label">Audio</div><div class="inset">`;
     html += line('Microphone', `<select class="field" data-model="form.microphone">${mics.map((name) => `<option value="${esc(name)}" ${name === f.microphone ? 'selected' : ''}>${esc(name || 'System default')}</option>`).join('')}</select>`);
     html += line('Also record meeting audio', toggle('meeting_audio', f.meeting_audio));
+    // macOS only: Meet names need Accessibility, asked for here rather than at launch.
+    if (st.speaker_access != null && f.meeting_audio) html += line('Meet speaker names', st.speaker_access ? '<span class="faint">On</span>' : `<button class="btn small" data-act="allow-speaker-names">Allow</button>`);
     html += `</div></div>`;
     // Updates: version, Check for updates, Move to Applications (update.js).
     html += window.ticoUpdateRow?.(st.update) || '';

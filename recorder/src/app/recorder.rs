@@ -2958,6 +2958,7 @@ impl Recorder {
             "notice": self.input_notice().filter(|notice| *notice != self.notice_dismissed),
             "speaker_permission": self.active.is_some()
                 && tico_recorder_native::speaker_names::permission_pending(),
+            "speaker_access": tico_recorder_native::speaker_names::access(),
             "speech": speech::view(&self.config, self.key_saved("transcription"),
                 self.streaming() && self.key_saved(stream::KEY_NAME)),
         })

@@ -32,9 +32,15 @@ fn chunk(channel: &str, words: Vec<Word>) -> crate::store::Chunk {
         "status":"done","text":"speech","error":"","attempts":1,"provider":{},"words":words})).unwrap()
 }
 
+/// The record as the store reads it back: names settled from the evidence (see `Store::get`).
+fn named(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>) -> Recording {
+    let mut record = record.clone();
+    record.speaker_names = vote(&record, streamed);
+    record
+}
 /// What the saved transcript shows for each meeting-audio word.
 fn shown(record: &Recording) -> Vec<String> {
-    crate::transcript::chunk_words(record)["them"]
+    crate::transcript::chunk_words(&named(record, &BTreeMap::new()))["them"]
         .iter()
         .map(|w| w.speaker.clone())
         .collect()
@@ -208,9 +214,9 @@ fn stream_and_offline_voices_keep_their_own_labels_and_names() {
         "them".into(),
         vec![word(2000, 3000, "stream:S1"), word(3200, 3300, "stream:S1")],
     )]);
-    let names = Names::new(&record, &streamed);
-    assert_eq!(names.get("Speaker 1"), "Ana Example");
-    assert_eq!(names.get("Speaker 2"), "Ben Example");
+    let record = named(&record, &streamed);
+    assert_eq!(name_of(&record, "Speaker 1"), "Ana Example");
+    assert_eq!(name_of(&record, "Speaker 2"), "Ben Example");
     let live: Vec<_> = crate::transcript::live_turns(&record, &streamed, &[])
         .into_iter()
         .map(|turn| turn.speaker)
@@ -236,8 +242,8 @@ fn one_stable_label_pools_its_stream_and_offline_evidence_into_one_name() {
     let streamed = BTreeMap::from([("them".into(), vec![word(5000, 5600, "stream:S4")])]);
     // 0.6 s each: neither is enough alone, together they name the label.
     assert_eq!(shown(&record), ["Speaker 2"]);
-    let names = Names::new(&record, &streamed);
-    assert_eq!(names.get("Speaker 2"), "Ana Example");
+    let record = named(&record, &streamed);
+    assert_eq!(name_of(&record, "Speaker 2"), "Ana Example");
     let live: Vec<_> = crate::transcript::live_turns(&record, &streamed, &[])
         .into_iter()
         .map(|turn| turn.speaker)
@@ -410,16 +416,38 @@ fn replay(edit: impl Fn(&mut serde_json::Value)) -> (Vec<Observation>, Vec<Inter
     }
     (observed, coalesce(intervals))
 }
+/// The captured rows with a mute control (the other device's) become a second, remote-looking
+/// person marked "(You)", so the indicator row is the remote speaker.
+fn as_remote(tree: &mut serde_json::Value) {
+    fn button(node: &serde_json::Value) -> bool {
+        node["role"] == "AXButton"
+            || node["children"]
+                .as_array()
+                .is_some_and(|c| c.iter().any(button))
+    }
+    if !button(tree) {
+        return;
+    }
+    tree["description"] = json!("Participant 2");
+    let children = tree["children"].as_array_mut().unwrap();
+    for child in children.iter_mut() {
+        if child["label"] == "Participant 1" {
+            child["label"] = json!("Participant 2");
+        }
+    }
+    children.push(json!({"role":"AXStaticText","label":"(You)"}));
+}
 #[test]
 fn captured_chrome_rows_yield_the_live_speech_bursts() {
-    let (observed, intervals) = replay(|_| {});
-    assert!(
-        observed
+    let (observed, intervals) = replay(as_remote);
+    assert!(observed.iter().all(|o| {
+        o.participants
             .iter()
-            .all(|o| o.participants.iter().all(|p| p == "Participant 1"))
-    );
-    // Rows are missing until the panel opens and during three relayouts.
-    assert_eq!(observed.iter().filter(|o| !o.indicators).count(), 149);
+            .all(|p| p == "Participant 1" || p == "Participant 2")
+    }));
+    // Rows are missing until the panel opens and during three relayouts, and a lone row
+    // cannot say whose it is.
+    assert_eq!(observed.iter().filter(|o| !o.indicators).count(), 157);
     let spans: Vec<_> = intervals
         .iter()
         .map(|i| {
@@ -445,20 +473,13 @@ fn captured_chrome_rows_yield_the_live_speech_bursts() {
     );
 }
 #[test]
-fn captured_rows_marked_as_the_local_person_yield_nothing() {
-    // The captured row with the indicator carries an anonymized second text ("P38") where Meet
-    // shows "(You)" on the local person's row. With that marker, the bursts are the mic's.
-    fn mark(node: &mut serde_json::Value) {
-        if node["label"] == "P38" {
-            node["label"] = json!("(You)");
-        }
-        if let Some(children) = node.get_mut("children").and_then(|c| c.as_array_mut()) {
-            children.iter_mut().for_each(mark);
-        }
-    }
-    let (observed, intervals) = replay(mark);
+fn captured_rows_where_the_speaking_row_is_the_local_person_yield_nothing() {
+    // As captured, the indicator row is the one without a mute control: this Mac's own row,
+    // in whatever language Meet shows. Its bursts are the mic's.
+    let (observed, intervals) = replay(|_| {});
     assert!(intervals.is_empty());
     assert!(observed.iter().any(|o| o.self_names == ["Participant 1"]));
+    assert!(observed.iter().all(|o| o.active.is_empty()));
 }
 #[test]
 fn meet_detection_rejects_landing_pages_other_sites_and_unrelated_browser_documents() {
@@ -517,24 +538,24 @@ fn old_library_migration_is_repeatable_keeps_audio_and_cascades_local_identity_d
             .intervals
             .is_empty()
     );
-    let observed = Observation {
-        participants: vec!["Ana Example".into(), "Casey Example".into()],
-        self_names: vec!["Casey Example".into()],
-        active: vec!["Ana Example".into()],
-        indicators: true,
-    };
+    let people = [
+        ("Ana Example".to_string(), false),
+        ("Casey Example".to_string(), true),
+    ];
     store
         .observe_speakers(
             &record.id,
-            &observed,
+            &people,
             &[interval(1000, 1250, "Ana Example")],
+            &[(1000, 1250)],
         )
         .unwrap();
     store
         .observe_speakers(
             &record.id,
-            &observed,
+            &[],
             &[interval(1250, 1500, "Ana Example")],
+            &[(1250, 1500)],
         )
         .unwrap();
     store
@@ -546,6 +567,7 @@ fn old_library_migration_is_repeatable_keeps_audio_and_cascades_local_identity_d
     let reopened = Store::open(dir.path()).unwrap();
     let timeline = reopened.get(&record.id).unwrap().meeting_speakers;
     assert_eq!(timeline.intervals, [interval(1000, 1500, "Ana Example")]);
+    assert_eq!(timeline.readable, [(1000, 1500)]);
     assert_eq!(timeline.self_names, ["Casey Example"]);
     assert_eq!(
         reopened.context(&record.id).unwrap().participants,
@@ -571,4 +593,176 @@ fn old_library_migration_is_repeatable_keeps_audio_and_cascades_local_identity_d
             .participants
             .is_empty()
     );
+}
+/// One second of speech per word, for `seconds` from `start_ms`.
+fn talk(start_ms: u64, seconds: u64, speaker: &str) -> Vec<Word> {
+    (0..seconds)
+        .map(|i| word(start_ms + i * 1000, start_ms + (i + 1) * 1000, speaker))
+        .collect()
+}
+#[test]
+fn a_long_talker_is_not_named_after_someone_elses_short_replies() {
+    let mut record = record();
+    // Speaker 2 talks for 20 s; Ana's indicator shows two 0.75 s "mm-hmm"s meanwhile. The
+    // talker's own row never shows a reading (a phone, or a row out of view).
+    record.meeting_speakers.intervals = vec![
+        interval(5300, 6050, "Ana Example"),
+        interval(12_300, 13_050, "Ana Example"),
+    ];
+    record.meeting_speakers.readable = vec![(0, 25_000)];
+    record.chunks.push(chunk("them", talk(0, 20, "Speaker 2")));
+    assert!(shown(&record).iter().all(|s| s == "Speaker 2"));
+    // Without readable spans (a library from before they were kept) the old rule applies.
+    record.meeting_speakers.readable.clear();
+    assert!(shown(&record).iter().all(|s| s == "Ana Example"));
+}
+#[test]
+fn a_trailing_indicator_at_turn_handoffs_does_not_name_the_next_voice() {
+    let mut record = record();
+    let mut words = vec![];
+    let mut intervals = vec![];
+    // Ana and Speaker 2 alternate 3 s turns. Ana's indicator trails 0.45 s into each of
+    // Speaker 2's turns; Speaker 2's own row shows nothing.
+    for turn in 0..4u64 {
+        let ana = turn * 6000;
+        words.extend(talk(ana, 3, "Speaker 1"));
+        intervals.push(interval(ana + 300, ana + 3300 + 450, "Ana Example"));
+        words.extend(talk(ana + 3000, 3, "Speaker 2"));
+    }
+    record.meeting_speakers.intervals = intervals;
+    record.meeting_speakers.readable = vec![(0, 30_000)];
+    record.chunks.push(chunk("them", words));
+    let shown = shown(&record);
+    let named: BTreeSet<_> = shown.iter().map(String::as_str).collect();
+    assert_eq!(named, BTreeSet::from(["Ana Example", "Speaker 2"]));
+    assert_eq!(shown.iter().filter(|s| *s == "Ana Example").count(), 12);
+}
+#[test]
+fn names_stick_until_another_name_clearly_wins_and_never_go_back_to_a_number() {
+    let mut record = voice(0, 3000, vec![]);
+    record.speaker_names = BTreeMap::from([("Speaker 2".into(), "Ana Example".into())]);
+    // No evidence at all, then a tie: the name stays.
+    assert_eq!(vote(&record, &BTreeMap::new())["Speaker 2"], "Ana Example");
+    record.meeting_speakers.intervals = vec![
+        interval(300, 1800, "Ana Example"),
+        interval(300, 1800, "Ben Example"),
+    ];
+    assert_eq!(vote(&record, &BTreeMap::new())["Speaker 2"], "Ana Example");
+    // Another name wins outright: the voice moves to it.
+    record.meeting_speakers.intervals = vec![interval(300, 3300, "Ben Example")];
+    assert_eq!(vote(&record, &BTreeMap::new())["Speaker 2"], "Ben Example");
+    // A name later known to be this Mac's person is dropped.
+    record.meeting_speakers.self_names = vec!["Ana Example".into()];
+    record.meeting_speakers.intervals.clear();
+    assert!(vote(&record, &BTreeMap::new()).is_empty());
+}
+#[test]
+fn the_store_keeps_a_settled_name_when_later_evidence_is_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let id = store.create("Meeting").unwrap().id;
+    store
+        .mutate(&id, |r| {
+            r.state = "stopped".into();
+            r.chunks
+                .push(chunk("them", vec![word(0, 2000, "Speaker 2")]));
+            r.chunks[0].recording_id = r.id.clone();
+            Ok(())
+        })
+        .unwrap();
+    store
+        .observe_speakers(
+            &id,
+            &[("Ana Example".into(), false)],
+            &[interval(300, 2300, "Ana Example")],
+            &[(0, 3000)],
+        )
+        .unwrap();
+    assert_eq!(
+        store.get(&id).unwrap().speaker_names["Speaker 2"],
+        "Ana Example"
+    );
+    store
+        .db()
+        .unwrap()
+        .execute("DELETE FROM meeting_speaker_intervals", [])
+        .unwrap();
+    let record = store.get(&id).unwrap();
+    assert_eq!(name_of(&record, "Speaker 2"), "Ana Example");
+    assert_eq!(shown(&record), ["Ana Example"]);
+}
+fn button() -> serde_json::Value {
+    json!({"role":"AXGroup","children":[{"role":"AXButton","description":"Mute"}]})
+}
+#[test]
+fn without_a_known_local_row_no_one_is_speaking() {
+    // Meet in another language: no "(You)" text, and every row has a control.
+    let root = panel(vec![
+        row("Casey Example", vec![button()], &["IisKdb", "wEsLMd"]),
+        row("Ana Example", vec![button()], &["IisKdb", "HX2H7"]),
+    ]);
+    let observed = meet::GoogleMeet.observe(&root);
+    assert!(observed.active.is_empty());
+    assert!(!observed.indicators);
+    assert_eq!(observed.participants, ["Ana Example", "Casey Example"]);
+    // A lone row cannot say whose it is either.
+    let observed = meet::GoogleMeet.observe(&panel(vec![row(
+        "Ana Example",
+        vec![],
+        &["IisKdb", "HX2H7"],
+    )]));
+    assert!(observed.active.is_empty());
+    assert!(!observed.indicators);
+}
+#[test]
+fn the_one_row_without_a_mute_control_is_the_local_person_in_any_language() {
+    let root = panel(vec![
+        row("Casey Example", vec![], &["IisKdb", "wEsLMd"]),
+        row("Ana Example", vec![button()], &["IisKdb", "HX2H7"]),
+        row("Ben Example", vec![button()], &["IisKdb", "gjg47c"]),
+    ]);
+    let observed = meet::GoogleMeet.observe(&root);
+    assert_eq!(observed.active, ["Ana Example"]);
+    assert_eq!(observed.self_names, ["Casey Example"]);
+    assert!(observed.indicators);
+}
+#[test]
+fn readable_polls_are_recorded_and_unreadable_or_missed_ones_are_not() {
+    let mut samples = Samples::default();
+    samples.push(1000, speaking(&[]));
+    assert_eq!(samples.readable, None);
+    samples.push(1250, Observation::default());
+    assert_eq!(samples.readable, Some((1000, 1250)));
+    samples.push(1500, speaking(&[]));
+    assert_eq!(samples.readable, None, "the previous poll was unreadable");
+    samples.push(3000, speaking(&[]));
+    assert_eq!(samples.readable, None, "a missed poll");
+    samples.push(3250, speaking(&[]));
+    assert_eq!(samples.readable, Some((3000, 3250)));
+}
+#[test]
+fn a_batch_joins_contiguous_evidence_before_writing() {
+    let mut batch = Batch::default();
+    assert!(batch.is_empty());
+    batch.add(vec![interval(0, 250, "Ana Example")], Some((0, 250)));
+    batch.add(
+        vec![
+            interval(250, 500, "Ana Example"),
+            interval(250, 500, "Ben Example"),
+        ],
+        Some((250, 500)),
+    );
+    batch.add(
+        vec![interval(1500, 1750, "Ana Example")],
+        Some((1500, 1750)),
+    );
+    assert_eq!(
+        batch.intervals,
+        [
+            interval(0, 500, "Ana Example"),
+            interval(250, 500, "Ben Example"),
+            interval(1500, 1750, "Ana Example"),
+        ]
+    );
+    assert_eq!(batch.readable, [(0, 500), (1500, 1750)]);
 }

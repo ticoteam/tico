@@ -274,8 +274,48 @@ impl Samples {
     }
 }
 
+/// Evidence waiting to be written: people seen for the first time, and intervals and readable
+/// spans with contiguous pieces joined.
+#[derive(Default)]
+#[cfg(any(target_os = "macos", test))]
+pub(super) struct Batch {
+    pub people: Vec<(String, bool)>,
+    pub intervals: Vec<Interval>,
+    pub readable: Vec<(u64, u64)>,
+}
+#[cfg(any(target_os = "macos", test))]
+impl Batch {
+    pub fn add(&mut self, intervals: Vec<Interval>, readable: Option<(u64, u64)>) {
+        for interval in intervals {
+            match self
+                .intervals
+                .iter_mut()
+                .rev()
+                .find(|i| i.name == interval.name)
+                .filter(|i| i.end_ms == interval.start_ms)
+            {
+                Some(open) => open.end_ms = interval.end_ms,
+                None => self.intervals.push(interval),
+            }
+        }
+        if let Some((start, end)) = readable {
+            match self.readable.last_mut() {
+                Some(last) if last.1 == start => last.1 = end,
+                _ => self.readable.push((start, end)),
+            }
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.people.is_empty() && self.intervals.is_empty() && self.readable.is_empty()
+    }
+}
+
 #[cfg(target_os = "macos")]
-pub use macos::{Watch, dismiss_permission, open_settings, permission_pending};
+pub use macos::{Watch, access, dismiss_permission, open_settings, permission_pending};
+#[cfg(not(target_os = "macos"))]
+pub fn access() -> Option<bool> {
+    None
+}
 #[cfg(not(target_os = "macos"))]
 pub fn permission_pending() -> bool {
     false

@@ -213,7 +213,7 @@ impl RecordingHandle {
             .and_then(|config| stream::Plan::from_settings(&config))
             // Keep a settings-watching worker even while live text is off or not connected.
             .or_else(|| stream::Plan::from_settings(&settings::Settings::default()));
-        Self::with_plan(store, id, plan, true, move |inputs| {
+        Self::with_plan(store, id, plan, meeting_audio, move |inputs| {
             setup_inputs(
                 inputs,
                 || capture::start_microphone_for_meeting(microphone.as_deref(), meeting_audio),

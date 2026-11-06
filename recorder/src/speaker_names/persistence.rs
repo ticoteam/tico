@@ -1,11 +1,11 @@
-use super::{Interval, Timeline};
 #[cfg(any(target_os = "macos", test))]
 use super::name;
+use super::{Interval, Timeline};
 use crate::store::{Recording, Store, Word};
 use anyhow::Result;
-use rusqlite::{Connection, params};
 #[cfg(any(target_os = "macos", test))]
 use rusqlite::OptionalExtension;
+use rusqlite::{Connection, params};
 use std::collections::BTreeMap;
 
 /// Additive and idempotent for existing recorder libraries; deleting a recording deletes its

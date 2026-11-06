@@ -317,11 +317,7 @@ impl Tico {
             queue = Queue::read(&transaction, id, &self.destination.id)?;
         }
         queue.corrections(&transaction, &record)?;
-        crate::speaker_names::correct_shared_names(
-            &transaction,
-            &record,
-            &self.destination.id,
-        )?;
+        crate::speaker_names::correct_shared_names(&transaction, &record, &self.destination.id)?;
         transaction.commit()?;
         if live {
             let key = format!("{id}\n{}", self.destination.id);
@@ -1288,8 +1284,7 @@ impl<'a> Queue<'a> {
                         // Tico shows the name; the label is kept so a later name revises it.
                         let label = record.speaker_labels.get(&turn.speaker).cloned();
                         if let Some(label) = &label {
-                            turn.speaker =
-                                crate::speaker_names::name_of(record, label).to_owned();
+                            turn.speaker = crate::speaker_names::name_of(record, label).to_owned();
                         }
                         (channel, turn, label)
                     }),
@@ -1454,11 +1449,13 @@ impl<'a> Queue<'a> {
             "SELECT seq,label FROM live_span_labels WHERE recording_id=? AND destination_id=?",
         )?;
         let labels: HashMap<i64, String> = query
-            .query_map([self.id, self.destination], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .query_map([self.id, self.destination], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?
             .collect::<std::result::Result<_, _>>()?;
         drop(query);
-        let mut renames =
-            crate::speaker_names::MAX_QUEUED_CORRECTIONS - queued_corrections(transaction, self.id, self.destination)?;
+        let mut renames = crate::speaker_names::MAX_QUEUED_CORRECTIONS
+            - queued_corrections(transaction, self.id, self.destination)?;
         let mut query = transaction.prepare(
             "SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND chunk_id LIKE 'stream:%'",
         )?;
@@ -1537,7 +1534,10 @@ impl<'a> Queue<'a> {
                         continue;
                     }
                     renames -= 1;
-                    (speaker.to_owned(), shown["text"].as_str().unwrap_or("").to_owned())
+                    (
+                        speaker.to_owned(),
+                        shown["text"].as_str().unwrap_or("").to_owned(),
+                    )
                 } else {
                     continue;
                 };
@@ -1917,7 +1917,12 @@ mod speaker_name_tests {
             intervals: vec![interval(300, "Ana Example"), interval(2300, "Ben Example")],
             participants: vec!["Ana Example".into(), "Ben Example".into()],
             self_names: vec![],
+            readable: vec![(0, 10_000)],
         }
+    }
+    /// What the store settles on read: the names the evidence gives each voice label.
+    fn settle(record: &mut Recording, streamed: &BTreeMap<String, Vec<Word>>) {
+        record.speaker_names = crate::speaker_names::vote(record, streamed);
     }
     fn rows(tx: &rusqlite::Transaction, table: &str) -> Vec<Value> {
         let mut query = tx
@@ -1944,11 +1949,11 @@ mod speaker_name_tests {
         record
             .chunks
             .push(chunk(&record.id, words("Speaker 1", "Speaker 2")));
-        let names = Names::new(&record, &BTreeMap::new());
+        settle(&mut record, &BTreeMap::new());
         let mut db = store.db().unwrap();
         let tx = db.transaction().unwrap();
         let mut queue = Queue::read(&tx, &record.id, "destination").unwrap();
-        queue.finished(&tx, &record, u64::MAX, &names).unwrap();
+        queue.finished(&tx, &record, u64::MAX).unwrap();
         let sent = rows(&tx, "live_outbox");
         assert_eq!(speakers(&sent), ["Ana Example", "Ben Example"]);
         assert_eq!(sent[0]["text"], "First");
@@ -1967,21 +1972,17 @@ mod speaker_name_tests {
         let mut db = store.db().unwrap();
         let tx = db.transaction().unwrap();
         let mut queue = Queue::read(&tx, &record.id, "destination").unwrap();
-        queue
-            .streamed(&tx, &record, &raw, u64::MAX, &Names::default())
-            .unwrap();
+        queue.streamed(&tx, &record, &raw, u64::MAX).unwrap();
         assert_eq!(
             speakers(&rows(&tx, "live_outbox")),
             ["Speaker 1", "Speaker 2"]
         );
         record.meeting_speakers = timeline();
-        let queue = Queue::read(&tx, &record.id, "destination").unwrap();
-        queue
-            .corrections(&tx, &record, &Names::new(&record, &raw))
-            .unwrap();
-        queue
-            .corrections(&tx, &record, &Names::new(&record, &raw))
-            .unwrap();
+        settle(&mut record, &raw);
+        let id = record.id.clone();
+        let queue = Queue::read(&tx, &id, "destination").unwrap();
+        queue.corrections(&tx, &record).unwrap();
+        queue.corrections(&tx, &record).unwrap();
         let revised = rows(&tx, "live_corrections");
         assert_eq!(speakers(&revised), ["Ana Example", "Ben Example"]);
         assert_eq!(revised[0]["text"], "First");
@@ -1992,9 +1993,9 @@ mod speaker_name_tests {
         )
         .unwrap();
         record.meeting_speakers.intervals[0].name = "Ben Example".into();
-        queue
-            .corrections(&tx, &record, &Names::new(&record, &raw))
-            .unwrap();
+        settle(&mut record, &raw);
+        assert_eq!(record.speaker_names["Speaker 1"], "Ben Example");
+        queue.corrections(&tx, &record).unwrap();
         assert_eq!(rows(&tx, "live_corrections").len(), 2);
     }
     #[test]
@@ -2009,17 +2010,15 @@ mod speaker_name_tests {
         let mut db = store.db().unwrap();
         let tx = db.transaction().unwrap();
         let mut queue = Queue::read(&tx, &record.id, "destination").unwrap();
-        queue
-            .finished(&tx, &record, u64::MAX, &Names::default())
-            .unwrap();
+        queue.finished(&tx, &record, u64::MAX).unwrap();
         assert_eq!(
             speakers(&rows(&tx, "live_outbox")),
             ["Speaker 1", "Speaker 2"]
         );
         record.meeting_speakers = timeline();
-        let names = Names::new(&record, &BTreeMap::new());
-        crate::speaker_names::correct_shared_names(&tx, &record, "destination", &names).unwrap();
-        crate::speaker_names::correct_shared_names(&tx, &record, "destination", &names).unwrap();
+        settle(&mut record, &BTreeMap::new());
+        crate::speaker_names::correct_shared_names(&tx, &record, "destination").unwrap();
+        crate::speaker_names::correct_shared_names(&tx, &record, "destination").unwrap();
         let revised = rows(&tx, "live_corrections");
         assert_eq!(speakers(&revised), ["Ana Example", "Ben Example"]);
         assert_eq!(revised[1]["text"], "Second");
@@ -2031,13 +2030,130 @@ mod speaker_name_tests {
         // New evidence moves the label to another name; the edited line keeps its speaker.
         record.meeting_speakers.intervals[0].name = "Ben Example".into();
         record.meeting_speakers.intervals[1].name = "Ana Example".into();
-        let names = Names::new(&record, &BTreeMap::new());
-        crate::speaker_names::correct_shared_names(&tx, &record, "destination", &names).unwrap();
+        settle(&mut record, &BTreeMap::new());
+        crate::speaker_names::correct_shared_names(&tx, &record, "destination").unwrap();
         let revised = rows(&tx, "live_corrections");
         assert_eq!(
             speakers(&revised),
             ["Ana Example", "Ben Example", "Ana Example"]
         );
         assert_eq!(revised[2]["revision"], 3);
+    }
+    fn shared_finished(store: &Store) -> Recording {
+        let mut record = store.create("Meeting").unwrap();
+        record.state = "stopped".into();
+        record
+            .chunks
+            .push(chunk(&record.id, words("Speaker 1", "Speaker 2")));
+        record
+    }
+    #[test]
+    fn a_refused_rename_is_not_the_base_revision_and_is_not_asked_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let mut record = shared_finished(&store);
+        let mut db = store.db().unwrap();
+        let tx = db.transaction().unwrap();
+        let mut queue = Queue::read(&tx, &record.id, "destination").unwrap();
+        queue.finished(&tx, &record, u64::MAX).unwrap();
+        // Tico refused renaming line 1 to Ana.
+        tx.execute(
+            "INSERT INTO live_corrections(recording_id,destination_id,seq,revision,payload_json,state) VALUES(?,'destination',1,2,?,2)",
+            rusqlite::params![record.id, json!({"revision":2,"speaker":"Ana Example","start_ms":0,"end_ms":1000,"text":"First"}).to_string()],
+        )
+        .unwrap();
+        record.meeting_speakers = timeline();
+        settle(&mut record, &BTreeMap::new());
+        crate::speaker_names::correct_shared_names(&tx, &record, "destination").unwrap();
+        let revised = rows(&tx, "live_corrections");
+        assert_eq!(speakers(&revised), ["Ana Example", "Ben Example"]);
+        // Line 1's voice is now Ben: built on what Tico accepted (the original), not revision 2.
+        record.meeting_speakers.intervals[0].name = "Ben Example".into();
+        record.meeting_speakers.intervals[1].name = "Ana Example".into();
+        settle(&mut record, &BTreeMap::new());
+        crate::speaker_names::correct_shared_names(&tx, &record, "destination").unwrap();
+        let revised = rows(&tx, "live_corrections");
+        assert_eq!(
+            speakers(&revised),
+            ["Ana Example", "Ben Example", "Ben Example", "Ana Example"]
+        );
+        assert_eq!(revised[2]["revision"], 2);
+        assert_eq!(revised[3]["revision"], 3);
+    }
+    #[test]
+    fn renames_wait_while_many_corrections_are_queued() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let mut record = shared_finished(&store);
+        let mut db = store.db().unwrap();
+        let tx = db.transaction().unwrap();
+        let mut queue = Queue::read(&tx, &record.id, "destination").unwrap();
+        queue.finished(&tx, &record, u64::MAX).unwrap();
+        for seq in 0..crate::speaker_names::MAX_QUEUED_CORRECTIONS - 1 {
+            tx.execute(
+                "INSERT INTO live_corrections(recording_id,destination_id,seq,revision,payload_json) VALUES(?,'destination',?,2,'{}')",
+                rusqlite::params![record.id, 100 + seq],
+            )
+            .unwrap();
+        }
+        record.meeting_speakers = timeline();
+        settle(&mut record, &BTreeMap::new());
+        // One slot left: one line now, the other on a later pass.
+        crate::speaker_names::correct_shared_names(&tx, &record, "destination").unwrap();
+        let named = |tx: &rusqlite::Transaction| {
+            rows(tx, "live_corrections")
+                .into_iter()
+                .filter(|r| r.get("speaker").is_some())
+                .count()
+        };
+        assert_eq!(named(&tx), 1);
+        crate::speaker_names::correct_shared_names(&tx, &record, "destination").unwrap();
+        assert_eq!(named(&tx), 1);
+        tx.execute("UPDATE live_corrections SET state=1", [])
+            .unwrap();
+        crate::speaker_names::correct_shared_names(&tx, &record, "destination").unwrap();
+        assert_eq!(named(&tx), 2);
+    }
+    #[test]
+    fn streamed_lines_keep_their_voice_label_so_a_later_name_renames_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let mut record = store.create("Meeting").unwrap();
+        record.state = "recording".into();
+        record.speaker_labels = BTreeMap::from([
+            ("stream:S1".into(), "Speaker 1".into()),
+            ("stream:S2".into(), "Speaker 2".into()),
+        ]);
+        let raw = BTreeMap::from([("them".into(), words("stream:S1", "stream:S2"))]);
+        record.meeting_speakers = timeline();
+        settle(&mut record, &raw);
+        let mut db = store.db().unwrap();
+        let tx = db.transaction().unwrap();
+        let mut queue = Queue::read(&tx, &record.id, "destination").unwrap();
+        queue.streamed(&tx, &record, &raw, u64::MAX).unwrap();
+        assert_eq!(
+            speakers(&rows(&tx, "live_outbox")),
+            ["Ana Example", "Ben Example"]
+        );
+        let mut query = tx
+            .prepare("SELECT label FROM live_span_labels ORDER BY seq")
+            .unwrap();
+        let labels: Vec<String> = query
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        drop(query);
+        assert_eq!(labels, ["Speaker 1", "Speaker 2"]);
+        record.meeting_speakers.intervals[0].name = "Ben Example".into();
+        record.meeting_speakers.intervals[1].name = "Ana Example".into();
+        settle(&mut record, &raw);
+        let id = record.id.clone();
+        let queue = Queue::read(&tx, &id, "destination").unwrap();
+        queue.corrections(&tx, &record).unwrap();
+        assert_eq!(
+            speakers(&rows(&tx, "live_corrections")),
+            ["Ben Example", "Ana Example"]
+        );
     }
 }

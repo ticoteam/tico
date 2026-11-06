@@ -4,13 +4,14 @@
 //! page's AX tree (it stays empty for assistive clients otherwise). AXValue is read only for
 //! static text inside a participant row or a video tile's name container.
 use super::{
-    MeetingAdapter, Observation, POLL_MS, Samples,
+    Batch, MeetingAdapter, Observation, POLL_MS, Samples,
     meet::{self, GoogleMeet, Node},
 };
 use crate::store::Store;
 use core_foundation::{
     array::CFArray,
     base::{CFType, CFTypeRef, TCFType},
+    boolean::CFBoolean,
     dictionary::CFDictionary,
     number::CFNumber,
     string::CFString,
@@ -18,7 +19,7 @@ use core_foundation::{
 };
 use objc2_app_kit::NSRunningApplication;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     ffi::c_void,
     path::Path,
     sync::{
@@ -72,33 +73,49 @@ const CHROMIUM: &[&str] = &[
     "com.microsoft.edgemac",
     "com.brave.Browser",
 ];
+/// Until a Meet document is found, look this rarely; a found meeting is read every [`POLL_MS`].
+const FIND_MS: u64 = 2000;
+/// Evidence is written in batches this far apart, and once more when the watch ends.
+const FLUSH_MS: u64 = 1000;
 const PROMPT_FILE: &str = "speaker-accessibility-dismissed";
+const ASKED_FILE: &str = "speaker-accessibility-prompted";
+const MANUAL: &str = "AXManualAccessibility";
+/// Set while this recording's watch saw a supported browser without Accessibility access.
 static PERMISSION: AtomicBool = AtomicBool::new(false);
 pub fn permission_pending() -> bool {
     PERMISSION.load(Ordering::Acquire)
+}
+/// Whether the recorder may read Meet's accessibility tree.
+pub fn access() -> Option<bool> {
+    Some(unsafe { AXIsProcessTrusted() })
 }
 pub fn dismiss_permission(root: &Path) {
     let _ = std::fs::write(root.join(PROMPT_FILE), b"1");
     PERMISSION.store(false, Ordering::Release);
 }
+/// The first Allow shows macOS's own prompt, which also lists the app in the Accessibility
+/// pane; later ones open the pane. Never both at once, and neither counts as a dismissal.
 pub fn open_settings(root: &Path) {
-    // Lists the app in the Accessibility pane; macOS shows its own prompt the first time.
-    let options = CFDictionary::from_CFType_pairs(&[(
-        CFString::new("AXTrustedCheckOptionPrompt"),
-        core_foundation::boolean::CFBoolean::true_value(),
-    )]);
-    unsafe {
-        AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef().cast());
+    if unsafe { AXIsProcessTrusted() } {
+        return;
     }
-    let opened = std::process::Command::new("/usr/bin/open")
+    let asked = root.join(ASKED_FILE);
+    if !asked.exists() {
+        let _ = std::fs::write(&asked, b"1");
+        let options = CFDictionary::from_CFType_pairs(&[(
+            CFString::new("AXTrustedCheckOptionPrompt"),
+            CFBoolean::true_value(),
+        )]);
+        unsafe {
+            AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef().cast());
+        }
+        return;
+    }
+    let _ = std::process::Command::new("/usr/bin/open")
         .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    if opened {
-        dismiss_permission(root);
-    }
+        .status();
 }
 fn attr(element: &CFType, key: &str) -> Option<CFType> {
     unsafe {
@@ -188,14 +205,21 @@ fn metadata(element: &CFType) -> Vec<CFType> {
     let values = unsafe { CFType::wrap_under_create_rule(values.cast()) };
     array(&values)
 }
-/// (pid, a window title looks like Meet, Chromium).
-fn browser_windows() -> Vec<(i32, bool, bool)> {
+fn bundle(pid: i32) -> Option<String> {
+    NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?
+        .bundleIdentifier()
+        .map(|id| id.to_string())
+}
+/// (pid, Chromium) for each supported browser with a window. Window titles here would need
+/// Screen Recording, so they are not read; `bundles` caches each window owner's bundle id
+/// while that process keeps a window.
+fn browser_windows(bundles: &mut BTreeMap<i32, Option<String>>) -> Vec<(i32, bool)> {
     let raw = unsafe { CGWindowListCopyWindowInfo(16, 0) }; // Include minimized windows; exclude desktop.
     if raw.is_null() {
         return vec![];
     }
     let windows = unsafe { CFArray::<CFDictionary<CFString, CFType>>::wrap_under_create_rule(raw) };
-    let mut pids = std::collections::BTreeMap::new();
+    let mut seen = BTreeMap::new();
     for window in windows.iter().take(200) {
         let Some(pid) = window
             .find(CFString::new("kCGWindowOwnerPID"))
@@ -204,27 +228,20 @@ fn browser_windows() -> Vec<(i32, bool, bool)> {
         else {
             continue;
         };
-        let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
-            continue;
-        };
-        let Some(bundle) = app.bundleIdentifier().map(|id| id.to_string()) else {
-            continue;
-        };
-        if !BROWSERS.contains(&bundle.as_str()) {
-            continue;
+        if !seen.contains_key(&pid) {
+            let id = bundles.remove(&pid).unwrap_or_else(|| bundle(pid));
+            seen.insert(pid, id);
         }
-        // Window titles are used only to detect Meet when AX is denied; they are never stored.
-        let is_meet = window
-            .find(CFString::new("kCGWindowName"))
-            .and_then(|v| v.downcast::<CFString>())
-            .is_some_and(|s| meet::window_title(&s.to_string()));
-        let entry = pids
-            .entry(pid)
-            .or_insert((false, CHROMIUM.contains(&bundle.as_str())));
-        entry.0 |= is_meet;
     }
-    pids.into_iter()
-        .map(|(pid, (meet, chromium))| (pid, meet, chromium))
+    *bundles = seen;
+    bundles
+        .iter()
+        .filter_map(|(pid, id)| {
+            let id = id.as_deref()?;
+            BROWSERS
+                .contains(&id)
+                .then(|| (*pid, CHROMIUM.contains(&id)))
+        })
         .collect()
 }
 
@@ -337,30 +354,73 @@ fn project(
         children: descendants,
     })
 }
-fn poll(canceled: Arc<AtomicBool>, woken: &mut BTreeSet<i32>) -> (bool, Observation) {
-    objc2::rc::autoreleasepool(|_| poll_inner(canceled, woken))
+#[derive(Default)]
+struct Discovery {
+    bundles: BTreeMap<i32, Option<String>>,
+    /// Browsers whose page accessibility was checked: true when this watch switched it on.
+    woken: BTreeMap<i32, bool>,
+}
+#[derive(Default)]
+struct Poll {
+    /// A supported browser is running but Accessibility is not allowed.
+    denied: bool,
+    /// A Meet document was found, so the next poll comes at the full rate.
+    found: bool,
+    observed: Observation,
+}
+fn poll(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
+    objc2::rc::autoreleasepool(|_| poll_inner(canceled, discovery))
+}
+fn set_manual(pid: i32, on: bool) {
+    let raw = unsafe { AXUIElementCreateApplication(pid) };
+    if raw.is_null() {
+        return;
+    }
+    let app = unsafe { CFType::wrap_under_create_rule(raw) };
+    let key = CFString::new(MANUAL);
+    let value = if on {
+        CFBoolean::true_value()
+    } else {
+        CFBoolean::false_value()
+    };
+    unsafe {
+        AXUIElementSetMessagingTimeout(app.as_CFTypeRef(), 0.025);
+        AXUIElementSetAttributeValue(app.as_CFTypeRef(), key.as_CFTypeRef(), value.as_CFTypeRef());
+    }
 }
 /// Chromium returns kAXErrorAttributeUnsupported here yet still enables its tree, which fills
-/// in over the next polls. Asked once per browser process; later polls retry the walk.
-fn wake(app: &CFType) {
-    let key = CFString::new("AXManualAccessibility");
-    unsafe {
-        AXUIElementSetAttributeValue(
-            app.as_CFTypeRef(),
-            key.as_CFTypeRef(),
-            core_foundation::boolean::CFBoolean::true_value().as_CFTypeRef(),
-        );
+/// in over the next polls. Asked once per browser process. A browser that already had it on
+/// (another assistive app) is left as it was, including when the watch ends.
+fn wake(app: &CFType, pid: i32, woken: &mut BTreeMap<i32, bool>) {
+    if woken.contains_key(&pid) {
+        return;
+    }
+    let already = attr(app, MANUAL)
+        .and_then(|value| value.downcast::<CFBoolean>())
+        .is_some_and(bool::from);
+    woken.insert(pid, !already);
+    if !already {
+        set_manual(pid, true);
     }
 }
-fn poll_inner(canceled: Arc<AtomicBool>, woken: &mut BTreeSet<i32>) -> (bool, Observation) {
-    let windows = browser_windows();
+/// Switch page accessibility back off in the browsers this watch switched on.
+fn unwake(woken: &BTreeMap<i32, bool>) {
+    objc2::rc::autoreleasepool(|_| {
+        for (pid, _) in woken.iter().filter(|(_, ours)| **ours) {
+            if bundle(*pid).is_some_and(|id| CHROMIUM.contains(&id.as_str())) {
+                set_manual(*pid, false);
+            }
+        }
+    })
+}
+fn poll_inner(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
+    let browsers = browser_windows(&mut discovery.bundles);
     if !unsafe { AXIsProcessTrusted() } {
-        return (
-            windows.iter().any(|(_, meet, _)| *meet),
-            Observation::default(),
-        );
+        return Poll {
+            denied: !browsers.is_empty(),
+            ..Default::default()
+        };
     }
-    woken.retain(|pid| windows.iter().any(|(p, _, _)| p == pid));
     PERMISSION.store(false, Ordering::Release);
     let mut budget = Budget {
         until: Instant::now() + Duration::from_millis(150),
@@ -368,7 +428,7 @@ fn poll_inner(canceled: Arc<AtomicBool>, woken: &mut BTreeSet<i32>) -> (bool, Ob
         canceled,
     };
     let mut found = vec![];
-    for (pid, _, chromium) in windows {
+    for (pid, chromium) in browsers {
         let raw = unsafe { AXUIElementCreateApplication(pid) };
         if raw.is_null() {
             continue;
@@ -377,19 +437,17 @@ fn poll_inner(canceled: Arc<AtomicBool>, woken: &mut BTreeSet<i32>) -> (bool, Ob
         unsafe {
             AXUIElementSetMessagingTimeout(app.as_CFTypeRef(), 0.025);
         }
-        let windows = elements(&app, "AXWindows");
+        // Only a window titled like Meet is walked; other tabs and windows are never read.
+        let windows: Vec<_> = elements(&app, "AXWindows")
+            .into_iter()
+            .filter(|w| meet::window_title(&text(w, "AXTitle")))
+            .collect();
         // Chromium page accessibility slows the browser, so only for a window showing Meet.
-        if chromium
-            && !woken.contains(&pid)
-            && windows
-                .iter()
-                .any(|w| meet::window_title(&text(w, "AXTitle")))
-        {
-            woken.insert(pid);
-            wake(&app);
+        if chromium && !windows.is_empty() {
+            wake(&app, pid, &mut discovery.woken);
         }
         for window in &windows {
-            let Some(document) = document(&window, 0, &mut budget) else {
+            let Some(document) = document(window, 0, &mut budget) else {
                 continue;
             };
             let nodes = children(&document)
@@ -399,7 +457,10 @@ fn poll_inner(canceled: Arc<AtomicBool>, woken: &mut BTreeSet<i32>) -> (bool, Ob
             // An incomplete tree cannot safely say that a speaker stopped or a second speaker
             // was absent. Close the previous evidence rather than applying a partial result.
             if budget.left == 0 || Instant::now() >= budget.until {
-                return (false, Observation::default());
+                return Poll {
+                    found: true,
+                    ..Default::default()
+                };
             }
             found.push(GoogleMeet.observe(&Node {
                 role: "AXGroup".into(),
@@ -408,11 +469,26 @@ fn poll_inner(canceled: Arc<AtomicBool>, woken: &mut BTreeSet<i32>) -> (bool, Ob
             }));
         }
     }
-    // Two meetings open at once have no safe audio-to-window association.
-    if found.len() == 1 {
-        (false, found.pop().unwrap())
-    } else {
-        (false, Observation::default())
+    Poll {
+        denied: false,
+        found: !found.is_empty(),
+        // Two meetings open at once have no safe audio-to-window association.
+        observed: if found.len() == 1 {
+            found.pop().unwrap()
+        } else {
+            Observation::default()
+        },
+    }
+}
+fn flush(store: &Store, id: &str, batch: &mut Batch) {
+    if batch.is_empty() {
+        return;
+    }
+    let batch = std::mem::take(batch);
+    // A failed write loses this batch only; observation goes on.
+    if let Err(error) = store.observe_speakers(id, &batch.people, &batch.intervals, &batch.readable)
+    {
+        eprintln!("Meeting speakers not saved: {error:#}");
     }
 }
 
@@ -433,34 +509,45 @@ impl Watch {
             .name("tico-meet-speakers".into())
             .spawn(move || {
                 crate::qos::background();
+                // Each recording asks afresh.
+                PERMISSION.store(false, Ordering::Release);
                 let mut samples = Samples::default();
                 let mut participants = BTreeSet::new();
                 let mut locals = BTreeSet::new();
-                let mut woken = BTreeSet::new();
+                let mut discovery = Discovery::default();
+                let mut batch = Batch::default();
+                let mut flushed = Instant::now();
                 while !canceled.load(Ordering::Acquire) {
                     let tick = Instant::now();
-                    let (denied, observed) = poll(canceled.clone(), &mut woken);
-                    if denied && !store.root().join(PROMPT_FILE).exists() {
+                    let polled = poll(canceled.clone(), &mut discovery);
+                    if polled.denied && !store.root().join(PROMPT_FILE).exists() {
                         PERMISSION.store(true, Ordering::Release);
                     }
                     let at = offset + started.elapsed().as_millis() as u64;
-                    let intervals = samples.push(at, observed.clone());
-                    let mut new_names = false;
-                    for name in &observed.participants {
-                        new_names |= participants.insert(name.clone());
-                    }
-                    for name in &observed.self_names {
-                        new_names |= locals.insert(name.clone());
-                    }
-                    if (!intervals.is_empty() || new_names) && !canceled.load(Ordering::Acquire) {
-                        if store.observe_speakers(&id, &observed, &intervals).is_err() {
-                            break;
+                    let intervals = samples.push(at, polled.observed.clone());
+                    for name in &polled.observed.participants {
+                        if participants.insert(name.clone()) {
+                            batch.people.push((name.clone(), false));
                         }
                     }
+                    for name in &polled.observed.self_names {
+                        if locals.insert(name.clone()) {
+                            batch.people.push((name.clone(), true));
+                        }
+                    }
+                    batch.add(intervals, samples.readable);
+                    if flushed.elapsed() >= Duration::from_millis(FLUSH_MS) {
+                        flush(&store, &id, &mut batch);
+                        flushed = Instant::now();
+                    }
+                    let every = if polled.found { POLL_MS } else { FIND_MS };
                     thread::park_timeout(
-                        Duration::from_millis(POLL_MS).saturating_sub(tick.elapsed()),
+                        Duration::from_millis(every).saturating_sub(tick.elapsed()),
                     );
                 }
+                flush(&store, &id, &mut batch);
+                unwake(&discovery.woken);
+                PERMISSION.store(false, Ordering::Release);
             })
             .ok();
         Self { stop, worker }
