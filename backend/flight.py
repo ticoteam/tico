@@ -694,7 +694,8 @@ def code_state(root=ROOT):
     """`modified` when the code differs from what the image was built with (files copied over a release image), `match`
     when it is the same, None when the image recorded no hash (a source checkout, or an image from before the hash)."""
     try:
-        expected = json.loads(open(os.path.join(root, "release-manifest.json")).read()).get("code")
+        with open(os.path.join(root, "release-manifest.json")) as manifest:
+            expected = json.load(manifest).get("code")
     except (OSError, ValueError, AttributeError):
         return None
     if not expected:
