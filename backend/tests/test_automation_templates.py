@@ -172,19 +172,6 @@ def test_a_person_cannot_fill_a_template_for_an_inbox_they_cannot_read(api):
     fill(api, "founder", "person:ana", "ana@acme.example", token="ben-test", expected=403)   # not Ana's to change
 
 
-def test_a_fill_saves_nothing(api):
-    before = get(api, "automations")["automations"]
-    fill(api, "founder", "person:ana", "ana@acme.example")
-    assert get(api, "automations")["automations"] == before
-
-
-def test_the_listing_and_an_unknown_template(api):
-    listing = get(api, "automations/templates")["templates"]
-    assert [t["id"] for t in listing] == ["founder", "support", "sales", "blank"]
-    assert all(t["destinations"] for t in listing)
-    fill(api, "nope", "person:ana", "ana@acme.example", expected=404)
-
-
 def test_the_answers_match_the_published_contract(api):
     from backend.tests.test_openapi_v2 import conforms
     set_templates(api, STAFF)
@@ -193,15 +180,19 @@ def test_the_answers_match_the_published_contract(api):
              for path in document["paths"].values() for op in path.values()
              if op.get("operationId") in ("listAutomationTemplates", "getAutomationTemplate")}
     assert conforms(get(api, "automations/templates"), shape["listAutomationTemplates"], document) is None
+    before = get(api, "automations")["automations"]
     filled = fill(api, "founder", "person:ana", "ana@acme.example")
     assert conforms(filled, shape["getAutomationTemplate"], document) is None
-
-
-def test_the_cli_fills_the_same_template_as_the_api(api):
-    set_templates(api, STAFF)
+    assert get(api, "automations")["automations"] == before, "a fill saves nothing"
+    # The listing and an unknown template.
+    listing = get(api, "automations/templates")["templates"]
+    assert [t["id"] for t in listing] == ["founder", "support", "sales", "blank"]
+    assert all(t["destinations"] for t in listing)
+    fill(api, "nope", "person:ana", "ana@acme.example", expected=404)
+    # The CLI fills the same template as the API.
     assert [t["id"] for t in cli(api, "ana-test", "templates")["templates"]] == ["founder", "support", "sales", "blank"]
     via_cli = cli(api, "ana-test", "template", "founder", "--owner", "person:ana", "--inbox", "ana@acme.example")
-    assert via_cli == fill(api, "founder", "person:ana", "ana@acme.example")
+    assert via_cli == filled
 
 
 def test_an_active_bot_still_onboarding_is_passed_over_for_the_next_one(api):
