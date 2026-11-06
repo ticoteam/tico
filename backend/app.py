@@ -8830,6 +8830,8 @@ def create_app(settings=None):
     install_branches(app, store, auth, mutate, settings_admin, execution)
     from .bot_copy import install as install_bot_copy
     install_bot_copy(app, store, auth, mutate, settings_admin, place_now)
+    from .skills import install as install_skills
+    install_skills(app, store, auth, mutate)
     from .subscriptions import install as install_subscriptions
     install_subscriptions(app, store, auth, mutate, settings, computer_rows)
     from .model_subscriptions import install as install_model_subscriptions

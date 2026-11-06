@@ -3468,6 +3468,25 @@ STABLE.extend([
     ("/api/v2/alerts/company", "put", "Alerts", "setAlertCompanyCap", "Set the company monthly alert cap in USD (zero disables paid alerts); owner/admin", "AlertCompanyCap"),
 ])
 
+# The company skills directory (backend/skills.py): answers are not declared yet, so the document lists the routes only.
+TAGS["Skills"] = "The company's approved skills: proposals and approval, screening state, and installs for bots and people (docs/skills.md)."
+STABLE.extend([
+    ("/api/v2/skills", "get", "Skills", "listSkills", "The directory: each skill with its latest approved version and install count", None),
+    ("/api/v2/skills/proposals", "post", "Skills", "proposeSkill", "Propose a skill or an update as its whole folder of text files; an admin approves it after screening", None),
+    ("/api/v2/skills/proposals", "get", "Skills", "listSkillProposals", "Proposals: admins see all, anyone else their own", None),
+    ("/api/v2/skills/proposals/{pid}", "get", "Skills", "getSkillProposal", "A proposal with its files, its diff, whether the skill moved on, and its latest screening", None),
+    ("/api/v2/skills/proposals/{pid}/approve", "post", "Skills", "approveSkillProposal", "Admins approve a screened proposal as the skill's next version", None),
+    ("/api/v2/skills/proposals/{pid}/decline", "post", "Skills", "declineSkillProposal", "Admins decline a pending proposal with a reason", None),
+    ("/api/v2/skills/proposals/{pid}/withdraw", "post", "Skills", "withdrawSkillProposal", "The proposer withdraws a pending proposal", None),
+    ("/api/v2/skills/proposals/{pid}/rescreen", "post", "Skills", "rescreenSkillProposal", "Admins or the proposer send a pending proposal back to screening", None),
+    ("/api/v2/skills/installs", "get", "Skills", "listSkillInstalls", "The installs of one bot or person, with what is wanted and what is staged there", None),
+    ("/api/v2/skills/installs/{iid}", "delete", "Skills", "uninstallSkill", "Take a skill off a bot or person, with the rights to install it", None),
+    ("/api/v2/skills/{name}", "get", "Skills", "getSkill", "One skill: its versions and the installs the caller may see", None),
+    ("/api/v2/skills/{name}/versions/{number}", "get", "Skills", "getSkillVersion", "One approved version of a skill, with its files", None),
+    ("/api/v2/skills/{name}/installs", "post", "Skills", "installSkill", "Install a skill for one bot or person, at the latest version or pinned to one", None),
+    ("/api/v2/skills/{name}/installs/bulk", "post", "Skills", "installSkillForTargets", "Install a skill for several bots or people at once, all or nothing", None),
+])
+
 def generate():
     """The document for a default installation: what docs/openapi/v2.json holds."""
     import tempfile

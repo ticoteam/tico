@@ -184,7 +184,8 @@ repository (BotOps gets a short-lived token for it only as a person who may read
 
 A skill is a folder, `skills/<name>/`, in a bot's repository, and each bot owns its own. BotOps copies one to other bots when you ask
 ("give the support bot the triage skill the scribe has"), or run `hub skill copy <skill> --from <bot> --to <bot> [<bot> ...]`: a commit in
-each target's repository, for bots whose source you may read and whose repositories you manage. A target that already has a different
+each target's repository, for bots whose source you may read and whose repositories you manage. To offer a skill to the whole company,
+`hub skill submit <skill>` proposes it to the Skills directory, where an admin approves it and installs say who has it ([Skills directory](skills.md)). A target that already has a different
 skill of that name is left alone unless you say to replace it. Nothing stays linked (`playbooks/copy-a-skill.md`).
 
 ## Message bots

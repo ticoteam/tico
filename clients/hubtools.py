@@ -4481,6 +4481,20 @@ def skill_copy(api, args):
     return botcopy.run_skill(_as_person(api), args)
 
 
+@tool("hub_skill_submit", "Propose a skill folder to the company's Skills directory, as the person who asked you (a bot or a person may propose; an "
+      "admin approves it after screening). The folder is read on this computer: `skills/<skill>` or `.claude/skills/<skill>` in its repository, "
+      "else `~/.claude/skills/<skill>`. A symlink, a binary file, or anything over the limits is refused here with the reason, never truncated; "
+      "the whole folder is sent. An update of a skill the directory has is based on its latest version unless `base` names another.",
+      {"skill": _s("The skill's folder name, lowercase letters, digits, dots and hyphens"),
+       "path": _s("The folder, when it is not in one of the usual places"),
+       "note": _s("One line for the admin, up to 200 characters"),
+       "base": {"type": "integer", "minimum": 1, "description": "The version an update is based on (default: the latest)"}},
+      required=("skill",), writes=True, local=True)
+def skill_submit(api, args):
+    from clients import skills
+    return skills.run_submit(_as_person(api), args)
+
+
 @tool("hub_agent_pair_show", "Preview a pairing code: profile, host, harness and expiry, without changing a credential.",
       {"code": _s("The pairing code the profile printed")}, required=("code",))
 def agent_pair_show(api, args):
@@ -7988,6 +8002,7 @@ AUDIENCE = {
     "hub_maintenance_set": REQUESTER, "hub_maintenance_run": REQUESTER,
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
+    "hub_skill_submit": PEOPLE + BOTS,              # any person or bot proposes; an admin approves (backend/skills.py)
     "hub_repo_review": ("bot", "botops"),
     "hub_repo_product_create": ("owner", "bot", "botops"),   # a bot needs Create product repositories (server)
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},
