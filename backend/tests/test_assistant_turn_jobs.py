@@ -105,11 +105,11 @@ def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card
     call(api, token, "POST", f"tasks/{task}", {"version": current["version"], "owner": "bot:ops"})
 
     # A turn declines an approval.
-    approval = approval_for_ana(api)["id"]
+    finance = setup_attempt(api, "finance")[2]["token"]
+    approval = approval_for_ana(api, token=finance)["id"]
     call(api, turn(api, "No, do not spend it"), "POST", f"approvals/{approval}", {"decision": "declined", "note": ""})
 
     # A turn answers a question the bot asked.
-    finance = setup_attempt(api, "finance")[2]["token"]
     asked = call(api, finance, "POST", "messages", {"to": "human:ana", "text": "Close or Apollo?", "kind": "ask"})
     call(api, turn(api, "Apollo"), "POST", f"messages/{asked['id']}/answer", {"text": "Apollo"})
 
