@@ -640,7 +640,8 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     # ran 11-14 minutes per shard. It now splits into VMs of at most TICO_CI_JOB_SECONDS, setup included.
     suite = Counter({f"backend/tests/test_{i}.py": 1 for i in range(936)})
     split, loads = checks.groups(suite, {name: 40000 / 936 for name in suite})
-    assert len(split) > 16 and max(loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS
+    # Files are whole, so a VM can run one file past its target (the same 60 s margin the 180 s target had).
+    assert len(split) > 16 and max(loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS + 60
     # A small selection still takes one VM.
     assert len(checks.groups(Counter({"a.py": 3}), {"a.py": 200})[0]) == 1
     counts = Counter({f"t{i}.py": 1 for i in range(30)})
