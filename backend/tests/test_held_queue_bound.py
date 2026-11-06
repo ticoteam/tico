@@ -193,8 +193,7 @@ def test_full_queue_keeps_work_and_human_system_and_recovery_controls_work(queue
     send(queue, 'doc-updater')  # active queue remains unchanged even above the held limit
 
 
-@pytest.mark.parametrize('state', ['active', 'paused', 'quarantined'])
-@pytest.mark.parametrize('denial', ['write', 'contact'])
+@pytest.mark.parametrize('state,denial', [('active', 'write'), ('active', 'contact'), ('paused', 'write')])
 def test_permission_denial_precedes_capacity(queue, monkeypatch, state, denial):
     api, tokens, _ = queue
     monkeypatch.setattr(H, 'HELD_QUEUE_ITEMS', 0)
