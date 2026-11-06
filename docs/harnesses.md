@@ -485,9 +485,9 @@ another bot's home; all turns use the original login in its own home.
 
 Goals, chat commands and controls stay probed: the runner reports them per installed version in its heartbeat.
 
-### Company skills on a Claude Code turn
+### Company skills on a Claude Code or Codex turn
 
-At the start of each Claude Code turn the runner asks `GET /api/v2/attempts/{aid}/skills` for the skills installed for
+At the start of each Claude Code or Codex turn the runner asks `GET /api/v2/attempts/{aid}/skills` for the skills installed for
 the bot (the latest approved version, or the pinned one). It fetches each bundle once by sha
 (`GET /api/v2/skills/bundles/{sha256}`) into `<state>/skill-bundles/<sha>.json`, checks the sha on every read, and
 writes the files under `<state>/skill-sessions/<attempt>/.claude/skills/<name>/`. That folder is added with
@@ -497,7 +497,16 @@ runner, or the bot's own run of that attempt, may read its installs or post its 
 
 A bundle that fails its sha, a path that leaves the skill folder, a link in the way, or any server error leaves that
 skill (or all of them) out and the turn runs on; the failure is logged without file contents. A server without these
-routes answers 404 and the runner stages nothing. Other harnesses stage no company skills yet.
+routes answers 404 and the runner stages nothing. Harnesses other than Claude Code and Codex stage none yet.
+
+Codex gets the same staged folder: before the thread starts or resumes, the runner gives the turn's own app server
+`<state>/skill-sessions/<attempt>/.claude/skills` as its only extra skill root (`skills/extraRoots/set`, Codex 0.136
+and later), and Codex lists those skills to the model next to its own. Nothing is written under `CODEX_HOME` or the
+repository. An app server without the call runs the turn without company skills. Codex counts a use only for an
+explicit selection: a `skill` item in the turn's input, which the app server echoes in the turn's user message, is
+reported as a `Skill` call. Codex sends no event when it resolves a `$name` typed in the text or when the model reads a
+`SKILL.md`, so neither is counted. The runner sends text only, so Codex bots' uses today come from a person's typed
+`/name` (below).
 
 Each `Skill` tool call the runner reports carries the skill's name (`skill`) and nothing of its arguments. The server
 counts a call to a directory skill once per (attempt, tool id); a person's message to a bot that starts with `/name`

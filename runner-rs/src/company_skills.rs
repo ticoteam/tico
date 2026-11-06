@@ -1,11 +1,13 @@
-//! Company skills for a Claude turn (backend/skill_runtime.py, spec reports/2026-11-05-company-skills §4 Bots).
+//! Company skills for a Claude or Codex turn (backend/skill_runtime.py, spec reports/2026-11-05-company-skills §4 Bots).
 //!
 //! At a turn's start the runner asks the server for the bot's installed skills (`GET attempts/{aid}/skills`), fetches
 //! each bundle once into an immutable cache keyed by its sha (`<state>/skill-bundles/<sha>.json`, checked against
 //! the sha on every read), stages them in a fresh folder of the turn's own (`<state>/skill-sessions/<aid>`, laid out
-//! as `.claude/skills/<name>/...`) and adds that folder to Claude's `--add-dir` list: Claude Code loads the skills in
-//! an added directory's `.claude/skills`. It then reports what it staged (`POST attempts/{aid}/skills/receipt`) and
-//! remembers the staged skills for the bot's `/` menu (`menu`).
+//! as `.claude/skills/<name>/...`) and hands that folder to the harness: Claude gets it in its `--add-dir` list (Claude
+//! Code loads the skills in an added directory's `.claude/skills`); Codex gets its `.claude/skills` (`skills_root`)
+//! as the app server's extra skill root (hosts/codex.rs), never a folder under the operator's CODEX_HOME. It then
+//! reports what it staged (`POST attempts/{aid}/skills/receipt`) and remembers the staged skills for the bot's `/`
+//! menu (`menu`).
 //!
 //! Nothing here may fail a turn: any failure is logged and the turn runs without company skills (a skill that fails
 //! alone is left out). Staged files are readable by everyone on the computer, so a turn run as its own leased user
@@ -191,6 +193,11 @@ fn prune(sessions: &Path) {
     }
 }
 
+/// The folder of a turn's staged folder that holds one folder per skill (`<name>/SKILL.md`): Codex's skill root.
+pub fn skills_root(staged: &Path) -> PathBuf {
+    staged.join(".claude").join("skills")
+}
+
 /// A fresh `<state>/skill-sessions/<aid>` with `.claude/skills/<name>/...` for each bundle that writes whole; the
 /// folder and the (name, sha) of what it holds. None when nothing could be staged.
 pub fn stage(state_dir: &Path, aid: &str, bundles: &[(String, String, Vec<File>)]) -> Option<(PathBuf, Vec<(String, String)>)> {
@@ -209,7 +216,7 @@ pub fn stage(state_dir: &Path, aid: &str, bundles: &[(String, String, Vec<File>)
     if std::fs::symlink_metadata(&dir).is_ok() {
         let _ = std::fs::remove_dir_all(&dir).or_else(|_| std::fs::remove_file(&dir)); // a retried start stages again
     }
-    let skills = dir.join(".claude").join("skills");
+    let skills = skills_root(&dir);
     for d in [&dir, &dir.join(".claude"), &skills] {
         if let Err(e) = make_dir(d) {
             log(&format!("Tico runner: company skills: cannot make the turn's folder: {e}"));
