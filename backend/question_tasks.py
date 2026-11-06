@@ -153,8 +153,10 @@ def sourced(conn, sources):
     """Stamp `sources` on every history event, audit event and message the close inside writes (its note, the bot's
     wake, the parent's note): each copies the answer's words, so each is redacted for a reader who may not open those
     pages."""
-    marks = [(table, column, conn.execute(f"SELECT coalesce(max(rowid), 0) FROM {table}").fetchone()[0])
-             for table, column in (("history_events", "data"), ("messages", "refs"), ("events", "detail"))]
+    marks = [
+        (table, column, conn.execute(f"SELECT coalesce(max(rowid), 0) FROM {table}").fetchone()[0])
+        for table, column in (("history_events", "data"), ("messages", "refs"), ("events", "detail"))
+    ]
     yield
     if not sources:
         return
@@ -443,8 +445,10 @@ def with_pick_sources(asked):
         return asked
     by_label = {e["label"]: {"file": e["file"]} for e in review.get("files") or [] if e.get("label") and e.get("file")}
     first = questions[0]
-    options = [{**o, "source": by_label[o["label"]]} if o.get("label") in by_label and not o.get("source") else o
-               for o in first.get("options") or []]
+    options = [
+        {**o, "source": by_label[o["label"]]} if o.get("label") in by_label and not o.get("source") else o
+        for o in first.get("options") or []
+    ]
     return {**asked, "refs": {**refs, "questions": [{**first, "options": options}, *questions[1:]]}}
 
 
@@ -468,8 +472,13 @@ def answer(c, auth, who, task_id, body, warn=""):
     asked = with_pick_sources(as_ask(row))
     questions = {q["id"]: q for q in asked["refs"]["questions"]}
     body, passed = checked_answers(questions, asked["refs"], body)
-    given = {"target": {"task": task_id}, "answers": body.answers, "other": body.other, "dismiss": body.dismiss,
-             "by": who.actor}
+    given = {
+        "target": {"task": task_id},
+        "answers": body.answers,
+        "other": body.other,
+        "dismiss": body.dismiss,
+        "by": who.actor,
+    }
     previous = _load(row.get("answer"))
     if previous:
         # A retry with a new transport key records nothing twice; a different answer to a closed question is late.
