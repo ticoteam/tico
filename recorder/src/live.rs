@@ -394,6 +394,9 @@ impl Tico {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         drop(query);
+        // Counts for the recorder log (speaker renames are corrections too); no text.
+        let (mut sent, mut refused) = (0, vec![]);
+        let short: String = id.chars().take(8).collect();
         for (rowid, seq, revision, text) in pending {
             let payload: Value = serde_json::from_str(&text)?;
             let state = match self.call(
@@ -403,12 +406,34 @@ impl Tico {
             ) {
                 Ok(_) => 1,
                 Err(error) if correction_refused(&error, &payload) => 2,
-                Err(error) => return Err(error),
+                Err(error) => {
+                    crate::diag!(
+                        "live: rec={short} corrections sent {sent}, refused {}, then failed: {error:#}",
+                        refused.len()
+                    );
+                    return Err(error);
+                }
             };
             db.execute(
                 "UPDATE live_corrections SET state=? WHERE rowid=?",
                 rusqlite::params![state, rowid],
             )?;
+            if state == 1 {
+                sent += 1;
+            } else {
+                refused.push(format!("{seq} r{revision}"));
+            }
+        }
+        if sent > 0 || !refused.is_empty() {
+            crate::diag!(
+                "live: rec={short} corrections sent {sent}, refused {}{}",
+                refused.len(),
+                if refused.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", refused.join(", "))
+                }
+            );
         }
         Ok(())
     }

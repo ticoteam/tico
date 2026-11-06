@@ -778,3 +778,81 @@ fn a_batch_joins_contiguous_evidence_before_writing() {
     );
     assert_eq!(batch.readable, [(0, 500), (1500, 1750)]);
 }
+#[test]
+fn the_watch_log_reports_rows_turns_and_the_document_without_repeating_itself() {
+    let mut log = watch_log::WatchLog::new("0123456789");
+    let found = watch_log::PollInfo {
+        found: true,
+        browser: "com.google.Chrome".into(),
+        windows: 1,
+        nodes: 300,
+        ms: 12,
+        ..Default::default()
+    };
+    let observed = Observation {
+        rows: 2,
+        local_by: "structure",
+        self_names: vec!["Casey Example".into()],
+        indicators: true,
+        ..Default::default()
+    };
+    let first = log.poll(&found, &observed, &[], 0);
+    assert_eq!(first.len(), 2);
+    assert!(first[0].contains("document found in com.google.Chrome"));
+    assert!(first[1].ends_with("2 rows; local Casey Example by structure"));
+    // Same rows, a turn that continues: nothing new.
+    assert!(
+        log.poll(&found, &observed, &[interval(0, 250, "Ana Example")], 250)
+            .is_empty()
+    );
+    assert!(
+        log.poll(&found, &observed, &[interval(250, 500, "Ana Example")], 500)
+            .is_empty()
+    );
+    // Over a second without a reading ends the turn: one line for the whole turn.
+    let ended = log.poll(&found, &observed, &[], 1750);
+    assert_eq!(
+        ended,
+        ["meet: rec=01234567 Ana Example spoke 0.00-0.50 s (0.5 s)"]
+    );
+    let unknown = Observation {
+        rows: 2,
+        local_by: "none",
+        ..Default::default()
+    };
+    assert!(
+        log.poll(&found, &unknown, &[], 2000)[0]
+            .ends_with("local row unknown, speaking state not used")
+    );
+    let lost = log.poll(
+        &watch_log::PollInfo::default(),
+        &Observation::default(),
+        &[],
+        2250,
+    );
+    assert_eq!(lost, ["meet: rec=01234567 document lost"]);
+    let end = log.end();
+    assert!(end.last().unwrap().ends_with("watch ended"));
+    assert!(end.iter().any(|l| l.contains("polls in com.google.Chrome")));
+}
+#[test]
+fn vote_tallies_say_why_a_name_is_withheld() {
+    let mut record = record();
+    record.meeting_speakers.intervals = vec![interval(5300, 6050, "Ana Example")];
+    record.meeting_speakers.readable = vec![(0, 25_000)];
+    record.chunks.push(chunk("them", talk(0, 20, "Speaker 2")));
+    let (names, tallies) = tally(&record, &BTreeMap::new());
+    assert!(names.is_empty());
+    assert_eq!(tallies[0].outcome, Err("under 1 s of overlap"));
+    assert_eq!(tallies[0].scores["Ana Example"], 750);
+    record
+        .meeting_speakers
+        .intervals
+        .push(interval(12_300, 13_050, "Ana Example"));
+    let (_, tallies) = tally(&record, &BTreeMap::new());
+    assert_eq!(
+        tallies[0].outcome,
+        Err("covers under 40% of the voice's readable speech")
+    );
+    assert_eq!(tallies[0].speech, 20_000);
+}

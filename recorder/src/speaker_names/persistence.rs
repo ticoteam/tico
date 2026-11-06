@@ -79,7 +79,8 @@ pub(crate) fn settle_names(db: &Connection, record: &mut Recording) -> Result<()
         live.extend(serde_json::from_str::<Vec<Word>>(&row?)?);
     }
     let streamed = BTreeMap::from([("them".to_owned(), live)]);
-    let names = super::vote(record, &streamed);
+    let (names, tallies) = super::tally(record, &streamed);
+    log_tallies(record, &names, &tallies);
     if names != record.speaker_names {
         db.execute(
             "UPDATE recordings SET document=json_set(document,'$.speaker_names',json(?)) WHERE id=?",
@@ -88,6 +89,76 @@ pub(crate) fn settle_names(db: &Connection, record: &mut Recording) -> Result<()
         record.speaker_names = names;
     }
     Ok(())
+}
+/// What was last logged per recording and label, so a vote is logged when its outcome
+/// changes, and a withheld one at most once a minute while its numbers move.
+static LOGGED: std::sync::Mutex<BTreeMap<String, (String, String, std::time::Instant)>> =
+    std::sync::Mutex::new(BTreeMap::new());
+static LIMIT: std::sync::LazyLock<std::sync::Mutex<crate::diag::Limit>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(crate::diag::Limit::new(30)));
+fn log_tallies(record: &Recording, names: &BTreeMap<String, String>, tallies: &[super::Tally]) {
+    if tallies.is_empty() {
+        return;
+    }
+    let short: String = record.id.chars().take(8).collect();
+    let mut logged = LOGGED.lock().unwrap_or_else(|e| e.into_inner());
+    if logged.len() > 2000 {
+        logged.clear();
+    }
+    for tally in tallies {
+        let before = record.speaker_names.get(&tally.label);
+        let after = names.get(&tally.label);
+        let event = match (&tally.outcome, before) {
+            (Ok(name), None) => format!("assigned {name}"),
+            (Ok(name), Some(old)) if old != name => format!("changed {old} -> {name}"),
+            (Ok(name), Some(_)) => format!("kept {name}"),
+            (Err(reason), _) => match after {
+                Some(name) => format!("withheld ({reason}), keeps {name}"),
+                None => format!("withheld ({reason})"),
+            },
+        };
+        let total: u64 = tally.scores.values().sum();
+        let top = tally.scores.values().max().copied().unwrap_or(0);
+        let detail = format!(
+            "{} | share {}% | covers {}% of {:.1} s readable speech",
+            tally
+                .scores
+                .iter()
+                .map(|(name, ms)| format!("{name} {:.1} s", *ms as f64 / 1000.0))
+                .collect::<Vec<_>>()
+                .join(", "),
+            (top * 100).checked_div(total).unwrap_or(0),
+            (top * 100).checked_div(tally.speech).unwrap_or(100),
+            tally.speech as f64 / 1000.0,
+        );
+        let key = format!("{short}:{}", tally.label);
+        // A name kept on later reads is the same news as its assignment.
+        let kind = event.replacen("kept", "assigned", 1);
+        let due = match logged.get(&key) {
+            None => true,
+            Some((last, _, _)) if *last != kind => true,
+            Some((_, last_detail, at)) => {
+                tally.outcome.is_err()
+                    && *last_detail != detail
+                    && at.elapsed() >= std::time::Duration::from_secs(60)
+            }
+        };
+        if due {
+            logged.insert(key, (kind, detail.clone(), std::time::Instant::now()));
+            let Some(dropped) = LIMIT.lock().unwrap_or_else(|e| e.into_inner()).allow() else {
+                continue;
+            };
+            let dropped = if dropped > 0 {
+                format!(" ({dropped} vote lines dropped)")
+            } else {
+                String::new()
+            };
+            crate::diag!(
+                "speaker names: rec={short} {} {event} | {detail}{dropped}",
+                tally.label
+            );
+        }
+    }
 }
 impl Store {
     pub fn meeting_speakers(&self, id: &str) -> Result<Timeline> {

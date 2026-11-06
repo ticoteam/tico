@@ -10,6 +10,8 @@ pub(crate) use sharing::correct_shared_names;
 mod macos;
 #[cfg(test)]
 mod tests;
+#[cfg(any(target_os = "macos", test))]
+mod watch_log;
 
 use crate::store::{Recording, Word};
 use serde::{Deserialize, Serialize};
@@ -58,6 +60,10 @@ pub struct Observation {
     pub active: Vec<String>,
     /// Speaking state was readable this poll. Without it silence is unknown, not observed.
     pub indicators: bool,
+    /// People-panel rows seen, and how the local row was told apart: "marker", "structure",
+    /// or "none" (then no speaking state is used). For the log only.
+    pub rows: usize,
+    pub local_by: &'static str,
 }
 
 /// One adapter per meeting app. Browser AX transport stays outside the app's parser.
@@ -133,13 +139,28 @@ fn covered(spans: &[(u64, u64)], start: u64, end: u64) -> u64 {
 }
 /// Ambiguous overlap is evidence for neither person: a voice needs enough overlap, two thirds
 /// of it for one name, and that name speaking through a real share of the voice's readable speech.
-fn winner(scores: BTreeMap<String, u64>, readable_speech: u64) -> Option<String> {
+fn judge(scores: &BTreeMap<String, u64>, readable_speech: u64) -> Result<String, &'static str> {
     let total: u64 = scores.values().sum();
-    let (name, weight) = scores.into_iter().max_by_key(|(_, weight)| *weight)?;
-    (weight >= MIN_EVIDENCE_MS
-        && weight * 3 >= total * 2
-        && weight * 100 >= readable_speech * MIN_COVERAGE_PCT)
-        .then_some(name)
+    let Some((name, weight)) = scores.iter().max_by_key(|(_, weight)| **weight) else {
+        return Err("no overlap");
+    };
+    if *weight < MIN_EVIDENCE_MS {
+        return Err("under 1 s of overlap");
+    }
+    if weight * 3 < total * 2 {
+        return Err("no two-thirds majority");
+    }
+    if weight * 100 < readable_speech * MIN_COVERAGE_PCT {
+        return Err("covers under 40% of the voice's readable speech");
+    }
+    Ok(name.clone())
+}
+/// One label's vote, for the log: overlap per name, its own readable speech, and the outcome.
+pub(crate) struct Tally {
+    pub label: String,
+    pub scores: BTreeMap<String, u64>,
+    pub speech: u64,
+    pub outcome: Result<String, &'static str>,
 }
 /// A label the recorder chose itself. A speaker a person typed is never renamed.
 fn provisional(label: &str) -> bool {
@@ -165,6 +186,13 @@ pub fn vote(
     record: &Recording,
     streamed: &BTreeMap<String, Vec<Word>>,
 ) -> BTreeMap<String, String> {
+    tally(record, streamed).0
+}
+/// [`vote`], with each voted label's tally.
+pub(crate) fn tally(
+    record: &Recording,
+    streamed: &BTreeMap<String, Vec<Word>>,
+) -> (BTreeMap<String, String>, Vec<Tally>) {
     let timeline = &record.meeting_speakers;
     let mut out: BTreeMap<String, String> = record
         .speaker_names
@@ -173,7 +201,7 @@ pub fn vote(
         .map(|(label, name)| (label.clone(), name.clone()))
         .collect();
     if timeline.intervals.is_empty() {
-        return out;
+        return (out, vec![]);
     }
     let evidence = Evidence::new(timeline);
     let mut readable = timeline.readable.clone();
@@ -216,12 +244,20 @@ pub fn vote(
     {
         add(&word.speaker, word.start_ms, word.end_ms);
     }
+    let mut tallies = vec![];
     for (label, (scores, speech)) in votes {
-        if let Some(name) = winner(scores, speech) {
-            out.insert(label.to_owned(), name);
+        let outcome = judge(&scores, speech);
+        if let Ok(name) = &outcome {
+            out.insert(label.to_owned(), name.clone());
         }
+        tallies.push(Tally {
+            label: label.to_owned(),
+            scores,
+            speech,
+            outcome,
+        });
     }
-    out
+    (out, tallies)
 }
 
 /// Turn point observations into bounded intervals. A reading covers the time to the next poll;

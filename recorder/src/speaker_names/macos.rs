@@ -6,6 +6,7 @@
 use super::{
     Batch, MeetingAdapter, Observation, POLL_MS, Samples,
     meet::{self, GoogleMeet, Node},
+    watch_log::{PollInfo, WatchLog},
 };
 use crate::store::Store;
 use core_foundation::{
@@ -359,6 +360,9 @@ struct Discovery {
     bundles: BTreeMap<i32, Option<String>>,
     /// Browsers whose page accessibility was checked: true when this watch switched it on.
     woken: BTreeMap<i32, bool>,
+    /// Accessibility access as last logged.
+    trusted: Option<bool>,
+    rec: String,
 }
 #[derive(Default)]
 struct Poll {
@@ -367,6 +371,7 @@ struct Poll {
     /// A Meet document was found, so the next poll comes at the full rate.
     found: bool,
     observed: Observation,
+    info: PollInfo,
 }
 fn poll(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
     objc2::rc::autoreleasepool(|_| poll_inner(canceled, discovery))
@@ -391,7 +396,7 @@ fn set_manual(pid: i32, on: bool) {
 /// Chromium returns kAXErrorAttributeUnsupported here yet still enables its tree, which fills
 /// in over the next polls. Asked once per browser process. A browser that already had it on
 /// (another assistive app) is left as it was, including when the watch ends.
-fn wake(app: &CFType, pid: i32, woken: &mut BTreeMap<i32, bool>) {
+fn wake(app: &CFType, pid: i32, browser: &str, rec: &str, woken: &mut BTreeMap<i32, bool>) {
     if woken.contains_key(&pid) {
         return;
     }
@@ -399,23 +404,45 @@ fn wake(app: &CFType, pid: i32, woken: &mut BTreeMap<i32, bool>) {
         .and_then(|value| value.downcast::<CFBoolean>())
         .is_some_and(bool::from);
     woken.insert(pid, !already);
-    if !already {
+    if already {
+        crate::diag!(
+            "meet: rec={rec} page accessibility already on in {browser} (pid {pid}); left as is"
+        );
+    } else {
         set_manual(pid, true);
+        crate::diag!("meet: rec={rec} page accessibility switched on in {browser} (pid {pid})");
     }
 }
 /// Switch page accessibility back off in the browsers this watch switched on.
-fn unwake(woken: &BTreeMap<i32, bool>) {
+fn unwake(woken: &BTreeMap<i32, bool>, rec: &str) {
     objc2::rc::autoreleasepool(|_| {
         for (pid, _) in woken.iter().filter(|(_, ours)| **ours) {
-            if bundle(*pid).is_some_and(|id| CHROMIUM.contains(&id.as_str())) {
-                set_manual(*pid, false);
+            match bundle(*pid).filter(|id| CHROMIUM.contains(&id.as_str())) {
+                Some(id) => {
+                    set_manual(*pid, false);
+                    crate::diag!(
+                        "meet: rec={rec} page accessibility switched back off in {id} (pid {pid})"
+                    );
+                }
+                None => {
+                    crate::diag!("meet: rec={rec} browser pid {pid} gone; nothing to switch off")
+                }
             }
         }
     })
 }
 fn poll_inner(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
     let browsers = browser_windows(&mut discovery.bundles);
-    if !unsafe { AXIsProcessTrusted() } {
+    let trusted = unsafe { AXIsProcessTrusted() };
+    if discovery.trusted != Some(trusted) {
+        discovery.trusted = Some(trusted);
+        crate::diag!(
+            "meet: rec={} accessibility {}",
+            discovery.rec,
+            if trusted { "allowed" } else { "not allowed" }
+        );
+    }
+    if !trusted {
         return Poll {
             denied: !browsers.is_empty(),
             ..Default::default()
@@ -428,6 +455,7 @@ fn poll_inner(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
         canceled,
     };
     let mut found = vec![];
+    let mut info = PollInfo::default();
     for (pid, chromium) in browsers {
         let raw = unsafe { AXUIElementCreateApplication(pid) };
         if raw.is_null() {
@@ -443,9 +471,16 @@ fn poll_inner(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
             .filter(|w| meet::window_title(&text(w, "AXTitle")))
             .collect();
         // Chromium page accessibility slows the browser, so only for a window showing Meet.
+        let browser = discovery
+            .bundles
+            .get(&pid)
+            .cloned()
+            .flatten()
+            .unwrap_or_default();
         if chromium && !windows.is_empty() {
-            wake(&app, pid, &mut discovery.woken);
+            wake(&app, pid, &browser, &discovery.rec, &mut discovery.woken);
         }
+        info.windows += windows.len();
         for window in &windows {
             let Some(document) = document(window, 0, &mut budget) else {
                 continue;
@@ -456,9 +491,16 @@ fn poll_inner(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
                 .collect();
             // An incomplete tree cannot safely say that a speaker stopped or a second speaker
             // was absent. Close the previous evidence rather than applying a partial result.
+            info.browser.clone_from(&browser);
             if budget.left == 0 || Instant::now() >= budget.until {
                 return Poll {
                     found: true,
+                    info: PollInfo {
+                        found: true,
+                        nodes: 1800 - budget.left,
+                        truncated: true,
+                        ..info
+                    },
                     ..Default::default()
                 };
             }
@@ -469,9 +511,12 @@ fn poll_inner(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
             }));
         }
     }
+    info.found = !found.is_empty();
+    info.nodes = 1800 - budget.left;
     Poll {
         denied: false,
         found: !found.is_empty(),
+        info,
         // Two meetings open at once have no safe audio-to-window association.
         observed: if found.len() == 1 {
             found.pop().unwrap()
@@ -488,7 +533,10 @@ fn flush(store: &Store, id: &str, batch: &mut Batch) {
     // A failed write loses this batch only; observation goes on.
     if let Err(error) = store.observe_speakers(id, &batch.people, &batch.intervals, &batch.readable)
     {
-        eprintln!("Meeting speakers not saved: {error:#}");
+        crate::diag!(
+            "meet: rec={} speaker evidence not saved: {error:#}",
+            &id[..id.len().min(8)]
+        );
     }
 }
 
@@ -514,17 +562,40 @@ impl Watch {
                 let mut samples = Samples::default();
                 let mut participants = BTreeSet::new();
                 let mut locals = BTreeSet::new();
-                let mut discovery = Discovery::default();
+                let mut log = WatchLog::new(&id);
+                let mut discovery = Discovery {
+                    rec: log.rec().to_owned(),
+                    ..Default::default()
+                };
+                crate::diag!("meet: rec={} watch started", log.rec());
+                let mut asked = false;
                 let mut batch = Batch::default();
                 let mut flushed = Instant::now();
                 while !canceled.load(Ordering::Acquire) {
                     let tick = Instant::now();
-                    let polled = poll(canceled.clone(), &mut discovery);
+                    let mut polled = poll(canceled.clone(), &mut discovery);
+                    polled.info.ms = tick.elapsed().as_millis() as u64;
+                    if polled.denied && !asked {
+                        asked = true;
+                        let dismissed = store.root().join(PROMPT_FILE).exists();
+                        crate::diag!(
+                            "meet: rec={} supported browser open without accessibility; notice {}",
+                            log.rec(),
+                            if dismissed {
+                                "dismissed earlier, not shown"
+                            } else {
+                                "shown"
+                            }
+                        );
+                    }
                     if polled.denied && !store.root().join(PROMPT_FILE).exists() {
                         PERMISSION.store(true, Ordering::Release);
                     }
                     let at = offset + started.elapsed().as_millis() as u64;
                     let intervals = samples.push(at, polled.observed.clone());
+                    for line in log.poll(&polled.info, &polled.observed, &intervals, at) {
+                        crate::diag!("{line}");
+                    }
                     for name in &polled.observed.participants {
                         if participants.insert(name.clone()) {
                             batch.people.push((name.clone(), false));
@@ -546,7 +617,10 @@ impl Watch {
                     );
                 }
                 flush(&store, &id, &mut batch);
-                unwake(&discovery.woken);
+                unwake(&discovery.woken, log.rec());
+                for line in log.end() {
+                    crate::diag!("{line}");
+                }
                 PERMISSION.store(false, Ordering::Release);
             })
             .ok();

@@ -10,6 +10,9 @@ use anyhow::Result;
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde_json::{Value, json};
 
+static WAITING: std::sync::LazyLock<std::sync::Mutex<crate::diag::Limit>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(crate::diag::Limit::new(2)));
+
 pub(crate) fn correct_shared_names(
     tx: &Transaction,
     record: &Recording,
@@ -39,6 +42,17 @@ pub(crate) fn correct_shared_names(
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (seq, key, original) in rows {
         if budget <= 0 {
+            if let Some(dropped) = WAITING.lock().unwrap_or_else(|e| e.into_inner()).allow() {
+                crate::diag!(
+                    "live: rec={} speaker renames wait: {MAX_QUEUED_CORRECTIONS} corrections queued{}",
+                    record.id.chars().take(8).collect::<String>(),
+                    if dropped > 0 {
+                        format!(" ({dropped} lines dropped)")
+                    } else {
+                        String::new()
+                    }
+                );
+            }
             break;
         }
         // A chunk's later turns are keyed "<chunk>:turn:<n>".

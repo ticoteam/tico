@@ -403,6 +403,7 @@ fn main() {
     let root = settings::root();
     let library_lock = AppLock::acquire(&root).expect("Recorder library is in use");
     let store = Store::open(&root).expect("Open recorder library");
+    tico_recorder_native::diag::init(&root);
     store.recover().expect("Recover saved audio");
     if demo && store.list().unwrap_or_default().is_empty() {
         recorder::seed_demo(&store).expect("Create demo library");

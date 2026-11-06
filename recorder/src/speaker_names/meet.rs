@@ -191,15 +191,15 @@ fn tile_names(root: &Node, out: &mut BTreeSet<(String, bool)>) {
 /// Which rows are the local person's: the "(You)" marker, or else the one row without a mute
 /// control when every other row has one (the captured layout, in any language). Empty when
 /// neither identifies anyone.
-fn local_rows(rows: &[Row]) -> Vec<bool> {
+fn local_rows(rows: &[Row]) -> (Vec<bool>, &'static str) {
     if rows.iter().any(|r| r.local) {
-        return rows.iter().map(|r| r.local).collect();
+        return (rows.iter().map(|r| r.local).collect(), "marker");
     }
     let bare = rows.iter().filter(|r| !r.control).count();
     if rows.len() >= 2 && bare == 1 {
-        return rows.iter().map(|r| !r.control).collect();
+        return (rows.iter().map(|r| !r.control).collect(), "structure");
     }
-    vec![]
+    (vec![], if rows.is_empty() { "" } else { "none" })
 }
 impl MeetingAdapter for GoogleMeet {
     fn detect_window(&self, _title: &str, document_url: &str) -> bool {
@@ -219,7 +219,7 @@ impl MeetingAdapter for GoogleMeet {
     }
     fn observe(&self, root: &Node) -> Observation {
         let rows = rows(root);
-        let local = local_rows(&rows);
+        let (local, local_by) = local_rows(&rows);
         let mut names = BTreeSet::new();
         tile_names(root, &mut names);
         names.extend(
@@ -247,6 +247,8 @@ impl MeetingAdapter for GoogleMeet {
             self_names: locals.into_iter().collect(),
             active: active.into_iter().take(100).collect(),
             indicators: known && rows.iter().any(|r| r.speaking.is_some()),
+            rows: rows.len(),
+            local_by,
         }
     }
 }
