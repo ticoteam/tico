@@ -139,7 +139,7 @@ gets a different page.
   publication without storing a page. Publishing unchanged HTML adds no version.
   The task place's `can_link` controls linking; it grants no card editing or pin arranging rights (`can_edit`).
   **Unlink** is available to whoever linked it, the task's owner or requester, and the org owner.
-- **Pinned** to the Dashboard, a team page or a bot's sidebar ([Overview](overview.md)), a page shows as a card there.
+- **Pinned** to the Dashboard, a team page or a bot's sidebar ([Company](overview.md)), a page shows as a card there.
   The full view lists where it is pinned, among the places the reader may open.
 
 Pages show inline when the install has a visual address (`TICO_VISUAL_ORIGIN`) or Tico file hosting

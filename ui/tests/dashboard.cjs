@@ -158,8 +158,9 @@ async function shot(page, name) {
       const {page, errors, fake} = await open(browser);
       await page.locator('#dash-grid .dash-pin').first().waitFor();
       assert.deepEqual(await headings(page), ['Tasks by status', 'Done per week', 'Needs you', 'Latest pages'], 'the default cards');
-      assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Company');
-      assert.equal(await page.locator('#side a[data-nav="overview"].cur').count(), 1, 'Overview is current');
+      assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Dashboard');
+      assert.equal(await page.locator('#main h1').first().innerText(), 'Company', 'the page is Company');
+      assert.equal(await page.locator('#side a[data-nav="overview"].cur').count(), 1, 'Company is current');
       assert.equal(await page.locator('.dash-stat strong').first().innerText(), '4');
       assert.equal(await page.locator('#dash-grid a[href="#/task/t1"]').count(), 1, 'Needs you links its top items');
       assert.equal(await page.locator('#dash-grid a[href="#/page/f1"]').count(), 1, 'Latest pages links each page');
