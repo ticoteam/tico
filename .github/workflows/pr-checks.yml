@@ -27,7 +27,7 @@ concurrency:
 jobs:
   plan:
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 12
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -100,7 +100,7 @@ jobs:
   tests:
     needs: plan
     name: ${{ matrix.suite }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -175,7 +175,7 @@ jobs:
     # (actionlint). Seconds each; tools are pinned.
     name: static checks
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -234,7 +234,7 @@ jobs:
     # can be required: a PR without Rust changes passes it in seconds.
     name: rust lint
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -267,7 +267,7 @@ jobs:
     # app.yml installs. Always reported, so it can be required: a PR without app changes passes it in seconds.
     name: desktop app
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -356,7 +356,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.caddy == 'true'
     name: caddy-linux-${{ matrix.arch }}
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.arch == 'arm64' && 'arm64' || 'x64', matrix.arch != 'arm64' && '/family=m8+m7+m6+c8+c7+c6+r8+r7' || '') || matrix.runner }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.arch == 'arm64' && 'arm64' || 'x64', matrix.arch != 'arm64' && '/family=m8+m7+m6+r8+r7' || '') || matrix.runner }}
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -419,7 +419,7 @@ jobs:
     # in the same concurrency group.
     if: ${{ !cancelled() && !github.event.pull_request.draft }}
     needs: [plan, tests, caddy-linux, static, rust-lint, desktop-app, recorder]
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below,
     # and the gate after it must still run. A hang in the receipt canceled the whole job at three minutes on #2487.
     timeout-minutes: 4

@@ -311,7 +311,7 @@ Python jobs install no npm packages, browsers or apt packages. The browser job c
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
 one retry. Pip and npm download caches remain enabled. Checks run on 4-vCPU RunsOn Spot VMs in Tico's own AWS
-account (fork PRs on GitHub-hosted runners; x64 labels take the m, c and r families of generations 6–8, arm64 labels are unchanged). `scripts/pr_checks.py` sizes the Python and browser groups so each VM
+account (fork PRs on GitHub-hosted runners; x64 labels take the m and r families of generations 6–8, arm64 labels are unchanged). `scripts/pr_checks.py` sizes the Python and browser groups so each VM
 finishes in about `TICO_CI_JOB_SECONDS` (300, five minutes) including setup, using JUnit per-file and browser per-script timings
 from the latest successful Release validation run (its `test-timings` artifact: the same pytest flags, slow tests
 included), with collected test counts until timings exist. New files use the observed

@@ -32,7 +32,7 @@ concurrency:
 jobs:
   python-browser:
     # pip, npm, the Playwright browsers and the browser system packages: what a browser shard's Install fills.
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -78,7 +78,7 @@ jobs:
         run: bash scripts/ci_install.sh browser-cache
 
   rust-lint:
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -99,7 +99,7 @@ jobs:
 
   desktop-app:
     # The desktop app's compiled dependencies: what the desktop app PR job's clippy and test steps restore.
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -128,7 +128,7 @@ jobs:
         run: cargo +1.92.0 clippy --locked --all-targets && cargo +1.92.0 test --locked --no-run
 
   conformance:
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+c8+c7+c6+r8+r7/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
