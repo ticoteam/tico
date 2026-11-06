@@ -10,13 +10,13 @@
 Spec: emp-tico-open-source reports/2026-11-05-company-skills/spec.md §4 Bots and §5. Tables:
 backend/migrations/20261106061559_company_skills.sql.
 """
-import hashlib
 import json
 import re
 
 from fastapi import Request
 from pydantic import Field
 
+from clients.skills import bundle_sha  # the contract's canonical sha, the one backend/skills.py uses
 from . import hubdb as H
 from .models import Contract
 from .store import Problem
@@ -39,14 +39,6 @@ class StagedSkill(Contract):
 class SkillReceipt(Contract):
     """What a runner staged for one attempt (runner-rs/src/company_skills.rs)."""
     staged: list[StagedSkill] = Field(default_factory=list, max_length=200)
-
-
-def bundle_sha(files):
-    """The canonical bundle sha (the contract's): files sorted by path, each {"content", "path"}, compact JSON with
-    sorted keys and raw UTF-8. backend/skills.py `bundle_sha` is the same algorithm."""
-    ordered = sorted(({"content": f["content"], "path": f["path"]} for f in files), key=lambda f: f["path"])
-    text = json.dumps(ordered, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def resolved_installs(c, target_type, target_id):

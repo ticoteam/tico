@@ -46,8 +46,9 @@ skills helper reports as staged (`staged`: the sha it actually has). A differenc
 Under `/api/v2/skills`: the directory (`GET skills`), a skill with its versions and installs (`GET skills/{name}`), a version with
 its files (`GET skills/{name}/versions/{number}`), proposals (`POST skills/proposals`, `GET skills/proposals`,
 `GET skills/proposals/{id}`, and `approve`, `decline`, `withdraw`, `rescreen` under it), and installs (`POST skills/{name}/installs`,
-`POST skills/{name}/installs/bulk`, `GET skills/installs?target_type=&target_id=`, `DELETE skills/installs/{id}`). The contract is
-in `docs/openapi/v2.json` under the Skills tag.
+`POST skills/{name}/installs/bulk`, `GET skills/installs?target_type=&target_id=`, `DELETE skills/installs/{id}`), and an approved
+version's files by sha (`GET skills/bundles/{sha256}`). The contract is in `docs/openapi/v2.json` under the Skills tag. How a
+runner stages installed skills on a Claude Code turn and reports them: [Harnesses](harnesses.md#company-skills-on-a-claude-code-turn).
 
 ## Privacy
 

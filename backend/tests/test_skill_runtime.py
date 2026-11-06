@@ -4,6 +4,7 @@ import hashlib
 import json
 
 from backend import skill_runtime as SR
+from backend import skills
 from backend.store import H
 from backend.tests.test_api import api, get, post, runner, setup_attempt  # noqa: F401
 
@@ -109,6 +110,7 @@ def test_the_bundle_sha_is_the_contracts_canonical_json():
     assert SR.bundle_sha(files) == hashlib.sha256(text.encode()).hexdigest()
     # The same vector is checked in runner-rs/src/company_skills.rs.
     assert SR.bundle_sha(files) == SR.bundle_sha(list(reversed(files)))
+    assert SR.bundle_sha is skills.bundle_sha                # one algorithm: clients/skills.py, as R's routes use
 
 
 def test_a_receipt_upserts_one_row_per_skill_and_ignores_unknown_versions(api):
