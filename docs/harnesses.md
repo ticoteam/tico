@@ -102,8 +102,10 @@ stdio server's environment names the Gateway key empty so it never inherits it. 
 
 **Compact at** applies to a pi turn: the turn's `settings.json` (in the same agent folder) sets pi's
 `compaction.reserveTokens` to the model's context window less the bot's Compact at (`reserve_tokens` in `hosts/pi.rs`,
-kept between pi's default 16,384 and a compaction point of 100,000). The Tico Gateway's models have a 200,000-token window.
-No OpenRouter model's window is known to Tico yet, so those turns keep pi's own compaction. pi's `compaction_end` with a
+kept between pi's default 16,384 and a compaction point of 100,000). The Tico Gateway's models have a 200,000-token window,
+so a Compact at of 250,000 or more compacts at 183,616 tokens there (200,000 less 16,384). No model outside the Gateway has a
+window Tico knows yet (OpenRouter's, DeepSeek's, Moonshot's and Mistral's included), so those turns keep pi's own compaction
+whatever the Compact at. pi's `compaction_end` with a
 result is a compaction: the session's next turn is given the whole prompt. pi can compact between one turn's tool calls,
 where Tico cannot put back what the turn left out, so that turn keeps what it was given until the next one.
 `compact_first` and `/compact` send pi's RPC `compact`, which ends at its `compaction_end`.
