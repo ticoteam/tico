@@ -1,4 +1,4 @@
-/* ui/app/settings-recurring.js — Settings > System: what Tico runs on its own, and task rules
+/* ui/app/settings-recurring.js — Automations > System jobs (#/automations/system-jobs): what Tico runs on its own, and task rules
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -7,7 +7,7 @@
 // WHEN <trigger> THEN <action>, with its department tag, schedule, last and next run and, for a job that asks Decide,
 // which route answered and this month's spend. An owner or admin switches the six AI/people jobs (and Topic changed),
 // picks their schedule preset and runs them now. Who may change a job is the server's `can_change`, enforced there too.
-// Fetched again at most once a minute while the tab is open.
+// Fetched again at most once a minute while the screen is open (ui/app/automations-maintenance.js auSysJobsPane).
 let SYSTEM_ROUTINES = null, SYSTEM_ROUTINES_AT = 0, SYSTEM_ROUTINES_Q = '', SYSTEM_ROUTINES_HELD = false;
 const SYSTEM_ROUTINE_BUSY = new Set();
 // Jobs a happening starts, not a clock: they keep no run log, so the row says so in place of a last run.
@@ -204,7 +204,7 @@ function memoryTidyEditor(job) {
   const choices = job.pilot_models || [];
   dialog.innerHTML = `<form class="task-rule-form"><header><h2>Nightly memory tidy pilot</h2><button type="button" class="ghost" data-close>Cancel</button></header>
     <p>Up to three bots. Use each bot's slug. These models apply only to the tidy pass. The pilot stops at $50.</p>
-    <p class="muted">Only models enabled in Settings > Computers > Models are offered. Haiku-tier models cannot be used.</p>
+    <p class="muted">Only models enabled in Settings > Models are offered. Haiku-tier models cannot be used.</p>
     <div data-pilot-rows></div><button type="button" class="ghost" data-add>Add bot</button>
     <p class="err" role="status" data-error></p><footer><button type="submit" class="primary">Save pilot list</button></footer></form>`;
   const rows = dialog.querySelector('[data-pilot-rows]'), add = dialog.querySelector('[data-add]');

@@ -18,7 +18,8 @@ CHOICES = {"aws": "an S3 bucket in your AWS account, created for you (versioned,
            "existing": "a bucket I already have (S3, R2 or any S3-compatible store)",
            "local": "none: keep copies only on this server (not safe if the server is lost)"}
 KEY_PREFIX = "tico"
-NONCURRENT_DAYS = 90
+NONCURRENT_DAYS = 90  # superseded attachments and key copies
+LITESTREAM_NONCURRENT_DAYS = 3  # Litestream writes ~1 file/s and deletes old ones, so its versions pile up fast
 R2_TOKEN_HELP = "permissions: Account > Workers R2 Storage > Edit"
 
 
@@ -43,7 +44,7 @@ def policy(bucket: str) -> dict:
 def aws_plan_lines(domain: str, region: str, account_id: str = "<account>") -> list[str]:
     bucket = bucket_name(domain, account_id)
     return [f"S3 bucket {bucket} in {region}: versioning on, AES-256 encryption, all public access blocked, TLS only, "
-            f"older versions expire after {NONCURRENT_DAYS} days",
+            f"older versions expire after {NONCURRENT_DAYS} days ({LITESTREAM_NONCURRENT_DAYS} for database copies)",
             f"IAM user {user_name(awsmod.slug(domain))} allowed to read and write that bucket only; its access key goes into .env "
             "(containers cannot use the instance role)",
             f"The server copies its database (Litestream, about every minute) and attachments (every 30 seconds) to s3://{bucket}/{KEY_PREFIX}"]
@@ -73,7 +74,11 @@ def create_s3(s3, iam, *, domain: str, region: str, account_id: str, name: str,
     s3.put_bucket_lifecycle_configuration(Bucket=bucket, LifecycleConfiguration={"Rules": [{
         "ID": "tico-backups", "Status": "Enabled", "Filter": {"Prefix": ""},
         "NoncurrentVersionExpiration": {"NoncurrentDays": NONCURRENT_DAYS},
-        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7}}]})
+        "Expiration": {"ExpiredObjectDeleteMarker": True},
+        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}}, {
+        # Litestream keeps one folder per compaction level (0000-0009) at the top of the replica.
+        "ID": "litestream", "Status": "Enabled", "Filter": {"Prefix": f"{KEY_PREFIX}/000"},
+        "NoncurrentVersionExpiration": {"NoncurrentDays": LITESTREAM_NONCURRENT_DAYS}}]})
     s3.put_bucket_policy(Bucket=bucket, Policy=json.dumps({"Version": "2012-10-17", "Statement": [{
         "Sid": "TLSOnly", "Effect": "Deny", "Principal": "*", "Action": "s3:*",
         "Resource": [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/*"],

@@ -1,4 +1,6 @@
-/* ui/app/settings-webhooks.js — Settings > Webhooks: incoming, outgoing, through Tico Gateway
+/* ui/app/settings-webhooks.js — webhooks, in three homes: incoming on Automations (#/automations/webhooks[/<id>], a
+   built-in row of the list), outgoing on Tools (#/tools/webhooks[/<id>]), through Tico Gateway as a fold of the Tico
+   Gateway card on Settings > Models. Settings > Webhooks was all three; its addresses redirect (whOldAddress).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -12,12 +14,18 @@ const WH_UNHEARD = [['log', 'Log it'], ['note', 'Tell the maker']];
 const WH_OUTCOMES = {accepted: ['ok', 'Accepted'], refused: ['fail', 'Refused'], rate_limited: ['fail', 'Over limit'], replayed: ['', 'Rerun']};
 const whRefused = r => r.outcome === 'refused' || r.outcome === 'rate_limited';
 const WH_SEND_STATES = {delivered: 'ok', failed: 'fail', ready: 'waiting', sending: 'waiting', canceled: '', withheld: ''};
-const WH_TABS = [['incoming', 'Incoming'], ['outgoing', 'Outgoing'], ['gateway', 'Through Tico Gateway', 'Gateway']];
-// The open tab and item, and the one set of secrets on screen: {id, url?, signing?, relay?} for an incoming webhook,
+// Each part's host element, and the page address an open item rides on (none for the Gateway fold).
+const WH_HOSTS = {incoming: '#wh-incoming', outgoing: '#wh-outgoing', gateway: '#wh-gateway'};
+const WH_HOOKS_ROUTE = '#/tools/webhooks', WH_INCOMING_ROUTE = '#/automations/webhooks';
+const WH_ROUTES = {incoming: WH_INCOMING_ROUTE, outgoing: WH_HOOKS_ROUTE};
+// A link to the Gateway part (#/settings/models/wh-gateway) opens the fold, or does once the card is drawn
+// (settingsShow, renderSettingsProviders).
+let WH_OPEN_GATEWAY = false;
+// The open part and item, and the one set of secrets on screen: {id, url?, signing?, relay?} for an incoming webhook,
 // {id, secret} for an endpoint. The wake address's signing secret stays until the person dismisses it.
 const WH = {tab: 'incoming', trigger: '', hook: '', shown: null, hookShown: null, wakeSecret: ''};
 let WH_RUN = 0, WH_HOOKS = null;
-let WH_TRIGGERS = null;          // the incoming webhooks (GET /v2/triggers), loaded when the tab opens
+let WH_TRIGGERS = null;          // the incoming webhooks (GET /v2/triggers), loaded when a part opens
 // The event catalog (backend/event_catalog.py): the endpoint picker reads it.
 let EVENT_TYPES = [], EVENT_TYPES_P = null;
 function eventTypesLoad() {
@@ -37,17 +45,26 @@ const whPlural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const whMine = t => !t.builtin && (settingsIsAdmin() || t.created_by === 'human:' + (S.me?.id || ''));
 const whOpt = (v, label, cur) => `<option value="${esc(v)}"${String(v) === String(cur) ? ' selected' : ''}>${esc(label)}</option>`;
 
-async function renderSettingsWebhooks() {
-  const el = $('#set-webhooks'); if (!el) return;
-  const seg = $('#settings-webhooks-view');
-  if (seg) {
-    seg.querySelectorAll('[data-wh-tab]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.whTab === WH.tab)));
-    seg.onclick = ev => {
-      const b = ev.target.closest('[data-wh-tab]');
-      if (!b || b.dataset.whTab === WH.tab) return;
-      Object.assign(WH, {tab: b.dataset.whTab, trigger: '', hook: '', shown: null, hookShown: null});
-      void renderSettingsWebhooks();
-    };
+// Open a part in its host, on an item (a webhook's id) or its list; the same part and item keep what is shown.
+function whMount(tab, item = '') {
+  const cur = tab === 'incoming' ? WH.trigger : tab === 'outgoing' ? WH.hook : '';
+  if (WH.tab !== tab || cur !== item) Object.assign(WH, {tab, trigger: tab === 'incoming' ? item : '', hook: tab === 'outgoing' ? item : '', shown: null, hookShown: null});
+  return whRender();
+}
+// An old Settings > Webhooks address (#/triggers, #/settings/webhooks[/<part>]) at the part's new home.
+function whOldAddress(route) {
+  const part = String(route).split('?')[0].split('/')[3];
+  if (part === 'outgoing') return WH_HOOKS_ROUTE;
+  if (part === 'gateway') return SETTINGS + '/models/wh-gateway';
+  return WH_INCOMING_ROUTE;
+}
+async function whRender() {
+  const el = $(WH_HOSTS[WH.tab]); if (!el) return;
+  // The page's address names the open item, so it can be shared; it replaces the entry (no new history step).
+  const base = WH_ROUTES[WH.tab];
+  if (base && (S.route === base || S.route.startsWith(base + '/'))) {
+    const item = WH.tab === 'incoming' ? WH.trigger : WH.hook, to = base + (item ? '/' + encodeURIComponent(item) : '');
+    if (location.hash !== to) { history.replaceState(history.state, '', to); S.route = LAST_ROUTE = to; }
   }
   el.onclick = whClick;
   const run = ++WH_RUN;
@@ -78,10 +95,9 @@ async function whClick(ev) {
     if (value) { await copyText(value); toast('Copied'); }
     return;
   }
-  if (ev.target.closest('[data-wh-gateway-link]')) { ev.preventDefault(); settingsShow('gateway'); return; }
   if (ev.target.closest('[data-wh-back]')) {
     Object.assign(WH, {trigger: '', hook: '', shown: null, hookShown: null});
-    void renderSettingsWebhooks();
+    void whRender();
   }
 }
 // A dialog in the house form style; Cancel and Escape close it, and closing removes it.
@@ -110,9 +126,9 @@ function whSubmit(dialog, fn) {
 // ---------------------------------------------------------------------------------------------------------- Incoming
 // Finance's own triggers (consumer finance: Mercury, Stripe, QuickBooks, Xero) are managed in Finance › Sources, not here.
 const WH_FINANCE_PRESETS = ['mercury', 'stripe_finance', 'intuit', 'xero'];
+const whIncoming = list => list.filter(t => t.consumer ? t.consumer !== 'finance' : !WH_FINANCE_PRESETS.includes(t.preset));
 async function whTriggersFresh() {
-  WH_TRIGGERS = ((await get('/v2/triggers', {fresh: true})).triggers || [])
-    .filter(t => t.consumer ? t.consumer !== 'finance' : !WH_FINANCE_PRESETS.includes(t.preset));
+  WH_TRIGGERS = whIncoming((await get('/v2/triggers', {fresh: true})).triggers || []);
   return WH_TRIGGERS;
 }
 function whCountsHTML(t) {
@@ -132,7 +148,7 @@ async function whTriggers(el, run) {
         <span class="wh-meta muted">${t.last_received ? esc(ago(t.last_received)) : 'Never called'}</span></button>`).join('')}</div>`
       : '<div class="empty">No webhooks yet.</div>'}`;
   el.querySelector('[data-wh-new]').onclick = () => whTriggerDialog(null);
-  el.querySelectorAll('[data-wh-open]').forEach(b => { b.onclick = () => { WH.trigger = b.dataset.whOpen; WH.shown = null; void renderSettingsWebhooks(); }; });
+  el.querySelectorAll('[data-wh-open]').forEach(b => { b.onclick = () => { WH.trigger = b.dataset.whOpen; WH.shown = null; void whRender(); }; });
 }
 async function whTriggerDetail(el, run) {
   const id = WH.trigger, path = `/v2/triggers/${encodeURIComponent(id)}`;
@@ -185,7 +201,7 @@ async function whTriggerDetail(el, run) {
       const r = (await post(path + '/recover', {since_hours: Math.min(720, Math.max(1, (t.keep_days || 7) * 24))})).recover;
       toast([`Recovered ${r.recovered} of ${r.found}`, r.duplicate && `${r.duplicate} already in`, r.still_refused && `${r.still_refused} still refused`,
         r.more && 'more wait'].filter(Boolean).join(' · '), !r.recovered && r.found > 0);
-      void renderSettingsWebhooks();
+      void whRender();
     } catch (e) { toast(e.message, true); b.disabled = false; }
   });
   el.querySelectorAll('[data-wh-call]').forEach(row => {
@@ -197,7 +213,7 @@ async function whTriggerDetail(el, run) {
       try {
         const r = (await post(`${path}/deliveries/${encodeURIComponent(delivery)}/replay`, {})).replay;
         toast(`Ran again: ${whPlural(r.tasks, 'task')}`);
-        void renderSettingsWebhooks();
+        void whRender();
       } catch (e) { toast(e.message, true); again.disabled = false; }
     };
   });
@@ -234,12 +250,12 @@ function whTriggerDialog(t) {
     const num = k => Number(v.get(k));
     if (builtin) {
       await post(`/v2/triggers/${encodeURIComponent(t.id)}`, {keep_days: num('keep_days')});
-      dialog.close(); void renderSettingsWebhooks(); return;
+      dialog.close(); void whRender(); return;
     }
     const settings = {type_from: String(v.get('type_from') || '').trim(), hourly: num('hourly'), keep_days: num('keep_days'), unheard: String(v.get('unheard'))};
     if (t) {
       await post(`/v2/triggers/${encodeURIComponent(t.id)}`, {name: String(v.get('name')).trim(), ...settings});
-      dialog.close(); void renderSettingsWebhooks(); return;
+      dialog.close(); void whRender(); return;
     }
     // Making one is three calls (create, signing, settings): the create answer carries only the address.
     const made = (await post('/v2/triggers', {name: String(v.get('name')).trim()})).trigger;
@@ -259,7 +275,7 @@ function whTriggerDialog(t) {
       if (settings.unheard !== 'log') changed.unheard = settings.unheard;
       if (Object.keys(changed).length) await post(`/v2/triggers/${encodeURIComponent(made.id)}`, changed);
     } catch (e) { toast(e.message, true); }
-    dialog.close(); void renderSettingsWebhooks();
+    dialog.close(); void whRender();
   });
   form.elements[0].focus();
 }
@@ -274,12 +290,12 @@ function whSigningDialog(t) {
     const made = (await post(path, {preset: String(v.get('preset')), ...(secret ? {secret} : {})})).trigger;
     WH.shown = {...(WH.shown?.id === t.id ? WH.shown : {}), id: t.id};
     if (!secret) { if (made.replayed) toast('Saved, but the secret was lost on the way. Save again for a new one.', true); else WH.shown.signing = made.signing_secret; }
-    dialog.close(); void renderSettingsWebhooks();
+    dialog.close(); void whRender();
   });
   const off = dialog.querySelector('[data-wh-sign-off]');
   if (off) off.onclick = async () => {
     if (!confirm('Turn signing off? Anyone with the address can call it.')) return;
-    try { await post(path, {off: true}); if (WH.shown?.id === t.id) delete WH.shown.signing; dialog.close(); void renderSettingsWebhooks(); }
+    try { await post(path, {off: true}); if (WH.shown?.id === t.id) delete WH.shown.signing; dialog.close(); void whRender(); }
     catch (e) { dialog.querySelector('[data-wh-error]').textContent = e.message; }
   };
 }
@@ -289,7 +305,7 @@ async function whRotate(t) {
     const made = (await post(`/v2/triggers/${encodeURIComponent(t.id)}/rotate`, {})).trigger;
     WH.shown = {...(WH.shown?.id === t.id ? WH.shown : {}), id: t.id, url: made.replayed ? '' : made.url};
     if (made.replayed) toast('A new address was made, but it was lost on the way. Try New secret again.', true);
-    void renderSettingsWebhooks();
+    void whRender();
   } catch (e) { toast(e.message, true); }
 }
 async function whTriggerDelete(t) {
@@ -297,7 +313,7 @@ async function whTriggerDelete(t) {
   try {
     await post(`/v2/triggers/${encodeURIComponent(t.id)}/delete`, {});
     Object.assign(WH, {trigger: '', shown: null});
-    void renderSettingsWebhooks();
+    void whRender();
   } catch (e) { toast(e.message, true); }
 }
 
@@ -318,7 +334,7 @@ async function whHooks(el, run) {
         <span class="wh-meta"><span class="tnum">${h.last_7_days.delivered} sent</span>${h.last_7_days.failed ? ` · <span class="wh-bad tnum">${h.last_7_days.failed} failed</span>` : ''} <span class="muted">7d</span></span></button>`).join('')}</div>`
       : '<div class="empty">No endpoints yet.</div>'}`;
   el.querySelector('[data-wh-hook-new]').onclick = () => void whHookDialog(null);
-  el.querySelectorAll('[data-wh-hook]').forEach(b => { b.onclick = () => { WH.hook = b.dataset.whHook; WH.hookShown = null; void renderSettingsWebhooks(); }; });
+  el.querySelectorAll('[data-wh-hook]').forEach(b => { b.onclick = () => { WH.hook = b.dataset.whHook; WH.hookShown = null; void whRender(); }; });
 }
 // The event picker: All, then each catalog group (its box means `group.*`) and its events. A pattern the catalog
 // does not know is kept, checked, at the end.
@@ -464,16 +480,16 @@ async function whHookDialog(h) {
       const saved = await settingsDestinationSave(extra => post(`/v2/webhooks/${encodeURIComponent(h.id)}/update`,
         {...body, ...(filter ? {filter} : {}), headers: sent, expected_revision: h.revision, ...extra}));
       if (saved.credentials_choice === 'clear') toast('Saved. Type the secret header values again: the endpoint is paused until then.');
-      dialog.close(); void renderSettingsWebhooks(); return;
+      dialog.close(); void whRender(); return;
     }
     if (filter && Object.values(filter).some(x => x.length)) body.filter = filter;
     if (sent.length) body.headers = sent;
     const made = await post('/v2/webhooks', body);
     dialog.close();
-    if (!made.webhook) { toast('Sent for approval'); void renderSettingsWebhooks(); return; }
+    if (!made.webhook) { toast('Sent for approval'); void whRender(); return; }
     Object.assign(WH, {tab: 'outgoing', hook: made.webhook.id, hookShown: made.webhook.replayed ? null : {id: made.webhook.id, secret: made.webhook.secret}});
     if (made.webhook.replayed) toast('Made, but the secret was lost on the way. Use New secret to get one.', true);
-    void renderSettingsWebhooks();
+    void whRender();
   });
   form.elements.name.focus();
 }
@@ -515,7 +531,7 @@ async function whHookDetail(el, run) {
         <span class="wh-call-ctl">${may && ['failed', 'canceled'].includes(s.state) ? '<button class="ghost" type="button" data-wh-retry>Retry</button>' : ''}</span></div>`).join('')}</div>`
       : '<div class="empty">Nothing sent yet.</div>'}`;
   const on = (sel, fn) => { const b = el.querySelector(sel); if (b) b.onclick = fn; };
-  const act = async (fn, after) => { try { await fn(); after?.(); void renderSettingsWebhooks(); } catch (e) { toast(e.message, true); } };
+  const act = async (fn, after) => { try { await fn(); after?.(); void whRender(); } catch (e) { toast(e.message, true); } };
   on('[data-wh-hook-edit]', () => void whHookDialog(h));
   on('[data-wh-hook-pause]', () => act(() => post(`${path}/${h.enabled ? 'pause' : 'resume'}`, {})));
   on('[data-wh-hook-rotate]', () => {
@@ -557,12 +573,11 @@ async function whGateway(el, run) {
     get('/v2/sleep').then(d => !!d.sleep?.hosted).catch(() => false),
     S.me?.role === 'owner' ? get('/v2/hooks/wake-url', {fresh: true}).catch(() => null) : null]);
   if (run !== WH_RUN) return;
-  const link = settingsIsAdmin() ? ' <a href="#/settings" data-wh-gateway-link>Gateway</a>' : '';
-  if (relay.key === 'none') { el.innerHTML = `<div class="empty" data-wh-no-key>Connect the Gateway first.${link}</div>`; return; }
+  if (relay.key === 'none') { el.innerHTML = `<div class="empty" data-wh-no-key>Connect the Gateway first.</div>`; return; }
   const rows = list.filter(t => !t.builtin);
   const status = [relay.last_pull ? `Last pull ${esc(ago(relay.last_pull))}` : 'Not pulled yet',
     Number.isFinite(relay.pending) ? `<span class="tnum">${relay.pending}</span> waiting` : ''].filter(Boolean).join(' · ');
-  el.innerHTML = `${relay.key === 'revoked' ? `<p class="err">The Gateway refused this server's key.${link}</p>` : ''}
+  el.innerHTML = `${relay.key === 'revoked' ? `<p class="err">The Gateway refused this server's key.</p>` : ''}
     <p class="settings-cell-note" data-wh-relay-status>${status}${relay.last_error ? ` · <span class="wh-bad">${esc(relay.last_error)}</span>` : ''}</p>
     ${wake && !hosted ? '<div class="wh-wake-url" data-wh-wake-url></div>' : ''}
     ${WH.shown?.relay ? whSecretHTML(`Gateway address · ${(list.find(t => t.id === WH.shown.id) || {}).name || ''}`, WH.shown.relay, 'relay') : ''}
@@ -590,7 +605,7 @@ async function whGateway(el, run) {
       const r = (await post(what === 'make' ? path : `${path}/${what}`, {})).relay;
       WH.shown = what === 'delete' ? null : r.replayed ? null : {id, relay: r.address};
       if (what !== 'delete' && r.replayed) toast('Made, but the address was lost on the way. Use New secret.', true);
-      void renderSettingsWebhooks();
+      void whRender();
     } catch (e) { toast(e.message, true); b.disabled = false; }
   }; });
 }
@@ -632,4 +647,33 @@ function whWakeUrl(el, wake, {editing = false, error = '', draft = wake.url || '
     if (!url) { whWakeUrl(el, wake, {editing: true, error: 'Enter an https:// address', draft: ''}); return; }
     void save(url, form.querySelector('[type="submit"]'));
   };
+}
+
+// ------------------------------------------------------------------------------------------------- Where each part shows
+// Automations: incoming webhooks are a built-in row of the list, kind webhook, and their own screen (pageAutomations).
+// The row shows when the hub answers its list of triggers, as Maintenance's does when /v2/maintenance answers.
+const AU_HOOKS = 'webhooks';
+function auHooksList(list, found) {
+  if (!Array.isArray(found?.triggers)) return list;
+  WH_TRIGGERS = whIncoming(found.triggers);
+  const row = {id: AU_HOOKS, name: 'Incoming webhooks', kind: 'webhook', builtin: true, readonly: true, owner_id: AU_MAINT_OWNER,
+    enabled: true, trigger: {type: 'webhook', name: whPlural(WH_TRIGGERS.length, 'webhook')},
+    steps: [], description: WH_TRIGGERS.map(t => t.name).join(' '), can_edit: false, can_pause: false};
+  return [row, ...list.filter(a => a.id !== AU_HOOKS)];
+}
+// The screen: its name over the list or one webhook (#/automations/webhooks/<id>), drawn once per visit.
+const auHooksHead = hd => { hd.innerHTML = `<h2 class="au-name">Incoming webhooks</h2>${AU_BUILTIN_PILL}`; };
+function auHooksPane(pane) {
+  const item = decodeURIComponent(S.route.split('?')[0].slice(WH_INCOMING_ROUTE.length + 1).split('/')[0] || '');
+  const fresh = !pane.querySelector(WH_HOSTS.incoming);
+  if (fresh) pane.innerHTML = `<div class="au-pad" id="${WH_HOSTS.incoming.slice(1)}">${skelRows(3)}</div>`;
+  if (fresh || WH.tab !== 'incoming' || WH.trigger !== item) void whMount('incoming', item);
+}
+
+// Tools: outgoing webhooks (#/tools/webhooks[/<id>]); their rows in the Tools list open them here.
+function pageToolWebhooks(item = '') {
+  if (!$(WH_HOSTS.outgoing)) $('#main').innerHTML = `<div class="tt tt-page" id="tool-webhooks">
+    <nav class="tt-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span><span>Webhooks</span></nav>
+    <section class="card"><div id="${WH_HOSTS.outgoing.slice(1)}">${skelRows(3, {card: true, dot: false})}</div></section></div>`;
+  void whMount('outgoing', item);
 }

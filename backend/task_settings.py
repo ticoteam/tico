@@ -1,4 +1,4 @@
-"""What each system job does to tasks, shown beside it in Settings › System. It never decides anything."""
+"""What each system job does to tasks, shown beside it in Automations › System jobs. It never decides anything."""
 
 JOBS = {
     "assigned_tasks": ("open", 'Start assigned tasks on a free computer, up to each bot\'s "Keep N going".'),

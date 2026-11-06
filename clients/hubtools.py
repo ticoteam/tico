@@ -3527,7 +3527,7 @@ def trigger_rotate(api, args):
 @tool("hub_trigger_sign", "Verify every call to a trigger. `preset`: hmac (GitHub's X-Hub-Signature-256 or X-Signature), "
       "github, standard (Standard Webhooks; the secret is whsec_ and base64) or stripe; the current preset, else hmac, "
       "when empty. `secret` is the one the sender gave you; empty makes a new one, returned once. `off` stops checking. "
-      "BotOps asked by a person can't pass a secret on: they type it in Settings > Webhooks > Incoming.",
+      "BotOps asked by a person can't pass a secret on: they type it in Automations › Incoming webhooks.",
       {**TRIGGER, "preset": {"type": "string", "enum": ["hmac", "github", "standard", "stripe", "slack"]},
        "secret": _s("The sender's signing secret, 16+ characters; empty makes one"),
        "off": {"type": "boolean", "description": "true stops checking signatures"}},

@@ -21,6 +21,9 @@ task ("Release vX.Y.Z: <what>") instead of pushing the tag itself; the Release M
 so the tasks waiting on the release learn it shipped. Tico itself never moves a task on a tag, release or deploy; it
 only marks the merged PR links the running release contains as Shipped (backend/github.py).
 
+Tico's own repository is the exception: it releases itself through [release windows](#release-windows) in GitHub
+Actions. Its Release Manager bot no longer tags or rolls out Tico releases; it only monitors them.
+
 **When releases are cut.** The Release Manager hears about Dev tickets at Pending Release once, as one task:
 "Release: <n> tickets at Pending Release". It arrives once a day at a set hour (10:00 company time by default;
 an owner or admin changes the hour, adds a second one or turns it off in Settings, or with `hub release schedule`),
@@ -47,6 +50,89 @@ It is separate from the release command's "Release notes for vX.Y.Z" task. Docs 
 the pre-release checklist. Only the owner, a person who moves Dev tickets, the Release Manager and the bot that
 manages the Dev tickets type run `hub release now`. Routines can run `on: release_published` for one task per release.
 
+## Release windows
+
+Tico's own releases (ticoteam/tico) ship from two windows a day, run by `.github/workflows/train.yml` and
+`scripts/release_train.py`. No one tags by hand.
+
+- **When.** A window opens at 14:30 and 22:00 UTC: 07:30 and 15:00 in Los Angeles in summer, an hour earlier in
+  winter. It stays open until a `vX.Y.Z` release is published after it opened. Nothing is stored: every run works this
+  out from GitHub, so a late schedule or a missed event costs time, never a wrong release.
+- **At the open**, the canary's release is promoted to stable if the bake gate passes (below). Then, if main has moved
+  past the newest release, Release validation (`ci.yml`) is dispatched for main's head as the next patch.
+- **The first green candidate ships.** When a validation of this window goes green, the window tags that commit,
+  publishes it (`release.yml`, dispatched on the tag) and updates the canary. That closes the window. The release is
+  published as not latest; only once the canary runs it healthy does the window make it the latest GitHub release and
+  move the images' `latest` tags, so new installs, update checks and desktop apps never get a release the canary has
+  not run. The canary's updater installs that exact version, latest or not. Latest never moves backwards (a newer
+  release that is already latest stays so, and the issue says so), and a marking that failed or did not finish is
+  retried by the backstop and each window step once the canary runs that release healthy.
+- **Notes.** When a release publishes, the monitoring Release Manager files the Technical Writer's "Release notes for
+  vX.Y.Z" task.
+- **A red candidate keeps the window open.** The failure goes on the one open `release-train` issue, once: a failure
+  the issue's last comment already reports is not posted again. Each push to main while the window is open validates
+  the new head, one validation at a time. A red or cancelled head waits for the next push; it is not run again, except
+  by a manual run (below), which validates it again (a flaky check). A window still red at the next open carries on.
+  The next window that ships closes the issue.
+- **Canary and stable.** The canary is Tico Team's install, stable is TIDY's. Both are updated through their update
+  keys ([Service keys](service-keys.md#update-keys)) with `GET`/`POST /api/v2/system/update`, never a browser or SSH.
+- **The bake gate.** Stable takes the canary's release only when the canary has run it for 4 hours (`BAKE_HOURS`), its
+  last update is healthy, `RELEASE_HOLD` is empty and no open issue is labelled `release-blocker`. Anything the gate
+  cannot read holds the release and is reported on the issue. Promotion runs at each open, and again just before a new
+  release goes to the canary.
+- **Holding.** Set the repository variable `RELEASE_HOLD` to a reason (or open a `release-blocker` issue) to keep
+  stable where it is. Set `RELEASE_TRAINS` to anything but `on` to stop the windows altogether.
+- **By hand.** `gh workflow run train.yml --ref main` runs one window step now (promote, then ship or validate,
+  validating a red or cancelled head again), even with `RELEASE_TRAINS` off. `python3 scripts/release_train.py status` (with `GITHUB_TOKEN`, and the install
+  variables to see them) shows the window, the next step and what each install runs.
+
+Triggers: the two window schedules, every push to main, every finished Release validation run, a manual run, and a
+backstop schedule every 20 minutes (at :05, :25 and :45, never a window's minute) that takes a step in an open window
+if an event was missed (it never opens a window or promotes). A small read-only job decides first, so a push with
+nothing to do ends in seconds. Every job that acts (the window job and the hotfix) shares one concurrency group, so two
+never start a build or a release at once. One race remains: GitHub keeps one waiting job per group, so a hotfix queued
+behind a running window job can still be replaced by a window job whose read-only check ran just before the hotfix
+was queued; a hotfix that shows as cancelled that way is simply run again.
+
+Settings, in the GitHub environment `release` (deployments from `main` and `v*` tags only): variables `CANARY_URL`
+and `STABLE_URL`, secrets `CANARY_UPDATE_KEY` and `STABLE_UPDATE_KEY`. Repository variables: `RELEASE_TRAINS`
+(`on` to go live), `RELEASE_HOLD`, `BAKE_HOURS` (default 4). The window tags with the Actions token, which starts no
+workflow, so it dispatches `release.yml` on the tag (with `latest=false`).
+
+### A release that did not publish
+
+A tag with no published release keeps the window from moving on (the next version would skip it). When the Release
+workflow on the tag failed, the window runs it once more, 30 minutes after the first run started, and then updates the
+canary and marks it latest as usual; the release-train issue records it. If the second run fails too, the issue says
+so and a person finishes it by hand: read the failed run, fix the cause (a registry or GitHub outage usually clears),
+then
+
+```sh
+gh workflow run release.yml --ref vX.Y.Z -f desktop=false -f latest=false   # publish, not latest
+gh workflow run train.yml --ref main                                        # canary, then latest
+```
+
+The window step sees the release published, updates the canary and marks the release latest. To mark it latest
+without the window: `gh release edit vX.Y.Z --latest`, and for each of `tico`, `tico-runner` and `tico-updater`,
+`docker buildx imagetools create -t ghcr.io/ticoteam/<image>:latest ghcr.io/ticoteam/<image>:vX.Y.Z`. A release whose
+canary update failed stays published but not latest; the next window ships the next patch over it.
+
+### Hotfixes
+
+A hotfix is for a major production issue only: data loss, a security hole, an outage, an install that cannot update.
+Everything else waits for the next window. Land the fix on main, then:
+
+```sh
+gh workflow run hotfix.yml --ref main -f reason="Tasks vanish from the board after an update" [-f sha=<commit>] [-f promote_stable=false] [-f override_hold=true]
+```
+
+Anyone with write access may run it, bots included. It validates the commit as the next patch, publishes it, updates
+the canary, marks it latest once the canary is healthy and, unless `promote_stable` is off, updates stable right
+after, with no bake. Holds still apply: with `RELEASE_HOLD` set or a `release-blocker` issue open, stable is left
+where it is unless `override_hold` is on, and the override is written, with who ran it, in the run summary and on the
+issue. The reason is required and goes on a `release-train` issue: closed when the hotfix succeeds, left open when it
+fails. A hotfix release also closes the current window.
+
 ## The fast path
 
 1. **While building a PR**, run the focused tests for its changes; CI selects the tests a change can reach (below).
@@ -60,8 +146,9 @@ manages the Dev tickets type run `hub release now`. Routines can run `on: releas
 6. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
 7. **Desktop follows**: built only when the shell changed, and attached to the published release when it is done.
 
-Releases are started by the Release Manager only. Release validation never runs on a schedule or on a push to main:
-each run is a full gate for one candidate.
+These steps are the release command's, for a team whose Release Manager releases. Tico's own repository releases
+through [release windows](#release-windows) instead. Release validation never runs on a schedule or on a push to main
+itself: each run is a full gate for one candidate, dispatched for an exact commit and version.
 
 ## Supported versions
 
@@ -575,7 +662,7 @@ leaves the other installs untouched, and the bot asks the owner what to do next.
 
 Setup, once:
 
-- **Write on the repository.** An owner or admin ticks the repository in Settings → Repositories and gives the bot
+- **Write on the repository.** An owner or admin ticks the repository in Settings → General → Repositories and gives the bot
   write on it: `hub bot repos <slug> --chosen <owner>/<repo>:write` (list the bot's other chosen repositories in the
   same command; `--chosen` replaces them), or the same in the bot's settings ([Repositories](repositories.md)).
 - **An update key per install.** The owner of each install, the team's own included, runs

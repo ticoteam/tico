@@ -2094,7 +2094,7 @@ def view(c, who, settings, auth, github, config):
             said.append(f"{hooks['skipped']} events skipped endpoints past the limit of {webhooks.MAX_PER_EVENT} per event")
         if said:
             checks.append(_check("webhooks", "Outgoing webhooks", "warn", "In the last 24 hours Tico " + "; ".join(said) + ".",
-                                 [_fix("Open webhooks", "#/settings", "webhooks")]))
+                                 [_fix("Open webhooks", "#/tools/webhooks")]))
     if full and (denies := _harness_denies_check(c, settings)):
         checks.append(denies)
     if full:
@@ -2328,7 +2328,7 @@ def view(c, who, settings, auth, github, config):
     # Webhooks waiting at Tico Gateway that this server is not collecting (backend/hook_relay.py).
     if kind == "owner" and (relay := hook_relay.health(c, settings)):
         checks.append(_check("hook_relay", "Webhooks through Tico Gateway", relay["status"], relay["summary"],
-                             [_fix("Open Webhooks", "#/settings", "webhooks")]))
+                             [_fix("Open Webhooks", "#/settings/models/wh-gateway")]))
     # Sleep when idle is on but Tico could not be asked to stop this server (backend/sleep_idle.py).
     if kind == "owner" and (sleep := sleep_idle.health(c, settings)):
         checks.append(_check("sleep_idle", "Sleep when idle", sleep["status"], sleep["summary"],

@@ -25,8 +25,16 @@ def _card(tab, card=""):
 
 
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "Settings > Computers", "Settings > Bots"
-RULES, HOOKS, TASKS, REPOS = "Settings > System", "Settings > Webhooks", "Settings > Tasks", "Settings > Repositories"
-INBOXES, STRATEGY = "Tools", "Settings > System > Strategy bot"
+RULES, TASKS, REPOS = "Automations > System jobs", "Settings > Tasks", "Settings > General > Repositories"
+# Webhooks left Settings: incoming ones are on Automations, outgoing ones on Tools, their Gateway addresses a fold of
+# the Tico Gateway card on Models (ui/app/settings-webhooks.js).
+HOOKS_IN, HOOKS_OUT, HOOKS_GW = "Automations > Incoming webhooks", "Tools > Webhooks", "Settings > Models > Tico Gateway > Webhooks"
+HOOKS_IN_CARD, HOOKS_OUT_CARD = "#/automations/webhooks", "#/tools/webhooks"
+INBOXES, STRATEGY = "Tools", "Strategy bot > Settings"
+# System's other cards moved to the built-in bots' own Settings and to Settings > Security. Releases is on whichever bot
+# is the Release Manager: its address reads the schedule and opens that bot (ui/app/settings.js settingsMovedOut).
+RELEASES, TASK_MANAGER, SECURITY = "Release Manager > Settings > Releases", "Task Manager > Settings", "Settings > Security"
+SYSTEM_JOBS = "#/automations/system-jobs"
 INBOUND, TEXTS, MAIL = (INBOXES + " > Settings > " + s for s in ("Email", "Texts", "Letters in"))
 MODELS = "Settings > Models"
 
@@ -50,8 +58,8 @@ _RULE_NAMES = {
 }
 _RULE_WHERE = {"health_monitor_reports": ("Settings > Health > Health monitor", _card("health")),
                "bot_reports_direct": (GENERAL + " > Team", _card("general", "settings-team")),
-               "stale_review": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
-               "topic_fresh": (RULES + " > What Tico runs on its own", _card("system", "set-system-card"))}
+               "stale_review": (RULES, SYSTEM_JOBS),
+               "topic_fresh": (RULES, SYSTEM_JOBS)}
 _ADMIN_RULES = ("stale_review", "topic_fresh", "org_rule_checks")
 
 TEAM_RULES = [
@@ -257,7 +265,7 @@ ENTRIES = TEAM_RULES + [
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
-      value="json", card=_card("repos", "set-repos"), words="run edit workflows actions ci product",
+      value="json", card=_card("general", "set-repos"), words="run edit workflows actions ci product",
       confirm_when=(("chosen.run_workflows", (True,)), ("chosen.edit_workflows", (True,)),
                     ("all_repos.run_workflows", (True,)), ("all_repos.edit_workflows", (True,)),
                     ("create_product_repositories", (True,))),
@@ -266,71 +274,69 @@ ENTRIES = TEAM_RULES + [
           "workflows starts CI, which uses the repository's secrets"),
     # Strategy bot
     S("strategy.checks", "Strategy bot regular checks", STRATEGY, "owner", "confirm", "POST",
-      "strategy-bot/checks", "on", card=_card("system", "set-strategy-bot-card")),
+      "strategy-bot/checks", "on", card="#/bot/goal-manager/settings"),
     S("strategy.level", "How much the Strategy bot does", STRATEGY, "owner", "confirm", "POST",
-      "strategy-bot/level", "level", "int", _card("system", "set-strategy-bot-card")),
+      "strategy-bot/level", "level", "int", "#/bot/goal-manager/settings"),
     # Repositories
     S("repo.enabled", "Repository on", REPOS, "admin", "direct", "PUT", "repositories/{id}", "enabled",
-      card=_card("repos", "set-repos")),
+      card=_card("general", "set-repos")),
     S("repo.setup_command", "Repository setup command", REPOS, "admin", "direct", "PUT", "repositories/{id}",
-      "setup_command", "text", _card("repos", "set-repos")),
+      "setup_command", "text", _card("general", "set-repos")),
     S("repos.new_bot_default", "New bots get repositories", REPOS, "admin", "direct", "PUT", "repositories/settings",
-      "new_bot_default", "text", _card("repos", "set-repos")),
+      "new_bot_default", "text", _card("general", "set-repos")),
     S("repos.product.create", "New product repository", REPOS, "owner", "confirm", "POST", "github/product-repos",
-      value="json", card=_card("repos", "set-repos")),
+      value="json", card=_card("general", "set-repos")),
     # Rules
-    S("rules.system", "What Tico runs on its own", RULES + " > What Tico runs on its own", "admin", "direct", "PUT",
-      "system-routines/{id}", value="json", card=_card("system", "set-system-card"), words="schedule routine"),
-    S("rules.task_rule", "Task rule", RULES + " > What Tico runs on its own", "anyone", "direct", "PUT", "task-rules/{id}",
-      value="json", card=_card("system", "set-system-card")),
-    S("rules.task_rule.create", "New task rule", RULES + " > What Tico runs on its own", "anyone", "direct", "POST",
-      "task-rules", value="json", card=_card("system", "set-system-card")),
-    S("release.on", "Daily release", RULES + " > Releases", "admin", "direct", "PATCH", "release-schedule", "on",
-      card=_card("system", "set-release-card"), read="release-schedule#on"),
-    S("release.times", "Release times", RULES + " > Releases", "admin", "direct", "PATCH", "release-schedule",
-      "times", "list", _card("system", "set-release-card"), "release-schedule#times", words="release schedule"),
-    S("release.bot", "Release bot", RULES + " > Releases", "admin", "direct", "PATCH", "release-schedule", "bot",
-      "text", _card("system", "set-release-card"), "release-schedule#bot"),
-    S("release.writer", "Release notes writer", RULES + " > Releases", "admin", "direct", "PATCH",
-      "release-schedule", "writer", "text", _card("system", "set-release-card"), "release-schedule#writer"),
-    *[S("screening." + source, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
-        source, "choice:off|warn" + ("" if source == "mail" else "|hold"), _card("system", "set-screening-card"),
+    S("rules.system", "What Tico runs on its own", RULES, "admin", "direct", "PUT",
+      "system-routines/{id}", value="json", card=SYSTEM_JOBS, words="schedule routine"),
+    S("rules.task_rule", "Task rule", RULES, "anyone", "direct", "PUT", "task-rules/{id}",
+      value="json", card=SYSTEM_JOBS),
+    S("rules.task_rule.create", "New task rule", RULES, "anyone", "direct", "POST",
+      "task-rules", value="json", card=SYSTEM_JOBS),
+    S("release.on", "Daily release", RELEASES, "admin", "direct", "PATCH", "release-schedule", "on",
+      card=_card("releases"), read="release-schedule#on"),
+    S("release.times", "Release times", RELEASES, "admin", "direct", "PATCH", "release-schedule",
+      "times", "list", _card("releases"), "release-schedule#times", words="release schedule"),
+    S("release.bot", "Release bot", RELEASES, "admin", "direct", "PATCH", "release-schedule", "bot",
+      "text", _card("releases"), "release-schedule#bot"),
+    S("release.writer", "Release notes writer", RELEASES, "admin", "direct", "PATCH",
+      "release-schedule", "writer", "text", _card("releases"), "release-schedule#writer"),
+    *[S("screening." + source, "Screening: " + name, SECURITY + " > Screening", "admin", "direct", "PUT", "screening",
+        source, "choice:off|warn" + ("" if source == "mail" else "|hold"), _card("security", "set-screening-card"),
         "screening#modes." + source, words="prompt injection screening")
       for source, name in (("webhook", "Webhooks"), ("mail", "Mail"), ("idea", "Ideas"), ("watcher", "Watchers"), ("document", "Documents"))],
-    *[S("screening." + layer, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
-        layer, card=_card("system", "set-screening-card"), read="screening#layers." + layer,
+    *[S("screening." + layer, "Screening: " + name, SECURITY + " > Screening", "admin", "direct", "PUT", "screening",
+        layer, card=_card("security", "set-screening-card"), read="screening#layers." + layer,
         words="prompt injection screening detector")
       for layer, name in (("patterns", "Patterns"), ("model", "Decision model"))],
-    S("task_manager.on", "Task Manager", RULES + " > Task Manager", "owner", "direct", "POST", "task-manager/turn-on",
-      value="json", card=_card("system", "set-task-manager-card")),
-    S("task_manager.off", "Task Manager off", RULES + " > Task Manager", "owner", "direct", "POST",
-      "task-manager/turn-off", value="json", card=_card("system", "set-task-manager-card")),
-    # Webhooks: `incoming`, `outgoing` and `gateway` are the Webhooks tab's own parts, which ui/app/router.js opens from
-    # `#/settings/webhooks/<part>` before the catalogue's generic `#/settings/<tab>/<card>` branch: rename them
-    # together.
-    S("webhooks.incoming.create", "New incoming trigger", HOOKS + " > Incoming", "anyone", "direct", "POST", "triggers",
-      value="json", card=_card("webhooks", "incoming"), words="webhook incoming"),
-    S("webhooks.incoming", "Incoming trigger", HOOKS + " > Incoming", "creator", "direct", "POST", "triggers/{id}",
-      value="json", card=_card("webhooks", "incoming"), words="webhook incoming keep days hourly"),
-    S("webhooks.incoming.signing", "Incoming trigger signing", HOOKS + " > Incoming", "creator", "person", "POST",
-      "triggers/{id}/signing", value="json", card=_card("webhooks", "incoming"),
-      why="A signing secret is typed in Settings, never passed through a bot"),
-    S("webhooks.incoming.rotate", "Rotate an incoming trigger's address", HOOKS + " > Incoming", "creator", "confirm",
+    S("task_manager.on", "Task Manager", TASK_MANAGER, "owner", "direct", "POST", "task-manager/turn-on",
+      value="json", card="#/bot/task-manager/settings"),
+    S("task_manager.off", "Task Manager off", TASK_MANAGER, "owner", "direct", "POST",
+      "task-manager/turn-off", value="json", card="#/bot/task-manager/settings"),
+    # Webhooks
+    S("webhooks.incoming.create", "New incoming trigger", HOOKS_IN, "anyone", "direct", "POST", "triggers",
+      value="json", card=HOOKS_IN_CARD, words="webhook incoming"),
+    S("webhooks.incoming", "Incoming trigger", HOOKS_IN, "creator", "direct", "POST", "triggers/{id}",
+      value="json", card=HOOKS_IN_CARD, words="webhook incoming keep days hourly"),
+    S("webhooks.incoming.signing", "Incoming trigger signing", HOOKS_IN, "creator", "person", "POST",
+      "triggers/{id}/signing", value="json", card=HOOKS_IN_CARD,
+      why="A signing secret is typed by a person, never passed through a bot"),
+    S("webhooks.incoming.rotate", "Rotate an incoming trigger's address", HOOKS_IN, "creator", "confirm",
       "POST",
-      "triggers/{id}/rotate", value="json", card=_card("webhooks", "incoming")),
-    S("webhooks.incoming.delete", "Delete an incoming trigger", HOOKS + " > Incoming", "creator", "confirm", "POST",
-      "triggers/{id}/delete", value="json", card=_card("webhooks", "incoming")),
-    S("webhooks.gateway.wake", "Gateway wake", HOOKS + " > Gateway", "creator", "confirm", "POST",
-      "triggers/{id}/relay/wake", "wake", card=_card("webhooks", "gateway")),
+      "triggers/{id}/rotate", value="json", card=HOOKS_IN_CARD),
+    S("webhooks.incoming.delete", "Delete an incoming trigger", HOOKS_IN, "creator", "confirm", "POST",
+      "triggers/{id}/delete", value="json", card=HOOKS_IN_CARD),
+    S("webhooks.gateway.wake", "Gateway wake", HOOKS_GW, "creator", "confirm", "POST",
+      "triggers/{id}/relay/wake", "wake", card=_card("models", "wh-gateway")),
     # Both answer with a signing secret shown only then, which a Confirm card's tap never shows (it keeps the status).
-    S("hooks.wake_url", "Gateway wake URL", HOOKS + " > Gateway", "owner", "person", "PUT", "hooks/wake-url", "url",
-      "text", _card("webhooks", "gateway"),
-      why="Setting the Gateway wake URL shows its signing secret once, in Settings"),
-    S("webhooks.outgoing.create", "New outgoing webhook", HOOKS + " > Outgoing", "anyone", "person", "POST", "webhooks",
-      value="json", card=_card("webhooks", "outgoing"),
-      why="A new outgoing webhook shows its signing secret once, in Settings"),
-    S("webhooks.outgoing", "Outgoing webhook", HOOKS + " > Outgoing", "creator", "confirm", "POST", "webhooks/{id}/update",
-      value="json", card=_card("webhooks", "outgoing")),
+    S("hooks.wake_url", "Gateway wake URL", HOOKS_GW, "owner", "person", "PUT", "hooks/wake-url", "url",
+      "text", _card("models", "wh-gateway"),
+      why="Setting the Gateway wake URL shows its signing secret once, on screen"),
+    S("webhooks.outgoing.create", "New outgoing webhook", HOOKS_OUT, "anyone", "person", "POST", "webhooks",
+      value="json", card=HOOKS_OUT_CARD,
+      why="A new outgoing webhook shows its signing secret once, on screen"),
+    S("webhooks.outgoing", "Outgoing webhook", HOOKS_OUT, "creator", "confirm", "POST", "webhooks/{id}/update",
+      value="json", card=HOOKS_OUT_CARD),
     # Listening
     S("listening.destination", "Listening destination", "Settings > Listening", "owner", "confirm", "PUT",
       "listening/destinations/{id}", value="json", card=_card("listening")),
