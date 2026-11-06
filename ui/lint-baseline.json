@@ -44,7 +44,7 @@
     "ui/app/inboxes-outbox.js": 1,
     "ui/app/inboxes-sending.js": 3,
     "ui/app/inboxes-texts.js": 2,
-    "ui/app/issues.js": 2,
+    "ui/app/issues.js": 1,
     "ui/app/liquid-dot.js": 1,
     "ui/app/live-meetings.js": 7,
     "ui/app/live.js": 1,
