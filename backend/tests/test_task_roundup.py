@@ -1358,9 +1358,13 @@ def test_an_unanswered_question_goes_back_to_the_bot_that_asked_as_one_roundup_l
         settle(c, mine["id"], "finance", ago(days=8))
         question = old_question(c, H.task(c, mine["id"]), "Which permit number do I use?")
         complete_jobs(c)
-        before = c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:finance'").fetchone()[0]
+        before = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
         assert still_needed.sweep(c, H.shift(DAY, hours=3)) == {"bot:finance": [question["id"]]}
-        assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:finance'").fetchone()[0] == before
+        # The card closing tells its bot quietly (a notice, no run): nothing is queued for it.
+        told = [H._json(r[0], {}) for r in c.execute(
+            "SELECT refs FROM messages WHERE recipient_id='bot:finance' AND rowid>?", (before,))]
+        assert all(refs.get("quiet") for refs in told), told
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id='finance' AND state<>'completed'").fetchone()
         assert still_needed.sweep(c, H.shift(DAY, hours=4)) == {}, "the batch runs once a day"
         assert "finance" in task_roundup.run(c, NOON)["woke"]
         assert (f'- {mine["id"][:8]} Renew the parking permit: no answer in two business days to '
@@ -1443,7 +1447,11 @@ def test_a_question_about_a_task_its_bot_no_longer_reads_names_neither_the_task_
     with store.transaction() as c:
         mine = H.task_create(c, H.human_actor("ana"), "Confidential vendor terms", "Keep it quiet.", "bot:cpo", lint=False)
         c.execute("UPDATE tasks SET created_at=? WHERE id=?", (DAY, mine["id"]))
+        # Ana's message on it woke finance, which asked her while that let it act on the task (task_delegations).
+        c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
+                  (mine["id"], "bot:finance", "human:ana", H.new_id(), H.shift(H.now(), hours=24)))
         question = old_question(c, H.task(c, mine["id"]), "Are the vendor terms still 40 days?")
+        c.execute("DELETE FROM task_delegations WHERE task_id=?", (mine["id"],))
         complete_jobs(c)
         assert still_needed.sweep(c, H.shift(DAY, hours=3)) == {"bot:finance": [question["id"]]}
         # cpo, the task's bot, now lets only Ana's people read it: finance asked about it while it could.
