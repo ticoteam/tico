@@ -54,6 +54,15 @@ review status check instead of recommending a merge or move on. These clocks sta
 first observes the condition, survive repeated refreshes, and clear when it resolves. A new head starts a new
 review wait. Older links acquire a clock on their next sync; Health performs no extra GitHub polling.
 
+**Needs you plate** names each person whose Needs you count is over 10 items (the number the Tasks page's You tab
+shows): a warning over 10, bad over 25. It names the three bots asking most of that plate. An administrator sees
+everyone's plate; anyone else sees only their own. A plate of 10 or fewer shows nothing.
+
+**Dev board moving** names open Dev tickets (numbered tickets on the Dev tickets board) that a bot owns, where nothing
+has changed for over 24 hours and no run is live or queued on them. It is a warning, and bad at five or more. Each names
+the ticket, its step, its bot and the hours it has been idle. A ticket with a run live or queued is left out, and so is
+one that changed within the day.
+
 ## What it checks
 
 Check health runs the plain-code checks below and the Health page's own checks: the queue (Stuck bots), refused queue

@@ -181,8 +181,8 @@ def test_a_bot_with_no_manager_reports_to_the_owner(api):
 def test_a_solicited_reply_and_work_on_a_shared_task_pass(api):
     chart(api)
     message(api, "pd-test", "human:ben", "Status?", expected=409)
-    message(api, "ben-test", "product-design", "How is the launch note going?")
-    message(api, "pd-test", "human:ben", "Draft is up.")  # Ben wrote first
+    asked = message(api, "ben-test", "product-design", "How is the launch note going?")
+    message(api, "pd-test", "human:ben", "Draft is up.", in_reply_to=asked["id"])  # a direct reply to Ben's message
     # Cara is on Ben's task as the one it waits on: product-design may hand it to her, and give her nothing else.
     shared = task(api, "ben-test", "bot:product-design", title="Launch note")
     with api.app.state.store.transaction() as c:
@@ -194,9 +194,17 @@ def test_a_solicited_reply_and_work_on_a_shared_task_pass(api):
         except reach.Refused as exc:
             assert exc.code == "reach_closed"
     task(api, "pd-test", "human:cara", title="Something new for Cara", expected=409)
+    # Waiting on Cara no longer opens her to a bot that is not next to her: it takes it to its manager.
     r = api.post(
         f"/api/v2/tasks/{shared['id']}",
         json={"owner": "human:cara", "version": shared["version"]},
+        headers=headers("pd-test"),
+    )
+    assert r.status_code == 409, r.text
+    # Ben handed it the task, so a hand-back to Ben passes.
+    r = api.post(
+        f"/api/v2/tasks/{shared['id']}",
+        json={"owner": "human:ben", "version": shared["version"]},
         headers=headers("pd-test"),
     )
     assert r.status_code == 200, r.text
@@ -317,8 +325,26 @@ def test_a_dm_a_person_brought_the_bot_into_is_solicited_and_a_legacy_message_ch
         headers=headers("ben-test"),
     )
     assert dm.status_code == 200, dm.text
+    # A person wrote in this DM, so the bot may answer every person in it, Cara included.
     r = api.post(
         f"/api/v2/threads/{dm.json()['id']}/messages", json={"text": "Here is the plan."}, headers=headers("pd-test")
+    )
+    assert r.status_code == 200, r.text
+    # Ben writing to the bot in a DIFFERENT conversation does not open this one for Cara.
+    other = api.post(
+        "/api/v2/threads/dm",
+        json={"members": ["human:cara"], "body": "A new one", "title": "Quiet"},
+        headers=headers("pd-test"),
+    )
+    assert other.status_code == 409 and other.json()["error"]["receiver"] == "human:cara", other.text
+    own = api.post(
+        "/api/v2/threads/dm",
+        json={"members": ["bot:product-design"], "body": "Plan?", "title": "Plan"},
+        headers=headers("ben-test"),
+    )
+    assert own.status_code == 200, own.text
+    r = api.post(
+        f"/api/v2/threads/{own.json()['id']}/messages", json={"text": "Here is the plan."}, headers=headers("pd-test")
     )
     assert r.status_code == 200, r.text
     # A legacy message to a peer that @mentions Cara where she reads it is refused whole: the mention reaches her.
@@ -363,6 +389,7 @@ def test_a_sub_thread_reply_to_the_receivers_message_is_solicited(api):
         # check_post passes the sub-thread and the thread above it, and the message the sub-thread hangs from.
         assert reach.solicited(c, "bot:product-design", "human:cara", ["t-sub", "t-top"], [None, "m-cara"])
         assert not reach.solicited(c, "bot:product-design", "human:cara", "t-sub")
+        assert reach.person_asked(c, "bot:product-design", "human:cara", None, ["t-sub", "t-top"], [None, "m-cara"])
 
 
 def test_a_message_in_a_tasks_thread_uses_the_task_and_a_send_anyway_replay_is_not_rechecked(api):
@@ -372,7 +399,12 @@ def test_a_message_in_a_tasks_thread_uses_the_task_and_a_send_anyway_replay_is_n
         wait_on_cara(c, shared["id"])
         conversation = H.task(c, shared["id"])["conversation_id"]
         who = Identity("bot:product-design", "bot", agent="test")
-        reach.check(c, who, "human:cara", "chat", conversation_id=conversation)  # the thread's own task
+        reach.check(c, who, "human:ben", "chat", conversation_id=conversation)  # the thread's own task, Ben handed it
+        try:
+            reach.check(c, who, "human:cara", "chat", conversation_id=conversation)  # a thread member is not enough
+            raise AssertionError("refused: Cara did not hand it over")
+        except reach.Refused:
+            pass
         replay = Identity("bot:product-design", "bot", agent=reach.REPLAY_AGENT)
         reach.check(c, replay, "human:cara", "task")  # a person sent it anyway
         try:
@@ -439,15 +471,13 @@ def test_a_message_task_ref_sent_as_a_list_is_checked_on_its_first_task_and_junk
     a 409 that writes nothing. A ref that is neither a task id nor a list of them is a 422, never a 500."""
     chart(api)
     shared = task(api, "ben-test", "bot:product-design", title="Launch note")
-    with api.app.state.store.transaction() as c:
-        wait_on_cara(c, shared["id"])  # Cara is on it
-    other = task(api, "ben-test", "bot:finance", title="Budget")  # Cara is not on it
-    message(api, "pd-test", "human:cara", "On the launch note.", refs={"task": [shared["id"]]})
-    refused = message(api, "pd-test", "human:cara", "On the budget.", expected=409, refs={"task": [other["id"]]})
+    other = task(api, "ben-test", "bot:finance", title="Budget")  # Ben did not hand it to product-design
+    message(api, "pd-test", "human:ben", "On the launch note.", refs={"task": [shared["id"]]})
+    refused = message(api, "pd-test", "human:ben", "On the budget.", expected=409, refs={"task": [other["id"]]})
     assert refused["error"]["code"] == "reach_closed"
-    message(api, "pd-test", "human:cara", "Both.", refs={"task": [shared["id"], other["id"]]})
+    message(api, "pd-test", "human:ben", "Both.", refs={"task": [shared["id"], other["id"]]})
     refused = message(
-        api, "pd-test", "human:cara", "Budget first.", expected=409, refs={"task": [other["id"], shared["id"]]}
+        api, "pd-test", "human:ben", "Budget first.", expected=409, refs={"task": [other["id"], shared["id"]]}
     )
     assert refused["error"]["code"] == "reach_closed"
     for ref in ({"id": shared["id"]}, [[shared["id"]]]):
@@ -472,3 +502,61 @@ def test_a_bots_task_comment_is_checked_against_its_reach_as_a_thread_post_is(ap
         headers=headers("pd-test"),
     )
     assert fine.status_code == 200, fine.text
+
+
+def two_levels_down(api):
+    """ops reports to product-design, which reports to cpo, who reports to Ben: ops is two levels below cpo's manager."""
+    chart(api)
+    as_bot(api, "ops", "ops-test")
+
+
+def test_a_bot_two_levels_down_is_refused_a_person_whatever_it_shares_with_them(api):
+    two_levels_down(api)
+    # Ben requested a task in ops's tree, is a reader of it, and chatted with ops in another conversation.
+    child = task(api, "pd-test", "bot:ops", title="Child of Ben's task", readers=["human:ben"])
+    asked = message(api, "ben-test", "ops", "Hello ops")
+    other = api.post(
+        "/api/v2/threads",
+        json={"title": "Other", "audience": "members", "members": ["bot:ops"]},
+        headers=headers("ben-test"),
+    )
+    assert other.status_code == 200, other.text
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:ops", child["id"], status="waiting", waiting_on="human:ben", note="Question for Ben?")
+    for title in ("Straight to Ben",):
+        task(api, "ops-test", "human:ben", title=title, expected=409)
+    refused = message(api, "ops-test", "human:ben", "A question.", expected=409, refs={"task": [child["id"]]})
+    assert refused["error"]["code"] == "reach_closed" and refused["error"]["via"] == "bot:product-design"
+    assert "Send it to product-design, who can pass it on." in refused["error"]["detail"]
+    # An ask that becomes a question task owned by Ben is checked the same way.
+    r = api.post(
+        f"/api/v2/tasks/{child['id']}",
+        json={"owner": "human:ben", "version": child["version"]},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 409, r.text
+    # Bot to bot is as before.
+    task(api, "ops-test", "bot:product-design", title="To its manager")
+    assert asked["id"]
+
+
+def test_a_bot_two_levels_down_may_answer_a_person_who_came_to_it_or_handed_it_the_task(api):
+    two_levels_down(api)
+    asked = message(api, "ben-test", "ops", "Status on the note?")
+    message(api, "ops-test", "human:ben", "Done.", in_reply_to=asked["id"])  # a direct reply
+    with api.app.state.store.read() as c:
+        room = c.execute("SELECT conversation_id FROM messages WHERE id=?", (asked["id"],)).fetchone()[0]
+    message(api, "ops-test", "human:ben", "One more thing.", conversation_id=room)  # the conversation Ben opened
+    handed = task(api, "ben-test", "bot:ops", title="Ben's own task for ops")
+    message(api, "ops-test", "human:ben", "A question on it.", refs={"task": [handed["id"]]})
+    # Ben handed it the task, so a question task for Ben on it passes; a new task for Ben does not.
+    task(api, "ops-test", "human:ben", title="Unrelated", expected=409)
+
+
+def test_a_direct_report_reaches_the_owner_and_other_people_stay_closed(api):
+    chart(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot='product-design'")
+    task(api, "pd-test", "human:ana", title="From a direct report")
+    message(api, "pd-test", "human:ana", "Hello owner.")
+    task(api, "pd-test", "human:cara", title="To Cara", expected=409)

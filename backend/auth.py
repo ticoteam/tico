@@ -771,7 +771,7 @@ class Auth:
 
     def system_bot(self, slug):
         """The built-in bots (the Assistant, BotOps, the Librarian, the Strategy Bot, the Health Monitor, the Task
-        Manager, the Bookkeeper): they act for the whole company, so only the company owner changes them. Admins
+        Manager, the Bookkeeper, Counsel, the Brand Owner): they act for the whole company, so only the company owner changes them. Admins
         manage every other bot."""
         return slug in (
             self.settings.assistant_bot,
@@ -783,6 +783,7 @@ class Auth:
             "task-manager",
             "bookkeeper",
             H.COUNSEL,
+            H.BRAND_OWNER,
         )
 
     def bot_manager(self, c, who, slug, operator=None):

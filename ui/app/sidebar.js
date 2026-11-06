@@ -739,7 +739,7 @@ $('#org-history').onclick = () => {
 // `reports_to` is untouched, and a helper's reports hang where it would have. The Strategy Bot is an Assistant helper.
 const isHelperBot = e => isBuiltInBot(e.id) || !!e.helper;
 // The order here and on Goals: the Assistant, then the other built-ins, then other helpers.
-const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'task-manager', 'bookkeeper', COUNSEL_BOT, 'inbox'];
+const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'task-manager', 'bookkeeper', COUNSEL_BOT, 'brand', 'inbox'];
 const helperRank = e => e.id === assistantBot() ? -1 : HELPER_ORDER.includes(e.id) ? HELPER_ORDER.indexOf(e.id) : 99;
 function orgTreeWithHelpers(byParent) {
   const out = {}, bot = {}, parentOf = {};
