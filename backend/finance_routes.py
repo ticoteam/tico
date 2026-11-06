@@ -8,6 +8,8 @@ call also carries the result it just made, and a retry (the saved answer, or onc
 the action) reads the rest afresh through the caller's current view: a reason that names amounts shows only while that
 view still covers them."""
 
+import contextvars
+import json
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
 
@@ -130,17 +132,44 @@ def books_problem(e: books_link.BrokerFailed) -> Problem:
 
 
 def install(app, store, auth, mutate):
+    # The private-line audit a request has armed (spec §7.5): its reader, the private accounts that reader sees in full,
+    # and the ids the request names. `viewer` clears it at the start of every request, so it never outlives one.
+    armed: contextvars.ContextVar[tuple[str, tuple[str, ...], frozenset[str]] | None] = contextvars.ContextVar(
+        "finance_private_read", default=None
+    )
+
     def viewer(request):
         who = request.state.identity
         auth.domain(who)
+        armed.set(None)
         return who
+
+    def audited(result):
+        """`result`, after writing the armed audit when it carries a private line the reader sees in full: one row per
+        request, naming those lines alone. A request that names the line (a line's detail, a metric on it) reads it
+        too. Ids are UUIDs, so finding one in the result's text is exact."""
+        pending = armed.get()
+        if pending is None:
+            return result
+        actor, lines, named = pending
+        text = result if isinstance(result, str) else json.dumps(result, default=str)
+        found = [a for a in lines if a in named or a in text]
+        if found:
+            armed.set(None)
+            try:
+                with store.transaction() as c:
+                    finance.note_full_read(c, actor, found)
+            except finance.FinanceError as e:
+                raise problem(e) from None
+        return result
 
     def read(fn):
         try:
             with store.read() as c:
-                return fn(c)
+                result = fn(c)
         except finance.FinanceError as e:
             raise problem(e) from None
+        return audited(result)
 
     def record_export(actor, kind, year):
         """A CSV export is recorded in events for whoever it was made for (spec §7.5)."""
@@ -150,21 +179,22 @@ def install(app, store, auth, mutate):
         except finance.FinanceError as e:
             raise problem(e) from None
 
-    def audit_private_read(actor):
-        """A request by someone other than the owner who reads private lines in full is written to events (spec §7.5),
-        once per request, whatever the route answers. The owner's own reads are not logged."""
+    def audit_private_read(request, actor):
+        """Arm the private-line audit (spec §7.5) for a reader other than the owner who sees private lines in full. The
+        row is written only when what the request returns carries one of those lines (`audited`): a read that touches
+        none writes nothing. The owner's own reads are not logged."""
         try:
             with store.read() as c:
                 lines = finance.full_read_lines(c, actor)
-            if lines:
-                with store.transaction() as c:
-                    finance.note_full_read(c, actor, lines)
         except finance.FinanceError as e:
             raise problem(e) from None
+        if lines:
+            named = frozenset(str(v) for v in (*request.path_params.values(), *request.query_params.values()))
+            armed.set((actor, tuple(lines), named))
 
     def as_viewer(request, view_as):
         """The caller, or for the owner the teammate they view Finance as (audited). A request by someone other than
-        the owner who reads private lines in full is written to events (spec §7.5), once per request."""
+        the owner that returns private lines in full is written to events (spec §7.5), once per request."""
         who = viewer(request)
         if not view_as or view_as == who.actor:
             actor = who.actor
@@ -175,7 +205,7 @@ def install(app, store, auth, mutate):
                     finance.note_view_as(c, who.actor, actor)
             except finance.FinanceError as e:
                 raise problem(e) from None
-        audit_private_read(actor)
+        audit_private_read(request, actor)
         return actor
 
     @app.get("/api/v2/finance/budgets")
@@ -314,7 +344,7 @@ def install(app, store, auth, mutate):
         """Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies: for a finance admin who
         sees sources. The ordinary trigger routes never show these bodies."""
         who = viewer(request)
-        audit_private_read(who.actor)
+        audit_private_read(request, who.actor)
         return read(lambda c: finance_reads.webhook_deliveries(c, who.actor, limit=limit))
 
     @app.get("/api/v2/finance/access")
@@ -822,7 +852,7 @@ def install(app, store, auth, mutate):
         """A month's close checklist, for teammates who do the books. The money accounts still behind are listed up to
         `top_n`; the rest fold into "Other · n"."""
         who = viewer(request)
-        audit_private_read(who.actor)
+        audit_private_read(request, who.actor)
         return read(lambda c: finance_reads.close_checklist(c, who.actor, month, top_n=top_n))
 
     @app.get("/api/v2/finance/action-kinds")
@@ -1035,14 +1065,15 @@ def install(app, store, auth, mutate):
         """Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key
         is the action's key, so a retry never acts twice. `dry_run` writes nothing and says what would happen."""
         who = viewer(request)
-        audit_private_read(who.actor)  # the receipt and a dry run both carry the action's impact (spec 7.5)
+        audit_private_read(request, who.actor)  # the receipt and a dry run both carry the action's impact (spec 7.5)
         key = (request.headers.get("idempotency-key") or "").strip()
         if body.dry_run:
             try:
                 with store.transaction() as c:
-                    return finance.act(c, who.actor, body.kind, body.payload, key or "dry-run", dry_run=True).as_dict()
+                    tried = finance.act(c, who.actor, body.kind, body.payload, key or "dry-run", dry_run=True).as_dict()
             except finance.FinanceError as e:
                 raise problem(e) from None
+            return audited(tried)
         first = {}
 
         def work(c):
@@ -1061,30 +1092,32 @@ def install(app, store, auth, mutate):
             finance.banking_ring()  # after the commit: the worker syncs it now
         done = first.get("result")
         if done is not None and not done.replayed and done.action_id == saved.get("action_id"):
-            return {
-                **saved,
-                "code": done.code,
-                "reason": done.reason,
-                "approval_id": done.approval_id,
-                "approver": done.approver,
-                "rule": done.rule,
-                "result": dict(done.result),
-                "impact": dict(done.impact),
-            }
+            return audited(
+                {
+                    **saved,
+                    "code": done.code,
+                    "reason": done.reason,
+                    "approval_id": done.approval_id,
+                    "approver": done.approver,
+                    "rule": done.rule,
+                    "result": dict(done.result),
+                    "impact": dict(done.impact),
+                }
+            )
         if not saved.get("action_id"):
-            return saved
+            return audited(saved)
         with store.read() as c:
             now = finance_reads.action_for(c, who.actor, saved["action_id"])
-        return {**saved, **now} if now else saved
+        return audited({**saved, **now} if now else saved)
 
     @app.get("/api/v2/finance/actions/{action_id}")
     def finance_action(request: Request, action_id: ID):
         """An action's status, for whoever asked for it, the person named to decide its approval, or whoever's current
         view covers what it is about. Its reason shows to the approver, and to others only while their view covers it."""
         who = viewer(request)
-        audit_private_read(who.actor)
+        audit_private_read(request, who.actor)
         with store.read() as c:
             found = finance_reads.action_for(c, who.actor, action_id)
         if found is None:
             raise Problem("not_found", "No such Finance action", 404)
-        return found
+        return audited(found)

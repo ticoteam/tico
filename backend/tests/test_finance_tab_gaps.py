@@ -695,7 +695,7 @@ def test_a_vendor_named_unattributed_is_its_own_row_apart_from_no_vendor(books):
 
 def test_a_full_read_of_a_private_line_by_someone_else_is_written_to_events(api):
     """Spec 7.5: a full read of a private line is written to events. Eve holds full detail of account 6900 (private), so
-    her requests leave a row naming it; the owner's own requests leave none."""
+    her P&L, which shows the line, leaves a row naming it; the owner's own requests leave none."""
     from backend.finance import actions as FA
     from backend.tests.test_finance_fixtures import _seed
 
@@ -703,6 +703,7 @@ def test_a_full_read_of_a_private_line_by_someone_else_is_written_to_events(api)
     with store.transaction() as c:
         _seed(c)
         assert FA.ensure_setup(c, store.settings.owner_email)
+        open_views(c)  # eve sees her own expenses, so her P&L has the line
         private = account(c, "6900")
         assert (
             act(
@@ -717,10 +718,11 @@ def test_a_full_read_of_a_private_line_by_someone_else_is_written_to_events(api)
     assert [tuple(r) for r in rows] == [("human:eve", private)]
 
 
-def test_each_request_by_someone_else_with_private_detail_leaves_one_row_for_the_read(api):
-    """Spec 7.5: one path serves the tools, search and exports, and each request leaves one row. Eve holds full detail of
-    account 6900, so each of her requests (search, the tax CSV, the close, the webhook bodies, an action's status, and a
-    dry run) adds exactly one 'finance.private_read' row, whatever the route answers. The owner's requests add none."""
+def test_only_a_request_that_returns_a_private_line_leaves_a_row_and_only_one(api):
+    """Spec 7.5: a full read of a private line is written to events, once per request; a read that returns no private
+    line writes nothing. Eve holds full detail of account 6900: her P&L and the line's own detail return it and leave one
+    row each; a metric and a contact search do not return it and leave none. Every other route follows the same rule: a
+    row exactly when the answer carries the line. The owner's requests add none."""
     from backend.finance import actions as FA
     from backend.tests.test_finance_fixtures import _seed
 
@@ -728,6 +730,7 @@ def test_each_request_by_someone_else_with_private_detail_leaves_one_row_for_the
     with store.transaction() as c:
         _seed(c)
         assert FA.ensure_setup(c, store.settings.owner_email)
+        open_views(c)  # eve sees her own expenses, so her P&L has the line
         private = account(c, "6900")
         payload = {"account_id": private, "private": True, "full_detail": ["human:eve"]}
         done = act(c, OWNER, "private_lines_set", payload)
@@ -739,15 +742,7 @@ def test_each_request_by_someone_else_with_private_detail_leaves_one_row_for_the
                 "SELECT COUNT(*) FROM events WHERE action='finance.private_read' AND actor=?", (actor,)
             ).fetchone()[0]
 
-    reads = [
-        ("GET", "/api/v2/finance/search?kind=entry"),
-        ("GET", "/api/v2/finance/tax/sales-tax.csv?year=2026"),
-        ("GET", "/api/v2/finance/close/2026-10"),
-        ("GET", "/api/v2/finance/webhook-deliveries"),
-        ("GET", f"/api/v2/finance/actions/{done.action_id}"),
-        ("POST", "/api/v2/finance/actions"),
-    ]
-    for method, path in reads:
+    def eve(method, path):
         before = rows("human:eve")
         if method == "GET":
             r = api.get(path, headers=headers("eve-test"))
@@ -758,9 +753,34 @@ def test_each_request_by_someone_else_with_private_detail_leaves_one_row_for_the
                 headers=headers("eve-test"),
             )
         assert r.status_code < 500, (path, r.text)
-        assert rows("human:eve") == before + 1, path
+        return r, rows("human:eve") - before
+
+    for path in ("/api/v2/finance/pnl", f"/api/v2/finance/lines/{private}"):
+        r, added = eve("GET", path)
+        assert r.status_code == 200 and private in r.text, (path, r.text[:300])
+        assert added == 1, path
+    with store.read() as c:
+        last = c.execute(
+            "SELECT target FROM events WHERE action='finance.private_read' ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+    assert last[0] == private
+    for path in ("/api/v2/finance/metrics/cash", "/api/v2/finance/search?kind=contact"):
+        r, added = eve("GET", path)
+        assert r.status_code == 200 and private not in r.text, (path, r.text[:300])
+        assert added == 0, path
+    for method, path in (
+        ("GET", "/api/v2/finance/search?kind=entry"),
+        ("GET", "/api/v2/finance/tax/sales-tax.csv?year=2026"),
+        ("GET", "/api/v2/finance/close/2026-10"),
+        ("GET", "/api/v2/finance/webhook-deliveries"),
+        ("GET", f"/api/v2/finance/actions/{done.action_id}"),
+        ("POST", "/api/v2/finance/actions"),
+    ):
+        r, added = eve(method, path)
+        assert added == int(r.status_code < 400 and private in r.text), (path, r.status_code, r.text[:300])
     before = rows(OWNER)
     api.get("/api/v2/finance/close/2026-10", headers=headers("ana-test"))
+    api.get("/api/v2/finance/pnl", headers=headers("ana-test"))
     assert rows(OWNER) == before == 0
 
 
