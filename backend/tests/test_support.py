@@ -509,6 +509,7 @@ def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_appro
 
 def test_a_draft_that_is_not_exactly_a_report_is_refused(environment, hq):  # noqa: F811  (the fixture)
     import hashlib
+    import uuid
     sha = lambda text: hashlib.sha256(text.encode()).hexdigest()
     api = environment()
     drafts_only(api)
@@ -522,7 +523,8 @@ def test_a_draft_that_is_not_exactly_a_report_is_refused(environment, hq):  # no
         ({"message": REPORT, "content_sha256": sha(REPORT), "diagnostics": "abc"}, "not diagnostics"),
         ({"message": REPORT, "content_sha256": sha(REPORT), "include_ids": "yes"}, "true or false"),
     ]:
-        r = api.post("/api/v2/approvals", json={"kind": "support", "payload": payload}, headers=bot)
+        r = api.post("/api/v2/approvals", json={"kind": "support", "payload": payload},
+                     headers={**bot, "Idempotency-Key": str(uuid.uuid4())})
         assert r.status_code >= 400 and why in r.text, (why, r.status_code, r.text)
 
 

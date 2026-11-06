@@ -17,7 +17,18 @@ from backend.tests.test_batch import approval_for_ana
 
 def turn(api, text="Please do it"):
     """The Assistant's turn for the person's own message: its run token, with no citation header."""
-    return assistant_turn(api, "ana-test", text)[1]["token"]
+    before = getattr(api, "last_turn", None)
+    if before is None:
+        runner_, attempt = assistant_turn(api, "ana-test", text)
+    else:
+        # A second turn is the same runner's: the first run ends, then the new message is the next job.
+        runner_, first = before
+        post(api, f"attempts/{first['id']}/started", {"thread_id": f"turn-{first['id']}"}, token=runner_["token"])
+        post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, token=runner_["token"])
+        say(api, text, "ana-test")
+        attempt = post(api, "jobs/claim", {}, token=runner_["token"])["attempt"]
+    api.last_turn = (runner_, attempt)
+    return attempt["token"]
 
 
 def call(api, token, method, path, body=None, expected=200):
