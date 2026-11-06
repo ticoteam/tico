@@ -180,7 +180,7 @@ async function linkedTasks({hub, browser}) {
 }
 
 (async () => {
-  const hub = await startHub({seeds: ['org', 'toured']});
+  const hub = await startHub({seeds: ['org', 'toured', 'finance']})   // e2e-meetings' seeds, less Gina: Finance set up, or the page's finance read is a 404;
   let browser;
   try {
     browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
