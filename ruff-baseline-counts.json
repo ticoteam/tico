@@ -4,9 +4,8 @@
   },
   "backend/app.py": {
     "B904": 3,
-    "B905": 3,
-    "BLE001": 16,
-    "F401": 5
+    "BLE001": 15,
+    "F401": 4
   },
   "backend/ask_ingest.py": {
     "B904": 4,
