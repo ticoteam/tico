@@ -364,7 +364,7 @@ class Published:
                     times[tag.lstrip("v")] = str(rel["published_at"])
             with self.lock:
                 self.times = times
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
             log.debug("Release times unavailable: %s", type(exc).__name__)
         finally:
             self.checked = self.clock()
