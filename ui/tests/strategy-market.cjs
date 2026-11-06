@@ -34,7 +34,7 @@ async function onePage(page, tag) {
   for (const key of ['money', 'reach', 'saying']) assert.equal(await page.locator(`#mkt-q-${key} .mkt-ans`).count(), 0, `${tag}: no ${key} line`);
   // What changed?
   assert.equal(await page.locator('.mkt-items li').count(), 5, tag + ': every item');
-  assert.deepEqual(await texts(page, '.mkt-items .mkt-kind'), ['Change', 'Change', 'Signal', 'Theme', 'Size']);
+  assert.deepEqual(await texts(page, '.mkt-items .mkt-kind'), ['CHANGE', 'CHANGE', 'SIGNAL', 'THEME', 'SIZE']);
   assert.equal(await page.locator('.mkt-items li').first().locator('.mkt-bet').innerText(), 'Bet 1', tag + ': the item tags its bet');
   assert.equal(await page.locator('.mkt-items .mkt-bet').count(), 1, tag + ': only that item');
   assert.equal(await page.locator('.mkt-bet').getAttribute('href'), '#/strategy');
