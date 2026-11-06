@@ -372,12 +372,14 @@ def create_app(settings=None):
                 with system_routines.recording(store, key) as run:
                     work()
                     run.did("Done", quiet=True)
+
             def release_check():
                 # The release check (and the anonymous count that rides on it) runs even when nobody has the
                 # page open; it is a no-op until its six hours are up.
                 releases.notice()
                 # Subscribed updates for bots, as quiet notes; nothing is fetched while no bot subscribes.
                 update_feeds.tick(store)
+
             rest = heartbeat.Rest()
             while not stop.is_set():
                 # The Heartbeat (backend/heartbeat.py): GitHub sync, personal alerts, the tick's due-time and recovery
@@ -397,16 +399,21 @@ def create_app(settings=None):
                     except Exception as exc:
                         telemetry.capture("scheduler", exc)
                         import logging
+
                         logging.getLogger("tico.scheduler").error("Scheduler tick failed: %s", type(exc).__name__)
                     try:
                         # Tools > Settings > Email's pending and failing Workspace key is checked again (backend/google_workspace.py).
                         from . import google_workspace as workspace_checks
-                        await asyncio.to_thread(system_routines.pass_of, store, "workspace_check", workspace_checks.tick, store)
+
+                        await asyncio.to_thread(
+                            system_routines.pass_of, store, "workspace_check", workspace_checks.tick, store
+                        )
                     except Exception as exc:
                         telemetry.capture("google_workspace", exc)
                     try:
                         # Workspace inboxes' queued email, sent by the server itself after its undo window and pacing.
                         from . import email_sending
+
                         await asyncio.to_thread(email_sending.drain, store, auth)
                     except Exception as exc:
                         telemetry.capture("email_drain", exc)
@@ -11742,6 +11749,7 @@ def create_app(settings=None):
     system_routines.install(app, store, auth, mutate)
     maintenance.install(app, store, auth, mutate)
     from . import heartbeat as heartbeat_screen
+
     heartbeat_screen.install(app, store, auth, mutate)
     from . import task_rules
 

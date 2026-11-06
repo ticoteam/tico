@@ -284,9 +284,17 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("getHealth", "get", "/api/v2/health")
     from datetime import datetime, timezone
     from backend import heartbeat
-    heartbeat.record(api.app.state.store, datetime.now(timezone.utc), [   # a beat, so a step and the log have numbers
-        heartbeat.Ran("due_reminders", 3, "1 reminder sent", False), heartbeat.Ran("snooze_ends", 1, "Nothing due", True),
-        heartbeat.Ran("queue_check", 2, None, True, "Failed: unexpected error (RuntimeError)")], 7)
+
+    heartbeat.record(
+        api.app.state.store,
+        datetime.now(timezone.utc),
+        [  # a beat, so a step and the log have numbers
+            heartbeat.Ran("due_reminders", 3, "1 reminder sent", False),
+            heartbeat.Ran("snooze_ends", 1, "Nothing due", True),
+            heartbeat.Ran("queue_check", 2, None, True, "Failed: unexpected error (RuntimeError)"),
+        ],
+        7,
+    )
     call("getHeartbeat", "get", "/api/v2/heartbeat")
     call("saveHeartbeat", "put", "/api/v2/heartbeat", json={"interval_s": 15})
     call("listToolIndex", "get", "/api/v2/tool-index")

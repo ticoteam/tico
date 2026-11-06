@@ -2959,6 +2959,7 @@ class MaintenanceUpdate(Contract):
 
 class HeartbeatUpdate(Contract):
     """The seconds between Heartbeat beats (backend/heartbeat.py), 5 to 60."""
+
     interval_s: int = Field(ge=5, le=60)
 
 

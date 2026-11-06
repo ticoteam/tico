@@ -18,8 +18,12 @@ def mirrors(api):
         out = {}
         for row in c.execute("SELECT * FROM automations WHERE builtin=1 AND json_extract(flow,'$.readonly')=1"):
             flow = json.loads(row["flow"])
-            out[row["id"]] = (flow["trigger"]["name"], (flow.get("source") or {}).get("id"), row["deleted_at"],
-                              row["enabled"])
+            out[row["id"]] = (
+                flow["trigger"]["name"],
+                (flow.get("source") or {}).get("id"),
+                row["deleted_at"],
+                row["enabled"],
+            )
         return out
 
 
@@ -28,7 +32,7 @@ def live(api, name):
 
 
 def sync(api):
-    M.catch_up(db(api))                                          # a cutover that waited for its owner, as the tick does
+    M.catch_up(db(api))  # a cutover that waited for its owner, as the tick does
     with db(api).transaction() as c:
         return automations.sync_system_mirrors(c)
 

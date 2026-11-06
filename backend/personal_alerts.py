@@ -603,6 +603,7 @@ class Alerts:
         # thread, after the beat: a pass with nothing to send writes nothing.
         from . import heartbeat
         from . import system_routines as SR
+
         words, quiet, error, begun = "Nothing to send", True, None, time.monotonic()
         try:
             self.collect()
@@ -623,8 +624,9 @@ class Alerts:
             error = SR.failure_words(exc)
             logging.getLogger("tico.alerts").exception("Personal alert worker failed")
         finally:
-            heartbeat.record_late(self.store, "personal_alerts", words, quiet, error,
-                                  round((time.monotonic() - begun) * 1000))
+            heartbeat.record_late(
+                self.store, "personal_alerts", words, quiet, error, round((time.monotonic() - begun) * 1000)
+            )
             self.worker_lock.release()
 
     def tick(self):

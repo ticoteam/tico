@@ -230,12 +230,16 @@ def restore_check(store, s3, cloudwatch, bucket):
 
 def health(store, cloudwatch):
     from . import heartbeat
+
     with store.read() as c:
         rows = {r["service"]: dict(r) for r in c.execute("SELECT * FROM service_health")}
         # The loop's age is its last beat or pass, whichever is fresher (backend/heartbeat.py `liveness`).
         _, loop_age, _ = heartbeat.liveness(c)
-    age_metrics = {"scheduler": "SchedulerAgeSeconds", "backup": "BackupAgeSeconds",
-                   "restore-check": "RestoreCheckAgeSeconds"}
+    age_metrics = {
+        "scheduler": "SchedulerAgeSeconds",
+        "backup": "BackupAgeSeconds",
+        "restore-check": "RestoreCheckAgeSeconds",
+    }
     for service, name in age_metrics.items():
         row = rows.get(service, {})
         last = H.parse_ts(row.get("last_succeeded_at"))

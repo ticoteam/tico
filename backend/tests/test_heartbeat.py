@@ -4,6 +4,7 @@ something happened, a repeated failure folded into it; step rows only with a wri
 or every 5 minutes, their counts held in memory till then), its interval is a setting read each pass, the loop reads as
 alive within one interval and a minute, and GET/PUT /api/v2/heartbeat show and set it.
 Ana owns the team, Ben is an admin, Cara a member (backend/tests/test_api.py). Synthetic fixtures only."""
+
 import dataclasses
 import json
 from datetime import datetime, timedelta, timezone
@@ -18,10 +19,30 @@ from backend.tests.mirror_rows import dead_mirror, live, mirrors, sync
 
 # Two hours ago: a beat's day counts are read against the clock, and every beat below stays inside the day.
 AT = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=2)
-ORDER = ["github_sync", "personal_alerts", "stall_marks", "turn_fixer", "run_housekeeping", "ship_deployed", "task_loops",
-         "snooze_ends", "queue_check", "milestone_waits", "due_reminders", "updates", "company_page", "ask_deadlines",
-         "thread_digest", "thread_bot_digest", "thread_loop_guard", "go_live_expiry", "stall_checks", "approval_expiry",
-         "repository_waits", "call_sweeps"]
+ORDER = [
+    "github_sync",
+    "personal_alerts",
+    "stall_marks",
+    "turn_fixer",
+    "run_housekeeping",
+    "ship_deployed",
+    "task_loops",
+    "snooze_ends",
+    "queue_check",
+    "milestone_waits",
+    "due_reminders",
+    "updates",
+    "company_page",
+    "ask_deadlines",
+    "thread_digest",
+    "thread_bot_digest",
+    "thread_loop_guard",
+    "go_live_expiry",
+    "stall_checks",
+    "approval_expiry",
+    "repository_waits",
+    "call_sweeps",
+]
 
 
 class Telemetry:
@@ -44,7 +65,9 @@ def fake(monkeypatch):
             if isinstance(answer, Exception):
                 raise answer
             return answer
+
         return run
+
     steps = [dataclasses.replace(step, run=runner(step.key)) for step in HB.STEPS]
     monkeypatch.setattr(HB, "STEPS", steps)
     monkeypatch.setattr(HB, "BY_KEY", {step.key: step for step in steps})
@@ -73,7 +96,7 @@ def test_the_steps_run_in_their_order_and_the_server_loops_own_need_the_app(api,
     beat(api, scheduler_of(api), AT)
     assert ran == ORDER, "every step is due on a first beat"
     ran.clear()
-    beat(api, scheduler_of(api), AT + timedelta(hours=1), app=False)   # a bare Scheduler.tick (tests, a script)
+    beat(api, scheduler_of(api), AT + timedelta(hours=1), app=False)  # a bare Scheduler.tick (tests, a script)
     assert ran == [k for k in ORDER if not HB.BY_KEY[k].loop]
     assert {"github_sync", "personal_alerts", "repository_waits", "call_sweeps"}.isdisjoint(ran)
 
@@ -117,7 +140,7 @@ def test_a_poll_never_runs_more_often_than_every_10_seconds(api, fake):
     scheduler = scheduler_of(api)
     beat(api, scheduler, AT)
     ran.clear()
-    beat(api, scheduler, AT + timedelta(seconds=5))              # a 5-second interval
+    beat(api, scheduler, AT + timedelta(seconds=5))  # a 5-second interval
     polls = {k for k in ORDER if HB.BY_KEY[k].kind == "poll"}
     assert polls.isdisjoint(ran) and "run_housekeeping" in ran
     ran.clear()
@@ -176,7 +199,10 @@ def test_a_quiet_beat_is_counted_not_stored(api, fake):
     # A changed result is written at once; otherwise the counts go down every 5 minutes.
     answers["run_housekeeping"] = ("Nothing to clean", True)
     beat(api, scheduler, AT + timedelta(seconds=30))
-    assert stored("run_housekeeping")["runs_count"] == 4 and stored("run_housekeeping")["last_result"] == "Nothing to clean"
+    assert (
+        stored("run_housekeeping")["runs_count"] == 4
+        and stored("run_housekeeping")["last_result"] == "Nothing to clean"
+    )
     beat(api, scheduler, AT + timedelta(seconds=40))
     assert stored("turn_fixer")["runs_count"] == 4, "flushed with the changed result's write"
     assert stored("run_housekeeping")["runs_count"] == 4
@@ -210,11 +236,12 @@ def test_old_beats_are_pruned_hourly_inside_the_beat(api, fake, monkeypatch):
     def stored(at):
         with store.transaction() as c:
             HB._beat_row(c, at, [HB.Ran("snooze_ends", 1, "1 snooze ended", False)], 1)
+
     stored(AT - timedelta(days=8))
-    beat(api, scheduler_of(api), AT)                             # first beat: prunes
+    beat(api, scheduler_of(api), AT)  # first beat: prunes
     assert rows(api, "SELECT * FROM heartbeat_beats") == []
     stored(AT - timedelta(days=8))
-    beat(api, scheduler_of(api), AT + timedelta(minutes=30))     # inside the hour: not again
+    beat(api, scheduler_of(api), AT + timedelta(minutes=30))  # inside the hour: not again
     assert len(rows(api, "SELECT * FROM heartbeat_beats")) == 1
     beat(api, scheduler_of(api), AT + timedelta(hours=1))
     assert rows(api, "SELECT * FROM heartbeat_beats") == []
@@ -225,13 +252,21 @@ def test_old_beats_are_pruned_hourly_inside_the_beat(api, fake, monkeypatch):
     with store.transaction() as c:
         HB.prune(c, AT + timedelta(minutes=10))
     assert [r["started_at"] for r in rows(api, "SELECT started_at FROM heartbeat_beats ORDER BY started_at")] == [
-        HB.S.stamp(AT + timedelta(minutes=n)) for n in (2, 3, 4)]
+        HB.S.stamp(AT + timedelta(minutes=n)) for n in (2, 3, 4)
+    ]
 
 
 def test_the_interval_is_clamped_and_read_each_pass(api):
     store = api.app.state.store
     assert (HB.clamp(1), HB.clamp(5), HB.clamp(15), HB.clamp(60), HB.clamp(600), HB.clamp("x"), HB.clamp(None)) == (
-        5, 5, 15, 60, 60, 10, 10)
+        5,
+        5,
+        15,
+        60,
+        60,
+        10,
+        10,
+    )
     assert HB.interval(store) == HB.INTERVAL_DEFAULT == 10
     with store.transaction() as c:
         assert HB.save_interval(c, "human:ana", 2) == 5
@@ -247,7 +282,7 @@ def test_get_shows_the_steps_and_the_log_and_put_needs_an_owner_or_admin(api, fa
     scheduler = scheduler_of(api)
     for n in range(3):
         beat(api, scheduler, AT + timedelta(seconds=10 * n))
-    data = get(api, "heartbeat", token="cara-test")              # any signed-in person reads it
+    data = get(api, "heartbeat", token="cara-test")  # any signed-in person reads it
     assert data["interval_s"] == 10 and (data["interval_min"], data["interval_max"]) == (5, 60)
     assert data["can_change"] is False and data["last_beat_at"]
     assert [k["key"] for k in data["kinds"]] == ["due", "recovery", "poll"]
@@ -307,8 +342,10 @@ def test_a_steps_switch_is_honoured_and_shows_on_its_row(api, fake):
     assert "ask_deadlines" not in ran and "approval_expiry" in ran
     step = next(s for s in get(api, "heartbeat")["steps"] if s["key"] == "ask_deadlines")
     assert step["switch"] and step["on"] is False and step["every"] == "Off" and step["can_change"] is True
-    assert next(s for s in get(api, "heartbeat", token="cara-test")["steps"]
-                if s["key"] == "ask_deadlines")["can_change"] is False
+    assert (
+        next(s for s in get(api, "heartbeat", token="cara-test")["steps"] if s["key"] == "ask_deadlines")["can_change"]
+        is False
+    )
     put(api, "system-routines/ask_deadlines", {"on": True}, token="cara-test", expected=403)
     put(api, "system-routines/ask_deadlines", {"on": True}, token="ben-test")
     ran.clear()
@@ -322,7 +359,9 @@ def test_a_late_outcome_lands_on_its_step_row(api):
     HB.record_late(store, "personal_alerts", "Nothing to send", True, ms=3)
     assert rows(api, "SELECT * FROM heartbeat_steps") == [], "a quiet late outcome writes nothing"
     shown = next(s for s in get(api, "heartbeat")["steps"] if s["key"] == "personal_alerts")
-    assert shown["last_result"] == "Nothing to send" and shown["last_run_at"] and shown["last_ms"] == 3, "noted in memory"
+    assert shown["last_result"] == "Nothing to send" and shown["last_run_at"] and shown["last_ms"] == 3, (
+        "noted in memory"
+    )
     HB.record_late(store, "personal_alerts", "2 alerts tried", False, ms=4)
     (step,) = rows(api, "SELECT * FROM heartbeat_steps")
     assert step["last_did"] == "2 alerts tried" and step["runs_count"] == 0, "its beat counted the run"
@@ -386,8 +425,10 @@ def test_the_loop_is_alive_within_one_interval_and_a_minute(api):
         assert HB.liveness(c, now)[2] is False, "200 s ago"
     # The fresher of the beat and the scheduler's pass counts; at 10 s the threshold is the minute floor plus 10.
     with store.transaction() as c:
-        c.execute("INSERT INTO service_health(service,last_succeeded_at) VALUES('scheduler',?)",
-                  (HB.S.stamp(now - timedelta(seconds=5)),))
+        c.execute(
+            "INSERT INTO service_health(service,last_succeeded_at) VALUES('scheduler',?)",
+            (HB.S.stamp(now - timedelta(seconds=5)),),
+        )
         HB.save_interval(c, "human:ana", 10)
     with store.read() as c:
         assert HB.liveness(c, now)[1:] == (5.0, True)
@@ -401,6 +442,7 @@ def test_the_rest_of_the_pass_carries_a_skipped_passs_failures():
     class Ctx:
         def __init__(self, *failures):
             self.failures = list(failures)
+
     assert rest.due(Ctx()) is True
     clock[0] = 5
     assert rest.due(Ctx({"ship_deployed": "RuntimeError"})) is False
@@ -415,7 +457,7 @@ def test_the_rest_of_the_pass_carries_a_skipped_passs_failures():
 def test_tick_ms_is_the_ticks_own_time(api):
     scheduler = scheduler_of(api)
     ctx = HB.Context(scheduler, AT)
-    ctx.started -= 120                          # a beat that took two minutes
+    ctx.started -= 120  # a beat that took two minutes
     scheduler.tick(AT, ctx)
     (row,) = rows(api, "SELECT detail FROM service_health WHERE service='scheduler'")
     assert json.loads(row["detail"])["tick_ms"] < 120_000

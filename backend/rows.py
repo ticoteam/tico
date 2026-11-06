@@ -741,6 +741,7 @@ class MaintenanceRunStepRow(TypedDict):
 class HeartbeatStepRow(TypedDict):
     """One `heartbeat_steps` row (SELECT *): one Heartbeat step's last run, result and error, and its day counts in two
     12-hour windows (migration 20261106094503_heartbeat)."""
+
     key: str
     last_run_at: str | None
     last_ms: int | None
@@ -763,6 +764,7 @@ class HeartbeatStepRow(TypedDict):
 class HeartbeatBeatRow(TypedDict):
     """One `heartbeat_beats` row (SELECT *): a beat where a step did something or failed; `steps` is those steps' lines
     as JSON ({key, text, ms, error}); a beat repeating only its failures folds into it (`repeat_count`)."""
+
     id: str
     started_at: str
     total_ms: int
@@ -776,6 +778,7 @@ class HeartbeatBeatRow(TypedDict):
 
 class HeartbeatStateRow(TypedDict):
     """The one `heartbeat_states` row (id 1): the last beat, beats in the day windows, quiet beats counted."""
+
     id: int
     last_beat_at: str | None
     window_started_at: str | None

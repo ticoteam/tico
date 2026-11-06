@@ -12,6 +12,7 @@ listed and counted here under the list's Maintenance row (ui/app/automations-mai
 (backend/heartbeat.py) is treated the same: its mirror is never listed, and its runs (`system_runs` job `heartbeat`,
 quiet beats folded) are listed and counted under the list's Heartbeat row (ui/app/automations-heartbeat.js), for anyone
 signed in, as GET /api/v2/heartbeat is."""
+
 import json
 from datetime import timedelta
 
@@ -30,12 +31,12 @@ STATUSES = {
     "held": ("held",),
 }
 JOB_PREFIX = "tico.builtin.job."
-TASK_RULE = "tico.builtin.task_rule"   # a task rule's read-only mirror (redesign_migration `_builtins`)
-SYSTEM_RUN = "sys_"          # a system job's run id, so it never meets an automation run's
-MAINT = "maintenance"        # the Maintenance row's id and the run's owner: Tico itself
-MAINT_RUN = "mnt_"           # a Maintenance run's id here
-HEART = "heartbeat"          # the Heartbeat row's id, and its system job's key
-HEART_RUN = "hb_"            # a Heartbeat run's id here
+TASK_RULE = "tico.builtin.task_rule"  # a task rule's read-only mirror (redesign_migration `_builtins`)
+SYSTEM_RUN = "sys_"  # a system job's run id, so it never meets an automation run's
+MAINT = "maintenance"  # the Maintenance row's id and the run's owner: Tico itself
+MAINT_RUN = "mnt_"  # a Maintenance run's id here
+HEART = "heartbeat"  # the Heartbeat row's id, and its system job's key
+HEART_RUN = "hb_"  # a Heartbeat run's id here
 IDS_MAX = 500
 STEP_WORDS = {
     "filter": "Filter",
@@ -390,19 +391,35 @@ def _maint_shown(c, trigger="", owner="", ids=""):
 
 def heart_row(run):
     status = _system_status(run)
-    return {"id": HEART_RUN + run["id"], "automation_id": HEART, "automation_name": "Heartbeat", "trigger": "system",
-            "owner_id": "tico", "version": 1, "trigger_ref": "system", "started_at": run["started_at"],
-            "finished_at": run["finished_at"], "status": status, "cost": run["cost_usd"] or 0, "started_by": "Scheduled",
-            "outcome": str(run["result"] or ("Done" if status == "ok" else ""))[:140], "step_count": None,
-            "count": run["runs"] or 1}
+    return {
+        "id": HEART_RUN + run["id"],
+        "automation_id": HEART,
+        "automation_name": "Heartbeat",
+        "trigger": "system",
+        "owner_id": "tico",
+        "version": 1,
+        "trigger_ref": "system",
+        "started_at": run["started_at"],
+        "finished_at": run["finished_at"],
+        "status": status,
+        "cost": run["cost_usd"] or 0,
+        "started_by": "Scheduled",
+        "outcome": str(run["result"] or ("Done" if status == "ok" else ""))[:140],
+        "step_count": None,
+        "count": run["runs"] or 1,
+    }
 
 
 def _heart_shown(c, trigger="", owner="", ids=""):
     """Whether the Heartbeat's runs are in a listing narrowed by trigger, owner and ids."""
     kinds = {k for k in str(trigger or "").split(",") if k}
     wanted = {i for i in str(ids or "").split(",") if i}
-    return (H._has_table(c, "system_runs") and (not kinds or "system" in kinds)
-            and (not owner or owner == "tico") and (not wanted or HEART in wanted))
+    return (
+        H._has_table(c, "system_runs")
+        and (not kinds or "system" in kinds)
+        and (not owner or owner == "tico")
+        and (not wanted or HEART in wanted)
+    )
 
 
 def _spread(r, start, step):
@@ -518,22 +535,52 @@ def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, be
             ).fetchall()
         ]
     if status not in ("waiting", "held") and _maint_shown(c, trigger, owner, ids):
-        where = {"done": " AND ok=1 AND finished_at IS NOT NULL", "ok": " AND ok=1 AND finished_at IS NOT NULL",
-                 "failed": " AND finished_at IS NOT NULL AND ok=0", "running": " AND finished_at IS NULL"}.get(status, "")
-        found += [("m", r) for r in c.execute(
-            "SELECT * FROM maintenance_runs WHERE started_at>=?" + where + page_at
-            + " ORDER BY started_at DESC, id DESC LIMIT ?", (since, *marks, limit + 1)).fetchall()]
+        where = {
+            "done": " AND ok=1 AND finished_at IS NOT NULL",
+            "ok": " AND ok=1 AND finished_at IS NOT NULL",
+            "failed": " AND finished_at IS NOT NULL AND ok=0",
+            "running": " AND finished_at IS NULL",
+        }.get(status, "")
+        found += [
+            ("m", r)
+            for r in c.execute(
+                "SELECT * FROM maintenance_runs WHERE started_at>=?"
+                + where
+                + page_at
+                + " ORDER BY started_at DESC, id DESC LIMIT ?",
+                (since, *marks, limit + 1),
+            ).fetchall()
+        ]
     if status not in ("waiting", "held") and _heart_shown(c, trigger, owner, ids):
-        where = {"done": " AND ok=1 AND finished_at IS NOT NULL", "ok": " AND ok=1 AND finished_at IS NOT NULL",
-                 "failed": " AND ok=0", "running": " AND finished_at IS NULL"}.get(status, "")
-        found += [("h", r) for r in c.execute(
-            "SELECT * FROM system_runs WHERE job=? AND started_at>=?" + where + page_at
-            + " ORDER BY started_at DESC, id DESC LIMIT ?", (HEART, since, *marks, limit + 1)).fetchall()]
+        where = {
+            "done": " AND ok=1 AND finished_at IS NOT NULL",
+            "ok": " AND ok=1 AND finished_at IS NOT NULL",
+            "failed": " AND ok=0",
+            "running": " AND finished_at IS NULL",
+        }.get(status, "")
+        found += [
+            ("h", r)
+            for r in c.execute(
+                "SELECT * FROM system_runs WHERE job=? AND started_at>=?"
+                + where
+                + page_at
+                + " ORDER BY started_at DESC, id DESC LIMIT ?",
+                (HEART, since, *marks, limit + 1),
+            ).fetchall()
+        ]
     found.sort(key=lambda x: (x[1]["started_at"], x[1]["id"]), reverse=True)
     more = len(found) > limit
     found = found[:limit]
-    out = [run_row(r, *by_id[r["automation_id"]]) if src == "a" else system_row(r, jobs[r["job"]][0]) if src == "s"
-           else heart_row(r) if src == "h" else maint_row(r) for src, r in found]
+    out = [
+        run_row(r, *by_id[r["automation_id"]])
+        if src == "a"
+        else system_row(r, jobs[r["job"]][0])
+        if src == "s"
+        else heart_row(r)
+        if src == "h"
+        else maint_row(r)
+        for src, r in found
+    ]
     shown, cut = AU.page(out, limit, 0, AU.RUN_BYTES)
     nxt = None
     if (more or cut is not None) and shown:
@@ -573,8 +620,11 @@ def stats(c, who, rng="1h", settings=None):
             add(r["automation_id"], r["b"], r["n"], r["f"] or 0, r["cost"])
     if jobs and H._has_table(c, "system_runs"):
         start, step = H.parse_ts(since), timedelta(seconds=width)
-        for r in c.execute("SELECT job, started_at, first_started_at, runs, ok, cost_usd FROM system_runs WHERE started_at>=? "
-                           "AND job IN (SELECT value FROM json_each(?))", (since, json.dumps(list(jobs)))):
+        for r in c.execute(
+            "SELECT job, started_at, first_started_at, runs, ok, cost_usd FROM system_runs WHERE started_at>=? "
+            "AND job IN (SELECT value FROM json_each(?))",
+            (since, json.dumps(list(jobs))),
+        ):
             if not H.parse_ts(r["started_at"]):
                 add(jobs[r["job"]], n - 1, 1, 0 if r["ok"] else 1, r["cost_usd"])
                 continue
@@ -591,8 +641,10 @@ def stats(c, who, rng="1h", settings=None):
             add(MAINT, r["b"], r["n"], r["f"] or 0, r["cost"])
     if _heart_shown(c):
         start, step = H.parse_ts(since), timedelta(seconds=width)
-        for r in c.execute("SELECT started_at, first_started_at, runs, ok, cost_usd FROM system_runs WHERE job=? "
-                           "AND started_at>=?", (HEART, since)):
+        for r in c.execute(
+            "SELECT started_at, first_started_at, runs, ok, cost_usd FROM system_runs WHERE job=? AND started_at>=?",
+            (HEART, since),
+        ):
             if not H.parse_ts(r["started_at"]):
                 add(HEART, n - 1, 1, 0 if r["ok"] else 1, r["cost_usd"])
                 continue

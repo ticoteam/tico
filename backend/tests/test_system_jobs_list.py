@@ -22,8 +22,6 @@ from backend.tests.test_api import api, get  # noqa: F401
 BACKEND = pathlib.Path(__file__).resolve().parents[1]
 
 
-
-
 def test_nothing_is_made_before_the_cutover_is_done(api):
     with db(api).transaction() as c:
         c.execute("DELETE FROM automations WHERE json_extract(flow,'$.trigger.name')='tico.builtin.job.thread_rank'")
@@ -232,23 +230,26 @@ def runs_of(api, key):
 
 SCHEDULER_JOBS = ("heartbeat", "screening", "finance_upkeep", "hourly_deadlines")
 # Quiet on an install with nothing waiting, so four ticks keep one row each.
-QUIET_JOBS = ("screening", "hourly_deadlines")      # the Heartbeat's quiet beats fold too: checked below
+QUIET_JOBS = ("screening", "hourly_deadlines")  # the Heartbeat's quiet beats fold too: checked below
 # The blocks that became Heartbeat steps (backend/heartbeat.py): each on its step row, none on a run row of its own.
-HEARTBEAT_STEPS = ("stall_marks", "run_housekeeping", "ship_deployed", "task_loops", "queue_check", "milestone_waits",
-                   "thread_loop_guard", "snooze_ends")
+HEARTBEAT_STEPS = (
+    "stall_marks",
+    "run_housekeeping",
+    "ship_deployed",
+    "task_loops",
+    "queue_check",
+    "milestone_waits",
+    "thread_loop_guard",
+    "snooze_ends",
+)
 
 
 def step_rows(api):
     """The Heartbeat's step rows as the screen shows them: stored, with the counts memory holds until its next write."""
     from backend import heartbeat as HB
+
     with db(api).read() as c:
         return HB.merged_steps(c, db(api))
-
-
-
-
-
-
 
 
 def applying(monkeypatch, *keys):
@@ -270,12 +271,14 @@ def test_scheduler_jobs_and_background_passes_record_their_runs(api, monkeypatch
     for key in QUIET_JOBS:
         assert len(runs_of(api, key)) == 1, (key, runs_of(api, key))
     beats = [r["result"] for r in runs_of(api, "heartbeat")]
-    assert beats.count("All quiet") == 1, beats      # the first beat may do something; the quiet ones after it fold
+    assert beats.count("All quiet") == 1, beats  # the first beat may do something; the quiet ones after it fold
     steps = step_rows(api)
     for key in HEARTBEAT_STEPS:
         assert steps[key]["last_result"] and not steps[key]["last_error"], (key, steps[key])
         assert runs_of(api, key) == [], key
-    assert steps["run_housekeeping"]["runs_count"] == 4 and steps["stall_marks"]["runs_count"] == 1, "every beat; a minute"
+    assert steps["run_housekeeping"]["runs_count"] == 4 and steps["stall_marks"]["runs_count"] == 1, (
+        "every beat; a minute"
+    )
     # The Company page is closed on a new install: a beat with nothing due is quiet, on its step row only.
     assert steps["company_page"]["last_result"] == "Nothing due" and steps["company_page"]["last_did_at"] is None
     assert runs_of(api, "company_page") == []
@@ -289,7 +292,7 @@ def test_scheduler_jobs_and_background_passes_record_their_runs(api, monkeypatch
         raise RuntimeError("private words")
 
     monkeypatch.setattr(milestone_waits, "reconcile", broken)
-    failures = Scheduler(db(api), api.app.state.execution).tick()["failures"]   # a Heartbeat step: the rest still ran
+    failures = Scheduler(db(api), api.app.state.execution).tick()["failures"]  # a Heartbeat step: the rest still ran
     assert {"milestone_waits": "RuntimeError"} in failures
     step = step_rows(api)["milestone_waits"]
     assert step["last_error"] == "Failed: unexpected error (RuntimeError)" and step["failed_count"] == 1
@@ -345,8 +348,10 @@ def test_scheduler_jobs_and_background_passes_record_their_runs(api, monkeypatch
         c.execute("DELETE FROM system_runs WHERE job='screening'")
     long_ago = H.shift(H.now(), seconds=-(SR.QUIET_WRITE_SECONDS + 60))
     with store.transaction() as c:
-        first = SR.save(c, SR.Run("screening", started=long_ago, error="Failed: the database was busy"), finished=long_ago)
-    for _ in range(3):                           # once more after the interval, then twice inside it: no write
+        first = SR.save(
+            c, SR.Run("screening", started=long_ago, error="Failed: the database was busy"), finished=long_ago
+        )
+    for _ in range(3):  # once more after the interval, then twice inside it: no write
         SR.write(store, SR.Run("screening", error="Failed: the database was busy"))
     (row,) = runs_of(api, "screening")
     assert row["id"] == first and row["runs"] == 2 and row["first_started_at"] == long_ago and not row["ok"]
@@ -354,8 +359,11 @@ def test_scheduler_jobs_and_background_passes_record_their_runs(api, monkeypatch
     SR.write(store, SR.Run("screening").did("Nothing due", quiet=True))
     SR.write(store, SR.Run("screening", error="Failed: Tico refused it"))
     assert [(r["ok"], r["result"]) for r in runs_of(api, "screening")] == [
-        (0, "Failed: the database was busy"), (0, "Failed: Tico refused it"), (1, "Nothing due"),
-        (0, "Failed: Tico refused it")], "another reason, or a success between, is a new row"
+        (0, "Failed: the database was busy"),
+        (0, "Failed: Tico refused it"),
+        (1, "Nothing due"),
+        (0, "Failed: Tico refused it"),
+    ], "another reason, or a success between, is a new row"
     # a topic check records a fresh start and folds kept chats
     from backend import topic_change
     from backend.auth import Identity
@@ -398,6 +406,7 @@ def test_every_key_a_block_records_under_is_a_job():
     found = recorded_keys()
     assert {"heartbeat", "release_check", "inbound_mail", "doc_sync", "assigned_tasks"} <= set(found)
     from backend import heartbeat
+
     assert not set(found) & set(heartbeat.BY_KEY), "a Heartbeat step records on its step row"
     assert {key: where for key, where in found.items() if key not in SR.BY_KEY} == {}
 

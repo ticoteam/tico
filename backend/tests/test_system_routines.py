@@ -35,8 +35,11 @@ def test_the_jobs_list_and_each_run_record(api):
         "task-rule-close-after-done"
     ]
     assert {k for k, j in jobs.items() if j["controllable"]} == {
-        "stale_review", "kpi_asks", "task_manager_report",
-        "bookkeeper_check"} - hidden, "Ask go-ahead's switch is on its Heartbeat step (test_heartbeat.py)"
+        "stale_review",
+        "kpi_asks",
+        "task_manager_report",
+        "bookkeeper_check",
+    } - hidden, "Ask go-ahead's switch is on its Heartbeat step (test_heartbeat.py)"
     assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "thread_rank"}
     assert "learnings" not in jobs, "Learn runs in Maintenance"
     # Housekeeping has no switch; Task roundup and Learn run in Maintenance.
@@ -71,7 +74,7 @@ def test_the_jobs_list_and_each_run_record(api):
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM system_runs WHERE job='screening'").fetchone()[0] == 1
         beats = [r["result"] for r in c.execute("SELECT result FROM system_runs WHERE job='heartbeat'")]
-    assert beats.count("All quiet") == 1, beats      # the first beat may do something; the quiet ones after it fold
+    assert beats.count("All quiet") == 1, beats  # the first beat may do something; the quiet ones after it fold
     with store.transaction() as c:
         c.execute("DELETE FROM system_runs WHERE job='screening'")
     # a quiet repeat moves its row after the write interval and a busy run starts a new one

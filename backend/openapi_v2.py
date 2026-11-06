@@ -2048,40 +2048,126 @@ STABLE = [
         "QueuePurgeResult",
     ),
     ("/healthz", "get", "Health", "getLiveness", "Is the server up (no sign-in)", None),
-    ("/api/v2/health", "get", "Health", "getHealth", "Checks, computers and failures (bots see counts, computers and failed runs)", "Health"),
-    ("/api/v2/health/findings", "get", "Health", "getHealthFindings",
-     "What Check health found on this install: each open problem with its count, last seen time and Tico-bug report, "
-     "plus botops (whether BotOps is there to take findings) and reports_without_asking (the team rule)", None),
-    ("/api/v2/health/findings/{key}/report", "post", "Health", "reportHealthFinding",
-     "People and BotOps: report a finding (key or signature) as a Tico bug: one ticket per problem with the redacted diagnostics, "
-     "a message on it when it comes back, or a support approval when the team rule is off", None),
-    ("/api/v2/task-manager", "get", "Health", "getTaskManager",
-     "People and bots: whether the Task Manager is on, its hourly report's switch, schedule and last run, and each "
-     "department's last check and open check task", None),
-    ("/api/v2/task-manager/turn-on", "post", "Health", "turnOnTaskManager",
-     "Owner only: add the Task Manager from the catalog (or wake a paused one) and activate it", None),
-    ("/api/v2/task-manager/turn-off", "post", "Health", "turnOffTaskManager", "Owner only: pause the Task Manager", None),
-    ("/api/v2/system-routines", "get", "Health", "listSystemRoutines",
-     "Every job Tico runs on its own: schedule, last and next run, on or off, and what the viewer may change", None),
-    ("/api/v2/system-routines/{key}", "put", "Health", "saveSystemRoutine",
-     "The owner or an admin: switch a system routine on or off, pick its schedule preset (15m, hourly, 4h, daily, "
-     "business) or its daily time; answers {job}: the routine's listing row, or for ask_deadlines (a Heartbeat step "
-     "with its own switch) its HeartbeatStep row", "SystemRoutineSaved"),
-    ("/api/v2/system-routines/{key}/run", "post", "Health", "runSystemRoutine",
-     "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running. "
-     "The retired task_roundup and learnings jobs run Maintenance Find stuck and Learn respectively and return "
-     "{run, started}.", None),
-    ("/api/v2/maintenance", "get", "Health", "getMaintenance",
-     "The Maintenance run: its schedule, pause and monthly judge cap, each step with its switch, how often it runs and its cursor, Learn's seven-day stats, the last run, the live run, the next run, and whether the viewer may change it", None),
-    ("/api/v2/maintenance", "patch", "Health", "saveMaintenance",
-     "The owner or an admin: change the schedule, the pause or the monthly cap, and each step's switch, how often it runs or its number of bots. Only what is sent changes", "MaintenanceUpdate"),
-    ("/api/v2/maintenance/runs", "get", "Health", "listMaintenanceRuns",
-     "Maintenance runs, newest first, a page at a time, each with its step rows. Pass `next` back as `before`", None),
-    ("/api/v2/maintenance/run", "post", "Health", "runMaintenance",
-     "The owner or an admin: run now, every step or only `step`, due by the same rules as a scheduled run; a run already live is returned instead of a second one", "MaintenanceRunRequest"),
-    ("/api/v2/threads/{thread_id}/catch-up", "post", "Conversations", "catchUpThread",
-     "What is new in a thread (scope subtree: its sub-threads too) that you may read, summarized and posted to your "
-     "Assistant DM; the newest 40 messages at most. Nothing new posts nothing", "CatchUpResult"),
+    (
+        "/api/v2/health",
+        "get",
+        "Health",
+        "getHealth",
+        "Checks, computers and failures (bots see counts, computers and failed runs)",
+        "Health",
+    ),
+    (
+        "/api/v2/health/findings",
+        "get",
+        "Health",
+        "getHealthFindings",
+        "What Check health found on this install: each open problem with its count, last seen time and Tico-bug report, "
+        "plus botops (whether BotOps is there to take findings) and reports_without_asking (the team rule)",
+        None,
+    ),
+    (
+        "/api/v2/health/findings/{key}/report",
+        "post",
+        "Health",
+        "reportHealthFinding",
+        "People and BotOps: report a finding (key or signature) as a Tico bug: one ticket per problem with the redacted diagnostics, "
+        "a message on it when it comes back, or a support approval when the team rule is off",
+        None,
+    ),
+    (
+        "/api/v2/task-manager",
+        "get",
+        "Health",
+        "getTaskManager",
+        "People and bots: whether the Task Manager is on, its hourly report's switch, schedule and last run, and each "
+        "department's last check and open check task",
+        None,
+    ),
+    (
+        "/api/v2/task-manager/turn-on",
+        "post",
+        "Health",
+        "turnOnTaskManager",
+        "Owner only: add the Task Manager from the catalog (or wake a paused one) and activate it",
+        None,
+    ),
+    (
+        "/api/v2/task-manager/turn-off",
+        "post",
+        "Health",
+        "turnOffTaskManager",
+        "Owner only: pause the Task Manager",
+        None,
+    ),
+    (
+        "/api/v2/system-routines",
+        "get",
+        "Health",
+        "listSystemRoutines",
+        "Every job Tico runs on its own: schedule, last and next run, on or off, and what the viewer may change",
+        None,
+    ),
+    (
+        "/api/v2/system-routines/{key}",
+        "put",
+        "Health",
+        "saveSystemRoutine",
+        "The owner or an admin: switch a system routine on or off, pick its schedule preset (15m, hourly, 4h, daily, "
+        "business) or its daily time; answers {job}: the routine's listing row, or for ask_deadlines (a Heartbeat step "
+        "with its own switch) its HeartbeatStep row",
+        "SystemRoutineSaved",
+    ),
+    (
+        "/api/v2/system-routines/{key}/run",
+        "post",
+        "Health",
+        "runSystemRoutine",
+        "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running. "
+        "The retired task_roundup and learnings jobs run Maintenance Find stuck and Learn respectively and return "
+        "{run, started}.",
+        None,
+    ),
+    (
+        "/api/v2/maintenance",
+        "get",
+        "Health",
+        "getMaintenance",
+        "The Maintenance run: its schedule, pause and monthly judge cap, each step with its switch, how often it runs and its cursor, Learn's seven-day stats, the last run, the live run, the next run, and whether the viewer may change it",
+        None,
+    ),
+    (
+        "/api/v2/maintenance",
+        "patch",
+        "Health",
+        "saveMaintenance",
+        "The owner or an admin: change the schedule, the pause or the monthly cap, and each step's switch, how often it runs or its number of bots. Only what is sent changes",
+        "MaintenanceUpdate",
+    ),
+    (
+        "/api/v2/maintenance/runs",
+        "get",
+        "Health",
+        "listMaintenanceRuns",
+        "Maintenance runs, newest first, a page at a time, each with its step rows. Pass `next` back as `before`",
+        None,
+    ),
+    (
+        "/api/v2/maintenance/run",
+        "post",
+        "Health",
+        "runMaintenance",
+        "The owner or an admin: run now, every step or only `step`, due by the same rules as a scheduled run; a run already live is returned instead of a second one",
+        "MaintenanceRunRequest",
+    ),
+    (
+        "/api/v2/threads/{thread_id}/catch-up",
+        "post",
+        "Conversations",
+        "catchUpThread",
+        "What is new in a thread (scope subtree: its sub-threads too) that you may read, summarized and posted to your "
+        "Assistant DM; the newest 40 messages at most. Nothing new posts nothing",
+        "CatchUpResult",
+    ),
 ]
 
 
@@ -9543,33 +9629,96 @@ SCHEMAS.update(
 
 # The Heartbeat (backend/heartbeat.py): one short beat of ordered steps, every 10 s by default.
 INT_N = {"type": ["integer", "null"]}
-STABLE.extend([
-    ("/api/v2/heartbeat", "get", "Health", "getHeartbeat",
-     "The Heartbeat: seconds between beats, the last beat, beats in the last day and quiet beats, each step in order "
-     "with its kind, cadence, switch and day counts, and the beats that did something, newest first (pass `next` back "
-     "as `before`)", "HeartbeatView"),
-    ("/api/v2/heartbeat", "put", "Health", "saveHeartbeat",
-     "The owner or an admin: set the seconds between beats, 5 to 60", "HeartbeatView"),
-])
-SCHEMAS.update({
-    "HeartbeatStep": obj({"key": "s", "name": "s", "kind": {"enum": ["due", "recovery", "poll"]}, "kind_name": "s",
-                          "every_s": INT_N, "every": "s", "switch": "b", "on": "b", "can_change": "b",
-                          "last_run_at": "n", "last_ms": INT_N, "last_result": "n", "last_did_at": "n", "last_did": "n",
-                          "last_error": "n", "last_error_at": "n", "failing": "b",
-                          "runs_24h": "i", "did_24h": "i", "failed_24h": "i"}),
-    # A beat whose failures repeat the newest row's is folded into it: `repeats` beats, the last at `last_repeated_at`.
-    "HeartbeatBeat": obj({"id": "s", "started_at": "s", "total_ms": "i", "did": "i", "failed": "i",
-                          "repeats": "i", "last_repeated_at": "n",
-                          "steps": items(obj({"key": "s", "name": "s", "text": "n", "ms": "i", "error": "n"},
-                                             required=["key", "ms"]))}),
-    "HeartbeatView": obj({"interval_s": "i", "interval_min": "i", "interval_max": "i", "last_beat_at": "n",
-                      "beats_24h": "i", "quiet_beats": "i", "quiet_since_at": "n",
-                      "kinds": items(obj({"key": "s", "name": "s"})), "steps": items(ref("HeartbeatStep")),
-                      "beats": items(ref("HeartbeatBeat")), "next": "n", "can_change": "b"}),
-    "SystemRoutineSaved": obj({"job": {"anyOf": [ref("HeartbeatStep"), obj({"key": "s", "name": "s"})],
-                                       "description": "The saved routine's row: a HeartbeatStep for ask_deadlines, "
-                                                      "else its GET /system-routines row"}}),
-})
+STABLE.extend(
+    [
+        (
+            "/api/v2/heartbeat",
+            "get",
+            "Health",
+            "getHeartbeat",
+            "The Heartbeat: seconds between beats, the last beat, beats in the last day and quiet beats, each step in order "
+            "with its kind, cadence, switch and day counts, and the beats that did something, newest first (pass `next` back "
+            "as `before`)",
+            "HeartbeatView",
+        ),
+        (
+            "/api/v2/heartbeat",
+            "put",
+            "Health",
+            "saveHeartbeat",
+            "The owner or an admin: set the seconds between beats, 5 to 60",
+            "HeartbeatView",
+        ),
+    ]
+)
+SCHEMAS.update(
+    {
+        "HeartbeatStep": obj(
+            {
+                "key": "s",
+                "name": "s",
+                "kind": {"enum": ["due", "recovery", "poll"]},
+                "kind_name": "s",
+                "every_s": INT_N,
+                "every": "s",
+                "switch": "b",
+                "on": "b",
+                "can_change": "b",
+                "last_run_at": "n",
+                "last_ms": INT_N,
+                "last_result": "n",
+                "last_did_at": "n",
+                "last_did": "n",
+                "last_error": "n",
+                "last_error_at": "n",
+                "failing": "b",
+                "runs_24h": "i",
+                "did_24h": "i",
+                "failed_24h": "i",
+            }
+        ),
+        # A beat whose failures repeat the newest row's is folded into it: `repeats` beats, the last at `last_repeated_at`.
+        "HeartbeatBeat": obj(
+            {
+                "id": "s",
+                "started_at": "s",
+                "total_ms": "i",
+                "did": "i",
+                "failed": "i",
+                "repeats": "i",
+                "last_repeated_at": "n",
+                "steps": items(
+                    obj({"key": "s", "name": "s", "text": "n", "ms": "i", "error": "n"}, required=["key", "ms"])
+                ),
+            }
+        ),
+        "HeartbeatView": obj(
+            {
+                "interval_s": "i",
+                "interval_min": "i",
+                "interval_max": "i",
+                "last_beat_at": "n",
+                "beats_24h": "i",
+                "quiet_beats": "i",
+                "quiet_since_at": "n",
+                "kinds": items(obj({"key": "s", "name": "s"})),
+                "steps": items(ref("HeartbeatStep")),
+                "beats": items(ref("HeartbeatBeat")),
+                "next": "n",
+                "can_change": "b",
+            }
+        ),
+        "SystemRoutineSaved": obj(
+            {
+                "job": {
+                    "anyOf": [ref("HeartbeatStep"), obj({"key": "s", "name": "s"})],
+                    "description": "The saved routine's row: a HeartbeatStep for ask_deadlines, "
+                    "else its GET /system-routines row",
+                }
+            }
+        ),
+    }
+)
 
 
 def spec(app):

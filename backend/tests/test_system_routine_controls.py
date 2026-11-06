@@ -16,8 +16,12 @@ from backend.store import H
 from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
-TIMED = {"stale_review", "kpi_asks", "task_manager_report",
-         "bookkeeper_check"}   # the jobs with a schedule preset; Ask go-ahead's is on its Heartbeat step
+TIMED = {
+    "stale_review",
+    "kpi_asks",
+    "task_manager_report",
+    "bookkeeper_check",
+}  # the jobs with a schedule preset; Ask go-ahead's is on its Heartbeat step
 
 
 def rows(api, token="ana-test"):

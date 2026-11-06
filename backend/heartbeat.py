@@ -14,6 +14,7 @@ What a beat did is stored small (migration 20261106094503_heartbeat): each beat 
 (repeated failures fold); a step's `heartbeat_steps` row only when it did something, failed, changed its result or is
 timed from its last run, else every 5 minutes, its counts kept in memory between (`_Memory`). The Heartbeat is one System job (system_routines.JOBS `heartbeat`): one run per beat,
 quiet repeats folded. Its screen is ui/app/automations-heartbeat.js (GET/PUT /api/v2/heartbeat)."""
+
 import json
 import logging
 import threading
@@ -29,18 +30,18 @@ from .store import H, Problem
 
 LOG = logging.getLogger("tico.heartbeat")
 
-INTERVAL_KEY = "heartbeat:interval_s"       # registry_metadata
+INTERVAL_KEY = "heartbeat:interval_s"  # registry_metadata
 INTERVAL_DEFAULT, INTERVAL_MIN, INTERVAL_MAX = 10, 5, 60
-POLL_FLOOR = timedelta(seconds=10)          # a shorter beat never polls an outside system more often than before
-REST_FLOOR = 10.0                           # seconds: the rest of the loop, likewise (backend/app.py)
-WINDOW = timedelta(hours=12)                # the day counts: this window and the one before it
-KEEP = timedelta(days=7)                    # working beats kept this long...
-KEEP_BEATS = 5000                           # ...and at most this many
+POLL_FLOOR = timedelta(seconds=10)  # a shorter beat never polls an outside system more often than before
+REST_FLOOR = 10.0  # seconds: the rest of the loop, likewise (backend/app.py)
+WINDOW = timedelta(hours=12)  # the day counts: this window and the one before it
+KEEP = timedelta(days=7)  # working beats kept this long...
+KEEP_BEATS = 5000  # ...and at most this many
 PRUNE_EVERY = timedelta(hours=1)
-FLUSH_EVERY = timedelta(minutes=5)          # quiet steps' counts and last runs, kept in memory between writes
-ALIVE_MIN = 60                              # seconds: the server counts as running while it beat this recently...
-ALIVE_SLACK = 60                            # ...or within one interval and this much more, whichever is longer
-CARRY_MAX = 50                              # failures of skipped rest passes carried to the next one, at most
+FLUSH_EVERY = timedelta(minutes=5)  # quiet steps' counts and last runs, kept in memory between writes
+ALIVE_MIN = 60  # seconds: the server counts as running while it beat this recently...
+ALIVE_SLACK = 60  # ...or within one interval and this much more, whichever is longer
+CARRY_MAX = 50  # failures of skipped rest passes carried to the next one, at most
 PAGE = 20
 KINDS = (("due", "Due times"), ("recovery", "Recovery"), ("poll", "Outside polls"))
 KIND_WORDS = dict(KINDS)
@@ -52,16 +53,16 @@ class Failed(Exception):
 
 @dataclass(frozen=True)
 class Step:
-    key: str                    # its System job key before the Heartbeat (system_routines history keeps the old rows)
+    key: str  # its System job key before the Heartbeat (system_routines history keeps the old rows)
     name: str
-    kind: str                   # "due", "recovery" or "poll"
-    every: timedelta | None     # None: every beat; else at most this often (today's cadence)
-    run: object                 # run(ctx) -> (words, quiet); words None: the step records its own outcome later
+    kind: str  # "due", "recovery" or "poll"
+    every: timedelta | None  # None: every beat; else at most this often (today's cadence)
+    run: object  # run(ctx) -> (words, quiet); words None: the step records its own outcome later
     failure: str | None = None  # the {name: kind} entry it adds to the pass's failures when it raises, as before
     capture: str | None = None  # the telemetry name a raise went to before; None: it never went, or captures its own
-    lasting: bool = False       # timed from its last recorded start, so a restart keeps its hour
+    lasting: bool = False  # timed from its last recorded start, so a restart keeps its hour
     control: str | None = None  # its switch and preset (system_routines.CONTROLS)
-    loop: bool = False          # one of the server loop's own (needs the app): never in a bare Scheduler.tick
+    loop: bool = False  # one of the server loop's own (needs the app): never in a bare Scheduler.tick
 
     @property
     def floor(self):
@@ -113,6 +114,7 @@ class Context:
 def github_sync(ctx):
     github_app = ctx.app.state.github_app
     from .github import flush_wakes, reconcile_worktree_prs, refresh_deployed_tasks, refresh_pending_checks
+
     with ctx.store.transaction() as c:
         flush_wakes(c)
     refresh_deployed_tasks(github_app)
@@ -122,12 +124,15 @@ def github_sync(ctx):
     reconcile_worktree_prs(github_app)
     # A merge or release a task waits for whose webhook never came is asked of GitHub (Dev 256).
     from . import milestone_waits
+
     milestone_waits.recover(github_app)
     # A review move refused for pending checks or a missing receipt, retried once that clears (Dev 534 C).
     from . import move_retry
+
     move_retry.tick(github_app)
     # A gate hold whose current head has every hosted check passing clears on a fresh GitHub read.
     from . import task_blocked
+
     task_blocked.fresh(github_app)
     return "Done", True
 
@@ -142,15 +147,19 @@ def personal_alerts(ctx):
 def repository_waits(ctx):
     github_app = ctx.app.state.github_app
     from .repositories import daily
+
     daily(github_app)
     # A bot waiting for its GitHub repository finishes once a person has made it or granted the permission.
     from . import repo_waits
+
     repo_waits.tick(github_app)
     # A task waiting for room for a worktree whose freeing event was lost (backend/worktree_waits.py).
     from . import worktree_waits
+
     worktree_waits.tick(ctx.store, ctx.settings.github_owner)
     # A bot left in setup for a day: its person hears once (backend/setup_stuck.py).
     from . import setup_stuck
+
     setup_stuck.tick(ctx.store)
     return "Done", True
 
@@ -159,8 +168,10 @@ def call_sweeps(ctx):
     # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py), and
     # calls kept to their threads: people and bots whose access ended, and a LiveKit that restarted.
     failed = None
-    for name, sweep in (("live_meeting_sweep", ctx.app.state.live_meeting_routing.sweep),
-                        ("calls_sweep", ctx.app.state.calls.sweep)):
+    for name, sweep in (
+        ("live_meeting_sweep", ctx.app.state.live_meeting_routing.sweep),
+        ("calls_sweep", ctx.app.state.calls.sweep),
+    ):
         try:
             sweep()
         except Exception as exc:  # noqa: BLE001 - a step's own failure is captured and the beat goes on
@@ -179,29 +190,80 @@ STEPS = [
     Step("personal_alerts", "Personal alerts", "poll", None, personal_alerts, capture="scheduler", loop=True),
     Step("stall_marks", "Silent run check", "recovery", MINUTE, S.step_stall_marks, failure="stall_marks"),
     Step("turn_fixer", "Turn fixer", "recovery", None, S.step_turn_fixer, failure="turn_fixer"),
-    Step("run_housekeeping", "Run housekeeping", "recovery", None, S.step_run_housekeeping,
-         failure="run_housekeeping", capture="scheduler"),
-    Step("ship_deployed", "Shipped merges", "recovery", None, S.step_ship_deployed,
-         failure="ship_deployed", capture="scheduler"),
-    Step("task_loops", "Task loop alerts", "recovery", None, S.step_task_loops, failure="task_loops", capture="scheduler"),
+    Step(
+        "run_housekeeping",
+        "Run housekeeping",
+        "recovery",
+        None,
+        S.step_run_housekeeping,
+        failure="run_housekeeping",
+        capture="scheduler",
+    ),
+    Step(
+        "ship_deployed",
+        "Shipped merges",
+        "recovery",
+        None,
+        S.step_ship_deployed,
+        failure="ship_deployed",
+        capture="scheduler",
+    ),
+    Step(
+        "task_loops", "Task loop alerts", "recovery", None, S.step_task_loops, failure="task_loops", capture="scheduler"
+    ),
     Step("snooze_ends", "Snooze ends", "due", None, S.step_snooze_ends, failure="snooze_ends", capture="scheduler"),
-    Step("queue_check", "Queue check", "recovery", None, S.step_queue_check, failure="queue_check", capture="scheduler"),
-    Step("milestone_waits", "Merge and release waits", "recovery", None, S.step_milestone_waits,
-         failure="milestone_waits", capture="scheduler"),
-    Step("due_reminders", "Due reminders", "due", None, S.step_due_reminders,
-         failure="due_reminders", capture="scheduler"),
+    Step(
+        "queue_check", "Queue check", "recovery", None, S.step_queue_check, failure="queue_check", capture="scheduler"
+    ),
+    Step(
+        "milestone_waits",
+        "Merge and release waits",
+        "recovery",
+        None,
+        S.step_milestone_waits,
+        failure="milestone_waits",
+        capture="scheduler",
+    ),
+    Step(
+        "due_reminders",
+        "Due reminders",
+        "due",
+        None,
+        S.step_due_reminders,
+        failure="due_reminders",
+        capture="scheduler",
+    ),
     Step("updates", "Updates", "due", None, S.step_updates, failure="updates"),
     Step("company_page", "Company page editions", "due", None, S.step_company_page, failure="company_page"),
-    Step("ask_deadlines", "Ask go-ahead", "due", HOUR, S.step_ask_deadlines, failure="ask_deadlines",
-         lasting=True, control="ask_deadlines"),
+    Step(
+        "ask_deadlines",
+        "Ask go-ahead",
+        "due",
+        HOUR,
+        S.step_ask_deadlines,
+        failure="ask_deadlines",
+        lasting=True,
+        control="ask_deadlines",
+    ),
     Step("thread_digest", "Email digest", "due", HOUR, S.step_thread_digest, failure="helper", lasting=True),
-    Step("thread_bot_digest", "Bot thread digest", "due", HOUR, S.step_thread_bot_digest, failure="helper", lasting=True),
+    Step(
+        "thread_bot_digest", "Bot thread digest", "due", HOUR, S.step_thread_bot_digest, failure="helper", lasting=True
+    ),
     Step("thread_loop_guard", "Paused bot replies", "due", None, S.step_thread_loop_guard, failure="thread_loop_guard"),
     Step("go_live_expiry", "Go-live expiry", "due", TEN_MINUTES, S.step_go_live_expiry, failure="go_live"),
-    Step("stall_checks", "Stall checks", "recovery", MINUTE, S.step_stall_checks,
-         failure="stall_checks", capture="scheduler"),
+    Step(
+        "stall_checks",
+        "Stall checks",
+        "recovery",
+        MINUTE,
+        S.step_stall_checks,
+        failure="stall_checks",
+        capture="scheduler",
+    ),
     Step("approval_expiry", "Approval expiry", "due", HOUR, S.step_approval_expiry, failure="approval_expiry"),
-    Step("repository_waits", "Repository and setup waits", "poll", None, repository_waits, capture="scheduler", loop=True),
+    Step(
+        "repository_waits", "Repository and setup waits", "poll", None, repository_waits, capture="scheduler", loop=True
+    ),
     # It asks LiveKit, so it is timed as the polls are: never more often than every 10 s.
     Step("call_sweeps", "Calls and live meetings", "recovery", POLL_FLOOR, call_sweeps, loop=True),
 ]
@@ -234,8 +296,10 @@ def interval(store):
 
 def save_interval(c, actor, value):
     seconds, before = clamp(value), interval_of(c)
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (INTERVAL_KEY, str(seconds)))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (INTERVAL_KEY, str(seconds)),
+    )
     if seconds != before:
         H.event(c, actor, "heartbeat.updated", "heartbeat", {"before": before, "after": seconds})
     return seconds
@@ -253,7 +317,7 @@ def _due(ctx, step, at, cfgs, lasts):
     mark = marks.get(step.key)
     if step.lasting:
         if lasts is None:
-            return False                       # as the fixed-cadence jobs waited when their last runs could not be read
+            return False  # as the fixed-cadence jobs waited when their last runs could not be read
         mark = max([t for t in (mark, lasts.get(step.key)) if t], default=None)
     if mark is not None and at - mark < every:
         return False
@@ -284,7 +348,7 @@ def beat(ctx):
             with ctx.store.read() as c:
                 cfgs, lasts = SR.config(c), SR.last_started(c, timed)
         except Exception as exc:  # noqa: BLE001 - the timing reads fail alone; untimed steps still run
-            cfgs = lasts = None                # only those steps wait for the next beat
+            cfgs = lasts = None  # only those steps wait for the next beat
             ctx.failures.append({"system_routines": type(exc).__name__})
         for step in STEPS:
             if step.loop and ctx.app is None:
@@ -311,9 +375,15 @@ def beat(ctx):
         if failed:
             run.error = "Failed: " + ", ".join(BY_KEY[r.key].name for r in failed)
         else:
-            run.did(SR.count_words(len(worked), "step did something", "steps did something") if worked else "All quiet",
-                    quiet=not worked)
-    return {"ran": [r.key for r in ran], "did": [r.key for r in ran if r.did], "failed": [r.key for r in ran if r.error]}
+            run.did(
+                SR.count_words(len(worked), "step did something", "steps did something") if worked else "All quiet",
+                quiet=not worked,
+            )
+    return {
+        "ran": [r.key for r in ran],
+        "did": [r.key for r in ran if r.did],
+        "failed": [r.key for r in ran if r.error],
+    }
 
 
 def _roll(row, at, fields, window_field="window_started_at"):
@@ -329,8 +399,21 @@ def _roll(row, at, fields, window_field="window_started_at"):
 
 
 STEP_COUNTS = ("runs_count", "did_count", "failed_count")
-STEP_COLUMNS = ("key", "last_run_at", "last_ms", "last_result", "last_did_at", "last_did", "last_error", "last_error_at",
-                "window_started_at", *STEP_COUNTS, *("previous_" + f for f in STEP_COUNTS), "created_at", "updated_at")
+STEP_COLUMNS = (
+    "key",
+    "last_run_at",
+    "last_ms",
+    "last_result",
+    "last_did_at",
+    "last_did",
+    "last_error",
+    "last_error_at",
+    "window_started_at",
+    *STEP_COUNTS,
+    *("previous_" + f for f in STEP_COUNTS),
+    "created_at",
+    "updated_at",
+)
 
 
 class _Memory:
@@ -341,9 +424,9 @@ class _Memory:
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.pending = {}           # key -> {"runs_count", "did_count", "failed_count": n, "set": {column: value}}
-        self.stored = None          # key -> last_result as written; read once
-        self.flushed = None         # when the noted numbers were last written
+        self.pending = {}  # key -> {"runs_count", "did_count", "failed_count": n, "set": {column: value}}
+        self.stored = None  # key -> last_result as written; read once
+        self.flushed = None  # when the noted numbers were last written
 
 
 _MEMORIES = weakref.WeakKeyDictionary()
@@ -379,8 +462,16 @@ def _note(mem, r, at, counted=True):
 
 def _merged(old, p, at, key):
     """A step's row with what memory noted since it was written laid over it, its day windows moved on to `at`."""
-    row = dict(old) if old else {"key": key, "created_at": S.stamp(at), **{f: 0 for f in STEP_COUNTS},
-                                 **{"previous_" + f: 0 for f in STEP_COUNTS}}
+    row = (
+        dict(old)
+        if old
+        else {
+            "key": key,
+            "created_at": S.stamp(at),
+            **{f: 0 for f in STEP_COUNTS},
+            **{"previous_" + f: 0 for f in STEP_COUNTS},
+        }
+    )
     _roll(row, at, STEP_COUNTS)
     if p:
         for f in STEP_COUNTS:
@@ -395,10 +486,12 @@ def _write_steps(c, taken, at):
     for key, p in taken.items():
         row = _merged(old.get(key), p, at, key)
         row["updated_at"] = S.stamp(at)
-        c.execute(f"INSERT INTO heartbeat_steps({','.join(STEP_COLUMNS)}) VALUES({','.join('?' * len(STEP_COLUMNS))}) "
-                  "ON CONFLICT(key) DO UPDATE SET " + ",".join(f"{col}=excluded.{col}" for col in STEP_COLUMNS[1:]
-                                                               if col != "created_at"),
-                  [row.get(col) for col in STEP_COLUMNS])
+        c.execute(
+            f"INSERT INTO heartbeat_steps({','.join(STEP_COLUMNS)}) VALUES({','.join('?' * len(STEP_COLUMNS))}) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            + ",".join(f"{col}=excluded.{col}" for col in STEP_COLUMNS[1:] if col != "created_at"),
+            [row.get(col) for col in STEP_COLUMNS],
+        )
 
 
 def _give_back(mem, taken):
@@ -440,25 +533,46 @@ def _beat_row(c, at, lines, total_ms):
     into that row (its repeat count and last time) so one broken step does not push the useful beats out."""
     steps = [{"key": r.key, "text": r.words if r.did else None, "ms": r.ms, "error": r.error} for r in lines]
     if steps and all(r.error for r in lines):
-        last = c.execute("SELECT id, steps, did_count FROM heartbeat_beats ORDER BY started_at DESC, id DESC LIMIT 1").fetchone()
+        last = c.execute(
+            "SELECT id, steps, did_count FROM heartbeat_beats ORDER BY started_at DESC, id DESC LIMIT 1"
+        ).fetchone()
         try:
-            same = bool(last) and not last["did_count"] and _signature(json.loads(last["steps"] or "[]")) == _signature(steps)
+            same = (
+                bool(last)
+                and not last["did_count"]
+                and _signature(json.loads(last["steps"] or "[]")) == _signature(steps)
+            )
         except ValueError:
             same = False
         if same:
-            c.execute("UPDATE heartbeat_beats SET repeat_count=repeat_count+1, last_repeated_at=? WHERE id=?",
-                      (S.stamp(at), last["id"]))
+            c.execute(
+                "UPDATE heartbeat_beats SET repeat_count=repeat_count+1, last_repeated_at=? WHERE id=?",
+                (S.stamp(at), last["id"]),
+            )
             return
-    c.execute("INSERT INTO heartbeat_beats(id,started_at,total_ms,did_count,failed_count,steps,created_at) "
-              "VALUES(?,?,?,?,?,?,?)", (H.new_id(), S.stamp(at), total_ms, sum(r.did for r in lines),
-                                        sum(r.error is not None for r in lines), json.dumps(steps), H.now()))
+    c.execute(
+        "INSERT INTO heartbeat_beats(id,started_at,total_ms,did_count,failed_count,steps,created_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (
+            H.new_id(),
+            S.stamp(at),
+            total_ms,
+            sum(r.did for r in lines),
+            sum(r.error is not None for r in lines),
+            json.dumps(steps),
+            H.now(),
+        ),
+    )
 
 
 def _state_write(c, at, working):
     now = S.stamp(at)
     state = c.execute("SELECT * FROM heartbeat_states WHERE id=1").fetchone()
-    state = dict(state) if state else {"id": 1, "beats_count": 0, "previous_beats_count": 0, "quiet_beats_count": 0,
-                                       "created_at": now}
+    state = (
+        dict(state)
+        if state
+        else {"id": 1, "beats_count": 0, "previous_beats_count": 0, "quiet_beats_count": 0, "created_at": now}
+    )
     _roll(state, at, ("beats_count",))
     state["beats_count"] += 1
     state["last_beat_at"] = now
@@ -472,11 +586,23 @@ def _state_write(c, at, working):
         prune(c, at)
         state["last_pruned_at"] = now
     state["updated_at"] = now
-    cols = ("id", "last_beat_at", "window_started_at", "beats_count", "previous_beats_count", "quiet_beats_count",
-            "quiet_since_at", "last_pruned_at", "created_at", "updated_at")
-    c.execute(f"INSERT INTO heartbeat_states({','.join(cols)}) VALUES({','.join('?' * len(cols))}) "
-              "ON CONFLICT(id) DO UPDATE SET " + ",".join(f"{col}=excluded.{col}" for col in cols[1:] if col != "created_at"),
-              [state.get(col) for col in cols])
+    cols = (
+        "id",
+        "last_beat_at",
+        "window_started_at",
+        "beats_count",
+        "previous_beats_count",
+        "quiet_beats_count",
+        "quiet_since_at",
+        "last_pruned_at",
+        "created_at",
+        "updated_at",
+    )
+    c.execute(
+        f"INSERT INTO heartbeat_states({','.join(cols)}) VALUES({','.join('?' * len(cols))}) "
+        "ON CONFLICT(id) DO UPDATE SET " + ",".join(f"{col}=excluded.{col}" for col in cols[1:] if col != "created_at"),
+        [state.get(col) for col in cols],
+    )
 
 
 def _commit(store, at, urgent, lines=(), total_ms=0, beat=False):
@@ -488,8 +614,10 @@ def _commit(store, at, urgent, lines=(), total_ms=0, beat=False):
             with mem.lock:
                 if mem.stored is None:
                     mem.stored = {k: v for k, v in c.execute("SELECT key, last_result FROM heartbeat_steps")}
-                changed = any("last_result" in p["set"] and p["set"]["last_result"] != mem.stored.get(k)
-                              for k, p in mem.pending.items())
+                changed = any(
+                    "last_result" in p["set"] and p["set"]["last_result"] != mem.stored.get(k)
+                    for k, p in mem.pending.items()
+                )
                 if urgent or lines or changed or mem.flushed is None or abs(at - mem.flushed) >= FLUSH_EVERY:
                     taken, mem.pending = mem.pending, {}
             if taken:
@@ -522,8 +650,11 @@ def record(store, at, ran, total_ms):
 
 def prune(c, at):
     c.execute("DELETE FROM heartbeat_beats WHERE coalesce(last_repeated_at, started_at)<?", (S.stamp(at - KEEP),))
-    c.execute("DELETE FROM heartbeat_beats WHERE id IN (SELECT id FROM heartbeat_beats ORDER BY started_at DESC, id DESC "
-              "LIMIT -1 OFFSET ?)", (KEEP_BEATS,))
+    c.execute(
+        "DELETE FROM heartbeat_beats WHERE id IN (SELECT id FROM heartbeat_beats ORDER BY started_at DESC, id DESC "
+        "LIMIT -1 OFFSET ?)",
+        (KEEP_BEATS,),
+    )
 
 
 def record_late(store, key, words, quiet, error=None, ms=0, counted=False):
@@ -553,7 +684,9 @@ def liveness(c, now=None):
     tick, beat, saved = c.execute(
         "SELECT (SELECT last_succeeded_at FROM service_health WHERE service='scheduler'),"
         " (SELECT last_beat_at FROM heartbeat_states WHERE id=1),"
-        " (SELECT value FROM registry_metadata WHERE key=?)", (INTERVAL_KEY,)).fetchone()
+        " (SELECT value FROM registry_metadata WHERE key=?)",
+        (INTERVAL_KEY,),
+    ).fetchone()
     parsed = [(H.parse_ts(s), s) for s in (tick, beat) if s and H.parse_ts(s)]
     if not parsed:
         return None, None, False
@@ -589,8 +722,9 @@ def run_now(store, auth, key):
     step = CONTROLLED[key]
     from .scheduler import Scheduler
 
-    class _Execution:                          # a step reads only `auth` from the execution
+    class _Execution:  # a step reads only `auth` from the execution
         pass
+
     execution = _Execution()
     execution.auth = auth
     ctx = Context(Scheduler(store, execution))
@@ -637,9 +771,16 @@ def _beat_view(row):
         steps = []
     for line in steps:
         line["name"] = BY_KEY[line["key"]].name if line.get("key") in BY_KEY else line.get("key")
-    return {"id": row["id"], "started_at": row["started_at"], "total_ms": row["total_ms"], "did": row["did_count"],
-            "failed": row["failed_count"], "steps": steps, "repeats": int(row["repeat_count"] or 1),
-            "last_repeated_at": row["last_repeated_at"]}
+    return {
+        "id": row["id"],
+        "started_at": row["started_at"],
+        "total_ms": row["total_ms"],
+        "did": row["did_count"],
+        "failed": row["failed_count"],
+        "steps": steps,
+        "repeats": int(row["repeat_count"] or 1),
+        "last_repeated_at": row["last_repeated_at"],
+    }
 
 
 def beats(c, limit=PAGE, before=None):
@@ -651,26 +792,41 @@ def beats(c, limit=PAGE, before=None):
         if not sep or not started or not rid:
             raise Problem("invalid", "before is the `next` of the page before", 422)
         at = (started, rid)
-    rows = c.execute("SELECT * FROM heartbeat_beats" + (" WHERE started_at<? OR (started_at=? AND id<?)" if at else "")
-                     + " ORDER BY started_at DESC, id DESC LIMIT ?",
-                     (*((at[0], at[0], at[1]) if at else ()), limit + 1)).fetchall()
+    rows = c.execute(
+        "SELECT * FROM heartbeat_beats"
+        + (" WHERE started_at<? OR (started_at=? AND id<?)" if at else "")
+        + " ORDER BY started_at DESC, id DESC LIMIT ?",
+        (*((at[0], at[0], at[1]) if at else ()), limit + 1),
+    ).fetchall()
     shown = rows[:limit]
     nxt = f"{shown[-1]['started_at']}|{shown[-1]['id']}" if len(rows) > limit and shown else None
     return [_beat_view(r) for r in shown], nxt
 
 
 def _step_view(step, row, cfg, at, auth, who):
-    return {"key": step.key, "name": step.name, "kind": step.kind, "kind_name": KIND_WORDS[step.kind],
-            "every_s": int(step.floor.total_seconds()) if step.floor else None, "every": every_words(step, cfg),
-            "switch": bool(step.control), "on": cfg["on"] if cfg else True,
-            "can_change": bool(step.control and who is not None and SR.can_change(auth, who, step.control)),
-            "last_run_at": row.get("last_run_at"), "last_ms": row.get("last_ms"), "last_result": row.get("last_result"),
-            "last_did_at": row.get("last_did_at"), "last_did": row.get("last_did"),
-            "last_error": row.get("last_error"), "last_error_at": row.get("last_error_at"),
-            # Its latest run failed: the error is current, not one from before a run that went well.
-            "failing": bool(row.get("last_error")) and (row.get("last_error_at") or "") >= (row.get("last_run_at") or ""),
-            "runs_24h": _day(row, at, "runs_count"), "did_24h": _day(row, at, "did_count"),
-            "failed_24h": _day(row, at, "failed_count")}
+    return {
+        "key": step.key,
+        "name": step.name,
+        "kind": step.kind,
+        "kind_name": KIND_WORDS[step.kind],
+        "every_s": int(step.floor.total_seconds()) if step.floor else None,
+        "every": every_words(step, cfg),
+        "switch": bool(step.control),
+        "on": cfg["on"] if cfg else True,
+        "can_change": bool(step.control and who is not None and SR.can_change(auth, who, step.control)),
+        "last_run_at": row.get("last_run_at"),
+        "last_ms": row.get("last_ms"),
+        "last_result": row.get("last_result"),
+        "last_did_at": row.get("last_did_at"),
+        "last_did": row.get("last_did"),
+        "last_error": row.get("last_error"),
+        "last_error_at": row.get("last_error_at"),
+        # Its latest run failed: the error is current, not one from before a run that went well.
+        "failing": bool(row.get("last_error")) and (row.get("last_error_at") or "") >= (row.get("last_run_at") or ""),
+        "runs_24h": _day(row, at, "runs_count"),
+        "did_24h": _day(row, at, "did_count"),
+        "failed_24h": _day(row, at, "failed_count"),
+    }
 
 
 def step_row(c, key, auth, who):
@@ -686,18 +842,33 @@ def listing(c, auth, who, limit=PAGE, before=None, store=None):
     kind, cadence, switch and numbers (with `store`, what this process noted since the rows were written laid over
     them), and a page of the beats that did something."""
     at = datetime.now(timezone.utc)
-    rows = merged_steps(c, store, at) if store is not None else {r["key"]: dict(r) for r in c.execute("SELECT * FROM heartbeat_steps")}
+    rows = (
+        merged_steps(c, store, at)
+        if store is not None
+        else {r["key"]: dict(r) for r in c.execute("SELECT * FROM heartbeat_steps")}
+    )
     state = c.execute("SELECT * FROM heartbeat_states WHERE id=1").fetchone()
     state = dict(state) if state else {}
     cfgs = SR.config(c)
-    steps = [_step_view(step, rows.get(step.key, {}), cfgs.get(step.control) if step.control else None, at, auth, who)
-             for step in STEPS]
+    steps = [
+        _step_view(step, rows.get(step.key, {}), cfgs.get(step.control) if step.control else None, at, auth, who)
+        for step in STEPS
+    ]
     page, nxt = beats(c, limit, before)
-    return {"interval_s": interval_of(c), "interval_min": INTERVAL_MIN, "interval_max": INTERVAL_MAX,
-            "last_beat_at": state.get("last_beat_at"), "beats_24h": _day(state, at, "beats_count"),
-            "quiet_beats": int(state.get("quiet_beats_count") or 0), "quiet_since_at": state.get("quiet_since_at"),
-            "kinds": [{"key": k, "name": n} for k, n in KINDS], "steps": steps, "beats": page, "next": nxt,
-            "can_change": can_change(auth, who)}
+    return {
+        "interval_s": interval_of(c),
+        "interval_min": INTERVAL_MIN,
+        "interval_max": INTERVAL_MAX,
+        "last_beat_at": state.get("last_beat_at"),
+        "beats_24h": _day(state, at, "beats_count"),
+        "quiet_beats": int(state.get("quiet_beats_count") or 0),
+        "quiet_since_at": state.get("quiet_since_at"),
+        "kinds": [{"key": k, "name": n} for k, n in KINDS],
+        "steps": steps,
+        "beats": page,
+        "next": nxt,
+        "can_change": can_change(auth, who),
+    }
 
 
 def may_change(auth, who):
@@ -738,6 +909,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             save_interval(c, who.actor, body.interval_s)
+
         mutate(request, body, work)
         with store.read() as c:
             return listing(c, auth, who, store=store)
