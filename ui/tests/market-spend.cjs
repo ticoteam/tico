@@ -165,7 +165,8 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
       assert.deepEqual(await page.locator('.mkt-tile-k .mkt-lab').allInnerTexts(), ['YEARLY SPEND', 'FASTEST GROWING']);
       assert.equal(await page.locator('.mkt-tile-k .mkt-big').first().innerText(), '$16.8B');
       assert.equal(await page.locator('.mkt-tile-k .mkt-big').nth(1).innerText(), 'Specialty cleaning');
-      assert.equal(await page.locator('.mkt-ctl .mkt-sure').innerText(), 'Estimated');
+      assert.equal(await page.locator('.mkt-tile-k .mkt-sure').innerText(), 'Estimated', 'how sure, once, on the spend tile');
+      assert.equal(await page.locator('.mkt-sure').count(), 1);
       assert.equal(await page.locator('.mkt-pl tbody tr').count(), 1);
       assert.equal(await page.locator('#mkt-q-players .mkt-more').innerText(), '1 tracked');
       within(await areaRatios(page.locator('.mkt-map > .mkt-box')), 'top level');

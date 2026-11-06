@@ -193,7 +193,7 @@ function mktSpend(host, first) {
         `<button type="button" data-dim="${key}" aria-pressed="${key === ctx.dimension}">${label}</button>`).join('')}</div>` : ''}
       ${bases.length > 1 ? `<div class="mkt-seg" role="group" aria-label="Basis">${bases.map(b =>
         `<button type="button" data-basis="${esc(b)}" aria-pressed="${b === ctx.basis}">${esc(MKT_BASES[b] || b)}</button>`).join('')}</div>` : ''}
-      <span class="spacer"></span>${mktSized(d) ? mktSureHtml(d) : ''}
+      <span class="spacer"></span>
       ${d.definition ? '<button class="ghost small" type="button" data-mkt-def>Definition</button>' : ''}</div>`;
   }
 

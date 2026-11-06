@@ -126,7 +126,7 @@
 .rdm-leg{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-left:auto;font-size:var(--t-xs);color:var(--muted)}
 .rdm-leg>span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 .rdm-leg i{width:8px;height:8px;border-radius:2px;display:inline-block}
-.rdm-bars{display:flex;align-items:flex-end;height:130px;margin-top:14px;border-bottom:1px solid var(--line)}
+.rdm-bars{display:flex;align-items:flex-end;height:130px;margin-top:30px;border-bottom:1px solid var(--line)}
 .rdm-col{position:relative;flex:1;height:100%;display:flex;justify-content:center}
 .rdm-stk{width:min(22px,60%);height:100%;display:flex;flex-direction:column-reverse}
 .rdm-stk span{display:block;width:100%;flex:none;border-top:1px solid var(--surface)}
