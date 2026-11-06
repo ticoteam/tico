@@ -119,7 +119,9 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await editor.locator('[data-bot-cloud-grow]').isChecked(), true, 'storage grows unless turned off');
     if (process.env.TICO_UI_SHOTS) {
       fs.mkdirSync(process.env.TICO_UI_SHOTS, {recursive: true});
-      await editor.locator('[data-bot-cloud-row]').locator('..').screenshot({path: path.join(process.env.TICO_UI_SHOTS, 'cloud-machine-grow.png')});
+      const grow = editor.locator('[data-bot-cloud-grow]');
+      await grow.scrollIntoViewIfNeeded();
+      await grow.page().screenshot({path: path.join(process.env.TICO_UI_SHOTS, 'cloud-machine-grow.png')});
     }
     await editor.locator('[data-bot-cloud-size]').selectOption('large');
     await editor.locator('[data-bot-cloud-pause]').fill('45');
