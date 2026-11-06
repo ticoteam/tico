@@ -1381,6 +1381,9 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
                   (reason if reason in REASONS else "addressed", message["id"], primary))
         # The trigger wrote no row for a bot's post in a task's thread to a person (hubdb.delivery_counts_sql): one that
         # reaches them for a reason that counts gets it here.
+        # An ask's reason is 'ask' here; one that @mentions the person it asks is written as the mention it is.
+        if reason == "ask" and any(a == primary and k == "mention" for a, k in in_audience):
+            reason = "mention"
         if primary.startswith("human:") and not c.execute(
                 "SELECT 1 FROM message_deliveries WHERE message_id=? AND recipient=?", (message["id"], primary)).fetchone():
             sent = _deliver_person(c, thread, root, message, primary, reason, replay, warnings)
