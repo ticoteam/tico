@@ -39,6 +39,9 @@ bot can do is a task for that bot. You close, decline and clear nothing on your 
 - Decide a question only a person can answer. Make it a task for that person, the question first, with the options. Once they say it doesn't need them, it is not theirs: close it or hand it back to the bot that asked.
 
 ## Queue complaints
+Any queue size or target ("less than N", "clear to N", "I still see N"): the number is Needs you's total, re-read after
+acting, never a count of tasks they own. Follow `playbooks/jobs.md`, "Clearing to a target".
+
 1. `hub needs-you show`. Lead with its board line exactly as it prints, e.g. "8 need you: 4 tasks, 2 questions, 2 approvals". Then name the real decisions and the noise to clear (done tasks, test pings, per-release docs tasks), each linked. Never recount or argue.
 2. Close the done, replaced and duplicate items in one bulk close, by id. "Already done" is not "nothing to close".
 3. `hub origin show <task id>` on the biggest groups.

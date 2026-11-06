@@ -274,3 +274,120 @@
     the Pangram and SEO tasks or hands them back to BotOps to decide. It does not stop after some and ask about the rest. The
     reply says what it cleared with counts and links (3 approvals, 2 tasks) and "say undo to put it back", in two to four
     short lines. It does not message BotOps, does not answer a BotOps question, and creates no task.
+
+# Clearing to a target. Needs you is the count (its total and per kind), not the tasks Dana owns. Mixed kinds: owned
+# tasks (close), a stale merge and a stale publish approval (decline), a stale bot question (decline), and a $4,000 spend
+# approval and a paid-search question that are real decisions (keep). The reply names what is kept and why.
+- id: live-clear-to-target-mixed
+  group: live
+  prompt: "close more tasks for me, leaving less than 20 in total, whatever you think are most important"
+  hub:
+    - match: '^needs-you show'
+      out:
+        actor: "human:dana"
+        total: 151
+        this_week: 120
+        by_kind: {task: 33, question: 93, approval: 14, thread_held: 8, declined: 1, ask: 1, thread_capped: 1}
+        by_bot:
+          - {bot: "bot:botops", name: "BotOps", count: 28, this_week: 22, older_than_3_days: 6, items: [{id: "9a1b2c3d-3000-4000-8000-000000000001", kind: question, title: "Runner queue test ping: still needed?", created_at: "2026-11-02T10:00:00Z", age_days: 4.0, done_but_open: false}]}
+          - {bot: "bot:engineering-manager", name: "Engineering Manager", count: 12, this_week: 9, older_than_3_days: 3, items: []}
+          - {bot: "bot:growth", name: "Growth", count: 20, this_week: 8, older_than_3_days: 12, items: []}
+          - {bot: "bot:release-manager", name: "Release Manager", count: 14, this_week: 10, older_than_3_days: 4, items: []}
+          - {bot: "human:dana", name: "Dana", count: 33, this_week: 14, older_than_3_days: 19, items: [{id: "4d3f8b5a-3000-4000-8000-000000000004", kind: task, title: "Docs for v0.5.19 release notes", created_at: "2026-11-02T15:12:00Z", age_days: 4.0, done_but_open: true}]}
+        bots_left: 3
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: "1a0c5e27-3000-4000-8000-000000000001", title: "Docs for v0.5.20 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "Shipped. Notes are on the Company page.", created: "2026-11-02T23:10:00Z", updated: "2026-11-03T08:02:00Z"}
+          - {id: "4d3f8b5a-3000-4000-8000-000000000004", title: "Docs for v0.5.19 release notes", status: open, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-02T15:12:00Z", updated: "2026-11-02T16:40:00Z"}
+          - {id: "5e4a9c6b-3000-4000-8000-000000000005", title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
+          - {id: "6f5b0d7c-3000-4000-8000-000000000006", title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
+          - {id: "7d21c4a0-3000-4000-8000-000000000007", title: "Review the Acme holiday projector contract", status: open, owner: "human:dana", requester: "bot:counsel", note: "Their lawyer's redlines are in.", created: "2026-11-03T09:00:00Z", updated: "2026-11-04T09:00:00Z"}
+        next_offset: null
+    - match: '^task bulk close'
+      out: {matched: 4, changed: 4, note: "closed as the person, via Assistant"}
+    - match: '^message list'
+      out:
+        actor: "human:dana"
+        messages:
+          - {id: "b2000001-3000-4000-8000-000000000001", kind: ask, from_actor: "bot:botops", text: "The runner queue test ping still runs every 6 hours. Still needed, yes or no?", refs: {task: "5e4a9c6b-3000-4000-8000-000000000005"}, created: "2026-10-30T10:00:00Z"}
+          - {id: "b2000002-3000-4000-8000-000000000002", kind: ask, from_actor: "bot:growth", text: "Paid search for the holiday push: spend $4,000 more, or hold at $2,000?", refs: {task: "7d21c4a0-3000-4000-8000-000000000007"}, created: "2026-11-04T09:00:00Z"}
+          - {id: "b2000003-3000-4000-8000-000000000003", kind: notice, from_actor: "bot:release-manager", text: 'Approve this merge: {"repo": "tico", "pull_request": 2010}', refs: {approval: "c3000001-3000-4000-8000-000000000001"}, created: "2026-10-20T09:00:00Z"}
+          - {id: "b2000004-3000-4000-8000-000000000004", kind: notice, from_actor: "bot:release-manager", text: 'Approve this publish: {"release": "v0.5.0", "channel": "stable"}', refs: {approval: "c3000002-3000-4000-8000-000000000002"}, created: "2026-10-29T09:00:00Z"}
+          - {id: "b2000005-3000-4000-8000-000000000005", kind: notice, from_actor: "bot:finance-analyst", text: 'Approve this spend: {"vendor": "Acme Ads", "amount_usd": 4000, "for": "paid search, holiday push"}', refs: {approval: "c3000003-3000-4000-8000-000000000003"}, created: "2026-11-04T10:00:00Z"}
+        more_messages: false
+        tasks: []
+        notices: []
+    - match: '^question answer'
+      out: {answered: true, note: "answered as the person, via Assistant"}
+    - match: '^approval decline'
+      out: {status: declined, note: "declined as the person, via Assistant"}
+  must:
+    - '^needs-you show\b'
+    - '^task (bulk close|close)\b'
+    - '^question answer\b'
+    - '^approval decline\b'
+  must_not:
+    - '^approval approve\b'
+    - '^message send\b'
+    - '^question ask\b'
+    - '^task create\b'
+    - '^approval decline c3000003'
+    - '^question answer b2000002'
+    - '^task (bulk )?close .*7d21c4a0'
+  reply: |
+    Counts the queue from Needs you, not from the tasks Dana owns: 151 items, split as 33 tasks, 93 bot questions, 14
+    approvals, 8 held messages and the rest, as the record shows. It acts in this turn, as Dana: closes the owned tasks
+    that are done or duplicates by id (one bulk close), declines the stale merge (PR 2010) and the stale v0.5.0 publish
+    approval, and declines or answers the stale BotOps question. It keeps the $4,000 Acme Ads spend approval and the
+    Growth paid-search question for Dana's decision, and the projector contract review, each with its link and a short
+    reason. It does not approve anything and sends no message. It re-reads Needs you after acting and reports that
+    count. It says the answers cannot be taken back, and gives an undo line only for the closed tasks. Short lines, no
+    headings.
+
+- id: live-recount-142-not-owned
+  group: live
+  prompt: "i still see 142 tickets for me, i want less than 20"
+  history:
+    - {from: "human:dana", body: "close more tasks for me, leaving less than 20 in total, whatever you think are most important"}
+    - {from: "assistant", body: "I closed 45 of the tasks you own. 18 owned open tasks remain, so you are close to your target."}
+  hub:
+    - match: '^needs-you show'
+      out:
+        actor: "human:dana"
+        total: 142
+        this_week: 110
+        by_kind: {task: 20, question: 99, approval: 12, thread_held: 8, declined: 1, ask: 1, thread_capped: 1}
+        by_bot:
+          - {bot: "bot:botops", name: "BotOps", count: 28, this_week: 22, older_than_3_days: 6, items: [{id: "b2000001-3000-4000-8000-000000000011", kind: question, title: "Still need the runner queue test ping, yes or no?", created_at: "2026-10-30T10:00:00Z", age_days: 7.0, done_but_open: false}]}
+          - {bot: "bot:engineering-manager", name: "Engineering Manager", count: 12, this_week: 9, older_than_3_days: 3, items: [{id: "b2000002-3000-4000-8000-000000000012", kind: question, title: "Which of the two hiring plans for Q1?", created_at: "2026-11-03T09:00:00Z", age_days: 3.0, done_but_open: false}]}
+        bots_left: 0
+    - match: '^message list'
+      out:
+        actor: "human:dana"
+        messages:
+          - {id: "b2000001-3000-4000-8000-000000000011", kind: ask, from_actor: "bot:botops", text: "Still need the runner queue test ping, yes or no?", refs: {task: "5e4a9c6b-3000-4000-8000-000000000015"}, created: "2026-10-30T10:00:00Z"}
+          - {id: "b2000002-3000-4000-8000-000000000012", kind: ask, from_actor: "bot:engineering-manager", text: "Which of the two hiring plans for Q1 should the team start? Plan A adds two engineers; Plan B adds one and a contractor.", refs: {task: "8e6d2f1b-3000-4000-8000-000000000018"}, created: "2026-11-03T09:00:00Z"}
+        more_messages: false
+        tasks: []
+        notices: []
+    - match: '^question answer'
+      out: {answered: true, note: "answered as the person, via Assistant"}
+    - match: '^task bulk close'
+      out: {matched: 4, changed: 4, note: "closed as the person, via Assistant"}
+  must:
+    - '^needs-you show\b'
+    - '^(question answer|task (bulk close|close)|approval decline)\b'
+  must_not:
+    - '^approval approve\b'
+    - '^message send\b'
+    - '^question ask\b'
+    - '^question answer b2000002'
+  reply: |
+    Says the queue is 142 by Needs you, the count the board shows: 20 tasks, 99 bot questions, 12 approvals, 8 held
+    messages and the rest. It corrects its earlier "18 owned open tasks remain" line: that counted only the tasks Dana
+    owns, not the queue. It recounts from Needs you this turn, not from the tasks, and acts on the items now: closes the
+    done or duplicate tasks, declines or answers the stale bot questions (the test-ping question is declined, not
+    answered with a yes), and keeps the Engineering Manager's hiring-plan question for Dana's choice with its link and
+    why. It does not stop after some items, does not ask about each one, and does not approve or send anything. It
+    re-reads Needs you after acting and reports the new count against the target of 20. Short lines, no headings.

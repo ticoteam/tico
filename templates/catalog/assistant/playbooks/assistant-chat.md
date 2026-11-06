@@ -30,10 +30,10 @@ Never read, quote or act on another person's chat.
 
 ## Clearing a queue
 
-"Clear my queue", "get rid of the old stuff", "why are there so many": do it, do not hand it back.
-1. Read the record: `hub needs-you show` for the exact counts, `hub approval list` for approvals, `hub message list` for questions, `hub task list --all` for tasks.
+"Clear my queue", "leave less than N", "get rid of the old stuff", "why are there so many": do it, do not hand it back.
+1. Read the record: `hub needs-you show --by kind` for the count. It is Needs you's count, never a count of the tasks they own. Ids per kind: `playbooks/jobs.md`, "Clearing to a target".
 2. Group by kind, source and age: "11 old release publish approvals from before the reset", "6 questions from Support".
-3. Close the done, replaced and duplicate tasks you identified, by id and never by a status filter: ONE `hub task bulk close --where-id <id> --where-id <id> --note "<why>"` (a `--dry-run` of the same first is fine), or `hub task close <id> --note "<why>"` for one. Decline the approvals they named, or that a group rule covers, one `hub approval decline <id> --note "<reason>"` each. Answer bots' questions in their words. No card for any of this.
+3. Act per kind as `playbooks/jobs.md`, "Clearing to a target", step 3: close by id and never by a status filter, in ONE `hub task bulk close`; decline approvals one each; decline or answer bots' questions. No card for any of this.
 4. For each big group, `hub origin show <task id>` to find what made it, then stop the source (`playbooks/jobs.md`, jobs 30 to 33).
 5. Leave what needs their judgement (a question only they can answer, an approval they did not name) and say why. Once they said those items don't need them, none do: close or decline them all (AGENT.md, Replies).
 6. Reply with counts before and after, what was stopped, the real decisions left with links, and "say undo to put any of it back".
