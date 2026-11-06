@@ -86,19 +86,21 @@ belongs to one company, so it can have the helper.
 ## When a machine can't start
 
 When a bot's cloud machine can't start, the problem replaces the machine's state. It shows on the bot's page under
-**Computer**, on the work queued for the bot, and in **Settings → Health**. Health names each active bot whose machine
-has a problem, whether or not work is queued, and lists queued work that is stuck. *code* is the reason HQ or the
-server gives.
+**Computer**, on the work queued for the bot, and on the Health page. General's Health line opens that page, and its
+address still works. Health names each active bot whose machine has a problem, whether or not work is queued, and
+lists queued work that is stuck. *code* is the reason HQ or the server gives.
 
 | Shown as | Means |
 |---|---|
 | Out of credit | The company is out of credit, or its Tico Cloud plan is locked (the trial ended without a card, or the month is unpaid), so its cloud machines don't start until HQ says the company is open again. |
-| Didn't start (*code*): trying again | HQ refused to make or start the machine. Tico waits 15 seconds after the first refusal, twice as long after the next, and so on, up to 15 minutes. |
-| Couldn't be made or started (*code*): trying again | Something on the server failed during one of Tico's looks at the machine, for example while it was made or started. Tico tries again on each look, about every 10 seconds. |
+| Didn't start (*code*): trying again | HQ didn't answer, or refused to make or start the machine. Tico waits 15 seconds after the first failure, twice as long after the next, and so on, up to 15 minutes. |
+| Couldn't be made or started (*code*): trying again | Something on the server failed during one of Tico's looks at the machine, for example while it was made or started. Tico tries again on the next look, about every 10 seconds. If a create request was sent and no answer came back, Tico waits for HQ's list instead, as described below. |
 | Started, but its work did not run there | Tico started the machine for the bot's work, and the work did not run on it. |
-| Made, but it never connected to this server | Three machines in a row never connected, so Tico makes no more until one connects or a person chooses **Replace machine**. |
+| Made, but it never connected to this server | Three machines in a row never connected, so Tico makes no more until a person chooses **Replace machine**, or a new machine for the bot turns up. |
 
-**Out of credit** and **Didn't start** clear when Tico next starts or makes the machine. **Couldn't be made or started** clears when a later look runs clean. **Started, but its work did not run there** clears when new work is queued for the bot. **Made, but it never connected** clears only when a machine connects, or when a person chooses **Replace machine**.
+A create that got no answer, or a server error, is not sent again until HQ's list can be read. Tico asks for the list at its next look, so if HQ answers, the wait is usually seconds. The wait also ends when a new machine for the bot turns up. If the list cannot be read, the wait lasts 16 minutes from the create request, and it survives a restart.
+
+**Out of credit** clears when a later start or make succeeds. **Didn't start** clears the same way, and a wait for HQ's list also clears when the list can be read. **Couldn't be made or started** clears when a later look runs clean. **Started, but its work did not run there** clears when the work waiting for the bot changes. **Made, but it never connected** clears when a person chooses **Replace machine**, or when a new machine for the bot turns up. A mode or placement change clears every problem except **Made, but it never connected**, and not while the machine is being deleted.
 
 ## A stop never lands under a turn
 
