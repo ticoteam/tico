@@ -340,7 +340,7 @@ function makePill(cfg) {
     <div class="p-cmd" hidden></div>`;
 
   const q = sel => el.querySelector(sel);
-  const box = q('.p-text'), pill = q('.p-pill');
+  const box = q('.p-text');
   // The cap is the textarea's CSS max-height: 120px, or up to 300px in a desktop bot chat (#524).
   // IPhone autocorrect never landed in the composer. Collapsing the box to
   // height:auto on every keystroke re-lays it out mid-word, which drops iOS's pending correction.

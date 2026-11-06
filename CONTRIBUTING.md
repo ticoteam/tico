@@ -51,6 +51,11 @@ After that, each `git push` runs `scripts/check.sh` first. To push without it on
 shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
 `scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
 
+The UI's JavaScript has a type check and a Biome lint, both seconds long: `bash scripts/check_ui_types.sh` and
+`bash scripts/check_ui_lint.sh`. Each counts findings per file against `ui/types-baseline.json` or
+`ui/lint-baseline.json`. The counts only shrink: after you fix findings, lower the baseline with
+`python3 scripts/ui_baseline.py tsc --write` (or `biome`).
+
 ## Profiling API test setup
 
 Each API test creates a fresh app, store, authentication state, registry and database. For targeted
