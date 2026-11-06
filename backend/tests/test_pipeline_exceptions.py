@@ -373,16 +373,14 @@ def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_until_it_is_real
         run(c, check, "completed", 60)
         upstream = H.task_create(c, "bot:cpo", "Ship the base fix", "Ship.", "bot:cpo", lint=False)
         settled(c)
-        conv = H.conversation(c, check["conversation_id"])
 
         def ask():
-            m = H._write_message(
-                c, "bot:ops", "bot:cpo", "Which head should I review?", conv, "ask", {"task": check["id"]}, None, None
+            from backend import question_tasks
+
+            q = question_tasks.ask_plain(
+                c, "bot:ops", "human:ana", "Which head should I review?", parent=H.task(c, check["id"])
             )
-            return lambda: (
-                c.execute("DELETE FROM jobs WHERE message_id=?", (m["id"],)),
-                c.execute("DELETE FROM messages WHERE id=?", (m["id"],)),
-            )
+            return lambda: c.execute("UPDATE tasks SET status='closed' WHERE id=?", (q["id"],))
 
         def snooze():
             set_holds(c, check["id"], snoozed_until=H.shift(H.now(), hours=3))

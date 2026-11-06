@@ -104,7 +104,7 @@ def register(
         """The author changes a comment's text. It wakes nobody and is not sent again; the new text
         is new words to the bot on the task, so it needs what a new comment needs."""
         who = request.state.identity
-        if body.ask is not None or body.attachments:
+        if body.attachments:
             raise Problem("validation", "An edit changes only a plain comment's text", 422)
         rc = rule_check(
             who,
@@ -166,29 +166,3 @@ def register(
             }
 
         return mutate(request, body, work, check=lambda c: own_comment(c, who, tid, mid, allow_deleted=True))
-
-    @app.post("/api/v2/tasks/{tid}/comments/{mid}/resolve")
-    def task_ask_resolve(request: Request, tid: str, mid: str, body: M.TaskAskResolve):
-        """Settle an open question answered somewhere else (its asker or the task's owner bot, quoting the
-        person), or withdraw it (its asker). It leaves every Needs you list; it wakes nobody."""
-        who = request.state.identity
-
-        def readable(c):
-            task_id = auth.resolve_task(c, who, tid)
-            row = auth.task(c, who, task_id)
-            asked = H.comment_on(c, row, mid)
-            if not asked or asked.get("deleted_at") or asked["kind"] != "ask":
-                raise Problem("not_found", "No such question on this task", 404)
-            privacy.require_message(c, who, asked)
-            return row
-
-        def work(c):
-            row = readable(c)
-            out = H.task_ask_resolve(c, who.actor, row["id"], mid, body.quote)
-            return {
-                "comment": visual_view(c, who, [out["answer"] or out["ask"]])[0],
-                "comments": visual_view(c, who, H.task_comments(c, row["id"], actor=privacy.actor(who))),
-                "woke": False,
-            }
-
-        return mutate(request, body, work, check=readable)

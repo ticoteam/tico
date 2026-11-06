@@ -145,11 +145,9 @@ def test_a_result_still_waits_for_the_parents_other_waits(api, wait):
                 (H.new_id(), parent, H.now(), H.now()),
             )
         elif wait == "question":  # read past the skipped subtasks: wait_detail's own checks still hold it
-            c.execute(
-                "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
-                "VALUES(?,?,'bot:ops','human:ana','ask','Which release?',?,?)",
-                (H.new_id(), H.task(c, parent)["conversation_id"], '{"task": "%s"}' % parent, H.now()),
-            )
+            from backend import question_tasks
+
+            question_tasks.ask_plain(c, 'bot:ops', 'human:ana', 'Which release?', parent=H.task(c, parent))
         elif wait == "manual":
             set_holds(c, parent, blocked_kind='manual', blocked_reason='Held until the freeze lifts')
         else:  # a task outside this one that it waits on, not one of its subtasks

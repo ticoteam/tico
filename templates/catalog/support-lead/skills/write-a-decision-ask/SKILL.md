@@ -15,7 +15,7 @@ Steps:
 4. State the evidence in two lines, each with its date and source.
 5. State the proposed answer, and what happens on yes and on no.
 6. State the cost of no answer: which target is missed, which ticket waits, and from which date.
-7. Send it once, as one task question to the owner (`hub task ask <id>` on an existing task, or
+7. Send it once, as one task question to the owner (`hub task question "<question>" --on <person> --parent <id>` on an existing task, or
    `hub task create --owner <human>` for a new one). Record it in `knowledge/decisions-needed.md` with the date.
 8. Two business days later, with no answer: ask again only if the cost is a blocked ticket or a missed target, and
    name what is blocked. Otherwise leave the entry open in the log. Never re-ask a question the log already shows as

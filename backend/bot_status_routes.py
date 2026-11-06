@@ -181,25 +181,6 @@ def register(app, auth, delegated_identity, mutate, settings_admin, store, reset
 
             return readable_page_refs(c, auth, who, result)
 
-    @app.get("/api/v2/answers")
-    def answers(request: Request, ids: str):
-        who = request.state.identity
-        with store.read() as c:
-            mids = ids.split(",")
-            if len(mids) > 20:
-                raise Problem("limit", "Read at most 20 correlated answers at a time", 422)
-            for mid in mids:
-                msg = H.message(c, mid)
-                if not msg or msg["sender_id"] != who.actor:
-                    raise Problem("forbidden", "You may read only answers to your own questions", 403)
-                auth.conversation(c, who, msg["conversation_id"])
-                privacy.require_message(c, who, msg)
-            answers = H.answers_to(c, mids)
-            privacy.require_payload(c, who, answers)
-            from .files import readable_page_refs
-
-            return readable_page_refs(c, auth, who, answers)
-
     @app.post("/api/v2/messages/{mid}/ack")
     def acknowledge(request: Request, mid: str, body: M.Empty):
         who = request.state.identity
@@ -219,9 +200,6 @@ def register(app, auth, delegated_identity, mutate, settings_admin, store, reset
             H._message_writer(c, who.actor, msg, H.conversation(c, msg["conversation_id"]))
             H.mark_read(c, who.actor, mid, recipient=who.actor)
             H.mark_delivered(c, who.actor, mid, recipient=who.actor)
-            # A waiting CLI has already consumed the answer in its current turn.
-            if msg["kind"] == "answer":
-                c.execute("UPDATE jobs SET state='completed' WHERE message_id=? AND state='queued'", (mid,))
             return {"read": True}
 
         return mutate(request, body, work)

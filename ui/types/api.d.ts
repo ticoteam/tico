@@ -45,11 +45,6 @@ export type AlertTest = {
   status: string;
 };
 
-export type Answer = {
-  text: string;
-  unknown?: boolean;
-};
-
 export type ApiTool = {
   access: Array<{
   fixed?: boolean;
@@ -1010,10 +1005,6 @@ export type ChatResult = {
   message: Message;
 };
 
-export type ClarifyAsk = {
-  ask: string;
-};
-
 export type CloudAgent = {
   connect_id: string | null;
   id: string;
@@ -1173,7 +1164,7 @@ export type Conversation = {
 };
 
 export type ConversationCreate = {
-  kind?: "chat" | "ask" | "notice";
+  kind?: "chat" | "notice";
   participants: Array<string>;
   subject?: string;
 };
@@ -1612,7 +1603,6 @@ export type FileSearchHit = {
 };
 
 export type FileVersionEdit = {
-  ask?: ReviewAsk | null;
   note?: string | null;
 };
 
@@ -2693,7 +2683,7 @@ export type GoalWhy = {
 export type GoalsNeedsYou = {
   actor: string;
   items: Array<{
-  actions: Array<"answer" | "update" | "decide" | "add_reading" | "open">;
+  actions: Array<"update" | "decide" | "add_reading" | "open">;
   body: string | null;
   created_at: string | null;
   freshness?: string;
@@ -2992,12 +2982,6 @@ export type HoldEmpty = Record<string, unknown>;
 
 export type HoldSend = {
   nonce: string;
-};
-
-export type IfNoAnswer = {
-  by?: string | null;
-  do: string;
-  kind: "reversible" | "send" | "spend" | "delete";
 };
 
 export type InboundCompanyConnection = {
@@ -3862,7 +3846,7 @@ export type MessageCreate = {
   defer_for?: string | null;
   delivery?: "steer" | "queue" | "defer" | null;
   in_reply_to?: string | null;
-  kind?: "say" | "ask" | "notice" | "steer";
+  kind?: "say" | "notice" | "steer";
   needs_action?: boolean;
   refs?: Record<string, unknown>;
   text: string;
@@ -3986,7 +3970,7 @@ export type NeedsYou = {
 };
 
 export type NeedsYouItem = {
-  actions: Array<"answer" | "update" | "decide" | "add_reading" | "open">;
+  actions: Array<"update" | "decide" | "add_reading" | "open">;
   body: string | null;
   created_at: string | null;
   id: string;
@@ -4502,14 +4486,6 @@ export type PurchaseOrders = {
   orders: Array<FinanceOrderRow>;
 };
 
-export type QuestionOption = {
-  description?: string;
-  file?: string | null;
-  label: string;
-  recommended?: boolean;
-  then?: string;
-};
-
 export type QuestionSets = {
   sets: Array<{
   id: string;
@@ -4693,25 +4669,9 @@ export type ReviewAnswer = {
   text: string;
 };
 
-export type ReviewAsk = {
-  if_no_answer?: IfNoAnswer | null;
-  questions: Array<ReviewQuestion>;
-  who?: string | null;
-};
-
 export type ReviewMany = {
   action: "approve_all" | "dismiss_all";
   ids?: Array<string> | null;
-};
-
-export type ReviewQuestion = {
-  header: string;
-  id: string;
-  multi?: boolean;
-  options?: Array<QuestionOption>;
-  other?: boolean;
-  question: string;
-  why?: string;
 };
 
 export type ReviewSettings = {
@@ -5579,10 +5539,6 @@ export type TaskAnswers = {
   answers: Array<ReviewAnswer>;
 };
 
-export type TaskAskResolve = {
-  quote?: string | null;
-};
-
 export type TaskBlocker = {
   endpoint: string;
   repo: string;
@@ -5668,7 +5624,6 @@ export type TaskCheckBack = {
 
 export type TaskComment = {
   approval_id?: string | null;
-  ask?: ReviewAsk | null;
   attachments?: Array<string | VisualRef>;
   defer_for?: string | null;
   delivery?: "steer" | "queue" | "defer" | "goal" | null;
@@ -7024,14 +6979,6 @@ export type AddThreadMemberParams = {
 export type AddThreadMemberBody = MemberAdd;
 export type AddThreadMemberResponse = ThreadMemberChange;
 
-/** POST /api/v2/messages/{mid}/answer */
-export type AnswerMessageParams = {
-  "Idempotency-Key": string;
-  mid: string;
-};
-export type AnswerMessageBody = Answer;
-export type AnswerMessageResponse = unknown;
-
 /** POST /api/v2/tasks/{tid}/answers */
 export type AnswerTaskQuestionParams = {
   "Idempotency-Key": string;
@@ -7115,29 +7062,6 @@ export type AttachTaskFileParams = {
   tid: string;
 };
 export type AttachTaskFileBody = {
-  ask?: {
-  if_no_answer?: {
-  by?: string | null;
-  do: string;
-  kind: "reversible" | "send" | "spend" | "delete";
-} | null;
-  questions: Array<{
-  header: string;
-  id: string;
-  multi?: boolean;
-  options?: Array<{
-  description?: string;
-  file?: string | null;
-  label: string;
-  recommended?: boolean;
-  then?: string;
-}>;
-  other?: boolean;
-  question: string;
-  why?: string;
-}>;
-  who?: string | null;
-} | null;
   content_base64?: string | null;
   name: string;
   note?: string | null;
@@ -7255,13 +7179,6 @@ export type CheckTaskParams = {
 };
 export type CheckTaskBody = TaskCreate;
 export type CheckTaskResponse = unknown;
-
-/** POST /api/v2/needs-you/clarify */
-export type ClarifyAskParams = {
-  "Idempotency-Key": string;
-};
-export type ClarifyAskBody = ClarifyAsk;
-export type ClarifyAskResponse = unknown;
 
 /** POST /api/v2/seats/{seat_id}/close */
 export type CloseSeatParams = {
@@ -11010,15 +10927,6 @@ export type RescreenSkillProposalParams = {
 };
 export type RescreenSkillProposalBody = Empty;
 export type RescreenSkillProposalResponse = unknown;
-
-/** POST /api/v2/tasks/{tid}/comments/{mid}/resolve */
-export type ResolveTaskQuestionParams = {
-  "Idempotency-Key": string;
-  mid: string;
-  tid: string;
-};
-export type ResolveTaskQuestionBody = TaskAskResolve;
-export type ResolveTaskQuestionResponse = CommentResult;
 
 /** POST /api/v2/assistant/changes/{cid}/restore */
 export type RestoreAssistantChangeParams = {

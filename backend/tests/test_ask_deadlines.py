@@ -1,38 +1,39 @@
-"""A bot's ask to a person goes ahead on the bot's default when it is safe to, and closes on its date."""
+"""A bot's question task to a person goes ahead on the bot's default when it is safe to, and closes on its date."""
 
 from backend.tests.test_api import api, headers, post  # noqa: F401  (fixture)
-from backend import ask_deadlines, team_rules
+from backend import ask_deadlines, question_tasks as QT, team_rules
 from backend.store import H
 
 
 def _ask(c, title, default=None, days=0):
-    """Ops asks Ana a Yes / No question on its own task, set waiting on her, `days` ago."""
+    """Ops asks Ana a Yes / No question task under its own task (which waits on it), `days` ago."""
     task = H.task_create(c, "bot:ops", title, "x", "bot:ops", lint=False)
-    ask = {
-        "questions": [
-            {
-                "id": "decision",
-                "header": "",
-                "question": title,
-                "options": [{"label": "Yes"}, {"label": "No"}],
-                "multi": False,
-                "other": True,
-            }
-        ],
-        "who": "human:ana",
-        **({"if_no_answer": default} if default else {}),
-    }
-    said = H.task_comment(c, "bot:ops", task["id"], title, ask=ask)
-    H.task_update(c, "bot:ops", task["id"], status="waiting", waiting_on="human:ana", note=title)
+    card = QT.ask_plain(c, "bot:ops", "human:ana", title, parent=task)
+    QT.store(
+        c,
+        card["id"],
+        {
+            "questions": [
+                {
+                    "id": "decision",
+                    "header": "",
+                    "question": title,
+                    "why": "",
+                    "options": [{"label": "Yes"}, {"label": "No"}],
+                    "multi": False,
+                }
+            ],
+            **({"if_no_answer": default} if default else {}),
+        },
+    )
     then = H.shift(H.now(), days=-days)
-    c.execute("UPDATE messages SET created_at=? WHERE id=?", (then, said["id"]))
-    c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (then, task["id"]))
-    c.execute("UPDATE tasks SET created_at=? WHERE id=?", (then, task["id"]))
-    return task, said
-
-
-def _answer(c, said):
-    return c.execute("SELECT * FROM messages WHERE in_reply_to=? AND kind='answer'", (said["id"],)).fetchone()
+    c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (task["id"],))
+    c.execute("UPDATE tasks SET created_at=?, asked_at=? WHERE id IN (?,?)", (then, then, card["id"], task["id"]))
+    c.execute(
+        "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id IN (?,?)",
+        (then, card["id"], task["id"]),
+    )
+    return task, H.task(c, card["id"])
 
 
 def test_a_reversible_default_goes_ahead_after_the_teams_days_and_a_send_waits(api):
@@ -43,15 +44,14 @@ def test_a_reversible_default_goes_ahead_after_the_teams_days_and_a_send_waits(a
         done = ask_deadlines.sweep(c)
     assert done["went_ahead"] == [safe_ask["id"]]
     with api.app.state.store.read() as c:
-        answer = _answer(c, safe_ask)
-        assert answer["sender_id"] == H.KEEPER and answer["recipient_id"] == "bot:ops"
-        assert "goes ahead" in answer["body"] and H._json(answer["refs"], {})["answer"]["answers"] == {
-            "decision": ["Yes"]
-        }
-        assert not H.open_task_asks(c, H.task(c, safe["id"]))  # settled: it waits on her no more
-        assert c.execute("SELECT 1 FROM jobs WHERE message_id=?", (answer["id"],)).fetchone()  # Ops wakes on it
-        assert _answer(c, send_ask) is None and _answer(c, fresh_ask) is None
-        assert [a["recipient_id"] for a in H.open_task_asks(c, H.task(c, send["id"]))] == ["human:ana"]
+        answered = H.task(c, safe_ask["id"])
+        answer = QT.fields(answered)["answer"]
+        assert answered["status"] == "done" and not QT.is_open(answered)
+        assert answer["by"] == H.KEEPER and answer["answers"] == {"decision": ["Yes"]}
+        assert "goes ahead" in answer["text"]
+        assert QT.waiting_on(c, H.task(c, safe["id"])) is None  # settled: it waits on her no more
+        assert QT.is_open(H.task(c, send_ask["id"])) and QT.is_open(H.task(c, fresh_ask["id"]))
+        assert QT.waiting_on(c, H.task(c, send["id"])) == "human:ana"
 
     # The owner turns it off: nothing goes ahead on its own.
     with api.app.state.store.transaction() as c:
@@ -60,11 +60,9 @@ def test_a_reversible_default_goes_ahead_after_the_teams_days_and_a_send_waits(a
         assert ask_deadlines.sweep(c)["went_ahead"] == []
 
 
-def test_an_undated_ask_waits_for_the_batch_and_a_task_handed_to_a_person_closes_after_two_weeks(api):
+def test_a_task_handed_to_a_person_closes_after_two_weeks_and_an_undated_question_waits_for_the_batch(api):
     with api.app.state.store.transaction() as c:
         _, old = _ask(c, "Which logo do we use?", days=15)
-        _, spoken = _ask(c, "Which font do we use?", days=15)
-        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-15), spoken["id"]))
         handed = H.task_create(c, "bot:ops", "Sign the venue form", "x", "human:ana", lint=False)
         touched = H.task_create(c, "bot:ops", "Pick the venue", "x", "human:ana", lint=False)
         later = H.task_create(
@@ -77,12 +75,11 @@ def test_an_undated_ask_waits_for_the_batch_and_a_task_handed_to_a_person_closes
                 (H.shift(H.now(), days=-15), row["id"]),
             )
         H.task_comment(c, "human:ana", touched["id"], "Still looking, give me a few days")
-        H.task_comment(c, "human:ana", H.message_task_id(spoken), "Thinking about it")
         done = ask_deadlines.sweep(c)
-    # Undated asks go back to their bot in the weekday batch (backend/still_needed.py), never one by one here.
+    # Undated questions go back to their bot in the weekday batch (backend/still_needed.py), never one by one here.
     assert done["expired"] == [] and done["closed"] == [handed["id"]]
     with api.app.state.store.read() as c:
-        assert _answer(c, old) is None
+        assert QT.is_open(H.task(c, old["id"]))
         closed = H.task(c, handed["id"])
         assert closed["status"] == "closed" and "expired" in closed["note"]
         assert H.task(c, touched["id"])["status"] == "open"
@@ -108,8 +105,8 @@ def test_an_undated_ask_waits_for_the_batch_and_a_task_handed_to_a_person_closes
         assert card["id"] not in ask_deadlines.sweep(c)["closed"]
         assert H.task(c, card["id"])["status"] == "open" and H.task(c, task["id"])["status"] == "waiting"
 
-    # A go-ahead date after day 14 is refused when asked; here one is set anyway: the ask waits for its date, then
-    # goes ahead and closes.
+    # A go-ahead date after day 14 is refused when asked; here one is set anyway: the question waits for its date,
+    # then goes ahead and closes.
     with api.app.state.store.transaction() as c:
         _, far = _ask(
             c,

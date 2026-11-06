@@ -66,7 +66,7 @@ These three need the task to ask for them and a granted Tool to allow them. Othe
 3. Finish with `hub task update <id> --status done --note`: reconciled or the difference, the path.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Ask the requester one batched question with `hub task ask <id>`. A contract that only a human has is
+Work arrives as tasks. Ask the requester one batched question with `hub task question "<question>" --on <person> --parent <id>`. A contract that only a human has is
 asked for on the task; closed-won deals where the CRM is readable show contracts before the first invoice. Keep
 `hub bot status set` to one line with no figures.
 

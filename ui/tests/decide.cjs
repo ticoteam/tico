@@ -17,9 +17,12 @@ const items = [
   // an open question with "or" is not a yes or a no: it opens the task
   wait('t-ask', 'Coordinate the external agent scenario in the example', {created_at: at(500),
     ask: {id: 'q-1', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Should the public example show the agent demo, or stay static?', created_at: at(300)}}),
-  // a stale ask (unanswered past three days): the card carries one-click Clarify
-  wait('t-stale', 'Sync the external agent scenario', {created_at: at(5000), updated_at: at(5000),
-    ask: {id: 'q-stale', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Should the public example show the agent demo?', created_at: at(5000), stale: true}}),
+  // a question task a bot put to Ana, unanswered past three days: the card carries one-click Clarify
+  {id: 't-stale', kind: 'question', title: 'Sync the external agent scenario', body: '', owner_id: 'human:ana', requester_id: 'bot:writer',
+    status: 'open', version: 2, created_at: at(5000), updated_at: at(5000), note: '', ask_missing: false, open_asks: 0,
+    lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0},
+    ask: {id: 't-stale', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Should the public example show the agent demo?',
+      created_at: at(5000), stale: true, question_task: true, refs: {}}},
   wait('t-plain', 'Run the video tool trial', {created_at: at(490), note: PLAIN, person_ask: PLAIN,
     body: 'Run the video tool trial\n\nThe test plan is in the shared folder.'}),
   // set waiting before the rule, with no plain ask: its task, not a card
@@ -32,7 +35,7 @@ const items = [
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks', extraTasks: items});
-    const sent = [], clarified = [];
+    const sent = [];
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}));
     await page.route('**/api/v2/tasks/*/comments', route => {
       const id = decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-2));
@@ -40,10 +43,6 @@ const items = [
       return route.fulfill({contentType: 'application/json', body: JSON.stringify({comments: []})});
     });
     await page.route('**/api/v2/tasks/*/files', route => route.fulfill({contentType: 'application/json', body: '{"files":[]}'}));
-    await page.route('**/api/v2/needs-you/clarify', route => {
-      clarified.push(route.request().postDataJSON());
-      return route.fulfill({contentType: 'application/json', body: '{}'});
-    });
     await page.evaluate(() => v2Refresh());
     const card = page.locator('#need-card .dc-card');
     const read = async id => {
@@ -85,12 +84,14 @@ const items = [
       {id: 'building', kind: 'waiting', owner_id: 'bot:writer', waiting_on: 'human:ana', created_at: new Date(Date.now() - 3600e3).toISOString(), tier: 1},
       {id: 'due', kind: 'waiting', owner_id: 'bot:writer', waiting_on: 'human:ana', created_at: new Date(Date.now() - 200 * 3600e3).toISOString(), tier: 0},
     ]).map(c => c.key)), ['task:due', 'task:building', 'task:old']);
-    // A yes or no, an option, an approval, a stale check, a question outside a task, or a recommendation: a card.
+    // An approval, a stale check, a question task with a recommendation, or a task with a recommendation: a card.
     // Anything else opens whole.
     assert.deepEqual(await page.evaluate(() => [
-      {id: 'a', kind: 'approval'}, {id: 'b', kind: 'ask'}, {id: 'c', kind: 'stale'},
-      {id: 'd', kind: 'task', owner_id: 'human:ana', recommend: {ask: 'q', do: 'Gusto'}}, {id: 'e', kind: 'task', owner_id: 'human:ana'},
-    ].map(decideCardKey)), ['approval:a', 'ask:b', 'stale:c', 'task:d', '']);
+      {id: 'a', kind: 'approval'}, {id: 'b', kind: 'question', owner_id: 'human:ana', requester_id: 'bot:writer',
+        ask: {id: 'b', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Gusto?', refs: {}}, recommend: {ask: 'b', do: 'Gusto'}},
+      {id: 'c', kind: 'stale'}, {id: 'd', kind: 'task', owner_id: 'human:ana', recommend: {ask: 'q', do: 'Gusto'}},
+      {id: 'e', kind: 'task', owner_id: 'human:ana'}, {id: 'f', kind: 'question', owner_id: 'human:ana', ask: {id: 'f', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Gusto?', refs: {}}},
+    ].map(decideCardKey)), ['approval:a', 'task:b', 'stale:c', 'task:d', '', '']);
 
     // An old link to one item: Needs you, with that item's card open over it, full screen.
     await page.evaluate(() => { location.hash = '#/decide?item=t-plain'; });
@@ -126,14 +127,17 @@ const items = [
     await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
     assert.deepEqual(sent, [{id: 't-plain', text: 'Yes.'}]);
 
-    // A stale ask carries one-click Clarify: one tap asks the bot whether it still matters, in clearer words.
+    // A stale question carries one-click Clarify: one tap comments on its task and @mentions the bot that asked, which
+    // wakes it to say whether it still matters, in clearer words.
     assert.equal(c.lead, 'Should the public example show the agent demo?');
     assert.equal(c.clarify, 'Ask Writer to clarify');
     assert.deepEqual(c.buttons, ['no', 'yes']);
     await page.locator('#need-card .dc-body [data-dc="clarify"]').click();
     assert.equal(await page.locator('#need-card .dc-toast span').textContent(), 'Asked Writer to clarify');
     await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
-    assert.deepEqual(clarified, [{ask: 'q-stale'}]);
+    const clarify = sent.at(-1);
+    assert.equal(clarify.id, 't-stale');
+    assert.match(clarify.text, /^@writer Please clarify this( for [^:]+)?: "Should the public example show the agent demo\?" Is this request still relevant\?/);
     // the note is only ever text
     assert.equal(await page.locator('#need-card .dc-body img').count(), 0);
     assert.equal(await page.evaluate(() => window.pwned), undefined);

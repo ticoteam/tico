@@ -360,11 +360,7 @@ def bot_wait_sql(visible_sql):
         "AND NOT EXISTS (SELECT 1 FROM task_holds bh WHERE bh.task_id=tasks.id AND bh.kind='blocked' "
         "AND bh.released_at IS NULL AND bh.cause IN ('gate','worktree')) "
         f"AND ({blockers} ORDER BY r.created_at,r.rowid LIMIT 1) LIKE 'bot:%' "
-        f"AND NOT EXISTS ({blockers} AND b.owner_id LIKE 'human:%') "
-        "AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-        f"WHERE m.conversation_id=tasks.conversation_id AND {H.MESSAGE_TASK_SQL}=tasks.id "
-        f"AND m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL} "
-        "AND m.recipient_id LIKE 'human:%' AND coalesce(m.body,'')!='')"
+        f"AND NOT EXISTS ({blockers} AND b.owner_id LIKE 'human:%')"
     )
 
 

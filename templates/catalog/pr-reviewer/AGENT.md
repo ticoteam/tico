@@ -85,7 +85,7 @@ tag or publish a release yourself.
 ## Talking to {{app_name}}
 Read with `gh pr list -R <repo> --state open --json number,title,author,createdAt,additions,deletions,reviewDecision`,
 `gh pr view <n> -R <repo> --comments`, `gh pr diff <n> -R <repo>`, `gh pr checks <n> -R <repo>` and
-`gh search prs "<words>" -R <repo>`. A question for the requester is `hub task ask <id>`, one open question per task. A
+`gh search prs "<words>" -R <repo>`. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A
 pull request in a risky path is `hub task create --owner <person> --title... --link <pull request url>`.
 Finish every task, quiet day or not.
 

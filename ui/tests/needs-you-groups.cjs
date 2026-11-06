@@ -18,7 +18,7 @@ const base = (id, title, over = {}) => ({id, title, body: 'Details.', person_ask
 const TASKS = [
   base('t-keys', 'Add the new OpenAI keys', {requester_id: 'bot:botops', due_at: inDays(2)}),
   base('t-pick', 'Gusto or Rippling for payroll?', {requester_id: 'bot:analyst', due_at: inDays(9),
-    ask: {id: 'q-pick', body: 'Should payroll move to Gusto or Rippling?', sender_id: 'bot:analyst', recipient_id: 'human:ana'}}),
+    ask: {id: 't-pick', body: 'Should payroll move to Gusto or Rippling?', sender_id: 'bot:analyst', recipient_id: 'human:ana', refs: {}}}),
   base('t-invoice', 'Pay the October hosting invoice', {requester_id: 'bot:botops'}),
   base('t-deck', 'Review the launch deck', {requester_id: 'human:sam'}),
   base('t-call', 'Call Murphy back about the lease', {requester_id: 'bot:support'}),
@@ -38,12 +38,13 @@ const SEND = {id: 'ap-send', kind: 'approval', what: 'send', requester_id: 'bot:
   payload: {to: ['Jennie Ooten <jennie@acme.example>'], cc: [], subject: '$200 for each rental owner you introduce', body_sha256: 'a'.repeat(64)}};
 const SPEND = {id: 'ap-spend', kind: 'approval', what: 'spend', requester_id: 'bot:analyst', requested_by: 'bot:analyst', created_at: ago(90),
   title: 'Pay $1,200: LinkedIn ads for October', need: 'pay', payload: {amount: '$1,200', what: 'LinkedIn ads for October', account: 'Ads'}};
-const REC = {do: 'Gusto', ask: 'q-pick', option: 'Gusto', kind: 'reversible'};
+// A question task's own id is its ask's: "Do what you recommend" takes it by that id.
+const REC = {do: 'Gusto', ask: 't-pick', option: 'Gusto', kind: 'reversible'};
 const card = (id, over) => ({...TASKS.find(x => x.id === id), kind: 'task', ...over});
 const NEEDS = [
   card('t-keys', {need: 'connect'}),
   // It holds up a roadmap item at Building, so Decide shows it first (backend/views.py decide_tier).
-  card('t-pick', {need: 'decide', recommend: REC, tier: 1, holds_up: {id: 'r-payroll', title: 'Payroll move', kind: 'roadmap', step: 'Building'},
+  card('t-pick', {kind: 'question', need: 'decide', recommend: REC, tier: 1, holds_up: {id: 'r-payroll', title: 'Payroll move', kind: 'roadmap', step: 'Building'},
     folded: [{id: 't-vendor', title: 'Switch the payroll vendor', owner_id: 'bot:analyst', kind: 'waiting', note: 'Waiting on Ana to pick the vendor.'}]}),
   SEND,
   SPEND,
@@ -121,7 +122,7 @@ async function shot(target, name) {
     await page.locator('#need-card [data-dc="close"]').click();
     await page.locator('#task-body [data-group="need:decide"] [data-recommend]').click();
     for (let i = 0; i < 50 && !taken.length; i++) await page.waitForTimeout(20);
-    assert.deepEqual(taken, [{ask: 'q-pick', version: 1}], 'with the version the card showed');
+    assert.deepEqual(taken, [{ask: 't-pick', version: 1}], 'with the version the card showed');
     await page.waitForFunction(() => !document.querySelector('#task-body [data-group="need:decide"] [data-recommend]'));
 
     // Overview: the count and what went away on its own.

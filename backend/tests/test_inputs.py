@@ -15,7 +15,12 @@ def test_interrupted_steered_question_is_not_silently_completed(api):
     ready(api, r, ["ops", "finance"])
     post(api, "chat/finance", {"text": "Ask COO"})
     finance = claim(api, r)
-    q = post(api, "messages", {"to": "ops", "kind": "ask", "text": "Any update?", "wait_s": 60}, finance["token"])
+    q = post(
+        api,
+        "messages",
+        {"to": "ops", "kind": "say", "needs_action": True, "text": "Any update?", "wait_s": 60},
+        finance["token"],
+    )
     post(api, f"attempts/{a['id']}/inputs", {}, r["token"])
     expire(api, a["id"])
     with api.app.state.store.transaction() as c:
@@ -126,7 +131,7 @@ def ask_ops(api, r, task_id, text):
     return post(
         api,
         "messages",
-        {"to": "ops", "kind": "ask", "text": text, "wait_s": 60, "refs": {"task": task_id}},
+        {"to": "ops", "kind": "say", "needs_action": True, "text": text, "wait_s": 60, "refs": {"task": task_id}},
         finance["token"],
     )
 

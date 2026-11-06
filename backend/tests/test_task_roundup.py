@@ -12,7 +12,7 @@ import pytest
 
 from backend import bot_settings as BS
 from backend.enqueue import enqueue_stored
-from backend import still_needed, task_check_backs, task_roundup
+from backend import question_tasks as QT, still_needed, task_check_backs, task_roundup
 from backend import step_backlog as SB
 from backend import task_holds as TH
 from backend import task_relations as TR
@@ -1785,25 +1785,36 @@ def test_a_backlog_of_snoozed_tickets_still_lists_for_its_manager(api, monkeypat
         assert lists(c, "ops") == []
 
 
+def old_question(c, parent, text, bot="bot:finance"):
+    """A question task `bot` asked Ana under `parent`, asked eight days ago."""
+    question = QT.ask_plain(c, bot, "human:ana", text, parent=parent)
+    c.execute("UPDATE tasks SET created_at=?, asked_at=? WHERE id=?", (ago(days=8), ago(days=8), question["id"]))
+    return question
+
+
 def test_an_unanswered_question_goes_back_to_the_bot_that_asked_as_one_roundup_line_with_no_wake_and_is_not_resent(api):
     store = api.app.state.store
     with store.transaction() as c:
         mine = task(c, "Renew the parking permit")
         settle(c, mine["id"], "finance", ago(days=8))
-        question = H.say(
-            c,
-            "bot:finance",
-            "human:ana",
-            "Which permit number do I use?",
-            kind="ask",
-            conversation_id=H.task(c, mine["id"])["conversation_id"],
-            refs={"task": mine["id"]},
-        )
-        c.execute("UPDATE messages SET created_at=? WHERE id=?", (ago(days=8), question["id"]))
+        question = old_question(c, H.task(c, mine["id"]), "Which permit number do I use?")
         complete_jobs(c)
-        before = c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:finance'").fetchone()[0]
+        before = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
         assert still_needed.sweep(c, H.shift(DAY, hours=3)) == {"bot:finance": [question["id"]]}
-        assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:finance'").fetchone()[0] == before
+        # The card closing tells its bot quietly (a notice, no run): nothing is queued for it.
+        woken = c.execute(
+            "SELECT j.state, m.body FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot_id='finance' AND j.state IN ('queued','leased','running')"
+        ).fetchall()
+        assert not woken, [tuple(r) for r in woken]
+        loud = [
+            (r[0][:80], r[1])
+            for r in c.execute(
+                "SELECT body, refs FROM messages WHERE recipient_id='bot:finance' AND rowid>?", (before,)
+            )
+            if not H._json(r[1], {}).get("quiet")
+        ]
+        assert not loud, loud
         assert still_needed.sweep(c, H.shift(DAY, hours=4)) == {}, "the batch runs once a day"
         assert "finance" in task_roundup.run(c, NOON)["woke"]
         assert (
@@ -1821,27 +1832,8 @@ def test_a_still_needed_event_the_base_sent_as_a_message_is_not_relisted_on_upgr
     with store.transaction() as c:
         mine = task(c, "Renew the parking permit")
         settle(c, mine["id"], "finance", ago(days=8))
-        conv = H.task(c, mine["id"])["conversation_id"]
-        delivered = H.say(
-            c,
-            "bot:finance",
-            "human:ana",
-            "Which permit number do I use?",
-            kind="ask",
-            conversation_id=conv,
-            refs={"task": mine["id"]},
-        )
-        pending = H.say(
-            c,
-            "bot:finance",
-            "human:ana",
-            "Which renewal fee applies?",
-            kind="ask",
-            conversation_id=conv,
-            refs={"task": mine["id"]},
-        )
-        for question in (delivered, pending):
-            c.execute("UPDATE messages SET created_at=? WHERE id=?", (ago(days=8), question["id"]))
+        delivered = old_question(c, H.task(c, mine["id"]), "Which permit number do I use?")
+        pending = old_question(c, H.task(c, mine["id"]), "Which renewal fee applies?")
         H.event(c, H.KEEPER, still_needed.ACTION, "bot:finance", {"asks": [delivered["id"]], "message": H.new_id()})
         H.event(c, H.KEEPER, still_needed.ACTION, "bot:finance", {"asks": [pending["id"]]})
         complete_jobs(c)
@@ -1872,7 +1864,7 @@ def test_a_list_cut_at_its_cap_keeps_its_group_order_and_counts_the_rest(api, mo
         assert lines[3] == "- and 1 more" and len(lines) == 4
 
 
-def test_a_question_about_a_private_task_asked_from_a_home_room_names_neither_the_task_nor_the_question(api):
+def test_a_question_about_a_private_task_names_neither_the_task_nor_the_question(api):
     store = api.app.state.store
     with store.transaction() as c:
         private = H.task_create(
@@ -1885,17 +1877,7 @@ def test_a_question_about_a_private_task_asked_from_a_home_room_names_neither_th
             private=True,
         )
         settle(c, private["id"], "finance", ago(days=8))
-        home = H.open_conversation(c, H.human_actor("ana"), [H.human_actor("ana"), H.bot_actor("finance")], kind="chat")
-        question = H.say(
-            c,
-            H.bot_actor("finance"),
-            H.human_actor("ana"),
-            "Is the merger price still 40 million?",
-            conversation_id=home["id"],
-            kind="ask",
-            refs={"task": private["id"]},
-        )
-        c.execute("UPDATE messages SET created_at=? WHERE id=?", (ago(days=8), question["id"]))
+        question = old_question(c, H.task(c, private["id"]), "Is the merger price still 40 million?")
         complete_jobs(c)
         assert still_needed.sweep(c, H.shift(DAY, hours=3)) == {"bot:finance": [question["id"]]}
         assert "finance" in task_roundup.run(c, NOON)["woke"]
@@ -1931,16 +1913,19 @@ def test_a_question_about_a_task_its_bot_no_longer_reads_names_neither_the_task_
             c, H.human_actor("ana"), "Confidential vendor terms", "Keep it quiet.", "bot:cpo", lint=False
         )
         c.execute("UPDATE tasks SET created_at=? WHERE id=?", (DAY, mine["id"]))
-        question = H.say(
-            c,
-            H.bot_actor("finance"),
-            H.human_actor("ana"),
-            "Are the vendor terms still 40 days?",
-            conversation_id=H.task(c, mine["id"])["conversation_id"],
-            kind="ask",
-            refs={"task": mine["id"]},
+        # Ana's message on it woke finance, which asked her while that let it act on the task (task_delegations).
+        c.execute(
+            "INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
+            (
+                mine["id"],
+                "bot:finance",
+                "human:ana",
+                H.say(c, "human:ana", "bot:finance", "Check the vendor terms.")["id"],
+                H.shift(H.now(), hours=24),
+            ),
         )
-        c.execute("UPDATE messages SET created_at=? WHERE id=?", (ago(days=8), question["id"]))
+        question = old_question(c, H.task(c, mine["id"]), "Are the vendor terms still 40 days?")
+        c.execute("DELETE FROM task_delegations WHERE task_id=?", (mine["id"],))
         complete_jobs(c)
         assert still_needed.sweep(c, H.shift(DAY, hours=3)) == {"bot:finance": [question["id"]]}
         # cpo, the task's bot, now lets only Ana's people read it: finance asked about it while it could.
@@ -1963,16 +1948,7 @@ def test_a_reviewer_is_woken_once_by_its_roundup_and_listed_only_its_returned_qu
         mine = task(c, "Renew the parking permit")  # before the profile: a reviewer takes no ordinary task
         BS.write(c, "finance", {"profile": "reviewer"})
         settle(c, mine["id"], "finance", ago(days=8))
-        question = H.say(
-            c,
-            "bot:finance",
-            "human:ana",
-            "Which permit number do I use?",
-            kind="ask",
-            conversation_id=H.task(c, mine["id"])["conversation_id"],
-            refs={"task": mine["id"]},
-        )
-        c.execute("UPDATE messages SET created_at=? WHERE id=?", (ago(days=8), question["id"]))
+        question = old_question(c, H.task(c, mine["id"]), "Which permit number do I use?")
         complete_jobs(c)
         assert still_needed.sweep(c, H.shift(DAY, hours=3)) == {"bot:finance": [question["id"]]}
         assert "finance" in task_roundup.run(c, NOON)["woke"]

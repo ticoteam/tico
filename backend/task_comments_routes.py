@@ -4,7 +4,6 @@ from .store import H
 from . import models as M
 from .store import Problem
 from fastapi import Request
-from . import ask_ingest
 from . import bot_to_bot
 from . import counsel
 from . import delivery
@@ -41,12 +40,11 @@ def register(
         task_id = auth.resolve_task(c, who, tid)
         row = auth.task(c, who, task_id)
         from .chat_goals import may_direct, own_room, set_goal
-        from .task_review import comment_rights, check_ask
+        from .task_review import comment_rights
 
         comment_rights(c, auth, who, task_id)
-        ask = check_ask(c, task_id, body.ask, auth, who)
         # The org rule check (backend/org_rule_check.py), applied before anything is written: held, nothing is.
-        audience = rule_comment_audience(c, who, row, body.text, ask) if rc is not None else None
+        audience = rule_comment_audience(c, who, row, body.text) if rc is not None else None
         rule = org_rule_check.apply(
             c,
             rc,
@@ -57,12 +55,9 @@ def register(
         if rule and rule.get("moved"):
             raise Problem("moved", "Who this goes to changed while it was checked; send it again", 409, retryable=True)
         if rule and rule.get("held"):
-            if ingest:
-                ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.held_answer(c, who, rule, auth=auth)
         text = org_rule_check.warned_text(rule, body.text)
         attached, report = visuals.attach(c, who, app.state.files, app.state.blobs, body.attachments, task_id=task_id)
-        moves = mover(c, who)
         # A comment reaches its @mentions, the author it replies to and the task's followers (threads.plan). Steer and
         # queue wake the bots among them, so they take the right to direct the task (a bot's is its needs_action);
         # anyone may defer. Defer and goal wake none: a goal's own control does (set_goal below).
@@ -81,14 +76,12 @@ def register(
             way = body.delivery
         elif body.delivery == "goal":
             way, defer_for = "defer", delivery.NEVER
-        elif ask:
-            way = "steer" if who.role == "bot" or H.task_participant(c, who.actor, row) or moves else "defer"
         else:
             way, defer_for = comment_way_for(c, who, row)
         # A Defer never the reader did not choose (none named, or a defer with no deadline) binds the bots only:
         # people following are notified as their level says (threads.plan).
-        people = way == "defer" and not ask and not directs and body.defer_for is None
-        if way == "defer" and bot and not ask and not directs:
+        people = way == "defer" and not directs and body.defer_for is None
+        if way == "defer" and bot and not directs:
             # A deadline wakes the bot as a steer would, so it takes the same right. Someone off the task defers
             # with none: their comment waits for the bots' next turn here.
             if body.defer_for not in (None, delivery.NEVER):
@@ -103,7 +96,6 @@ def register(
         if (
             way == "defer"
             and bot
-            and not ask
             and body.delivery == "defer"
             and directs
             and delivery.running_in_session(c, H.actor_id(bot), [row["conversation_id"]], task_id)
@@ -112,23 +104,16 @@ def register(
         extra = {"attachments": attached, "files": [a["ref"] for a in attached]} if attached else {}
         if body.needs_action or (who.role == "bot" and body.delivery in ("steer", "queue")):
             extra["needs_action"] = True
-        # Judged against the plate before the question is on it.
-        gate = (
-            ask_ingest.apply(c, ingest)
-            if ingest and ask and ask_ingest.matches(ingest, H.task_ask_recipient(c, who.actor, row, ask))
-            else None
-        )
         msg = H.task_comment(
             c,
             who.actor,
             task_id,
             text,
             wake=way != "defer",
-            ask=ask,
             public=body.public,
             approval_id=body.approval_id,
             extra_refs=extra or None,
-            way=None if ask else way,
+            way=way,
             defer_for=defer_for,
             people_notified=people,
             delegate=directs and way != "defer",
@@ -138,9 +123,9 @@ def register(
         # The bot the comment went to first: the follower it was for, or the bot its @mention reached.
         reached = msg.get("recipient_id") if H.is_bot(msg.get("recipient_id")) else None
         bot = bot or reached
-        if way == "defer" and not ask and reached and (msg.get("refs") or {}).get("delivery") == "queue":
+        if way == "defer" and reached and (msg.get("refs") or {}).get("delivery") == "queue":
             way = "queue"  # Defer never with an @mention: the bot it names is reached, queued (D6)
-        if way == "defer" and not ask:
+        if way == "defer":
             found = c.execute(
                 "SELECT due_at FROM deferrals WHERE item=? OR item IN (SELECT carrier_id FROM "
                 "message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL) LIMIT 1",
@@ -151,15 +136,6 @@ def register(
         if body.delivery == "goal":
             # The task session's goal, set as a chat's is (chat_goals.set_goal): its /goal control wakes the bot.
             goal = set_goal(c, auth, who, row["conversation_id"], "set", body.text, send)
-        if gate and not ask_ingest.matches(ingest, msg.get("recipient_id")):
-            gate = None
-            ask_ingest.skipped(c, ingest, "target")
-        elif ingest and not gate:
-            ask_ingest.skipped(c, ingest, "not_applied")
-        if gate:
-            ask_ingest.record(c, ingest, gate, task_id, msg["id"])
-            if gate["acts"]:
-                H.task_ask_resolve(c, who.actor, task_id, msg["id"])
         for item in attached:
             c.execute(
                 "INSERT OR IGNORE INTO task_file_reviews(file_id,version) VALUES(?,?)", (item["id"], item["version"])
@@ -185,30 +161,10 @@ def register(
             **({"held": waits} if waits else {}),
             **({"visuals": report} if report else {}),
             **({"goal": goal} if goal else {}),
-            **ask_ingest.reply(gate),
             **org_rule_check.answer(rule),
         }
 
-    def comment_ingest(who, tid, body):
-        if not body.ask or not ask_ingest.gated(who, settings.assistant_bot) or not (row := readable_task(who, tid)):
-            return None
-        with store.read() as c:
-            asked = H.task_ask_recipient(c, who.actor, row, body.ask.model_dump())
-        return ask_ingest.preflight(
-            store,
-            app.state.judge,
-            who,
-            asked,
-            row["title"],
-            body.text,
-            kind="question",
-            asked=[q.model_dump() for q in body.ask.questions],
-        )
-
-    def rule_prepare_comment(store_, bot, replay):
-        return comment_ingest(bot, replay["task"], M.TaskComment.model_validate(replay["body"]))
-
-    @org_rule_check.replayer("comment", prepare=rule_prepare_comment)
+    @org_rule_check.replayer("comment")
     def rule_replay_comment(c, bot, hold, replay, ingest, gate=None):
         return comment_write(
             c, bot, replay["task"], M.TaskComment.model_validate(replay["body"]), ingest, org_rule_check.decided(gate)
@@ -220,18 +176,11 @@ def register(
         running turn, queue right after it, defer to its next turn on the task (at the latest `defer_for`, 24h), or
         goal: the task session's goal becomes the text (chat_goals.set_goal). Omitted, it steers (D13), or defers with no
         deadline for a reader who may not direct the task's bots. It reaches the task's followers and whom it addresses
-        (threads.plan). A bot's
-        question to a person passes ask ingest first (backend/ask_ingest.py): a refused write rolls back before it
-        is asked."""
+        (threads.plan). A question to a person is a question task (`POST /api/v2/task-questions`), never a comment."""
         who = request.state.identity
         counsel.no_attachments(who, body.attachments)  # before the rule check holds anything (visuals.attach too)
-        if body.delivery and (body.ask or (body.needs_action and body.delivery != "steer")):
-            raise Problem(
-                "delivery",
-                "A question always wakes the one it is for, and needs_action is steer: send it "
-                "without a delivery, or with steer",
-                422,
-            )
+        if body.delivery and body.needs_action and body.delivery != "steer":
+            raise Problem("delivery", "needs_action is steer: send it without a delivery, or with steer", 422)
         if wrong := delivery.check(body.delivery, body.defer_for):
             raise Problem("delivery", wrong, 422)
         if body.delivery == "goal" and (body.attachments or body.public):
@@ -240,24 +189,10 @@ def register(
             who,
             "comment",
             body.text,
-            lambda c: rule_comment_audience(
-                c,
-                who,
-                auth.task(c, who, auth.resolve_task(c, who, tid)),
-                body.text,
-                body.ask.model_dump() if body.ask else None,
-            ),
+            lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), body.text),
             place=task_place(who, tid),
-            track_route=body.ask is not None,
         )
-        ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else comment_ingest(who, tid, body)
-        result = ask_ingest.judged(
-            store,
-            ingest,
-            lambda: mutate(
-                request, body, lambda c: comment_write(c, who, tid, body, ingest, rc, request.state.identity)
-            ),
-        )
+        result = mutate(request, body, lambda c: comment_write(c, who, tid, body, None, rc, request.state.identity))
         if body.attachments:
             app.state.file_metadata.wake.set()  # a chat file shared here is a new task copy: preview it now
         return result

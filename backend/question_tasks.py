@@ -274,18 +274,84 @@ def open_for(conn, bot, person, *, parent=None, topic=None, private=False):
     return None
 
 
-def supersede_legacy(conn, bot, person, task_id, *, parent=None, topic=None, private=False):
-    """An old ask message (`hub task question` before step 6a: the bot's own task waiting on the person, the question
-    in an ask) on the same topic as question task `task_id`: superseded, and its task closed pointing to the new one,
-    so the person's Needs you counts the question once. Returns the old task's id, or None."""
-    found = H.open_question(conn, bot, person, parent=parent, topic=topic, private=private)
-    if not found:
+def ask_plain(conn, bot, person, text, *, parent=None, why=""):
+    """A plain question from `bot` to `person` (a Yes / No with no options) as a question task: under live task
+    `parent`, which then waits on it, else on its own, private to the two of them. Returns the new task."""
+    text = str(text or "").strip()
+    live = bool(parent and parent["status"] in H.ACTIVE_STATUSES)
+    card = H.task_create(
+        conn,
+        bot,
+        H._ask_title(text)[:200] or "A question for you",
+        text,
+        person,
+        lint=False,
+        deduplicate=False,
+        quiet_notice=True,
+        parent_id=parent["id"] if live else None,
+        private=None if live else True,
+    )
+    store(
+        conn,
+        card["id"],
+        {"questions": [{"id": FIRST_ID, "header": "", "question": text, "why": why, "options": [], "multi": False}]},
+    )
+    if live:
+        file(conn, bot, H.task(conn, card["id"]), parent)
+    H.hook(
+        conn,
+        "needs_you.created",
+        card["id"],
+        lambda: {"id": card["id"], "to": person, "from": bot, "task_id": parent["id"] if live else None},
+        bot,
+        revision=0,
+    )
+    return H.task(conn, card["id"])
+
+
+def ask_alone(conn, bot, person, text, *, why=""):
+    """A plain question from `bot` to `person` outside any task (ask_plain). The same words while one is still open
+    are not asked twice: returns the new task, or None when nothing was filed."""
+    text = str(text or "").strip()
+    if not text:
         return None
-    old = found["task"]["id"]
-    why = f"Asked again as a question task: {task_id}"
-    H.supersede_asks(conn, old, from_actor=bot, to_actor=person, why=why)
-    H.task_close(conn, H.KEEPER, old, f"Superseded by task {task_id}.", quiet=True, strict=False)
-    return old
+    for found in conn.execute(
+        f"SELECT id FROM tasks WHERE owner_id=? AND requester_id=? AND {OPEN_SQL}", (person, bot)
+    ).fetchall():
+        card = H.task(conn, found[0])
+        if " ".join(str((fields(card)["questions"] or [{}])[0].get("question") or "").split()) == " ".join(
+            text.split()
+        ):
+            return None
+    return ask_plain(conn, bot, person, text, why=why)
+
+
+def answer_from_reply(conn, person, bot, conversation_id, message):
+    """A person's reply in their chat with `bot` (a Slack thread's follow-up) to the bot's last line answers the bot's
+    question task when it is the one open question from `bot` to `person` asked since the person last wrote there: it
+    closes done with the reply as its note (closed reads a named option as the pick). Returns the task id, or None."""
+    since = (
+        conn.execute(
+            "SELECT max(created_at) FROM messages WHERE conversation_id=? AND sender_id=? AND id<>? "
+            "AND deleted_at IS NULL",
+            (conversation_id, person, message["id"]),
+        ).fetchone()[0]
+        or ""
+    )
+    found = [
+        r[0]
+        for r in conn.execute(
+            f"SELECT id FROM tasks WHERE owner_id=? AND requester_id=? AND {OPEN_SQL} "
+            "AND coalesce(asked_at, created_at)>=?",
+            (person, bot, since),
+        )
+    ]
+    if len(found) != 1:
+        return None
+    # The reply itself reaches the bot (and wakes it): no second notice that the task is done. A task of the bot's that
+    # waited on it still opens again, with its one wake there.
+    H.task_update(conn, person, found[0], status="done", note=str(message.get("body") or "").strip(), heard=(bot,))
+    return found[0]
 
 
 def earlier(conn, card):
@@ -524,6 +590,14 @@ def answer(c, auth, who, task_id, body, warn=""):
         H.task_update(c, who.actor, task_id, status="declined" if body.dismiss else "done", note=text)
     if value.get("reviewed"):
         file_reviews.record(c, who, task_id, task_id, task_id, value["reviewed"])
+    parent = TR.parent_of(c, task_id)
+    H.hook(
+        c,
+        "needs_you.answered",
+        task_id,
+        lambda: {"id": task_id, "to": who.actor, "from": row["requester_id"], "task_id": parent},
+        who.actor,
+    )
     return {"answer": value, "comments": H.task_comments(c, task_id, actor=privacy.actor(who)), "woke": True}
 
 
@@ -546,9 +620,10 @@ def take_recommendation(c, auth, who, row, version=None):
         raise Problem("no_recommendation", "This question carries no recommendation to take", 409)
     if rec["option"]:
         question = asked["refs"]["questions"][0]
-        return answer(
+        picked = answer(
             c, auth, who, row["id"], M.TaskAnswer(target={"task": row["id"]}, answers={question["id"]: [rec["option"]]})
         )
+        return {**picked, "did": rec["do"]}
     text, refs = H.answer_text(asked, rec["do"], text="Yes, do what you recommend: " + rec["do"])
     record(
         c,
@@ -567,7 +642,7 @@ def take_recommendation(c, auth, who, row, version=None):
     )
     with sourced(c, refs.get("body_sources")):  # the bot's default may copy a page's words
         H.task_update(c, who.actor, row["id"], status="done", note=text)
-    return {"answer": _load(H.task(c, row["id"]).get("answer")), "woke": True}
+    return {"answer": _load(H.task(c, row["id"]).get("answer")), "woke": True, "did": rec["do"]}
 
 
 # ---- dates: ask_deadlines and still_needed run on question tasks --------------------------------------------------
@@ -694,9 +769,9 @@ def _move_wait(conn, task_id, on):
         # The note a wait set: "Blocked on <name>: <ask>", the name as it was then.
         if said.startswith("Blocked on ") and ": " in said:
             said = said.split(": ", 1)[1]
-        # Only the owner's own open question holds the task (task_holds.holds); another bot's leaves it unheld.
-        asked = any(a["recipient_id"] == on and a["sender_id"] == row["owner_id"] for a in H.open_task_asks(conn, row))
-        if H.is_bot(row["owner_id"]) and not asked and not H._waits_on(conn, row, on):
+        # An open question task of theirs already holds it: move_asks, which runs first, made one from any open ask.
+        asked = H._waits_on(conn, row, on)
+        if H.is_bot(row["owner_id"]) and not asked:
             conn.execute("SAVEPOINT move_wait_card")
             try:
                 card = H._ask_in_subtask(conn, row["owner_id"], row, on, said or row["title"])
@@ -721,6 +796,277 @@ def _move_wait(conn, task_id, on):
     if not held and H.is_bot(on):
         _note_line(conn, row, on, said)
     H._task_event(conn, task_id, H.KEEPER, "waiting_on", on, None, "Its blocker holds it" if held else "")
+
+
+# ---- the asks migration 20261106131713_asks_to_question_tasks set aside ----------------------------------------------
+
+
+def move_asks(conn):
+    """Each open ask the asks migration found (`asks_moved`), once, at the first start after it (Store.initialize),
+    before move_waits: an ask to a person on a live task becomes a question subtask for them, or joins the open
+    question card they already have there; a loose ask to a person becomes a question task of its own; an ask to a bot
+    becomes a DM between the two, flagged needs-action. The old message stays in its thread, superseded, so it is
+    history and in no list. Each row in its own savepoint: one that cannot move keeps its words on record (`_kept`)
+    instead, and one that cannot be kept is superseded with its reason (`_lost`). A row is never tried again at every
+    start. The table goes when it is empty."""
+    import logging
+
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='asks_moved'").fetchone():
+        return
+    log = logging.getLogger(__name__)
+    for (mid,) in conn.execute("SELECT message_id FROM asks_moved ORDER BY created_at, message_id").fetchall():
+        conn.execute("SAVEPOINT move_ask")
+        try:
+            _move_ask(conn, mid)
+        except Exception as exc:  # one old ask never stops a start
+            conn.execute("ROLLBACK TO move_ask")
+            log.exception("ask %s not moved", mid)
+            why = str(getattr(exc, "detail", "") or exc)
+            try:
+                _kept(conn, mid, why)
+            except Exception:
+                conn.execute("ROLLBACK TO move_ask")
+                log.exception("ask %s not kept either", mid)
+                _lost(conn, mid, why)
+        conn.execute("RELEASE move_ask")
+        conn.execute("DELETE FROM asks_moved WHERE message_id=?", (mid,))
+    conn.execute("DROP TABLE IF EXISTS asks_moved")
+
+
+def _open_ask(conn, mid):
+    """The ask message `mid`, while it is still open, else None."""
+    m = H.message(conn, mid)
+    if not m or m.get("kind") != "ask" or m.get("answered_by_id") or m.get("superseded_at"):
+        return None
+    if conn.execute(
+        "SELECT 1 FROM messages WHERE in_reply_to=? AND kind='answer' AND deleted_at IS NULL", (mid,)
+    ).fetchone():
+        return None
+    return m
+
+
+def _retire(conn, m, task_id, how, data=None):
+    """The old ask leaves every list: superseded, with where it went, on its task's record and in the log."""
+    refs = {**(m.get("refs") or {}), "moved": {"how": how, **(data or {})}}
+    conn.execute(
+        "UPDATE messages SET superseded_at=?, refs=? WHERE id=?", (H.now(), json.dumps(refs, sort_keys=True), m["id"])
+    )
+    if task_id and H.task(conn, task_id):
+        H._task_event(conn, task_id, H.KEEPER, "ask", m["id"], how, (data or {}).get("note", "")[:500])
+    H.event(
+        conn,
+        H.KEEPER,
+        "ask.moved",
+        m["id"],
+        {"how": how, "task": task_id, "from": m["sender_id"], "to": m["recipient_id"], **(data or {})},
+    )
+    H.recount(conn, [m["sender_id"]])
+
+
+def _questions(m):
+    """The ask's question as a question task stores it: its structured questions, else its words as one question with
+    no options (Yes / No)."""
+    refs = m.get("refs") or {}
+    found = refs.get("questions") if isinstance(refs.get("questions"), list) else None
+    if found:
+        return [dict(q) for q in found]
+    return [
+        {
+            "id": FIRST_ID,
+            "header": "",
+            "question": str(m.get("body") or "").strip(),
+            "why": "",
+            "options": [],
+            "multi": False,
+        }
+    ]
+
+
+def _shape(m):
+    """The ask as a question task takes it (store's shape), its topic too."""
+    refs = m.get("refs") or {}
+    return {
+        "questions": _questions(m),
+        "if_no_answer": refs.get("if_no_answer"),
+        "review": refs.get("review"),
+        "spend": refs.get("spend"),
+        "attachments": refs.get("attachments"),
+        "topic": refs.get("topic"),
+    }
+
+
+def _store_ask(conn, card_id, m):
+    """The ask's question, default, files under review and spend on question task `card_id`, its clock the ask's."""
+    ask = _shape(m)
+    store(conn, card_id, ask, topic=H.question_topic(ask["topic"]))
+    conn.execute("UPDATE tasks SET asked_at=? WHERE id=?", (H.ask_clock(m), card_id))
+
+
+def _move_ask(conn, mid):
+    m = _open_ask(conn, mid)
+    if not m:
+        return
+    conv = H.conversation(conn, m["conversation_id"])
+    task_id = H.message_task_id(m, conv)
+    row = H.task(conn, task_id) if task_id else None
+    sender, to = m["sender_id"], m["recipient_id"]
+    if m.get("expires_at") and m["expires_at"] <= H.now():
+        return _retire(conn, m, task_id, "expired")  # it had left Needs you on its date
+    if H.is_bot(to):
+        return _to_dm(conn, m, row)
+    if not H.is_human(to):
+        return _kept(conn, mid, "asked of the system, which has no inbox")
+    if task_id and not row:
+        return _retire(conn, m, task_id, "task gone")
+    if row and row["status"] not in H.ACTIVE_STATUSES:
+        return _retire(conn, m, task_id, "task ended")  # an ask on an ended task ends with it
+    if row:
+        card = _open_card(conn, row, to)
+        if card:
+            # One card per person per task: the ask joins it as a comment from the one who asked, and adds what the card
+            # lacks.
+            _join(conn, card, m)
+            H.task_comment(conn, sender, card["id"], str(m.get("body") or "").strip() or card["title"], wake=False)
+            return _retire(conn, m, task_id, "joined", {"task_id": card["id"]})
+    card, how = _ask_task(conn, m, row)
+    _retire(conn, m, task_id, how, {"task_id": card["id"]})
+    if row:
+        from . import task_holds
+
+        task_holds.refresh(conn, row["id"])
+
+
+def _open_card(conn, row, person):
+    """The open question task `person` owns under or blocking task `row`, oldest first, or None."""
+    found = conn.execute(
+        "SELECT wq.id FROM task_relations wr JOIN tasks wq ON wq.id=wr.from_task WHERE wr.to_task=? "
+        "AND wr.kind IN ('parent','blocks') AND wq.owner_id=? AND wq.questions IS NOT NULL AND wq.answer IS NULL "
+        f"AND wq.status IN ({','.join(repr(s) for s in H.ACTIVE_STATUSES)}) ORDER BY wq.created_at, wq.rowid LIMIT 1",
+        (row["id"], person),
+    ).fetchone()
+    return H.task(conn, found[0]) if found else None
+
+
+def _join(conn, card, m):
+    """An ask that joins an open card adds what the card lacks: its options (the recommended one too), its default and
+    its files under review. The card's own question stays as it is; the ask's words come in as its comment."""
+    have, ask = fields(card), _shape(m)
+    questions = [dict(q) for q in (have["questions"] or [])]
+    if questions and ask["questions"]:
+        first, asked = questions[0], ask["questions"][0]
+        if not first.get("options") and asked.get("options"):
+            first["options"] = [dict(o) for o in asked["options"]]
+        picks = {o.get("label") for o in asked.get("options") or [] if o.get("recommended")}
+        if picks and not any(o.get("recommended") for o in first.get("options") or []):
+            for o in first.get("options") or []:
+                if o.get("label") in picks:
+                    o["recommended"] = True
+    files = {**ask["review"], "attachments": ask.get("attachments") or []} if ask["review"] else None
+    review = have["review"] or files
+    conn.execute(
+        "UPDATE tasks SET questions=?, if_no_answer=?, review=? WHERE id=?",
+        (json.dumps(questions), _dump(have["if_no_answer"] or ask["if_no_answer"]), _dump(review), card["id"]),
+    )
+
+
+def _ask_task(conn, m, row):
+    """A question task for the person the ask was put to: the open one on its topic that the person already has
+    (open_for, as the live path folds it), else under its task when it has a live one (a private task's makes a private
+    one, which only its readers see), else on its own and private to the two of them, as the ask was. Returns (task, how)."""
+    sender, person = m["sender_id"], m["recipient_id"]
+    questions = _questions(m)
+    question = str(questions[0].get("question") or m.get("body") or "").strip()
+    title = H._ask_title(question)[:200] or "A question for you"
+    body = str(m.get("body") or "").strip() or question
+    live = bool(row and row["status"] in H.ACTIVE_STATUSES)
+    topic = H.question_topic((m.get("refs") or {}).get("topic"))
+    found = open_for(
+        conn,
+        sender,
+        person,
+        parent=row["id"] if row else None,
+        topic=topic,
+        private=not row or H.task_private(conn, row),
+    )
+    if found:
+        # The new wording folds into the open question task on this topic (question_tasks.fold): nothing new is sent.
+        fold(conn, sender, found, question, _shape(m), title=title, body=body)
+        return found, "folded"
+    if row:
+        conn.execute("SAVEPOINT ask_task")
+        try:
+            card = H.task_create(
+                conn, sender, title, body, person, parent_id=row["id"], lint=False, deduplicate=False, quiet_notice=True
+            )
+        except H.Refused:
+            # A subtask of an ended task, or one the rules refuse there: a question task of its own instead.
+            conn.execute("ROLLBACK TO ask_task")
+            card = None
+        conn.execute("RELEASE ask_task")
+        if card:
+            _store_ask(conn, card["id"], m)
+            if live:
+                conn.execute("SAVEPOINT ask_file")
+                try:
+                    file(conn, sender, H.task(conn, card["id"]), row)
+                except H.Refused:
+                    # A private task whose readers the card does not share takes no blocker on it (a private
+                    # dependency needs the same audience): the bot hears the answer on the card, as its requester.
+                    conn.execute("ROLLBACK TO ask_file")
+                conn.execute("RELEASE ask_file")
+            return card, "question_task"
+        # Its task's title only where the person reads that task: a private one's stays off.
+        readable = not H.task_private(conn, row) or H.task_private_readable(conn, person, row)
+        body = f"{body}\n\nAbout task {row['id']}: {row['title']}" if readable else body
+    card = H.task_create(
+        conn,
+        sender,
+        title,
+        body,
+        person,
+        lint=False,
+        deduplicate=False,
+        quiet_notice=True,
+        private=True if not row or H.task_private(conn, row) else None,
+    )
+    _store_ask(conn, card["id"], m)
+    return card, "question_task"
+
+
+def _to_dm(conn, m, row):
+    """An ask to a bot as what bots do now (D9): a message in the DM between the two, flagged needs-action, so the bot
+    it asks takes it on its next run now and its reply wakes the asker."""
+    sender, bot = m["sender_id"], m["recipient_id"]
+    conv = H._pair_conversation(conn, sender, bot, "chat", allow_held=True)
+    refs = {"needs_action": True, "asked_before": m["id"], **({"task": row["id"]} if row else {})}
+    sent = H.say(conn, sender, bot, str(m.get("body") or "").strip(), conversation_id=conv["id"], refs=refs)
+    _retire(conn, m, row["id"] if row else None, "dm", {"message_id": sent["id"]})
+
+
+def _kept(conn, mid, why):
+    """An open ask that could not move: retired all the same, its words kept where its people read them, on its task as
+    a quiet keeper line, and the reason in the log (`ask.not_moved`)."""
+    m = H.message(conn, mid)
+    if not m or m.get("kind") != "ask" or m.get("superseded_at"):
+        return
+    task_id = H.message_task_id(m, H.conversation(conn, m["conversation_id"]))
+    row = H.task(conn, task_id) if task_id else None
+    said = str(m.get("body") or "").strip()
+    if row and row["status"] in H.ACTIVE_STATUSES and said:
+        line = (
+            f"An open question from {H.actor_name(conn, m['sender_id'])} to {H.actor_name(conn, m['recipient_id'])} "
+            f"did not move to a question task ({why}): {said}"
+        )[:4000]
+        H.task_comment(conn, H.KEEPER, task_id, line, wake=False)
+    H.event(conn, H.KEEPER, "ask.not_moved", mid, {"why": why[:500], "task": task_id})
+    _retire(conn, m, task_id, "kept", {"note": why})
+
+
+def _lost(conn, mid, why):
+    """An open ask that neither moved nor could be kept: superseded all the same, with the reason in the log. It writes
+    only the message and its event, not a task, so the failure above is not needed again."""
+    conn.execute("UPDATE messages SET superseded_at=? WHERE id=? AND superseded_at IS NULL", (H.now(), mid))
+    H.event(conn, H.KEEPER, "ask.not_moved", mid, {"why": why[:500], "task": None})
 
 
 def _note_line(conn, row, on, said):

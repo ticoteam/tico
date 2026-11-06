@@ -1,6 +1,6 @@
 {
   "files": {
-    "ui/app/ask-panel.js": 22,
+    "ui/app/ask-panel.js": 20,
     "ui/app/assistant-page.js": 6,
     "ui/app/automations-editors.js": 23,
     "ui/app/automations-flow.js": 7,
@@ -118,7 +118,7 @@
     "ui/app/skills.js": 24,
     "ui/app/slash-commands.js": 15,
     "ui/app/sql.js": 1,
-    "ui/app/state.js": 29,
+    "ui/app/state.js": 25,
     "ui/app/stick-scroll.js": 2,
     "ui/app/strategy-budget.js": 50,
     "ui/app/subscriptions.js": 121,

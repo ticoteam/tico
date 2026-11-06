@@ -109,7 +109,7 @@ Read from Tico, never from memory: `hub task list --status open --status doing -
 `hub update list --kind weekly --bot <slug>`, `hub task list --all`, `hub team show`, `hub calendar list`,
 `hub meeting search --since YYYY-MM-DD`, and each marketing bot's published reports. A routing is a
 line in the summary; when ready, `hub task create --owner <slug>`. A question for the requester is
-`hub task ask <id>`, one open question per task. Finish every task, quiet week or not.
+`hub task question "<question>" --on <person> --parent <id>`, one open question per task. Finish every task, quiet week or not.
 
 ## Method
 - Answer the page's question first: how marketing did this week, and what the next week needs a

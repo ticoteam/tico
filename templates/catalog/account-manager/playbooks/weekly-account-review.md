@@ -38,7 +38,7 @@ in the headline.
 
 For each renewal in the next 90 days, read the Customer Success Manager's latest note, or ask:
 
-    hub question ask customer-success "<account> health?" --wait 60
+    hub message send customer-success "<account> health?" --needs-action
 
 A red account gets no commercial proposal this week. List it under "Held for health" with their note and its date.
 

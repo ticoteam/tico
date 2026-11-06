@@ -563,7 +563,6 @@ def step_approval_expiry(ctx):
     acted = {
         "approvals expired": ended.get("stale") or [],
         "approvals closed with their task": ended.get("ended") or [],
-        "asks cleared": ended.get("asks") or [],
         "asked cards expired": ended.get("cards") or [],
     }
     return SR.words_of(acted, none="Nothing expired"), not any(acted.values())

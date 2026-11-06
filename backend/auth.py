@@ -1025,9 +1025,11 @@ class Auth:
         if who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
+            # On a person's own Assistant turn, the person's own question tasks too (hubdb.own_question_for_assistant).
+            own = f" OR (questions IS NOT NULL AND owner_id={me})" if H.assistant_turn_person(who) else ""
             audience += (
                 f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
-                f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}))"
+                f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}){own})"
             )
         from . import counsel
 
@@ -1293,7 +1295,9 @@ class Auth:
             raise Problem("not_found", "Task not found", 404)
         if who.role not in ("owner", "human", "bot") or not H.task_private_readable(c, who.actor, row):
             raise Problem("not_found", "Task not found", 404)
-        if who.task_actor and not H.task_private_readable(c, who.task_actor, row):
+        if who.task_actor and not (
+            H.task_private_readable(c, who.task_actor, row) or H.own_question_for_assistant(who, row)
+        ):
             raise Problem("not_found", "Task not found", 404)
         participants = (row["owner_id"], row["requester_id"])
         if not H.task_participant(c, who.actor, row) and not (
