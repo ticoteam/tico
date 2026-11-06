@@ -382,7 +382,7 @@ class _Google:
         self._check(reply)
         if reply.status != 200:
             raise Failed(f"Google Ads account {customer}: " + _google_error(reply))
-        batches: list[Any] = cast(list[Any], reply.body) if isinstance(reply.body, list) else [reply.body]
+        batches: list[Any] = _list(reply.body) or [reply.body]
         return [_dict(r) for b in batches for r in _list(_dict(b).get("results"))]
 
 

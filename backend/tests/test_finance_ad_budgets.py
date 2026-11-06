@@ -45,7 +45,7 @@ def _tool(c: sqlite3.Connection, tid: str, service: str) -> None:
 
 def world(store: Store, at: str = AT) -> dict[str, str]:
     """An Advertising line, Google Ads and Meta imports booking to it, one ad account per bot, the platforms' vendor
-    contacts, and budgets: each bot's (warn only) and a Marketing one over the whole line. The ids by name."""
+    contacts, and budgets: a Marketing one over the whole line and, under it, each bot's (warn only). The ids by name."""
     with store.transaction() as c:
         _bots(c)
         made = act(c, OWNER, "account_create", {"code": "6300", "name": "Advertising", "type": "expense",
@@ -64,12 +64,13 @@ def world(store: Store, at: str = AT) -> dict[str, str]:
             SA.set_bot(c, out[platform], bot, at)
             out[platform + "_vendor"] = AI.ensure_vendor(c, platform, at)
         for key, body in (
+                ("marketing", {"name": "Marketing", "amount": 1_000_000}),
                 ("google", {"name": "Rental Google Ad Owner", "teammate": "bot:paid-rental-ads",
                             "vendor": out["google_ads_vendor"], "amount": 300_000}),
                 ("meta", {"name": "Rental Social Ad Owner", "teammate": "bot:rental-social-ad-owner",
-                          "vendor": out["meta_ads_vendor"], "amount": 300_000}),
-                ("marketing", {"name": "Marketing", "amount": 1_000_000})):
-            done = act(c, OWNER, "budget_create", {**body, "account_id": adv, "at_limit": "warn"}, at=at)
+                          "vendor": out["meta_ads_vendor"], "amount": 300_000})):
+            under = {"parent_id": out["marketing"]} if key != "marketing" else {}
+            done = act(c, OWNER, "budget_create", {**body, **under, "account_id": adv, "at_limit": "warn"}, at=at)
             assert done.status == "committed", done
             out[key] = str(done.result["budget_id"])
     return out
