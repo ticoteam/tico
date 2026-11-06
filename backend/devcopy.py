@@ -52,7 +52,7 @@ EMPTY = (
     "task_reconnects", "google_signin_refusals",
     # refusal holds on one task or chat: their cooldowns belong to the source's runs; the copy starts with none
     "quarantine_holds",
-    # Pass deadlines can withdraw tasks; a rehearsal copy never resumes that work.
+    # The retired Nightly memory tidy pilot's ledger: history only.
     "memory_tidy_passes", "memory_tidy_packets",
     # routines and watchers
     "webhooks", "webhook_events", "webhook_sends", "webhook_attempts",   # outgoing: a copy never sends an event out
@@ -196,7 +196,7 @@ KEEP = frozenset((
     # Native threads (backend/threads.py) and teammate permissions (backend/teammate_access.py). A delivery to an
     # outside destination that has not gone is made moot below, so the copy never sends it.
     "message_deliveries", "message_mentions", "message_reactions", "message_revisions", "sequences",
-    "teammate_accesses", "thread_followers", "thread_members", "thread_pins", "thread_routings",
+    "teammate_accesses", "thread_followers", "thread_members", "thread_pins",
     "message_routes",
     "message_search_keys",    # the search index's keys (thread_search.py); its FTS table is copied whole too, and search joins messages
     "home_merges", "home_merge_messages",   # where each person's old chat with a bot went (backend/bot_home_merge.py)

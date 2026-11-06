@@ -128,7 +128,6 @@ ACTIONS = {
                            ("finance", "rules", "digest")),
     "wake_rules_digest": ("open the week's rules digest task for the Bookkeeper when there are new rules",
                           ("finance", "rules", "digest", "wake")),
-    "propose_memory_tidy": ("propose memory and knowledge edits for the pilot bots", ("memory", "tidy", "pilot")),
     "remind_due": ("tell a bot when one of its tasks reaches its due time", ("due", "remind", "tasks")),
     "go_ahead": ("go ahead on a past-deadline question's default answer, or expire it",
                  ("ask", "question", "deadline", "expire")),
@@ -146,20 +145,19 @@ ACTIONS = {
     "send_task_roundup": ("send each bot one list of its tasks: a follow-up that came due, an unanswered question, an assignment "
                           "not started, a restate, a late ticket, an exception, a backlog, a missed update or a quiet task",
                          ("tasks", "roundup", "wake", "missed", "quiet", "update", "late", "backlog", "exceptions", "assigned")),
-    "tell_earlier_messages": ("tell each manager of a bot once when its Home still holds closed history",
-                              ("thread", "earlier", "closed", "history", "managers", "notice")),
     "wake_digest_bots": ("start one run for each bot with new messages in the threads it follows on digest",
                          ("bot", "digest", "thread", "wake", "batch")),
-    "route_message": ("have Decide read a person's message that names nobody and wake the bots it is for, three at most",
-                      ("route", "routing", "thread", "bots", "wake", "message")),
     "resume_capped_wakes": ("let bot wakes the loop guard paused go when a thread's hour has room",
                             ("loop", "guard", "capped", "paused", "resume", "wake", "thread", "bots")),
     "purge_thread_messages": ("delete messages past the time their thread keeps them, with what was copied from them",
                               ("retention", "purge", "delete", "thread", "messages", "keep")),
+    "roll_up_skill_usage": ("fold skill uses into daily counts and delete raw uses older than 90 days",
+                            ("skills", "usage", "rollup", "retention", "delete")),
     "email_digest": ("email a person once an hour the threads they follow on digest that have new messages: titles, "
                      "unread counts and links, never the messages", ("email", "digest", "unread", "thread", "notify")),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
-    "ask_to_task": ("turn a bot's plain ask to a person into a small task", ("ask", "tasks")),
+    "reopen_stranded": ("send a bot's task waiting on nothing tracked back to open after two hours",
+                        ("waiting", "stranded", "reopen", "tasks")),
     "end_snooze": ("bring snoozed tasks back when their date comes", ("snooze", "tasks")),
     "start_deferred": ("start deferred runs that are due", ("deferred", "runs")),
     "end_go_live": ("end a go-live waiting for a computer that never reports", ("go-live", "computer", "expire")),
@@ -194,6 +192,8 @@ ACTIONS = {
     "start_editions": ("start the Company page editions that came due and send waiting reader notices",
                        ("company", "page", "edition", "readers")),
     "screen_waiting": ("screen outside text a restart left waiting", ("screening", "outside", "text")),
+    "screen_skills": ("screen each proposed skill and update before an admin can approve it",
+                      ("skills", "screening", "proposals", "approve")),
     "finance_upkeep": ("post Finance's waiting events, usage and prepaids, end holds and finished approvals, open the next period",
                        ("finance", "events", "usage", "holds", "period", "approvals")),
     "deadline_sweeps": ("turn off failing webhooks, retire replaced computers, hand on support tickets and screened items",
@@ -289,6 +289,10 @@ def _company_page_open(c, settings):
     return schedule.transparency(c) != "closed"
 
 
+def _skills_proposed(c, settings):
+    return _row_exists(c, "SELECT 1 FROM skill_proposals LIMIT 1")
+
+
 def _cloud_company(c, settings):
     from . import cloud_machines
     return cloud_machines.cloud_company(c, settings)
@@ -346,9 +350,6 @@ JOBS = [
         "rules is a quiet run.",
         CHECKS, "Weekly", 7 * 86400, then=("check_rules_digest", "wake_rules_digest"), department=FINANCE,
         applies=_bookkeeper),
-    Job("memory_tidy", "Nightly memory tidy",
-        "Proposes memory and knowledge edits for up to three pilot bots on their named models. Pilot stop: $50.",
-        LEARNING, "Nightly at 03:30", control=True, then=("propose_memory_tidy",)),
     Job("due_reminders", "Due reminders", "Tells a bot when one of its tasks reaches its due time.",
         REMINDERS, "Every 10 seconds", 10, then=("remind_due",)),
     Job("ask_deadlines", "Ask go-ahead",
@@ -356,10 +357,6 @@ JOBS = [
         REMINDERS, "Hourly", 3600, control=True, then=("go_ahead",)),
     Job("approval_expiry", "Approval expiry", "Takes approvals and asks nobody will act on out of Needs you.",
         REMINDERS, "Hourly", 3600, then=("expire_approvals",)),
-    Job("thread_followups", "Earlier messages",
-        "Tells each manager of a bot once, in a direct message, when the bot's Home still holds closed history. Plain code: "
-        "no model is called, and nothing new is a quiet run. Asks nobody answered are on the bot's task roundup.",
-        REMINDERS, "Every 15 minutes", 900, then=("tell_earlier_messages",)),
     Job("thread_digest", "Email digest",
         "Emails a person once an hour the threads they follow on digest that have new messages: each title, its unread "
         "count and a link, never the messages. Nothing unread is a quiet run.",
@@ -368,10 +365,6 @@ JOBS = [
         "Starts one run an hour for each bot that follows threads on digest and has new messages in them. Plain code: "
         "no model is called until a batch has something in it, and nothing new is a quiet run.",
         REMINDERS, "Hourly", 3600, then=("wake_digest_bots",)),
-    Job("thread_routing", "Thread routing",
-        "Reads a person's message that names nobody in a thread with several bots and wakes the ones it is for, three "
-        "at most. Below the confidence bar, or with Decide off, it wakes none.",
-        REMINDERS, "As messages arrive", ai=True, labels=("slack-route",), then=("route_message",)),
     Job("still_needed", "Unanswered questions",
         "On weekday mornings, questions unanswered for two business days go back to their bots as lines on the bots' "
         "task roundup, never as a wake.",
@@ -385,9 +378,9 @@ JOBS = [
         "Frees turns proven dead, keeps one Health finding per busy-turns incident and hands what it cannot fix to "
         "BotOps.", HOUSEKEEPING, "Every 10 seconds", 10, then=("free_dead_starts", "turns_finding")),
     Job("waiting_checks", "Waiting checks",
-        "Turns a bot's plain ask to a person into a small task. It no longer sends a waiting task back to work; a "
-        "waiting task that waits on nothing is listed on the task roundup after a day.",
-        HOUSEKEEPING, "Hourly", 3600, then=("ask_to_task",)),
+        "Sends a bot's task waiting on nothing tracked back to open after two hours (one that keeps coming back "
+        "goes to its manager bot or BotOps).",
+        HOUSEKEEPING, "Hourly", 3600, then=("reopen_stranded",)),
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred", "start_task")),
@@ -398,6 +391,10 @@ JOBS = [
         "Deletes messages past the time their thread keeps them, with what was copied from them, in short batches. Plain "
         "code: nothing past its time is a quiet run.",
         HOUSEKEEPING, "Every 15 minutes", 900, then=("purge_thread_messages",)),
+    Job("skill_usage_rollup", "Skill usage",
+        "Folds skill uses into daily counts for Library › Skills and deletes raw uses older than 90 days. Plain code: "
+        "nothing new is a quiet run.",
+        HOUSEKEEPING, "Hourly", 3600, then=("roll_up_skill_usage",)),
     Job("invariant_checks", "Production checks",
         "Reads a few production invariants in plain code and shows each failing one on Health. Check health files each "
         "one as a BotOps task, closed when the check passes.",
@@ -474,6 +471,11 @@ JOBS = [
         HOUSEKEEPING, "Every 10 seconds", 10, then=("start_editions",), applies=_company_page_open),
     Job("screening", "Outside text check", "Screens outside text a restart left waiting.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("screen_waiting",)),
+    Job("skill_screening", "Skill screening",
+        "Screens each proposed skill and update with plain-code patterns and Decide High before an admin can approve it. "
+        "Mandatory: no switch, and no other model answers in its place.",
+        CHECKS, "As skills are proposed", ai=True, labels=("skill-screen",), then=("screen_skills",),
+        applies=_skills_proposed),
     Job("finance_upkeep", "Finance upkeep",
         "Posts Finance's waiting events, Gateway usage and prepaid costs, ends expired holds and finished approvals, "
         "watches documents, and opens next month's period.",
@@ -560,7 +562,6 @@ class Control:
 CONTROLS = {
     "stale_review": Control(rule="stale_review", presets=AI_PRESETS, preset=HOURLY, at="09:00"),
     "kpi_asks": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
-    "memory_tidy": Control(on=False, presets=(DAILY,), preset=DAILY, at="03:30"),
     "ask_deadlines": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     # Hourly while people are at work: a report outside business hours would wait on nobody to read it.
     "task_manager_report": Control(presets=(BUSINESS, HOURLY, FOUR_HOURS, DAILY), preset=BUSINESS, at="09:00"),
@@ -572,7 +573,8 @@ CONTROLS = {
 # Last runs read by backend/scheduler.py (QUICK and FIXED).
 QUICK_KEYS = ("kpi_asks", "ask_deadlines", "task_manager_report",
               "bookkeeper_check", "bookkeeper_watch",
-              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention")
+              "bookkeeper_rules_digest", "thread_digest", "thread_bot_digest", "thread_retention",
+              "skill_usage_rollup")
 
 
 def zone():
@@ -612,8 +614,7 @@ def schedule_words(key, cfg):
     """A controlled job's schedule in words: "Every 4 hours", "Daily at 09:00"."""
     if not cfg or not cfg.get("preset"):
         return BY_KEY[key].schedule
-    words = PRESETS[cfg["preset"]][0].format(at=cfg.get("at") or "")
-    return "Nightly at " + cfg["at"] if key == "memory_tidy" else words
+    return PRESETS[cfg["preset"]][0].format(at=cfg.get("at") or "")
 
 
 def may_change(auth, who, key):
@@ -1045,10 +1046,6 @@ def listing(c, settings, now=None, who=None, auth=None, everything=False):
                 "owner_only": bool(ctl and ctl.owner_only),
                 "can_change": bool(ctl and who is not None and auth is not None and can_change(auth, who, job.key)),
                 "last": None, "next": _stamp(following) if following else None}
-        if job.key == "memory_tidy" and item["can_change"]:
-            from . import memory_tidy_controls
-            item["pilots"] = memory_tidy_controls.pilot_rows(c)
-            item["pilot_models"] = memory_tidy_controls.model_options(c, settings)
         item["search"] = search_words(job, when_words, then_words, department)
         if job.key == "task_manager_report":
             from .task_manager import active as task_manager_active
@@ -1099,13 +1096,8 @@ def install(app, store, auth, mutate):
         Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
         who = request.state.identity
         may_change(auth, who, key)
-        if body.pilots is not None and key != "memory_tidy":
-            raise Problem("invalid", "Only Nightly memory tidy has a pilot list", 422)
 
         def work(c):
-            if body.pilots is not None:
-                from . import memory_tidy_controls
-                memory_tidy_controls.save(c, store.settings, who.actor, [p.model_dump() for p in body.pilots])
             return save_config(c, who.actor, key, body.on, body.preset, body.at)
         mutate(request, body, work)
         with store.read() as c:

@@ -176,11 +176,11 @@ def test_query_resolves_ids_with_default_and_explicit_caps_before_modifying(api,
     assert len(live["writes"][-1][1]["ids"]) == 500
 
 
-@pytest.mark.parametrize("selection", [{"ids": ["m1"], "query": "in:inbox"}, {}, {"ids": []},
-                                      {"ids": ["m"] * 501}, {"query": " "}, {"query": "in:inbox", "limit": 501}])
-def test_invalid_selections_never_reach_gmail(api, live, selection):
-    organize(api, expected=422, mailbox=BOX, action="archive", **selection)
-    assert not live["calls"]
+def test_invalid_selections_never_reach_gmail(api, live):
+    for selection in [{"ids": ["m1"], "query": "in:inbox"}, {}, {"ids": []},
+                      {"ids": ["m"] * 501}, {"query": " "}, {"query": "in:inbox", "limit": 501}]:
+        organize(api, expected=422, mailbox=BOX, action="archive", **selection)
+        assert not live["calls"], str(selection)[:60]
 
 
 def test_read_only_level_and_company_switch_are_rechecked_before_each_write(api, live, assistant_token):

@@ -219,37 +219,43 @@ def test_a_comment_on_a_task_a_bot_filed_wakes_it_only_when_addressed_to_it(api)
         assert update["woke"] is False and jobs_for(api, "ops") == queued
     assert any(m["body"] == "Testing it on staging for a day." for m in get(api, "tasks/" + task["id"])["comments"])
     assert post(api, path, {"text": "@ops which app is still open?"})["woke"] is True
-    queued = jobs_for(api, "ops")
-    # The owner's reply with no @mention is deferred a day: it reaches the bot that asked on its next turn there.
+    # The @mention made ops a follower: the owner's plain reply now reaches it like any post, Steer by default.
     reply = post(api, path, {"text": "I don't know why this task is assigned to me."}, token="ben-test")
-    assert reply["woke"] is False and reply["comment"]["recipient_id"] == "bot:ops"
-    assert reply["sent_as"]["delivery"] == "defer" and reply["sent_as"]["until"]
-    assert jobs_for(api, "ops") == queued
+    assert reply["woke"] is True and reply["comment"]["recipient_id"] == "bot:ops"
+    queued = jobs_for(api, "ops")
     mine = f"{path}/{reply['comment']['id']}"
     assert post(api, mine, {"text": "Why is this mine?"}, token="ben-test")["woke"] is False
     assert post(api, mine + "/delete", {}, token="ben-test")["woke"] is False
     assert jobs_for(api, "ops") == queued, "an edit or delete wakes nobody"
 
 
-def test_a_person_mentioned_in_a_comment_gets_it_as_a_question_in_needs_you(api):
+def test_a_person_mentioned_in_a_comment_is_reached_and_follows_the_task(api):
     token = bot_token(api, "ops")
     task = post(api, "tasks", {"owner": "ana", "title": "Fix the sign-in check", "body": "x"}, token=token)
     queued = jobs_for(api, "ops")
     said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you test it on staging?"}, token="priya-test")
-    assert said["comment"]["kind"] == "ask" and said["comment"]["recipient_id"] == "human:ben"
+    assert said["comment"]["kind"] == "say" and mention_reason(api, said["comment"]["id"], "human:ben") == "mention"
     assert jobs_for(api, "ops") == queued, "the bot that filed it is not woken"
+    assert mention_reason(api, said["comment"]["id"], "human:priya") is None, "posting reaches not the author"
     with api.app.state.store.read() as c:
-        assert task["id"] in {t["id"] for t in H.needs_you(c, "human:ben")["tasks"]}
-        assert task["id"] not in {t["id"] for t in H.needs_you(c, "human:priya")["tasks"]}
+        assert c.execute("SELECT following FROM thread_followers WHERE thread_id=? AND actor='human:ben'",
+                         (H.task(c, task["id"])["conversation_id"],)).fetchone()[0] == 1
+
+
+def mention_reason(api, message_id, actor):
+    """Why a message reached `actor` (its delivery's reason), or None when it did not."""
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT reason FROM message_deliveries WHERE message_id=? AND recipient=?",
+                        (message_id, actor)).fetchone()
+    return row[0] if row else None
 
 
 def test_a_mention_on_a_task_with_no_bot_on_it_is_one_comment(api):
     task = post(api, "tasks", {"owner": "ben", "title": "Book the venue", "body": "x"})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you book it by Friday?"})
-    assert said["comment"]["kind"] == "ask" and said["comment"]["recipient_id"] == "human:ben"
+    # A mention is a comment that reaches whom it names, not a question (question tasks are their own thing).
+    assert said["comment"]["kind"] == "say" and mention_reason(api, said["comment"]["id"], "human:ben") == "mention"
     assert [m["body"] for m in get(api, "tasks/" + task["id"])["comments"]] == ["@ben can you book it by Friday?"]
-    with api.app.state.store.read() as c:
-        assert task["id"] in {t["id"] for t in H.needs_you(c, "human:ben")["tasks"]}
 
 
 def test_mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot(api):
@@ -258,8 +264,7 @@ def test_mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot(api):
     said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you send ops the numbers?"})
     assert said["woke"] is True and said["comment"]["kind"] != "ask"
     assert jobs_for(api, "ops") == queued + 1
-    with api.app.state.store.read() as c:
-        assert task["id"] in {t["id"] for t in H.needs_you(c, "human:ben")["tasks"]}
+    assert mention_reason(api, said["comment"]["id"], "human:ben") == "mention"
 
 
 def test_a_comment_on_a_task_with_no_bot_on_it_is_not_quiet(api):

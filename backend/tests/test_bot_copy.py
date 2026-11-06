@@ -361,3 +361,9 @@ def test_botops_is_given_a_read_only_token_for_a_bot_on_another_computer_only_fo
 def botcopy_person(api, attempt):
     from clients.hubtools import _Requester
     return _Requester(Hub(api, attempt["token"]))
+
+
+def test_a_last_line_without_a_newline_stays_on_its_own_diff_line():
+    from clients.botcopy import unified
+    diff = unified("f", b"a\nx", b"a\ny")
+    assert "-x\n\\ No newline at end of file\n+y\n" in diff     # was "-x+y" before

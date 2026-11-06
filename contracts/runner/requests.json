@@ -668,6 +668,86 @@
    "title": "ContainerExecReadiness",
    "type": "object"
   },
+  "DiskCleanupClass": {
+   "additionalProperties": false,
+   "properties": {
+    "bytes": {
+     "minimum": 0,
+     "title": "Bytes",
+     "type": "integer"
+    },
+    "count": {
+     "minimum": 0,
+     "title": "Count",
+     "type": "integer"
+    },
+    "kind": {
+     "maxLength": 40,
+     "title": "Kind",
+     "type": "string"
+    }
+   },
+   "required": [
+    "kind",
+    "count",
+    "bytes"
+   ],
+   "title": "DiskCleanupClass",
+   "type": "object"
+  },
+  "DiskCleanupReadiness": {
+   "additionalProperties": false,
+   "description": "The last clean-up the computer ran by itself on a low workspace volume (runner-rs/src/disk_clean.rs).",
+   "properties": {
+    "at": {
+     "maxLength": 40,
+     "title": "At",
+     "type": "string"
+    },
+    "classes": {
+     "items": {
+      "$ref": "#/$defs/DiskCleanupClass"
+     },
+     "maxItems": 10,
+     "title": "Classes",
+     "type": "array"
+    },
+    "free_after_bytes": {
+     "minimum": 0,
+     "title": "Free After Bytes",
+     "type": "integer"
+    },
+    "free_before_bytes": {
+     "minimum": 0,
+     "title": "Free Before Bytes",
+     "type": "integer"
+    },
+    "freed_bytes": {
+     "minimum": 0,
+     "title": "Freed Bytes",
+     "type": "integer"
+    },
+    "low_bytes": {
+     "minimum": 0,
+     "title": "Low Bytes",
+     "type": "integer"
+    },
+    "still_low": {
+     "default": false,
+     "title": "Still Low",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "at",
+    "free_before_bytes",
+    "free_after_bytes",
+    "low_bytes",
+    "freed_bytes"
+   ],
+   "title": "DiskCleanupReadiness",
+   "type": "object"
+  },
   "DiskReadiness": {
    "additionalProperties": false,
    "properties": {
@@ -1173,7 +1253,7 @@
   },
   "MailRequest": {
    "additionalProperties": false,
-   "description": "What a bot's bot.yaml asks for its mail (runner-rs/src/declared_access.rs `mail_request`): a request only. The\nserver-held setting (backend/mail_settings.py) decides; Health says when the two differ.",
+   "description": "What a bot's bot.yaml says of its mail, as its computer still reports it (runner-rs/src/declared_access.rs\n`mail_request`). Accepted and ignored: sending is the server's sending policy alone (backend/email_sending.py).",
    "properties": {
     "forward_to": {
      "items": {
@@ -2346,6 +2426,17 @@
      "anyOf": [
       {
        "$ref": "#/$defs/DiskReadiness"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "disk_cleanup": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/DiskCleanupReadiness"
       },
       {
        "type": "null"

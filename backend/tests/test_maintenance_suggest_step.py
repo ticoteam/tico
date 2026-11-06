@@ -19,6 +19,13 @@ from backend.tests.test_api import api, get, put  # noqa: F401
 from backend.tests.test_maintenance_learn_step import complete, queue, start
 
 
+@pytest.fixture(autouse=True)
+def _not_a_friday(monkeypatch):
+    """A Friday's update must be a week in review (updates.kind_for); these tests post daily ones, so pin a Tuesday."""
+    from backend import updates as _updates
+    monkeypatch.setattr(_updates, "today", lambda at=None: "2026-09-29")
+
+
 def item(n=1, **changes):
     return {"id": f"sg_{n:032x}", "fingerprint": f"sha256:{n:064x}", "owner_role": "botops",
             "title": "Set up a manager", "body": "Give open work a manager.",
@@ -336,17 +343,18 @@ def test_missing_role_waits_then_template_holder_gets_delivery_only_turn(install
     assert receipt(install)["outcome"] == "delivered"
 
 
-def test_post_feedback_is_bound_to_receiving_bot_and_request(install, http):
+def test_post_feedback_is_bound_to_receiving_bot_and_request(install, http, monkeypatch):
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     http[1]["items"] = [item(), item(2)]
     run_step(install)
     with install.transaction() as c:
         row = queue(c)
         updates.send_request(c, row)
-        updates.post(c, "ops", "- Finished the work", suggestions_seen=[item()["id"]], delivery_batch_id="other")
+        updates.post(c, "ops", "- Finished the work", kind="daily", suggestions_seen=[item()["id"]], delivery_batch_id="other")
         assert c.execute("SELECT count(*) FROM suggestions WHERE outcome IS NOT NULL").fetchone()[0] == 0
         suggestions.feedback(c, "finance", row["id"], [item()["id"]], settled=True)
         assert c.execute("SELECT count(*) FROM suggestions WHERE outcome IS NOT NULL").fetchone()[0] == 0
-        updates.post(c, "ops", "- Finished the work", suggestions_seen=[item()["id"]], delivery_batch_id=row["id"])
+        updates.post(c, "ops", "- Finished the work", kind="daily", suggestions_seen=[item()["id"]], delivery_batch_id=row["id"])
         assert c.execute("SELECT outcome FROM suggestions WHERE id=?", (item()["id"],)).fetchone()[0] == "acted"
         assert c.execute("SELECT outcome FROM suggestions WHERE id=?", (item(2)["id"],)).fetchone()[0] == "delivered"
 
@@ -409,7 +417,8 @@ def test_bound_retry_unbinds_a_role_that_moved_to_another_bot(install, http):
     assert all(row[key] is None for key in ("owner_bot_id", "update_batch_id", "message_id", "delivered_at", "cooldown_until"))
 
 
-def test_redo_completion_cannot_settle_the_original_delivery(install, http, api):
+def test_redo_completion_cannot_settle_the_original_delivery(install, http, api, monkeypatch):
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     run_step(install)
     with install.transaction() as c:
         batch = queue(c)
@@ -430,7 +439,7 @@ def test_redo_completion_cannot_settle_the_original_delivery(install, http, api)
     assert receipt(install)["message_id"] == original["id"]
     assert receipt(install)["outcome"] is None
     with install.transaction() as c:
-        updates.post(c, "ops", "- Finished the redo")
+        updates.post(c, "ops", "- Finished the redo", kind="daily")
         assert updates.settle_sent(c, sent) is False
     assert receipt(install)["outcome"] is None
     with install.transaction() as c:
@@ -439,7 +448,8 @@ def test_redo_completion_cannot_settle_the_original_delivery(install, http, api)
     assert receipt(install)["outcome"] == "delivered"
 
 
-def test_update_delivers_at_most_ten_suggestions_and_preserves_the_original_message(install, http):
+def test_update_delivers_at_most_ten_suggestions_and_preserves_the_original_message(install, http, monkeypatch):
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     http[1]["items"] = [item(n) for n in range(1, 12)]
     run_step(install)
     with install.transaction() as c:
@@ -450,7 +460,7 @@ def test_update_delivers_at_most_ten_suggestions_and_preserves_the_original_mess
         retry = updates.send_request(c, batch)
         assert retry["id"] != original["id"]
         assert c.execute("SELECT count(*) FROM suggestions WHERE message_id=?", (original["id"],)).fetchone()[0] == 10
-        updates.post(c, "ops", "- Finished the work", suggestions_seen=[item(n)["id"] for n in range(1, 11)],
+        updates.post(c, "ops", "- Finished the work", kind="daily", suggestions_seen=[item(n)["id"] for n in range(1, 11)],
                      delivery_batch_id=batch["id"])
         assert c.execute("SELECT count(*) FROM suggestions WHERE outcome='acted'").fetchone()[0] == 10
 

@@ -9,6 +9,8 @@ sensitive so it can take a while."
   last has posted or its run ended), so updates never crowd out real work on a Mac. Quietest bots
   first; a bot busy with a run is passed over and asked again later that day. A request is a
   keeper notice to the bot, which queues its run like any message; the facts it needs ride along.
+  A bot with nothing real to report skips instead of posting (`skip`): the request finishes `skipped` with
+  "nothing new to report", and is never retried or marked missed.
 - `updates`: what a bot posted (one per bot, day and kind; a second post replaces the first).
 - `update_reads`: per person, so reading one is never someone else's read.
 - A reply is an ordinary chat message to the bot carrying `refs.update`; the bot's session gets it
@@ -223,23 +225,25 @@ def restricted_bots(c):
 
 
 def team_updates(c, author, kind, day):
-    """(the direct reports' updates for that day, the reports who have none) for a manager's request.
-    A person's update is read by everyone, so their restricted bot reports are left out. Each row says
-    whether it is flagged `meetings`, so a person's draft carries the flag up and a bot never gets its text."""
+    """(the direct reports' updates for that day, the reports who have none, the reports who had nothing new to report)
+    for a manager's request. A person's update is read by everyone, so their restricted bot reports are left out. Each row
+    says whether it is flagged `meetings`, so a person's draft carries the flag up and a bot never gets its text."""
     reports = direct_reports(c, author)
     if is_person(author):
         hidden = restricted_bots(c)
         reports = [a for a in reports if a not in hidden]
     if not reports:
-        return [], []
+        return [], [], []
     rows = {r["bot"]: dict(r) for r in c.execute(
         "SELECT id, bot, body, meetings FROM updates WHERE kind=? AND day=? AND bot IN (" + ",".join("?" * len(reports)) + ")",
         (kind, day, *reports))}
-    asked = {r["bot"] for r in c.execute(
-        "SELECT bot FROM update_queue WHERE kind=? AND day=? AND bot IN (" + ",".join("?" * len(reports)) + ")",
+    asked = {r["bot"]: dict(r) for r in c.execute(
+        "SELECT bot, state, reason FROM update_queue WHERE kind=? AND day=? AND bot IN (" + ",".join("?" * len(reports)) + ")",
         (kind, day, *reports))}
-    missing = [a for a in reports if a not in rows and (a in asked or is_person(a))]
-    return [rows[a] for a in reports if a in rows], missing
+    # Nothing new is not missing: a report that skipped (or had no work since its last update) has nothing to say.
+    quiet = {a for a, r in asked.items() if r["state"] == "skipped" and r["reason"] in (NOTHING_NEW, NO_WORK)}
+    missing = [a for a in reports if a not in rows and a not in quiet and (a in asked or is_person(a))]
+    return [rows[a] for a in reports if a in rows], missing, [a for a in reports if a in quiet and a not in rows]
 
 
 def _waited_out(row):
@@ -420,11 +424,20 @@ def _finish(c, row, state, reason=None):
     c.execute("UPDATE update_queue SET state=?, done_at=?, reason=? WHERE id=?", (state, H.now(), reason, row["id"]))
 
 
+def skip(c, bot, kind, day):
+    """A bot's request for the day answered with nothing new to report: it finishes `skipped`, so `settle_sent` never sees
+    it and it is neither retried nor marked missed. A request a post already settled keeps its state (the post stands)."""
+    c.execute("UPDATE update_queue SET state='skipped', done_at=?, reason=? WHERE bot=? AND kind=? AND day=? "
+              "AND state IN ('queued','sent','missed')", (H.now(), NOTHING_NEW, bot, kind, day))
+
+
 def _delivery_only(row):
     return bool(row["delivery_only"]) if "delivery_only" in row.keys() else False
 
 
 NO_WORK = "no work since its last update"
+# A request answered with nothing real to report (`skip`, or a person's draft reply `{"skip": true}`): nothing is posted.
+NOTHING_NEW = "nothing new to report"
 
 
 def settle_sent(c, row):
@@ -590,7 +603,9 @@ def request_text(c, bot, kind, day, redo=False, delivery=False, learning_items=N
             "",
             SLIDES_SHAPE,
             "Say it plainly: these are skimmed by swiping, so a slide is a few short lines, never a wall of text. "
-            "If nothing got done, say why in one bullet, then pick your most useful open task and start it in this turn. "
+            "If nothing real has happened this week (nothing finished, started, decided, or newly waiting or blocked; "
+            "rechecking that nothing changed does not count), don't post: call hub_update_create with skip instead. "
+            "If you have open tasks, still pick the most useful one and start it in this turn. "
             "A review that breaks these rules is refused.",
         ]
         facts = [
@@ -613,8 +628,10 @@ def request_text(c, bot, kind, day, redo=False, delivery=False, learning_items=N
             "waits on a person (say who). Add a `Blocked:` bullet for each blocker and a `Suggestion:` bullet for each "
             f"suggestion you acted on, if any. At most {LIMITS[kind]['bullet']} words a bullet and {LIMITS[kind]['words']} "
             "in all, not counting those two.",
-            "If nothing got done, say why in one bullet, then pick your most useful open task and start it in "
-            "this turn. An update that breaks these rules is refused.",
+            "If nothing real has happened since your last update (nothing finished, started, decided, or newly waiting "
+            "or blocked; rechecking that nothing changed does not count), don't post: call hub_update_create with skip "
+            "instead. If you have open tasks, still pick the most useful one and start it in this turn. An update that "
+            "breaks these rules is refused.",
         ]
         facts = [
             "", f"Finished {'that day' if redo else 'since your last update'}:", line(done, lambda r: r["title"]),
@@ -628,8 +645,8 @@ def request_text(c, bot, kind, day, redo=False, delivery=False, learning_items=N
         "Suggestions:", line(slots["suggestions"], str),
     ]
     facts += learning_block
-    team, missing = team_updates(c, bot, kind, day)
-    if team or missing:
+    team, missing, quiet = team_updates(c, bot, kind, day)
+    if team or missing or quiet:
         ask.insert(1, "You manage a team: your update is your own work and what matters from theirs, naming who did it. "
                       "Sum it up in your own words; do not copy their bullets.")
         facts += ["Your team's " + ("weeks in review" if week else "updates") + " today:"]
@@ -638,6 +655,8 @@ def request_text(c, bot, kind, day, redo=False, delivery=False, learning_items=N
                   f"{_label(c, u['bot'])}: posted an update (not shown here)" for u in team] or ["- (none yet)"]
         if missing:
             facts.append("No update from: " + ", ".join(_label(c, a) for a in missing))
+        if quiet:
+            facts.append("Nothing new from: " + ", ".join(_label(c, a) for a in quiet))
     if redo:
         old = c.execute("SELECT body FROM updates WHERE bot=? AND kind=? AND day=?", (bot, kind, day)).fetchone()
         ask.insert(1, f"This redoes your {'week in review' if week else 'update'} for {day} in the current shape; "
@@ -755,23 +774,29 @@ def draft_facts(c, author, kind, day):
              "Their answers:", line(answers, lambda r: f"On {r[0]}: {_clip(r[1], 200)}"),
              "Their comments on tasks:", line(comments, lambda r: f"On {r[0]}: {_clip(r[1], 200)}"),
              "Meetings they were in:", line(meetings, lambda r: f"{r['title']}: {_clip(r['notes'], MEETING_CHARS)}")]
-    team, missing = team_updates(c, author, kind, day)
-    if team or missing:
+    team, missing, quiet = team_updates(c, author, kind, day)
+    if team or missing or quiet:
         facts += ["Their team's " + ("weeks in review" if week else "updates") + " today:"]
         facts += [f"{_label(c, u['bot'])}:\n{u['body']}" for u in team] or ["- (none yet)"]
         if missing:
             facts.append("No update from: " + ", ".join(_label(c, a) for a in missing))
+        if quiet:
+            facts.append("Nothing new from: " + ", ".join(_label(c, a) for a in quiet))
     return "\n".join(facts), bool(meetings) or any(u["meetings"] for u in team)
 
 
 def draft_instructions(kind):
     if kind == "weekly":
         return DRAFT_INSTRUCTIONS + SLIDES_SHAPE + (' Reply with one JSON object and nothing else: {"slides": {"goal": "...", '
-                                                    '"kpis": [], "done": [...], "focus": [...], "blockers": [...]}}.')
+                                                    '"kpis": [], "done": [...], "focus": [...], "blockers": [...]}}, or '
+                                                    '{"skip": true} if the facts hold nothing real to report this week '
+                                                    '(nothing finished, started, decided, or newly waiting or blocked).')
     return DRAFT_INSTRUCTIONS + (f"Write three bullets in plain English: no title, headings or task ids, at most "
                                  f"{LIMITS[kind]['bullet']} words a bullet and {LIMITS[kind]['words']} in all, plus a "
                                  "`Blocked:` bullet for each blocker, if any. Reply with one JSON object and nothing else: "
-                                 '{"body": "- first bullet\\n- second bullet\\n- third bullet"}.')
+                                 '{"body": "- first bullet\\n- second bullet\\n- third bullet"}, or {"skip": true} if the '
+                                 "facts hold nothing real to report since yesterday (nothing finished, started, decided, or "
+                                 "newly waiting or blocked).")
 
 
 def writer_for(c, settings, store=None, vault=None):
@@ -864,6 +889,10 @@ def write_draft(store, author, write, assistant):
             return None
         if out is None:
             _retry_or_miss(c, row, failed)
+            return None
+        if isinstance(out, dict) and out.get("skip") is True:
+            # Nothing real to say: nothing is posted, and the request is settled rather than asked again.
+            _finish(c, row, "skipped", NOTHING_NEW)
             return None
         c.execute("SAVEPOINT update_draft")
         try:

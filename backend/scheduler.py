@@ -127,16 +127,6 @@ def run_bookkeeper_rules_digest(store, auth, at, failures=None):
         run.did(made["words"], quiet=not made["items"])
 
 
-def run_thread_followups(store, auth, at, failures=None):
-    # A bot's managers get one notice about its Home's closed history (backend/thread_followups.py). Nothing due is a quiet
-    # run: no post, no model.
-    with SR.recording(store, "thread_followups", failures, "helper") as run:
-        from . import thread_followups
-        with store.transaction() as c:
-            notices = thread_followups.earlier_sweep(c, auth, stamp(at))     # scoped "earlier-messages" there
-        run.did(SR.words_of(notices, "notice", "Nothing to tell"), quiet=not notices)
-
-
 def run_thread_digest(store, auth, at, failures=None):
     # One email an hour to each person with threads to list on digest (backend/thread_digest.py). Nothing unread is a
     # quiet run: no mail and no write.
@@ -153,6 +143,15 @@ def run_thread_bot_digest(store, auth, at, failures=None):
     with SR.recording(store, "thread_bot_digest", failures, "helper") as run:
         woken = thread_bot_digest.sweep(store)
         run.did(SR.words_of(woken, "bot", "No bot digests"), quiet=not woken)
+
+
+def run_skill_usage_rollup(store, auth, at, failures=None):
+    # Skill uses folded into daily counts and raw uses past 90 days deleted (backend/skill_usage.py). Plain code;
+    # nothing new is a quiet run.
+    from . import skill_usage
+    with SR.recording(store, "skill_usage_rollup", failures, "skills") as run:
+        said = skill_usage.words(skill_usage.run(store, at))
+        run.did(said or "Nothing new", quiet=not said)
 
 
 def run_thread_retention(store, auth, at, failures=None):
@@ -172,10 +171,10 @@ QUICK = {"kpi_asks": run_kpi_asks,
 # a person switches). The Bookkeeper's pause is their off switch.
 FIXED = {"bookkeeper_watch": (run_bookkeeper_watch, timedelta(days=1)),
          "bookkeeper_rules_digest": (run_bookkeeper_rules_digest, timedelta(days=7)),
-         "thread_followups": (run_thread_followups, timedelta(minutes=15)),
          "thread_digest": (run_thread_digest, timedelta(hours=1)),
          "thread_bot_digest": (run_thread_bot_digest, timedelta(hours=1)),
-         "thread_retention": (run_thread_retention, timedelta(minutes=15))}
+         "thread_retention": (run_thread_retention, timedelta(minutes=15)),
+         "skill_usage_rollup": (run_skill_usage_rollup, timedelta(hours=1))}
 
 
 def run_now(store, auth, key, actor):
@@ -194,9 +193,6 @@ def run_now(store, auth, key, actor):
         if stale_review.tick(store, stamp(at), force=True) is None:
             raise Problem("conflict", "A stale ticket review is already running, or it was just switched off", 409)
         running = True
-    elif key == "memory_tidy":
-        from . import memory_tidy_controls
-        running = memory_tidy_controls.run_now(store, auth, actor)
     elif key == "learnings":
         from . import maintenance
         _, running = maintenance.run_now(store, auth, actor, step="learn")
@@ -547,16 +543,6 @@ class Scheduler:
         # Maintenance (backend/maintenance.py): the run starts when its schedule says it is due; its steps run on a thread.
         from . import maintenance
         maintenance.tick(self.store, self.execution.auth, at, failures)
-        try:
-            from . import memory_tidy_controls
-            from .store import Problem
-            try:
-                memory_tidy_controls.nightly(self.store, self.execution.auth, at)
-            except Problem as exc:
-                if exc.detail != memory_tidy_controls.UNAVAILABLE:
-                    raise
-        except Exception as exc:
-            failures.append({"memory_tidy": type(exc).__name__})
         # Page monitors (backend/market_watch.py): once a day the watched competitor pages are read on their own thread.
         try:
             from . import market_watch
@@ -626,12 +612,13 @@ class Scheduler:
                 if mark is None or at - mark >= every:
                     self.marks[key] = at
                     run(self.store, self.execution.auth, at, failures)
-        # Thread messages waiting to be routed: on their own thread, since a tick never waits on the decision model.
+        # Proposed skills and updates waiting for their screen (backend/skill_screening.py): on their own thread, since a
+        # screen's model call can take 90 seconds. The pass records its own run.
         try:
-            from . import thread_routing
-            thread_routing.kick(self.store)
+            from . import skill_screening
+            skill_screening.kick(self.store)
         except Exception as exc:
-            failures.append({"thread_routing": type(exc).__name__})
+            failures.append({"skill_screening": type(exc).__name__})
         # Bot wakes the loop guard held: they go by themselves as their root's rolling hour reopens. Plain SQL, no model.
         with SR.recording(self.store, "thread_loop_guard", failures) as run:
             from . import threads
@@ -798,38 +785,28 @@ class Scheduler:
                 except Exception as exc:
                     failures.append({"drop_unreadable": type(exc).__name__})
         if self.stranded is None or at - self.stranded >= timedelta(hours=1):
-            # Every hour: waiting tasks' holds, and plain asks to a person (backend/task_holds.py, person_asks.py).
+            # Every hour: a bot's task waiting on nothing tracked goes back to open after a grace (task_holds.unstrand).
             self.stranded = at
-            try:
-                # Once after this shipped: every waiting task's reason put right, one wake per bot (task_holds.py).
+            with SR.recording(self.store, "waiting_checks", failures, "stranded") as run:
                 from . import task_holds
                 with self.store.transaction() as c:
-                    task_holds.backfill(c, stamp(at))
-            except Exception as exc:
-                failures.append({"task_holds_backfill": type(exc).__name__})
-            # ...bot tasks waiting on a person with a plain ask become the bot's task blocked on one small subtask
-            # the person owns (the waiting checks' whole job now: nothing is sent back to work here)...
-            with SR.recording(self.store, "waiting_checks", failures, "person_asks") as run:
-                from . import person_asks
-                with self.store.transaction() as c:
-                    moved = person_asks.migrate(c)
-                run.did(SR.words_of(moved, "plain ask made a task", "No plain asks to a person", "plain asks made tasks"))
+                    unstranded = task_holds.unstrand(c, stamp(at))
+                run.did(SR.words_of({"tasks waiting on nothing reopened": unstranded["opened"],
+                                     "stuck tasks handed to a manager": unstranded["told"]},
+                                    none="Nothing stranded"))
 
         if self.asks_checked is None or at - self.asks_checked >= timedelta(hours=1):
             self.asks_checked = at
             # Every hour: approvals and asks nobody will act on leave Needs you (backend/approval_expiry.py).
             with SR.recording(self.store, "approval_expiry", failures) as run:
-                from . import approval_expiry, memory_tidy_cards
+                from . import approval_expiry
                 with self.store.transaction() as c:
                     ended = approval_expiry.sweep(c, stamp(at))
-                    # Standalone cards use their own two-business-day clock, never task closure.
-                    tidy_expired = memory_tidy_cards.sweep(c, stamp(at))
                 ended = ended or {}
                 run.did(SR.words_of({"approvals expired": ended.get("stale") or [],
                                      "approvals closed with their task": ended.get("ended") or [],
                                      "asks cleared": ended.get("asks") or [],
-                                     "asked cards expired": ended.get("cards") or [],
-                                     "tidy cards withdrawn": tidy_expired}, none="Nothing expired"))
+                                     "asked cards expired": ended.get("cards") or []}, none="Nothing expired"))
             # A Finance action whose approval was decided, withdrawn or expired ends now (its hold released).
             with SR.recording(self.store, "finance_upkeep", failures, "finance_approvals") as run:
                 from .finance import actions as finance

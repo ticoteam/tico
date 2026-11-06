@@ -10,7 +10,7 @@ operation), an edit as `threads_edit`. Every list is paged and byte-capped by th
 
 import asyncio
 import json
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import Query, Request
 from pydantic import BaseModel, Field
@@ -448,6 +448,20 @@ def install(app, store, auth, mutate, rule_check):
             if root["id"] != row["id"]:
                 root = threads.require(c, v, root["id"])
             return {"bots": thread_bot_status.status(c, v, root)}
+
+    @app.get("/api/v2/threads/{thread_id}/reach")
+    def reach_preview(request: Request, thread_id: str, text: str = "",
+                      delivery_: Annotated[Way | None, Query(alias="delivery")] = None, defer_for: str | None = None,
+                      in_reply_to: str | None = None):
+        """Who a message with `text` (its @mentions) sent this way would reach, each with its mode: steer when no
+        `delivery` is named. Writes nothing; 404 for a thread the viewer cannot read."""
+        if wrong := delivery.check(delivery_, defer_for):
+            raise Problem("delivery", wrong, 422)
+        with store.read() as c:
+            v = threads.viewer(auth, request.state.identity)
+            target = threads.reply_target(c, v, thread_id, in_reply_to)["id"] if in_reply_to else None
+            return threads.reaches(c, v, thread_id, text[:20000], way=delivery_, defer_for=defer_for,
+                                   in_reply_to=target)
 
     @app.get("/api/v2/threads/{thread_id}/members")
     def members(request: Request, thread_id: str, cursor: str | None = None, limit: int | None = None):

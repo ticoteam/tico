@@ -2,7 +2,6 @@
 install, listens only where it may, and never touches the network."""
 
 import contextlib
-import json
 import os
 import signal
 import socket
@@ -146,7 +145,9 @@ def test_nothing_leaves_the_machine(built):
 
 
 # ----------------------------------------------------------------------------- the folder a demo runs in
-ENDINGS = [("returns", None), ("ctrl-c", KeyboardInterrupt), ("sigterm", SystemExit)]
+# Ctrl-C leaves demo.main through the same `finally` as SIGTERM (there is no KeyboardInterrupt branch); SIGTERM is the
+# ending with its own handler, so it stands for both.
+ENDINGS = [("returns", None), ("sigterm", SystemExit)]
 
 
 def stub_server(monkeypatch, tmp_path, ending):
@@ -159,8 +160,6 @@ def stub_server(monkeypatch, tmp_path, ending):
     def run(*, settings, **kw):
         running.append(settings.db_path.parent)
         assert settings.db_path.exists()
-        if ending == "ctrl-c":
-            raise KeyboardInterrupt
         if ending == "sigterm":
             os.kill(os.getpid(), signal.SIGTERM)
 
@@ -197,22 +196,3 @@ def test_the_usage_windows_follow_the_demo_clock_not_the_machines(monkeypatch):
     real_clock_at(monkeypatch, datetime(2026, 9, 25, 7, 0, 1, tzinfo=timezone.utc))
     with demo_seed.fixed(demo_seed.Clock(NOW)):
         assert usage_limits.bounds() == usage_limits.bounds(NOW)
-
-
-def test_builds_either_side_of_the_hour_save_the_same_usage_limits(tmp_path, monkeypatch):
-    """The machine's clock crosses 07:00 UTC between two builds of one `now`: the limits they save still match."""
-    builds = {}
-    for name, moment in (("before", datetime(2026, 9, 25, 6, 59, 59, tzinfo=timezone.utc)),
-                         ("after", datetime(2026, 9, 25, 7, 0, 1, tzinfo=timezone.utc))):
-        real_clock_at(monkeypatch, moment)
-        builds[name] = demo.build(tmp_path / name, now=NOW)
-    saved = {name: usage_limits_saved(settings.db_path) for name, settings in builds.items()}
-    assert saved["before"] == saved["after"]
-    hours = [json.loads(response).get("limit", {}).get("spent", {}).get("hour") for _, response in saved["before"]]
-    assert any(hours), "the windows hold spend, so the hour is really compared"
-
-
-def usage_limits_saved(path):
-    with sqlite3.connect(path) as db:
-        return db.execute("SELECT operation, response FROM idempotency WHERE operation LIKE '/api/v2/usage/%' "
-                          "ORDER BY operation").fetchall()

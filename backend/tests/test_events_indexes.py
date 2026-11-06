@@ -4,8 +4,6 @@ check names the index the read must use, so on the old indexes the credential, d
 
 events_task_origin (actor, action, target, ts) stays whole: reads by actor alone (a person's first action, whether
 anyone left history) need it on every action, so a partial index would scan events for them."""
-import pytest
-
 from backend import judge as B
 from backend import task_privacy
 from backend.config import Settings
@@ -84,14 +82,14 @@ READS = [
 ]
 
 
-@pytest.mark.parametrize("name,sql,args,index", READS, ids=[r[0] for r in READS])
-def test_read_plans_on_the_kept_index_and_never_scans_events(tmp_path, name, sql, args, index):
+def test_read_plans_on_the_kept_index_and_never_scans_events(tmp_path):
     s = open_store(tmp_path / "hub.sqlite")
     with s.read() as c:
-        text = plan(c, sql, args)
-    assert index in text, text
-    assert "SCAN events" not in text, text
-    assert not any(dropped in text for dropped in DROPPED), text
+        for name, sql, args, index in READS:
+            text = plan(c, sql, args)
+            assert index in text, (name, text)
+            assert "SCAN events" not in text, (name, text)
+            assert not any(dropped in text for dropped in DROPPED), (name, text)
 
 
 def test_the_redundant_indexes_stay_dropped_after_every_start(tmp_path):

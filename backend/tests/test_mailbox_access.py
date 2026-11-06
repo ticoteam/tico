@@ -51,26 +51,55 @@ def refused(fn, *args, code=None, status=None):
         assert e.value.status == status, e.value.detail
     return e.value
 
+class _Undone(Exception):
+    """Raised after a step to roll its transaction back, so the next step starts from the fixture's team again."""
+
+
+def run_steps(api, *steps):
+    """Each step runs in its own transaction on the same install and is rolled back, so no step sees what an earlier one
+    made. A failure names its step."""
+    for step in steps:
+        try:
+            with tx(api) as c:
+                step(c)
+                raise _Undone
+        except _Undone:
+            pass
+        except Exception as e:
+            e.add_note(f"in step {step.__name__}")
+            raise
+
+
 
 # ------------------------------------------------------------------------------------------- a person's own mailbox
-def test_a_person_has_read_and_write_on_their_own_mailbox_before_and_after_it_has_a_row(api):
-    with tx(api) as c:
-        assert MA.level(c, "person:cara", CARA) == "read_write"
-        assert levels(c, "person:cara") == {CARA: "read_write"}
-        row = personal(c, CARA)
-        assert row["person_id"] == "cara" and row["kind"] == "personal"          # linked by the roster email
-        assert MA.level(c, "person:cara", CARA) == "read_write"
-        assert MA.mailboxes_for(c, "person:cara")[0]["id"] == row["id"]
+
+def a_person_has_read_and_write_on_their_own_mailbox_before_and_after_it_has_a_row(c):
+    assert MA.level(c, "person:cara", CARA) == "read_write"
+    assert levels(c, "person:cara") == {CARA: "read_write"}
+    row = personal(c, CARA)
+    assert row["person_id"] == "cara" and row["kind"] == "personal"          # linked by the roster email
+    assert MA.level(c, "person:cara", CARA) == "read_write"
+    assert MA.mailboxes_for(c, "person:cara")[0]["id"] == row["id"]
 
 
-def test_the_owner_admins_and_managers_get_nothing_on_someone_elses_mailbox(api):
-    with tx(api) as c:
-        personal(c, CARA)
-        for who in ("person:ana", "person:ben", "bot:coo", "bot:inbox"):
-            assert MA.level(c, who, CARA) == "none", who
-            assert CARA not in levels(c, who), who
-        assert MA.may(c, "person:ana", CARA) == {"read": False, "organize": False, "send": False,
-                                                  "change_calendar": False, "draft": False}
+def the_owner_admins_and_managers_get_nothing_on_someone_elses_mailbox(c):
+    personal(c, CARA)
+    for who in ("person:ana", "person:ben", "bot:coo", "bot:inbox"):
+        assert MA.level(c, who, CARA) == "none", who
+        assert CARA not in levels(c, who), who
+    assert MA.may(c, "person:ana", CARA) == {"read": False, "organize": False, "send": False,
+                                              "change_calendar": False, "draft": False}
+
+
+def someone_who_left_holds_nothing(c):
+    assert MA.level(c, "person:nobody", "nobody@acme.example") == "none"
+    assert MA.level(c, "person:", CARA) == "none"
+    assert MA.level(c, None, CARA) == "none"
+    assert MA.level(c, "runner:r1", CARA) == "none"
+
+
+def test_a_persons_own_mailbox_and_nobody_elses_are_read_by_the_rule(api):
+    run_steps(api, a_person_has_read_and_write_on_their_own_mailbox_before_and_after_it_has_a_row, the_owner_admins_and_managers_get_nothing_on_someone_elses_mailbox, someone_who_left_holds_nothing)
 
 
 def test_a_manager_gets_no_automatic_view_of_a_reports_mail(api):
@@ -85,65 +114,67 @@ def test_a_manager_gets_no_automatic_view_of_a_reports_mail(api):
         assert MA.level(c, "person:ana", BEN) == "none"
 
 
-def test_someone_who_left_holds_nothing(api):
-    with tx(api) as c:
-        assert MA.level(c, "person:nobody", "nobody@acme.example") == "none"
-        assert MA.level(c, "person:", CARA) == "none"
-        assert MA.level(c, None, CARA) == "none"
-        assert MA.level(c, "runner:r1", CARA) == "none"
 
 
 # ---------------------------------------------------------------------------------------------------- shared inbox
-def test_admins_have_read_and_write_on_a_shared_inbox_and_members_need_a_grant(api):
-    with tx(api) as c:
-        row = shared(c)
-        assert row["kind"] == "shared" and row["person_id"] is None
-        assert MA.level(c, "person:ana", SUPPORT) == "read_write"              # the owner is an admin
-        assert MA.level(c, "person:ben", SUPPORT) == "read_write"
-        assert MA.level(c, "person:cara", SUPPORT) == "none"
-        assert SUPPORT in levels(c, "person:ben")
-        MA.grant(c, "person:ben", row["id"], "person", "cara", "read")
-        assert MA.level(c, "person:cara", SUPPORT) == "read"
+
+def admins_have_read_and_write_on_a_shared_inbox_and_members_need_a_grant(c):
+    row = shared(c)
+    assert row["kind"] == "shared" and row["person_id"] is None
+    assert MA.level(c, "person:ana", SUPPORT) == "read_write"              # the owner is an admin
+    assert MA.level(c, "person:ben", SUPPORT) == "read_write"
+    assert MA.level(c, "person:cara", SUPPORT) == "none"
+    assert SUPPORT in levels(c, "person:ben")
+    MA.grant(c, "person:ben", row["id"], "person", "cara", "read")
+    assert MA.level(c, "person:cara", SUPPORT) == "read"
 
 
-def test_a_shared_inbox_is_shared_only_by_an_admin_and_never_a_linked_mailbox(api):
-    with tx(api) as c:
-        row = awaiting(c)
-        refused(MA.make_shared, c, "person:cara", row["id"], status=403)
-        refused(MA.make_shared, c, ASSISTANT, row["id"], status=403)
-        made = MA.make_shared(c, "person:ben", row["id"])
-        assert made["kind"] == "shared" and made["shared_by"] == "person:ben"
-        assert MA.level(c, "person:ben", made["address"]) == "read_write"
-        linked = personal(c, CARA)
-        refused(MA.make_shared, c, "person:ana", linked["id"], code="linked", status=409)
+def a_shared_inbox_is_shared_only_by_an_admin_and_never_a_linked_mailbox(c):
+    row = awaiting(c)
+    refused(MA.make_shared, c, "person:cara", row["id"], status=403)
+    refused(MA.make_shared, c, ASSISTANT, row["id"], status=403)
+    made = MA.make_shared(c, "person:ben", row["id"])
+    assert made["kind"] == "shared" and made["shared_by"] == "person:ben"
+    assert MA.level(c, "person:ben", made["address"]) == "read_write"
+    linked = personal(c, CARA)
+    refused(MA.make_shared, c, "person:ana", linked["id"], code="linked", status=409)
+
+
+def test_a_shared_inbox_is_read_by_admins_and_shared_only_by_an_admin(api):
+    run_steps(api, admins_have_read_and_write_on_a_shared_inbox_and_members_need_a_grant, a_shared_inbox_is_shared_only_by_an_admin_and_never_a_linked_mailbox)
+
+
 
 
 # ---------------------------------------------------------------------------------------------- awaiting its person
-def test_an_awaiting_mailbox_is_private_until_its_person_joins(api):
-    with tx(api) as c:
-        row = awaiting(c)
-        for who in ("person:ana", "person:ben", "person:cara", "bot:coo"):
-            assert MA.level(c, who, row["address"]) == "none", who
-        # A grant written on it anyway (an older row, a hand edit) counts for nothing.
-        MA.give(c, row, "bot", bot(c, "coo"), "read_write", "test")
-        MA.give(c, row, "person", "cara", "read_write", "test")
-        assert MA.level(c, "bot:coo", row["address"]) == "none"
-        assert MA.level(c, "person:cara", row["address"]) == "none"
-        assert row["address"] not in levels(c, "bot:coo")
-        refused(MA.grant, c, "person:ana", row["id"], "person", "ben", "read", code="awaiting_person", status=409)
+
+def an_awaiting_mailbox_is_private_until_its_person_joins(c):
+    row = awaiting(c)
+    for who in ("person:ana", "person:ben", "person:cara", "bot:coo"):
+        assert MA.level(c, who, row["address"]) == "none", who
+    # A grant written on it anyway (an older row, a hand edit) counts for nothing.
+    MA.give(c, row, "bot", bot(c, "coo"), "read_write", "test")
+    MA.give(c, row, "person", "cara", "read_write", "test")
+    assert MA.level(c, "bot:coo", row["address"]) == "none"
+    assert MA.level(c, "person:cara", row["address"]) == "none"
+    assert row["address"] not in levels(c, "bot:coo")
+    refused(MA.grant, c, "person:ana", row["id"], "person", "ben", "read", code="awaiting_person", status=409)
 
 
-def test_joining_links_an_awaiting_mailbox_and_never_makes_one(api):
-    with tx(api) as c:
-        assert MA.link_person(c, "cara", CARA) is None                          # no row: joining connects nothing
-        assert MA._row(c, CARA) is None
-        row = awaiting(c)
-        linked = MA.link_person(c, "human:dana", "Dana@Acme.example")
-        assert linked["person_id"] == "dana" and linked["id"] == row["id"]
-        assert MA.link_person(c, "eve", "dana@acme.example") is None             # already someone's
-        assert MA._row(c, "dana@acme.example")["person_id"] == "dana"
-        s = shared(c)
-        assert MA.link_person(c, "sam", SUPPORT) is None and MA.row_by_id(c, s["id"])["kind"] == "shared"
+def joining_links_an_awaiting_mailbox_and_never_makes_one(c):
+    assert MA.link_person(c, "cara", CARA) is None                          # no row: joining connects nothing
+    assert MA._row(c, CARA) is None
+    row = awaiting(c)
+    linked = MA.link_person(c, "human:dana", "Dana@Acme.example")
+    assert linked["person_id"] == "dana" and linked["id"] == row["id"]
+    assert MA.link_person(c, "eve", "dana@acme.example") is None             # already someone's
+    assert MA._row(c, "dana@acme.example")["person_id"] == "dana"
+    s = shared(c)
+    assert MA.link_person(c, "sam", SUPPORT) is None and MA.row_by_id(c, s["id"])["kind"] == "shared"
+
+
+def test_an_awaiting_mailbox_is_private_and_joining_links_it(api):
+    run_steps(api, an_awaiting_mailbox_is_private_until_its_person_joins, joining_links_an_awaiting_mailbox_and_never_makes_one)
 
 
 def test_adding_a_person_links_their_awaiting_mailbox(api):
@@ -157,119 +188,155 @@ def test_adding_a_person_links_their_awaiting_mailbox(api):
         assert MA.level(c, "person:" + row["person_id"], "eve@acme.example") == "read_write"
 
 
+
+
 # ---------------------------------------------------------------------------------------------- explicit grants
-def test_a_person_grants_and_revokes_a_bot_on_their_own_mailbox(api):
-    with tx(api) as c:
-        row = personal(c, CARA)
-        coo = bot(c, "coo")
-        access = MA.grant(c, "person:cara", row["id"], "bot", "coo", "read")
-        assert access["grantee_id"] == coo and access["level"] == "read"
-        assert MA.level(c, "bot:coo", CARA) == "read"
-        assert MA.may(c, "bot:coo", CARA)["organize"] is False
-        again = MA.grant(c, "person:cara", row["id"], "bot", coo, "read_write")
-        assert again["id"] == access["id"] and again["level"] == "read_write"
-        assert MA.level(c, "bot:coo", CARA) == "read_write"
-        assert MA.may(c, "bot:coo", CARA) == {"read": True, "organize": True, "send": True, "change_calendar": True,
-                                              "draft": True}
-        MA.revoke(c, "person:cara", row["id"], access["id"])
-        assert MA.level(c, "bot:coo", CARA) == "none"
-        refused(MA.revoke, c, "person:cara", row["id"], access["id"], code="not_found", status=404)
-        logged = [r["action"] for r in c.execute("SELECT action FROM events WHERE target=? ORDER BY rowid", (row["id"],))]
-        assert logged == ["mailbox.access_granted", "mailbox.access_granted", "mailbox.access_revoked"]
+
+def a_person_grants_and_revokes_a_bot_on_their_own_mailbox(c):
+    row = personal(c, CARA)
+    coo = bot(c, "coo")
+    access = MA.grant(c, "person:cara", row["id"], "bot", "coo", "read")
+    assert access["grantee_id"] == coo and access["level"] == "read"
+    assert MA.level(c, "bot:coo", CARA) == "read"
+    assert MA.may(c, "bot:coo", CARA)["organize"] is False
+    again = MA.grant(c, "person:cara", row["id"], "bot", coo, "read_write")
+    assert again["id"] == access["id"] and again["level"] == "read_write"
+    assert MA.level(c, "bot:coo", CARA) == "read_write"
+    assert MA.may(c, "bot:coo", CARA) == {"read": True, "organize": True, "send": True, "change_calendar": True,
+                                          "draft": True}
+    MA.revoke(c, "person:cara", row["id"], access["id"])
+    assert MA.level(c, "bot:coo", CARA) == "none"
+    refused(MA.revoke, c, "person:cara", row["id"], access["id"], code="not_found", status=404)
+    logged = [r["action"] for r in c.execute("SELECT action FROM events WHERE target=? ORDER BY rowid", (row["id"],))]
+    assert logged == ["mailbox.access_granted", "mailbox.access_granted", "mailbox.access_revoked"]
 
 
-def test_a_grant_is_checked(api):
-    with tx(api) as c:
-        row = personal(c, CARA)
-        refused(MA.grant, c, "person:cara", row["id"], "team", "x", "read", code="invalid")
-        refused(MA.grant, c, "person:cara", row["id"], "person", "ben", "admin", code="invalid")
-        refused(MA.grant, c, "person:cara", row["id"], "person", "nobody", "read", code="not_found")
-        refused(MA.grant, c, "person:cara", row["id"], "bot", "no-such-bot", "read", code="not_found")
-        refused(MA.grant, c, "person:cara", row["id"], "person", "cara", "read", code="invalid")      # their own
-        refused(MA.grant, c, "person:cara", "missing", "person", "ben", "read", code="not_found", status=404)
+def a_grant_is_checked(c):
+    row = personal(c, CARA)
+    refused(MA.grant, c, "person:cara", row["id"], "team", "x", "read", code="invalid")
+    refused(MA.grant, c, "person:cara", row["id"], "person", "ben", "admin", code="invalid")
+    refused(MA.grant, c, "person:cara", row["id"], "person", "nobody", "read", code="not_found")
+    refused(MA.grant, c, "person:cara", row["id"], "bot", "no-such-bot", "read", code="not_found")
+    refused(MA.grant, c, "person:cara", row["id"], "person", "cara", "read", code="invalid")      # their own
+    refused(MA.grant, c, "person:cara", "missing", "person", "ben", "read", code="not_found", status=404)
 
 
-def test_an_archived_bot_holds_nothing(api):
-    with tx(api) as c:
-        row = personal(c, CARA)
-        MA.grant(c, "person:cara", row["id"], "bot", "coo", "read_write")
-        c.execute("UPDATE bots SET state='archived' WHERE id=?", (bot(c, "coo"),))
-        assert MA.level(c, "bot:coo", CARA) == "none"
+def an_archived_bot_holds_nothing(c):
+    row = personal(c, CARA)
+    MA.grant(c, "person:cara", row["id"], "bot", "coo", "read_write")
+    c.execute("UPDATE bots SET state='archived' WHERE id=?", (bot(c, "coo"),))
+    assert MA.level(c, "bot:coo", CARA) == "none"
 
 
-def test_give_never_lowers_a_level(api):
-    with tx(api) as c:
-        row = personal(c, CARA)
-        coo = bot(c, "coo")
-        first = MA.give(c, row, "bot", coo, "read_write", "test")
-        assert MA.give(c, row, "bot", coo, "read", "test") == first
-        assert MA.level(c, "bot:coo", CARA) == "read_write"
-        with pytest.raises(ValueError):
-            MA.give(c, row, "bot", coo, "admin", "test")
+def give_never_lowers_a_level(c):
+    row = personal(c, CARA)
+    coo = bot(c, "coo")
+    first = MA.give(c, row, "bot", coo, "read_write", "test")
+    assert MA.give(c, row, "bot", coo, "read", "test") == first
+    assert MA.level(c, "bot:coo", CARA) == "read_write"
+    with pytest.raises(ValueError):
+        MA.give(c, row, "bot", coo, "admin", "test")
+
+
+def nobody_reshares(c):
+    row = personal(c, CARA)
+    MA.grant(c, "person:cara", row["id"], "person", "ben", "read_write")
+    # ben holds Read and write on cara's mailbox, and is an admin: he still may not pass it on.
+    refused(MA.grant, c, "person:ben", row["id"], "bot", "coo", "read", status=403)
+    refused(MA.grant, c, "person:ana", row["id"], "bot", "coo", "read", status=403)     # nor may the owner
+    refused(MA.grant, c, "bot:coo", row["id"], "bot", "coo", "read", status=403)        # nor a bot
+    access = c.execute("SELECT id FROM mailbox_accesses WHERE mailbox_id=?", (row["id"],)).fetchone()["id"]
+    refused(MA.revoke, c, "person:ben", row["id"], access, status=403)
+    s = shared(c)
+    refused(MA.grant, c, "person:cara", s["id"], "bot", "coo", "read", status=403)     # a member, on a shared one
+    MA.grant(c, "person:ben", s["id"], "person", "cara", "read_write")
+    refused(MA.grant, c, "person:cara", s["id"], "bot", "coo", "read", status=403)     # even holding it
+
+
+def the_assistant_may_not_share_or_stop_a_mailbox(c):
+    row = personal(c, ANA)
+    refused(MA.grant, c, ASSISTANT, row["id"], "bot", "coo", "read", status=403)
+    refused(MA.stop, c, ASSISTANT, row["id"], status=403)
+    MA.grant(c, "person:ana", row["id"], "bot", "coo", "read")
+    access = c.execute("SELECT id FROM mailbox_accesses WHERE mailbox_id=?", (row["id"],)).fetchone()["id"]
+    refused(MA.revoke, c, ASSISTANT, row["id"], access, status=403)
+
+
+def the_assistant_holds_exactly_its_persons_access(c):
+    s = shared(c)
+    row = personal(c, CARA)
+    MA.grant(c, "person:cara", row["id"], "person", "ana", "read")
+    assert MA.principal(c, ASSISTANT) == MA.Principal("person", "ana")
+    assert levels(c, ASSISTANT) == levels(c, "person:ana") == {ANA: "read_write", CARA: "read",
+                                                               s["address"]: "read_write"}
+    # Not the assistant bot's own grants.
+    assert levels(c, "bot:coo") == {}
+
+
+def principals_from_identities(c):
+    coo = bot(c, "coo")
+    assert MA.principal(c, Identity("human:cara", "human", CARA)) == MA.Principal("person", "cara")
+    assert MA.principal(c, Identity("bot:" + coo, "bot")) == MA.Principal("bot", coo)
+    assert MA.principal(c, "bot:coo") == MA.Principal("bot", coo)                     # by slug too
+    assert MA.principal(c, Identity("runner:r1", "runner", runner_id="r1")) is MA.NOBODY
+    assert MA.principal(c, Identity("service:k1", "service")) is MA.NOBODY
+    assert MA.principal(c, "bot:no-such-bot") is MA.NOBODY
+
+
+def test_grants_are_made_checked_kept_and_never_reshared(api):
+    run_steps(api, a_person_grants_and_revokes_a_bot_on_their_own_mailbox, a_grant_is_checked, an_archived_bot_holds_nothing, give_never_lowers_a_level, nobody_reshares, the_assistant_may_not_share_or_stop_a_mailbox, the_assistant_holds_exactly_its_persons_access, principals_from_identities)
+
+
 
 
 # ---------------------------------------------------------------------------------------------------- no reshare
-def test_nobody_reshares(api):
-    with tx(api) as c:
-        row = personal(c, CARA)
-        MA.grant(c, "person:cara", row["id"], "person", "ben", "read_write")
-        # ben holds Read and write on cara's mailbox, and is an admin: he still may not pass it on.
-        refused(MA.grant, c, "person:ben", row["id"], "bot", "coo", "read", status=403)
-        refused(MA.grant, c, "person:ana", row["id"], "bot", "coo", "read", status=403)     # nor may the owner
-        refused(MA.grant, c, "bot:coo", row["id"], "bot", "coo", "read", status=403)        # nor a bot
-        access = c.execute("SELECT id FROM mailbox_accesses WHERE mailbox_id=?", (row["id"],)).fetchone()["id"]
-        refused(MA.revoke, c, "person:ben", row["id"], access, status=403)
-        s = shared(c)
-        refused(MA.grant, c, "person:cara", s["id"], "bot", "coo", "read", status=403)     # a member, on a shared one
-        MA.grant(c, "person:ben", s["id"], "person", "cara", "read_write")
-        refused(MA.grant, c, "person:cara", s["id"], "bot", "coo", "read", status=403)     # even holding it
 
-
-def test_the_assistant_may_not_share_or_stop_a_mailbox(api):
-    with tx(api) as c:
-        row = personal(c, ANA)
-        refused(MA.grant, c, ASSISTANT, row["id"], "bot", "coo", "read", status=403)
-        refused(MA.stop, c, ASSISTANT, row["id"], status=403)
-        MA.grant(c, "person:ana", row["id"], "bot", "coo", "read")
-        access = c.execute("SELECT id FROM mailbox_accesses WHERE mailbox_id=?", (row["id"],)).fetchone()["id"]
-        refused(MA.revoke, c, ASSISTANT, row["id"], access, status=403)
 
 
 # ------------------------------------------------------------------------------------------- the Assistant is them
-def test_the_assistant_holds_exactly_its_persons_access(api):
-    with tx(api) as c:
-        s = shared(c)
-        row = personal(c, CARA)
-        MA.grant(c, "person:cara", row["id"], "person", "ana", "read")
-        assert MA.principal(c, ASSISTANT) == MA.Principal("person", "ana")
-        assert levels(c, ASSISTANT) == levels(c, "person:ana") == {ANA: "read_write", CARA: "read",
-                                                                   s["address"]: "read_write"}
-        # Not the assistant bot's own grants.
-        assert levels(c, "bot:coo") == {}
 
-
-def test_principals_from_identities(api):
-    with tx(api) as c:
-        coo = bot(c, "coo")
-        assert MA.principal(c, Identity("human:cara", "human", CARA)) == MA.Principal("person", "cara")
-        assert MA.principal(c, Identity("bot:" + coo, "bot")) == MA.Principal("bot", coo)
-        assert MA.principal(c, "bot:coo") == MA.Principal("bot", coo)                     # by slug too
-        assert MA.principal(c, Identity("runner:r1", "runner", runner_id="r1")) is MA.NOBODY
-        assert MA.principal(c, Identity("service:k1", "service")) is MA.NOBODY
-        assert MA.principal(c, "bot:no-such-bot") is MA.NOBODY
 
 
 # ------------------------------------------------------------------------------------------------ outside the domain
-def test_outside_the_company_domains_read_and_write_is_read(api):
-    with tx(api) as c:
-        assert MA.company_domains(c) == ["acme.example"]
-        out = shared(c, OUTSIDE)
-        assert MA.level(c, "person:ben", OUTSIDE) == "read"
-        MA.grant(c, "person:ben", out["id"], "bot", "coo", "read_write")
-        assert MA.level(c, "bot:coo", OUTSIDE) == "read"
-        assert MA.may(c, "bot:coo", OUTSIDE)["send"] is False
-        assert MA.inside("x@acme.example", []) is True                                    # nothing known: no cap
-        assert MA.inside("x@partner.example", ["acme.example"]) is False
+
+def outside_the_company_domains_read_and_write_is_read(c):
+    assert MA.company_domains(c) == ["acme.example"]
+    out = shared(c, OUTSIDE)
+    assert MA.level(c, "person:ben", OUTSIDE) == "read"
+    MA.grant(c, "person:ben", out["id"], "bot", "coo", "read_write")
+    assert MA.level(c, "bot:coo", OUTSIDE) == "read"
+    assert MA.may(c, "bot:coo", OUTSIDE)["send"] is False
+    assert MA.inside("x@acme.example", []) is True                                    # nothing known: no cap
+    assert MA.inside("x@partner.example", ["acme.example"]) is False
+
+
+def a_stopped_mailbox_is_used_by_nobody_and_stopped_only_by_its_person_or_an_admin(c):
+    row = personal(c, CARA)
+    MA.grant(c, "person:cara", row["id"], "bot", "coo", "read_write")
+    refused(MA.stop, c, "bot:coo", row["id"], status=403)
+    refused(MA.stop, c, "person:eve", row["id"], status=403)
+    assert MA.stop(c, "person:cara", row["id"])["status"] == "stopped"
+    assert MA.level(c, "person:cara", CARA) == "none"
+    assert MA.level(c, "bot:coo", CARA) == "none"
+    assert CARA in MA.stopped(c)
+    refused(MA.grant, c, "person:cara", row["id"], "person", "ben", "read", code="stopped", status=409)
+    s = shared(c)
+    refused(MA.stop, c, "person:cara", s["id"], status=403)
+    assert MA.stop(c, "person:ben", s["id"])["status"] == "stopped"
+
+
+def the_connector_reads_its_targets_and_never_writes_here(c):
+    personal(c, CARA)
+    p = MA.connector([{"address": "Cara@Acme.example"}, "ana@acme.example", {"address": ""}])
+    assert p.targets == frozenset({CARA, ANA})
+    assert MA.level(c, p, CARA) == "read"
+    assert MA.level(c, p, BEN) == "none"
+    assert MA.may(c, p, CARA)["organize"] is False
+    assert {box["address"]: box["level"] for box in MA.mailboxes_for(c, p)} == {CARA: "read", ANA: "read"}
+
+
+def test_outside_the_domain_stopping_and_the_connector(api):
+    run_steps(api, outside_the_company_domains_read_and_write_is_read, a_stopped_mailbox_is_used_by_nobody_and_stopped_only_by_its_person_or_an_admin, the_connector_reads_its_targets_and_never_writes_here)
 
 
 def test_allowed_domains_are_the_company_domains(api):
@@ -283,7 +350,10 @@ def test_allowed_domains_are_the_company_domains(api):
         assert MA.level(c, "person:ben", OUTSIDE) == "read_write"
 
 
+
+
 # ---------------------------------------------------------------------------------------------------- company cap
+
 def test_what_tico_may_do_caps_every_level(api):
     with tx(api) as c:
         row = personal(c, CARA)
@@ -304,36 +374,18 @@ def test_what_tico_may_do_caps_every_level(api):
                                               "draft": False}
 
 
+
+
 # ----------------------------------------------------------------------------------------------------- stopping
-def test_a_stopped_mailbox_is_used_by_nobody_and_stopped_only_by_its_person_or_an_admin(api):
-    with tx(api) as c:
-        row = personal(c, CARA)
-        MA.grant(c, "person:cara", row["id"], "bot", "coo", "read_write")
-        refused(MA.stop, c, "bot:coo", row["id"], status=403)
-        refused(MA.stop, c, "person:eve", row["id"], status=403)
-        assert MA.stop(c, "person:cara", row["id"])["status"] == "stopped"
-        assert MA.level(c, "person:cara", CARA) == "none"
-        assert MA.level(c, "bot:coo", CARA) == "none"
-        assert CARA in MA.stopped(c)
-        refused(MA.grant, c, "person:cara", row["id"], "person", "ben", "read", code="stopped", status=409)
-        s = shared(c)
-        refused(MA.stop, c, "person:cara", s["id"], status=403)
-        assert MA.stop(c, "person:ben", s["id"])["status"] == "stopped"
+
 
 
 # ---------------------------------------------------------------------------------------------------- the connector
-def test_the_connector_reads_its_targets_and_never_writes_here(api):
-    with tx(api) as c:
-        personal(c, CARA)
-        p = MA.connector([{"address": "Cara@Acme.example"}, "ana@acme.example", {"address": ""}])
-        assert p.targets == frozenset({CARA, ANA})
-        assert MA.level(c, p, CARA) == "read"
-        assert MA.level(c, p, BEN) == "none"
-        assert MA.may(c, p, CARA)["organize"] is False
-        assert {box["address"]: box["level"] for box in MA.mailboxes_for(c, p)} == {CARA: "read", ANA: "read"}
+
 
 
 # ---------------------------------------------------------------------------------------------- automation actions
+
 def test_an_automation_action_needs_its_owner_s_level_now(api):
     with tx(api) as c:
         row = personal(c, CARA)
@@ -355,22 +407,49 @@ def test_an_automation_action_needs_its_owner_s_level_now(api):
         assert MA.action_refusal(c, "person:cara", CARA, "something_new")       # unknown: needs what a send needs
 
 
+
+
 # ------------------------------------------------------------------------------------------- the message bot
-def test_setting_a_message_bot_grants_it_and_moving_it_takes_the_old_grant(api):
-    with tx(api) as c:
-        coo, ops = bot(c, "coo"), bot(c, "ops")
-        cara = {"id": "cara", "email": CARA}
-        row = MA.message_bot_changed(c, cara, None, "", coo)
-        assert row["address"] == CARA and row["person_id"] == "cara"
-        assert MA.level(c, "bot:coo", CARA) == "read"                           # no gmail entry asks to draft
-        MA.message_bot_changed(c, cara, coo, CARA, ops)
-        assert MA.level(c, "bot:coo", CARA) == "none"
-        assert MA.level(c, "bot:ops", CARA) == "read"
-        MA.message_bot_changed(c, cara, ops, CARA, None)
-        assert MA.level(c, "bot:ops", CARA) == "none"
+
+def setting_a_message_bot_grants_it_and_moving_it_takes_the_old_grant(c):
+    coo, ops = bot(c, "coo"), bot(c, "ops")
+    cara = {"id": "cara", "email": CARA}
+    row = MA.message_bot_changed(c, cara, None, "", coo)
+    assert row["address"] == CARA and row["person_id"] == "cara"
+    assert MA.level(c, "bot:coo", CARA) == "read"                           # no gmail entry asks to draft
+    MA.message_bot_changed(c, cara, coo, CARA, ops)
+    assert MA.level(c, "bot:coo", CARA) == "none"
+    assert MA.level(c, "bot:ops", CARA) == "read"
+    MA.message_bot_changed(c, cara, ops, CARA, None)
+    assert MA.level(c, "bot:ops", CARA) == "none"
+
+
+def making_a_message_bot_links_only_a_mailbox_its_maker_may_grant(c):
+    """Settings' add from template, a hire, BotOps (backend/message_bots.py link): the link gives the bot a grant, so a
+    member gets it only on their own email, and an admin on any."""
+    from backend import bot_settings as BS
+    from backend import message_bots
+    for slug in ("ops", "doc-updater", "finance"):
+        BS.write(c, slug, {"name": slug, "template": "inbox"})
+    assert message_bots.link(c, "human:cara", "ops", "human:cara", "Mailbox: ana@acme.example\n") is None
+    assert message_bots.link(c, "human:cara", "ops", "human:cara", "Mailbox: support@acme.example\n") is None
+    assert MA.level(c, "bot:ops", ANA) == "none" and MA._row(c, SUPPORT) is None
+    assert message_bots.link(c, "bot:coo", "ops", "bot:coo", "Mailbox: cara@acme.example\n") is None
+    assert message_bots.link(c, "human:cara", "ops", "human:cara", "Mailbox: cara@acme.example\n") == "cara"
+    assert MA.level(c, "bot:ops", CARA) == "read_write"                    # the template's read and draft
+    assert message_bots.link(c, "human:ben", "doc-updater", "human:ben", "Mailbox: support@acme.example\n") == "ben"
+    assert MA._row(c, SUPPORT)["kind"] == "shared"
+    assert MA.level(c, "bot:doc-updater", SUPPORT) != "none"
+
+
+def test_a_message_bot_set_or_made_holds_only_what_its_maker_may_grant(api):
+    run_steps(api, setting_a_message_bot_grants_it_and_moving_it_takes_the_old_grant, making_a_message_bot_links_only_a_mailbox_its_maker_may_grant)
+
+
 
 
 # ---------------------------------------------------------------------------------------------- the API's answer
+
 def test_mail_access_answers_the_caller(api):
     with tx(api) as c:
         s = shared(c)
@@ -397,21 +476,6 @@ def test_a_database_before_the_migration_answers_only_a_persons_own_email(api):
         assert MA.backfill(c) == {"mailboxes": 0, "accesses": 0}
 
 
+
+
 # ------------------------------------------------------------------------------- a message bot made, not assigned
-def test_making_a_message_bot_links_only_a_mailbox_its_maker_may_grant(api):
-    """Settings' add from template, a hire, BotOps (backend/message_bots.py link): the link gives the bot a grant, so a
-    member gets it only on their own email, and an admin on any."""
-    from backend import bot_settings as BS
-    from backend import message_bots
-    with tx(api) as c:
-        for slug in ("ops", "doc-updater", "finance"):
-            BS.write(c, slug, {"name": slug, "template": "inbox"})
-        assert message_bots.link(c, "human:cara", "ops", "human:cara", "Mailbox: ana@acme.example\n") is None
-        assert message_bots.link(c, "human:cara", "ops", "human:cara", "Mailbox: support@acme.example\n") is None
-        assert MA.level(c, "bot:ops", ANA) == "none" and MA._row(c, SUPPORT) is None
-        assert message_bots.link(c, "bot:coo", "ops", "bot:coo", "Mailbox: cara@acme.example\n") is None
-        assert message_bots.link(c, "human:cara", "ops", "human:cara", "Mailbox: cara@acme.example\n") == "cara"
-        assert MA.level(c, "bot:ops", CARA) == "read_write"                    # the template's read and draft
-        assert message_bots.link(c, "human:ben", "doc-updater", "human:ben", "Mailbox: support@acme.example\n") == "ben"
-        assert MA._row(c, SUPPORT)["kind"] == "shared"
-        assert MA.level(c, "bot:doc-updater", SUPPORT) != "none"

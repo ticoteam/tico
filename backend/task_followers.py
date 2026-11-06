@@ -18,7 +18,7 @@ from . import hubdb as H
 LEVELS = ("live", "mentions", "digest", "muted")
 OWNER = "owner"      # the row the task's ownership made
 CHOSEN = "manual"    # a follow someone chose (the reason threads.follow writes too)
-KEPT = (CHOSEN, "mentioned")   # rows an owner change leaves: a choice, or a mention
+KEPT = (CHOSEN, "mentioned", "replied")   # rows an owner change leaves: a choice, a mention or a reply
 
 
 def thread_id(conn, row):

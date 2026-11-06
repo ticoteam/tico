@@ -33,8 +33,8 @@ def machine(api):
     return task_bot(api, lanes=True, others=('cpo',))
 
 
-@pytest.mark.parametrize('profile', ['lead', 'doer', 'custom'])
-@pytest.mark.parametrize('party', ['owned', 'requested'])
+# A custom profile reads like a doer, and an owned task ignores the profile: the three cases that differ.
+@pytest.mark.parametrize('profile,party', [('lead', 'owned'), ('lead', 'requested'), ('doer', 'requested')])
 def test_parked_party_blocker_delivers_a_usable_notice_job(api, profile, party):
     r = machine(api)
     with api.app.state.store.transaction() as c:
@@ -63,7 +63,7 @@ def test_parked_party_blocker_delivers_a_usable_notice_job(api, profile, party):
         still_blocked(c, task, blocker)
 
 
-@pytest.mark.parametrize('profile', ['lead', 'doer', 'custom'])
+@pytest.mark.parametrize('profile', ['lead', 'doer'])
 def test_unrelated_blocker_preserves_actual_baseline_audience(api, profile):
     with api.app.state.store.transaction() as c:
         task, blocker = parked(c, profile, party='unrelated')
@@ -90,7 +90,8 @@ def test_parked_incident_notice_is_claimed_without_starting_work(api, monkeypatc
     with api.app.state.store.transaction() as c:
         task, blocker = parked(c, incident=True)
         msg, job = sent_job(c, task, 'bot:cpo', 'The incident entered a step', {'news': 'step_entered'})
-        assert job and job['held'] == 0 and msg['refs']['rule'] == 'incident_news'
+        assert job and job['held'] == 0 and job['state'] == 'queued' and msg['refs']['rule'] == 'incident_news'
+        assert H.task(c, task['id'])['status'] == task['status']     # the notice moves nothing
     def no_start(*args, **kwargs):
         pytest.fail('A notice turn must never start held work')
     monkeypatch.setattr(auto_tasks, 'started', no_start)
@@ -111,19 +112,6 @@ def test_snooze_after_enqueue_still_holds_the_notice(api):
         H.TS.snooze(c, 'human:ana', task['id'], H.shift(H.now(), days=1))
     assert claim(api, r, 'cpo') is None
     with api.app.state.store.read() as c:
-        still_blocked(c, task, blocker)
-
-
-@pytest.mark.parametrize('profile', ['lead', 'doer', 'custom'])
-def test_parked_incident_step_notice_wakes_without_moving_the_task(api, profile):
-    with api.app.state.store.transaction() as c:
-        task, blocker = parked(c, profile, incident=True)
-        # This is a notice payload, not a successful transition through an open dependency.
-        msg, job = sent_job(c, task, 'bot:cpo', 'Step moved: On Deck -> In Progress',
-                            {'news': 'step_entered'})
-        assert msg['refs']['rule'] == 'incident_news'
-        assert job and job['held'] == 0 and job['state'] == 'queued'
-        assert H.task(c, task['id'])['status'] == task['status']
         still_blocked(c, task, blocker)
 
 

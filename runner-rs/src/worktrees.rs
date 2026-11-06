@@ -173,6 +173,39 @@ pub async fn git(path: &Path, env: &Env, args: &[&str], check: bool) -> R<Out> {
 pub struct TaskLock(#[allow(dead_code)] crate::lock::FileLock);
 
 pub async fn locked(workspace: &Path, task: &str) -> R<TaskLock> {
+    let file = task_lock_file(workspace, task)?;
+    let file = tokio::task::spawn_blocking(move || {
+        use std::os::fd::AsRawFd;
+        // SAFETY: flock on a file this process holds open.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if rc == 0 { Ok(crate::lock::FileLock::from_locked(file)) } else { Err(std::io::Error::last_os_error()) }
+    })
+    .await
+    .map_err(|e| WtErr::Os(e.to_string()))??;
+    Ok(TaskLock(file))
+}
+
+/// The task locks of every path in `tasks` if each is free now, else None (disk_clean.rs): a hub CLI step or
+/// worktree action running on any of them keeps the folder as it is. Paths sharing a lock file take it once.
+pub fn try_locked(workspace: &Path, tasks: &[String]) -> Option<Vec<TaskLock>> {
+    let mut names = HashSet::new();
+    let mut held = vec![];
+    for task in tasks {
+        if !names.insert(gitrun::sha256_hex(task.as_bytes())[..2].to_string()) {
+            continue;
+        }
+        let file = task_lock_file(workspace, task).ok()?;
+        use std::os::fd::AsRawFd;
+        // SAFETY: flock on a file this process holds open.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return None;
+        }
+        held.push(TaskLock(crate::lock::FileLock::from_locked(file)));
+    }
+    Some(held)
+}
+
+fn task_lock_file(workspace: &Path, task: &str) -> R<std::fs::File> {
     let tasks = workspace.join("tasks");
     let folder = tasks.join(".locks");
     crate::repo_safety::outside_installation(&folder)?;
@@ -186,18 +219,10 @@ pub async fn locked(workspace: &Path, task: &str) -> R<TaskLock> {
     let name = &gitrun::sha256_hex(task.as_bytes())[..2];
     let file = regular_file::open(&folder.join(name), std::fs::OpenOptions::new().create(true).append(true), SMALL)?;
     crate::isolation::chown_file(&file)?;
-    let file = tokio::task::spawn_blocking(move || {
-        use std::os::fd::AsRawFd;
-        // SAFETY: flock on a file this process holds open.
-        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-        if rc == 0 { Ok(crate::lock::FileLock::from_locked(file)) } else { Err(std::io::Error::last_os_error()) }
-    })
-    .await
-    .map_err(|e| WtErr::Os(e.to_string()))??;
-    Ok(TaskLock(file))
+    Ok(file)
 }
 
-fn detail(row: &Value) -> Map<String, Value> {
+pub(crate) fn detail(row: &Value) -> Map<String, Value> {
     match &row["detail_json"] {
         Value::String(s) if !s.is_empty() => serde_json::from_str::<Value>(s).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default(),
         Value::Object(m) => m.clone(),
@@ -1122,7 +1147,7 @@ fn rebuildable(dir: &Path) -> bool {
 }
 
 /// Folders under `dir` to delete and git checkouts to consider, never through a symlink and at most six levels down.
-fn scratch(dir: &Path, depth: u32, caches: &mut Vec<PathBuf>, checkouts: &mut Vec<PathBuf>) {
+pub(crate) fn scratch(dir: &Path, depth: u32, caches: &mut Vec<PathBuf>, checkouts: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let path = entry.path();
@@ -1587,19 +1612,36 @@ fn server_lacks_checkout_fields(e: &ApiError) -> bool {
         && ["extra", "unknown field", "unexpected field", "not permitted"].iter().any(|m| d.contains(m))
 }
 
-fn closed(row: &Value) -> bool {
+pub(crate) fn closed(row: &Value) -> bool {
     let d = detail(row);
     ["done", "closed", "declined"].contains(&text_of(&row["task_status"]).as_str()) || row["bot_state"] == "archived" || crate::util::truthy(d.get("delete_requested"))
+}
+
+/// Remove actions for every finished task's worktree the server already asked to clean up and has not given up on,
+/// that no queued action names: what a low disk retries at once (Worktrees::expedite).
+pub(crate) fn urgent_removals(rows: &[Value], queued: &[Value]) -> Vec<Value> {
+    let named: HashSet<String> = queued.iter().map(|a| text_of(&a["link_id"])).collect();
+    rows.iter()
+        .filter(|r| {
+            let d = detail(r);
+            closed(r) && r["state"] != "removed" && crate::util::truthy(d.get("cleanup_requested"))
+                && !crate::util::truthy(d.get("cleanup_gave_up")) && !named.contains(&text_of(&r["id"]))
+        })
+        .map(|r| json!({"link_id": r["id"], "action": "remove", "branch": r["branch"], "path": r["path"], "task_id": r["task_id"], "repo": r["repo"], "owner": r["owner"]}))
+        .collect()
 }
 
 /// What the manager needs from the runner: whether a bot's turn could be in a task's worktree, the bot's
 /// checkout and lane locks (held without waiting), and the vault values last granted to the bot.
 pub trait Host: Send + Sync + 'static {
+    /// Whether no turn of `bot` is running in its main lane or on `task` (by the turn's lane or its claim).
     fn idle(&self, bot: &str, task: &str) -> bool;
     fn try_locks(&self, bot: &str, lane: &str) -> Option<Box<dyn Send>>;
     fn vault(&self, bot: &str) -> Vec<String>;
     fn retain_vault(&self, owners: &HashSet<String>);
     fn repositories(&self) -> Option<Arc<repositories::Repositories>>;
+    /// Whether any bot's turn on `task` is running here (a reviewer's too), by the turn's lane or its claim.
+    fn task_busy(&self, _task: &str) -> bool { false }
 }
 
 #[derive(Default)]
@@ -1621,11 +1663,31 @@ pub struct Worktrees {
     pending: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Bots whose worktree maintenance is running: no claim names them meanwhile.
     pub maintaining: Mutex<HashSet<String>>,
+    /// The disk is low (disk_clean.rs): the next pass removes every finished task's worktree the server asked to
+    /// clean up, without this computer's own retry wait.
+    urgent: std::sync::atomic::AtomicBool,
 }
 
 impl Worktrees {
     pub fn new(workspace: &Path, client: Client) -> Worktrees {
-        Worktrees { workspace: workspace.to_path_buf(), client, inner: Mutex::new(Inner::default()), pending: Mutex::new(None), maintaining: Mutex::new(HashSet::new()) }
+        Worktrees { workspace: workspace.to_path_buf(), client, inner: Mutex::new(Inner::default()), pending: Mutex::new(None), maintaining: Mutex::new(HashSet::new()), urgent: Default::default() }
+    }
+
+    /// Remove finished tasks' worktrees now: the next pass retries each cleanup the server asked for, past this
+    /// computer's backoff, through the usual preservation in `act`. Waits (up to `limit` each) for a running pass,
+    /// then for the one it starts, so what comes after sees the worktrees that went.
+    pub async fn expedite(self: &Arc<Self>, host: Arc<dyn Host>, limit: Duration) {
+        self.wait_pass(limit).await;
+        self.urgent.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.poll(host, &[]);
+        self.wait_pass(limit).await;
+    }
+
+    async fn wait_pass(&self, limit: Duration) {
+        let until = Instant::now() + limit;
+        while Instant::now() < until && self.pending.lock().unwrap().as_ref().is_some_and(|p| !p.is_finished()) {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
     }
 
     /// Queue the heartbeat reply's actions and start a pass if none is running; the last reports meanwhile.
@@ -1655,10 +1717,18 @@ impl Worktrees {
         }
     }
 
-    pub async fn sync(self: Arc<Self>, host: Arc<dyn Host>, actions: Vec<Value>) {
+    pub async fn sync(self: Arc<Self>, host: Arc<dyn Host>, mut actions: Vec<Value>) {
         adopt_task_states(&self.workspace);
         let Ok(reply) = self.client.get("runners/me/worktrees").await else { return };
         let mut rows: Vec<Value> = reply["worktrees"].as_array().cloned().unwrap_or_default();
+        let urgent: HashSet<String> = if self.urgent.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            let extra = urgent_removals(&rows, &actions);
+            let ids = extra.iter().map(|a| text_of(&a["link_id"])).collect();
+            actions.extend(extra);
+            ids
+        } else {
+            HashSet::new()
+        };
         let owners: HashSet<String> = rows.iter().map(|r| text_of(&r["owner"]).trim_start_matches("bot:").to_string()).collect();
         host.retain_vault(&owners);
         let ids: HashSet<String> = rows.iter().map(|r| text_of(&r["id"])).collect();
@@ -1682,15 +1752,16 @@ impl Worktrees {
             }
             let explicit_retry = !generation.is_empty()
                 && self.inner.lock().unwrap().cleanup_retry_generations.get(&link) != Some(&generation);
-            if !explicit_retry && self.inner.lock().unwrap().retry.get(&link).is_some_and(|(at, _)| Instant::now() < *at) {
+            if !explicit_retry && !urgent.contains(&link) && self.inner.lock().unwrap().retry.get(&link).is_some_and(|(at, _)| Instant::now() < *at) {
                 continue;
             }
             let owner = text_of(&row["owner"]);
             let bot = owner.trim_start_matches("bot:").to_string();
             let task = text_of(&row["task_id"]);
-            // A turn in the bot's main checkout or this task's lane may be using the worktree.
+            // A turn in the bot's main checkout or this task's lane may be using the worktree, and so may a turn on
+            // this task in another lane (a subtask's runs in its session root's) or another bot's (a reviewer's).
             let Some(guards) = host.try_locks(&bot, &format!("task:{task}")) else { continue };
-            if !host.idle(&bot, &task) {
+            if !host.idle(&bot, &task) || (kind == "remove" && host.task_busy(&task)) {
                 continue;
             }
             if explicit_retry {
@@ -1837,7 +1908,7 @@ impl Worktrees {
                 let Ok(reply) = client.get("runners/me/worktrees").await else { return false };
                 let Some(fresh) = reply["worktrees"].as_array().and_then(|a| a.iter().find(|r| text_of(&r["id"]) == l).cloned()) else { return false };
                 let fd = detail(&fresh);
-                h.idle(&b, &t) && (closed(&fresh) || (released && crate::util::truthy(fd.get("release_requested"))))
+                h.idle(&b, &t) && !h.task_busy(&t) && (closed(&fresh) || (released && crate::util::truthy(fd.get("release_requested"))))
             }
         };
         let state = act(&self.workspace, action_row, kind, &env, &vault, still_closed).await?;

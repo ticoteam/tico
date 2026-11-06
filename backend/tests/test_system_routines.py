@@ -30,14 +30,12 @@ def test_every_built_in_job_is_listed_with_its_group_word_and_control_availabili
         "task-rule-close-after-done"]
     assert {k for k, j in jobs.items() if j["controllable"]} == {
         "stale_review", "kpi_asks", "ask_deadlines", "task_manager_report",
-        "bookkeeper_check", "memory_tidy"} - hidden
-    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "thread_routing", "thread_rank"}
+        "bookkeeper_check"} - hidden
+    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "thread_rank"}
     assert "learnings" not in jobs, "Learn runs in Maintenance"
     # Housekeeping has no switch; Task roundup and Learn run in Maintenance.
     assert all(j["needed"] == (j["group"] == "housekeeping" and not j["controllable"]) for j in jobs.values())
     assert "task_roundup" not in jobs
-    assert jobs["thread_followups"]["name"] == "Earlier messages"
-    assert jobs["thread_followups"]["then"] == [SR.ACTIONS["tell_earlier_messages"][0]]
     assert jobs["stale_review"]["schedule"] == "Hourly"
     for key in ("due_reminders", "ask_deadlines", "approval_expiry"):
         assert jobs[key]["group"] == "reminders"
