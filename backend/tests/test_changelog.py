@@ -159,6 +159,8 @@ def released_edits(root):
 
 
 def test_released_changelog_sections_match_their_tags():
+    if os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
+        pytest.skip("a pull request is checked by test_pr_changelog_lines_stay_under_unreleased; this walks every tag")
     edited = released_edits(ROOT) if shutil.which("git") else None
     if edited is None:
         pytest.skip("no release tags in this checkout (shallow clone or tags not fetched)")

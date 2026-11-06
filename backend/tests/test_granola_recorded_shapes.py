@@ -92,8 +92,19 @@ def test_the_fixtures_match_what_the_live_check_expects():
     assert granola_live_check.check_fixture(FIXTURE) == []
 
 
-@pytest.mark.parametrize("notes", ["get_meetings", "get_meetings_event_stream"])
-def test_connect_and_sync_read_compressed_answers_with_provider_text_once(api, notes):
+def forget_meetings(api):
+    with api.app.state.store.transaction() as c:
+        for table in ("import_refs", "media_control", "media_assets", "meetings"):
+            c.execute(f"DELETE FROM {table}")
+
+
+def test_connect_and_sync_read_compressed_answers_with_provider_text_once(api):
+    for notes in ("get_meetings", "get_meetings_event_stream"):
+        forget_meetings(api)
+        connect_and_sync_read_compressed_answers_with_provider_text_once(api, notes)
+
+
+def connect_and_sync_read_compressed_answers_with_provider_text_once(api, notes):
     provider = Recorded(api, notes)
     status = provider.connect()
     assert status["connected"] and not status.get("last_error"), status    # v0.3.4: gzip read twice = "unreachable"
@@ -108,8 +119,13 @@ def test_connect_and_sync_read_compressed_answers_with_provider_text_once(api, n
     assert provider.notes_calls == [IDS]
 
 
-@pytest.mark.parametrize("throttle", granola_live_check.RATE_LIMITS)
-def test_each_recorded_rate_limit_is_waited_out_without_skipping_a_meeting(api, throttle):
+def test_each_recorded_rate_limit_is_waited_out_without_skipping_a_meeting(api):
+    for throttle in granola_live_check.RATE_LIMITS:
+        forget_meetings(api)
+        a_recorded_rate_limit_is_waited_out_without_skipping_a_meeting(api, throttle)
+
+
+def a_recorded_rate_limit_is_waited_out_without_skipping_a_meeting(api, throttle):
     provider = Recorded(api)
     provider.connect()
     provider.throttles["get_meetings"] = [throttle, throttle]   # v0.3.7: a throttled batch skipped its meetings

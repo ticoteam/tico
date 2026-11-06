@@ -41,12 +41,12 @@ def seeded(api, tmp_path):
     return api
 
 
-@pytest.mark.parametrize("url", ["http://127.0.0.1/pricing", "http://localhost/x", "http://169.254.169.254/latest",
-                                 "http://[::1]/", "ftp://northwind.example/x", "file:///etc/passwd",
-                                 "https://user:pw@northwind.example/x"])
-def test_an_internal_or_odd_address_is_refused_when_it_is_added(seeded, url):
-    watch(seeded, url=url, expected=422)
-    assert get(seeded, "market/watches")["watches"] == []
+def test_an_internal_or_odd_address_is_refused_when_it_is_added(seeded):
+    for url in ["http://127.0.0.1/pricing", "http://localhost/x", "http://169.254.169.254/latest",
+                "http://[::1]/", "ftp://northwind.example/x", "file:///etc/passwd",
+                "https://user:pw@northwind.example/x"]:
+        watch(seeded, url=url, expected=422)
+        assert get(seeded, "market/watches")["watches"] == [], url
 
 
 def test_a_name_that_resolves_to_a_private_address_is_blocked_when_read(seeded, monkeypatch):

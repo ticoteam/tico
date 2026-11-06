@@ -75,7 +75,7 @@ def test_a_run_that_leaves_it_hands_it_to_the_next_run(api):
     assert [t["id"] for t in second["next_run"]] == [task["id"]], "the next run carries it again"
 
 
-def test_a_run_that_worked_it_does_not_carry_it_again(api):
+def test_a_run_that_worked_it_a_comment_a_step_move_or_an_explicit_handled_does_not_carry_it_again(api):
     r = setup(api)
     task = later(api)
     first = wake(api, r)
@@ -85,18 +85,17 @@ def test_a_run_that_worked_it_does_not_carry_it_again(api):
     after = shown(api, task)
     assert after["next_run_waiting"] is False
     assert after["deferred"]["state"] == "delivered" and after["deferred"]["worked"] is True
-    assert wake(api, r, "Anything else?")["next_run"] == [], "worked: not re-carried"
-
-
-def test_a_step_move_or_an_explicit_handled_counts_as_worked(api):
-    r = setup(api)
-    task = later(api)
-    first = wake(api, r)
+    again = wake(api, r, "Anything else?")
+    assert again["next_run"] == [], "worked: not re-carried"
+    finish(api, r, again)
+    # An explicit handled counts as worked too.
+    task = later(api, "Watch the new signups")
+    first = wake(api, r, "And the signups?")
     with api.app.state.store.transaction() as c:
         Q.defer(c, "bot:ops", task["id"], handled=True)
     finish(api, r, first)
     assert shown(api, task)["deferred"]["worked"] is True
-    assert wake(api, r, "Anything else?")["next_run"] == []
+    assert wake(api, r, "Anything more?")["next_run"] == []
 
 
 def test_a_pull_request_refreshed_is_not_work_and_one_pushed_to_is(api):
@@ -206,7 +205,7 @@ def test_next_run_puts_it_back_at_once(api):
     assert [t["id"] for t in wake(api, r, "Anything else?")["next_run"]] == [task["id"]]
 
 
-def test_a_person_defers_through_the_api_and_wrong_asks_are_refused(api):
+def test_a_person_defers_through_the_api_wrong_asks_are_refused_and_run_now_drops_the_condition(api):
     setup(api)
     blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 241 review", "body": "Review it."})
     task = later(api)
@@ -222,12 +221,9 @@ def test_a_person_defers_through_the_api_and_wrong_asks_are_refused(api):
         other = H.task_create(c, "human:ana", "Later", "Later.", "bot:ops", next_run=True)
         with pytest.raises(H.Refused):
             Q.defer(c, "bot:ops", other["id"], after=blocker["id"])   # already finished: work it now
-
-
-def test_run_now_drops_a_stored_condition(api):
-    setup(api)
-    blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 241 review", "body": "Review it."})
-    task = later(api)
+    # Run now drops a stored condition.
+    blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 243 review", "body": "Review it."})
+    task = later(api, "Watch the new signups")
     post(api, f"tasks/{task['id']}/defer", {"after": blocker["id"]})
     got = post(api, f"tasks/{task['id']}/run-now", {})["task"]
     assert "resume" not in got and got["deferred"]["state"] == "queued"

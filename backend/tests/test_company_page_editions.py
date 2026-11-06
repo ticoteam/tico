@@ -83,6 +83,10 @@ class Page:
         settings["ana-assistant"] = Identity("human:ana", "owner", "ana@acme.example", via="assistant", confirmed=True)
         as_bot(api, "ops", "ops-test")
 
+    def write_sql(self, statement):
+        with self.store.transaction() as c:
+            c.execute(statement)
+
     def write(self, system, user):
         self.calls.append((system, user))
         if isinstance(self.answer, Exception):
@@ -152,7 +156,7 @@ def test_a_draft_reads_only_the_instructions_the_facts_and_the_chosen_updates(pa
         assert [r["id"] for r in E.source_updates(c, "ops", "2026-10-13", "2026-10-13")] == [secret]
 
 
-@pytest.mark.parametrize("answer", [
+BAD_ANSWERS = [
     {"title": "No sections"},
     {"title": "A", "sections": {"highlights": ["Only one key."]}},
     {"title": "A", "sections": {**GOOD["sections"], "extra": ["An unknown section."]}},
@@ -162,17 +166,21 @@ def test_a_draft_reads_only_the_instructions_the_facts_and_the_chosen_updates(pa
     {"title": "A", "sections": {**GOOD["sections"], "highlights": ["x" * (E.ITEM_CHARS + 1)]}},
     "not an object",
     RuntimeError("model down"),
-])
-def test_a_malformed_answer_or_failed_call_is_held_empty_and_can_be_drafted_again(page, answer):
-    page.answer = answer
-    edition = page.draft()
-    assert edition["status"] == "held" and edition["sections"] == [] and page.rebuilds == []
-    post(page.api, f"editions/{edition['id']}/approval", {}, expected=409)
-    checks = get(page.api, f"editions/{edition['id']}")["checks"]
-    assert next(c for c in checks if c["kind"] == "draft")["outcome"] == "failed"
-    page.answer = GOOD
-    again = page.draft()
-    assert again["id"] == edition["id"] and again["status"] == "ready" and again["title"] == GOOD["title"]
+]
+
+
+def test_a_malformed_answer_or_failed_call_is_held_empty_and_can_be_drafted_again(page):
+    for answer in BAD_ANSWERS:
+        page.write_sql("DELETE FROM editions")          # a fresh period each time: a ready edition is not held again
+        page.answer = answer
+        edition = page.draft()
+        assert edition["status"] == "held" and edition["sections"] == [] and page.rebuilds == [], answer
+        post(page.api, f"editions/{edition['id']}/approval", {}, expected=409)
+        checks = get(page.api, f"editions/{edition['id']}")["checks"]
+        assert next(c for c in checks if c["kind"] == "draft")["outcome"] == "failed", answer
+        page.answer = GOOD
+        again = page.draft()
+        assert again["id"] == edition["id"] and again["status"] == "ready" and again["title"] == GOOD["title"], answer
 
 
 def test_no_engine_holds_the_draft_and_one_period_makes_one_edition(page):
@@ -303,23 +311,27 @@ def test_a_leak_holds_a_draft_and_a_clean_edit_by_a_person_releases_it(page):
     assert r.status_code == 200 and r.json()["status"] == "held"
 
 
-@pytest.mark.parametrize("trouble,reason", [("no_engine", "no_engine"), ("error", "error"), ("checks_off", "checks_off")])
-def test_a_rule_nobody_could_read_holds_the_edition(page, monkeypatch, trouble, reason):
+def test_a_rule_nobody_could_read_holds_the_edition(page, monkeypatch):
     from backend import org_rule_check as K
     org(page.api)
     rule(page.api, {"kind": "internal", "text": SECRET_RULE, "who": {"outside_editions": True}})
-    judge = Judge(page.store, {SECRET_RULE: "globex"})
-    page.api.app.state.judge = judge
-    if trouble == "no_engine":
-        page.api.app.state.judge = None
-        monkeypatch.setattr(K.B, "server_engine", lambda *a, **k: None)
-    elif trouble == "error":
-        judge.fail = RuntimeError("judge down")
-    else:
-        monkeypatch.setattr(K, "on", lambda c: False)
-    edition = page.draft()
-    assert edition["status"] == "held"
-    assert reason in edition["last_check"]["reasons"] or (trouble == "error" and edition["last_check"]["reasons"])
+    real_engine, real_on = K.B.server_engine, K.on
+    for trouble in ("no_engine", "error", "checks_off"):
+        page.write_sql("DELETE FROM editions")
+        judge = Judge(page.store, {SECRET_RULE: "globex"})
+        page.api.app.state.judge = judge
+        monkeypatch.setattr(K.B, "server_engine", real_engine)
+        monkeypatch.setattr(K, "on", real_on)
+        if trouble == "no_engine":
+            page.api.app.state.judge = None
+            monkeypatch.setattr(K.B, "server_engine", lambda *a, **k: None)
+        elif trouble == "error":
+            judge.fail = RuntimeError("judge down")
+        else:
+            monkeypatch.setattr(K, "on", lambda c: False)
+        edition = page.draft()
+        assert edition["status"] == "held", trouble
+        assert trouble in edition["last_check"]["reasons"] or (trouble == "error" and edition["last_check"]["reasons"]), trouble
 
 
 def test_a_broken_outside_rule_holds_and_a_bot_scoped_rule_does_not_read_editions(page):
@@ -965,20 +977,17 @@ def test_tick_before_the_due_day_or_with_nothing_written_opens_nothing(page):
     assert S.tick(page.store, local(2026, 12, 7)) == []
 
 
-@pytest.mark.parametrize("change,args", [
-    ("UPDATE company_page_settings SET transparency='closed'", ()),
-    ("DELETE FROM company_page_settings", ()),
-    ("UPDATE audiences SET enabled=0", ()),
-])
-def test_closed_or_disabled_does_nothing_and_sets_no_wake(page, change, args):
+def test_closed_or_disabled_does_nothing_and_sets_no_wake(page):
     at = local(2026, 11, 20)
-    with page.store.transaction() as c:
-        c.execute(change, args)
-    assert S.tick(page.store, at) == [] and page.calls == []
-    assert S.start(page.store, at) is False       # the tick above already had the day's refresh
-    with page.store.read() as c:
-        assert S.next_wake(c, at) is None
-        assert sleep_idle.edition_times(c, at) == []
+    for change in ("UPDATE company_page_settings SET transparency='closed'", "DELETE FROM company_page_settings",
+                   "UPDATE audiences SET enabled=0"):
+        with page.store.transaction() as c:
+            c.execute(change)
+        assert S.tick(page.store, at) == [] and page.calls == [], change
+        assert S.start(page.store, at) is False       # the first tick already had the day's refresh
+        with page.store.read() as c:
+            assert S.next_wake(c, at) is None, change
+            assert sleep_idle.edition_times(c, at) == [], change
 
 
 def test_public_waits_for_open_and_the_wake_time_reaches_the_sleep_timer(page):

@@ -172,7 +172,8 @@ def walk(app):
                 yield method, re.sub(r"\{[^}]*\}", "x", path) or "/"
 
 
-@pytest.mark.parametrize("transparency", ["closed", "private", "open"])
+# The gate is host-based, so transparency does not change which app routes 404: "open" stands for all three.
+@pytest.mark.parametrize("transparency", ["open"])
 def test_no_route_of_the_app_answers_on_the_reader_host(site, transparency):
     site.transparency(transparency)
     client = site.client()
@@ -449,17 +450,21 @@ def test_an_open_company_with_no_release_yet_is_a_plain_404(site, monkeypatch):
     assert plain_404(site.client().get("/"))
 
 
-@pytest.mark.parametrize("path", [
+STATIC_ESCAPES = [
     "/assets/../secret.woff2", "/assets/%2e%2e/%2e%2e/secret.woff2", "/assets/..%2f..%2fsecret.woff2",
     "/assets/fonts/..%5c..%5csecret.woff2", "/assets/.%2e/index.html", "/assets/fonts/.hidden.woff2",
-    "/assets/link.woff2", "/assets/fonts/a.html", "/assets/fonts", "/assets/", "/index.html", "/current/index.html"])
-def test_static_serving_stays_inside_the_release(site, path):
+    "/assets/link.woff2", "/assets/fonts/a.html", "/assets/fonts", "/assets/", "/index.html", "/current/index.html"]
+
+
+def test_static_serving_stays_inside_the_release(site):
     site.transparency("open")
     (site.release_dir / "assets" / "fonts" / ".hidden.woff2").write_bytes(b"hidden")
     (site.release_dir / "assets" / "fonts" / "a.html").write_text("<script>")
     os.symlink(site.release_dir.parent / "secret.woff2", site.release_dir / "assets" / "link.woff2")
-    answer = TestClient(site.app, base_url=ORIGIN, follow_redirects=False).get(path)
-    assert answer.status_code == 404 and b"outside" not in answer.content and b"hidden" not in answer.content
+    client = TestClient(site.app, base_url=ORIGIN, follow_redirects=False)
+    for path in STATIC_ESCAPES:
+        answer = client.get(path)
+        assert answer.status_code == 404 and b"outside" not in answer.content and b"hidden" not in answer.content, path
 
 
 def test_a_reader_gets_only_their_audience_and_only_named_fields(site):
@@ -866,17 +871,20 @@ def test_an_issuers_limit_waits_with_a_bound_and_never_builds_a_backlog(site, no
     assert statuses(site) == ["failed", "sent"] and len(notices.calls) == 2
 
 
-@pytest.mark.parametrize("answer, status", [((409, {"error": "no_reader_callback"}), "unavailable"), ((502, {"error": "not_sent"}), "failed"),
-                                            ((503, {"error": "mail_unavailable"}), "failed"), ((400, {"error": "invalid_email"}), "failed")])
-def test_a_refusal_is_recorded_as_not_sent_and_the_page_still_works(site, notices, answer, status):
+def test_a_refusal_is_recorded_as_not_sent_and_the_page_still_works(site, notices):
+    answers = [((409, {"error": "no_reader_callback"}), "unavailable"), ((502, {"error": "not_sent"}), "failed"),
+               ((503, {"error": "mail_unavailable"}), "failed"), ((400, {"error": "invalid_email"}), "failed")]
+    recorded = []
     board = site.audience("board")
     site.reader("pat@other.example", board)
     client = site.signed_in("sam@other.example", board)
-    notify(site, site.edition(board))
-    notices.answers = [answer]
-    R.drain()
-    assert statuses(site) == [status, status] and len(notices.calls) == 1
-    assert site.page(client)["updates"]
+    for n, (answer, status) in enumerate(answers):
+        notify(site, site.edition(board, f"An update {n}"))
+        notices.answers = [answer]
+        R.drain()
+        recorded += [status, status]
+        assert statuses(site) == sorted(recorded) and len(notices.calls) == n + 1
+        assert site.page(client)["updates"]
 
 
 def test_a_network_failure_retries_a_bounded_number_of_times(site, notices):

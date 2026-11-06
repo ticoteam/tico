@@ -194,23 +194,26 @@ def test_ordinary_assistant_turn_cannot_publish_even_with_a_supplied_attempt(api
     assert_no_page(api)
 
 
-@pytest.mark.parametrize("change", ["sender", "room", "deleted", "target", "via"])
-def test_publish_rechecks_the_initiating_message(api, change):
-    t = task(api, private=False)
-    _, attempt, message = start(api, t["id"])
-    with api.app.state.store.transaction() as c:
-        if change == "sender":
-            c.execute("UPDATE messages SET sender_id='human:cara' WHERE id=?", (message["id"],))
-        elif change == "room":
-            c.execute("UPDATE conversations SET room_key='other' WHERE id=?", (message["conversation_id"],))
-        elif change == "deleted":
-            c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), message["id"]))
-        else:
-            refs = {**message["refs"], **({"via": "assistant"} if change == "via" else {"make_page": {"task": "other"}})}
-            c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
-    result = page(api, attempt, task=t["id"])
-    assert result.status_code == 403, result.text
-    assert_no_page(api)
+def test_publish_rechecks_the_initiating_message(api):
+    machine = None
+    for change in ("sender", "room", "deleted", "target", "via"):
+        t = task(api, title=f"Review the plan ({change})", private=False)
+        machine, attempt, message = start(api, t["id"], machine=machine)
+        with api.app.state.store.transaction() as c:
+            if change == "sender":
+                c.execute("UPDATE messages SET sender_id='human:cara' WHERE id=?", (message["id"],))
+            elif change == "room":
+                c.execute("UPDATE conversations SET room_key='other' WHERE id=?", (message["conversation_id"],))
+            elif change == "deleted":
+                c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), message["id"]))
+            else:
+                refs = {**message["refs"], **({"via": "assistant"} if change == "via" else {"make_page": {"task": "other"}})}
+                c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
+        result = page(api, attempt, task=t["id"])
+        assert result.status_code == 403, (change, result.text)
+        assert_no_page(api)
+        post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
+             machine["token"])
 
 
 def test_task_access_checks_apply_to_the_route_status_and_publishing(api):
