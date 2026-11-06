@@ -1,7 +1,52 @@
 #!/usr/bin/env bash
-# Runs scripts/check.sh before each push. Turn it on once per clone:
+# Runs before each push. It is expected in every clone, people's and bots' alike; turn it on once:
 #   git config core.hooksPath .githooks
-# To push without it once: git push --no-verify
-set -uo pipefail
+# In order: fetch origin main (quietly, 20 seconds at most; an offline push goes on with the last fetched main), then
+# scripts/check.sh on what you changed, then scripts/check_conflicts.sh, which fails when a pushed commit would not
+# merge into origin/main. Skip it once with: git push --no-verify
+set -o pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
-exec bash scripts/check.sh
+
+zero=0000000000000000000000000000000000000000
+heads=()
+refs=0
+if [ ! -t 0 ]; then
+  # git gives one line per ref: <local ref> <local sha> <remote ref> <remote sha>. Deletions and tags carry no new commits.
+  while read -r local_ref local_sha _remote_ref _remote_sha; do
+    refs=$((refs + 1))
+    case $local_ref in refs/tags/*) continue ;; esac
+    if [ "$local_sha" = "$zero" ]; then continue; fi
+    heads+=("$local_sha")
+  done
+fi
+if [ "$refs" -eq 0 ]; then
+  heads=(HEAD)  # run by hand, with nothing on stdin: check HEAD
+elif [ "${#heads[@]}" -eq 0 ]; then
+  exit 0  # only deletions or tags: no commits to check
+fi
+
+if command -v timeout >/dev/null 2>&1; then
+  fetch=(timeout 20 git fetch --quiet origin main)
+else
+  fetch=(perl -e 'alarm shift; exec @ARGV' 20 git fetch --quiet origin main)
+fi
+if ! "${fetch[@]}" 2>/dev/null; then
+  echo "pre-push: could not fetch origin main; the checks use the main fetched last time" >&2
+fi
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "pre-push: uncommitted changes are checked too; CI checks only the commit you push" >&2
+fi
+
+if ! bash scripts/check.sh; then
+  echo "push stopped: scripts/check.sh failed. Fix it and push again (git push --no-verify skips the hook)." >&2
+  exit 1
+fi
+
+for sha in "${heads[@]}"; do
+  if ! bash scripts/check_conflicts.sh --head "$sha"; then
+    echo "push stopped: the branch conflicts with origin/main. Fix it and push again (git push --no-verify skips the hook)." >&2
+    exit 1
+  fi
+done
+exit 0
