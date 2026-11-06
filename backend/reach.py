@@ -492,7 +492,17 @@ def remove_line(c, auth, who, line_id, via=None, checked=True):
 # may reach them (a bot that needs a fix asks BotOps). The Assistant's slug is the install's own (TICO_ASSISTANT_BOT).
 # The built-in bots of Auth.system_bot plus the support helper, except the Health Monitor: its tasks to people far from
 # it are what nearby reach is for, so it is checked like any bot.
-HELPERS = ("botops", "task-manager", "goal-manager", "librarian", "support", "assistant", "bookkeeper", H.COUNSEL)
+HELPERS = (
+    "botops",
+    "task-manager",
+    "goal-manager",
+    "librarian",
+    "support",
+    "assistant",
+    "bookkeeper",
+    H.COUNSEL,
+    H.BRAND_OWNER,
+)
 SOLICITED_DAYS = 7  # how far back a teammate's message to a bot makes the bot's answer to them solicited
 NAMES_SHOWN = 6  # the teammates a refusal names as the ones the bot does reach
 

@@ -4004,6 +4004,9 @@ PRIVATE_BY_TEMPLATE = ("general-counsel", "tico-counsel")
 # The built-in Counsel's slug (backend/counsel.py): reserved under Tico's own name, so a company's own bot named
 # "counsel" (a legal team's, say) is never taken for it.
 COUNSEL = "tico-counsel"
+# The built-in Brand Owner's slug (docs/onboarding.md): it keeps the brand book. A company that hired a Brand Manager
+# under this slug before it was built in keeps that bot (backend/onboarding.py `_ensure_builtin`).
+BRAND_OWNER = "brand"
 # Bots the product names in code and refers to by slug (the built-in helpers and the assistant). Their id is their
 # slug, so that the actor string the code builds from the constant, `bot:<slug>`, is still the bot's actor. A bot a
 # person creates gets a UUIDv7 id (new_bot_id).
@@ -4011,6 +4014,7 @@ PRODUCT_BOT_SLUGS = frozenset(
     {
         FLEET_MAINTAINER,
         COUNSEL,
+        BRAND_OWNER,
         "librarian",
         "goal-manager",
         "task-manager",
