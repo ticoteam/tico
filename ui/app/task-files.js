@@ -418,8 +418,10 @@ function tfWire(d) {
     const step = ev.target.closest('[data-tf-step]');
     if (step) { tfStepImage(d, Number(step.dataset.tfStep)); return; }
     // a press on the backdrop (the dialog itself, outside its box) folds the file
-    const box = ev.target.matches?.('[data-tf-view]') && ev.target, r = box?.getBoundingClientRect();
-    if (box && (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom)) tfClose(d);
+    if (ev.target.matches?.('[data-tf-view]')) {
+      const r = ev.target.getBoundingClientRect();
+      if (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) tfClose(d);
+    }
   });
   d.addEventListener('change', ev => {
     if (ev.target.matches('[data-tf-with]') && d.tfOpen) { d.tfOpen.cmp = Number(ev.target.value); tfViewPaint(d); }
