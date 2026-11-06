@@ -25,7 +25,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
     """The bot list's row as it was read before backend/bot_rows.py: one bot at a time."""
     row = dict(bot)
     # runtime, model and host are the bot's declaration (bot_settings), as backend/app.py bot_view reads them.
-    row.update({"model": "", "runtime": "", "host": "dispatcher"})
+    row.update({"model": "", "runtime": "", "host": "keeper"})
     config = c.execute("SELECT team,owner_id,owner_ids,revision,description,reports_to,repo,"
                        f"thread_mode,{BS.CONFIG} AS config,onboarding_state FROM bot_config bc {BS.JOIN} WHERE bot=?", (bot["slug"],)).fetchone()
     assignment = c.execute("SELECT a.bot,a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,"
@@ -45,7 +45,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
         from backend.shared_bots import follow
         declared = follow(c, bot["slug"], json.loads(config["config"]) if config["config"] else {})
         row.update({"model": declared.get("model") or "", "runtime": declared.get("runtime") or "",
-                    "host": declared.get("host") or "dispatcher"})
+                    "host": declared.get("host") or "keeper"})
         if declared.get("shared_from"):
             repo = declared.get("repo") or repo
             row.update({"model": declared.get("model") or "", "runtime": declared.get("runtime") or "",
@@ -184,6 +184,13 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
     assert cara["ops"]["status"]["focus"] == "" and cara["ops"]["next_run"] == 0
     ana = {row["slug"]: row for row in T.get(api, "bots", token="ana-test")}
     assert ana["ops"]["status"]["focus"] == "the secret" and ana["ops"]["goal_active"] and ana["scout"]["agent"]
+
+
+def test_a_bot_that_declares_no_host_lists_as_a_keeper_bot(api):
+    """The keeper is the only host there is. The seeded bots declare no host (api fixture), and each lists as keeper."""
+    rows = {row["slug"]: row for row in T.get(api, "bots", token="ana-test")}
+    assert set(BASE) <= set(rows)
+    assert {slug: rows[slug]["host"] for slug in BASE} == {slug: "keeper" for slug in BASE}
 
 
 def statements(api, method, path, token, body=None):

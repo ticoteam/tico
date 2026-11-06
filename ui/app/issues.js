@@ -1,18 +1,8 @@
-/* ui/app/issues.js — Shared issue fragments, Issues/Runs/Access tables
+/* ui/app/issues.js — Shared fragments, Runs and Access tables
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 // ----------------------------------------------------------------- shared fragments
-const issueLink = i => `<a href="${i.url}" target="_blank" rel="noopener" class="mono">#${i.number}</a>`;
-const statusPill = i => i.state === 'CLOSED' ? `<span class="pill">closed</span>` : `<span class="pill ${i.status || ''}">${esc(i.status || 'no status')}</span>${i.needs_human ? ` <span class="pill needs">${esc(needsLabel(i.owner_id))}</span>` : ''}`;
-// "Needs you" only when the viewer is the one it waits on; otherwise "Needs <Name>".
-const needsLabel = owner => {
-  const slug = String(owner || '').toLowerCase();
-  const p = slug && (S.people || []).find(x => (x.email || '').split('@')[0].toLowerCase() === slug);
-  if (!p || slug === myHandle()) return 'Needs you';
-  return 'Needs ' + String(p.name || slug).trim().split(/\s+/)[0];
-};
-const prioPill = i => i.priority ? `<span class="pill ${i.priority}">${i.priority}</span>` : '';
 // Memoized per roster: task rows and sort comparators call this many times per render. Rebuilt when S.emps is
 // replaced (every refresh), grows in place (bot-branches.js) or the assistant's name changes.
 // A bot is named everywhere by its id (S.emps rows' `id`, the `bot:<id>` actor, routes and API paths); its slug is a
@@ -63,12 +53,6 @@ function botRepoHTML(e) {
 
 
 
-function issuesTable(list, showOwner) {
-  if (!list.length) return `<div class="empty">None.</div>`;
-  return `<div class="scroll"><table><tr><th>#</th><th>Title</th>${showOwner ? '<th>Owner</th>' : ''}<th>Status</th><th>Priority</th><th>Updated</th></tr>
-  ${list.map(i => `<tr><td>${issueLink(i)}</td><td>${esc(i.title)}${i.last_comment ? `<details><summary>last comment</summary><div class="q">${esc(i.last_comment)}</div></details>` : ''}</td>
-    ${showOwner ? `<td>${empChip(i.owner_id)}</td>` : ''}<td>${statusPill(i)}</td><td>${prioPill(i)}</td><td class="muted tnum">${ago(i.updatedAt)}</td></tr>`).join('')}</table></div>`;
-}
 // The models that did a run's work, each with its effort (not the bot's configured one); empty when nothing was counted.
 const ranOn = (made, effort = true) => [...new Set(((made || {}).segments || []).filter(s => s.model)
   .map(s => s.model + (effort && s.effort ? ` (${s.effort})` : '')))].join(' then ');

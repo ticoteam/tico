@@ -578,58 +578,6 @@ function pillClear(P, keepText) {
   P.files.length = 0; pillChips(P); chatDraftSave(P);
   if (keepText) pillButtons(P);
 }
-// a chat message: the run starts at once and the thread tails it
-async function pillChat(P, text) {
-  const btn = pq(P, '.p-send'), label = btn.textContent;
-  btn.disabled = true; pillBtnSay(btn, 'Sending…');
-  const files = P.files.slice(), scope = sessionScope(pq(P, '.p-text'));
-  try {
-    const fd = new FormData();
-    fd.append('text', text);
-    P.files.forEach(f => fd.append('files', f, f.name));
-    const res = await fetch(`${API}/employees/${encodeURIComponent(P.slug)}/chat`, {method: 'POST', body: await memoryBody(fd)});
-    const j = await res.json().catch(() => ({}));
-    if (res.status === 409) { pillBusy(P, j, text); return; }
-    if (!res.ok) throw new Error(j.error || res.statusText);
-    pillAcknowledge(P, text, files, scope);
-  } catch (e) { toast(e.message, true); }
-  finally { btn.disabled = false; pillBtnSay(btn, label); pillLabel(P); pillButtons(P); }
-}
-function pillBusy(P, j, text) {
-  const out = pq(P, '.p-cmd'); if (!out) return;
-  const name = empName(P.slug);
-  out.hidden = false;
-  out.innerHTML = j.error === 'busy' && j.issue
-    ? `<div class="cmd-out"><span>${name} is busy on  — send this as a task instead, or wait.</span>
-       <div class="row" style="margin-top:7px"><button class="primary" type="button" data-busy="task">Send as task</button>
-       <button class="ghost" type="button" data-busy="wait">Wait</button></div></div>`
-    : `<div class="cmd-out"><span>${name} cannot take a chat message right now${j.error ? ` (${esc(j.error)})` : ''}. Send it as a task instead, or wait.</span>
-       <div class="row" style="margin-top:7px"><button class="primary" type="button" data-busy="task">Send as task</button>
-       <button class="ghost" type="button" data-busy="wait">Wait</button></div></div>`;
-  out.querySelector('[data-busy="wait"]').onclick = () => { out.hidden = true; out.innerHTML = ''; };
-  out.querySelector('[data-busy="task"]').onclick = () => {
-    out.hidden = true; out.innerHTML = '';
-    P.action = 'task'; pillLabel(P);
-    if (text) { pq(P, '.p-text').value = text; pillButtons(P); }
-    pillSend(P);
-  };
-}
-async function pillTask(P, text) {
-  const slug = P.slug, btn = pq(P, '.p-send'), label = btn.textContent;
-  btn.disabled = true; pillBtnSay(btn, 'Creating…');
-  const files = P.files.slice(), scope = sessionScope(pq(P, '.p-text'));
-  try {
-    const fd = new FormData();
-    fd.append('slug', slug); fd.append('title', text.split('\n')[0].trim().slice(0, 80));
-    fd.append('body', text); fd.append('priority', 'p2'); fd.append('type', 'task');
-    P.files.forEach(f => fd.append('files', f, f.name));
-    const res = await fetch(`${API}/issues`, {method: 'POST', body: await memoryBody(fd)});
-    const j = await res.json().catch(() => ({})); if (!res.ok) throw new Error(j.error || res.statusText);
-    pillAcknowledge(P, text, files, scope); toast(`Queued as #${j.number}`);
-    await refresh(true); if (BOT?.slug === slug) loadBotIssues(slug);
-  } catch (e) { toast(e.message, true); }
-  btn.disabled = false; pillBtnSay(btn, label); pillLabel(P); pillButtons(P);
-}
 async function pillSend(P) {
   if (!P.el) return;
   const box = pq(P, '.p-text'), text = box.value.trim();
@@ -647,9 +595,5 @@ async function pillSend(P) {
   if (slash !== 'plain' && runCommand(text, pq(P, '.p-cmd'), P.slug)) {
     sessionAcknowledge(box); pillClear(P, true); return;
   }
-  if (isKeeper(P.slug)) {                                     // hub.db, not an Issue comment
-    return P.action === 'task' ? v2PillTask(P, text) : v2ChatSend(P, text);
-  }
-  if (P.action === 'task') return pillTask(P, text);
-  return pillChat(P, text);
+  return P.action === 'task' ? v2PillTask(P, text) : v2ChatSend(P, text);
 }
