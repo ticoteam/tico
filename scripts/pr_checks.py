@@ -784,11 +784,11 @@ def full_suite(name):
 def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None):
     """None means the full default suite; an empty list means explicitly unaffected.
 
-    A pull request runs the default tests that use a changed file (DependencyMap) and, of the browser scripts that
-    do, the core ones the full suite runs; a UI change runs its mapped scripts or all of them. A docs page,
-    CHANGELOG.md or a GitHub file runs the tests that read it (read_only); a CI input adds a short browser smoke
-    (CI_INPUTS). `added` names the new files (None: any may be new) and `core` the core browser scripts (None: read
-    from scripts/ui-tests.cjs)."""
+    A pull request or a merge queue group (base to head) runs the default tests that use a changed file
+    (DependencyMap) and, of the browser scripts that do, the core ones the full suite runs; a UI change runs its
+    mapped scripts or all of them. A docs page, CHANGELOG.md or a GitHub file runs the tests that read it
+    (read_only); a CI input adds a short browser smoke (CI_INPUTS). `added` names the new files (None: any may be
+    new) and `core` the core browser scripts (None: read from scripts/ui-tests.cjs)."""
     full = {"python": None, "browser": None, "caddy": True, "contracts": True, "reason": "full default suite"}
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
     runner = bool(rust) or any(
@@ -797,7 +797,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         for p in changed
     )
     full["rust"] = rust
-    if event != "pull_request":
+    if event not in ("pull_request", "merge_group"):
         return {**full, "conformance": runner, "reason": "main runs the full default suite"}
     if not changed:
         return {**full, "conformance": runner, "reason": "empty diff: full default suite", "uncertain": ["empty diff"]}
@@ -964,12 +964,14 @@ def image_checks(changed, root=ROOT):
     subprocess.run([sys.executable, "-c", found.group(1)], cwd=root, check=True)
 
 
-def prepare(event, base, output, timings_path=None):
+def prepare(event, base, output, timings_path=None, head="HEAD"):
+    """`head` is the commit under test: the checkout for a pull request, the queue group's merge commit for a
+    merge_group. A group's base is its own base sha, so it needs no merge_parent or changelog guard."""
     if event == "pull_request":
         base = merge_parent(base)
         guard_changelog(base)
-    changed = changed_files(base) if base else []
-    added = changed_files(base, only="A") if base else None
+    changed = changed_files(base, head) if base else []
+    added = changed_files(base, head, only="A") if base else None
     picked = selection(changed, event, base=base, added=added)
     if picked["python"] is not None and not picked["caddy"]:
         image_checks(changed)
@@ -1170,6 +1172,7 @@ def main():
     plan = sub.add_parser("plan")
     plan.add_argument("--event", required=True)
     plan.add_argument("--base", default="")
+    plan.add_argument("--head", default="HEAD")
     plan.add_argument("--output", default="ci-plan.json")
     plan.add_argument("--timings")
     execute = sub.add_parser("run")
@@ -1179,7 +1182,7 @@ def main():
     sub.add_parser("receipt")
     args = parser.parse_args()
     if args.action == "plan":
-        prepare(args.event, args.base, args.output, args.timings)
+        prepare(args.event, args.base, args.output, args.timings, args.head)
     elif args.action == "run":
         return run(args.plan, args.suite)
     elif args.action == "durations":

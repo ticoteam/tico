@@ -12,10 +12,10 @@ Run every kind and print one verdict per kind:
 Each kind is one pytest run with the `slow` tests included; the default `pytest` run leaves those out. Running a
 single file the same way: `python3 -m pytest -q -o addopts= -m "" -p no:cacheprovider e2e/tests/test_upgrade.py`.
 
-PR checks run the slow MCP sweep, CLI sweep and API golden contract in a separate parallel `contracts` job when
-`backend/`, `clients/`, `e2e/`, `templates/`, `skills/` or roles/company inputs change. Shared CI/configuration changes,
-deleted or uncertain inputs, and every main push run them too. The default suite still excludes other slow tests;
-release validation runs every test. To run the PR contracts locally:
+The merge queue runs the slow MCP sweep, CLI sweep and API golden contract in a separate parallel `contracts` job when
+`backend/`, `clients/`, `e2e/`, `templates/`, `skills/` or roles/company inputs change. Shared CI/configuration changes and
+deleted or uncertain inputs run them too. A pull request's own pushes run lint only. The default suite still excludes
+other slow tests; release validation runs every test. To run the contracts locally:
 
     python3 -m pytest -q -n 4 -m slow backend/tests/test_e2e_mcp.py backend/tests/test_e2e_cli.py e2e/tests/test_contract.py
 
