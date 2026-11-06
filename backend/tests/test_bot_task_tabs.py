@@ -429,4 +429,5 @@ def test_bot_filter_uses_readable_blockers_and_preserves_other_waits(api):
     cara = get(api, "bots/ops/task-tabs/tasks", "cara-test")["tabs"]
     assert ana[0]["count"] == 2 and set(ana[0]["ids"]) == {normal, hidden}
     assert cara[0]["count"] == 1 and cara[0]["ids"] == [normal]
-    assert ana[1]["count"] == 1 and ana[1]["ids"] == [person]
+    # Its open question task to Ana makes "Open question" wait on a person (question_tasks.waits_sql).
+    assert ana[1]["count"] == 2 and set(ana[1]["ids"]) == {person, asked}

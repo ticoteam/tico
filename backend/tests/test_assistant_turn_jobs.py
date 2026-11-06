@@ -112,7 +112,9 @@ def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card
 
     # A turn answers a question the bot asked.
     with api.app.state.store.transaction() as c:
-        asked = QT.ask_plain(c, "bot:finance", "human:ana", "Close or Apollo?")
+        # Under a shared task: a standalone question task is private to the bot and her, out of her Assistant's reach.
+        tool = H.task_create(c, "human:ana", "Pick the outbound tool", "x", "bot:finance", lint=False)
+        asked = QT.ask_plain(c, "bot:finance", "human:ana", "Close or Apollo?", parent=tool)
     call(api, turn(api, "Apollo"), "POST", f"tasks/{asked['id']}/answers",
          {"target": {"task": asked["id"]}, "answers": {}, "other": "Apollo"})
 
