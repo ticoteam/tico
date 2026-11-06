@@ -1,6 +1,7 @@
-# One explicitly requested release check, split across isolated native VMs that run side by side.
-# The VMs are RunsOn instances in Tico's own AWS account (manual runs only, never fork code).
-# No PR/push tests, schedule or publication: the release command dispatches it for the frozen candidate.
+# One release check for one candidate, split across isolated native VMs that run side by side.
+# The VMs are RunsOn instances in Tico's own AWS account (dispatched runs only, never fork code).
+# No PR/push tests, schedule or publication: the release window (train.yml), a hotfix (hotfix.yml) or a person dispatches
+# it for an exact commit and version, and release.yml and the release window find the run by its title.
 # It builds the release once: the Linux runner and relay binaries and the three images for both architectures, pushed by
 # digest only. The gate tests those binaries and images, and release.yml publishes exactly them for the tag, so what
 # shipped is what was tested. The Mac binaries are built by release.yml after the tag (no gate part runs on a Mac, and a
