@@ -65,7 +65,9 @@ def connected(api, hq):
     return r.json()
 
 
-def test_administration_follows_the_company_connection_for_members_too(api, hq):
+def test_administration_follows_the_connection_the_account_the_cloud_page_and_only_opens_portal_pages(api, hq, monkeypatch):
+    from backend import cloud_access
+    # It follows the company connection, for members too.
     assert api.get('/api/v2/config', headers=headers()).json()['administration_url'] == ''
     connected(api, hq)
     calls = len(hq.seen)
@@ -78,9 +80,7 @@ def test_administration_follows_the_company_connection_for_members_too(api, hq):
     hq.answers[('DELETE', '/v1/portal/server')] = lambda request: reply(204)
     assert api.delete(PATH, headers=headers()).status_code == 200
     assert api.get('/api/v2/config', headers=headers()).json()['administration_url'] == ''
-
-
-def test_administration_requires_a_tico_account_not_just_hosting_or_oidc(api, monkeypatch):
+    # It requires a Tico account, not just hosting or OIDC.
     settings = api.app.state.store.settings
     monkeypatch.setattr(settings, 'hosted', 'own')
     monkeypatch.setattr(settings, 'auth_proxy', 'oidc')
@@ -92,10 +92,9 @@ def test_administration_requires_a_tico_account_not_just_hosting_or_oidc(api, mo
     assert read() == CS.PORTAL_HOME
     monkeypatch.setattr(settings, 'oidc_issuer', 'https://accounts.tico.dev.acme.example')
     assert read() == ''
-
-
-def test_administration_uses_the_cloud_company_page_and_hides_in_rehearsal(api, monkeypatch):
-    from backend import cloud_access
+    monkeypatch.setattr(settings, 'hosted', '')
+    monkeypatch.setattr(settings, 'auth_proxy', '')
+    # It uses the cloud company page and hides in rehearsal.
     store = api.app.state.store
     portal = 'https://app.tico.dev/billing/acme'
     with store.transaction() as c:
@@ -104,16 +103,19 @@ def test_administration_uses_the_cloud_company_page_and_hides_in_rehearsal(api, 
     assert api.get('/api/v2/config', headers=headers()).json()['administration_url'] == portal
     monkeypatch.setattr(store.settings, 'rehearsal', True)
     assert api.get('/api/v2/config', headers=headers()).json()['administration_url'] == ''
-
-
-def test_administration_opens_only_portal_pages_and_drops_queries():
-    """A custom Gateway can name any https address, and a query or fragment could carry a token."""
+    # It opens only portal pages and drops queries: a custom Gateway can name any https address, and a query or
+    # fragment could carry a token.
     assert CS._admin_destination('https://app.tico.dev/billing/acme') == 'https://app.tico.dev/billing/acme'
     for value in ('https://login.acme.example/admin', 'http://app.tico.dev/billing', 'https://app.tico.dev.acme.example/',
                   'https://user@app.tico.dev/', 'https://app.tico.dev:8443/', None, '', 42):
         assert CS._admin_destination(value) == CS.PORTAL_HOME, value
     assert CS._admin_destination('https://app.tico.dev/billing?token=synthetic-secret#access_token=x') == \
         'https://app.tico.dev/billing'
+    # Only an https address is sent to HQ.
+    for configured, sent in [("http://127.0.0.1:8765", None), ("http://localhost:8765/", None),
+                             ("http://192.168.1.20:8765", None), ("http://tico.example.com", None), ("", None),
+                             ("https://tico.example.com/", "https://tico.example.com")]:
+        assert REAL_PUBLIC_URL(type("S", (), {"public_url": configured})()) == sent, configured
 
 
 def test_preview_then_connect_proves_the_address_and_seals_the_key(api, hq):
@@ -141,13 +143,6 @@ def test_preview_then_connect_proves_the_address_and_seals_the_key(api, hq):
     assert SERVER_KEY not in everything and SERVER_KEY not in json.dumps(view)
 
 
-@pytest.mark.parametrize("configured,sent", [
-    ("http://127.0.0.1:8765", None), ("http://localhost:8765/", None), ("http://192.168.1.20:8765", None),
-    ("http://tico.example.com", None), ("", None), ("https://tico.example.com/", "https://tico.example.com")])
-def test_only_an_https_address_is_sent_to_hq(configured, sent):
-    assert REAL_PUBLIC_URL(type("S", (), {"public_url": configured})()) == sent
-
-
 def test_a_local_server_links_with_no_address_and_shows_the_company(api, hq, monkeypatch):
     monkeypatch.setattr(CS, "public_url", REAL_PUBLIC_URL)             # the test app's own address: http on loopback
     bodies = []
@@ -169,7 +164,13 @@ def test_a_local_server_links_with_no_address_and_shows_the_company(api, hq, mon
     assert len(hq.gateway_soon) == 1                                    # its company Gateway key is asked for as usual
 
 
-def test_hq_refusals_and_bad_answers_are_plain_errors(api, hq, monkeypatch):
+def test_only_a_direct_owner_or_admin_manages_the_link_and_hq_refusals_and_bad_answers_are_plain_errors(api, hq, monkeypatch):
+    assert api.get(PATH).status_code == 401
+    as_member(api, "ben@acme.example")
+    assert api.get(PATH, headers=headers("ben-test")).status_code == 403
+    assert api.post(PATH, headers=headers("ben-test"), json={"code": CODE, "preview": True}).status_code == 403
+    assert api.delete(PATH, headers=headers("ben-test")).status_code == 403
+    assert hq.seen == []
     for status, body, expected, code in [(409, {"error": "code_used"}, 409, "code_used"),
                                          (404, {"error": "code_unknown"}, 404, "code_unknown"),
                                          (409, {"error": "install_linked"}, 409, "install_linked"),
@@ -187,15 +188,6 @@ def test_hq_refusals_and_bad_answers_are_plain_errors(api, hq, monkeypatch):
     monkeypatch.setenv("TICO_HQ_URL", "https://hq.example.com")   # only Tico's own HQ is ever asked
     assert api.post(PATH, headers=headers(), json={"code": CODE, "preview": True}).status_code == 503
     assert len(hq.seen) == calls
-
-
-def test_only_a_direct_owner_or_admin_manages_the_link(api, hq):
-    assert api.get(PATH).status_code == 401
-    as_member(api, "ben@acme.example")
-    assert api.get(PATH, headers=headers("ben-test")).status_code == 403
-    assert api.post(PATH, headers=headers("ben-test"), json={"code": CODE, "preview": True}).status_code == 403
-    assert api.delete(PATH, headers=headers("ben-test")).status_code == 403
-    assert hq.seen == []
 
 
 def test_refresh_heartbeat_and_disconnect_use_the_server_key(api, hq):

@@ -167,7 +167,19 @@ def unprimed(monkeypatch):
 PAGES = ("/api/status", "/api/v2/status")
 
 
-def test_both_status_pages_read_a_fixed_number_of_statements_however_many_bots_and_jobs(api, monkeypatch):
+def finish_private(store, slug):
+    """Closes the private task `slug` owns and the private one it asked a person for; returns their ids."""
+    with store.transaction() as c:
+        ids = {row[0] for row in c.execute(
+            "SELECT id FROM tasks WHERE private=1 AND ? IN (owner_id,requester_id)", ("bot:" + slug,))}
+        assert {row[0] for row in c.execute(f"SELECT owner_id='bot:{slug}' FROM tasks WHERE id IN ({','.join('?' * len(ids))})",
+                                            tuple(ids))} == {0, 1}
+        c.execute(f"UPDATE tasks SET status=CASE WHEN owner_id=? THEN 'done' ELSE 'closed' END "
+                  f"WHERE id IN ({','.join('?' * len(ids))})", ("bot:" + slug, *ids))
+    return ids
+
+
+def test_status_pages_read_a_fixed_number_of_statements_and_show_each_person_what_they_showed_before(api, monkeypatch):
     # Dev 509: on a team of about sixty bots these pages took 353 and 700 statements, 3.5-4 s each.
     machine = setup(api, monkeypatch, tasks=4)
     busy(api, machine, 0, 6)
@@ -176,15 +188,6 @@ def test_both_status_pages_read_a_fixed_number_of_statements_however_many_bots_a
     big = {path: page(api, monkeypatch, path) for path in PAGES}
     assert {path: count for path, (_, count) in big.items()} == small
     assert len(big["/api/v2/status"][0]["bots"]) >= 12 and len(big["/api/status"][0]["queued"]) >= 48
-    # Control: without the priming each added bot adds statements again, so the counts above do measure it.
-    unprimed(monkeypatch)
-    plain = {path: page(api, monkeypatch, path)[1] for path in PAGES}
-    assert all(plain[path] > small[path] + 12 for path in PAGES)
-
-
-def test_primed_status_pages_show_each_person_exactly_what_they_showed_before(api, monkeypatch):
-    machine = setup(api, monkeypatch, tasks=4)
-    busy(api, machine, 0, 6, live=2)
     # Ana owns the company; Ben is not on the private tasks, the bots' asks to Ana, or the Inbox bot.
     for token in ("ana-test", "ben-test"):
         primed = {path: page(api, monkeypatch, path, token)[0] for path in PAGES}
@@ -196,9 +199,13 @@ def test_primed_status_pages_show_each_person_exactly_what_they_showed_before(ap
         assert lines["busy-0"]["state"] == "running" and lines["busy-2"]["last_stop"]
         assert any(line["needs_human"] for line in lines.values())
     assert "inbox" not in {line["bot"] for line in page(api, monkeypatch, "/api/v2/status", "ben-test")[0]["bots"]}
+    # Control: without the priming each added bot adds statements again, so the counts above do measure it.
+    unprimed(monkeypatch)
+    plain = {path: page(api, monkeypatch, path)[1] for path in PAGES}
+    assert all(plain[path] > small[path] + 12 for path in PAGES)
 
 
-def test_status_task_reads_skip_finished_tasks_and_keep_the_same_rows(api, monkeypatch):
+def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_private_focus_and_message_checks(api, monkeypatch):
     # Dev 509: OR-ing owner and requester read every task the bots ever had; on a long-lived team that was most of
     # a second of each status page. Finished company tasks now cost nothing: the work done stays the same.
     machine = setup(api, monkeypatch, tasks=4)
@@ -238,15 +245,9 @@ def test_status_task_reads_skip_finished_tasks_and_keep_the_same_rows(api, monke
     after, more = read()
     assert after == before and more == steps and steps
 
-
-def test_status_task_rows_come_back_as_one_row_with_the_statements_own_rows(api, monkeypatch):
     # Tico Team: the status task read stepped 1,100 rows a page (850 of them private tasks), each step the GIL given up
     # and taken back; with other requests running Python it took 100 ms to 1 s for 2 ms of SQLite work. The rows now
     # come back as one row of JSON: the same rows, values and types, for many bots and for one.
-    machine = setup(api, monkeypatch, tasks=4)
-    busy(api, machine, 0, 4)
-    store = api.app.state.store
-    finish_private(store, "busy-1")                         # finished private tasks: one it owns, one it asked for
     with store.transaction() as c:
         shared = H.task_create(c, "human:ben", "Reader copy", "Read along.", "bot:busy-2", private=True)
         c.execute("UPDATE tasks SET readers=json_array('human:cara'), status='waiting', waiting_on='human:ben' WHERE id=?",
@@ -278,26 +279,8 @@ def test_status_task_rows_come_back_as_one_row_with_the_statements_own_rows(api,
     assert any(H.task_readers(row) == ["human:cara"] and row["waiting_on"] == "human:ben" for row in packed)
     assert any(row["owner_id"] == "human:cara" and row["requester_id"] == "bot:busy-3" for row in packed)
 
-
-def finish_private(store, slug):
-    """Closes the private task `slug` owns and the private one it asked a person for; returns their ids."""
-    with store.transaction() as c:
-        ids = {row[0] for row in c.execute(
-            "SELECT id FROM tasks WHERE private=1 AND ? IN (owner_id,requester_id)", ("bot:" + slug,))}
-        assert {row[0] for row in c.execute(f"SELECT owner_id='bot:{slug}' FROM tasks WHERE id IN ({','.join('?' * len(ids))})",
-                                            tuple(ids))} == {0, 1}
-        c.execute(f"UPDATE tasks SET status=CASE WHEN owner_id=? THEN 'done' ELSE 'closed' END "
-                  f"WHERE id IN ({','.join('?' * len(ids))})", ("bot:" + slug, *ids))
-    return ids
-
-
-def test_a_finished_private_task_still_keeps_its_bots_focus_from_who_cannot_read_it(api, monkeypatch):
     # A status line with no task id hides its focus when any private task of the bot is unreadable to the viewer:
     # once that task is finished only the private part of the status task read finds it.
-    machine = setup(api, monkeypatch, tasks=4)
-    busy(api, machine, 0, 2)
-    store = api.app.state.store
-    finish_private(store, "busy-1")
     with store.transaction() as c:
         c.execute("UPDATE bot_status SET task_id=NULL, focus='Drafting the offer letter' WHERE bot='busy-1'")
     for token, focus in (("ana-test", "Drafting the offer letter"), ("ben-test", "")):
@@ -308,13 +291,8 @@ def test_a_finished_private_task_still_keeps_its_bots_focus_from_who_cannot_read
             alone = privacy.status(c, who, row)
         assert batched["focus"] == alone["focus"] == focus
 
-
-def test_a_message_checked_twice_in_one_snapshot_is_read_once_and_a_write_checks_it_again(api, monkeypatch):
     # The status page checks its open jobs' messages for the job list and again for the queue counts. The second
     # check reuses the first in the same snapshot; a task turning private in that snapshot is seen at once.
-    machine = setup(api, monkeypatch, tasks=4)
-    busy(api, machine, 0, 2)
-    store = api.app.state.store
     ben = privacy.actor(store.settings.test_identities["ben-test"])
     with store.read_transaction() as c:
         task, = c.execute("SELECT id FROM tasks WHERE owner_id='bot:busy-0' AND private=0 AND title LIKE 'Work busy-0 1'")

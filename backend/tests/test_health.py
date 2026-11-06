@@ -313,32 +313,6 @@ def test_secrets_a_missing_key_file_cannot_open_are_named_with_the_fix(environme
     assert "sealed_secrets" not in health_of(api)[1]
 
 
-def test_listening_health_checks_custom_categories_without_question_text(environment, monkeypatch):
-    import json
-    from backend import listening
-    monkeypatch.setattr(listening, "_warning_revisions", listening.OrderedDict())
-    api = environment()
-    settings = api.app.state.store.settings
-    (settings.registry_dir / "listening.yaml").write_text("""
-destinations:
-  leads: {category: custom, threshold: 0.75, receiver: bot:ana, unless: {category: veto, threshold: 0.70}}
-""")
-    directory = settings.registry_dir / "questions"
-    directory.mkdir()
-    path = directory / "listening-item.json"
-    secret = "private-question-fixture-value"
-    qset = {"id": "listening-item", "version": 9, "summary": secret, "questions": {
-        "custom": {"type": "choice", "instructions": secret, "criteria": {"yes": secret, "no": None}}}}
-    path.write_text(json.dumps(qset))
-    listening.destinations(settings)
-    body, checks = health_of(api)
-    assert checks["listening"]["status"] == "warn"
-    assert secret not in json.dumps(body)
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email) VALUES('sam','Sam','sam@example.com')")
-    assert "listening" not in health_of(api, as_person(api, "sam"))[1]
-
-
 def test_a_bot_its_computer_cannot_start_is_stuck_with_the_reason_and_one_fix(environment):
     """Queued work behind "Claude login required" is named at once (not after 15 minutes), with a sign-in fix
     for administrators; someone without Read access on the bot hears nothing about it."""
@@ -524,24 +498,6 @@ def test_a_bot_over_the_daily_token_threshold_is_flagged(environment):
     assert checks["tokens"]["status"] == "warn" and "1,100 uncached input tokens in 24 h" in checks["tokens"]["summary"]
 
 
-def test_a_bot_that_has_not_finished_setup_warns_once_its_held_work_is_old(environment):
-    """A parked bot holds its work on purpose, so it is not "slow"; but work an hour old means nobody is finishing setup."""
-    api = environment()
-    add_bot(api, "support")
-    with api.app.state.store.transaction() as c:
-        task = H.task_create(c, H.KEEPER, "Ticket 42", "", "bot:support")    # from before an upgrade
-        c.execute("INSERT INTO bot_config(bot,owner_id,onboarding_state) VALUES('support','ana','needs_setup') ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup'")
-        BS.write(c, 'support', {})
-    assert "setup:support" not in health_of(api)[1]                 # just filed: setup may be under way
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET created_at='2026-01-02T03:04:05Z' WHERE id=?", (task["id"],))
-    check = health_of(api)[1]["setup:support"]
-    assert check["status"] == "warn" and check["summary"] == "support is still onboarding; 1 task waiting since 2026-01-02."
-    assert check["label"] == "Onboarding not finished"
-    assert check["fixes"][0]["href"] == "#/bot/support"
-    assert "setup:support" not in health_of(api, as_person(api, "quinn"))[1]
-
-
 def _parked(api, slug, days_ago, created_by="", operator="morgan"):
     add_bot(api, slug)
     with api.app.state.store.transaction() as c:
@@ -550,9 +506,29 @@ def _parked(api, slug, days_ago, created_by="", operator="morgan"):
         c.execute("UPDATE bots SET created_at=? WHERE slug=?", (H.shift(H.now(), days=-days_ago), slug))
 
 
-def test_a_bot_left_in_setup_for_a_day_is_stuck_and_its_manager_may_finish_it(environment):
-    """Overview's stuck list names a bot parked over a day, and only someone who may manage it gets the finish."""
+def test_a_bot_left_in_setup_warns_once_its_held_work_is_old_is_stuck_for_a_day_and_is_nudged_once(environment):
+    """One install: held work an hour old warns (a parked bot holds work on purpose, so it is not "slow"); a bot parked
+    over a day is on Overview's stuck list and only someone who may manage it gets the finish; and a bot left in setup
+    is nudged once to whoever its setup reminder goes to, and to nobody while that reminder is open."""
+    from backend import setup_stuck
     api = environment()
+    add_bot(api, "held")
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, H.KEEPER, "Ticket 42", "", "bot:held")    # from before an upgrade
+        c.execute("INSERT INTO bot_config(bot,owner_id,onboarding_state) VALUES('held','ana','needs_setup') ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup'")
+        BS.write(c, 'held', {})
+    assert "setup:held" not in health_of(api)[1]                 # just filed: setup may be under way
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET created_at='2026-01-02T03:04:05Z' WHERE id=?", (task["id"],))
+    check = health_of(api)[1]["setup:held"]
+    assert check["status"] == "warn" and check["summary"] == "held is still onboarding; 1 task waiting since 2026-01-02."
+    assert check["label"] == "Onboarding not finished"
+    assert check["fixes"][0]["href"] == "#/bot/held"
+    assert "setup:held" not in health_of(api, as_person(api, "quinn"))[1]
+    with api.app.state.store.transaction() as c:    # finished, so it is out of the lists below
+        c.execute("UPDATE bot_config SET onboarding_state='onboarded' WHERE bot='held'")
+        c.execute("DELETE FROM jobs WHERE bot_id='held'")
+
     _parked(api, "support", 14)
     _parked(api, "sales", 0)                        # added today: setup may be under way
     stuck = {row["bot"]: row for row in health_of(api)[0]["stuck"]}
@@ -565,14 +541,8 @@ def test_a_bot_left_in_setup_for_a_day_is_stuck_and_its_manager_may_finish_it(en
     assert api.post("/api/v2/bots/support/onboarded", json={}, headers=signed_in()).json()["onboarding_state"] == "onboarded"
     assert health_of(api)[0]["stuck"] == []
 
-
-def test_a_bot_left_in_setup_is_nudged_once_to_whoever_its_setup_reminder_goes_to(environment):
-    """The same person as the "Finish onboarding" reminder, and nobody while that reminder is open: one ask per bot."""
-    from backend import setup_stuck
-    api = environment()
-    as_person(api, "quinn")
-    _parked(api, "support", 3, created_by="human:quinn")
-    _parked(api, "sales", 3, operator="quinn")      # nobody known added it: its operator, as the reminder picks
+    _parked(api, "tess", 3, created_by="human:quinn")
+    _parked(api, "rob", 3, operator="quinn")        # nobody known added it: its operator, as the reminder picks
     _parked(api, "ops", 3, created_by="human:quinn")
     with api.app.state.store.transaction() as c:
         # An install from before the reminders were retired still holds ops's open "Finish onboarding" task: it has its ask.
@@ -581,7 +551,7 @@ def test_a_bot_left_in_setup_is_nudged_once_to_whoever_its_setup_reminder_goes_t
         H.event(c, H.KEEPER, "bot.setup_reminder", "ops", {"task": reminder["id"], "owner": "human:quinn"})
         assert H._open_setup_reminder(c, "ops")["owner_id"] == "human:quinn"
         told = setup_stuck.nudge(c)
-        assert told == {"support": ["human:quinn"], "sales": ["human:quinn"]}
+        assert told == {"tess": ["human:quinn"], "rob": ["human:quinn"]}
         assert setup_stuck.nudge(c) == {}
         notes = c.execute("SELECT recipient_id,body FROM messages WHERE sender_id='keeper' AND body LIKE '%waiting in setup%'")
         assert sorted(r["recipient_id"] for r in notes) == ["human:quinn", "human:quinn"]
@@ -737,12 +707,21 @@ def _listened(api, *, routed_days_ago, saved_days_ago, judged=None):
                       (judged, H.shift(H.now(), days=-routed_days_ago)))
 
 
-def test_listening_that_routed_before_but_lost_its_registry_file_is_bad(environment, monkeypatch):
-    """A server move that leaves listening.yaml behind keeps saving posts and sends them nowhere, silently."""
+def test_listening_health_names_a_lost_registry_a_quiet_source_a_missing_question_set_and_hides_custom_questions(environment, monkeypatch):
+    """One install, each listening finding in turn, the listen rows cleared between them."""
+    import json
     from backend import listening
-    monkeypatch.setattr(listening, "_warning_revisions", listening.OrderedDict())
     api = environment()
     settings = api.app.state.store.settings
+
+    def fresh():
+        monkeypatch.setattr(listening, "_warning_revisions", listening.OrderedDict())
+        with api.app.state.store.transaction() as c:
+            for table in ("listen_judgments", "intake_items", "listen_items"):
+                c.execute(f"DELETE FROM {table}")
+
+    # A server move that leaves listening.yaml behind keeps saving posts and sends them nowhere, silently.
+    fresh()
     (settings.registry_dir / "listening.yaml").unlink(missing_ok=True)
     assert "listening" not in health_of(api)[1]                 # never routed: nothing was lost
     _listened(api, routed_days_ago=14, saved_days_ago=2)
@@ -754,21 +733,12 @@ def test_listening_that_routed_before_but_lost_its_registry_file_is_bad(environm
     check = health_of(api)[1]["listening"]          # emptied on purpose is possible: a warning, not bad
     assert check["status"] == "warn" and "has no valid destinations" in check["summary"]
 
-
-def test_listening_that_stopped_saving_posts_is_not_flagged(environment, monkeypatch):
-    from backend import listening
-    monkeypatch.setattr(listening, "_warning_revisions", listening.OrderedDict())
-    api = environment()
-    (api.app.state.store.settings.registry_dir / "listening.yaml").unlink(missing_ok=True)
+    fresh()                                          # a source that stopped saving posts is not flagged
+    (settings.registry_dir / "listening.yaml").unlink(missing_ok=True)
     _listened(api, routed_days_ago=60, saved_days_ago=40)
     assert "listening" not in health_of(api)[1]
 
-
-def test_listening_scoring_with_the_shipped_questions_after_its_own_went_missing_is_named(environment, monkeypatch):
-    from backend import listening
-    monkeypatch.setattr(listening, "_warning_revisions", listening.OrderedDict())
-    api = environment()
-    settings = api.app.state.store.settings
+    fresh()                                          # scoring with the shipped questions after its own went missing
     (settings.registry_dir / "listening.yaml").write_text(
         "destinations:\n  leads: {category: lead, threshold: 0.75, receiver: bot:ana}\n")
     shipped = listening.question_set(settings)
@@ -776,6 +746,26 @@ def test_listening_scoring_with_the_shipped_questions_after_its_own_went_missing
     check = health_of(api)[1]["listening"]
     assert check["status"] == "warn" and f"({shipped['label']})" in check["summary"]
     assert f"listening-item@{shipped['version'] + 4}" in check["summary"]
+
+    fresh()                                          # custom categories are checked without their question text
+    (settings.registry_dir / "listening.yaml").write_text("""
+destinations:
+  leads: {category: custom, threshold: 0.75, receiver: bot:ana, unless: {category: veto, threshold: 0.70}}
+""")
+    directory = settings.registry_dir / "questions"
+    directory.mkdir()
+    path = directory / "listening-item.json"
+    secret = "private-question-fixture-value"
+    qset = {"id": "listening-item", "version": 9, "summary": secret, "questions": {
+        "custom": {"type": "choice", "instructions": secret, "criteria": {"yes": secret, "no": None}}}}
+    path.write_text(json.dumps(qset))
+    listening.destinations(settings)
+    body, checks = health_of(api)
+    assert checks["listening"]["status"] == "warn"
+    assert secret not in json.dumps(body)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO humans(id,name,email) VALUES('sam','Sam','sam@example.com')")
+    assert "listening" not in health_of(api, as_person(api, "sam"))[1]
 
 
 def test_a_computer_on_the_python_runner_is_told_to_update_and_the_heartbeat_takes_the_engine(environment):

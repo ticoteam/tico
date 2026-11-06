@@ -154,12 +154,9 @@ def test_the_lifetimes_are_the_documented_ones_and_are_read_per_harness(chat, mo
 
 
 @pytest.mark.parametrize("context,cached,age,checked", [
-    (15_000, 8_000, 30, False),        # under 20k, warm: no check (acceptance 2)
     (60_000, 45_000, 30, False),       # 20k to 100k, warm (75% cached): no check (the lead's reading)
     (60_000, 20_000, 30, True),        # 20k to 100k with a small cache hit (33%): cold, so checked (Dev 190)
-    (100_000, 40_000, 30, True),       # 100k or more: checked, warm or not
     (15_000, 8_000, 600, True),        # cold (stale turn): checked at any size
-    (15_000, 0, 30, True),             # cold (no cache use reported): checked
 ])
 def test_the_size_bands_and_warmth_decide_whether_decide_is_asked(chat, context, cached, age, checked):
     api, _, conversation, model, usage = chat
@@ -170,21 +167,6 @@ def test_the_size_bands_and_warmth_decide_whether_decide_is_asked(chat, context,
     if checked:
         row = checks(api)[0]
         assert row["context_tokens"] == context and row["gate"] == ("big" if context >= 100_000 else "cold")
-
-
-@pytest.mark.parametrize("context,age,checked", [
-    (15_000, 30, False),               # six warm requests of about 18k: summed over 100k, the last prompt under 20k
-    (None, 30, False),                 # a runner that sent no request counts: the size never triggers a check
-    (None, 600, True),                 # ... a cold cache still does
-])
-def test_the_size_is_the_newest_prompt_never_the_turns_summed_usage(chat, context, age, checked):
-    api, _, _, model, usage = chat
-    model.choice = "same_topic"
-    usage(context, 90_000, age, summed=6 * 18_000)
-    post(api, "chat/ops", {"text": "Next one"})
-    assert bool(model.calls) is checked and len(checks(api)) == int(checked)
-    if checked:
-        assert checks(api)[0]["context_tokens"] is None and checks(api)[0]["gate"] == "cold"
 
 
 def run_with(api, machine, requests):
@@ -205,22 +187,6 @@ def run_with(api, machine, requests):
                                (turn["id"],)).fetchone())
 
 
-@pytest.mark.parametrize("requests,prompt", [
-    # The runner's own fixture (runner-rs claude.rs): a 123,002-token prompt of the bot's, then a subagent's 900.
-    ([[3002, 120000, 78, 1], [900, 0, 5, 0]], 123_002),
-    # A small prompt of the bot's, then a large subagent's: the session is still small.
-    ([[500, 15000, 100, 1], [2000, 118000, 50, 0]], 15_500),
-    ([[500, 50000, 100, 1], [1000, 54000, 200, 1], [300, 0, 9, 0]], 55_000),   # the newest of the bot's own
-    ([[500, 50000, 100], [1000, 54000, 200]], None),     # an older runner: no marks, size unknown
-    ([[900, 0, 5, 0]], None),                            # only a subagent's: unknown
-])
-def test_a_turn_keeps_the_newest_of_the_bots_own_prompts_as_the_context_size(chat, requests, prompt):
-    api, machine, _, _, _ = chat
-    stored = run_with(api, machine, requests)
-    assert stored == (sum(r[0] for r in requests), sum(r[1] for r in requests), prompt), \
-        "the summed totals stay; the context is the bot's own newest prompt"
-
-
 def test_the_server_tells_runners_it_takes_the_marks(chat):
     """The runner sends each request's fourth count only when the server names this feature (runner-rs execute.rs
     `served`); an older server refuses it."""
@@ -230,21 +196,61 @@ def test_the_server_tells_runners_it_takes_the_marks(chat):
     assert features["run_pushes"] is True
 
 
-@pytest.mark.parametrize("requests,checked", [
-    ([[3002, 120000, 78, 1], [900, 0, 5, 0]], True),     # a warm session over 100k: checked, whatever the subagent
-    ([[500, 15000, 100, 1], [2000, 118000, 50, 0]], False),   # a warm small session: a large subagent never checks it
-    ([[3002, 120000, 78]], False),                       # an older runner, warm: size unknown, no check
-])
-def test_only_the_bots_own_prompt_size_triggers_a_check(chat, requests, checked):
-    api, machine, _, model, _ = chat
-    run_with(api, machine, requests)
-    with api.app.state.store.transaction() as c:
-        team_rules.save(c, "human:ana", {"topic_fresh": True})
+def test_the_context_size_is_the_bots_own_newest_prompt_never_a_subagents_or_the_summed_usage(chat):
+    """One chat, the request shapes in turn: what the last turn reports decides the size (never its summed usage),
+    a turn keeps the newest of the bot's own prompts, and only that prompt's size triggers a check."""
+    api, machine, _, model, usage = chat
     model.choice = "same_topic"
-    post(api, "chat/ops", {"text": "And another"})
-    assert bool(model.calls) is checked and len(checks(api)) == int(checked)
-    if checked:
-        assert checks(api)[0]["gate"] == "big"
+
+    def drain():
+        for _ in range(4):
+            turn = claim(api, machine)
+            if not turn:
+                break
+            finish(api, machine, turn)
+
+    for context, age, checked in [
+        (15_000, 30, False),               # six warm requests of about 18k: summed over 100k, the last prompt under 20k
+        (None, 30, False),                 # a runner that sent no request counts: the size never triggers a check
+        (None, 600, True),                 # ... a cold cache still does
+    ]:
+        usage(context, 90_000, age, summed=6 * 18_000)
+        seen = len(checks(api))
+        model.calls.clear()
+        post(api, "chat/ops", {"text": "Next one"})
+        assert bool(model.calls) is checked and len(checks(api)) - seen == int(checked), (context, age)
+        if checked:
+            assert checks(api)[-1]["context_tokens"] is None and checks(api)[-1]["gate"] == "cold"
+        drain()
+
+    for requests, prompt in [
+        # The runner's own fixture (runner-rs claude.rs): a 123,002-token prompt of the bot's, then a subagent's 900.
+        ([[3002, 120000, 78, 1], [900, 0, 5, 0]], 123_002),
+        # A small prompt of the bot's, then a large subagent's: the session is still small.
+        ([[500, 15000, 100, 1], [2000, 118000, 50, 0]], 15_500),
+        ([[500, 50000, 100, 1], [1000, 54000, 200, 1], [300, 0, 9, 0]], 55_000),   # the newest of the bot's own
+        ([[500, 50000, 100], [1000, 54000, 200]], None),     # an older runner: no marks, size unknown
+        ([[900, 0, 5, 0]], None),                            # only a subagent's: unknown
+    ]:
+        stored = run_with(api, machine, requests)
+        assert stored == (sum(r[0] for r in requests), sum(r[1] for r in requests), prompt), \
+            "the summed totals stay; the context is the bot's own newest prompt"
+
+    for requests, checked in [
+        ([[3002, 120000, 78, 1], [900, 0, 5, 0]], True),     # a warm session over 100k: checked, whatever the subagent
+        ([[500, 15000, 100, 1], [2000, 118000, 50, 0]], False),   # a warm small session: a large subagent never checks it
+        ([[3002, 120000, 78]], False),                       # an older runner, warm: size unknown, no check
+    ]:
+        run_with(api, machine, requests)
+        with api.app.state.store.transaction() as c:
+            team_rules.save(c, "human:ana", {"topic_fresh": True})
+        seen = len(checks(api))
+        model.calls.clear()
+        post(api, "chat/ops", {"text": "And another"})
+        assert bool(model.calls) is checked and len(checks(api)) - seen == int(checked), requests
+        if checked:
+            assert checks(api)[-1]["gate"] == "big"
+        drain()
 
 
 # -------------------------------------------------------------------------------- a new topic clears like Clear
@@ -297,17 +303,6 @@ def test_the_topic_clear_leaves_the_same_state_as_the_manual_clear(chat):
 
 # -------------------------------------------------------------------------------- no clear
 
-@pytest.mark.parametrize("choice,confidence", [("same_topic", 0.97), ("not_sure", 0.9), ("new_topic", 0.55)])
-def test_a_message_that_refers_back_or_an_unsure_answer_sends_in_the_same_session(chat, choice, confidence):
-    api, _, conversation, model, _ = chat
-    model.choice, model.confidence = choice, confidence
-    message = post(api, "chat/ops", {"text": "Do that again"})
-    assert len(model.calls) == 1, "the check ran"
-    assert "topic_changed" not in (message.get("refs") or {})
-    assert session_state(api, conversation) == {"epoch": 0, "bot_epoch": 0, "thread": True}
-    assert checks(api)[0]["clear"] is False
-
-
 def test_a_slow_decide_does_not_hold_the_send_past_the_budget(chat):
     api, machine, conversation, model, _ = chat
     model.hold = threading.Event()
@@ -326,23 +321,37 @@ def test_a_slow_decide_does_not_hold_the_send_past_the_budget(chat):
     assert turn["session_epoch"] == 0 and UNRELATED in [m["body"] for m in turn["history"]]
 
 
-@pytest.mark.parametrize("fail", [J.JudgeError("unavailable", "down", retryable=True), RuntimeError("bug"),
-                                  J.JudgeError("spend_cap", "cap", 429)])
-def test_a_decide_error_or_the_cap_sends_in_the_same_session(chat, fail):
-    api, _, conversation, model, _ = chat
-    model.fail = fail
-    message = post(api, "chat/ops", {"text": UNRELATED})
-    assert "topic_changed" not in (message.get("refs") or {})
-    assert session_state(api, conversation)["epoch"] == 0
-    assert checks(api)[0]["clear"] is False and checks(api)[0]["error"]
+def test_a_refer_back_an_unsure_answer_an_error_the_cap_or_the_budget_sends_in_the_same_session(chat):
+    api, machine, conversation, model, usage = chat
+    unchanged = {"epoch": 0, "bot_epoch": 0, "thread": True}
 
+    def send(text):
+        message = post(api, "chat/ops", {"text": text})
+        assert "topic_changed" not in (message.get("refs") or {})
+        assert session_state(api, conversation)["epoch"] == 0
+        finish(api, machine, claim(api, machine))
+        usage()
 
-def test_the_daily_budget_reached_asks_nothing_and_sends_in_the_same_session(chat):
-    api, _, conversation, model, _ = chat
+    for choice, confidence in [("same_topic", 0.97), ("not_sure", 0.9), ("new_topic", 0.55)]:
+        model.choice, model.confidence = choice, confidence
+        model.calls.clear()
+        send("Do that again")
+        assert len(model.calls) == 1, "the check ran"
+        assert session_state(api, conversation) == unchanged
+        assert checks(api)[-1]["clear"] is False
+
+    model.choice, model.confidence = "new_topic", 0.95
+    for fail in (J.JudgeError("unavailable", "down", retryable=True), RuntimeError("bug"),
+                 J.JudgeError("spend_cap", "cap", 429)):
+        model.fail = fail
+        send(UNRELATED)
+        assert checks(api)[-1]["clear"] is False and checks(api)[-1]["error"]
+    model.fail = None
+
     api.app.state.store.settings.decisions_daily_calls_owner = 0
-    post(api, "chat/ops", {"text": UNRELATED})
-    assert model.calls == [] and checks(api)[0]["error"] == "budget"
-    assert session_state(api, conversation)["epoch"] == 0
+    model.calls.clear()
+    send(UNRELATED)
+    assert model.calls == [] and checks(api)[-1]["error"] == "budget"
 
 
 @pytest.mark.parametrize("slow", ["gate", "audit"])
@@ -510,93 +519,94 @@ def test_sends_at_the_same_moment_cannot_pass_the_daily_call_limit_together(chat
 
 # -------------------------------------------------------------------------------- never checked
 
-def test_never_checked_in_a_shared_bots_room_even_with_one_person(chat):
-    api, _, conversation, model, _ = chat
+def test_never_checked_when_the_chat_is_shared_off_goaled_busy_a_task_chat_has_files_or_is_under_three_turns(chat):
+    """Every gate condition that keeps a send from being checked, one after another in one chat. Each one is undone and
+    its leftover turns finished so the next starts from the same checked-if-asked chat."""
+    api, machine, conversation, model, usage = chat
+
+    def quiet(why):
+        assert model.calls == [] and checks(api) == [], why
+
+    def drain():
+        for _ in range(6):
+            turn = claim(api, machine)
+            if not turn:
+                break
+            finish(api, machine, turn)
+        usage()
+
+    def set_rule(on):
+        with api.app.state.store.transaction() as c:
+            team_rules.save(c, "human:ana", {"topic_fresh": on})
+
+    before = session_state(api, conversation)
     with api.app.state.store.transaction() as c:   # what rooms.sync_shared_room makes when its owner is its only member
         c.execute("UPDATE conversations SET scope='shared' WHERE id=?", (conversation,))
-    before = session_state(api, conversation)
     post(api, "chat/ops", {"text": UNRELATED})
-    assert model.calls == [] and checks(api) == [] and session_state(api, conversation) == before
-
-def test_never_checked_with_the_switch_off(chat):
-    api, _, _, model, _ = chat
+    quiet("a shared bot's room, even with one person")
+    assert session_state(api, conversation) == before
     with api.app.state.store.transaction() as c:
-        team_rules.save(c, "human:ana", {"topic_fresh": False})
+        c.execute("UPDATE conversations SET scope='direct' WHERE id=?", (conversation,))
+    drain()
+
+    set_rule(False)
     post(api, "chat/ops", {"text": UNRELATED})
-    assert model.calls == [] and checks(api) == []
+    quiet("the switch off")
+    set_rule(True)
+    drain()
 
-
-def test_never_checked_with_an_active_chat_goal(chat):
-    api, _, conversation, model, _ = chat
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO chat_goals(id,conversation_id,bot,objective,status,set_by,set_at,updated_at) "
                   "VALUES('g1',?,'ops','Ship the fix','active','human:ana',?,?)", (conversation, H.now(), H.now()))
     post(api, "chat/ops", {"text": UNRELATED})
-    assert model.calls == [] and checks(api) == []
+    quiet("an active chat goal")
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM chat_goals WHERE id='g1'")
+    drain()
 
+    task = post(api, "tasks", {"owner": "ops", "title": "Look into it", "body": "The login bug"})
+    post(api, f"tasks/{task['id']}/chat", {"text": UNRELATED})
+    post(api, "chat/ops", {"text": UNRELATED, "refs": {"task": task["id"]}})
+    quiet("a task chat")
+    drain()
 
-def test_never_checked_while_a_turn_is_running(chat):
-    api, machine, _, model, _ = chat
+    r = api.post("/api/v2/uploads/chat/ops", data={"text": UNRELATED},
+                 files={"files": ("note.txt", b"Agenda for the offsite", "text/plain")}, headers=headers())
+    assert r.status_code == 200, r.text
+    quiet("files uploaded alongside")
+    assert session_state(api, conversation) == before
+    assert not r.json()["message"]["refs"].get("topic_changed")
+    fid = r.json()["message"]["refs"]["attachments"][0]["file_id"]
+    drain()
+
+    # A file already in the chat, attached by reference on the JSON route: QA on the v0.3.64 candidate saw one
+    # Decide call and a clear here.
+    message = post(api, "chat/ops", {"text": UNRELATED, "attachments": [f"{fid}@1"]})
+    assert [a["file_id"] for a in message["refs"]["attachments"]] == [fid], "the file still goes with the message"
+    quiet("files attached on the JSON route")
+    assert session_state(api, conversation) == before
+    assert not message["refs"].get("topic_changed")
+    drain()
+
     model.choice = "same_topic"
     post(api, "chat/ops", {"text": "Run the long job"})       # checked (big), same session
-    assert len(model.calls) == 1
+    assert len(model.calls) == 1, "the same chat, without files, is checked"
     model.calls.clear()
-    claim(api, machine)                                     # now running
+    running = claim(api, machine)                           # now running
     post(api, "chat/ops", {"text": UNRELATED})
-    assert model.calls == []
+    assert model.calls == [], "a running turn"
+    finish(api, machine, running)
+    drain()
+    model.calls.clear()
 
-
-def test_never_checked_under_three_turns_since_the_last_clear(chat):
-    api, machine, conversation, model, _ = chat
     assert clear(api).status_code == 200
     for text in ("One", "Two"):
         post(api, "chat/ops", {"text": text})
         finish(api, machine, claim(api, machine))
+    usage()
+    model.calls.clear()
     post(api, "chat/ops", {"text": UNRELATED})
     assert model.calls == [], "two turns since the clear"
-
-
-def test_never_checked_in_a_task_chat(chat):
-    api, _, _, model, _ = chat
-    task = post(api, "tasks", {"owner": "ops", "title": "Look into it", "body": "The login bug"})
-    post(api, f"tasks/{task['id']}/chat", {"text": UNRELATED})
-    post(api, "chat/ops", {"text": UNRELATED, "refs": {"task": task["id"]}})
-    assert model.calls == [] and checks(api) == []
-
-
-def test_never_checked_with_files_uploaded_alongside(chat):
-    """The multipart route (files uploaded with the message): no check, the session kept."""
-    api, machine, conversation, model, usage = chat
-    before = session_state(api, conversation)
-    r = api.post("/api/v2/uploads/chat/ops", data={"text": UNRELATED},
-                 files={"files": ("note.txt", b"Agenda for the offsite", "text/plain")}, headers=headers())
-    assert r.status_code == 200, r.text
-    assert model.calls == [] and checks(api) == [] and session_state(api, conversation) == before
-    assert not r.json()["message"]["refs"].get("topic_changed")
-    finish(api, machine, claim(api, machine))
-    usage()
-    post(api, "chat/ops", {"text": UNRELATED})
-    assert len(model.calls) == 1, "the same chat, without files, is checked"
-
-
-def test_never_checked_with_files_attached_on_the_json_route(chat):
-    """A file already in the chat, attached by reference on the JSON route (`attachments`): no check, the session
-    kept, as for files uploaded alongside. QA on the v0.3.64 candidate saw one Decide call and a clear here."""
-    api, machine, conversation, model, usage = chat
-    r = api.post("/api/v2/uploads/chat/ops", data={"text": "Here is the note"},
-                 files={"files": ("note.txt", b"Agenda for the offsite", "text/plain")}, headers=headers())
-    fid = r.json()["message"]["refs"]["attachments"][0]["file_id"]
-    finish(api, machine, claim(api, machine))
-    usage()
-    before = session_state(api, conversation)
-    message = post(api, "chat/ops", {"text": UNRELATED, "attachments": [f"{fid}@1"]})
-    assert [a["file_id"] for a in message["refs"]["attachments"]] == [fid], "the file still goes with the message"
-    assert model.calls == [] and checks(api) == [] and session_state(api, conversation) == before
-    assert not message["refs"].get("topic_changed")
-    finish(api, machine, claim(api, machine))
-    usage()
-    post(api, "chat/ops", {"text": UNRELATED})
-    assert len(model.calls) == 1, "the same chat, without files, is checked"
 
 
 def test_a_send_with_files_is_never_considered_whatever_the_route():

@@ -98,8 +98,7 @@ def test_same_service_gateway_edits_save_with_no_question(api, monkeypatch):
         assert gateway(api).get("key") and events(api) == []
 
 
-@pytest.mark.parametrize("change", ["host", "port", "scheme", "default"])
-def test_a_new_gateway_service_is_held_and_names_both_destinations_never_the_key(api, monkeypatch, change):
+def test_a_new_gateway_service_is_held_and_names_both_destinations_never_the_key(api, monkeypatch):
     """Test 4 (API reason) and 14: another host, port, http to https or back to Tico's own address is held with the old
     and new scheme, host and port and the key's label; a cancel (not answering) changes nothing and writes no event."""
     setup(api, monkeypatch)
@@ -107,20 +106,22 @@ def test_a_new_gateway_service_is_held_and_names_both_destinations_never_the_key
         fake.active(KEY, 0.1)
         save(api, fake)
         port = fake.server.server_port
-        url = {"host": fake.url.replace("127.0.0.1", "localhost"), "port": elsewhere.url,
-               "scheme": fake.url.replace("http://", "https://"), "default": ""}[change]
-        before = gateway(api)
-        reply = api.put("/api/v2/providers/gateway", json={"url": url, "expected_revision": before["revision"]},
-                        headers=headers("ana-test"))
-        error = held(reply)
-        assert error["old"] == {"address": f"http://127.0.0.1:{port}", "scheme": "http", "host": "127.0.0.1", "port": port}
-        assert error["new"]["address"] == {"host": f"http://localhost:{port}",
-                                           "port": f"http://127.0.0.1:{elsewhere.server.server_port}",
-                                           "scheme": f"https://127.0.0.1:{port}",
-                                           "default": "https://updates.tico.team:443"}[change]
-        assert error["credentials"] == ["Gateway key"] and error["revision"] == before["revision"]
-        assert KEY not in reply.text and before["preview"] not in reply.text and "/v1/gateway" not in reply.text
-        assert gateway(api) == before and events(api) == [] and elsewhere.calls == []
+        urls = {"host": fake.url.replace("127.0.0.1", "localhost"), "port": elsewhere.url,
+                "scheme": fake.url.replace("http://", "https://"), "default": ""}
+        addresses = {"host": f"http://localhost:{port}",
+                     "port": f"http://127.0.0.1:{elsewhere.server.server_port}",
+                     "scheme": f"https://127.0.0.1:{port}",
+                     "default": "https://updates.tico.team:443"}
+        for change, url in urls.items():
+            before = gateway(api)
+            reply = api.put("/api/v2/providers/gateway", json={"url": url, "expected_revision": before["revision"]},
+                            headers=headers("ana-test"))
+            error = held(reply)
+            assert error["old"] == {"address": f"http://127.0.0.1:{port}", "scheme": "http", "host": "127.0.0.1", "port": port}
+            assert error["new"]["address"] == addresses[change], change
+            assert error["credentials"] == ["Gateway key"] and error["revision"] == before["revision"]
+            assert KEY not in reply.text and before["preview"] not in reply.text and "/v1/gateway" not in reply.text
+            assert gateway(api) == before and events(api) == [] and elsewhere.calls == [], change
 
 
 def test_keep_sends_the_key_only_to_the_new_gateway_and_leaves_one_event(api, monkeypatch):
@@ -222,22 +223,22 @@ def test_same_destination_webhook_edits_save_with_no_question(api, net):
     assert events(api) == []
 
 
-@pytest.mark.parametrize("url", ["https://hooks.acme.example/tico/team-b?route=alpha",      # path
-                                 "https://hooks.acme.example/tico/team-a?route=beta",       # query
-                                 "https://other.acme.example/tico/team-a?route=alpha",      # host
-                                 "https://hooks.acme.example:8443/tico/team-a?route=alpha"])  # port
-def test_a_webhook_with_a_secret_header_holds_any_new_destination_and_cancel_changes_nothing(api, net, url):
+def test_a_webhook_with_a_secret_header_holds_any_new_destination_and_cancel_changes_nothing(api, net):
     """Tests 3, 4 and 14."""
     made = hook(api)
-    before = shown(api, made["id"])
-    reply = update(api, made["id"], {"url": url, "expected_revision": before["revision"]})
-    error = held(reply)
-    assert error["credentials"] == ["x-api-key"] and error["name"] == "Acme hook"
-    assert error["old"]["address"] == "https://hooks.acme.example:443"
-    assert error["path"] in (destinations.SAME_PATH, destinations.PATH_CHANGED)
-    for hidden in (SECRET, "team-a", "team-b", "route", "alpha", "beta"):
-        assert hidden not in reply.text, hidden
-    assert shown(api, made["id"]) == before and events(api) == []
+    for url in ["https://hooks.acme.example/tico/team-b?route=alpha",      # path
+                "https://hooks.acme.example/tico/team-a?route=beta",       # query
+                "https://other.acme.example/tico/team-a?route=alpha",      # host
+                "https://hooks.acme.example:8443/tico/team-a?route=alpha"]:  # port
+        before = shown(api, made["id"])
+        reply = update(api, made["id"], {"url": url, "expected_revision": before["revision"]})
+        error = held(reply)
+        assert error["credentials"] == ["x-api-key"] and error["name"] == "Acme hook"
+        assert error["old"]["address"] == "https://hooks.acme.example:443"
+        assert error["path"] in (destinations.SAME_PATH, destinations.PATH_CHANGED)
+        for hidden in (SECRET, "team-a", "team-b", "route", "alpha", "beta"):
+            assert hidden not in reply.text, (url, hidden)
+        assert shown(api, made["id"]) == before and events(api) == [], url
 
 
 def test_a_webhook_without_secret_headers_moves_with_no_question(api, net):

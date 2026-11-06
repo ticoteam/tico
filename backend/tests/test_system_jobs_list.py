@@ -53,7 +53,30 @@ def dead_mirror(api, name, key, source, words="Gone"):
         return M._save(c, who, flow)
 
 
-def test_the_sync_makes_missing_mirrors_retires_dead_ones_and_a_second_pass_changes_nothing(api):
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def test_nothing_is_made_before_the_cutover_is_done(api):
+    with db(api).transaction() as c:
+        c.execute("DELETE FROM automations WHERE json_extract(flow,'$.trigger.name')='tico.builtin.job.thread_rank'")
+        c.execute("UPDATE registry_metadata SET value=json_set(value,'$.state','running') WHERE key=?", (M.CUTOVER,))
+    assert sync(api) == {"made": [], "retired": [], "renamed": []}
+    assert live(api, "tico.builtin.job.thread_rank") == []
+
+
+def test_the_mirror_sync_makes_retires_renames_and_waits_out_a_broken_write(api, monkeypatch, caplog):
+    # the sync makes missing mirrors retires dead ones and a second pass changes nothing
     sync(api)                                                    # whatever the start left, settled
     with db(api).read() as c:
         assert M.state(c)["state"] == "done" and not M.state(c).get("owner_wait"), "the cutover ran at start"
@@ -86,10 +109,7 @@ def test_the_sync_makes_missing_mirrors_retires_dead_ones_and_a_second_pass_chan
     before = mirrors(api)
     assert sync(api) == {"made": [], "retired": [], "renamed": []}
     assert mirrors(api) == before
-
-
-def test_a_mirror_whose_words_drifted_takes_the_jobs_words(api):
-    sync(api)
+    # a mirror whose words drifted takes the jobs words
     (aid,) = live(api, "tico.builtin.job.due_reminders")
     with db(api).transaction() as c:
         c.execute("UPDATE automations SET flow=json_set(flow,'$.name','Old name') WHERE id=?", (aid,))
@@ -98,17 +118,11 @@ def test_a_mirror_whose_words_drifted_takes_the_jobs_words(api):
         flow = json.loads(c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()["flow"])
     assert flow["name"] == SR.BY_KEY["due_reminders"].name
     assert sync(api)["renamed"] == []
-
-
-def test_a_task_rule_mirror_whose_rule_is_gone_is_retired(api):
-    sync(api)
+    # a task rule mirror whose rule is gone is retired
     gone = dead_mirror(api, "Old rule", "task_rule", {"kind": "task_rule", "id": "task-rule-gone"})
     assert sync(api)["retired"] == [gone]
     assert mirrors(api)[gone][2]
-
-
-def test_a_task_rule_mirror_takes_its_rules_name_and_switch(api):
-    sync(api)
+    # a task rule mirror takes its rules name and switch
     rid = "task-rule-close-after-done"
     (aid,) = [a for a, (t, src, deleted, _) in mirrors(api).items() if t == "tico.builtin.task_rule" and src == rid
               and not deleted]
@@ -119,10 +133,7 @@ def test_a_task_rule_mirror_takes_its_rules_name_and_switch(api):
         row = c.execute("SELECT name, enabled, flow FROM automations WHERE id=?", (aid,)).fetchone()
     assert (row["name"], row["enabled"], json.loads(row["flow"])["controls"]["on"]) == ("Close finished work", 0, False)
     assert sync(api)["renamed"] == []
-
-
-def test_the_health_monitor_mirror_comes_back_with_its_bot_and_follows_its_switch(api):
-    sync(api)
+    # the health monitor mirror comes back with its bot and follows its switch
     with db(api).transaction() as c:                             # restored in Settings > Bots
         if H.bot(c, H.HEALTH_MONITOR):
             c.execute("UPDATE bots SET state='active' WHERE id=?", (H.HEALTH_MONITOR,))
@@ -141,10 +152,7 @@ def test_the_health_monitor_mirror_comes_back_with_its_bot_and_follows_its_switc
     with db(api).transaction() as c:
         c.execute("UPDATE bots SET state='archived' WHERE id=?", (H.HEALTH_MONITOR,))
     assert sync(api)["retired"] == [made]
-
-
-def test_retiring_a_twin_points_the_cutover_mark_at_the_mirror_kept(api):
-    sync(api)
+    # retiring a twin points the cutover mark at the mirror kept
     (kept,) = live(api, "tico.builtin.job.goal_colours")
     twin = dead_mirror(api, "Goal colours", "job.goal_colours", {"kind": "system_job", "id": "job:goal_colours"})
     with db(api).transaction() as c:
@@ -155,10 +163,7 @@ def test_retiring_a_twin_points_the_cutover_mark_at_the_mirror_kept(api):
         report = {(i["kind"], i["id"]): i for i in M.inventory(c)}
         assert mark.fetchone()["automation"] == kept
     assert report[("system_job", "job:goal_colours")]["state"] == "on", "the report names the live mirror"
-
-
-def test_a_mirror_that_cannot_be_written_waits_an_hour_and_warns_once(api, monkeypatch, caplog):
-    sync(api)
+    # a mirror that cannot be written waits an hour and warns once
     gone = dead_mirror(api, "Old rule", "task_rule", {"kind": "task_rule", "id": "task-rule-gone"})
     clock, real = [1000.0], automations.remove
 
@@ -175,14 +180,6 @@ def test_a_mirror_that_cannot_be_written_waits_an_hour_and_warns_once(api, monke
     assert sync(api)["retired"] == [], "not tried again inside the hour"
     clock[0] += 1
     assert sync(api)["retired"] == [gone]
-
-
-def test_nothing_is_made_before_the_cutover_is_done(api):
-    with db(api).transaction() as c:
-        c.execute("DELETE FROM automations WHERE json_extract(flow,'$.trigger.name')='tico.builtin.job.thread_rank'")
-        c.execute("UPDATE registry_metadata SET value=json_set(value,'$.state','running') WHERE key=?", (M.CUTOVER,))
-    assert sync(api) == {"made": [], "retired": [], "renamed": []}
-    assert live(api, "tico.builtin.job.thread_rank") == []
 
 
 @pytest.fixture
@@ -253,8 +250,31 @@ QUIET_JOBS = ("run_housekeeping", "ship_deployed", "task_loops", "milestone_wait
               "thread_loop_guard", "snooze_ends", "hourly_deadlines")
 
 
-def test_a_tick_records_each_scheduler_job_and_quiet_repeats_fold(api):
+
+
+
+
+
+
+def applying(monkeypatch, *keys):
+    """These jobs apply here, as once their feature is set up."""
+    for key in keys:
+        monkeypatch.setitem(SR.BY_KEY, key, dataclasses.replace(SR.BY_KEY[key], applies=None))
+
+
+
+
+
+
+
+
+
+
+
+
+def test_scheduler_jobs_and_background_passes_record_their_runs(api, monkeypatch):
     store = db(api)
+    # a tick records each scheduler job and quiet repeats fold
     scheduler = Scheduler(store, api.app.state.execution)
     at = datetime.now(timezone.utc)
     for n in range(4):
@@ -266,9 +286,7 @@ def test_a_tick_records_each_scheduler_job_and_quiet_repeats_fold(api):
         assert len(runs_of(api, key)) == 1, (key, runs_of(api, key))
     # The Company page is closed on a new install: its job does not apply, and a pass with nothing due writes nothing.
     assert runs_of(api, "company_page") == []
-
-
-def test_a_failing_block_records_its_failure(api, monkeypatch):
+    # a failing block records its failure
     from backend import milestone_waits
 
     def broken(c, failures=None, task_id=None):
@@ -276,12 +294,9 @@ def test_a_failing_block_records_its_failure(api, monkeypatch):
     monkeypatch.setattr(milestone_waits, "reconcile", broken)
     with pytest.raises(RuntimeError):
         Scheduler(db(api), api.app.state.execution).tick()
-    (run,) = runs_of(api, "milestone_waits")
+    run = runs_of(api, "milestone_waits")[-1]
     assert not run["ok"] and run["result"] == "Failed: unexpected error (RuntimeError)"
-
-
-def test_a_background_pass_records_one_run_and_quiet_passes_fold(api):
-    store = db(api)
+    # a background pass records one run and quiet passes fold
     for _ in range(3):
         SR.pass_of(store, "inbound_mail", lambda: None)
     (run,) = runs_of(api, "inbound_mail")
@@ -291,15 +306,7 @@ def test_a_background_pass_records_one_run_and_quiet_passes_fold(api):
     with pytest.raises(ValueError):
         SR.pass_of(store, "letters", lambda: int("x"))
     assert runs_of(api, "letters")[-1]["ok"] == 0
-
-
-def applying(monkeypatch, *keys):
-    """These jobs apply here, as once their feature is set up."""
-    for key in keys:
-        monkeypatch.setitem(SR.BY_KEY, key, dataclasses.replace(SR.BY_KEY[key], applies=None))
-
-
-def test_document_and_meeting_sync_record_each_pass(api, monkeypatch):
+    # document and meeting sync record each pass
     api.app.state.doc_sources.tick()
     api.app.state.granola.record(0, 0)
     assert runs_of(api, "doc_sync") == runs_of(api, "meeting_sync") == [], "not set up here: a quiet pass writes nothing"
@@ -314,10 +321,9 @@ def test_document_and_meeting_sync_record_each_pass(api, monkeypatch):
     assert [r["result"] for r in runs_of(api, "meeting_sync")] == ["Nothing due"]
     granola.record(2, 1)
     assert runs_of(api, "meeting_sync")[-1]["result"] == "2 syncs started, 1 connection could not be read"
-
-
-def test_a_job_that_does_not_apply_writes_its_failures_but_not_its_quiet_passes(api, monkeypatch):
-    store = db(api)
+    # a job that does not apply writes its failures but not its quiet passes
+    with store.transaction() as c:
+        c.execute("DELETE FROM system_runs WHERE job='letters'")
     for key in ("letters", "bookkeeper_check"):
         monkeypatch.setitem(SR.BY_KEY, key, dataclasses.replace(SR.BY_KEY[key], applies=lambda c, s: False))
     SR.pass_of(store, "letters", lambda: None)
@@ -326,12 +332,12 @@ def test_a_job_that_does_not_apply_writes_its_failures_but_not_its_quiet_passes(
         SR.pass_of(store, "letters", lambda: int("x"))
     assert [r["ok"] for r in runs_of(api, "letters")] == [0], "a failure always shows"
     # A controlled job's last start says when it runs next: it is written even where it does not apply.
+    seen_before = len(runs_of(api, "bookkeeper_check"))
     SR.write(store, SR.Run("bookkeeper_check").did("Nothing new", quiet=True))
-    assert len(runs_of(api, "bookkeeper_check")) == 1
-
-
-def test_a_failure_that_repeats_folds_into_the_first_and_counts_the_repeats(api):
-    store = db(api)
+    assert len(runs_of(api, "bookkeeper_check")) == seen_before + 1
+    # a failure that repeats folds into the first and counts the repeats
+    with store.transaction() as c:
+        c.execute("DELETE FROM system_runs WHERE job='snooze_ends'")
     long_ago = H.shift(H.now(), seconds=-(SR.QUIET_WRITE_SECONDS + 60))
     with store.transaction() as c:
         first = SR.save(c, SR.Run("snooze_ends", started=long_ago, error="Failed: the database was busy"), finished=long_ago)
@@ -345,9 +351,7 @@ def test_a_failure_that_repeats_folds_into_the_first_and_counts_the_repeats(api)
     assert [(r["ok"], r["result"]) for r in runs_of(api, "snooze_ends")] == [
         (0, "Failed: the database was busy"), (0, "Failed: Tico refused it"), (1, "Nothing due"),
         (0, "Failed: Tico refused it")], "another reason, or a success between, is a new row"
-
-
-def test_a_topic_check_records_a_fresh_start_and_folds_kept_chats(api):
+    # a topic check records a fresh start and folds kept chats
     from backend import topic_change
     from backend.auth import Identity
     who = Identity("human:ana", "owner", "ana@acme.example")
@@ -357,9 +361,7 @@ def test_a_topic_check_records_a_fresh_start_and_folds_kept_chats(api):
     topic_change._audit(db(api), who, {"label": "topic-change@1", "clear": False, "error": "timeout"})
     assert [(r["result"], r["runs"]) for r in runs_of(api, "topic_fresh")] == [
         ("Same topic", 1), ("New topic: started fresh", 1), ("Kept the chat: the check took too long", 1)]
-
-
-def test_thread_routing_and_the_loop_guard_record(api):
+    # thread routing and the loop guard record
     from backend import thread_routing
     thread_routing._running.acquire()
     thread_routing._worker(db(api))                              # nothing waits: a quiet pass

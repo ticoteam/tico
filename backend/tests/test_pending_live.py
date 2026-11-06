@@ -6,7 +6,7 @@ from backend.tests.test_api import api, headers, get, restrict, unrelated_task_m
 from backend.tests.test_meeting_items import record, add, change, push, items
 
 
-def test_reader_merges_edits_and_send_applies_final_fields_once(api):
+def _reader_merges_edits_and_send_applies_final_fields_once(api):
     rid = record(api)
     item = add(api, rid, {'section': 'task', 'text': 'Draft',
                          'detail': {'owner': 'human:ben', 'priority': 'p1'}})['item']['id']
@@ -29,7 +29,7 @@ def test_reader_merges_edits_and_send_applies_final_fields_once(api):
     change(api, rid, item, {'status': 'dismissed'}, expected=409)
 
 
-def test_private_audience_and_participant_read_access(api):
+def _private_audience_and_participant_read_access(api):
     rid = record(api, {'private': True, 'participants': ['ana@acme.example', 'ben@acme.example']})
     item = add(api, rid, {'section': 'task', 'text': 'Private plan', 'detail': {'owner': 'human:cara'}})['item']['id']
     denied = push(api, rid, item, expected=409)
@@ -55,7 +55,7 @@ def test_private_audience_and_participant_read_access(api):
         assert not events.H.task_private_readable(c, 'human:ben', row)
 
 
-def test_redacts_mutation_replay_listing_and_outbox(api):
+def _redacts_mutation_replay_listing_and_outbox(api):
     rid = record(api)
     iid = add(api, rid, {'section': 'task', 'text': 'Secret mail', 'detail': {'owner': 'bot:inbox'}})['item']['id']
     sent = push(api, rid, iid)['item']
@@ -72,7 +72,7 @@ def test_redacts_mutation_replay_listing_and_outbox(api):
         assert meeting_items.feature_duplicate(c, 'Secret mail', who, auth) is None
 
 
-def test_presence_sessions_expire_independently_and_places_are_authorized(api):
+def _presence_sessions_expire_independently_and_places_are_authorized(api):
     rid = record(api, {'private': True})
     place = 'meeting:' + rid
     def beat(session, **extra):
@@ -88,7 +88,7 @@ def test_presence_sessions_expire_independently_and_places_are_authorized(api):
     assert api.get('/api/v2/presence', params={'place': place}, headers=headers('cara-test')).status_code == 404
 
 
-def test_stream_filters_and_one_gone_on_access_change(api):
+def _stream_filters_and_one_gone_on_access_change(api):
     store, auth = api.app.state.store, api.app.state.auth
     rid, other = record(api), record(api)
     with store.read() as c:
@@ -117,7 +117,7 @@ def test_stream_filters_and_one_gone_on_access_change(api):
     assert watch.drain() == []
 
 
-def test_watch_notices_bot_access_revoked_without_task_change(api):
+def _watch_notices_bot_access_revoked_without_task_change(api):
     from backend.tests.test_api import as_member
     as_member(api, 'ben@acme.example')
     task = api.post('/api/v2/tasks', json={'title': 'Ops followup', 'body': 'Follow up', 'owner': 'bot:ops', 'private': False},
@@ -139,7 +139,7 @@ def test_watch_notices_bot_access_revoked_without_task_change(api):
     assert watch.drain() == []
 
 
-def test_before_save_checks_private_live_audience_and_finalize_preserves_access(api):
+def _before_save_checks_private_live_audience_and_finalize_preserves_access(api):
     from backend.tests.test_api import post
     mid = post(api, 'live-meetings', {'title': 'Private live', 'visibility': 'private'})['id']
     post(api, f'live-meetings/{mid}/access', {'add': ['human:ben']})
@@ -164,7 +164,7 @@ def test_before_save_checks_private_live_audience_and_finalize_preserves_access(
     assert get(api, 'tasks/' + public['id'], 'cara-test')['task']['id'] == public['id']
 
 
-def test_doc_feature_and_bot_manager_are_inside_the_audience(api):
+def _doc_feature_and_bot_manager_are_inside_the_audience(api):
     from backend.tests.test_api import post
     mid = post(api, 'live-meetings', {'title': 'Private live', 'visibility': 'private'})['id']
     post(api, f'live-meetings/{mid}/bots', {'bots': ['ops']})
@@ -182,7 +182,7 @@ def test_doc_feature_and_bot_manager_are_inside_the_audience(api):
             assert get(api, 'tasks/' + result['item']['result_ref'], 'ben-test')['task']['private']
 
 
-def test_task_access_invalidates_items_and_deleted_meeting_emits_one_gone(api):
+def _task_access_invalidates_items_and_deleted_meeting_emits_one_gone(api):
     rid = record(api)
     iid = add(api, rid, {'section': 'task', 'text': 'Team followup', 'detail': {'owner': 'human:ben'}})['item']['id']
     tid = push(api, rid, iid)['item']['result_ref']
@@ -214,7 +214,7 @@ def test_task_access_invalidates_items_and_deleted_meeting_emits_one_gone(api):
     assert items(api, rid, 'cara-test')['id'] == rid
 
 
-def test_future_link_proposal_column_is_redacted_at_every_boundary(api):
+def _future_link_proposal_column_is_redacted_at_every_boundary(api):
     rid = record(api)
     secret = add(api, rid, {'section': 'task', 'text': 'Mail task', 'detail': {'owner': 'bot:inbox'}})['item']['id']
     tid = push(api, rid, secret)['item']['result_ref']
@@ -232,7 +232,7 @@ def test_future_link_proposal_column_is_redacted_at_every_boundary(api):
     assert all(i['proposed_task_id'] is None for i in outbox)
 
 
-def test_redesign_participants_audience_change_invalidates_access(api):
+def _redesign_participants_audience_change_invalidates_access(api):
     rid = record(api, {'private': True, 'participants': ['ben@acme.example']})
     store, auth = api.app.state.store, api.app.state.auth
     with store.read() as c:
@@ -248,7 +248,7 @@ def test_redesign_participants_audience_change_invalidates_access(api):
     assert watch.drain() == [('meeting_items', {'meeting_id': rid, 'gone': True})]
 
 
-def test_stale_save_and_send_return_current_without_overwriting_or_creating(api):
+def _stale_save_and_send_return_current_without_overwriting_or_creating(api):
     rid = record(api)
     item = add(api, rid, {'section':'task', 'text':'A title', 'detail':{'owner':'human:ana','body':'A details'}})['item']
     newer = change(api, rid, item['id'], {'version':item['version'], 'detail':{'body':'B details'}}, 'ben-test')['item']
@@ -268,7 +268,7 @@ def test_stale_save_and_send_return_current_without_overwriting_or_creating(api)
     assert items(api, rid)['sections']['task'][0]['detail']['body'] == 'B details'
 
 
-def test_participant_grants_end_with_removal_narrowing_and_discard(api):
+def _participant_grants_end_with_removal_narrowing_and_discard(api):
     from backend.tests.test_api import post
     for action in ('remove', 'narrow', 'discard'):
         if action == 'narrow':
@@ -305,7 +305,7 @@ def test_participant_grants_end_with_removal_narrowing_and_discard(api):
         assert not any(data.get('title') for _,_,data in changes[0])
 
 
-def test_sent_item_upload_survives_save_and_redacts_reference(api):
+def _sent_item_upload_survives_save_and_redacts_reference(api):
     from backend.tests.test_api import post
     tid = post(api, 'tasks', {'title':'Already created', 'body':'Words', 'owner':'human:ana','private':True})['id']
     rid = record(api)
@@ -314,7 +314,7 @@ def test_sent_item_upload_survives_save_and_redacts_reference(api):
     assert items(api,rid,'ben-test')['sections']['task'][0]['result_ref'] is None
 
 
-def test_partial_save_reconciles_an_existing_task_without_creating_another(api):
+def _partial_save_reconciles_an_existing_task_without_creating_another(api):
     from backend.tests.test_api import post
     rid = record(api)
     item = add(api, rid, {'section':'task','text':'Created after partial Save'})['item']
@@ -338,7 +338,7 @@ def test_partial_save_reconciles_an_existing_task_without_creating_another(api):
         assert c.execute("SELECT task_id FROM meeting_task_links WHERE meeting_id=? AND kind='sent'", (rid,)).fetchone()[0] == tid
 
 
-def test_presence_cleanup_is_bounded_and_meeting_delete_cleans_sessions(api):
+def _presence_cleanup_is_bounded_and_meeting_delete_cleans_sessions(api):
     from backend import presence
     from backend.maintenance_steps import clean_up
     rid = record(api)
@@ -358,7 +358,7 @@ def test_presence_cleanup_is_bounded_and_meeting_delete_cleans_sessions(api):
         assert not c.execute('SELECT 1 FROM presences WHERE place=?',('meeting:'+rid,)).fetchone()
 
 
-def test_participant_queries_recheck_source_even_if_a_historical_grant_remains(api):
+def _participant_queries_recheck_source_even_if_a_historical_grant_remains(api):
     from backend import meeting_audience
     from backend.tests.test_api import post
     mid = post(api, 'live-meetings', {'title':'Source', 'visibility':'private'})['id']
@@ -373,7 +373,7 @@ def test_participant_queries_recheck_source_even_if_a_historical_grant_remains(a
     assert api.get('/api/v2/tasks/'+tid,headers=headers('ben-test')).status_code in (403,404)
 
 
-def test_deleting_a_saved_meeting_revokes_grants_but_keeps_task_parties_and_readers(api):
+def _deleting_a_saved_meeting_revokes_grants_but_keeps_task_parties_and_readers(api):
     rid = record(api, {'private':True,'participants':['ben@acme.example','cara@acme.example']})
     iid = add(api,rid,{'section':'task','text':'Saved source','detail':{'owner':'human:ana'}})['item']['id']
     tid = push(api,rid,iid)['item']['result_ref']
@@ -389,7 +389,7 @@ def test_deleting_a_saved_meeting_revokes_grants_but_keeps_task_parties_and_read
         assert not c.execute("SELECT 1 FROM task_roles WHERE task_id=? AND actor='human:ben' AND role='participant'",(tid,)).fetchone()
 
 
-def test_historical_grant_does_not_parse_string_participants_as_people(api):
+def _historical_grant_does_not_parse_string_participants_as_people(api):
     import json
     rid = record(api, {'private':True,'participants':['ben@acme.example']})
     iid = add(api,rid,{'section':'task','text':'Legacy source','detail':{'owner':'human:ana'}})['item']['id']
@@ -406,7 +406,7 @@ def test_historical_grant_does_not_parse_string_participants_as_people(api):
     assert api.get('/api/v2/tasks/'+tid,headers=headers('ben-test')).status_code in (403,404)
 
 
-def test_sent_link_and_legacy_item_provenance_both_follow_current_access(api):
+def _sent_link_and_legacy_item_provenance_both_follow_current_access(api):
     from backend.tests.test_api import post
     for keep in ('link','item'):
         rid = record(api, {'private':True,'participants':['ben@acme.example']})
@@ -426,7 +426,7 @@ def test_sent_link_and_legacy_item_provenance_both_follow_current_access(api):
             assert not c.execute("SELECT 1 FROM task_roles WHERE task_id=? AND role='participant' AND actor='human:ben'",(tid,)).fetchone()
 
 
-def test_historical_participants_flag_and_edit_route_share_the_effective_audience(api):
+def _historical_participants_flag_and_edit_route_share_the_effective_audience(api):
     from backend import learnings, updates
     from backend.tests.test_api import post, setup_attempt
     _, _, attempt = setup_attempt(api)
@@ -468,7 +468,7 @@ def test_historical_participants_flag_and_edit_route_share_the_effective_audienc
     assert items(api, rid)['audience'] == ['human:ana']
 
 
-def test_recorder_adopts_a_task_sent_by_another_reader_after_partial_save(api):
+def _recorder_adopts_a_task_sent_by_another_reader_after_partial_save(api):
     rid = record(api)
     first = add(api, rid, {'section': 'task', 'text': 'A', 'detail': {'owner': 'human:ana'}})['item']
     sent = push(api, rid, first['id'], token='ben-test')['item']
@@ -485,7 +485,7 @@ def test_recorder_adopts_a_task_sent_by_another_reader_after_partial_save(api):
         assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == count
 
 
-def test_reader_cannot_use_sent_reconciliation_to_change_other_participant_access(api):
+def _reader_cannot_use_sent_reconciliation_to_change_other_participant_access(api):
     from backend.tests.test_api import post
     source = record(api, {'private': True, 'participants': ['ben@acme.example', 'cara@acme.example']})
     item = add(api, source, {'section': 'task', 'text': 'Shared source', 'detail': {'owner': 'human:ana'}})['item']
@@ -503,17 +503,17 @@ def test_reader_cannot_use_sent_reconciliation_to_change_other_participant_acces
         assert not c.execute('SELECT 1 FROM meeting_task_links WHERE meeting_id=? AND task_id=?', (other, tid)).fetchone()
 
 
-def test_participant_revocation_keeps_every_remaining_saved_or_live_source(api):
+def _participant_revocation_keeps_every_remaining_saved_or_live_source(api):
     from backend.tests.test_api import post
     for origin in ('saved', 'live'):
         if origin == 'saved':
             source = record(api, {'private': True, 'participants': ['ben@acme.example']})
-            item = add(api, source, {'section': 'task', 'text': 'Saved source', 'detail': {'owner': 'human:ana'}})['item']
+            item = add(api, source, {'section': 'task', 'text': 'Saved source revocation', 'detail': {'owner': 'human:ana'}})['item']
             tid = push(api, source, item['id'])['item']['result_ref']
         else:
             source = post(api, 'live-meetings', {'title': 'Live source', 'visibility': 'private'})['id']
             post(api, f'live-meetings/{source}/access', {'add': ['human:ben']})
-            tid = post(api, 'tasks', {'title': 'Live source', 'body': 'Words', 'owner': 'human:ana', 'live_meeting_id': source})['id']
+            tid = post(api, 'tasks', {'title': 'Live source revocation', 'body': 'Words', 'owner': 'human:ana', 'live_meeting_id': source})['id']
         other = record(api, {'private': True, 'participants': ['ben@acme.example']})
         add(api, other, {'section': 'task', 'text': 'Same task', 'status': 'pushed', 'result_ref': tid})
         unrelated = record(api, {'private': True})
@@ -531,3 +531,39 @@ def test_participant_revocation_keeps_every_remaining_saved_or_live_source(api):
         assert api.get('/api/v2/tasks/' + tid, headers=headers('ben-test')).status_code in (403, 404)
         with api.app.state.store.read() as c:
             assert not c.execute("SELECT 1 FROM task_roles WHERE task_id=? AND role='participant' AND actor='human:ben'", (tid,)).fetchone()
+
+
+def test_a_meeting_items_edits_sends_and_replays_are_applied_once_and_redacted(api):
+    _reader_merges_edits_and_send_applies_final_fields_once(api)
+    _stale_save_and_send_return_current_without_overwriting_or_creating(api)
+    _partial_save_reconciles_an_existing_task_without_creating_another(api)
+    _recorder_adopts_a_task_sent_by_another_reader_after_partial_save(api)
+    _sent_item_upload_survives_save_and_redacts_reference(api)
+    _redacts_mutation_replay_listing_and_outbox(api)
+    _future_link_proposal_column_is_redacted_at_every_boundary(api)
+
+
+def test_a_saved_meetings_audience_decides_who_reads_its_tasks_and_every_end_of_a_grant_revokes_it(api):
+    _private_audience_and_participant_read_access(api)
+    _task_access_invalidates_items_and_deleted_meeting_emits_one_gone(api)
+    _redesign_participants_audience_change_invalidates_access(api)
+    _participant_grants_end_with_removal_narrowing_and_discard(api)
+    _participant_queries_recheck_source_even_if_a_historical_grant_remains(api)
+    _historical_grant_does_not_parse_string_participants_as_people(api)
+    _sent_link_and_legacy_item_provenance_both_follow_current_access(api)
+    _deleting_a_saved_meeting_revokes_grants_but_keeps_task_parties_and_readers(api)
+    _participant_revocation_keeps_every_remaining_saved_or_live_source(api)
+    _reader_cannot_use_sent_reconciliation_to_change_other_participant_access(api)
+    _historical_participants_flag_and_edit_route_share_the_effective_audience(api)
+
+
+def test_presence_and_the_live_stream_follow_current_access(api):
+    _presence_cleanup_is_bounded_and_meeting_delete_cleans_sessions(api)
+    _presence_sessions_expire_independently_and_places_are_authorized(api)
+    _stream_filters_and_one_gone_on_access_change(api)
+    _watch_notices_bot_access_revoked_without_task_change(api)
+
+
+def test_a_private_live_meeting_checks_its_audience_before_a_task_is_saved_and_after_finalize(api):
+    _before_save_checks_private_live_audience_and_finalize_preserves_access(api)
+    _doc_feature_and_bot_manager_are_inside_the_audience(api)

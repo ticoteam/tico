@@ -150,9 +150,13 @@ def test_the_bundle_is_cut_into_parts_a_webkit_cache_keeps(api):
 
 
 @served
-@pytest.mark.parametrize("kind", ("js", "css"))
-@pytest.mark.parametrize("n", (0, 1))
-def test_an_old_bundle_url_is_complete_and_never_cached(api, monkeypatch, kind, n):
+def test_an_old_bundle_url_is_complete_and_never_cached(api, monkeypatch):
+    for kind in ("js", "css"):
+        for n in (0, 1):
+            an_old_bundle_url_is_complete_and_never_cached(api, monkeypatch, kind, n)
+
+
+def an_old_bundle_url_is_complete_and_never_cached(api, monkeypatch, kind, n):
     bundle = ui_bundle.Bundle(b"", [b"'use strict';\nconst A = 1;\n", b"'use strict';\nconst B = A + 1;\n"],
                               [b"a{color:red}\n", b"b{color:blue}\n"])
     monkeypatch.setattr(ui_bundle.UiBundle, "get", lambda self: bundle)

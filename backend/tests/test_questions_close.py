@@ -82,9 +82,7 @@ def test_a_question_closes_with_its_own_task_or_an_ancestor(api):
         assert set(swept) == {late_q["id"], stuck["id"]} and not H.message(c, kept["id"])["superseded_at"]
         assert H.message(c, deep_q["id"])["superseded_at"]
         assert approval_expiry.sweep(c)["asks"] == []
-
-
-def test_a_chat_note_keeps_a_pick_question_open_and_wakes_its_bot_once(api):
+    # A chat note keeps a pick question open and wakes its bot once.
     with api.app.state.store.transaction() as c:
         work = H.task_create(c, ANA, "Draft the board report", "x", OPS)
         asked = pick(c, work["id"])
@@ -94,7 +92,7 @@ def test_a_chat_note_keeps_a_pick_question_open_and_wakes_its_bot_once(api):
         assert listed(c, work["id"]) and wakes(c, reply["id"]) == 1
 
 
-def test_a_question_closes_on_its_fallback_date_even_when_its_fallback_waits(api):
+def test_a_question_closes_on_its_fallback_date_even_when_its_fallback_waits_or_after_a_clarify(api):
     with api.app.state.store.transaction() as c:
         work = H.task_create(c, ANA, "Tell the vendor", "x", OPS)
         asked = pick(c, work["id"], "Email the vendor the new date?",
@@ -103,6 +101,21 @@ def test_a_question_closes_on_its_fallback_date_even_when_its_fallback_waits(api
         assert ask_deadlines.sweep(c, H.shift(H.now(), days=2))["expired"] == [asked["id"]]
         answer = c.execute("SELECT * FROM messages WHERE in_reply_to=? AND kind='answer'", (asked["id"],)).fetchall()
         assert len(answer) == 1 and answer[0]["recipient_id"] == OPS and "never goes ahead" in answer[0]["body"]
+        assert wakes(c, answer[0]["id"]) == 1 and not listed(c, work["id"])
+    # A dated question closes on its date after a clarify, without going ahead.
+    with api.app.state.store.transaction() as c:
+        work = H.task_create(c, ANA, "Tidy the old drafts", "x", OPS)
+        asked = pick(c, work["id"], "Archive the old drafts?",
+                     default={"do": "July", "kind": "reversible", "by": H.shift(H.now(), days=10)})
+        # A full week clears two business days even across a weekend and a daylight-saving shift.
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-7), asked["id"]))
+    post(api, "needs-you/clarify", {"ask": asked["id"]})                       # Ana's word: no answer, no go-ahead
+    with api.app.state.store.transaction() as c:
+        assert ask_deadlines.sweep(c, H.shift(H.now(), days=11)) == {"went_ahead": [], "expired": [asked["id"]],
+                                                                        "closed": []}
+        answer = c.execute("SELECT * FROM messages WHERE in_reply_to=? AND kind='answer'", (asked["id"],)).fetchall()
+        assert len(answer) == 1 and "does not happen on its own" in answer[0]["body"]
+        assert "answer" not in H._json(answer[0]["refs"], {})              # no option picked for her
         assert wakes(c, answer[0]["id"]) == 1 and not listed(c, work["id"])
 
 
@@ -162,23 +175,6 @@ def test_closing_a_parent_closes_questions_and_waits_on_tasks_below(api):
         approval_expiry.sweep(c)
         assert not listed(c, late["id"]) and not H.open_task_asks(c, H.task(c, late["id"])) and cached_matches(c)
     assert late["id"] not in needs(api)[0]
-
-
-def test_a_dated_question_closes_on_its_date_after_a_clarify_without_going_ahead(api):
-    with api.app.state.store.transaction() as c:
-        work = H.task_create(c, ANA, "Tidy the old drafts", "x", OPS)
-        asked = pick(c, work["id"], "Archive the old drafts?",
-                     default={"do": "July", "kind": "reversible", "by": H.shift(H.now(), days=10)})
-        # A full week clears two business days even across a weekend and a daylight-saving shift.
-        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-7), asked["id"]))
-    post(api, "needs-you/clarify", {"ask": asked["id"]})                       # Ana's word: no answer, no go-ahead
-    with api.app.state.store.transaction() as c:
-        assert ask_deadlines.sweep(c, H.shift(H.now(), days=11)) == {"went_ahead": [], "expired": [asked["id"]],
-                                                                        "closed": []}
-        answer = c.execute("SELECT * FROM messages WHERE in_reply_to=? AND kind='answer'", (asked["id"],)).fetchall()
-        assert len(answer) == 1 and "does not happen on its own" in answer[0]["body"]
-        assert "answer" not in H._json(answer[0]["refs"], {})              # no option picked for her
-        assert wakes(c, answer[0]["id"]) == 1 and not listed(c, work["id"])
 
 
 def test_old_undated_questions_go_back_only_in_the_weekday_batch_of_the_hourly_sweep(api):

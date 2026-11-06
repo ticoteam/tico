@@ -171,9 +171,9 @@ def test_privacy_api_enforces_owner_and_open_source_gate(api):
     assert botops_act.classify("PUT", "system/suggestions", {"report_suggestion_outcomes": False}) == "do"
 
 
-@pytest.mark.parametrize("mode", ["demo", "rehearsal"])
-def test_demo_and_rehearsal_send_nothing(install, http, monkeypatch, mode):
-    monkeypatch.setattr(install.settings, mode, True)
+def test_demo_and_rehearsal_send_nothing(install, http, monkeypatch):
+    # Both take the same `demo or rehearsal` branch (suggestions.py target): one case stands for both.
+    monkeypatch.setattr(install.settings, "rehearsal", True)
     assert run_step(install)["status"] == "skipped" and http[0] == []
 
 

@@ -13,13 +13,14 @@ from backend.tests.test_api import api, as_member, assign, claim, post, ready, r
 STEPS = 10
 
 
-def runs(api, count, room=False, failed=False):
+def runs(api, count, room=False, failed=False, machine=None):
     """`count` runs of bot `ops`, each answering a message from Ana: a direct chat, or (`room`) a room Ana and Ben share
     with the bot. A `failed` run ends failed instead of completed and keeps no turn row."""
-    as_member(api, "ben@acme.example")
-    machine = runner(api, "ana")
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
+    if machine is None:
+        as_member(api, "ben@acme.example")
+        machine = runner(api, "ana")
+        assign(api, machine, "ops")
+        ready(api, machine, ["ops"])
     for k in range(count):
         if room:
             with api.app.state.store.transaction() as c:
@@ -42,7 +43,7 @@ def runs(api, count, room=False, failed=False):
         else:
             post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": f"Answer {k}.", "last_seq": len(rows)},
                  machine["token"])
-    return msg
+    return machine
 
 
 def turns_statements(api, monkeypatch, path, token="ana-test"):
@@ -70,31 +71,26 @@ def turns_statements(api, monkeypatch, path, token="ana-test"):
     return response.json(), len(seen)
 
 
-SCALES = [
-    ("direct chats", {}),
-    ("rooms with people in them", {"room": True}),
-    ("failed runs in rooms", {"room": True, "failed": True}),
-]
-
-
-@pytest.mark.parametrize("what,shape", SCALES, ids=[s[0] for s in SCALES])
-def test_the_turns_list_takes_the_same_statements_however_many_turns_it_reads(tmp_path, monkeypatch, what, shape):
+def test_the_turns_list_takes_the_same_statements_however_many_turns_it_reads(tmp_path, monkeypatch):
+    """Direct chats, rooms with people in them and failed runs in rooms, read together from one install."""
     counted = {}
     for name, count in (("small", 3), ("big", 20)):
         (tmp_path / name).mkdir()
         install = T.api.__wrapped__(tmp_path / name, None)
         api = next(install)
         try:
-            runs(api, count, **shape)
+            machine = None
+            for shape in ({}, {"room": True}, {"room": True, "failed": True}):
+                machine = runs(api, count, machine=machine, **shape)
             body, counted[name] = turns_statements(api, monkeypatch, "/api/v2/bots/ops/turns")
-            assert len(body) == count, (what, len(body))
+            assert len(body) == count * 3, len(body)
         finally:
             install.close()
     few, many = counted["small"], counted["big"]
     assert few > 0 and many > 0, (few, many)
     assert many - few <= 4, (
-        f"GET /api/v2/bots/ops/turns takes {many} statements with 20 {what} against {few} with 3: a read runs once per "
-        "turn again instead of once for the whole list. Batch it (see threads.prime_members).")
+        f"GET /api/v2/bots/ops/turns takes {many} statements with 20 turns of each shape against {few} with 3: a read "
+        "runs once per turn again instead of once for the whole list. Batch it (see threads.prime_members).")
 
 
 def test_priming_the_membership_reads_does_not_change_the_list(api, monkeypatch):

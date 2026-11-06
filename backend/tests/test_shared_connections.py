@@ -5,15 +5,24 @@ computer it serves with the same computers listed, and "this computer only" take
 import json
 
 from backend.store import H
-from backend.tests.test_computer_keys import SHARED, call, computer, fetch, heartbeat, listed, pending, report, setup
+from backend.tests.test_computer_keys import SHARED, call, computer as enrol, fetch, heartbeat, listed, pending, report, setup
 from backend.tests.test_computer_signin import grant, store
 from backend.tests.test_onboarding import as_person, environment  # noqa: F401
 
 PASTED = "sk-proj-shared-pasted-0123456789"
 
 
+class Tag:
+    """Each folded story runs on one install, so its computers carry their own prefix (stripped when listed)."""
+    v = ""
+
+
+def computer(api, label, **kw):
+    return enrol(api, Tag.v + label, **kw)
+
+
 def labels(machine_or_info):
-    return [c["label"] for c in machine_or_info["computers"]]
+    return [c["label"][len(Tag.v):] for c in machine_or_info["computers"]]
 
 
 def by_name(api, cid, machine):
@@ -23,10 +32,9 @@ def by_name(api, cid, machine):
                   (H.new_id(), cid, "computer:" + machine["runner_id"], "human:ana", H.now()))
 
 
-def test_a_key_shared_with_two_computers_shows_on_both_and_lists_both(environment):
+def _a_key_shared_with_two_computers_shows_on_both_and_lists_both(api):
     """Acceptance 19: Add connection > API key > paste > Shared with: [Bravo] from Alpha. Both run on it, both rows
     list both computers; a computer it was not shared with gets nothing."""
-    api = setup(environment)
     one, two, three = (computer(api, label) for label in ("Alpha", "Bravo", "Charlie"))
     out = call(api, "POST", f"computers/{two['runner_id']}/keys",
                {"runtime": "codex", "secret": PASTED, "share": [one["runner_id"]]})
@@ -45,7 +53,7 @@ def test_a_key_shared_with_two_computers_shows_on_both_and_lists_both(environmen
     vault = call(api, "GET", "credentials")
     row = next(r for r in vault["credentials"] if r["id"] == out["shared"]["id"])
     assert sorted(g["subject"] for g in row["grants"]) == sorted("computer:" + m["runner_id"] for m in (one, two))
-    assert {m["id"]: m["label"] for m in vault["computers"]}[two["runner_id"]] == "Bravo"
+    assert {m["id"]: m["label"] for m in vault["computers"]}[two["runner_id"]] == Tag.v + "Bravo"
     gid = next(g["id"] for g in row["grants"] if g["subject"] == "computer:" + two["runner_id"])
     call(api, "POST", f"credentials/{out['shared']['id']}/grants/{gid}/revoke", {})
     assert fetch(api, two)["credentials"] == [] and labels(listed(api, one)["shared_with"]["codex"]) == ["Alpha"]
@@ -85,10 +93,9 @@ def test_a_key_shared_by_name_comes_before_the_every_computer_key(environment):
     assert labels(listed(api, two)["shared_with"]["codex"]) == ["Bravo"]
 
 
-def test_this_computer_only_takes_one_computer_off_a_shared_key_for_good(environment):
+def _this_computer_only_takes_one_computer_off_a_shared_key_for_good(api):
     """Acceptance 36: Clear key from Alpha on a key shared with Alpha and Bravo asks with both named; "this computer
     only" leaves Bravo working and Alpha off it, after a refetch too, and the "Every computer" key does not step in."""
-    api = setup(environment)
     grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
     one, two = computer(api, "Alpha"), computer(api, "Bravo")
     call(api, "POST", f"computers/{one['runner_id']}/keys",
@@ -103,8 +110,7 @@ def test_this_computer_only_takes_one_computer_off_a_shared_key_for_good(environ
     assert labels(call(api, "GET", f"computers/{two['runner_id']}/keys?runtime=codex")) == ["Bravo"]
 
 
-def test_all_listed_computers_clears_every_computer_the_key_serves(environment):
-    api = setup(environment)
+def _all_listed_computers_clears_every_computer_the_key_serves(api):
     one, two, three = (computer(api, label, capabilities=["model_sign_out_v1", "model_keys_v1"])
                        for label in ("Alpha", "Bravo", "Charlie"))
     call(api, "POST", f"computers/{one['runner_id']}/keys",
@@ -115,10 +121,9 @@ def test_all_listed_computers_clears_every_computer_the_key_serves(environment):
     assert pending(api, three) == []
 
 
-def test_editing_a_shared_key_from_one_computer_changes_every_listed_computer(environment):
+def _editing_a_shared_key_from_one_computer_changes_every_listed_computer(api):
     """Acceptance 20 (server side): Replace key > All listed computers from Bravo; Alpha and Bravo both run on the new
     value, with the same preview on both rows."""
-    api = setup(environment)
     one, two = computer(api, "Alpha"), computer(api, "Bravo")
     call(api, "POST", f"computers/{one['runner_id']}/keys",
          {"runtime": "codex", "secret": PASTED, "share": [two["runner_id"]]})
@@ -130,8 +135,7 @@ def test_editing_a_shared_key_from_one_computer_changes_every_listed_computer(en
         assert listed(api, machine)["shared_keys"]["codex"]["preview"] == "sk-…321"
 
 
-def test_use_a_shared_key_attaches_an_existing_one_to_this_computer(environment):
-    api = setup(environment)
+def _use_a_shared_key_attaches_an_existing_one_to_this_computer(api):
     one, two, three = (computer(api, label) for label in ("Alpha", "Bravo", "Charlie"))
     made = call(api, "POST", f"computers/{one['runner_id']}/keys",
                 {"runtime": "codex", "secret": PASTED, "share": [two["runner_id"]]})["shared"]
@@ -150,11 +154,10 @@ def test_use_a_shared_key_attaches_an_existing_one_to_this_computer(environment)
          expected=422)
 
 
-def test_sharing_or_attaching_a_key_is_an_administrators_change(environment):
+def _sharing_or_attaching_a_key_is_an_administrators_change(api):
     """An operator who is not a credential administrator pastes a key for this computer only; sharing it, or
     attaching a shared one, widens a company secret and is refused. A member sees which computers, not the key's
     name or preview."""
-    api = setup(environment)
     mine = computer(api, "Quinn's box", operator="quinn")
     other = computer(api, "Team box")
     quinn = as_person(api, "quinn")
@@ -171,7 +174,7 @@ def test_sharing_or_attaching_a_key_is_an_administrators_change(environment):
     member = next(m for m in call(api, "GET", "operations", who=as_person(api, "quinn"))["computers"]
                   if m["id"] == other["runner_id"])
     assert member["shared_with"]["codex"] == {"every": False, "computers": [{"id": other["runner_id"],
-                                                                             "label": "Team box"}]}
+                                                                             "label": Tag.v + "Team box"}]}
     # Only connected computers.
     call(api, "POST", f"computers/{other['runner_id']}/keys",
          {"runtime": "codex", "secret": PASTED, "share": ["no-such-computer"]}, expected=422)
@@ -180,11 +183,10 @@ def test_sharing_or_attaching_a_key_is_an_administrators_change(environment):
          {"runtime": "codex", "secret": PASTED, "share": [mine["runner_id"]], "switch": True}, expected=422)
 
 
-def test_a_cleared_computer_given_a_shared_key_is_told_to_take_it_again(environment):
+def _a_cleared_computer_given_a_shared_key_is_told_to_take_it_again(api):
     """A computer cleared from here keeps a mark of its own and fetches no key while it has it: picking a shared key
     for it, or sharing a new one with it, sends the Use the shared key job that lifts that mark. One that is offline
     is refused by name rather than told it has a key it will not fetch."""
-    api = setup(environment)
     one, two = computer(api, "Alpha", source="shared"), computer(api, "Bravo")
     made = call(api, "POST", f"computers/{two['runner_id']}/keys",
                 {"runtime": "codex", "secret": PASTED, "share": [two["runner_id"]]})["shared"]
@@ -202,14 +204,13 @@ def test_a_cleared_computer_given_a_shared_key_is_told_to_take_it_again(environm
     refused = call(api, "POST", f"computers/{two['runner_id']}/keys",
                    {"runtime": "codex", "secret": "sk-proj-second-key-0123456789", "share": [one["runner_id"]]},
                    expected=409)
-    assert "Alpha is offline" in refused["error"]["detail"]
+    assert f"{Tag.v}Alpha is offline" in refused["error"]["detail"]
     assert fetch(api, one)["credentials"] == [] and fetch(api, two)["credentials"][0]["value"] == PASTED
 
 
-def test_the_shared_key_picked_for_a_computer_is_the_one_it_runs_on(environment):
+def _the_shared_key_picked_for_a_computer_is_the_one_it_runs_on(api):
     """Two shared keys of the same kind: the one picked in Add connection replaces the other on that computer,
     whichever is older, in what the dialog says, the computers listed and what the computer fetches."""
-    api = setup(environment)
     one, two, three = (computer(api, label) for label in ("Alpha", "Bravo", "Charlie"))
     # The key Charlie has sorts first, so credential order alone would keep it.
     value = {store(api, "OPENAI_API_KEY", key): key for key in (SHARED, PASTED)}
@@ -231,10 +232,9 @@ def test_the_shared_key_picked_for_a_computer_is_the_one_it_runs_on(environment)
     assert listed(api, one)["shared_with"]["codex"]["id"] == new["id"]
 
 
-def test_a_computer_still_reporting_a_key_that_stopped_serving_it_is_described_as_it_now_is(environment):
+def _a_computer_still_reporting_a_key_that_stopped_serving_it_is_described_as_it_now_is(api):
     """Cleared here, or its grant revoked, before the computer's next heartbeat: its last report still says the
     shared key signs it in, and Add / Replace / Clear key still open, describing no shared key."""
-    api = setup(environment)
     one, two = computer(api, "Alpha", source="shared"), computer(api, "Bravo", source="shared")
     cid = call(api, "POST", f"computers/{two['runner_id']}/keys",
                {"runtime": "codex", "secret": PASTED, "share": [one["runner_id"]]})["shared"]["id"]
@@ -251,11 +251,10 @@ def test_a_computer_still_reporting_a_key_that_stopped_serving_it_is_described_a
     assert call(api, "GET", f"computers/{two['runner_id']}/keys?runtime=codex")["source"] == ""
 
 
-def test_a_computers_operator_reads_which_computers_share_its_key_but_not_the_key(environment):
+def _a_computers_operator_reads_which_computers_share_its_key_but_not_the_key(api):
     """A shared key is a company credential: its name and preview are a credential administrator's to read, in the
     Clear / Replace key ask and on the Computers page alike. The computer's operator who is not one still reads which
     computers it serves, and its own key's preview."""
-    api = setup(environment)
     mine = computer(api, "Quinn's box", operator="quinn")
     other = computer(api, "Team box")
     made = call(api, "POST", f"computers/{other['runner_id']}/keys",
@@ -269,7 +268,7 @@ def test_a_computers_operator_reads_which_computers_share_its_key_but_not_the_ke
                 if m["id"] == mine["runner_id"])
     assert page["may_manage"] is True
     assert page["shared_with"]["codex"] == {"every": False, "computers": [
-        {"id": mine["runner_id"], "label": "Quinn's box"}, {"id": other["runner_id"], "label": "Team box"}]}
+        {"id": mine["runner_id"], "label": Tag.v + "Quinn's box"}, {"id": other["runner_id"], "label": Tag.v + "Team box"}]}
     assert page["shared_keys"]["codex"] == {"env": "OPENAI_API_KEY"} and "sk-" not in json.dumps(page)
     # Its own key, once it has one, it reads in full preview.
     job = call(api, "POST", f"computers/{mine['runner_id']}/keys", {"runtime": "codex", "secret": "sk-quinn-own-0123456789"},
@@ -278,3 +277,30 @@ def test_a_computers_operator_reads_which_computers_share_its_key_but_not_the_ke
     page = next(m for m in call(api, "GET", "operations", who=as_person(api, "quinn"))["computers"]
                 if m["id"] == mine["runner_id"])
     assert page["keys"]["codex"]["preview"] == "sk-…789"
+
+
+def run_stories(environment, stories):
+    api = setup(environment)
+    for number, story in enumerate(stories):
+        Tag.v = f"s{number}-"
+        try:
+            story(api)
+        finally:
+            Tag.v = ""
+
+
+def test_a_shared_key_shows_lists_and_clears_on_every_computer_it_serves(environment):
+    """First, because the choices a computer is offered are exactly the keys shared so far."""
+    run_stories(environment, [_use_a_shared_key_attaches_an_existing_one_to_this_computer,
+                              _a_key_shared_with_two_computers_shows_on_both_and_lists_both,
+                              _this_computer_only_takes_one_computer_off_a_shared_key_for_good,
+                              _all_listed_computers_clears_every_computer_the_key_serves,
+                              _editing_a_shared_key_from_one_computer_changes_every_listed_computer])
+
+
+def test_only_an_administrator_shares_a_key_and_a_computer_is_told_what_it_now_runs_on(environment):
+    run_stories(environment, [_sharing_or_attaching_a_key_is_an_administrators_change,
+                              _a_computers_operator_reads_which_computers_share_its_key_but_not_the_key,
+                              _a_cleared_computer_given_a_shared_key_is_told_to_take_it_again,
+                              _the_shared_key_picked_for_a_computer_is_the_one_it_runs_on,
+                              _a_computer_still_reporting_a_key_that_stopped_serving_it_is_described_as_it_now_is])

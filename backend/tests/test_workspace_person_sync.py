@@ -56,7 +56,15 @@ def addresses(api, machine):
     return {b["address"] for b in get(api, "connectors/mail/targets", machine["token"])["mailboxes"]}
 
 
-def test_botless_person_gets_one_stable_online_server_and_fails_over(api, known_person):
+def retire(api, *machines):
+    """End a scenario: its computers no longer compete for the mailbox in the next."""
+    for machine in machines:
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), machine["runner_id"]))
+
+
+def test_placement_order_of_a_mailbox_owner_across_servers_macs_assistants_and_message_bots(api, known_person):
+    # a botless person gets one stable online server and fails over
     first, second, third = computers(api, 3)
     machines = [first, second, third]
     assert owners(api, machines) == [first["runner_id"]]
@@ -68,6 +76,51 @@ def test_botless_person_gets_one_stable_online_server_and_fails_over(api, known_
     assert owners(api, machines) == [third["runner_id"]]
     offline(api, third)
     assert owners(api, machines) == []
+    retire(api, first, second, third)
+    # their own lowest online computer is used without a server
+    first, second = computers(api, operator="cara", isolated=False)
+    assert owners(api, [first, second]) == [first["runner_id"]]
+    offline(api, first)
+    assert owners(api, [first, second]) == [second["runner_id"]]
+    revoke(api, second)
+    assert owners(api, [first, second]) == []
+    retire(api, first, second)
+    # the configured assistant's host precedes the lowest server
+    first, assistant = computers(api)
+    api.app.state.store.settings.assistant_bot = "ops"
+    place(api, assistant, "ops")
+    assert owners(api, [first, assistant]) == [assistant["runner_id"]]
+    offline(api, assistant)
+    assert owners(api, [first, assistant]) == [first["runner_id"]]
+    retire(api, first, assistant)
+    # message-bot placement precedes the assistant and the fallback
+    first, host = computers(api)
+    declare(api, BOX)
+    with api.app.state.store.transaction() as c:
+        mailbox_access.ensure_mailbox(c, BOX)
+    place(api, first, "coo")
+    place(api, host, "inbox")
+    assert owners(api, [first, host], BOX) == [host["runner_id"]]
+    # Existing message-bot placement remains authoritative between heartbeats.
+    offline(api, host)
+    assert owners(api, [first, host], BOX) == [host["runner_id"]]
+    revoke(api, host)
+    assert owners(api, [first, host], BOX) == [first["runner_id"]]
+    retire(api, first, host)
+    # an isolated admin server precedes their own Mac and falls back when offline
+    own, server = computers(api, operator="ben")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET owner_id='cara' WHERE id=?", (own["runner_id"],))
+    contact(api, own, isolated=False)
+    # The person's Mac has the lower id; server priority still wins.
+    assert owners(api, [own, server]) == [server["runner_id"]]
+    offline(api, server)
+    assert owners(api, [own, server]) == [own["runner_id"]]
+    contact(api, server)
+    assert owners(api, [own, server]) == [server["runner_id"]]
+    as_member(api, "ben@acme.example")
+    assert owners(api, [own, server]) == [own["runner_id"]]
+    retire(api, own, server)
 
 
 def test_other_peoples_macs_never_take_a_persons_mailbox(api, known_person):
@@ -83,30 +136,6 @@ def test_other_peoples_macs_never_take_a_persons_mailbox(api, known_person):
         assert get(api, "runners/connectors", machine["token"])["connectors"] == []
         token(api, machine["token"], PERSONAL, expected=403)
         publish(api, machine["token"], PERSONAL, expected=403)
-
-
-def test_isolated_admin_server_precedes_own_mac_and_falls_back_when_offline(api, known_person):
-    own, server = computers(api, operator="ben")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET owner_id='cara' WHERE id=?", (own["runner_id"],))
-    contact(api, own, isolated=False)
-    # The person's Mac has the lower id; server priority still wins.
-    assert owners(api, [own, server]) == [server["runner_id"]]
-    offline(api, server)
-    assert owners(api, [own, server]) == [own["runner_id"]]
-    contact(api, server)
-    assert owners(api, [own, server]) == [server["runner_id"]]
-    as_member(api, "ben@acme.example")
-    assert owners(api, [own, server]) == [own["runner_id"]]
-
-
-def test_own_lowest_online_computer_is_used_without_a_server(api, known_person):
-    first, second = computers(api, operator="cara", isolated=False)
-    assert owners(api, [first, second]) == [first["runner_id"]]
-    offline(api, first)
-    assert owners(api, [first, second]) == [second["runner_id"]]
-    revoke(api, second)
-    assert owners(api, [first, second]) == []
 
 
 def test_a_members_isolated_computer_never_syncs_others_mail_even_when_shared(api, known_person):
@@ -132,30 +161,6 @@ def test_no_eligible_computer_means_no_sync_and_health_explains_it(api, known_pe
     [machine] = computers(api, 1, operator="cara", isolated=False)
     assert addresses(api, machine) == {PERSONAL}
     assert not any(i["kind"] == "google_workspace" for i in get(api, "operations")["issues"])
-
-
-def test_the_configured_assistants_host_precedes_the_lowest_server(api, known_person):
-    first, assistant = computers(api)
-    api.app.state.store.settings.assistant_bot = "ops"
-    place(api, assistant, "ops")
-    assert owners(api, [first, assistant]) == [assistant["runner_id"]]
-    offline(api, assistant)
-    assert owners(api, [first, assistant]) == [first["runner_id"]]
-
-
-def test_message_bot_placement_still_precedes_the_assistant_and_fallback(api, known_person):
-    first, host = computers(api)
-    declare(api, BOX)
-    with api.app.state.store.transaction() as c:
-        mailbox_access.ensure_mailbox(c, BOX)
-    place(api, first, "coo")
-    place(api, host, "inbox")
-    assert owners(api, [first, host], BOX) == [host["runner_id"]]
-    # Existing message-bot placement remains authoritative between heartbeats.
-    offline(api, host)
-    assert owners(api, [first, host], BOX) == [host["runner_id"]]
-    revoke(api, host)
-    assert owners(api, [first, host], BOX) == [first["runner_id"]]
 
 
 def test_stopped_awaiting_foreign_and_other_provider_mailboxes_are_not_fallback_targets(api, known_person):

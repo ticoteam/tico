@@ -37,21 +37,30 @@ CANARY = "Acme Payroll Mac"     # a computer's label: local, never in a report
 SECRET_BOT = "acme-payroll-bot"
 
 
-@pytest.fixture
-def readers(monkeypatch):
-    """Only the findings a test sets: the Health page and the production checks read nothing here."""
+def _readers(monkeypatch):
     monkeypatch.setattr(health, "view", lambda c, *a, **k: {"checks": []})
     monkeypatch.setattr(invariants, "CHECKS", [])
     monkeypatch.setattr(hosted_updates, "notice", lambda *a, **k: {})
     monkeypatch.setattr(replication, "status", lambda *a, **k: {})
 
 
-@pytest.fixture
-def code_findings(monkeypatch, readers):
-    """The code checks' findings for the next runs: the test replaces the list's contents."""
+def _code_findings(monkeypatch):
+    _readers(monkeypatch)
     items = []
     monkeypatch.setattr(MH, "findings", lambda c, settings: list(items))
     return items
+
+
+@pytest.fixture
+def readers(monkeypatch):
+    """Only the findings a test sets: the Health page and the production checks read nothing here."""
+    _readers(monkeypatch)
+
+
+@pytest.fixture
+def code_findings(monkeypatch, readers):
+    """The code checks' findings for the next runs: the test replaces the list's contents."""
+    return _code_findings(monkeypatch)
 
 
 def built(environment):
@@ -190,10 +199,11 @@ def turn(api, runner_id, result, minutes_ago, bot="coo", state=None):
                   "result) VALUES(?,?,?,?,1,?,?,?,?,?,?)",
                   (aid, job, bot, runner_id, "hash-" + aid, state or result["outcome"], at, at, at, json.dumps(result)))
 
-def login_findings(api):
+def login_findings(api, rid=""):
+    """The default-login findings, those of one computer when `rid` is given."""
     with api.app.state.store.read() as c:
         return {i["key"]: i for i in MH.findings(c, api.app.state.store.settings)
-                if i["check_id"] == "default_login_limited"}
+                if i["check_id"] == "default_login_limited" and rid in i["key"]}
 
 def gateway_choice(api, monkeypatch, runner_id, isolated, enabled=("anthropic",)):
     """The recommended models choice with the Gateway connected, on a computer that does (or does not) run Gateway work."""
@@ -206,214 +216,36 @@ def gateway_choice(api, monkeypatch, runner_id, isolated, enabled=("anthropic",)
         c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?",
                   (json.dumps({"schema_version": 1, "isolated": isolated, "runtimes": {}, "bots": {}}), runner_id))
 
-def test_an_urgent_finding_files_on_its_first_run(environment, readers, code_findings):
-    api, runner = built(environment)
-    key = "event_stream:" + runner["runner_id"]
-    code_findings[:] = [item("event_stream", key=key, title="The event stream drops")]
-    result = run(api)
-    assert result["details"]["filed"] == [key] and result["woke"] == 1
-    (task,) = botops_tasks(api)
-    assert task["title"] == "Health: The event stream drops" and task["owner_id"] == "bot:botops"
-    assert [job["task"] for job in wake_jobs(api)] == [task["id"]]
-    assert finding(api, key)["pending"] == 0
 
 
-def test_a_noisy_finding_files_on_its_second_run(environment, readers, code_findings):
-    api, _ = built(environment)
-    code_findings[:] = [item("runner_outdated", key="runner_outdated:R1", title="Computer R1 is outdated")]
-    first = run(api)
-    assert first["details"]["pending"] == ["runner_outdated:R1"] and botops_tasks(api) == []
-    second = run(api)
-    assert second["details"]["filed"] == ["runner_outdated:R1"] and len(botops_tasks(api)) == 1
-    assert finding(api, "runner_outdated:R1")["pending"] == 0
 
 
-def test_a_noisy_problem_that_passes_within_one_run_files_nothing(environment, readers, code_findings):
-    api, _ = built(environment)
-    code_findings[:] = [item("runner_outdated", key="runner_outdated:R1")]
-    run(api)
-    code_findings[:] = []
-    result = run(api)
-    assert result["details"]["cleared"] == [] and botops_tasks(api) == []
-    assert finding(api, "runner_outdated:R1")["present"] == 0
 
 
-def test_a_repeat_adds_to_the_count_and_comments_once_a_day(environment, readers, code_findings):
-    api, _ = built(environment)
-    now = datetime.now(timezone.utc)
-    code_findings[:] = [item("event_stream", key="event_stream:R1", title="The event stream drops")]
-    run(api, now)
-    (task,) = botops_tasks(api)
-    run(api, now + timedelta(minutes=1))
-    assert finding(api, "event_stream:R1")["occurrences"] == 2 and registry(api, "event_stream")["count"] == 2
-    assert said(api, task["id"], "Still there") == []           # a repeat within the day adds to the count only
-    run(api, now + timedelta(hours=25))
-    (comment,) = said(api, task["id"], "Still there")            # a day on: one comment, and no wake
-    assert "seen 3 times" in comment and registry(api, "event_stream")["count"] == 3
-    assert len(botops_tasks(api)) == 1
 
 
-def test_two_computers_with_one_problem_are_one_botops_task(environment, readers, code_findings):
-    api, _ = built(environment)
-    code_findings[:] = [item("event_stream", key="event_stream:A", title="The event stream drops")]
-    run(api)
-    code_findings[:] = [item("event_stream", key="event_stream:A", title="The event stream drops"),
-                        item("event_stream", key="event_stream:B", title="The event stream drops")]
-    result = run(api)
-    (task,) = botops_tasks(api)
-    assert result["woke"] == 0 and len(said(api, task["id"], "Also on 2 places")) == 1
-    assert finding(api, "event_stream:B")["present"] == 1
 
 
-def test_a_problem_that_clears_comments_and_wakes_botops_then_returns_to_the_same_task(environment, readers, code_findings):
-    api, _ = built(environment)
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
-    run(api)
-    (task,) = botops_tasks(api)
-    code_findings[:] = []
-    cleared = run(api)
-    assert cleared["details"]["cleared"] == ["push_stuck:A"] and cleared["woke"] == 1
-    (cleared_note,) = said(api, task["id"], "Cleared at")
-    assert "BotOps: close this task." in cleared_note
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
-    back = run(api)
-    assert back["woke"] == 1 and said(api, task["id"], "Back: Pushes are stuck")
-    assert [t["id"] for t in botops_tasks(api)] == [task["id"]]
 
 
-def test_a_task_botops_closed_is_opened_again_when_the_problem_returns(environment, readers, code_findings):
-    api, _ = built(environment)
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
-    run(api)
-    (first,) = botops_tasks(api)
-    code_findings[:] = []
-    run(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (first["id"],))
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
-    run(api)
-    tasks = botops_tasks(api)
-    assert len(tasks) == 2 and tasks[0]["id"] == first["id"]
-    assert tasks[1]["status"] not in ("done", "closed", "declined")
 
 
-def test_with_no_active_botops_nothing_is_filed_and_the_finding_is_listed(environment, readers, code_findings):
-    api, _ = built(environment)
-    set_botops(api, "paused")
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
-    result = run(api)
-    assert botops_tasks(api) == [] and result["woke"] == 0
-    assert result["details"]["unrouted"] == [{"signature": MH.signature("push_stuck"), "titles": ["Pushes are stuck"]}]
-    assert finding(api, "push_stuck:A")["present"] == 1
 
 
-def test_no_person_gets_a_task_from_check_health(environment, readers, code_findings):
-    api, _ = built(environment)
-    code_findings[:] = [item("push_stuck", key="push_stuck:A"), item("runner_outdated", key="runner_outdated:A")]
-    run(api)
-    run(api)
-    tasks = botops_tasks(api)
-    assert len(tasks) == 2 and {t["owner_id"] for t in tasks} == {"bot:botops"}
 
 
-def test_a_health_page_warning_is_filed_through_the_same_lifecycle(environment, readers, monkeypatch):
-    api, _ = built(environment)
-    page = [{"id": "disk:acme-mac", "label": "Disk space", "status": "warn", "summary": "92% full.",
-             "fixes": [{"label": "Free space"}]},
-            {"id": "invariant", "label": "Invariants", "status": "warn", "summary": "Read separately.", "fixes": []},
-            {"id": "backups", "label": "Backups", "status": "ok", "summary": "", "fixes": []}]
-    monkeypatch.setattr(health, "view", lambda c, *a, **k: {"checks": page})
-    run(api)
-    run(api)
-    (task,) = botops_tasks(api)
-    assert task["title"] == "Health: Disk space" and "Free space" in task["body"]
-    with api.app.state.store.read() as c:
-        rows = c.execute("SELECT key FROM health_findings WHERE present=1 AND pending=0 AND key LIKE 'page:%'").fetchall()
-    assert [r["key"] for r in rows] == ["page:disk:acme-mac"]
 
 
-def test_the_health_page_lists_each_open_finding_with_its_task(environment, readers, code_findings):
-    api, _ = built(environment)
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
-    run(api)
-    body = api.get("/api/v2/health/findings", headers=signed_in()).json()
-    (row,) = body["findings"]
-    assert row["key"] == "push_stuck:A" and row["tag"] == "urgent" and row["task_id"] == botops_tasks(api)[0]["id"]
-    assert body["botops"] is True and body["reports_without_asking"] is True
 
 
-def test_the_step_reads_its_findings_outside_the_write_lock(environment, readers, monkeypatch):
-    # The Health Monitor's scan read every finding inside the write transaction (7.2 s on TIDY, Oct 29): each runner call
-    # waited behind it. The reads run in a snapshot now; only the changes take the lock.
-    api, runner = built(environment)
-    store = api.app.state.store
-    holders = []
-    real = MH.findings
-
-    def watched(c, settings):
-        holders.append(len(store.writer.queue))                 # the write gate: holder plus waiters, 0 when none holds it
-        return real(c, settings)
-
-    monkeypatch.setattr(MH, "findings", watched)
-    runner_errors(api, runner, STREAM)
-    result = check_health.run_once(store, api.app.state.auth, store.settings)
-    assert "event_stream:" + runner["runner_id"] in result["details"]["filed"]
-    assert holders == [0]
 
 
-def test_a_tico_bug_is_one_ticket_then_a_comment_when_it_comes_back_worse(environment, readers, code_findings, hq):
-    api, _ = built(environment)
-    now, sig = datetime.now(timezone.utc), MH.signature("queue_idle")
-    code_findings[:] = [item("queue_idle", key="queue_idle:bot-1", kind=MH.BUG, title="Work waits with no turn")]
-    run(api, now)                                               # noisy: pending
-    first = file_due(api, run(api, now + timedelta(minutes=1)))[sig]
-    assert first["ticket"] and len(hq.tickets) == 1
-    again = file_due(api, run(api, now + timedelta(hours=25)))  # seen a third time, a day on: a comment, not a ticket
-    assert again[sig]["comment"] is True and len(hq.tickets) == 1
-    (ticket,) = hq.tickets.values()
-    assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (3 times)"]
 
 
-def test_with_the_team_rule_off_a_tico_bug_is_one_approval_and_nothing_leaves(environment, readers, code_findings, hq):
-    api, _ = built(environment)
-    set_rule(api, False)
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
-    sig = MH.signature("push_stuck")
-    first = file_due(api, run(api))[sig]
-    assert first["approval"] and hq.seen == []
-    (approval,) = open_approvals(api, "support")
-    assert approval["id"] == first["approval"]
-    again = api.post("/api/v2/health/findings/push_stuck:A/report", json={}, headers=signed_in()).json()
-    assert again == {"signature": sig, "approval": first["approval"], "again": True}     # still waiting for the person
-    assert len(open_approvals(api, "support")) == 1 and hq.seen == []
 
 
-def test_a_declined_approval_lets_the_tico_bug_be_reported_again(environment, readers, code_findings, hq):
-    api, _ = built(environment)
-    set_rule(api, False)
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
-    first = file_due(api, run(api))[MH.signature("push_stuck")]["approval"]
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE approvals SET decision='declined' WHERE id=?", (first,))
-    second = api.post("/api/v2/health/findings/push_stuck:A/report", json={}, headers=signed_in()).json()
-    assert second["approval"] and second["approval"] != first and "again" not in second
-    assert hq.seen == []
 
 
-def test_the_team_gets_at_most_five_new_tickets_a_day(environment, readers, code_findings, hq):
-    api, _ = built(environment)
-    store, sig = api.app.state.store, MH.signature("push_stuck")
-    with store.transaction() as c:
-        for i in range(5):
-            c.execute("INSERT INTO health_reports(signature,ticket_id,created_at,reported_occurrences) VALUES(?,?,?,1)",
-                      (f"hm-filed{i}", f"ticket-{i}", H.now()))
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
-    busy = file_due(api, run(api))[sig]
-    assert busy["deferred"] == "support_busy" and hq.tickets == {} and hq.seen == []
-    with store.transaction() as c:                              # the five were filed more than a day ago
-        c.execute("UPDATE health_reports SET created_at=?", (H.shift(H.now(), hours=-25),))
-    filed = file_due(api, run(api))[sig]
-    assert filed["ticket"] and len(hq.tickets) == 1
 
 
 def test_a_setup_finding_is_never_reported_to_the_tico_team(environment, readers, code_findings, hq):
@@ -459,49 +291,8 @@ def test_a_setup_finding_naming_a_bot_is_never_reported_to_the_tico_team(environ
         assert c.execute("SELECT count(*) FROM approvals WHERE kind='support'").fetchone()[0] == 0
 
 
-def test_a_report_the_owner_approved_is_the_teams_ticket_and_a_repeat_is_a_comment(environment, readers, hq):
-    api, runner = built(environment)
-    store = api.app.state.store
-    set_rule(api, False)
-    runner_errors(api, runner, STREAM)
-    run(api)
-    url = f"/api/v2/health/findings/event_stream:{runner['runner_id']}/report"
-    approval = api.post(url, json={}, headers=signed_in()).json()["approval"]
-    with store.transaction() as c:
-        owner = api.app.state.auth.owner_identity(c)
-        c.execute("UPDATE approvals SET decision='approved', decided_by_id=? WHERE id=?", (owner.actor, approval))
-    api.app.state.support.file_approved(owner, approval)
-    assert json.loads(hq.seen[-1].content)["source"] == "health_monitor"
-    with store.read() as c:
-        (request_key, source) = c.execute("SELECT request_key, json_extract(sent,'$.source') FROM support_tickets").fetchone()
-    assert request_key == "approval:" + approval and source == "health_monitor"
-    assert api.get("/api/v2/support/tickets", headers=signed_in()).json()["tickets"] == []
-    runner_errors(api, runner, [])
-    run(api)
-    runner_errors(api, runner, STREAM)
-    run(api)
-    repeat = api.post(url, json={}, headers=signed_in())
-    assert repeat.status_code == 200 and repeat.json()["comment"], repeat.text
-    (ticket,) = hq.tickets.values()
-    assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (2 times)"]
 
 
-@pytest.mark.parametrize("process,shown", [
-    ("container:acme-tico-1", "a Tico container"),
-    ("container:acme-server-1", "the Tico server container"),
-    ("process:AcmePayroll", "a process"),
-    ("process:python3", "process python3"),
-])
-def test_a_busy_process_is_reported_by_its_tico_name_only(environment, readers, hq, process, shown):
-    api, runner = built(environment)
-    with api.app.state.store.transaction() as c:
-        MH.record_idle(c, runner["runner_id"],
-                       MH.IdleLoad(sampled_at=H.now(), busy=[MH.IdleEntry(name=process, cpu=90, mb=300)]))
-    result = run(api)
-    assert result["details"]["filed"] == [f"local_busy:{runner['runner_id']}:{process}"]
-    file_due(api, result)
-    message = json.loads(hq.seen[0].content)["message"]
-    assert f"Process: {shown}\n" in message and "acme" not in message.lower()
 
 
 def test_the_idle_load_is_taken_from_a_computer_only(environment):
@@ -566,109 +357,20 @@ def run_step(api, when):
         return check_health.run(r, ctx)
 
 
-def test_the_step_runs_on_a_read_only_connection_and_files_through_the_store(environment, readers, code_findings):
-    api, _ = built(environment)
-    store, auth = api.app.state.store, api.app.state.auth
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
-    ctx = check_health.context(auth, store.settings, store)
-    with store.read() as r:
-        r.execute("PRAGMA query_only=1")          # a write on the read connection fails from here on
-        try:
-            result = check_health.run(r, ctx)
-        finally:
-            r.execute("PRAGMA query_only=0")
-    assert result["woke"] == 1 and result["details"]["filed"] == ["push_stuck:A"]
-    assert [t["owner_id"] for t in botops_tasks(api)] == ["bot:botops"]
 
 
-def test_a_tico_bug_the_step_finds_is_reported_by_run_after_its_write_transaction(environment, readers, code_findings, hq):
-    api, _ = built(environment)
-    now, sig = datetime.now(timezone.utc), MH.signature("queue_idle")
-    code_findings[:] = [item("queue_idle", key="queue_idle:bot-1", kind=MH.BUG, title="Work waits with no turn")]
-    run_step(api, now)                                     # noisy: pending until its second run
-    result = run_step(api, now + timedelta(minutes=1))
-    assert result["details"]["reports_due"] == [sig]
-    assert result["details"]["reports"][sig]["ticket"] and len(hq.tickets) == 1
 
 
-def test_the_readers_write_nothing_on_the_read_connection(environment, monkeypatch):
-    # The real readers, the Health page's own checks included: a reader that wrote would fail on the read connection and
-    # be noted here.
-    api, runner = built(environment)
-    store, auth = api.app.state.store, api.app.state.auth
-    runner_errors(api, runner, STREAM)
-    monkeypatch.setattr(hosted_updates, "notice", lambda *a, **k: {})
-    monkeypatch.setattr(replication, "status", lambda *a, **k: {})
-    ctx = check_health.context(auth, store.settings, store)
-    with store.read() as r:
-        r.execute("PRAGMA query_only=1")
-        try:
-            _, found, notes = check_health.gather(r, ctx)
-        finally:
-            r.execute("PRAGMA query_only=0")
-    assert notes == {}, notes
-    assert any(row["key"].startswith("event_stream:") for row in found)
 
 
-def test_one_production_check_hit_is_one_botops_task_and_no_person_task(environment, readers, monkeypatch):
-    api, _ = built(environment)
-    monkeypatch.setattr(invariants, "CHECKS", [fake_check("lease_overdue", ["r1", "r2"])])
-    result = run(api)
-    assert [t["title"] for t in botops_tasks(api)] == ["Health: Production check: Runs past their lease"]
-    assert result["woke"] == 1 and result["details"]["filed"] == ["inv:lease_overdue"]
-    with api.app.state.store.read() as c:
-        person = c.execute("SELECT count(*) FROM tasks WHERE title LIKE '%Production check%' "
-                           "AND owner_id NOT LIKE 'bot:%'").fetchone()[0]
-    assert person == 0
 
 
-def test_a_production_check_on_the_health_page_is_filed_once_as_an_invariant(environment, readers, monkeypatch):
-    api, _ = built(environment)
-    monkeypatch.setattr(invariants, "CHECKS", [fake_check("lease_overdue", ["r1"])])
-    row = {"id": "invariant:lease_overdue", "label": "Runs past their lease", "status": "warn", "summary": "x", "fixes": []}
-    monkeypatch.setattr(health, "view", lambda c, *a, **k: {"checks": [row]})
-    run(api)
-    assert filed_keys(api) == ["inv:lease_overdue"]
-    assert finding(api, "inv:lease_overdue")["check_id"] == "inv:lease_overdue"
 
 
-def test_the_invariant_sweep_raises_no_task_and_keeps_only_the_health_state(environment, readers, monkeypatch):
-    api, _ = built(environment)
-    store, auth = api.app.state.store, api.app.state.auth
-    monkeypatch.setattr(invariants, "CHECKS", [fake_check("lease_overdue", ["r1"])])
-    before = task_count(api)
-    assert invariants.sweep(store, auth, store.settings, datetime.now(timezone.utc)) == {"lease_overdue": 1}
-    assert task_count(api) == before
-    with store.read() as c:
-        assert tuple(c.execute("SELECT firing, count, task_id FROM invariant_state WHERE check_id='lease_overdue'")
-                     .fetchone()) == (1, 1, None)
 
 
-def test_the_health_page_links_a_production_check_to_the_botops_task_check_health_filed(environment, readers, monkeypatch):
-    api, _ = built(environment)
-    store = api.app.state.store
-    monkeypatch.setattr(invariants, "CHECKS", [fake_check("lease_overdue", ["r1"])])
-    invariants.sweep(store, api.app.state.auth, store.settings, datetime.now(timezone.utc))
-    with store.read() as c:
-        assert invariants.health_checks(c)[0]["fixes"] == [], "the sweep raised no task to link"
-    run(api)
-    (task,) = botops_tasks(api)
-    with store.read() as c:
-        (row,) = invariants.health_checks(c)
-    assert row["id"] == "invariant:lease_overdue"
-    assert row["fixes"] == [{"label": "Open the alert", "href": "#/tasks/" + task["id"], "tab": "", "click": ""}]
 
 
-def test_a_task_whose_finding_rows_are_gone_gets_its_cleared_comment(environment, readers, code_findings):
-    api, _ = built(environment)
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
-    run(api)
-    (task,) = botops_tasks(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM health_findings")               # rows lost (a restore): nothing says the problem is there
-    code_findings.clear()
-    run(api)
-    assert said(api, task["id"], "Cleared at") and registry(api, "push_stuck")["cleared"] is True
 
 
 def test_the_first_run_adopts_the_health_monitor_task_it_still_has_instead_of_opening_one(environment, readers, code_findings):
@@ -946,37 +648,6 @@ def test_the_pending_column_is_added_once_and_a_file_with_no_table_is_skipped():
     assert empty.execute("SELECT count(*) FROM sqlite_master WHERE name='health_findings'").fetchone()[0] == 0
 
 
-def test_a_default_login_out_of_quota_is_a_finding_until_a_turn_there_completes(environment, readers):
-    api, runner = built(environment)
-    rid = runner["runner_id"]
-    key = f"default_login_limited:{rid}:codex"
-    # The Oct 18 case: hops to Codex on the computer's default login (no profile) and a check model, all refused at
-    # once with no reset time. A hop's usage names only the primary that spent tokens.
-    turn(api, rid, {**QUOTA, "fallback": "codex", "primary_limited": True,
-                    "usage": {"runtime": "claude", "segments": [{"runtime": "claude"}]}}, 50)
-    assert key not in login_findings(api)                       # one limit is not yet a pattern
-    turn(api, rid, {**QUOTA, "check": "codex"}, 40)
-    turn(api, rid, {"outcome": "failed", "fallback": "codex", "profile_used": None}, 35)   # another failure: says nothing
-    turn(api, rid, {**QUOTA, "fallback": "codex"}, 30)
-    # The same runtime signed in as a subscription profile is not the default login, and works.
-    turn(api, rid, {"outcome": "completed", "fallback": "codex", "profile_used": "work"}, 20)
-    # Claude on the default login works: only Codex is out.
-    turn(api, rid, {"outcome": "completed", "profile_used": None, "usage": {"runtime": "claude"}}, 10)
-    found = login_findings(api)
-    assert list(found) == [key], found
-    row_item = found[key]
-    assert row_item["kind"] == "setup" and row_item["title"] == f"{CANARY}'s default Codex login is out of quota", row_item
-    assert "3 turns on it since" in row_item["detail"] and "no reset time" in row_item["detail"], row_item["detail"]
-    assert "fall back to it, will fail" in row_item["detail"]
-    # Noisy like the other login checks: its second run files it. A turn on that login that completes clears it.
-    assert key in keys(api)
-    run(api)
-    run(api)
-    assert finding(api, key)["present"] == 1
-    turn(api, rid, {"outcome": "completed", "check": "codex", "profile_used": None}, 5)
-    assert login_findings(api) == {}
-    run(api)
-    assert finding(api, key)["present"] == 0
 
 def test_a_paused_bots_routines_are_not_a_finding(environment):
     api, _ = built(environment)                                           # pausing holds routines by design (#500)
@@ -987,116 +658,13 @@ def test_a_paused_bots_routines_are_not_a_finding(environment):
         c.execute("UPDATE bots SET state='paused' WHERE slug='coo'")
     assert keys(api) == []
 
-@pytest.mark.parametrize("auto,enabled,config,raised", [
-    (True, ("anthropic", "openai"), None, False),                      # the company's Codex row takes the turn
-    (True, ("anthropic", "openai"), {"runtime": "claude"}, False),
-    (False, ("anthropic", "openai"), None, True),                      # the owner turned automatic fallback off
-    (True, ("anthropic",), None, True),                                # no row on another runtime
-    (True, ("openai",), {"runtime": "codex"}, True),                   # the only row is the bot's own runtime...
-    (True, ("anthropic", "openai"), {"fallback": {"off": True}}, True),   # ...or the bot turned fallback off...
-    (True, ("anthropic", "openai"), {"fallback": {"harness": "codex"}}, True),   # ...or names one with no model
-])
-def test_limited_no_fallback_counts_the_company_fallback(environment, auto, enabled, config, raised):
-    api, _ = built(environment)
-    company(api, enabled, auto)
-    limited(api, config=config)
-    with api.app.state.store.read() as c:
-        keys = {item["key"] for item in MH.findings(c, api.app.state.store.settings)}
-    assert ("limited_no_fallback:" + SECRET_BOT in keys) is raised
 
-def test_a_bots_own_fallback_still_counts_with_company_fallback_off(environment):
-    api, _ = built(environment)
-    company(api, auto=False)
-    limited(api, config={"fallback": {"harness": "codex", "model": "gpt-6-luna"}})
-    with api.app.state.store.read() as c:
-        assert not [i for i in MH.findings(c, api.app.state.store.settings)
-                    if i["check_id"] == "limited_no_fallback"]
 
-@pytest.mark.parametrize("reset_minutes,raised", [(None, True), (60, True), (-1, False)])
-def test_a_default_login_limit_clears_when_its_reset_time_passes(environment, reset_minutes, raised):
-    api, runner = built(environment)
-    reset = None if reset_minutes is None else H.shift(H.now(), minutes=reset_minutes)
-    for ago in (30, 20):
-        turn(api, runner["runner_id"], {**QUOTA, "check": "codex", "limit_resets_at": reset}, ago)
-    found = login_findings(api)
-    assert bool(found) is raised, found
-    if reset_minutes == 60:
-        assert "resets at " + reset[:16].replace("T", " ") + " UTC" in next(iter(found.values()))["detail"]
 
-def test_a_default_login_limit_older_than_a_day_is_not_a_finding(environment):
-    api, runner = built(environment)
-    for ago in (25 * 60, 24 * 60 + 30):
-        turn(api, runner["runner_id"], {**QUOTA, "check": "codex"}, ago)
-    assert login_findings(api) == {}
 
-def test_turns_that_failed_without_a_limit_are_not_a_quota_finding(environment):
-    api, runner = built(environment)
-    for ago in (30, 20):
-        turn(api, runner["runner_id"], {"outcome": "failed", "check": "codex", "profile_used": None}, ago)
-    assert login_findings(api) == {}
-    turn(api, runner["runner_id"], {**QUOTA, "check": "codex"}, 10)       # one limit among them is still one
-    assert login_findings(api) == {}
 
-def test_a_bots_own_key_is_not_the_computers_login(environment):
-    api, runner = built(environment)
-    rid = runner["runner_id"]
-    company(api, ("google", "openrouter", "openai"))
-    with api.app.state.store.transaction() as c:
-        H.sync_registry(c, {b: {"name": b, "status": "active"} for b in ("gem-a", "gem-b", "pi-a")}, None)
-        for bot, harness in (("gem-a", "gemini-cli"), ("gem-b", "gemini-cli"), ("pi-a", "pi")):
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,owner_id) VALUES(?,'ana')", (bot,))
-            BS.write(c, bot, {'harness': harness})
-    # The Gemini CLI and pi sign in with each bot's own key (`api_keys = "bot"`): gem-a out of quota on its key, as a
-    # turn of its own, a check and a fallback, says nothing about the computer, and gem-b working there clears nothing.
-    turn(api, rid, {**QUOTA}, 50, bot="gem-a")
-    turn(api, rid, {**QUOTA, "usage": {"runtime": "gemini", "harness": "gemini-cli"}}, 45, bot="gem-a")
-    turn(api, rid, {**QUOTA, "check": "gemini"}, 40, bot="gem-a")
-    turn(api, rid, {**QUOTA, "fallback": "pi"}, 35, bot="pi-a")
-    turn(api, rid, {**QUOTA, "fallback": "pi"}, 30, bot="pi-a")
-    assert login_findings(api) == {}
-    # Codex is signed in by the computer: two limits there are its finding, and gem-b's completed turn leaves it.
-    turn(api, rid, {**QUOTA, "check": "codex"}, 25, bot="gem-a")
-    turn(api, rid, {**QUOTA, "fallback": "codex"}, 20, bot="pi-a")
-    turn(api, rid, {"outcome": "completed", "profile_used": None}, 10, bot="gem-b")
-    assert list(login_findings(api)) == [f"default_login_limited:{rid}:codex"]
 
-@pytest.mark.parametrize("isolated", [True, False])
-def test_a_used_up_login_under_the_gateway_choice_is_one_plain_finding(environment, monkeypatch, isolated):
-    api, runner = built(environment)
-    rid = runner["runner_id"]
-    gateway_choice(api, monkeypatch, rid, isolated)
-    limited(api, config={"runtime": "claude"})
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
-                  (SECRET_BOT, rid, H.now()))
-    for ago in (30, 20):
-        turn(api, rid, {**QUOTA, "usage": {"runtime": "claude"}}, ago, bot=SECRET_BOT)
-    with api.app.state.store.read() as c:
-        found = [i for i in MH.findings(c, api.app.state.store.settings)
-                 if i["check_id"] in ("limited_no_fallback", "default_login_limited")]
-    if isolated:
-        # The Gateway takes the turn last: the bot is not stuck, and the login says so in plain words.
-        assert [(i["check_id"], i["title"]) for i in found] == [
-            ("default_login_limited", f"{CANARY}'s Claude login is used up")]
-        assert found[0]["detail"] == f"{CANARY}'s Claude login is used up. Bots are on Tico Gateway until it resets."
-        return
-    # A Mac skips the Gateway row, so the bot is stopped, and that finding says why and what to do.
-    stopped = [i for i in found if i["check_id"] == "limited_no_fallback"]
-    assert [i["title"] for i in stopped] == [f"{SECRET_BOT} stopped: its Claude login is used up"]
-    assert "no computer here can run Tico Gateway work" in stopped[0]["detail"]
-    assert stopped[0]["fix"] == "Sign in another Claude login, or add a Docker runner."
 
-def test_the_gateway_row_counts_as_a_fallback_only_under_the_gateway_choices(environment, monkeypatch):
-    api, runner = built(environment)
-    gateway_choice(api, monkeypatch, runner["runner_id"], True)
-    with api.app.state.store.transaction() as c:
-        record = providers.load(c)
-        providers.save(c, "human:test", {"expected_revision": record["revision"], "preset": "subscriptions"}, H.now())
-    limited(api, config={"runtime": "claude"})
-    with api.app.state.store.read() as c:
-        found = [i for i in MH.findings(c, api.app.state.store.settings)
-                 if i["check_id"] == "limited_no_fallback"]
-    assert [i["title"] for i in found] == [f"{SECRET_BOT} stopped on a usage limit and has no fallback model"]
 
 def test_the_monitor_files_for_botops_and_a_task_for_a_person_is_refused(api):
     # The Health Monitor gives its fixes to BotOps only (docs/health-monitor.md): a task for a person, and a hand-off to
@@ -1119,34 +687,8 @@ def test_the_monitor_files_for_botops_and_a_task_for_a_person_is_refused(api):
         assert handed.value.rule == "botops-only"
         assert H.task(c, fix["id"])["owner_id"] == "bot:botops"
 
-@pytest.mark.parametrize("release,severity", [("0.0.9", "bad"), ("0.4.40", "warn")])
-def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment, monkeypatch, release, severity):
-    monkeypatch.setenv("TICO_VERSION", "0.4.45")
-    api, runner = built(environment)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), runner["runner_id"]))
-        c.execute("INSERT INTO runner_versions(runner_id,release,reported_at) VALUES(?,?,?) ON CONFLICT(runner_id) "
-                  "DO UPDATE SET release=excluded.release,update_state='',update_error=''",
-                  (runner["runner_id"], release, H.now()))
-        found = {f["check_id"]: f for f in MH.findings(c, api.app.state.store.settings)}
-    assert found["runner_outdated"]["severity"] == severity
 
 
-@pytest.mark.parametrize("reason", ["will be recovered automatically on the next update",
-                                  "cannot recover: 1 changed file; commit or stash it first: app.py",
-                                  "switch it to main to follow releases"])
-def test_branch_blocks_give_botops_the_branch_and_its_recovery_or_refusal(environment, monkeypatch, reason):
-    monkeypatch.setenv("TICO_VERSION", "0.4.45")
-    api, runner = built(environment)
-    error = "the checkout is on branch tico/b427e9ee-fix-runner; " + reason
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), runner["runner_id"]))
-        c.execute("INSERT INTO runner_versions(runner_id,release,update_state,update_error,reported_at) "
-                  "VALUES(?,?,'blocked',?,?) ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,"
-                  "update_state=excluded.update_state,update_error=excluded.update_error",
-                  (runner["runner_id"], "0.4.40", error, H.now()))
-        found = next(f for f in MH.findings(c, api.app.state.store.settings) if f["check_id"] == "runner_outdated")
-    assert error in found["detail"] and found["fix"] == error
 
 def test_event_stream_counts_drops_and_not_the_ones_a_server_restart_caused(environment, readers, monkeypatch):
     api, runner = built(environment)
@@ -1249,83 +791,268 @@ def wake_jobs(api):
             "WHERE j.bot_id='botops' AND m.body LIKE 'Health wake: %'")]
 
 
-def test_the_step_reads_the_apps_settings_not_the_step_row(environment, readers, monkeypatch):
-    # The engine's ctx["settings"] is the step's own row (a dict). The readers and the report path need the app's settings.
-    api, _ = built(environment)
-    store, auth = api.app.state.store, api.app.state.auth
-    seen = {}
-
-    def view(c, who, settings, auth_, github, config):
-        seen["settings"] = settings
-        return {"checks": []}
-
-    monkeypatch.setattr(health, "view", view)
-    ctx = check_health.context(auth, store.settings, store)
-    ctx["settings"] = {"id": "check_health", "enabled": True}
-    with store.read() as c:
-        result = check_health.run(c, ctx)
-    assert seen["settings"] is store.settings
-    assert "code" not in result["details"]["notes"] and "page" not in result["details"]["notes"]
 
 
-@pytest.mark.parametrize("trigger", ["run_now", "schedule"])
-def test_maintenance_runs_health_and_files_reports_after_the_write_transaction(environment, readers, monkeypatch, trigger):
-    api, _ = built(environment)
-    store, auth = api.app.state.store, api.app.state.auth
-    reports = []
-
-    def findings(c, settings):
-        assert settings is store.settings and not store.writer.queue
-        return [item("worktree_error"), item("push_stuck", kind=MH.BUG)]
-
-    def file_reports(store_, auth_, settings, support_, due):
-        assert store_ is store and auth_ is auth and settings is store.settings
-        assert not store.writer.queue
-        reports.append(due)
-        return {MH.signature("push_stuck"): {"ticket": "synthetic"}}
-
-    monkeypatch.setattr(MH, "findings", findings)
-    monkeypatch.setattr(MH, "file_reports", file_reports)
-    if trigger == "run_now":
-        record, started = M.run_now(store, auth, "human:test", step="check_health", wait=True)
-        assert started
-    else:
-        monkeypatch.setattr(M, "_start", lambda store, auth, run_id, only, wait: M._execute(store, auth, run_id, only))
-        run_id = M.tick(store, auth, datetime.now(timezone.utc))
-        record = M.get_run(store, run_id)
-    step = next(s for s in record["steps"] if s["step"] == "check_health")
-    assert record["ok"] == 1 and step["status"] == "ran" and step["found"] == 2 and step["woke"] == 1
-    assert step["details"]["reports"][MH.signature("push_stuck")]["ticket"] == "synthetic"
-    assert reports == [[MH.signature("push_stuck")]]
-    with store.read() as c:
-        assert c.execute("SELECT cursor_at FROM maintenance_steps WHERE key='check_health'").fetchone()[0] == \
-            step["details"]["window_end"]
-    with store.transaction() as c:
-        M.save_step(c, "human:test", {"key": "check_health", "enabled": False})
-    record, _ = M.run_now(store, auth, "human:test", step="check_health", wait=True)
-    assert record["steps"][0]["status"] == "off" and len(reports) == 1
 
 
-@pytest.mark.parametrize("mode", ["rehearsal", "demo"])
-def test_the_live_health_step_skips_rehearsal_and_demo_copies(environment, readers, monkeypatch, mode):
-    api, _ = built(environment)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def test_a_busy_process_keeps_its_computers_sample_time_and_clears_when_that_time_is_too_old(environment, readers, code_findings):
+    api, runner = built(environment)
     store = api.app.state.store
-    monkeypatch.setattr(store.settings, mode, True)
+    with store.transaction() as c:
+        MH.record_idle(c, runner["runner_id"], MH.IdleLoad(sampled_at=H.now(),
+                                                            busy=[MH.IdleEntry(name="process:chrome", cpu=80.0, mb=900.0)]))
+    key = f"local_busy:{runner['runner_id']}:process:chrome"
+    sampled = H.shift(H.now(), hours=-1)
+    with store.transaction() as c:
+        c.execute("UPDATE health_findings SET first_seen_at=?, last_seen_at=? WHERE key=?", (sampled, sampled, key))
+    run(api)
+    assert finding(api, key)["last_seen_at"] == sampled and finding(api, key)["present"] == 1
+    run(api, datetime.now(timezone.utc) - timedelta(hours=1) + timedelta(hours=3))      # the sample is three hours old
+    assert finding(api, key)["present"] == 0
 
-    def unexpected(*args, **kwargs):
-        raise AssertionError("A rehearsal or demo copy must not scan or send health reports")
 
-    monkeypatch.setattr(check_health, "gather", unexpected)
-    monkeypatch.setattr(MH, "file_reports", unexpected)
-    record, _ = M.run_now(store, api.app.state.auth, "human:test", step="check_health", wait=True)
-    (step,) = record["steps"]
-    assert step["status"] == "skipped" and step["reason"] == "rehearsal or demo copy"
+# ----------------------------------------------------------------------------------------------------
+# Folded stories: one install walks each lifecycle; `_fresh` wipes the findings, tasks and wakes between sections.
+
+
+def _part_urgent(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    key = "event_stream:" + runner["runner_id"]
+    code_findings[:] = [item("event_stream", key=key, title="The event stream drops")]
+    result = run(api)
+    assert result["details"]["filed"] == [key] and result["woke"] == 1
+    (task,) = botops_tasks(api)
+    assert task["title"] == "Health: The event stream drops" and task["owner_id"] == "bot:botops"
+    assert [job["task"] for job in wake_jobs(api)] == [task["id"]]
+    assert finding(api, key)["pending"] == 0
+
+
+def _part_noisy(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    code_findings[:] = [item("runner_outdated", key="runner_outdated:R1", title="Computer R1 is outdated")]
+    first = run(api)
+    assert first["details"]["pending"] == ["runner_outdated:R1"] and botops_tasks(api) == []
+    second = run(api)
+    assert second["details"]["filed"] == ["runner_outdated:R1"] and len(botops_tasks(api)) == 1
+    assert finding(api, "runner_outdated:R1")["pending"] == 0
+
+
+def _part_noisy_passes(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    code_findings[:] = [item("runner_outdated", key="runner_outdated:R1")]
+    run(api)
+    code_findings[:] = []
+    result = run(api)
+    assert result["details"]["cleared"] == [] and botops_tasks(api) == []
+    assert finding(api, "runner_outdated:R1")["present"] == 0
+
+
+def _part_repeat(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    now = datetime.now(timezone.utc)
+    code_findings[:] = [item("event_stream", key="event_stream:R1", title="The event stream drops")]
+    run(api, now)
+    (task,) = botops_tasks(api)
+    run(api, now + timedelta(minutes=1))
+    assert finding(api, "event_stream:R1")["occurrences"] == 2 and registry(api, "event_stream")["count"] == 2
+    assert said(api, task["id"], "Still there") == []           # a repeat within the day adds to the count only
+    run(api, now + timedelta(hours=25))
+    (comment,) = said(api, task["id"], "Still there")            # a day on: one comment, and no wake
+    assert "seen 3 times" in comment and registry(api, "event_stream")["count"] == 3
+    assert len(botops_tasks(api)) == 1
+
+
+def _part_two_computers(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    code_findings[:] = [item("event_stream", key="event_stream:A", title="The event stream drops")]
+    run(api)
+    code_findings[:] = [item("event_stream", key="event_stream:A", title="The event stream drops"),
+                        item("event_stream", key="event_stream:B", title="The event stream drops")]
+    result = run(api)
+    (task,) = botops_tasks(api)
+    assert result["woke"] == 0 and len(said(api, task["id"], "Also on 2 places")) == 1
+    assert finding(api, "event_stream:B")["present"] == 1
+
+
+def _part_clears(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    run(api)
+    (task,) = botops_tasks(api)
+    code_findings[:] = []
+    cleared = run(api)
+    assert cleared["details"]["cleared"] == ["push_stuck:A"] and cleared["woke"] == 1
+    (cleared_note,) = said(api, task["id"], "Cleared at")
+    assert "BotOps: close this task." in cleared_note
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    back = run(api)
+    assert back["woke"] == 1 and said(api, task["id"], "Back: Pushes are stuck")
+    assert [t["id"] for t in botops_tasks(api)] == [task["id"]]
+
+
+def _part_reopens(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    run(api)
+    (first,) = botops_tasks(api)
+    code_findings[:] = []
+    run(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (first["id"],))
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    run(api)
+    tasks = botops_tasks(api)
+    assert len(tasks) == 2 and tasks[0]["id"] == first["id"]
+    assert tasks[1]["status"] not in ("done", "closed", "declined")
+
+
+def _part_rows_gone(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    run(api)
+    (task,) = botops_tasks(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM health_findings")               # rows lost (a restore): nothing says the problem is there
+    code_findings.clear()
+    run(api)
+    assert said(api, task["id"], "Cleared at") and registry(api, "push_stuck")["cleared"] is True
+
+
+def _part_clear_fails(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    run(api)
+    (task,) = botops_tasks(api)
+    real = H.task_comment
+    failures = []
+
+    def flaky(conn, actor, task_id, text, wake=True, **kwargs):
+        if not failures:
+            failures.append(text)
+            raise RuntimeError("the store is busy")
+        return real(conn, actor, task_id, text, wake=wake, **kwargs)
+
+    monkeypatch.setattr(H, "task_comment", flaky)
+    code_findings[:] = []
+    first = run(api)
+    assert len(failures) == 1 and first["woke"] == 0
+    assert registry(api, "push_stuck")["cleared"] is False and said(api, task["id"], "Cleared at") == []
+    second = run(api)
+    assert second["woke"] == 1 and len(said(api, task["id"], "Cleared at")) == 1
+    assert registry(api, "push_stuck")["cleared"] is True
+
+
+def _part_no_botops(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    set_botops(api, "paused")
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    result = run(api)
+    assert botops_tasks(api) == [] and result["woke"] == 0
+    assert result["details"]["unrouted"] == [{"signature": MH.signature("push_stuck"), "titles": ["Pushes are stuck"]}]
+    assert finding(api, "push_stuck:A")["present"] == 1
+
+
+def _part_no_person(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    code_findings[:] = [item("push_stuck", key="push_stuck:A"), item("runner_outdated", key="runner_outdated:A")]
+    run(api)
+    run(api)
+    tasks = botops_tasks(api)
+    assert len(tasks) == 2 and {t["owner_id"] for t in tasks} == {"bot:botops"}
+
+
+def _part_person_owned(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    store = api.app.state.store
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    run(api)
+    (first,) = botops_tasks(api)
     with store.read() as c:
-        assert c.execute("SELECT cursor_at FROM maintenance_steps WHERE key='check_health'").fetchone()[0] is None
+        person = api.app.state.auth.owner_identity(c).actor
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET owner_id=? WHERE id=?", (person, first["id"]))
+    before = len(comments)                                      # the creation's wake is on the task already: count from here
+    code_findings[:] = []
+    cleared = run(api)
+    assert cleared["woke"] == 0 and [row for row in comments[before:] if row[0] == first["id"]] == []
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    back = run(api)
+    assert back["woke"] == 1 and said(api, first["id"], "Back:") == []
+    (new,) = [t for t in botops_tasks(api) if t["id"] != first["id"]]
+    assert new["owner_id"] == "bot:botops" and new["status"] not in ("done", "closed", "declined")
 
 
-def test_with_support_off_a_tico_bug_leaves_for_no_one_and_asks_nothing(environment, readers, code_findings, hq, monkeypatch):
-    api, _ = built(environment)
+def _part_one_ticket(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    now, sig = datetime.now(timezone.utc), MH.signature("queue_idle")
+    code_findings[:] = [item("queue_idle", key="queue_idle:bot-1", kind=MH.BUG, title="Work waits with no turn")]
+    run(api, now)                                               # noisy: pending
+    first = file_due(api, run(api, now + timedelta(minutes=1)))[sig]
+    assert first["ticket"] and len(hq.tickets) == 1
+    again = file_due(api, run(api, now + timedelta(hours=25)))  # seen a third time, a day on: a comment, not a ticket
+    assert again[sig]["comment"] is True and len(hq.tickets) == 1
+    (ticket,) = hq.tickets.values()
+    assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (3 times)"]
+
+
+def _part_five_a_day(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    store, sig = api.app.state.store, MH.signature("push_stuck")
+    with store.transaction() as c:
+        for i in range(5):
+            c.execute("INSERT INTO health_reports(signature,ticket_id,created_at,reported_occurrences) VALUES(?,?,?,1)",
+                      (f"hm-filed{i}", f"ticket-{i}", H.now()))
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
+    busy = file_due(api, run(api))[sig]
+    assert busy["deferred"] == "support_busy" and hq.tickets == {} and hq.seen == []
+    with store.transaction() as c:                              # the five were filed more than a day ago
+        c.execute("UPDATE health_reports SET created_at=?", (H.shift(H.now(), hours=-25),))
+    filed = file_due(api, run(api))[sig]
+    assert filed["ticket"] and len(hq.tickets) == 1
+
+
+def _part_after_write(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    now, sig = datetime.now(timezone.utc), MH.signature("queue_idle")
+    code_findings[:] = [item("queue_idle", key="queue_idle:bot-1", kind=MH.BUG, title="Work waits with no turn")]
+    run_step(api, now)                                     # noisy: pending until its second run
+    result = run_step(api, now + timedelta(minutes=1))
+    assert result["details"]["reports_due"] == [sig]
+    assert result["details"]["reports"][sig]["ticket"] and len(hq.tickets) == 1
+
+
+def _part_support_off(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
     store = api.app.state.store
     sig = MH.signature("push_stuck")
     code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
@@ -1338,10 +1065,83 @@ def test_with_support_off_a_tico_bug_leaves_for_no_one_and_asks_nothing(environm
         assert c.execute("SELECT count(*) FROM health_reports").fetchone()[0] == 0
 
 
-@pytest.mark.parametrize("requester", ["bot:botops", H.KEEPER])
-def test_an_approved_report_is_sent_as_its_requester_and_a_failed_send_waits(environment, readers, code_findings,
-                                                                           hq, monkeypatch, requester):
-    api, _ = built(environment)
+def _part_daily_comment(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    t0, sig = clock.at, MH.signature("push_stuck")
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
+    file_due(api, run(api))                                              # the ticket
+    for hours in (1, 2):
+        clock.at = t0 + timedelta(hours=hours)
+        assert file_due(api, run(api)) == {}                             # seen again, under a day from the report
+
+    def seen_again():
+        (ticket,) = hq.tickets.values()
+        return [m for m in ticket["messages"] if m["body"].startswith("[Health Monitor] Seen again")]
+
+    assert seen_again() == []
+    clock.at = t0 + timedelta(hours=25)
+    assert file_due(api, run(api))[sig]["comment"] is True and len(seen_again()) == 1
+    for hours in (26, 27):
+        clock.at = t0 + timedelta(hours=hours)
+        file_due(api, run(api))
+    assert len(seen_again()) == 1                                        # the day counts from the comment, not the ticket
+
+
+def _part_one_approval(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    set_rule(api, False)
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
+    sig = MH.signature("push_stuck")
+    first = file_due(api, run(api))[sig]
+    assert first["approval"] and hq.seen == []
+    (approval,) = open_approvals(api, "support")
+    assert approval["id"] == first["approval"]
+    again = api.post("/api/v2/health/findings/push_stuck:A/report", json={}, headers=signed_in()).json()
+    assert again == {"signature": sig, "approval": first["approval"], "again": True}     # still waiting for the person
+    assert len(open_approvals(api, "support")) == 1 and hq.seen == []
+
+
+def _part_declined(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    set_rule(api, False)
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
+    first = file_due(api, run(api))[MH.signature("push_stuck")]["approval"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE approvals SET decision='declined' WHERE id=?", (first,))
+    second = api.post("/api/v2/health/findings/push_stuck:A/report", json={}, headers=signed_in()).json()
+    assert second["approval"] and second["approval"] != first and "again" not in second
+    assert hq.seen == []
+
+
+def _part_owner_approved(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    _readers(monkeypatch)
+    store = api.app.state.store
+    set_rule(api, False)
+    runner_errors(api, runner, STREAM)
+    run(api)
+    url = f"/api/v2/health/findings/event_stream:{runner['runner_id']}/report"
+    approval = api.post(url, json={}, headers=signed_in()).json()["approval"]
+    with store.transaction() as c:
+        owner = api.app.state.auth.owner_identity(c)
+        c.execute("UPDATE approvals SET decision='approved', decided_by_id=? WHERE id=?", (owner.actor, approval))
+    api.app.state.support.file_approved(owner, approval)
+    assert json.loads(hq.seen[-1].content)["source"] == "health_monitor"
+    with store.read() as c:
+        (request_key, source) = c.execute("SELECT request_key, json_extract(sent,'$.source') FROM support_tickets").fetchone()
+    assert request_key == "approval:" + approval and source == "health_monitor"
+    assert api.get("/api/v2/support/tickets", headers=signed_in()).json()["tickets"] == []
+    runner_errors(api, runner, [])
+    run(api)
+    runner_errors(api, runner, STREAM)
+    run(api)
+    repeat = api.post(url, json={}, headers=signed_in())
+    assert repeat.status_code == 200 and repeat.json()["comment"], repeat.text
+    (ticket,) = hq.tickets.values()
+    assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (2 times)"]
+
+
+def _part_sent_as_requester(api, runner, monkeypatch, *, requester, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
     store, support, auth, settings = api.app.state.store, api.app.state.support, api.app.state.auth, api.app.state.store.settings
     set_rule(api, False)
     sig = MH.signature("push_stuck")
@@ -1376,9 +1176,8 @@ def test_an_approved_report_is_sent_as_its_requester_and_a_failed_send_waits(env
     assert MH.file_reports(store, auth, settings, support, []) == {}      # sent once: nothing waits any more
 
 
-def test_approved_reports_share_the_daily_cap_and_wait_until_the_next_day(environment, readers, code_findings, hq, clock,
-                                                                          monkeypatch):
-    api, _ = built(environment)
+def _part_approved_cap(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
     store, auth, support = api.app.state.store, api.app.state.auth, api.app.state.support
     set_rule(api, False)
     code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG),
@@ -1415,8 +1214,8 @@ def test_approved_reports_share_the_daily_cap_and_wait_until_the_next_day(enviro
     assert sent[waiting]["ticket"] and len(hq.tickets) == 2
 
 
-def test_sending_an_approval_resets_the_repeat_count_and_daily_throttle(environment, readers, code_findings, hq, clock):
-    api, _ = built(environment)
+def _part_send_resets(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
     store, sig = api.app.state.store, MH.signature("push_stuck")
     set_rule(api, False)
     code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG)]
@@ -1439,31 +1238,79 @@ def test_sending_an_approval_resets_the_repeat_count_and_daily_throttle(environm
     assert file_due(api, run(api))[sig]["comment"] is True and len(ticket["messages"]) == 1
 
 
-def test_a_repeat_of_a_tico_bug_is_commented_once_a_day_counted_from_the_last_report(environment, readers, code_findings, hq,
-                                                                                    clock):
-    api, _ = built(environment)
-    t0, sig = clock.at, MH.signature("push_stuck")
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
-    file_due(api, run(api))                                              # the ticket
-    for hours in (1, 2):
-        clock.at = t0 + timedelta(hours=hours)
-        assert file_due(api, run(api)) == {}                             # seen again, under a day from the report
+def _part_outside_lock(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    # The Health Monitor's scan read every finding inside the write transaction (7.2 s on TIDY, Oct 29): each runner call
+    # waited behind it. The reads run in a snapshot now; only the changes take the lock.
+    _readers(monkeypatch)
+    store = api.app.state.store
+    holders = []
+    real = MH.findings
 
-    def seen_again():
-        (ticket,) = hq.tickets.values()
-        return [m for m in ticket["messages"] if m["body"].startswith("[Health Monitor] Seen again")]
+    def watched(c, settings):
+        holders.append(len(store.writer.queue))                 # the write gate: holder plus waiters, 0 when none holds it
+        return real(c, settings)
 
-    assert seen_again() == []
-    clock.at = t0 + timedelta(hours=25)
-    assert file_due(api, run(api))[sig]["comment"] is True and len(seen_again()) == 1
-    for hours in (26, 27):
-        clock.at = t0 + timedelta(hours=hours)
-        file_due(api, run(api))
-    assert len(seen_again()) == 1                                        # the day counts from the comment, not the ticket
+    monkeypatch.setattr(MH, "findings", watched)
+    runner_errors(api, runner, STREAM)
+    result = check_health.run_once(store, api.app.state.auth, store.settings)
+    assert "event_stream:" + runner["runner_id"] in result["details"]["filed"]
+    assert holders == [0]
 
 
-def test_three_new_problems_in_one_run_wake_botops_once(environment, readers, code_findings, comments):
-    api, _ = built(environment)
+def _part_read_only(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    store, auth = api.app.state.store, api.app.state.auth
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    ctx = check_health.context(auth, store.settings, store)
+    with store.read() as r:
+        r.execute("PRAGMA query_only=1")          # a write on the read connection fails from here on
+        try:
+            result = check_health.run(r, ctx)
+        finally:
+            r.execute("PRAGMA query_only=0")
+    assert result["woke"] == 1 and result["details"]["filed"] == ["push_stuck:A"]
+    assert [t["owner_id"] for t in botops_tasks(api)] == ["bot:botops"]
+
+
+def _part_readers_write_nothing(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    # The real readers, the Health page's own checks included: a reader that wrote would fail on the read connection and
+    # be noted here.
+    store, auth = api.app.state.store, api.app.state.auth
+    runner_errors(api, runner, STREAM)
+    monkeypatch.setattr(hosted_updates, "notice", lambda *a, **k: {})
+    monkeypatch.setattr(replication, "status", lambda *a, **k: {})
+    ctx = check_health.context(auth, store.settings, store)
+    with store.read() as r:
+        r.execute("PRAGMA query_only=1")
+        try:
+            _, found, notes = check_health.gather(r, ctx)
+        finally:
+            r.execute("PRAGMA query_only=0")
+    assert notes == {}, notes
+    assert any(row["key"].startswith("event_stream:") for row in found)
+
+
+def _part_app_settings(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    # The engine's ctx["settings"] is the step's own row (a dict). The readers and the report path need the app's settings.
+    _readers(monkeypatch)
+    store, auth = api.app.state.store, api.app.state.auth
+    seen = {}
+
+    def view(c, who, settings, auth_, github, config):
+        seen["settings"] = settings
+        return {"checks": []}
+
+    monkeypatch.setattr(health, "view", view)
+    ctx = check_health.context(auth, store.settings, store)
+    ctx["settings"] = {"id": "check_health", "enabled": True}
+    with store.read() as c:
+        result = check_health.run(c, ctx)
+    assert seen["settings"] is store.settings
+    assert "code" not in result["details"]["notes"] and "page" not in result["details"]["notes"]
+
+
+def _part_wake_once(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
     three_new_problems(code_findings)
     result = run(api)
     assert result["woke"] == 1 and len(botops_tasks(api)) == 3
@@ -1480,9 +1327,9 @@ def test_three_new_problems_in_one_run_wake_botops_once(environment, readers, co
         assert {r[0] for r in c.execute("SELECT target FROM events WHERE action=?", (L.TASK_ACTION,))} == ids
 
 
-def test_a_grouped_wake_held_by_a_rule_waits_until_a_job_is_queued(environment, readers, code_findings, monkeypatch):
+def _part_held_by_rule(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     from backend import rules
-    api, _ = built(environment)
+    code_findings = _code_findings(monkeypatch)
     three_new_problems(code_findings)
     real = rules.judge
 
@@ -1501,9 +1348,8 @@ def test_a_grouped_wake_held_by_a_rule_waits_until_a_job_is_queued(environment, 
     assert wake_marker(api) is None
 
 
-def test_a_capped_task_waits_alone_and_the_rest_of_the_group_wakes(environment, readers, code_findings,
-                                                                    monkeypatch, clock):
-    api, _ = built(environment)
+def _part_capped_task(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
     three_new_problems(code_findings)
     gate = check_health._wake_allowed
     monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: [])
@@ -1519,8 +1365,8 @@ def test_a_capped_task_waits_alone_and_the_rest_of_the_group_wakes(environment, 
     assert len(wake_jobs(api)) == 2
 
 
-def test_the_fleet_cap_keeps_health_tasks_pending_until_the_hour_reopens(environment, readers, code_findings, clock):
-    api, _ = built(environment)
+def _part_fleet_cap(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
     three_new_problems(code_findings)
     with api.app.state.store.transaction() as c:
         for n in range(L.WAKES_PER_HOUR):
@@ -1533,8 +1379,8 @@ def test_the_fleet_cap_keeps_health_tasks_pending_until_the_hour_reopens(environ
     assert run(api)["woke"] == 1 and wake_marker(api) is None
 
 
-def test_another_maintenance_wake_for_botops_in_the_same_run_holds_health(environment, readers, code_findings):
-    api, _ = built(environment)
+def _part_other_wake(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
     store, auth = api.app.state.store, api.app.state.auth
     three_new_problems(code_findings)
     with store.transaction() as c:
@@ -1545,11 +1391,42 @@ def test_another_maintenance_wake_for_botops_in_the_same_run_holds_health(enviro
     assert result["woke"] == 0 and len(wake_marker(api)) == 3 and wake_jobs(api) == []
     with store.transaction() as c:
         c.execute("UPDATE maintenance_runs SET finished_at=? WHERE id=?", (H.now(), run_id))
+    clock.at += timedelta(seconds=1)                            # the frozen clock: the next run starts after the other wake
     assert run(api)["woke"] == 1 and wake_marker(api) is None
 
 
-def test_find_stuck_sends_botops_its_list_and_health_wakes_on_the_next_run(environment, code_findings, clock, monkeypatch):
-    api, _ = built(environment)
+def _part_gate_refuses(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    three_new_problems(code_findings)
+    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: [])
+    refused = run(api)
+    assert refused["woke"] == 0 and [row for row in comments if row[1]] == []
+    assert len(wake_marker(api)) == 3
+    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: ids)
+    allowed = run(api)
+    assert allowed["woke"] == 1 and len([row for row in comments if row[1]]) == 1
+    assert wake_marker(api) is None
+
+
+def _part_private_title(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    code_findings[:] = [item("push_stuck", key="push_stuck:A"), item("worktree_error", key="worktree_error:A")]
+    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: [])
+    run(api)
+    shared, private = wake_marker(api)
+    secret = "Confidential merger terms"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (shared,))
+        c.execute("UPDATE tasks SET private=1,title=? WHERE id=?", (secret, private))
+    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: ids)
+    assert run(api)["woke"] == 1
+    (text,) = said(api, shared, "Health wake: ")
+    assert f"(task {shared})" in text and "a private health task" in text
+    assert secret not in text and private not in text
+
+
+def _part_find_stuck(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
     store, auth = api.app.state.store, api.app.state.auth
     monkeypatch.setattr(M, "_start", lambda store, auth, run_id, only, wait: M._execute(store, auth, run_id, only))
     code_findings[:] = [item("push_stuck", key="push_stuck:A")]
@@ -1588,100 +1465,83 @@ def test_find_stuck_sends_botops_its_list_and_health_wakes_on_the_next_run(envir
                          (L.BOT_ACTION, MH.BOTOPS)).fetchone()[0] == 2
 
 
-def test_a_grouped_wake_on_a_shared_task_hides_a_private_tasks_title_and_id(environment, readers, code_findings, monkeypatch):
-    api, _ = built(environment)
-    code_findings[:] = [item("push_stuck", key="push_stuck:A"), item("worktree_error", key="worktree_error:A")]
-    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: [])
+def _part_one_hit(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    _readers(monkeypatch)
+    monkeypatch.setattr(invariants, "CHECKS", [fake_check("lease_overdue", ["r1", "r2"])])
+    result = run(api)
+    assert [t["title"] for t in botops_tasks(api)] == ["Health: Production check: Runs past their lease"]
+    assert result["woke"] == 1 and result["details"]["filed"] == ["inv:lease_overdue"]
+    with api.app.state.store.read() as c:
+        person = c.execute("SELECT count(*) FROM tasks WHERE title LIKE '%Production check%' "
+                           "AND owner_id NOT LIKE 'bot:%'").fetchone()[0]
+    assert person == 0
+
+
+def _part_on_page(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    _readers(monkeypatch)
+    monkeypatch.setattr(invariants, "CHECKS", [fake_check("lease_overdue", ["r1"])])
+    row = {"id": "invariant:lease_overdue", "label": "Runs past their lease", "status": "warn", "summary": "x", "fixes": []}
+    monkeypatch.setattr(health, "view", lambda c, *a, **k: {"checks": [row]})
     run(api)
-    shared, private = wake_marker(api)
-    secret = "Confidential merger terms"
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET private=0 WHERE id=?", (shared,))
-        c.execute("UPDATE tasks SET private=1,title=? WHERE id=?", (secret, private))
-    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: ids)
-    assert run(api)["woke"] == 1
-    (text,) = said(api, shared, "Health wake: ")
-    assert f"(task {shared})" in text and "a private health task" in text
-    assert secret not in text and private not in text
+    assert filed_keys(api) == ["inv:lease_overdue"]
+    assert finding(api, "inv:lease_overdue")["check_id"] == "inv:lease_overdue"
 
 
-def test_a_wake_the_gate_refuses_waits_in_the_marker_and_the_next_allowed_run_wakes_once(environment, readers, code_findings,
-                                                                                         comments, monkeypatch):
-    api, _ = built(environment)
-    three_new_problems(code_findings)
-    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: [])
-    refused = run(api)
-    assert refused["woke"] == 0 and [row for row in comments if row[1]] == []
-    assert len(wake_marker(api)) == 3
-    monkeypatch.setattr(check_health, "_wake_allowed", lambda c, ids: ids)
-    allowed = run(api)
-    assert allowed["woke"] == 1 and len([row for row in comments if row[1]]) == 1
-    assert wake_marker(api) is None
-
-
-def test_a_task_given_to_a_person_gets_no_comment_and_a_new_botops_task_opens(environment, readers, code_findings, comments):
-    api, _ = built(environment)
-    store = api.app.state.store
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
-    run(api)
-    (first,) = botops_tasks(api)
+def _part_sweep(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    _readers(monkeypatch)
+    store, auth = api.app.state.store, api.app.state.auth
+    monkeypatch.setattr(invariants, "CHECKS", [fake_check("lease_overdue", ["r1"])])
+    before = task_count(api)
+    assert invariants.sweep(store, auth, store.settings, datetime.now(timezone.utc)) == {"lease_overdue": 1}
+    assert task_count(api) == before
     with store.read() as c:
-        person = api.app.state.auth.owner_identity(c).actor
-    with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id=? WHERE id=?", (person, first["id"]))
-    before = len(comments)                                      # the creation's wake is on the task already: count from here
-    code_findings[:] = []
-    cleared = run(api)
-    assert cleared["woke"] == 0 and [row for row in comments[before:] if row[0] == first["id"]] == []
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
-    back = run(api)
-    assert back["woke"] == 1 and said(api, first["id"], "Back:") == []
-    (new,) = [t for t in botops_tasks(api) if t["id"] != first["id"]]
-    assert new["owner_id"] == "bot:botops" and new["status"] not in ("done", "closed", "declined")
+        assert tuple(c.execute("SELECT firing, count, task_id FROM invariant_state WHERE check_id='lease_overdue'")
+                     .fetchone()) == (1, 1, None)
 
 
-def test_a_busy_process_keeps_its_computers_sample_time_and_clears_when_that_time_is_too_old(environment, readers, code_findings):
-    api, runner = built(environment)
+def _part_links(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    _readers(monkeypatch)
     store = api.app.state.store
-    with store.transaction() as c:
-        MH.record_idle(c, runner["runner_id"], MH.IdleLoad(sampled_at=H.now(),
-                                                            busy=[MH.IdleEntry(name="process:chrome", cpu=80.0, mb=900.0)]))
-    key = f"local_busy:{runner['runner_id']}:process:chrome"
-    sampled = H.shift(H.now(), hours=-1)
-    with store.transaction() as c:
-        c.execute("UPDATE health_findings SET first_seen_at=?, last_seen_at=? WHERE key=?", (sampled, sampled, key))
-    run(api)
-    assert finding(api, key)["last_seen_at"] == sampled and finding(api, key)["present"] == 1
-    run(api, datetime.now(timezone.utc) - timedelta(hours=1) + timedelta(hours=3))      # the sample is three hours old
-    assert finding(api, key)["present"] == 0
-
-
-def test_a_cleared_comment_that_fails_is_tried_again_on_the_next_run(environment, readers, code_findings, monkeypatch):
-    api, _ = built(environment)
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    monkeypatch.setattr(invariants, "CHECKS", [fake_check("lease_overdue", ["r1"])])
+    invariants.sweep(store, api.app.state.auth, store.settings, datetime.now(timezone.utc))
+    with store.read() as c:
+        assert invariants.health_checks(c)[0]["fixes"] == [], "the sweep raised no task to link"
     run(api)
     (task,) = botops_tasks(api)
-    real = H.task_comment
-    failures = []
-
-    def flaky(conn, actor, task_id, text, wake=True, **kwargs):
-        if not failures:
-            failures.append(text)
-            raise RuntimeError("the store is busy")
-        return real(conn, actor, task_id, text, wake=wake, **kwargs)
-
-    monkeypatch.setattr(H, "task_comment", flaky)
-    code_findings[:] = []
-    first = run(api)
-    assert len(failures) == 1 and first["woke"] == 0
-    assert registry(api, "push_stuck")["cleared"] is False and said(api, task["id"], "Cleared at") == []
-    second = run(api)
-    assert second["woke"] == 1 and len(said(api, task["id"], "Cleared at")) == 1
-    assert registry(api, "push_stuck")["cleared"] is True
+    with store.read() as c:
+        (row,) = invariants.health_checks(c)
+    assert row["id"] == "invariant:lease_overdue"
+    assert row["fixes"] == [{"label": "Open the alert", "href": "#/tasks/" + task["id"], "tab": "", "click": ""}]
 
 
-def test_the_health_page_reads_the_github_app_the_store_holds(environment, readers, monkeypatch):
-    api, _ = built(environment)
+def _part_warning(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    _readers(monkeypatch)
+    page = [{"id": "disk:acme-mac", "label": "Disk space", "status": "warn", "summary": "92% full.",
+             "fixes": [{"label": "Free space"}]},
+            {"id": "invariant", "label": "Invariants", "status": "warn", "summary": "Read separately.", "fixes": []},
+            {"id": "backups", "label": "Backups", "status": "ok", "summary": "", "fixes": []}]
+    monkeypatch.setattr(health, "view", lambda c, *a, **k: {"checks": page})
+    run(api)
+    run(api)
+    (task,) = botops_tasks(api)
+    assert task["title"] == "Health: Disk space" and "Free space" in task["body"]
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT key FROM health_findings WHERE present=1 AND pending=0 AND key LIKE 'page:%'").fetchall()
+    assert [r["key"] for r in rows] == ["page:disk:acme-mac"]
+
+
+def _part_lists(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    code_findings = _code_findings(monkeypatch)
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
+    run(api)
+    body = api.get("/api/v2/health/findings", headers=signed_in()).json()
+    (row,) = body["findings"]
+    assert row["key"] == "push_stuck:A" and row["tag"] == "urgent" and row["task_id"] == botops_tasks(api)[0]["id"]
+    assert body["botops"] is True and body["reports_without_asking"] is True
+
+
+def _part_github(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    _readers(monkeypatch)
     store = api.app.state.store
     store.github_app = SimpleNamespace(row=lambda c: {"installation_id": 7, "org": "acme", "administration": 1})
     health.note_github_token(store, "The App's key was refused", "Check the GitHub App's private key")
@@ -1696,3 +1556,346 @@ def test_the_health_page_reads_the_github_app_the_store_holds(environment, reade
     run(api)                                                             # a noisy check files on its second run
     assert seen["github"] is store.github_app
     assert finding(api, "page:github")["severity"] == "bad" and finding(api, "page:github")["present"] == 1
+
+
+def _part_quota(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    _readers(monkeypatch)
+    rid = runner["runner_id"]
+    key = f"default_login_limited:{rid}:codex"
+    # The Oct 18 case: hops to Codex on the computer's default login (no profile) and a check model, all refused at
+    # once with no reset time. A hop's usage names only the primary that spent tokens.
+    turn(api, rid, {**QUOTA, "fallback": "codex", "primary_limited": True,
+                    "usage": {"runtime": "claude", "segments": [{"runtime": "claude"}]}}, 50)
+    assert key not in login_findings(api, runner['runner_id'])                       # one limit is not yet a pattern
+    turn(api, rid, {**QUOTA, "check": "codex"}, 40)
+    turn(api, rid, {"outcome": "failed", "fallback": "codex", "profile_used": None}, 35)   # another failure: says nothing
+    turn(api, rid, {**QUOTA, "fallback": "codex"}, 30)
+    # The same runtime signed in as a subscription profile is not the default login, and works.
+    turn(api, rid, {"outcome": "completed", "fallback": "codex", "profile_used": "work"}, 20)
+    # Claude on the default login works: only Codex is out.
+    turn(api, rid, {"outcome": "completed", "profile_used": None, "usage": {"runtime": "claude"}}, 10)
+    found = login_findings(api, runner['runner_id'])
+    assert list(found) == [key], found
+    row_item = found[key]
+    assert row_item["kind"] == "setup" and row_item["title"] == f"{CANARY}'s default Codex login is out of quota", row_item
+    assert "3 turns on it since" in row_item["detail"] and "no reset time" in row_item["detail"], row_item["detail"]
+    assert "fall back to it, will fail" in row_item["detail"]
+    # Noisy like the other login checks: its second run files it. A turn on that login that completes clears it.
+    assert key in keys(api)
+    run(api)
+    run(api)
+    assert finding(api, key)["present"] == 1
+    turn(api, rid, {"outcome": "completed", "check": "codex", "profile_used": None}, 5)
+    assert login_findings(api, runner['runner_id']) == {}
+    run(api)
+    assert finding(api, key)["present"] == 0
+
+
+def _part_reset(api, runner, monkeypatch, *, reset_minutes, raised, hq=None, comments=None, clock=None):
+    reset = None if reset_minutes is None else H.shift(H.now(), minutes=reset_minutes)
+    for ago in (30, 20):
+        turn(api, runner["runner_id"], {**QUOTA, "check": "codex", "limit_resets_at": reset}, ago)
+    found = login_findings(api, runner['runner_id'])
+    assert bool(found) is raised, found
+    if reset_minutes == 60:
+        assert "resets at " + reset[:16].replace("T", " ") + " UTC" in next(iter(found.values()))["detail"]
+
+
+def _part_older(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    for ago in (25 * 60, 24 * 60 + 30):
+        turn(api, runner["runner_id"], {**QUOTA, "check": "codex"}, ago)
+    assert login_findings(api, runner['runner_id']) == {}
+
+
+def _part_failed(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    for ago in (30, 20):
+        turn(api, runner["runner_id"], {"outcome": "failed", "check": "codex", "profile_used": None}, ago)
+    assert login_findings(api, runner['runner_id']) == {}
+    turn(api, runner["runner_id"], {**QUOTA, "check": "codex"}, 10)       # one limit among them is still one
+    assert login_findings(api, runner['runner_id']) == {}
+
+
+def _part_own_key(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    rid = runner["runner_id"]
+    company(api, ("google", "openrouter", "openai"))
+    with api.app.state.store.transaction() as c:
+        H.sync_registry(c, {b: {"name": b, "status": "active"} for b in ("gem-a", "gem-b", "pi-a")}, None)
+        for bot, harness in (("gem-a", "gemini-cli"), ("gem-b", "gemini-cli"), ("pi-a", "pi")):
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,owner_id) VALUES(?,'ana')", (bot,))
+            BS.write(c, bot, {'harness': harness})
+    # The Gemini CLI and pi sign in with each bot's own key (`api_keys = "bot"`): gem-a out of quota on its key, as a
+    # turn of its own, a check and a fallback, says nothing about the computer, and gem-b working there clears nothing.
+    turn(api, rid, {**QUOTA}, 50, bot="gem-a")
+    turn(api, rid, {**QUOTA, "usage": {"runtime": "gemini", "harness": "gemini-cli"}}, 45, bot="gem-a")
+    turn(api, rid, {**QUOTA, "check": "gemini"}, 40, bot="gem-a")
+    turn(api, rid, {**QUOTA, "fallback": "pi"}, 35, bot="pi-a")
+    turn(api, rid, {**QUOTA, "fallback": "pi"}, 30, bot="pi-a")
+    assert login_findings(api, runner['runner_id']) == {}
+    # Codex is signed in by the computer: two limits there are its finding, and gem-b's completed turn leaves it.
+    turn(api, rid, {**QUOTA, "check": "codex"}, 25, bot="gem-a")
+    turn(api, rid, {**QUOTA, "fallback": "codex"}, 20, bot="pi-a")
+    turn(api, rid, {"outcome": "completed", "profile_used": None}, 10, bot="gem-b")
+    assert list(login_findings(api, runner['runner_id'])) == [f"default_login_limited:{rid}:codex"]
+
+
+
+# ------------------------------------------------------------------------------------- the stories
+def _fresh(api, hq=None, comments=None):
+    """What a section of a story leaves behind, wiped: findings, reports, approvals, wakes and Health tasks (kept, renamed
+    and closed), so the next section starts as on a new install. BotOps is active again, the team rule back to its default."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET title='old: '||title, status='done' WHERE title LIKE 'Health:%'")
+        c.execute("UPDATE messages SET body='old '||body WHERE body LIKE 'Health wake: %'")
+        for table in ("health_findings", "health_reports", "invariant_state", "support_tickets"):
+            c.execute(f"DELETE FROM {table}")
+        c.execute("DELETE FROM approvals WHERE kind='support'")
+        c.execute("DELETE FROM registry_metadata WHERE key LIKE 'health-%'")
+        c.execute("DELETE FROM events WHERE action IN (?,?)", (L.BOT_ACTION, L.TASK_ACTION))
+        c.execute("UPDATE bots SET state='active' WHERE id='botops'")
+    set_rule(api, True)
+    if hq is not None:
+        hq.tickets.clear()
+        hq.seen.clear()
+    if comments is not None:
+        comments.clear()
+
+
+def _story(environment, monkeypatch, parts, **fixtures):
+    """One install for every part, each in its own monkeypatch scope after `_fresh`."""
+    api, runner = built(environment)
+    for part in parts:
+        _fresh(api, fixtures.get("hq"), fixtures.get("comments"))
+        with monkeypatch.context() as scope:
+            if isinstance(part, tuple):
+                part[0](api, runner, scope, **part[1], **fixtures)
+            else:
+                part(api, runner, scope, **fixtures)
+    return api
+
+
+def test_a_findings_botops_task_lifecycle_file_repeat_clear_return_reopen(environment, monkeypatch):
+    _story(environment, monkeypatch, [_part_urgent, _part_noisy, _part_noisy_passes, _part_repeat, _part_two_computers,
+                                      _part_clears, _part_reopens, _part_rows_gone, _part_clear_fails])
+
+
+def test_with_no_botops_or_a_person_owned_task_nothing_is_filed_to_a_person(environment, monkeypatch, comments):
+    _story(environment, monkeypatch, [_part_no_botops, _part_no_person, _part_person_owned], comments=comments)
+
+
+def test_a_tico_bug_reaches_hq_ticket_repeat_comment_support_off_and_daily_caps(environment, monkeypatch, hq, clock):
+    _story(environment, monkeypatch, [_part_one_ticket, _part_five_a_day, _part_after_write, _part_support_off,
+                                      _part_daily_comment], hq=hq, clock=clock)
+
+
+def test_with_the_team_rule_off_approval_decline_approve_and_send_as_the_requester(environment, monkeypatch, hq, clock):
+    _story(environment, monkeypatch, [_part_one_approval, _part_declined, _part_owner_approved,
+                                      (_part_sent_as_requester, {"requester": "bot:botops"}),
+                                      (_part_sent_as_requester, {"requester": H.KEEPER}),
+                                      _part_approved_cap, _part_send_resets], hq=hq, clock=clock)
+
+
+def test_the_step_reads_outside_the_write_lock_on_a_read_only_connection_with_the_apps_settings(environment, monkeypatch):
+    _story(environment, monkeypatch, [_part_outside_lock, _part_read_only, _part_readers_write_nothing, _part_app_settings])
+
+
+def test_a_grouped_wake_once_held_by_rule_gate_and_caps_then_wakes_once(environment, monkeypatch, comments, clock):
+    _story(environment, monkeypatch, [_part_wake_once, _part_held_by_rule, _part_capped_task, _part_fleet_cap,
+                                      _part_other_wake, _part_gate_refuses], comments=comments, clock=clock)
+
+
+def test_a_grouped_wake_hides_a_private_title_and_find_stuck_hands_botops_its_list(environment, monkeypatch, clock):
+    _story(environment, monkeypatch, [_part_private_title, _part_find_stuck], clock=clock)
+
+
+def test_a_production_check_is_one_botops_task_and_the_health_page_links_it(environment, monkeypatch):
+    _story(environment, monkeypatch, [_part_one_hit, _part_on_page, _part_sweep, _part_links])
+
+
+def test_the_health_page_feeds_the_lifecycle_lists_findings_and_reads_the_github_app(environment, monkeypatch):
+    _story(environment, monkeypatch, [_part_warning, _part_lists, _part_github])
+
+
+def test_a_default_login_limit_is_a_finding_until_a_turn_or_the_reset_clears_it(environment, monkeypatch):
+    api, _ = built(environment)
+    parts = [_part_quota, (_part_reset, {"reset_minutes": None, "raised": True}), (_part_reset, {"reset_minutes": 60, "raised": True}),
+             (_part_reset, {"reset_minutes": -1, "raised": False}), _part_older, _part_failed, _part_own_key]
+    for part in parts:
+        runner = machine(api, label=CANARY)                    # a computer of its own per case: its turns are its own
+        with monkeypatch.context() as scope:
+            _readers(scope)
+            part, extra = part if isinstance(part, tuple) else (part, {})
+            part(api, runner, scope, **extra)
+
+
+LIMITED_CASES = [
+    (True, ("anthropic", "openai"), None, False),                      # the company's Codex row takes the turn
+    (True, ("anthropic", "openai"), {"runtime": "claude"}, False),
+    (False, ("anthropic", "openai"), None, True),                      # the owner turned automatic fallback off
+    (True, ("anthropic",), None, True),                                # no row on another runtime
+    (True, ("openai",), {"runtime": "codex"}, True),                   # the only row is the bot's own runtime...
+    (True, ("anthropic", "openai"), {"fallback": {"off": True}}, True),   # ...or the bot turned fallback off...
+    (True, ("anthropic", "openai"), {"fallback": {"harness": "codex"}}, True),   # ...or names one with no model
+]
+
+
+def test_limited_no_fallback_counts_the_company_fallback_and_a_bots_own_fallback(environment):
+    api, _ = built(environment)
+    store = api.app.state.store
+    for n, (auto, enabled, config, raised) in enumerate(LIMITED_CASES):
+        bot = f"{SECRET_BOT}-{n}"                               # a bot of its own per case
+        company(api, enabled, auto)
+        limited(api, bot=bot, config=config)
+        with store.read() as c:
+            found = {i["key"] for i in MH.findings(c, store.settings)}
+        assert ("limited_no_fallback:" + bot in found) is raised, (n, auto, enabled, config)
+    company(api, auto=False)
+    limited(api, bot=SECRET_BOT, config={"fallback": {"harness": "codex", "model": "gpt-6-luna"}})
+    with store.read() as c:                                     # a bot's own fallback still counts with the company's off
+        assert not [i for i in MH.findings(c, store.settings)
+                    if i["check_id"] == "limited_no_fallback" and i["key"].endswith(SECRET_BOT)]
+
+
+def test_a_used_up_login_is_one_plain_finding_and_the_gateway_row_counts_only_under_the_gateway_choices(
+        environment, monkeypatch):
+    api, runner = built(environment)
+    rid, store = runner["runner_id"], api.app.state.store
+
+    def found_for(bot, *check_ids):
+        with store.read() as c:
+            return [i for i in MH.findings(c, store.settings) if i["check_id"] in check_ids and i["key"].endswith(bot)
+                    or i["check_id"] == "default_login_limited" and "default_login_limited" in check_ids and rid in i["key"]]
+
+    for n, isolated in enumerate((True, False)):
+        bot = f"{SECRET_BOT}-{n}"
+        gateway_choice(api, monkeypatch, rid, isolated)
+        limited(api, bot=bot, config={"runtime": "claude"})
+        with store.transaction() as c:
+            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
+                      (bot, rid, H.now()))
+        for ago in (30, 20):
+            turn(api, rid, {**QUOTA, "usage": {"runtime": "claude"}}, ago, bot=bot)
+        found = found_for(bot, "limited_no_fallback", "default_login_limited")
+        if isolated:
+            # The Gateway takes the turn last: the bot is not stuck, and the login says so in plain words.
+            assert [(i["check_id"], i["title"]) for i in found] == [
+                ("default_login_limited", f"{CANARY}'s Claude login is used up")]
+            assert found[0]["detail"] == f"{CANARY}'s Claude login is used up. Bots are on Tico Gateway until it resets."
+            continue
+        # A Mac skips the Gateway row, so the bot is stopped, and that finding says why and what to do.
+        stopped = [i for i in found if i["check_id"] == "limited_no_fallback"]
+        assert [i["title"] for i in stopped] == [f"{bot} stopped: its Claude login is used up"]
+        assert "no computer here can run Tico Gateway work" in stopped[0]["detail"]
+        assert stopped[0]["fix"] == "Sign in another Claude login, or add a Docker runner."
+    gateway_choice(api, monkeypatch, rid, True)
+    with store.transaction() as c:
+        providers.save(c, "human:test", {"expected_revision": providers.load(c)["revision"], "preset": "subscriptions"}, H.now())
+    bot = SECRET_BOT + "-plain"
+    limited(api, bot=bot, config={"runtime": "claude"})
+    assert [i["title"] for i in found_for(bot, "limited_no_fallback")] == [
+        f"{bot} stopped on a usage limit and has no fallback model"]
+
+
+def test_a_busy_process_is_reported_by_its_tico_name_only(environment, readers, hq):
+    api, runner = built(environment)
+    for process, shown in [("container:acme-tico-1", "a Tico container"), ("container:acme-server-1", "the Tico server container"),
+                           ("process:AcmePayroll", "a process"), ("process:python3", "process python3")]:
+        _fresh(api, hq)
+        with api.app.state.store.transaction() as c:
+            MH.record_idle(c, runner["runner_id"],
+                           MH.IdleLoad(sampled_at=H.now(), busy=[MH.IdleEntry(name=process, cpu=90, mb=300)]))
+        result = run(api)
+        assert result["details"]["filed"] == [f"local_busy:{runner['runner_id']}:{process}"]
+        file_due(api, result)
+        message = json.loads(hq.seen[0].content)["message"]
+        assert f"Process: {shown}\n" in message and "acme" not in message.lower()
+
+
+def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment, monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.4.45")
+    api, runner = built(environment)
+    for release, severity in [("0.0.9", "bad"), ("0.4.40", "warn")]:
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), runner["runner_id"]))
+            c.execute("INSERT INTO runner_versions(runner_id,release,reported_at) VALUES(?,?,?) ON CONFLICT(runner_id) "
+                      "DO UPDATE SET release=excluded.release,update_state='',update_error=''",
+                      (runner["runner_id"], release, H.now()))
+            found = {f["check_id"]: f for f in MH.findings(c, api.app.state.store.settings)}
+        assert found["runner_outdated"]["severity"] == severity
+
+
+def test_branch_blocks_give_botops_the_branch_and_its_recovery_or_refusal(environment, monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.4.45")
+    api, runner = built(environment)
+    for reason in ["will be recovered automatically on the next update",
+                   "cannot recover: 1 changed file; commit or stash it first: app.py",
+                   "switch it to main to follow releases"]:
+        error = "the checkout is on branch tico/b427e9ee-fix-runner; " + reason
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), runner["runner_id"]))
+            c.execute("INSERT INTO runner_versions(runner_id,release,update_state,update_error,reported_at) "
+                      "VALUES(?,?,'blocked',?,?) ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,"
+                      "update_state=excluded.update_state,update_error=excluded.update_error",
+                      (runner["runner_id"], "0.4.40", error, H.now()))
+            found = next(f for f in MH.findings(c, api.app.state.store.settings) if f["check_id"] == "runner_outdated")
+        assert error in found["detail"] and found["fix"] == error
+
+
+def test_maintenance_runs_health_and_files_reports_after_the_write_transaction(environment, readers, monkeypatch):
+    api, _ = built(environment)
+    store, auth = api.app.state.store, api.app.state.auth
+    reports = []
+
+    def findings(c, settings):
+        assert settings is store.settings and not store.writer.queue
+        return [item("worktree_error"), item("push_stuck", kind=MH.BUG)]
+
+    def file_reports(store_, auth_, settings, support_, due):
+        assert store_ is store and auth_ is auth and settings is store.settings
+        assert not store.writer.queue
+        reports.append(due)
+        return {MH.signature("push_stuck"): {"ticket": "synthetic"}}
+
+    monkeypatch.setattr(MH, "findings", findings)
+    monkeypatch.setattr(MH, "file_reports", file_reports)
+    for trigger in ("run_now", "schedule"):                     # both ways a run starts, each on a clean install
+        _fresh(api)
+        reports.clear()
+        with store.transaction() as c:
+            M.save_step(c, "human:test", {"key": "check_health", "enabled": True})
+            c.execute("UPDATE maintenance_steps SET cursor_at=NULL WHERE key='check_health'")
+        if trigger == "run_now":
+            record, started = M.run_now(store, auth, "human:test", step="check_health", wait=True)
+            assert started
+        else:
+            monkeypatch.setattr(M, "_start", lambda store, auth, run_id, only, wait: M._execute(store, auth, run_id, only))
+            run_id = M.tick(store, auth, datetime.now(timezone.utc))
+            record = M.get_run(store, run_id)
+        step = next(s for s in record["steps"] if s["step"] == "check_health")
+        assert record["ok"] == 1 and step["status"] == "ran" and step["found"] == 2 and step["woke"] == 1
+        assert step["details"]["reports"][MH.signature("push_stuck")]["ticket"] == "synthetic"
+        assert reports == [[MH.signature("push_stuck")]]
+        with store.read() as c:
+            assert c.execute("SELECT cursor_at FROM maintenance_steps WHERE key='check_health'").fetchone()[0] == \
+                step["details"]["window_end"]
+        with store.transaction() as c:
+            M.save_step(c, "human:test", {"key": "check_health", "enabled": False})
+        record, _ = M.run_now(store, auth, "human:test", step="check_health", wait=True)
+        assert record["steps"][0]["status"] == "off" and len(reports) == 1
+
+
+def test_the_live_health_step_skips_rehearsal_and_demo_copies(environment, readers, monkeypatch):
+    # Rehearsal and demo take the same `or` branch (check_health.run): one case stands for both.
+    api, _ = built(environment)
+    store = api.app.state.store
+    monkeypatch.setattr(store.settings, "rehearsal", True)
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("A rehearsal or demo copy must not scan or send health reports")
+
+    monkeypatch.setattr(check_health, "gather", unexpected)
+    monkeypatch.setattr(MH, "file_reports", unexpected)
+    record, _ = M.run_now(store, api.app.state.auth, "human:test", step="check_health", wait=True)
+    (step,) = record["steps"]
+    assert step["status"] == "skipped" and step["reason"] == "rehearsal or demo copy"
+    with store.read() as c:
+        assert c.execute("SELECT cursor_at FROM maintenance_steps WHERE key='check_health'").fetchone()[0] is None

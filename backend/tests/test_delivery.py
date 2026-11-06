@@ -124,48 +124,48 @@ def test_a_deferred_item_already_gone_starts_nothing(api):
     assert fired(api) == [] and rows(api, item=held["id"])[0]["how"] == "moot"
 
 
-@pytest.mark.parametrize("status", H.TASK_ENDED)
-def test_ending_a_task_cancels_its_deferrals_permanently(api, status):
+def test_ending_a_task_cancels_its_deferrals_permanently(api):
     setup(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team.",
-                               "delivery": "defer", "defer_for": "never"})
-    held = post(api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer",
-                                                       "defer_for": "24h"})["comment"]
-    with api.app.state.store.transaction() as c:
-        if status == "closed":
-            H.task_close(c, "human:ana", task["id"], quiet=True)
-        else:
-            H.task_update(c, "human:ana", task["id"], status=status, quiet=True)
-        assert H.task(c, task["id"])["status"] == status
-    settled = [rows(api, item=item)[0] for item in (task["id"], held["id"])]
-    assert all(r["settled_at"] and r["how"] == "moot" for r in settled)
-    with api.app.state.store.transaction() as c:
-        assert delivery.due(c, H.shift(H.now(), hours=25)) == []
-        H.task_update(c, "human:ana", task["id"], status="open", quiet=True)
-        assert delivery.due(c, H.shift(H.now(), hours=26)) == []
-    assert job_of(api, held["id"]) is None and fired(api) == []
-    assert [rows(api, item=item)[0] for item in (task["id"], held["id"])] == settled
+    for status in H.TASK_ENDED:
+        task = post(api, "tasks", {"owner": "ops", "title": f"Plan the launch {status}", "body": "For the team.",
+                                   "delivery": "defer", "defer_for": "never"})
+        held = post(api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer",
+                                                           "defer_for": "24h"})["comment"]
+        with api.app.state.store.transaction() as c:
+            if status == "closed":
+                H.task_close(c, "human:ana", task["id"], quiet=True)
+            else:
+                H.task_update(c, "human:ana", task["id"], status=status, quiet=True)
+            assert H.task(c, task["id"])["status"] == status
+        settled = [rows(api, item=item)[0] for item in (task["id"], held["id"])]
+        assert all(r["settled_at"] and r["how"] == "moot" for r in settled)
+        with api.app.state.store.transaction() as c:
+            assert delivery.due(c, H.shift(H.now(), hours=25)) == []
+            H.task_update(c, "human:ana", task["id"], status="open", quiet=True)
+            assert delivery.due(c, H.shift(H.now(), hours=26)) == []
+        assert job_of(api, held["id"]) is None and fired(api) == []
+        assert [rows(api, item=item)[0] for item in (task["id"], held["id"])] == settled
 
 
-@pytest.mark.parametrize("via", ("room", "refs"))
-def test_a_closed_tasks_deferred_message_is_moot_without_the_close_hook(api, via):
+def test_a_closed_tasks_deferred_message_is_moot_without_the_close_hook(api):
     setup(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team.",
-                               "delivery": "defer", "defer_for": "never"})
-    held = post(api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer",
-                                                       "defer_for": "24h"})["comment"]
-    with api.app.state.store.transaction() as c:
-        if via == "room":
-            c.execute("UPDATE messages SET refs=json_remove(refs,'$.task') WHERE id=?", (held["id"],))
-        else:
-            c.execute("UPDATE deferrals SET kind='message',conversation_id='' WHERE item=?", (held["id"],))
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (task["id"],))
-    assert rows(api, item=held["id"])[0]["settled_at"] is None
-    with api.app.state.store.transaction() as c:
-        assert delivery.due(c, H.shift(H.now(), hours=25)) == []
-    [row] = rows(api, item=held["id"])
-    assert row["settled_at"] and row["how"] == "moot"
-    assert job_of(api, held["id"]) is None and fired(api) == []
+    for via in ("room", "refs"):
+        task = post(api, "tasks", {"owner": "ops", "title": f"Plan the launch {via}", "body": "For the team.",
+                                   "delivery": "defer", "defer_for": "never"})
+        held = post(api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer",
+                                                           "defer_for": "24h"})["comment"]
+        with api.app.state.store.transaction() as c:
+            if via == "room":
+                c.execute("UPDATE messages SET refs=json_remove(refs,'$.task') WHERE id=?", (held["id"],))
+            else:
+                c.execute("UPDATE deferrals SET kind='message',conversation_id='' WHERE item=?", (held["id"],))
+            c.execute("UPDATE tasks SET status='closed' WHERE id=?", (task["id"],))
+        assert rows(api, item=held["id"])[0]["settled_at"] is None
+        with api.app.state.store.transaction() as c:
+            assert delivery.due(c, H.shift(H.now(), hours=25)) == []
+        [row] = rows(api, item=held["id"])
+        assert row["settled_at"] and row["how"] == "moot"
+        assert job_of(api, held["id"]) is None and fired(api) == []
 
 
 def test_ending_a_task_filed_from_a_shared_room_leaves_the_rooms_other_messages(api):
@@ -321,16 +321,16 @@ def test_notes_take_a_deadline_and_the_old_names_still_work(api):
     assert is_error is False, payload
 
 
-@pytest.mark.parametrize("body", [
-    {"text": "x", "delivery": "steer", "defer_for": "4h"},
-    {"text": "x", "delivery": "defer", "defer_for": "0m"},
-    {"text": "x", "delivery": "defer", "defer_for": "731d"},
-    {"text": "x", "delivery": "later"},
-])
-def test_a_chat_delivery_that_cannot_apply_is_refused(api, body):
+def test_a_chat_delivery_that_cannot_apply_is_refused(api):
     setup(api)
-    r = api.post("/api/v2/chat/ops", json=body, headers=headers())
-    assert r.status_code == 422, r.text
+    for body in [
+        {"text": "x", "delivery": "steer", "defer_for": "4h"},
+        {"text": "x", "delivery": "defer", "defer_for": "0m"},
+        {"text": "x", "delivery": "defer", "defer_for": "731d"},
+        {"text": "x", "delivery": "later"},
+    ]:
+        r = api.post("/api/v2/chat/ops", json=body, headers=headers())
+        assert r.status_code == 422, (body, r.text)
 
 
 def test_someone_off_the_task_cannot_wake_its_bot_with_a_deadline(api):

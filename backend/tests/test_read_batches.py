@@ -59,35 +59,37 @@ def seed(c, size):
     return parent["id"]
 
 
-@pytest.mark.parametrize("surface", ["files", "task", "activity"])
-def test_distinct_file_and_task_provenance_is_batched(api, monkeypatch, surface):
+def test_distinct_file_and_task_provenance_is_batched(api, monkeypatch):
+    surfaces = ("files", "task", "activity")
     counts = {}
     pages = {}
     for size in (3, 30):
         with api.app.state.store.transaction() as c:
             tid = seed(c, size)
+        for surface in surfaces:
+            for viewer in ("ana-test", "ben-test"):
+                path = {"files": "bots/ops/files?limit=2", "task": "tasks/" + tid,
+                        "activity": "files/file-3-0/activity"}[surface]
+                page, counts[surface, size, viewer] = traced_get(api, path, viewer)
+                pages[surface, viewer] = path, page
+                expected = size - (viewer == "ana-test")
+                if surface == "files":
+                    # The whole list is filtered before its two-row page is cut.
+                    assert page["total"] == expected + (3 - (viewer == "ana-test") if size == 30 else 0)
+                    assert len(page["files"]) == 2
+                elif surface == "task":
+                    assert len(page["runs"]) == expected
+                    assert len(page["comments"]) == expected * 2
+                else:
+                    assert len(page["activity"]) == (1 if size == 3 else expected + 1)
+    for surface in surfaces:
         for viewer in ("ana-test", "ben-test"):
-            path = {"files": "bots/ops/files?limit=2", "task": "tasks/" + tid,
-                    "activity": "files/file-3-0/activity"}[surface]
-            page, counts[size, viewer] = traced_get(api, path, viewer)
-            pages[viewer] = path, page
-            expected = size - (viewer == "ana-test")
-            if surface == "files":
-                # The whole list is filtered before its two-row page is cut.
-                assert page["total"] == expected + (3 - (viewer == "ana-test") if size == 30 else 0)
-                assert len(page["files"]) == 2
-            elif surface == "task":
-                assert len(page["runs"]) == expected
-                assert len(page["comments"]) == expected * 2
-            else:
-                assert len(page["activity"]) == (1 if size == 3 else expected + 1)
-    for viewer in ("ana-test", "ben-test"):
-        few, many = counts[3, viewer], counts[30, viewer]
-        print(f"{surface} {viewer}: {few} -> {many} statements")
-        assert many - few <= 8, (viewer, surface, few, many)
+            few, many = counts[surface, 3, viewer], counts[surface, 30, viewer]
+            print(f"{surface} {viewer}: {few} -> {many} statements")
+            assert many - few <= 8, (viewer, surface, few, many)
     # Priming never changes the page or the visibility total, even with different provenance per row.
     monkeypatch.setattr(read_cache, "cache", lambda c: None)
-    for viewer, (path, page) in pages.items():
+    for (surface, viewer), (path, page) in pages.items():
         assert get(api, path, viewer) == page
 
 
@@ -117,39 +119,39 @@ def test_task_questions_batch_answers_without_exposing_private_replies(api, monk
         assert get(api, "tasks/" + parent["id"], viewer) == page
 
 
-@pytest.mark.parametrize("primed", [False, True])
-@pytest.mark.parametrize("reverse", [False, True])
-def test_blob_cycles_keep_private_provenance_in_both_orders(api, primed, reverse):
+def test_blob_cycles_keep_private_provenance_in_both_orders(api):
     with api.app.state.store.transaction() as c:
         hidden = H.task_create(c, "human:ben", "Private", "Secret", "human:ben", private=True, lint=False)
         for bid in ("a", "b"):
             blob(c, bid)
         c.execute("INSERT INTO blob_media(blob_id,poster_blob_id,media_state) VALUES('a','b','ready'),('b','a','ready')")
         c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,'b')", (hidden["id"],))
-    for actor, expected in (("human:ana", False), ("human:ben", True)):
-        with api.app.state.store.read() as c:
-            order = ["b", "a"] if reverse else ["a", "b"]
-            if primed:
-                privacy.prime_blobs(c, order)
-            memo = {}
-            assert [privacy.blob_readable(c, actor, bid, memo=memo) for bid in order] == [expected] * 2
+    for primed in (False, True):
+        for reverse in (False, True):
+            for actor, expected in (("human:ana", False), ("human:ben", True)):
+                with api.app.state.store.read() as c:
+                    order = ["b", "a"] if reverse else ["a", "b"]
+                    if primed:
+                        privacy.prime_blobs(c, order)
+                    memo = {}
+                    assert [privacy.blob_readable(c, actor, bid, memo=memo) for bid in order] == [expected] * 2
 
 
-@pytest.mark.parametrize("primed", [False, True])
-@pytest.mark.parametrize("reverse", [False, True])
-def test_blob_depth_cap_cannot_reuse_a_shorter_walk(api, primed, reverse):
+def test_blob_depth_cap_cannot_reuse_a_shorter_walk(api):
     with api.app.state.store.transaction() as c:
         for n in range(102):
             blob(c, f"depth-{n}")
         for n in range(101):
             c.execute("INSERT INTO blob_media(blob_id,poster_blob_id,media_state) VALUES(?,?,'ready')",
                       (f"depth-{n + 1}", f"depth-{n}"))
-    with api.app.state.store.read() as c:
-        order = ["depth-0", "depth-2"]
-        if reverse:
-            order.reverse()
-        if primed:
-            privacy.prime_blobs(c, order)
-        memo = {}
-        result = {bid: privacy.blob_readable(c, "human:ana", bid, memo=memo) for bid in order}
-        assert result == {"depth-0": False, "depth-2": True}
+    for primed in (False, True):
+        for reverse in (False, True):
+            with api.app.state.store.read() as c:
+                order = ["depth-0", "depth-2"]
+                if reverse:
+                    order.reverse()
+                if primed:
+                    privacy.prime_blobs(c, order)
+                memo = {}
+                result = {bid: privacy.blob_readable(c, "human:ana", bid, memo=memo) for bid in order}
+                assert result == {"depth-0": False, "depth-2": True}

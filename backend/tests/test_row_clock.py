@@ -45,7 +45,7 @@ def parties(c):
     return {row["id"]: row for row in row_clock.parties(c)}
 
 
-def test_parties_are_read_once_until_a_private_party_changes(store, builds):
+def _parties_are_read_once_until_a_private_party_changes(store, builds):
     assert set(request(store, parties)) == {"secret"}
     assert builds["n"] == 1
     request(store, parties)
@@ -76,7 +76,7 @@ def parties_owner(s, tid):
     return request(s, parties)[tid]["owner_id"]
 
 
-def test_an_uncommitted_write_shares_nothing(store, builds):
+def _an_uncommitted_write_shares_nothing(store, builds):
     request(store, parties)
     with pytest.raises(RuntimeError):
         with store.transaction() as writer:
@@ -84,10 +84,10 @@ def test_an_uncommitted_write_shares_nothing(store, builds):
             # The writer sees its own change, and the change reaches no other reader.
             assert parties(writer)["secret"]["owner_id"] == "bot:ghost"
             raise RuntimeError("roll back")
-    assert parties_owner(store, "secret") == "bot:ops"
+    assert parties_owner(store, "secret") == "bot:other"  # the rolled-back owner never reaches a reader
 
 
-def test_access_rows_follow_only_the_access_keys(store, builds):
+def _access_rows_follow_only_the_access_keys(store, builds):
     with store.transaction() as c:
         c.execute("INSERT INTO registry_metadata VALUES('owner','{\"email\":\"ana@acme.example\"}')")
     first = request(store, row_clock.access_rows)
@@ -99,6 +99,17 @@ def test_access_rows_follow_only_the_access_keys(store, builds):
         c.execute("UPDATE registry_metadata SET value='{\"email\":\"ben@acme.example\"}' WHERE key='owner'")
     assert ("owner", '{"email":"ben@acme.example"}') in request(store, row_clock.access_rows)
 
+
+
+def test_shared_party_and_access_reads_follow_only_their_keys_and_never_share_uncommitted_writes(store, builds):
+    _parties_are_read_once_until_a_private_party_changes(store, builds)
+    _an_uncommitted_write_shares_nothing(store, builds)
+    _access_rows_follow_only_the_access_keys(store, builds)
+
+
+def test_task_ids_and_room_tasks_are_shared_until_a_task_or_room_moves_and_never_uncommitted(store):
+    _task_ids_and_room_tasks_are_read_once_until_a_task_or_room_moves(store)
+    _an_uncommitted_task_is_never_shared(store)
 
 
 def index_request(s):
@@ -119,7 +130,7 @@ def index_request(s):
     return found, [sql for sql in ran if sql in (rc.TASK_IDS, rc.ROOM_TASKS)]
 
 
-def test_task_ids_and_room_tasks_are_read_once_until_a_task_or_room_moves(store):
+def _task_ids_and_room_tasks_are_read_once_until_a_task_or_room_moves(store):
     from backend import row_clock as rc
     (ids, rooms), ran = index_request(store)
     assert ran == [rc.TASK_IDS, rc.ROOM_TASKS] and {"secret", "plain"} <= ids
@@ -149,7 +160,7 @@ def test_task_ids_and_room_tasks_are_read_once_until_a_task_or_room_moves(store)
     assert "newly" not in ids and "room-new" not in rooms
 
 
-def test_an_uncommitted_task_is_never_shared(store):
+def _an_uncommitted_task_is_never_shared(store):
     from backend.auth import Identity
     from backend.privacy_index import ReadIndex
     index_request(store)

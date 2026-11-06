@@ -543,8 +543,9 @@ def fill(api, seat):
     return post(api, f"seats/{seat['id']}/hire", {"template": pick})
 
 
-def test_a_bot_hired_under_an_open_manager_seat_reports_above_it_until_that_seat_is_hired(api):
+def test_seats_filled_under_open_manager_seats_keep_each_bot_on_a_line_that_never_circles(api):
     providers(api, "anthropic", "openai")
+    # A bot hired under an open manager seat reports above it until that seat is hired.
     head = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo",
                                "description": "Leads marketing and sets the content plan."})
     writer = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + head["id"],
@@ -562,14 +563,12 @@ def test_a_bot_hired_under_an_open_manager_seat_reports_above_it_until_that_seat
     assert bot_line(api, manager) == "coo"
     assert get(api, "seats")["seats"] == []
 
-
-def test_a_chain_of_open_seats_hired_bottom_up_ends_with_each_bot_under_the_one_above(api):
-    providers(api, "anthropic", "openai")
-    top = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo", "description": "Leads marketing."})
-    middle = post(api, "seats", {"title": "Content Lead", "reports_to": "seat:" + top["id"],
-                                 "description": "Leads the content team."})
-    bottom = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + middle["id"],
-                                 "description": "Writes the content."})
+    # A chain of open seats hired bottom-up ends with each bot under the one above.
+    top = post(api, "seats", {"title": "Head of Sales", "reports_to": "coo", "description": "Leads sales."})
+    middle = post(api, "seats", {"title": "Sales Lead", "reports_to": "seat:" + top["id"],
+                                 "description": "Leads the sales team."})
+    bottom = post(api, "seats", {"title": "Sales Rep", "reports_to": "seat:" + middle["id"],
+                                 "description": "Sells."})
     lowest = fill(api, bottom)
     assert bot_line(api, lowest) == "coo"
     highest = fill(api, top)
@@ -578,32 +577,26 @@ def test_a_chain_of_open_seats_hired_bottom_up_ends_with_each_bot_under_the_one_
     assert bot_line(api, lowest) == middling["bot"]          # moved when the seat above it filled
     assert bot_line(api, highest) == "coo"
 
-
-def test_a_bot_moved_by_hand_under_an_open_manager_keeps_that_manager_when_the_seat_fills(api):
-    providers(api, "anthropic", "openai")
-    head = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo", "description": "Leads marketing."})
-    writer = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + head["id"],
-                                 "description": "Writes the content."})
+    # A bot moved by hand under an open manager keeps that manager when the seat fills.
+    head = post(api, "seats", {"title": "Head of Support", "reports_to": "coo", "description": "Leads support."})
+    writer = post(api, "seats", {"title": "Support Writer", "reports_to": "seat:" + head["id"],
+                                 "description": "Writes the help pages."})
     hired = fill(api, writer)
-    # Someone moves the writer by hand before the manager is hired: the line they chose stays.
     revision = get(api, f"bots/{hired['slug']}")["revision"]
     post(api, f"bots/{hired['slug']}/definition", {"reports_to": "human:ben", "expected_revision": revision})
     fill(api, head)
     assert bot_line(api, hired) == "human:ben"
 
-
-def test_an_open_manager_moved_under_its_own_hire_does_not_circle_when_it_fills(api):
-    providers(api, "anthropic", "openai")
-    head = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo", "description": "Leads marketing."})
-    writer = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + head["id"],
-                                 "description": "Writes the content."})
+    # An open manager moved under its own hire does not circle when it fills.
+    head = post(api, "seats", {"title": "Head of Finance", "reports_to": "coo", "description": "Leads finance."})
+    writer = post(api, "seats", {"title": "Bookkeeper", "reports_to": "seat:" + head["id"],
+                                 "description": "Keeps the books."})
     hired = fill(api, writer)                                  # placed under the owner, the line it was hired on
-    # The open manager moves under the writer's bot: a legal line while that seat is open.
     assert api.patch(f"/api/v2/seats/{head['id']}", headers=headers(),
                      json={"reports_to": "bot:" + hired["slug"]}).status_code == 200
     manager = fill(api, head)                                  # filling must not close a circle
-    assert bot_line(api, manager) == hired["bot"]              # the manager reports to the writer's bot, as chosen
-    assert bot_line(api, hired) == "coo"                       # the writer stays where it was placed, not under the manager
+    assert bot_line(api, manager) == hired["bot"]
+    assert bot_line(api, hired) == "coo"
     with api.app.state.store.read() as c:                      # walk up from the manager: no bot twice, ends at the top
         line, seen = manager["bot"], []
         while H.bot(c, line):

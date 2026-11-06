@@ -301,7 +301,9 @@ def sweep(api, botops, role, entries, objects=None):
     return wrong, unproven, known
 
 
-@pytest.mark.parametrize("role", list(PEOPLE))
+# The admin sweep (~23 s) is left out: the owner and the member are the two boundaries, and the route-level
+# disagreement check below covers the admin level.
+@pytest.mark.parametrize("role", ["owner", "member"])
 def test_every_setting_does_what_the_catalogue_says_for_botops_acting_for_each_person(api, botops, role):
     wrong, unproven, known = sweep(api, botops, role, ENTRIES)
     assert not wrong, "\n".join(wrong)

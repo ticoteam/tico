@@ -44,43 +44,52 @@ def status_events(c, goal):
     return [e for e in G.history(c, goal["id"]) if e["field"] == "status"]
 
 
-@pytest.mark.parametrize("value,expected", [(50, "green"), (41, "yellow"), (39, "red")])
-def test_new_subgoal_gets_its_measure_colour_on_the_next_pass(api, clock, value, expected):
+def test_new_subgoal_gets_its_measure_colour_on_the_next_pass(api, clock):
+    cases = [(50, "green"), (41, "yellow"), (39, "red")]
     with api.app.state.store.transaction() as c:
         parent = make_goal(c)
-        child = make_goal(c, parent["id"])
-        unlinked = make_goal(c)
-        for goal in (child, unlinked):
-            measure(c, goal, value)
-            assert G.goal(c, goal["id"])["status"] is None
+        pairs = []
+        for value, expected in cases:
+            child = make_goal(c, parent["id"])
+            unlinked = make_goal(c)
+            for goal in (child, unlinked):
+                measure(c, goal, value)
+                assert G.goal(c, goal["id"])["status"] is None
+            pairs.append((child, unlinked, expected))
 
     result = post(api, "goals/refresh", {})
-    assert {r["goal"] for r in result["changed"]} == {child["id"], unlinked["id"]}
+    assert {r["goal"] for r in result["changed"]} == {g["id"] for child, unlinked, _ in pairs for g in (child, unlinked)}
     with api.app.state.store.read() as c:
-        coloured = G.goal(c, child["id"])
-        peer = G.goal(c, unlinked["id"])
-        assert coloured["status"] == peer["status"] == expected
-        assert coloured["status_note"] == peer["status_note"]
-        assert coloured["status_source"] == "auto"
-        assert coloured["parent_id"] == parent["id"]
+        for child, unlinked, expected in pairs:
+            coloured = G.goal(c, child["id"])
+            peer = G.goal(c, unlinked["id"])
+            assert coloured["status"] == peer["status"] == expected
+            assert coloured["status_note"] == peer["status_note"]
+            assert coloured["status_source"] == "auto"
+            assert coloured["parent_id"] == parent["id"]
 
 
-@pytest.mark.parametrize("days,expected", [(0, "yellow"), (20, "yellow"), (22, None)])
-def test_subgoal_uses_a_recent_at_risk_checkin_without_a_measure(api, clock, days, expected):
+def test_subgoal_uses_a_recent_at_risk_checkin_without_a_measure(api, clock):
+    cases = [(0, "yellow"), (20, "yellow"), (22, None)]
     with api.app.state.store.transaction() as c:
-        child = make_goal(c, make_goal(c)["id"])
-        checkin(c, child, days=days)
+        parent = make_goal(c)
+        children = []
+        for days, expected in cases:
+            child = make_goal(c, parent["id"])
+            checkin(c, child, days=days)
+            children.append((child, expected))
 
     post(api, "goals/refresh", {})
     with api.app.state.store.read() as c:
-        row = G.goal(c, child["id"])
-        assert row["status"] == expected
-        if expected:
-            assert row["status_note"].startswith("Check-in ")
-            assert row["status_note"].endswith(" ago: at risk")
-            assert row["status_source"] == "auto"
-        else:
-            assert status_events(c, child) == []
+        for child, expected in children:
+            row = G.goal(c, child["id"])
+            assert row["status"] == expected
+            if expected:
+                assert row["status_note"].startswith("Check-in ")
+                assert row["status_note"].endswith(" ago: at risk")
+                assert row["status_source"] == "auto"
+            else:
+                assert status_events(c, child) == []
 
 
 def test_subgoal_with_no_data_stays_uncoloured_like_an_unlinked_goal(api, clock):

@@ -5,6 +5,14 @@ with arguments built from each command's arguments and seeded objects. A command
 error recorded in e2e/cli/expected-refusals.json. A command the CLI no longer has (a rename the docs still use) fails
 unless it is a rename the CLI still answers (`hubcli.rename_argv`) or e2e/cli/stale.json names it. Writes that the CLI can
 preview run as dry runs.
+
+Running every command live costs ~0.7 s each, so the live run is a deterministic sample. The static checks cover every
+command each run: the scan, stale.json, the expected-refusals list, and an argparse parse of the argv built for each one.
+The live sample is (1) every command in a template or skill file changed by the change under test (working tree, the
+diff from origin/main, or else the last commit; read from git, ignored where git is missing), plus (2) one command per
+top-level group, picked by a fixed rotation: the group's commands in sorted order, index `commit count % group size`.
+Consecutive commits walk every command of every group, so all of them run within the largest group's size of commits.
+TICO_E2E_CLI_ALL=1 (and recording refusals) runs every command.
 """
 
 import argparse
@@ -15,6 +23,7 @@ import sys
 import json
 import os
 import re
+import subprocess
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -85,6 +94,62 @@ def used_commands():
                 continue                      # a group named in prose (`hub task`), not a command to run
             used.setdefault(" ".join(found), (leaf, rel))
     return used, stale
+
+
+def changed_files():
+    """Repo paths changed by the change under test: the working tree, the diff from origin/main, else the last commit."""
+    def git(*args):
+        try:
+            return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=20).stdout
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    names = set(git("diff", "--name-only", "HEAD").split()) | set(git("diff", "--name-only", "origin/main...HEAD").split())
+    return names or set(git("diff", "--name-only", "HEAD~1", "HEAD").split())
+
+
+def rotation():
+    """The fixed rotation counter: the number of commits, 0 where git cannot say."""
+    try:
+        return int(subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=ROOT, capture_output=True, text=True,
+                                  timeout=20).stdout.strip() or 0)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+
+
+def live_sample(used):
+    """The command paths to run live: all of them when asked, else the changed-file commands plus one per group."""
+    if RECORD or os.environ.get("TICO_E2E_CLI_ALL"):
+        return set(used)
+    changed = changed_files()
+    chosen = {path for path in used if any(f in changed for f in used_in(path))}
+    groups = {}
+    for path in sorted(used):
+        groups.setdefault(path.split(" ")[0], []).append(path)
+    count = rotation()
+    chosen.update(paths[count % len(paths)] for paths in groups.values())
+    return chosen
+
+
+@functools.lru_cache(maxsize=None)
+def files_using():
+    """{command path: every template or skill file that uses it}, for the changed-file rule."""
+    found = {}
+    for path in [*sorted(TEMPLATES.rglob("*")), *sorted(SKILLS.rglob("*"))]:
+        if not path.is_file() or path.suffix in SKIP_FILES:
+            continue
+        try:
+            text = path.read_text()
+        except (UnicodeDecodeError, OSError):
+            continue
+        for match in COMMAND.finditer(text):
+            resolved, leaf = resolve(match.group(1).split(" "))
+            if resolved and subparsers(leaf) is None and leaf.get_default("fn") is not None:
+                found.setdefault(" ".join(resolved), set()).add(str(path.relative_to(ROOT)))
+    return found
+
+
+def used_in(path):
+    return files_using().get(path, ())
 
 
 def argument_value(action, command):
@@ -240,10 +305,18 @@ def test_every_hub_command_in_templates_and_skills_runs_or_is_its_recorded_refus
     used, stale = used_commands()
     assert len(used) > 150, f"only {len(used)} commands found: the scan is not reading templates and skills"
     problems, observed = [], {}
+    sample = live_sample(used)
     for path, (leaf, where) in sorted(used.items()):
         if path in SKIPPED:
             continue
         argv = argv_for(path.split(" "), leaf, seeded_ids)
+        try:                                      # every command's argv parses, run live or not
+            command_tree().parse_args(argv)
+        except SystemExit:
+            problems.append(f"hub {path} ({where}): the argv built for it does not parse: {argv}")
+            continue
+        if path not in sample:
+            continue
         try:
             code, out, err = run_as_owner(live, workspace, argv)
         except Exception as exc:       # a command that raises instead of exiting is the failure this test is for

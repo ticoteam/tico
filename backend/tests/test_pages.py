@@ -293,19 +293,19 @@ def share_retired_icon(api, attempt, data):
     return lambda: on_disk(api, data)
 
 
-@pytest.mark.parametrize("share", [share_another_file, share_task_file, share_market_evidence, share_meeting_media,
-                                   share_team_icon, share_retired_icon])
-def test_bytes_another_kind_of_row_still_names_survive_a_hard_delete(api, share):
+def test_bytes_another_kind_of_row_still_names_survive_a_hard_delete(api):
     _, attempt = turn(api, who="ana-test")
-    data = icon_png(api) if share is share_team_icon else b"Acme shared bytes " + share.__name__.encode()
-    gone = publish(api, attempt, name="shared.png" if share is share_team_icon else "shared.txt", text=None, content_base64=base64.b64encode(data).decode()).json()["file"]["id"]
-    still = share(api, attempt, data)
-    aged(api)
-    assert api.delete("/api/v2/files/" + gone, headers=headers("ana-test")).status_code == 200
-    file_library.drain(api.app.state.store, api.app.state.blobs)
-    assert on_disk(api, data) and still()
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM blob_purges").fetchone()[0] == 0
+    for share in [share_another_file, share_task_file, share_market_evidence, share_meeting_media,
+                  share_team_icon, share_retired_icon]:
+        data = icon_png(api) if share is share_team_icon else b"Acme shared bytes " + share.__name__.encode()
+        gone = publish(api, attempt, name="shared.png" if share is share_team_icon else "shared.txt", text=None, content_base64=base64.b64encode(data).decode()).json()["file"]["id"]
+        still = share(api, attempt, data)
+        aged(api)
+        assert api.delete("/api/v2/files/" + gone, headers=headers("ana-test")).status_code == 200
+        file_library.drain(api.app.state.store, api.app.state.blobs)
+        assert on_disk(api, data) and still(), share.__name__
+        with api.app.state.store.read() as c:
+            assert c.execute("SELECT count(*) FROM blob_purges").fetchone()[0] == 0, share.__name__
 
 
 def test_bytes_written_moments_ago_wait_for_a_later_purge(api):

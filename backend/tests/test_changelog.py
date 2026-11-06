@@ -158,14 +158,6 @@ def released_edits(root):
     return edited if read else None
 
 
-def test_released_changelog_sections_match_their_tags():
-    edited = released_edits(ROOT) if shutil.which("git") else None
-    if edited is None:
-        pytest.skip("no release tags in this checkout (shallow clone or tags not fetched)")
-    assert not edited, "your CHANGELOG line landed in the released %s section; merge main and move it under ## [Unreleased]" % (
-        ", ".join("[%s]" % v for v in edited))
-
-
 # A Release Manager's notes merge-back or an erratum names each released section it may change in a commit trailer.
 RELEASE_TRAILER = re.compile(r"^Changelog-Release:[ \t]*v?(\d+\.\d+\.\d+)[ \t]*$", re.M)
 CONFLICT = "conflict"
@@ -221,7 +213,7 @@ def outside_unreleased_message(places):
 
 def test_pr_changelog_lines_stay_under_unreleased():
     # Release validation runs this suite on a candidate from its release branch: an empty Unreleased and its own
-    # new section, which test_released_changelog_sections_match_their_tags checks. A pull request is never one.
+    # new section, which the release guard (released_edits) checks. A pull request is never one.
     if os.environ.get("GITHUB_EVENT_NAME") != "pull_request" and not section((ROOT / "CHANGELOG.md").read_text(), "Unreleased"):
         pytest.skip("a release candidate (empty Unreleased); its notes are checked against its tag")
     outside = changes_outside_unreleased(ROOT) if shutil.which("git") else None

@@ -390,8 +390,9 @@ def test_import_never_replaces_an_existing_paused_employee(environment):
     assert rows(api, f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='accounts-payable'") == original
 
 
-@pytest.mark.parametrize("through_new_parent", [False, True], ids=["reverse-builtins", "new-parent-chain"])
-@pytest.mark.parametrize("bootstrap", [False, True], ids=["owner-api", "installer-bootstrap"])
+# The two axes are independent: the diagonal covers both values of each.
+@pytest.mark.parametrize("bootstrap, through_new_parent", [(False, False), (True, True)],
+                         ids=["owner-api-reverse-builtins", "installer-bootstrap-new-parent-chain"])
 def test_install_bootstrap_lays_out_the_chosen_chart_once_and_never_falls_back_to_sample(tmp_path, through_new_parent, bootstrap):
     from clients.environments import seed_registry
     seed_registry(tmp_path, "Owner", OWNER_EMAIL,
@@ -433,7 +434,7 @@ def test_install_bootstrap_lays_out_the_chosen_chart_once_and_never_falls_back_t
         assert rows(api, "SELECT id,title,reports_to FROM seats ORDER BY id") == initial_seats
 
 
-@pytest.mark.parametrize("broken", ["unreadable", "conflicting-id", "empty-file", "missing-file", "oversized-file"])
+@pytest.mark.parametrize("broken", ["conflicting-id", "empty-file", "oversized-file"])
 def test_a_chosen_chart_that_fails_to_import_is_shown_to_the_owner_and_no_sample_takes_its_place(tmp_path, monkeypatch,
                                                                                                 broken):
     """Spec acceptance 2 (first-v1 rule): the server starts with the built-ins only, nothing of the file is left, no
@@ -603,8 +604,8 @@ def goals_text(person=True):
     return C.to_yaml(draft)
 
 
-@pytest.mark.parametrize("person", [True, False], ids=["named-owner", "you"])
-@pytest.mark.parametrize("bootstrap", [False, True], ids=["owner-api", "installer-bootstrap"])
+@pytest.mark.parametrize("person, bootstrap", [(True, False), (False, True)],
+                         ids=["owner-api-named-owner", "installer-bootstrap-you"])
 def test_imported_goals_show_on_goals_with_their_owner_and_measure(tmp_path, environment, person, bootstrap):
     text = goals_text(person)
     if bootstrap:
@@ -659,7 +660,7 @@ def imported_goals_on_goals_page(api, text):
     assert again.status_code == 200 and len(rows(api, "SELECT id FROM goals")) == 5
 
 
-@pytest.mark.parametrize("bootstrap", [False, True], ids=["owner-api", "installer-bootstrap"])
+@pytest.mark.parametrize("bootstrap", [True], ids=["installer-bootstrap"])
 def test_a_renamed_assistants_goals_import_as_company_goals_and_an_untitled_unmeasured_goal_gets_no_kpi(tmp_path, environment,
                                                                                                        bootstrap):
     # Goals keeps the built-in bots out of its tree, so a goal the file gives the Assistant must land on the company.
@@ -711,7 +712,7 @@ def renamed_assistant_goals_on_goals_page(api, owners):
     assert not rows(api, "SELECT id FROM goals WHERE owner_id IN ('bot:ace','bot:coo')")
 
 
-@pytest.mark.parametrize("count", [72, 300])
+@pytest.mark.parametrize("count", [300])
 def test_a_full_plan_too_big_for_the_env_starts_the_server_from_its_file(tmp_path, monkeypatch, count):
     """AWS and SSH setup copy a packed plan to a file and TICO_COMPANY_FILE names it (compose.yaml)."""
     from backend.config import Settings

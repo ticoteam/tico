@@ -62,75 +62,16 @@ def merge(api):
                                               merged_at="2026-10-19T12:42:19Z"))
 
 
-def test_a_merge_wakes_the_waiter_once_and_the_upstream_keeps_its_step(api):
-    upstream, waiter = pair(api)
-    hook(api, "pull_request", pr_event("opened"))
-    stored = wait(api, waiter, "pr:" + PR)
-    assert stored["readback"] == [f"{name(waiter)} waits for PR #412 to merge"]
-    page = shown(api, waiter)
-    assert page["milestone_waits"][0]["sentence"] == "waits for PR #412 to merge"
-    assert page["milestone_waits"][0]["met"] is False
-    with api.app.state.store.read() as c:
-        assert H.waiting_for(c, H.task(c, waiter["id"])) == "PR #412 to merge"
-    assert wakes(api, waiter) == []
-
-    result = merge(api)
-    assert result["milestone_woken"] == [waiter["id"]]
-    assert len(wakes(api, waiter)) == 1 and "PR #412 merged" in wakes(api, waiter)[0]
-    after = shown(api, upstream)
-    assert (after["status"], after["step_id"]) == (upstream["status"], upstream["step_id"]), "upstream never moves"
-    assert shown(api, waiter)["milestone_waits"][0]["met"] is True
-
-    merge(api)                                              # GitHub delivers the same event again
-    Scheduler(api.app.state.store, api.app.state.execution).tick()   # and the sweep sees it too
-    assert len(wakes(api, waiter)) == 1, "one wake per waiting task and milestone"
 
 
-def test_a_wait_made_after_the_merge_is_woken_once_at_create(api):
-    _, waiter = pair(api)
-    merge(api)
-    stored = wait(api, waiter, "pr:" + PR)
-    assert "already happened" in stored["readback"][0]
-    assert len(wakes(api, waiter)) == 1
-    again = wait(api, waiter, "pr:" + PR)
-    assert again["readback"][0].startswith("Already: ")
-    Scheduler(api.app.state.store, api.app.state.execution).tick()
-    assert len(wakes(api, waiter)) == 1
 
 
-def test_a_wait_on_a_task_with_one_pr_link_waits_for_that_pr_and_comes_off_the_same_way(api):
-    upstream, waiter = pair(api)
-    wait(api, waiter, "pr:" + upstream["id"])
-    assert shown(api, waiter)["milestone_waits"][0]["target"] == "ticoteam/tico#412"
-    r = api.post(f"/api/v2/tasks/{waiter['id']}/waits", json={"on": "pr:" + upstream["id"], "remove": True},
-                 headers=headers())
-    assert r.status_code == 200, r.text
-    assert r.json()["readback"] == [f"Removed: {name(waiter)} waits for PR #412 to merge"]
-    merge(api)
-    assert wakes(api, waiter) == [] and shown(api, waiter)["milestone_waits"] == []
-    wait(api, waiter, "pr:" + upstream["id"])
-    other = post(api, "tasks", {"owner": "cpo", "title": "No PR here", "body": "x"})
-    refused = wait(api, waiter, "pr:" + other["id"], expected=422)
-    assert "has 0 pull request links" in str(refused), refused
 
 
-def test_a_merge_while_the_server_was_down_wakes_once_after_restart(api, tmp_path):
-    _, waiter = pair(api)
-    wait(api, waiter, "pr:" + PR)
-    # The merge reached the link but its wake was never written (the process stopped in between, or an older server).
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET state='merged', pr_sha='abc123' WHERE task_id<>? AND kind='pr'", (waiter["id"],))
-    assert wakes(api, waiter) == []
-    restarted = create_app(api.app.state.store.settings)
-    with TestClient(restarted) as client:
-        Scheduler(restarted.state.store, restarted.state.execution).tick()
-        Scheduler(restarted.state.store, restarted.state.execution).tick()
-        with restarted.state.store.read() as c:
-            woke = c.execute("SELECT count(*) FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                             f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs,'$.milestone') IS NOT NULL",
-                             (waiter["id"],)).fetchone()[0]
-        assert woke == 1
-        assert client  # the restarted app served while the sweep ran
+
+
+
+
 
 
 def test_a_published_release_wakes_the_next_checklist_while_the_previous_stays_open(api):
@@ -151,48 +92,10 @@ def test_a_published_release_wakes_the_next_checklist_while_the_previous_stays_o
     assert shown(api, previous)["status"] == previous["status"], "the watch stays open"
 
 
-def test_a_relation_write_reads_back_its_direction(api):
-    first = post(api, "tasks", {"owner": "cpo", "title": "Dev 233", "body": "x"})
-    second = post(api, "tasks", {"owner": "cpo", "title": "Dev 237", "body": "x"})
-    a, b = name(first), name(second)
-    right = raw(api, f"tasks/{second['id']}/relations", {"task": first["id"], "kind": "blocked_by"})
-    assert right["readback"] == [f"{b} waits for {a}", f"{a} blocks {b}"]
-    post(api, f"tasks/{second['id']}/relations", {"task": first["id"], "kind": "blocked_by", "remove": True})
-    reversed_ = raw(api, f"tasks/{second['id']}/relations", {"task": first["id"], "kind": "blocks"})
-    assert reversed_["readback"] == [f"{a} waits for {b}", f"{b} blocks {a}"], "the reversed write is plain to see"
-    same = wait(api, first, "task:" + second["id"])
-    assert same["readback"] == [f"Already: {a} waits for {b}", f"Already: {b} blocks {a}"]
-    made = raw(api, "tasks", {"owner": "cpo", "title": "Dev 238", "body": "x",
-                               "relations": [{"task": first["id"], "kind": "parent"},
-                                             {"task": second["id"], "kind": "blocked_by"}]})
-    assert made["readback"][0] == f'{name(made["task"])} is a subtask of {a}', "the parent reads back too"
-    assert made["readback"][2] == f'{name(made["task"])} waits for {b}'
-    child = raw(api, "tasks", {"owner": "cpo", "title": "Dev 239", "body": "x",
-                               "relations": [{"task": first["id"], "kind": "parent"}]})
-    assert child["readback"] == [f'{name(child["task"])} is a subtask of {a}', f'{a} is the parent of {name(child["task"])}']
 
 
-def test_every_way_to_block_a_task_on_its_own_subtask_reads_back_and_warns(api):
-    """Oct 22 (PR #1095 review): the create, relation and `wait --on task:` writes all say so."""
-    parent = post(api, "tasks", {"owner": "cpo", "title": "Release window", "body": "x"})
-    p = name(parent)
-    made = raw(api, "tasks", {"owner": "cpo", "title": "Hold merges", "body": "x",
-                              "relations": [{"task": parent["id"], "kind": "parent"},
-                                            {"task": parent["id"], "kind": "blocks"}]})
-    hold = made["task"]
-    assert made["readback"][2:] == [f"{p} waits for {name(hold)}", f"{name(hold)} blocks {p}"]
-    assert "is a subtask of" in made["warning"] and hold["id"] in made["warning"]
-    post(api, f"tasks/{parent['id']}/relations", {"task": hold["id"], "kind": "blocked_by", "remove": True})
-    waited = wait(api, parent, "task:" + hold["id"])
-    assert waited["readback"] == [f"{p} waits for {name(hold)}", f"{name(hold)} blocks {p}"]
-    assert "is a subtask of" in waited["warning"]
-    again = wait(api, parent, "task:" + hold["id"])
-    assert again["readback"][0].startswith("Already: ") and "warning" in again, "still a block on its own subtask"
-    r = api.post(f"/api/v2/tasks/{parent['id']}/waits", json={"on": "task:" + hold["id"], "remove": True},
-                 headers=headers())
-    assert r.status_code == 200 and "warning" not in r.json(), r.text
-    other = post(api, "tasks", {"owner": "cpo", "title": "Unrelated", "body": "x"})
-    assert "warning" not in wait(api, parent, "task:" + other["id"]), "only its own subtask warns"
+
+
 
 
 def test_a_milestone_wait_is_awaited_and_parks_the_task():
@@ -261,54 +164,143 @@ def test_a_missed_merge_and_release_are_asked_of_github_and_wake_once(api, monke
     assert shown(api, upstream)["status"] == upstream["status"]
 
 
-def test_a_release_published_while_the_server_was_down_wakes_once_after_restart(api, monkeypatch):
-    following = post(api, "tasks", {"owner": "cmo", "title": "v0.3.64 release checklist", "body": "x"})
-    wait(api, following, "release:v0.3.63")
-    github = FakeGitHub()
-    github.released.add("v0.3.63")          # published while the server was down: no webhook, no local record
-    restarted = create_app(api.app.state.store.settings)
-    with TestClient(restarted):
-        recover(restarted, monkeypatch, github)
-        recover(restarted, monkeypatch, github)
-        with restarted.state.store.read() as c:
-            woke = c.execute("SELECT count(*) FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                             f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs,'$.milestone') IS NOT NULL",
-                             (following["id"],)).fetchone()[0]
-        assert woke == 1
-
-
-def test_a_wait_note_comes_back_in_the_wake_and_a_task_wait_takes_none(api):
-    _, waiter = pair(api)
+def test_a_merge_wakes_each_waiter_once_with_its_note_and_a_removed_or_later_wait_behaves(api):
+    upstream, waiter = pair(api)
+    noted = post(api, "tasks", {"owner": "cmo", "title": "Visual replies note", "body": "x"})
+    changed = post(api, "tasks", {"owner": "cmo", "title": "Visual replies changed note", "body": "x"})
+    removed = post(api, "tasks", {"owner": "cmo", "title": "Visual replies removed", "body": "x"})
     hook(api, "pull_request", pr_event("opened"))
-    r = api.post(f"/api/v2/tasks/{waiter['id']}/waits", json={"on": "pr:" + PR, "note": "Check the migration, then QA"},
+    stored = wait(api, waiter, "pr:" + PR)
+    assert stored["readback"] == [f"{name(waiter)} waits for PR #412 to merge"]
+    page = shown(api, waiter)
+    assert page["milestone_waits"][0]["sentence"] == "waits for PR #412 to merge"
+    assert page["milestone_waits"][0]["met"] is False
+    with api.app.state.store.read() as c:
+        assert H.waiting_for(c, H.task(c, waiter["id"])) == "PR #412 to merge"
+    assert wakes(api, waiter) == []
+
+    # A wait note comes back in the wake, and a task wait takes none.
+    r = api.post(f"/api/v2/tasks/{noted['id']}/waits", json={"on": "pr:" + PR, "note": "Check the migration, then QA"},
                  headers=headers())
     assert r.status_code == 200, r.text
-    assert shown(api, waiter)["milestone_waits"][0]["note"] == "Check the migration, then QA"
-    merge(api)
-    assert len(wakes(api, waiter)) == 1
-    assert wakes(api, waiter)[0].endswith("\nYour note: Check the migration, then QA")
-    # A task: wait is the blocked_by relation, which has no note of its own: refused rather than dropped.
+    assert shown(api, noted)["milestone_waits"][0]["note"] == "Check the migration, then QA"
     other = post(api, "tasks", {"owner": "cmo", "title": "Pick the logo", "body": "x"})
-    r = api.post(f"/api/v2/tasks/{waiter['id']}/waits", json={"on": "task:" + other["id"], "note": "later"},
+    r = api.post(f"/api/v2/tasks/{noted['id']}/waits", json={"on": "task:" + other["id"], "note": "later"},
                  headers=headers())
     assert r.status_code >= 400 and "note" in r.text
 
-
-def test_a_changed_wait_note_is_a_task_change_with_history_and_the_later_wake_carries_it(api):
-    _, waiter = pair(api)
-    hook(api, "pull_request", pr_event("opened"))
-    wait(api, waiter, "pr:" + PR)                                   # first stored with no note
-    version = shown(api, waiter)["version"]
-    raw(api, f"tasks/{waiter['id']}/waits", {"on": "pr:" + PR, "note": "Check the migration"})
-    assert shown(api, waiter)["version"] == version + 1, "a changed note bumps the task version"
-    again = raw(api, f"tasks/{waiter['id']}/waits", {"on": "pr:" + PR, "note": "Check the migration"})
+    # A changed wait note is a task change with history.
+    wait(api, changed, "pr:" + PR)                                  # first stored with no note
+    version = shown(api, changed)["version"]
+    raw(api, f"tasks/{changed['id']}/waits", {"on": "pr:" + PR, "note": "Check the migration"})
+    assert shown(api, changed)["version"] == version + 1, "a changed note bumps the task version"
+    again = raw(api, f"tasks/{changed['id']}/waits", {"on": "pr:" + PR, "note": "Check the migration"})
     assert again["readback"][0].startswith("Already: ")
-    assert shown(api, waiter)["version"] == version + 1, "the same note again changes nothing"
-    raw(api, f"tasks/{waiter['id']}/waits", {"on": "pr:" + PR, "note": "Check the migration, then QA"})
+    assert shown(api, changed)["version"] == version + 1, "the same note again changes nothing"
+    raw(api, f"tasks/{changed['id']}/waits", {"on": "pr:" + PR, "note": "Check the migration, then QA"})
     with api.app.state.store.read() as c:
         notes = [(r["old"], r["new"]) for r in c.execute(
             "SELECT old,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='milestone_wait_note' ORDER BY created_at,id",
-            (waiter["id"],))]
+            (changed["id"],))]
     assert notes == [(None, "Check the migration"), ("Check the migration", "Check the migration, then QA")], notes
-    merge(api)
-    assert wakes(api, waiter)[-1].endswith("\nYour note: Check the migration, then QA")
+
+    # A wait on a task with one PR link waits for that PR and comes off the same way.
+    wait(api, removed, "pr:" + upstream["id"])
+    assert shown(api, removed)["milestone_waits"][0]["target"] == "ticoteam/tico#412"
+    r = api.post(f"/api/v2/tasks/{removed['id']}/waits", json={"on": "pr:" + upstream["id"], "remove": True},
+                 headers=headers())
+    assert r.status_code == 200, r.text
+    assert r.json()["readback"] == [f"Removed: {name(removed)} waits for PR #412 to merge"]
+
+    result = merge(api)
+    assert sorted(result["milestone_woken"]) == sorted([waiter["id"], noted["id"], changed["id"]])
+    assert len(wakes(api, waiter)) == 1 and "PR #412 merged" in wakes(api, waiter)[0]
+    assert wakes(api, noted)[0].endswith("\nYour note: Check the migration, then QA")
+    assert wakes(api, changed)[-1].endswith("\nYour note: Check the migration, then QA")
+    after = shown(api, upstream)
+    assert (after["status"], after["step_id"]) == (upstream["status"], upstream["step_id"]), "upstream never moves"
+    assert shown(api, waiter)["milestone_waits"][0]["met"] is True
+    assert wakes(api, removed) == [] and shown(api, removed)["milestone_waits"] == []
+
+    merge(api)                                              # GitHub delivers the same event again
+    Scheduler(api.app.state.store, api.app.state.execution).tick()   # and the sweep sees it too
+    assert len(wakes(api, waiter)) == 1, "one wake per waiting task and milestone"
+
+    # A wait made after the merge is woken once at create.
+    stored = wait(api, removed, "pr:" + PR)
+    assert "already happened" in stored["readback"][0]
+    assert len(wakes(api, removed)) == 1
+    again = wait(api, removed, "pr:" + PR)
+    assert again["readback"][0].startswith("Already: ")
+    Scheduler(api.app.state.store, api.app.state.execution).tick()
+    assert len(wakes(api, removed)) == 1
+    nopr = post(api, "tasks", {"owner": "cpo", "title": "No PR here", "body": "x"})
+    refused = wait(api, removed, "pr:" + nopr["id"], expected=422)
+    assert "has 0 pull request links" in str(refused), refused
+
+
+def test_relation_writes_read_back_their_direction_and_a_block_on_an_own_subtask_warns(api):
+    first = post(api, "tasks", {"owner": "cpo", "title": "Dev 233", "body": "x"})
+    second = post(api, "tasks", {"owner": "cpo", "title": "Dev 237", "body": "x"})
+    a, b = name(first), name(second)
+    right = raw(api, f"tasks/{second['id']}/relations", {"task": first["id"], "kind": "blocked_by"})
+    assert right["readback"] == [f"{b} waits for {a}", f"{a} blocks {b}"]
+    post(api, f"tasks/{second['id']}/relations", {"task": first["id"], "kind": "blocked_by", "remove": True})
+    reversed_ = raw(api, f"tasks/{second['id']}/relations", {"task": first["id"], "kind": "blocks"})
+    assert reversed_["readback"] == [f"{a} waits for {b}", f"{b} blocks {a}"], "the reversed write is plain to see"
+    same = wait(api, first, "task:" + second["id"])
+    assert same["readback"] == [f"Already: {a} waits for {b}", f"Already: {b} blocks {a}"]
+    made = raw(api, "tasks", {"owner": "cpo", "title": "Dev 238", "body": "x",
+                               "relations": [{"task": first["id"], "kind": "parent"},
+                                             {"task": second["id"], "kind": "blocked_by"}]})
+    assert made["readback"][0] == f'{name(made["task"])} is a subtask of {a}', "the parent reads back too"
+    assert made["readback"][2] == f'{name(made["task"])} waits for {b}'
+    child = raw(api, "tasks", {"owner": "cpo", "title": "Dev 239", "body": "x",
+                               "relations": [{"task": first["id"], "kind": "parent"}]})
+    assert child["readback"] == [f'{name(child["task"])} is a subtask of {a}', f'{a} is the parent of {name(child["task"])}']
+    # Every way to block a task on its own subtask reads back and warns.
+    parent = post(api, "tasks", {"owner": "cpo", "title": "Release window", "body": "x"})
+    p = name(parent)
+    made = raw(api, "tasks", {"owner": "cpo", "title": "Hold merges", "body": "x",
+                              "relations": [{"task": parent["id"], "kind": "parent"},
+                                            {"task": parent["id"], "kind": "blocks"}]})
+    hold = made["task"]
+    assert made["readback"][2:] == [f"{p} waits for {name(hold)}", f"{name(hold)} blocks {p}"]
+    assert "is a subtask of" in made["warning"] and hold["id"] in made["warning"]
+    post(api, f"tasks/{parent['id']}/relations", {"task": hold["id"], "kind": "blocked_by", "remove": True})
+    waited = wait(api, parent, "task:" + hold["id"])
+    assert waited["readback"] == [f"{p} waits for {name(hold)}", f"{name(hold)} blocks {p}"]
+    assert "is a subtask of" in waited["warning"]
+    again = wait(api, parent, "task:" + hold["id"])
+    assert again["readback"][0].startswith("Already: ") and "warning" in again, "still a block on its own subtask"
+    r = api.post(f"/api/v2/tasks/{parent['id']}/waits", json={"on": "task:" + hold["id"], "remove": True},
+                 headers=headers())
+    assert r.status_code == 200 and "warning" not in r.json(), r.text
+    other = post(api, "tasks", {"owner": "cpo", "title": "Unrelated", "body": "x"})
+    assert "warning" not in wait(api, parent, "task:" + other["id"]), "only its own subtask warns"
+
+
+def test_a_merge_or_release_while_the_server_was_down_wakes_once_after_restart(api, monkeypatch):
+    _, waiter = pair(api)
+    wait(api, waiter, "pr:" + PR)
+    following = post(api, "tasks", {"owner": "cmo", "title": "v0.3.64 release checklist", "body": "x"})
+    wait(api, following, "release:v0.3.63")
+    # The merge reached the link but its wake was never written (the process stopped in between, or an older server).
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_links SET state='merged', pr_sha='abc123' WHERE task_id<>? AND kind='pr'", (waiter["id"],))
+    assert wakes(api, waiter) == []
+    github = FakeGitHub()
+    github.released.add("v0.3.63")          # published while the server was down: no webhook, no local record
+    restarted = create_app(api.app.state.store.settings)
+    with TestClient(restarted) as client:
+        Scheduler(restarted.state.store, restarted.state.execution).tick()
+        Scheduler(restarted.state.store, restarted.state.execution).tick()
+        recover(restarted, monkeypatch, github)
+        recover(restarted, monkeypatch, github)
+        with restarted.state.store.read() as c:
+            def woke(task):
+                return c.execute("SELECT count(*) FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+                                 f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs,'$.milestone') IS NOT NULL",
+                                 (task["id"],)).fetchone()[0]
+            assert woke(waiter) == 1 and woke(following) == 1
+        assert client  # the restarted app served while the sweep ran

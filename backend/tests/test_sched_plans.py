@@ -33,46 +33,32 @@ def plan(api, sql, args=()):
         return " | ".join(str(row[-1]) for row in c.execute("EXPLAIN QUERY PLAN " + sql, args))
 
 
-def test_held_tick_reads_walk_held_queued_jobs(api):
+def test_the_periodic_reads_name_the_partial_index_that_keeps_them_to_live_rows(api):
+    from backend import start_places
+    tidy_stats(api)
     # The planner's choice depends on sizes and statistics, so the hint itself is pinned: without INDEXED BY the plan
     # scanned messages on TIDY (the old statements had no hint).
-    tidy_stats(api)
     for sql, args in ((W.HELD_NEW_SQL, ()), (W.HELD_DUE_SQL, (NOW,))):
         assert "INDEXED BY jobs_held_queued" in sql
         text = plan(api, sql, args)
         assert "USING INDEX jobs_held_queued" in text, text
         assert "SCAN m" not in text, text
-
-
-def test_task_wait_walks_queued_jobs(api):
-    tidy_stats(api)
+    # Task wait walks queued jobs.
     assert "INDEXED BY jobs_queued" in views.TASK_WAIT_SQL
     text = plan(api, views.TASK_WAIT_SQL, ("tk",))
     assert "USING INDEX jobs_queued" in text, text
     assert "SCAN m" not in text, text
-
-
-def test_dead_turn_sweep_walks_live_runs(api):
-    tidy_stats(api)
+    # The dead-turn sweep walks live runs.
     assert "INDEXED BY attempts_live_lease" in turn_fixer.DEAD_SQL
     text = plan(api, turn_fixer.DEAD_SQL, (NOW,))
     assert "USING INDEX attempts_live_lease" in text, text
     assert "attempts_created" not in text, text
-
-
-def test_health_live_totals_walk_live_runs(api):
-    # Unhinted, the GROUP BY picked attempts_runner_finished and walked every attempt ever run (48 ms on Tico Team).
-    from backend import start_places
-    tidy_stats(api)
+    # Unhinted, the health GROUP BY picked attempts_runner_finished and walked every attempt ever run (48 ms on Tico Team).
     assert "INDEXED BY attempts_live_lease" in start_places.LIVE_TOTALS_SQL
     text = plan(api, start_places.LIVE_TOTALS_SQL, (NOW,))
     assert "USING INDEX attempts_live_lease" in text, text
     assert "attempts_runner_finished" not in text, text
-
-
-def test_needs_you_withdrawn_count_seeks_replaced_asks(api):
-    # On messages_to_delivered it walked every message to the person (31k on Tico Team) for a few hundred asks.
-    tidy_stats(api)
+    # On messages_to_delivered the needs-you count walked every message to the person (31k on Tico Team).
     text = plan(api, views.WITHDRAWN_ASKS_SQL, ("chris", NOW))
     assert "SEARCH s USING INDEX messages_superseded_asks_to" in text, text
 

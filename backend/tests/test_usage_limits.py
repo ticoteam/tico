@@ -67,8 +67,20 @@ def test_the_monthly_limit_and_the_company_default_block_too(api):
     assert claim(api, r) is not None
 
 
-def test_who_may_set_a_limit(api):
+def test_who_may_set_a_limit_and_what_the_default_keeps(api):
+    # Subscription runs count unless the team turns that off.
+    assert get(api, "usage/limits")["default"]["count_subscription"] is True       # never chosen
+    assert put(api, "usage/limits", {"daily_usd": 20, "count_subscription": False})["default"]["count_subscription"] is False
+    assert get(api, "usage/limits")["default"]["count_subscription"] is False      # a saved choice stays
+    assert put(api, "usage/limits", {"daily_usd": 20})["default"]["count_subscription"] is False   # left out keeps it
+    assert put(api, "usage/limits", {"count_subscription": True})["default"]["count_subscription"] is True
+    # A computer cannot set or read limits.
+    r = runner(api)
+    assert api.get("/api/v2/usage/limits", headers=headers(r["token"])).status_code in (401, 403)
+    assert api.put("/api/v2/usage/limits/ops", json={"daily_usd": 1}, headers=headers(r["token"])).status_code in (401, 403)
     put(api, "usage/limits", {"daily_usd": 3})
+    put(api, "usage/pools/company", {"per_30m_usd": 10}, "ben-test")              # Ben is an administrator
+    put(api, "usage/pools/groups/nope", {"per_30m_usd": 10}, expected=404)
     # Ben is an administrator: any bot, and the default.
     put(api, "usage/limits/ops", {"daily_usd": 30}, "ben-test")
     put(api, "usage/limits", {"daily_usd": 3}, "ben-test")
@@ -89,12 +101,12 @@ def test_who_may_set_a_limit(api):
     assert get(api, "usage/limits", "cara-test")["bots"] == {}
     for bad in ({"daily_usd": 0}, {"daily_usd": -1}, {"monthly_usd": 1e12}):
         put(api, "usage/limits/ops", bad, "ana-test", expected=422)
-
-
-def test_a_computer_cannot_set_or_read_limits(api):
-    r = runner(api)
-    assert api.get("/api/v2/usage/limits", headers=headers(r["token"])).status_code in (401, 403)
-    assert api.put("/api/v2/usage/limits/ops", json={"daily_usd": 1}, headers=headers(r["token"])).status_code in (401, 403)
+    # Only the owner and administrators set team and group limits.
+    groups(api, "eng")
+    put(api, "usage/pools/company", {"per_30m_usd": 100}, "ben-test", expected=403)
+    put(api, "usage/pools/groups/eng", {"per_30m_usd": 1}, "ben-test", expected=403)
+    assert get(api, "usage/limits", "ben-test")["pools"] is None
+    assert get(api, "usage/limits")["pools"]["company"]["per_30m_usd"] == 10
 
 
 def test_a_message_or_task_for_a_bot_over_its_limit_is_saved_and_the_sender_is_told_why_it_waits(api):
@@ -155,17 +167,6 @@ def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_set
         at = datetime.fromisoformat(started[:19]).replace(tzinfo=usage_limits.timezone.utc)
         assert usage_limits.blocked(c, "ops", at=at) == "hourly"                  # the run's own hour
         assert usage_limits.blocked(c, "ops", at=at + usage_limits.timedelta(hours=1)) is None
-
-
-def test_only_the_owner_and_administrators_set_team_and_group_limits(api):
-    groups(api, "eng")
-    put(api, "usage/pools/company", {"per_30m_usd": 10}, "ben-test")              # Ben is an administrator
-    put(api, "usage/pools/groups/nope", {"per_30m_usd": 10}, expected=404)
-    as_member(api, "ben@acme.example")
-    put(api, "usage/pools/company", {"per_30m_usd": 100}, "ben-test", expected=403)
-    put(api, "usage/pools/groups/eng", {"per_30m_usd": 1}, "ben-test", expected=403)
-    assert get(api, "usage/limits", "ben-test")["pools"] is None
-    assert get(api, "usage/limits")["pools"]["company"]["per_30m_usd"] == 10
 
 
 def _jobs(api, bot="ops"):
@@ -240,14 +241,6 @@ def test_clearing_a_group_leaves_other_groups_and_clears_held_jobs(api):
     assert result["scope"] == "company" and result["cancelled"] == 1
     assert next(j for j in _jobs(api, "finance") if j["message_id"] == messages["finance"])["state"] == "canceled"
     assert post(api, "usage/queues/purge", {})["cancelled"] == 0
-
-
-def test_subscription_runs_count_unless_the_team_turns_that_off(api):
-    assert get(api, "usage/limits")["default"]["count_subscription"] is True       # never chosen
-    assert put(api, "usage/limits", {"daily_usd": 20, "count_subscription": False})["default"]["count_subscription"] is False
-    assert get(api, "usage/limits")["default"]["count_subscription"] is False      # a saved choice stays
-    assert put(api, "usage/limits", {"daily_usd": 20})["default"]["count_subscription"] is False   # left out keeps it
-    assert put(api, "usage/limits", {"count_subscription": True})["default"]["count_subscription"] is True
 
 
 def test_a_hold_counts_live_runs_once_even_when_claims_repeat(api, monkeypatch, caplog):

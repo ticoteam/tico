@@ -50,14 +50,14 @@ def test_only_listed_bot_on_named_model_and_off_stops_all(api):
         assert tidy.eligible(c, api.app.state.store.settings, 'ops') is None
 
 
-@pytest.mark.parametrize('bad', [entry(model='claude:claude-haiku-5-5'), entry(model='unknown'),
-    entry(bot='missing'), entry(effort='unsupported')])
-def test_refused_list_is_atomic_including_switch_and_time(api, bad):
+def test_refused_list_is_atomic_including_switch_and_time(api):
     enable(api)
     before = job(api)
-    put(api, PATH, {'on': True, 'at': '04:00', 'pilots': [bad]}, expected=422)
-    after = job(api)
-    assert (after['on'], after['at'], after['pilots']) == (before['on'], before['at'], [])
+    for bad in (entry(model='claude:claude-haiku-5-5'), entry(model='unknown'),
+                entry(bot='missing'), entry(effort='unsupported')):
+        put(api, PATH, {'on': True, 'at': '04:00', 'pilots': [bad]}, expected=422)
+        after = job(api)
+        assert (after['on'], after['at'], after['pilots']) == (before['on'], before['at'], [])
 
 
 def test_disabled_models_not_offered_or_saved_and_rechecked_at_admission(api):
