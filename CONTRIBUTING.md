@@ -135,9 +135,11 @@ company already owns, so their commits need no sign-off, and their pull requests
 
 - Trunk-based: everything lands on `main` through short-lived branches named `<who>/<topic>`, one ticket per PR.
 - Draft PRs run no CI. Mark the PR ready for review to start the lint checks; each later push runs only those.
-- Once the PR is reviewed and the tests you touched pass with `scripts/remote.py`, the author marks it ready and
-  merges it with `gh pr merge <N> --merge` (`--squash` and `--auto` also enqueue). The merge queue runs the full selected checks on the
-  merged result before the change lands on main.
+- Once the PR is reviewed and the tests you touched pass with `scripts/remote.py`, enqueue it with
+  `gh pr merge <N> --merge`. The merge queue tests the PR merged onto current main before the change lands.
+- Enqueue once. Don't rebase or merge main just to be current; rebase only when GitHub reports a conflict.
+- If the queue removes the PR, read why before you push again. Never use `--admin` or the REST merge endpoint:
+  both skip the queue.
 - If a release candidate goes red because of your merge, fixing it comes before anything else.
 
 ## Releases
