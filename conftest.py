@@ -91,6 +91,13 @@ def pytest_configure(config):
     _unix_socket_bind_outside_tmp_path(config)
     if hasattr(config, "workerinput") or config.option.pyargs:
         return          # --pyargs names modules, not paths
+    # The page serves the UI's TypeScript as its compiled JavaScript: compiled here once when this checkout can
+    # (Node and `npm ci`); otherwise the tests that load the page fail and say to run `npm run build:ui`.
+    from backend import ui_build
+    try:
+        ui_build.prepare()
+    except ui_build.StaleBuild:
+        pass
     base = Path(config.invocation_params.dir)
     missing = [str(arg) for arg in config.args if not (base / str(arg).split("::")[0]).exists()]
     if missing:

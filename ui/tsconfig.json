@@ -13,6 +13,6 @@
     "skipLibCheck": true,
     "types": []
   },
-  "include": ["./**/*.js", "./types/**/*.d.ts"],
+  "include": ["./**/*.js", "./**/*.ts", "./types/**/*.d.ts"],
   "exclude": ["./vendor/**", "./assets/**", "./node_modules/**"]
 }

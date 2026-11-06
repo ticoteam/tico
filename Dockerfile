@@ -45,6 +45,17 @@ RUN fetch-tool litestream /out
 FROM download AS node
 RUN fetch-tool node /opt/node
 
+# The UI's TypeScript files compiled to JavaScript (scripts/build-ui.cjs, backend/ui_build.py). The server image has
+# no Node, so only build/ui goes on from here. npm ci installs the lock's pinned esbuild and runs no package scripts.
+FROM node AS ui-build
+ENV PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /src
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY scripts/build-ui.cjs scripts/
+COPY ui ui
+RUN node scripts/build-ui.cjs
+
 FROM download AS gh
 RUN fetch-tool gh /out
 
@@ -88,6 +99,7 @@ ARG TICO_COMMIT
 ARG TICO_REPOSITORY
 WORKDIR /opt/tico
 COPY . /opt/tico
+COPY --from=ui-build /src/build/ui /opt/tico/build/ui
 # Deployed task completion needs the source commit, not just the version label.
 RUN python - <<'PY'
 import json
@@ -111,6 +123,7 @@ RUN chmod -R go-w,go+rX /opt/tico
 # The venv is only mounted here, so this stage's /opt/tico holds the source alone.
 RUN --mount=type=bind,from=venv,source=/opt/tico/.venv,target=/opt/tico/.venv \
     .venv/bin/python -c 'import backend.app, runner_support.connectors, runner_support.close_calls, runner_support.importers.service, runner.engine, clients.environments, yaml; yaml.CSafeLoader' \
+    && .venv/bin/python -m backend.ui_build --check \
     && .venv/bin/python -m compileall -q backend runner_support runner clients
 
 # The Rust runner (runner-rs/), built on the same Debian release as the runner image so it

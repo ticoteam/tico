@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from backend import ui_bundle
+from backend import ui_build, ui_bundle
 from backend.tests.test_api import api  # noqa: F401
 
 AUTH = {"Authorization": "Bearer ana-test"}
@@ -206,3 +206,59 @@ def test_parts_are_cut_between_files_in_order():
         "/tico/ui/app.bundle.js", "/tico/ui/app.bundle.2.js", "/tico/ui/app.bundle.3.js"]
     assert ui_bundle.is_part("/tico/ui/app.bundle.12.css") and not ui_bundle.is_part("/tico/ui/app.bundle.1.js")
     assert not ui_bundle.is_part("/tico/ui/app.bundle.js.map")
+
+
+def test_a_typescript_file_runs_only_as_its_current_compiled_output(tmp_path):
+    # A .ts file the page lists is bundled as build/ui's compiled JavaScript, and only while build/ui/manifest.json
+    # matches the source and the output: a missing or stale build is refused, never served as old JavaScript.
+    import hashlib
+    import json
+    ui = tmp_path / "ui"
+    (ui / "app").mkdir(parents=True)
+    (ui / "styles").mkdir()
+    (ui / "app/a.js").write_text("'use strict';\nconst A = 1;\n")
+    (ui / "app/b.ts").write_text("'use strict';\nconst B: number = A + 1;\n")
+    (ui / "styles/a.css").write_text("a{color:red}\n")
+    (ui / "index.html").write_text(
+        "<head>\n<!-- bundle:css:start -->\n<link rel=\"stylesheet\" href=\"/tico/ui/styles/a.css\">\n<!-- bundle:css:end -->\n</head>\n<body>\n"
+        "<!-- bundle:js:start -->\n<script src=\"/tico/ui/app/a.js\"></script>\n<script src=\"/tico/ui/app/b.ts\"></script>\n<!-- bundle:js:end -->\n</body>\n")
+    bundles = ui_bundle.UiBundle(ui)
+    with pytest.raises(ui_build.StaleBuild, match=r"ui/app/b\.ts .*npm run build:ui"):
+        bundles.get()
+    out = tmp_path / "build/ui"
+    (out / "app").mkdir(parents=True)
+
+    def sha(text):
+        return hashlib.sha256(text.encode()).hexdigest()
+
+    def compile_(source, output):           # what scripts/build-ui.cjs writes
+        (out / "app/b.js").write_text(output)
+        (out / "manifest.json").write_text(json.dumps({"files": {"app/b.ts": {"source": sha(source), "output": sha(output)}}}))
+    compile_((ui / "app/b.ts").read_text(), '"use strict";\nconst B = A + 1;\n')
+    first = bundles.get().js.decode()
+    assert '// file: app/b.ts\n"use strict";\nconst B = A + 1;' in first and "B: number" not in first
+    assert ui_build.stale(ui) == []
+    # The source changed after the build: the old output is refused, and the bundle built from it is not kept.
+    edited = ui / "app/b.ts"
+    before = edited.stat()
+    edited.write_text("'use strict';\nconst B: number = A + 2;\n")
+    os.utime(edited, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+    with pytest.raises(ui_build.StaleBuild):
+        bundles.get()
+    assert ui_build.stale(ui) == ["app/b.ts"] and ui_bundle.build_id(ui) == ""
+    # An output edited by hand is refused as well.
+    compile_(edited.read_text(), '"use strict";\nconst B = A + 2;\n')
+    assert "A + 2" in bundles.get().js.decode()
+    (out / "app/b.js").write_text('"use strict";\nconst B = 0;\n')
+    with pytest.raises(ui_build.StaleBuild):
+        ui_build.check(ui)
+
+
+def test_a_typescript_file_is_served_as_its_compiled_javascript(api):
+    # With the files served separately (TICO_UI_BUNDLE=off), the page asks for the .ts name it lists.
+    name = next(n for n in ui_build.sources(ui_build.ROOT / "ui") if n.startswith("app/"))
+    r = api.get(f"/tico/ui/{name}", headers=AUTH)
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/javascript")
+    assert r.content == ui_build.compiled(ui_build.ROOT / "ui", name).read_bytes()
+    assert api.get(f"/tico/ui/{name}").status_code == 401
+    assert api.get("/tico/ui/app/no-such-file.ts", headers=AUTH).status_code == 404

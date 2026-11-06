@@ -264,6 +264,8 @@ async function main() {
   const files = allFiles.filter(f => chosen ? chosen.includes(f.replace(/\.cjs$/, '')) : !WALKTHROUGHS.includes(f.replace(/\.cjs$/, '')));
   if (!files.length) { console.error('no UI test scripts matched'); process.exit(1); }
   if (list) { console.log(files.map(f => f.replace(/\.cjs$/, '')).join('\n')); return; }
+  // The page runs the UI's TypeScript files as their compiled JavaScript: compile them once, before any script reads it.
+  execFileSync(process.execPath, [path.join(__dirname, 'build-ui.cjs')], {stdio: 'inherit'});
   const {cores, idleFraction} = await sampleCpu();
   const selected = resources(process.env, cores, idleFraction);
   jobs ??= selected.jobs;
