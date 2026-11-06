@@ -336,7 +336,8 @@ def test_missing_role_waits_then_template_holder_gets_delivery_only_turn(install
     assert receipt(install)["outcome"] == "delivered"
 
 
-def test_post_feedback_is_bound_to_receiving_bot_and_request(install, http):
+def test_post_feedback_is_bound_to_receiving_bot_and_request(install, http, monkeypatch):
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     http[1]["items"] = [item(), item(2)]
     run_step(install)
     with install.transaction() as c:
@@ -409,7 +410,8 @@ def test_bound_retry_unbinds_a_role_that_moved_to_another_bot(install, http):
     assert all(row[key] is None for key in ("owner_bot_id", "update_batch_id", "message_id", "delivered_at", "cooldown_until"))
 
 
-def test_redo_completion_cannot_settle_the_original_delivery(install, http, api):
+def test_redo_completion_cannot_settle_the_original_delivery(install, http, api, monkeypatch):
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     run_step(install)
     with install.transaction() as c:
         batch = queue(c)
@@ -439,7 +441,8 @@ def test_redo_completion_cannot_settle_the_original_delivery(install, http, api)
     assert receipt(install)["outcome"] == "delivered"
 
 
-def test_update_delivers_at_most_ten_suggestions_and_preserves_the_original_message(install, http):
+def test_update_delivers_at_most_ten_suggestions_and_preserves_the_original_message(install, http, monkeypatch):
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     http[1]["items"] = [item(n) for n in range(1, 12)]
     run_step(install)
     with install.transaction() as c:

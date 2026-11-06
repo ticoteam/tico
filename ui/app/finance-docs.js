@@ -122,6 +122,7 @@ function finDocsReload() {
   if (FIN?.bs) void finBsLoad();
   if (FIN?.tx) void finTxLoad(false);
   if (FIN?.line) void finLineLoad();
+  if (FIN?.bud) void finBudLoad();
 }
 
 // ----------------------------------------------------------------- the bills address
