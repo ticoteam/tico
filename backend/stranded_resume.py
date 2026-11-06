@@ -118,7 +118,9 @@ def plan(c, at):
 def act(c, task_id, at):
     """Resume or stop resuming one task, if it still calls for it: "resumed", "stopped" or None."""
     row = H.task(c, task_id)
-    found = state(c, row, at) if row else None
+    if row is None:
+        return None
+    found = state(c, row, at)
     if found is None:
         return None
     if found["stop"]:
@@ -195,6 +197,8 @@ def stranded(c, row, at):
     if not row or row.get("status") != "doing" or not H.is_bot(row.get("owner_id")):
         return False
     row = task_holds.with_holds(c, row)
+    if row is None:
+        return False
     if row.get("blocked_since") or row.get("snoozed_until") and row["snoozed_until"] > at:
         return False
     if row.get("next_run") or row.get("resume") or row.get("carried_by") and auto_tasks.carrier_held(c, row):
