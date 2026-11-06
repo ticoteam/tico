@@ -149,8 +149,7 @@ function needsYouItem(i, folded, showName = true) {
         ${context ? `<div class="req-context"><div class="md">${safeMd(context)}</div></div>` : decision ? `<div class="req-context"><div class="md">${safeMd(decision)}</div></div>` : ''}
         ${next ? `<div class="req-next"><span>Next</span><div class="md">${safeMd(next)}</div></div>` : ''}
         <div class="issue-actions">
-          ${i.state === 'OPEN' ? `<button class="primary" type="button" data-issue-mode="comment" data-issue="${i.number}">Comment</button>
-          <button class="ghost danger" type="button" data-issue-mode="close" data-issue="${i.number}">Close</button>` : ''}
+          ${i.state === 'OPEN' ? `<button class="primary" type="button" data-issue-mode="comment" data-issue="${i.number}">Comment</button>` : ''}
 
         </div>
         <div class="issue-compose" hidden></div>
@@ -162,22 +161,6 @@ function needsYouItem(i, folded, showName = true) {
 }
 
 const CLOSE_WITHOUT_APPROVAL = 'Closed without approval. Do not treat this as authorization to send, publish, spend, or change live systems.';
-async function closeIssue(button, n) {
-  if (button.disabled) return;
-  const label = button.textContent;
-  button.disabled = true; button.textContent = 'Closing…';
-  try {
-    await post(`/issues/${n}/comment`, {body: CLOSE_WITHOUT_APPROVAL, close: true, clear_needs_human: false});
-    document.querySelectorAll(`.req[data-n="${n}"], .bcard[data-n="${n}"], .trow[data-n="${n}"]`).forEach(el => el.remove());
-    if ($('#needs') && !$('#needs .req')) $('#needs').innerHTML = '<div class="empty">Nothing needs you.</div>';
-    renderTree();
-    toast(`Closed #${n}`);
-    void refresh(false);
-  } catch (e) {
-    button.disabled = false; button.textContent = label;
-    toast(`Could not close #${n}: ${e.message}`, true);
-  }
-}
 function issueComposer(host, n, mode) {
   if (!host) return;
   if (!host.hidden && host.dataset.mode === mode) { host.hidden = true; host.innerHTML = ''; return; }
@@ -235,10 +218,6 @@ document.addEventListener('click', async ev => {
   const action = ev.target.closest('[data-issue-mode]');
   if (action) {
     ev.preventDefault();
-    if (action.dataset.issueMode === 'close') {
-      await closeIssue(action, +action.dataset.issue);
-      return;
-    }
     const scope = action.closest('.req,.bcard,.trow');
     issueComposer($(scope.matches('.bcard') ? ':scope > .issue-compose' : '.issue-compose', scope), +action.dataset.issue, action.dataset.issueMode);
     return;
