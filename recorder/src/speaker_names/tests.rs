@@ -661,14 +661,21 @@ fn the_store_keeps_a_settled_name_when_later_evidence_is_gone() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let id = store.create("Meeting").unwrap().id;
+    let mut said = chunk("them", vec![word(0, 2000, "Speaker 2")]);
+    said.recording_id = id.clone();
     store
-        .mutate(&id, |r| {
-            r.state = "stopped".into();
-            r.chunks
-                .push(chunk("them", vec![word(0, 2000, "Speaker 2")]));
-            r.chunks[0].recording_id = r.id.clone();
-            Ok(())
-        })
+        .db()
+        .unwrap()
+        .execute(
+            "INSERT INTO chunks(id,recording_id,status,start_ms,document) VALUES(?,?,?,?,?)",
+            rusqlite::params![
+                said.id,
+                id,
+                said.status,
+                0,
+                serde_json::to_string(&said).unwrap()
+            ],
+        )
         .unwrap();
     store
         .observe_speakers(
