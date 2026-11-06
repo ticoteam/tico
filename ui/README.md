@@ -39,7 +39,10 @@ only syntax that erases (no `enum`, `namespace` or constructor parameter propert
 script whose top-level names are globals like any other file's. `npm run build:ui` (scripts/build-ui.cjs, after
 `npm ci`) compiles each `.ts` file to `build/ui/` at the same path (`build/ui/app/name.js`) with esbuild's per-file
 transform: types stripped, nothing bundled, the file's place in the load order unchanged. `npm run watch:ui`
-recompiles on every change. `build/` is not committed. `build/ui/manifest.json` records each source's and output's
+recompiles on every change. `build/` is not committed. Each output has an external source map beside it
+(`name.js.map`, which its last line names), served as `/tico/ui/app/name.js.map`, so with the files served separately
+(`TICO_UI_BUNDLE=off`) a stack trace and the developer tools show the `.ts`. The bundle drops that line: its parts have
+no maps, for `.js` files either. `build/ui/manifest.json` records each source's, output's and map's
 sha256, and the bundle and the server's `/tico/ui/<name>.ts` route serve the output only while both match
 (backend/ui_build.py): a missing or stale build is a 503 naming the command, and `python -m backend.server` refuses
 to start on one (it compiles first when the checkout has Node and `npm ci`; so do pytest and `npm run test:ui`). The
