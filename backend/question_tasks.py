@@ -274,7 +274,7 @@ def answer_from_reply(conn, person, bot, conversation_id, message):
         return None
     # The reply itself reaches the bot (and wakes it): no second notice that the task is done. A task of the bot's that
     # waited on it still opens again, with its one wake there.
-    H.task_update(conn, person, found[0], status="done", note=str(message.get("body") or "").strip(), wake_others=False)
+    H.task_update(conn, person, found[0], status="done", note=str(message.get("body") or "").strip(), heard=(bot,))
     return found[0]
 
 
@@ -729,7 +729,14 @@ def _ask_task(conn, m, row):
         if card:
             _store_ask(conn, card["id"], m)
             if live:
-                file(conn, sender, H.task(conn, card["id"]), row)
+                conn.execute("SAVEPOINT ask_file")
+                try:
+                    file(conn, sender, H.task(conn, card["id"]), row)
+                except H.Refused:
+                    # A private task whose readers the card does not share takes no blocker on it (a private
+                    # dependency needs the same audience): the bot hears the answer on the card, as its requester.
+                    conn.execute("ROLLBACK TO ask_file")
+                conn.execute("RELEASE ask_file")
             return card
         # Its task's title only where the person reads that task: a private one's stays off.
         readable = not H.task_private(conn, row) or H.task_private_readable(conn, person, row)

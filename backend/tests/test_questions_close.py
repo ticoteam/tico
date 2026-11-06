@@ -90,7 +90,7 @@ def test_unanswered_questions_go_back_to_their_bot_in_one_weekday_morning_wake(a
         found = roundup_messages(c, OPS)
         assert len(found) == 1 and wakes(c, found[0]["id"]) == 1
         assert all(found[0]["body"].count(gone_back_line(t["title"])) == 1 for t in tasks)
-        assert "ops" not in task_roundup.run(c, EVENING_WED)["woke"], "not listed again"
+        assert "ops" not in task_roundup.run(c, EVENING_WED)["woke"], ("not listed again", roundup_messages(c, OPS)[-1]["body"])
         again = pick(c, tasks[0]["id"], "Which venue? The Hall or the Barn.")     # re-asked; the other two dropped
         assert [a["id"] for a in asks + [again] if listed(c, a["id"])] == [again["id"]]
         assert H.unanswered_ask(c, H.task(c, tasks[0]["id"]))["id"] == again["id"]
@@ -165,10 +165,10 @@ def test_a_bulk_close_recounts_the_asking_bot(api):
 def test_still_needed_keeps_the_wait_while_another_question_to_the_same_person_is_open(api):
     friday = "2026-10-16T17:00:00.000000Z"
     with api.app.state.store.transaction() as c:
-        work = H.task_create(c, ANA, "Pick a venue", "x", OPS)
+        work = H.task_create(c, CPO, "Pick a venue", "x", OPS)
         old = pick(c, work["id"], "Which venue?")
         age(c, old, friday)
-        # A second bot's newer question to Ana on the same task.
+        # A second bot on the task (its requester) asks Ana a newer question on it.
         fresh = pick(c, work["id"], "Which budget?", by=CPO)
         age(c, fresh, "2026-10-21T15:00:00.000000Z")
         assert still_needed.sweep(c, "2026-10-21T15:30:00.000000Z") == {OPS: [old["id"]]}

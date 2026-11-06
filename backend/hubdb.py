@@ -6518,7 +6518,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
                 verdict_head=None, skip_step_wake=(), review_reader=None, receipt_owner=None, public_allowance=0,
-                wake_others=True, check_back_at=None, check_back_note=None, owner_event_data=None, *, strict=True):
+                wake_others=True, check_back_at=None, check_back_note=None, owner_event_data=None, *, strict=True,
+                heard=()):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -6535,6 +6536,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     `verdict` and `verdict_head` record a review or QA subtask's verdict and the head it judged (record_verdict).
     Finishing it (done, or a closed step) closes its open descendants under the same close permissions.
     Automatic callers use `strict=False`: descendants they cannot close stay open and their requesters hear once.
+    `heard` names bots that already have the news (a person's chat reply that closed their question task): they get
+    no notice of it as well.
     """
     _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
@@ -6734,9 +6737,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                          f"--parent {task_id} --owner <bot or person>), relate a blocker, name the person with --on, "
                          "or set --due for when to look again"]
     # A bot that needs a person on its own task asks them in one question task they own, with no options
-    # (_ask_in_subtask): the task stays the bot's, blocked on it, and is never itself a card in their Needs you.
+    # (_ask_in_subtask): the task stays the bot's, blocked on it, and is never itself a card in their Needs you. An open
+    # question task to them from the owner on the task (`hub task question`) already asks, so nothing more is filed.
     asked_in = None
-    if waiting_on:
+    if waiting_on and not _owner_asked(conn, row, waiting_on):
         said = str(note if note is not None else row.get("note") or "").strip()
         if said.startswith(BLOCKED_ON.format(name=person_name(conn, waiting_on), ask="")):
             said = said.split(": ", 1)[1]          # the note this rule wrote, sent back as it was
@@ -6782,7 +6786,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             sets.append("readers=NULL")
             for reader in task_readers(row):
                 _task_event(conn, task_id, actor, "reader", reader, None, "")
-    # A wait on a person whose open question from before question tasks already asks them (no card filed above): the
+    # A wait on a person whose open question task from the owner already asks them (no card filed above): the
     # note is put in front of them, so it is checked like a title or body, and only warned about as an ask.
     person = waiting_on if waiting_on and not asked_in else None
     checked = ("title", "body", "note") if person else ("title", "body")
@@ -6980,7 +6984,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             if not task_private(conn, below):
                 _made_private(conn, actor, below["id"])
     # The requester is told when the task ends, and a decline always: nothing is withheld to spare a bot a run.
-    notify_requester = wake_others and status in ("done", "declined") and actor != row["requester_id"]
+    notify_requester = (wake_others and status in ("done", "declined") and actor != row["requester_id"]
+                        and row["requester_id"] not in heard)
     if note is not None and not notify_requester and not quiet:
         _mirror_task_note(conn, actor, after, note)
     if status in ("done", "declined") and row["status"] != status and row.get("questions"):
@@ -7050,7 +7055,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         # question on it, and the parent's owner. Each once, never whoever tapped; tasks-only bots quietly,
         # and only bots that may read the task (_wake).
         parent = task(conn, TR.parent_of(conn, task_id) or "")
-        told = {actor, KEEPER, subtask_told} | ({after["requester_id"]} if notify_requester else set())
+        told = {actor, KEEPER, subtask_told, *heard} | ({after["requester_id"]} if notify_requester else set())
         for who in dict.fromkeys([after["requester_id"], after["owner_id"], *askers, (parent or {}).get("owner_id")]):
             if not who or who in told or not is_bot(who) or not bot_reads_task(conn, who, after):
                 continue
@@ -9508,6 +9513,15 @@ def task_flow(conn, since, until=None, tz_minutes=0, visible="1", owner=None, re
 def task_history(conn, task_id, *, provenance=False):
     columns = TASK_EVENT_COLUMNS + (", data" if provenance else "")
     return _rows(conn.execute(f"SELECT {columns} FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY created_at, rowid", (task_id,)))
+
+
+def _owner_asked(conn, row, person):
+    """Whether an open question task owned by `person`, from this task's owner, sits under it or blocks it."""
+    return conn.execute(
+        "SELECT 1 FROM task_relations wr JOIN tasks wq ON wq.id=wr.from_task WHERE wr.to_task=? "
+        "AND wr.kind IN ('parent','blocks') AND wq.owner_id=? AND wq.requester_id=? AND wq.questions IS NOT NULL "
+        f"AND wq.answer IS NULL AND wq.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) LIMIT 1",
+        (row["id"], person, row["owner_id"])).fetchone() is not None
 
 
 def unanswered_ask(conn, task_row, *, actor=None):

@@ -144,6 +144,7 @@ def ask_ana(api, slug, title):
     with api.app.state.store.transaction() as c:
         made = H.task_create(c, OWNER, title, "Please.", "bot:" + slug)
         QT.ask_plain(c, "bot:" + slug, OWNER, "Which pricing page goes live first?", parent=H.task(c, made["id"]))
+        H.task_update(c, "bot:" + slug, made["id"], status="waiting", waiting_on=OWNER)
     return made["id"]
 
 

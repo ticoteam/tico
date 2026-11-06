@@ -458,7 +458,7 @@ class Rule5Tasks(HubCase):
         parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)
         row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO, parent_id=parent["id"])
         H.task_update(self.conn, SEO, row["id"], status="waiting", waiting_on="ana", note="Pick one image.")
-        H.say(self.conn, COO, ANA, "Which image?", conversation_id=row["conversation_id"], refs={"task": row["id"]})
+        QT.ask_plain(self.conn, COO, ANA, "Which image?", parent=row)
         H.task_update(self.conn, ANA, row["id"], status="done", note="Use B.")
         for bot in (CMO, SEO, COO):
             told = self.finished(row, bot)

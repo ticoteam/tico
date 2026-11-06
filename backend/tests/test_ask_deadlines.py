@@ -12,6 +12,7 @@ def _ask(c, title, default=None, days=0):
                                             "options": [{"label": "Yes"}, {"label": "No"}], "multi": False}],
                              **({"if_no_answer": default} if default else {})})
     then = H.shift(H.now(), days=-days)
+    c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (task["id"],))
     c.execute("UPDATE tasks SET created_at=?, asked_at=? WHERE id IN (?,?)", (then, then, card["id"], task["id"]))
     c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id IN (?,?)",
               (then, card["id"], task["id"]))
