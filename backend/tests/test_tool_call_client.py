@@ -34,8 +34,10 @@ def test_call_names_itself_so_cloudflare_lets_it_through():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         token = token_for("sentry")
-        environ = {"TICO_TOOL_SENTRY_URL": f"http://127.0.0.1:{server.server_port}/api/v2/tool-proxy/sentry",
-                   "SENTRY_READ_TOKEN": token}
+        environ = {
+            "TICO_TOOL_SENTRY_URL": f"http://127.0.0.1:{server.server_port}/api/v2/tool-proxy/sentry",
+            "SENTRY_READ_TOKEN": token,
+        }
         out = tool_call.call("sentry", "GET", "/api/0/projects/", query=["query=is:unresolved"], environ=environ)
     finally:
         server.shutdown()
