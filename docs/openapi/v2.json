@@ -55599,7 +55599,8 @@
             "type": "string",
             "enum": [
               "mercury",
-              "stripe"
+              "stripe",
+              "brex"
             ],
             "title": "Provider",
             "default": "mercury"
@@ -55657,6 +55658,18 @@
               }
             ],
             "title": "Server Ip"
+          },
+          "history_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History From"
           }
         },
         "additionalProperties": false,
@@ -55665,7 +55678,7 @@
           "credential_id"
         ],
         "title": "FinanceConnectionRequest",
-        "description": "Connect a bank or Stripe with a stored credential. Mercury's token: the approver is a Mercury user other than the\ntoken's creator, who approves payments in Mercury; without one, payments stay off. Stripe's restricted key needs no\napprover."
+        "description": "Connect a bank, Stripe or Brex with a stored credential. Mercury's token: the approver is a Mercury user other than\nthe token's creator, who approves payments in Mercury; without one, payments stay off. Stripe's restricted key and\nBrex's token need no approver. history_from is Brex's first day of history (Jan 1 of this year when left out); it is\nread for Brex only."
       },
       "FinanceConnectionResult": {
         "type": "object",
