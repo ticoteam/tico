@@ -33,6 +33,7 @@ async function open(browser, me, branches = false) {
   // `recruits` holds the applicants calls a seat page makes when it opens (POST .../recruit). They land whenever the
   // page gets them, so they are never mixed into `calls`, which steps compare exactly.
   const errors = [], calls = [], recruits = [], failures = new Set();
+  const rosterRead = {hold: null};
   const deletion = {status: 0, hold: null}, seatSave = {status: 0, hire: 0, draftHold: null, draftText: null};
   const people = [
     {id: 'ana', name: 'Ana Rivera', email: 'ana@example.test', org_parent: '', team: '', inbox_bot: 'inbox'},
@@ -48,7 +49,7 @@ async function open(browser, me, branches = false) {
     bot('writer', 'Writer', 'seo', 'b:cmo', {reports_to: 'cmo'}),
     bot('scout', 'Scout', '', 'p:ana', {reports_to: 'human:ana'}),
     bot('botops', 'BotOps', '', 'p:ana', {reports_to: 'human:ana', helper: true}),
-    bot('inbox', 'Inbox Manager', '', 'p:ana'),
+    bot('inbox', 'Inbox Manager', '', 'p:ana', {helper: true}),
     bot('channel', 'Channel Inbox', 'marketing', 'b:botops', {helper: true}),
   ];
   if (branches) bots.push(
@@ -89,7 +90,12 @@ async function open(browser, me, branches = false) {
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (failures.has(p)) return route.fulfill({status: 503, contentType: 'application/json', body: JSON.stringify({error: 'Temporarily unavailable'})});
     if (p === '/api/me') return json({...me, config: {beta}});
-    if (p === '/api/humans') return json({people, org_groups: groupRows()});
+    if (p === '/api/humans') {
+      const body = JSON.stringify({people, org_groups: groupRows()}), hold = rosterRead.hold;
+      rosterRead.hold = null;
+      if (hold) { hold.started(); await hold.release; }
+      return route.fulfill({contentType: 'application/json', body});
+    }
     if (p === '/api/employees') return json(bots);
     if (p === '/api/issues') return json([]);
     if (p === '/api/runs') return json([]);
@@ -195,7 +201,7 @@ async function open(browser, me, branches = false) {
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('https://tico-ui.test/#/updates');
   await page.locator('#tree a.node').first().waitFor();
-  return {page, errors, calls, recruits, people, groups, bots, failures, deletion, seatSave};
+  return {page, errors, calls, recruits, people, groups, bots, failures, deletion, seatSave, rosterRead};
 }
 
 // The chart as nested text: a group is {name: [...]}, a human or a bot is its name.
@@ -367,6 +373,31 @@ async function externalChanges(browser) {
   await page.close();
 }
 
+// A forced refresh must not join a read whose roster was captured before the change. Startup's notification
+// preference read also asks for /humans after the chart appears, so seeing a row does not mean all reads are done.
+async function refreshAfterOlderRead(browser) {
+  const {page, errors, people, rosterRead} = await open(browser, {id: 'ben', role: 'viewer', cloud: true, owner_id: 'ana'});
+  await page.waitForFunction(() => S.notifyBrowser !== undefined);
+  let release;
+  const released = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { rosterRead.hold = {started: resolve, release: released}; });
+  try {
+    await page.evaluate(() => { window.olderRoster = get('/humans'); });
+    await started;
+    people.find(p => p.id === 'ana').org_parent = 'p:dana';
+    people.find(p => p.id === 'ana').reports_to = 'dana';
+    people.push({id: 'dana', name: 'Dana Ruiz', org_parent: '', team: ''},
+                {id: 'zed', name: 'Zed Ito', org_parent: '', team: ''});
+    await page.evaluate(() => { window.chartRefresh = refresh(true); });
+    release();
+    await page.evaluate(() => Promise.all([window.olderRoster, window.chartRefresh]));
+    assert.deepEqual(await shape(page), [
+      {Dana: [{Ana: ['Cara', 'Scout']}]}, 'Zed', {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}],
+    'a forced refresh reads the changed roster even while an older read is in flight');
+    assert.deepEqual(errors, []);
+  } finally { release(); await page.close(); }
+}
+
 async function owner(browser) {
   const {page, errors, calls} = await open(browser, {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
   // Groups nest and hold humans and bots; a member hangs under its manager inside the group; Built-in is outside.
@@ -378,7 +409,7 @@ async function owner(browser) {
   await row(page, 'Marketing').locator('.chev').click();
   assert.equal(await page.locator('#tree a.node[href="#/bot/writer"]').isVisible(), true);
   assert.equal(await node(page, 'b:botops').count(), 0, 'built-in bots stay out of the chart');
-  assert.equal(await page.locator('#tree [data-org="b:inbox"], #tree [data-org="b:channel"]').count(), 0, 'message bots stay off the chart');
+  assert.equal(await page.locator('#tree [data-org="b:inbox"], #tree [data-org="b:channel"]').count(), 0, 'explicit helpers stay off the chart');
   assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, 'nor are their mailboxes in the sidebar');
 
   // Add a group even when Team is collapsed and showing history.
@@ -904,6 +935,7 @@ async function personalBranches(browser) {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     await externalChanges(browser);
+    await refreshAfterOlderRead(browser);
     await owner(browser);
     await topOfChart(browser);
     await member(browser);

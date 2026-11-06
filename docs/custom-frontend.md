@@ -203,9 +203,9 @@ routes. Every `POST` also needs an `Idempotency-Key` header. Answers below are t
 | Mark a starter bot as set up | `POST /api/v2/bots/{bot}/onboarded` `{}` | `{"bot", "onboarding_state": "onboarded", "changed": true}`. The bot's own call (`hub bot setup-done`, MCP `hub_bot_setup_done`) once its setup is done, or its manager's; repeating it answers `"changed": false`. The bot stops being parked: its routines may run and its work is claimed. `409 bot_limit` for a human's bot when they already hold their limit of active bots (a parked bot does not count until now). To start a parked bot's setup, send it a message as the human: `POST /api/v2/chat/{bot}` `{"text": "Let's set you up."}`; while it is `needs_setup` only a human's message wakes it. A message from someone who manages the bot also switches its first routine on. |
 | A bot's routines | `GET /api/v2/bots/{bot}/routines` | `{"routines": [{"id", "bot", "key", "title", "cron", "on", "kind": "cron"\|"event", "timezone", "enabled", "active", "text", "last_fired_at", "next_due_at", "deleted_at"}]}`. Needs Read on the bot (`403 forbidden` otherwise, `404` if the caller cannot see it); `?include_deleted=true` adds removed ones. |
 | Who can use a bot | `GET /api/v2/bots/{bot}/access` / `PUT` | `{"bot", "see": {"everyone": true, "people": [], "teams": [], "bots": []}, "read": {...}, "write": {...}, "revision", "you": {"see", "read", "write"}, "teams": [{"id", "name"}]}`. For the owner, bot administrators and the humans the bot reports up to; anyone else gets `403`. `PUT` takes `see`, `read`, `write` (each `{"everyone": true}` or lists of `people` ids, `teams` and `bots` slugs) and the `revision` you read; `409 version_conflict` if it moved. See [permissions.md](permissions.md). |
-| My DMs | `GET /api/v2/conversations?chat_with=ops` | `{"conversations": [{"id", "participants", "last_message_at"}]}`: my open DM with that bot (none yet is an empty list). |
+| My DMs | `GET /api/v2/conversations?chat_with=ops` | `{"conversations": [{"id", "participants", "last_message_at"}]}`: my open chat with that bot, or its Home after its chats move there (none yet is an empty list). |
 | Messages | `GET /api/v2/conversations/{id}/messages` | `{"messages": [{"id", "sender_id": "human:ana", "sender_name": "Ana", "recipient_id": "bot:ops", "recipient_name": "Ops", "body", "created_at", "refs", "run": {"job_id", "run_id", "state": "started_run"\|"added_to_run"}}], "actors": {...}, "has_more", "next_before"}`. Oldest first, up to 200; `?before=<next_before>` pages back. `run` says which run took a message and is absent until one has; a bot's reply carries `run` and `answers` too ([below](#which-run-took-a-message)). |
-| Send to a bot | `POST /api/v2/chat/ops` `{"text": "Hello"}` | `{"conversation": {"id"}, "message": {"id", "body"}}`. Opens the DM if needed; the reply arrives [live](#live-events). |
+| Send to a bot | `POST /api/v2/chat/ops` `{"text": "Hello"}` | `{"conversation": {"id"}, "message": {"id", "body"}}`. Once the bot's chats have moved, it posts to the bot's Home, unless the sender may not read that Home; the Assistant and the Strategy Bot keep their DMs. Otherwise it opens the DM if needed. The reply arrives [live](#live-events). |
 | Send in a thread | `POST /api/v2/conversations/{id}/messages` `{"text": "Again"}` | `{"message": {...}}` |
 | Tasks | `GET /api/v2/tasks?status=open,doing&owner=human:ana&limit=100` | `{"tasks": [{"id", "title", "body", "owner", "owner_name", "requester", "requester_name", "status", "due", "version", "labels", "number", "step_rank"}], "actors": {...}, "next_offset": null}`. Statuses: `open doing waiting review ready done declined`. `?offset=` pages. `?type=` and `?step=` (ids or names) and `?number=` filter, and `?sort=step` lists a type's board in order ([tasks.md](tasks.md)). To poll, keep the largest `updated_at` you have seen and ask `?updated_since=<it, ISO 8601 with a timezone>`: only tasks changed after it come back, closed ones included. Closing, reopening, commenting, a question asked or answered on it, a link or an attachment added or removed, a linked pull request's state and any change to its fields all change `updated_at`. `?brief=true` leaves out each task's `body` and `acceptance_criteria`; read one task for them. |
 | One task | `GET /api/v2/tasks/{id}` | `{"task": {...}, "events": [...], "comments": [...], "children": [...]}` |
@@ -263,7 +263,7 @@ it, when you may know) and `at`:
 ```
 id: 4120
 event: tasks
-data: {"seq": 4120, "actor": "human:ben", "at": "2026-10-05T10:00:01.120Z", "id": "t9", "task": {...as GET /api/v2/tasks shows it...}}
+data: {"seq": 4120, "actor": "human:ben", "at": "2026-10-05T10:00:01.120Z", "id": "t9", "kind": "update", "kinds": ["files", "update"], "task": {...as GET /api/v2/tasks shows it...}}
 
 id: 4121
 event: runs
@@ -274,15 +274,16 @@ data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot_id": "ops", "o
 
 | Topic | `data` |
 |---|---|
-| `tasks` | `id` and `task`, or `gone: true` for a deleted task; `bulk: true` (no `id`) when one change touched more than 100 tasks, such as a type edit: read task lists in full |
+| `tasks` | `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and `task`, or `gone: true` for a deleted task; `files` in `kinds` invalidates the task's files and linked pages, even when `kind` is `update`; `bulk: true` (no `id`) when one change touched more than 100 tasks, such as a type edit: read task lists in full |
 | `messages` | `id`, `conversation_id` and `message`, or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal` |
 | `runs` | `run_id`, `conversation_id`, `bot_id`, and `output` (one step of the run) or `state` (the job's state, or the run's: [Runs](status-and-state.md#runs)) |
 | `bots` | `bot` and `status`, as `GET /api/v2/status` lists it |
 | `needs` | your own Needs-you `count` and `items`, as `GET /api/v2/needs-you`, whenever anything on it may have moved |
+| `letters` | `id` and `letter`, as `GET /api/v2/letters/{id}` shows it; replace that row. `{id, gone:true}` removes a row after access is lost. Source access changes above `FAN_CAP` coalesce to `{invalidate:true}`: clear held rows and re-read the paged list once. Other letter events never re-read the list. |
 
 - **Only what you may read is sent.** A private task, a thread you are not in, or a bot whose activity you may
   not read never shows up, not even as a number. Bots cannot open the stream (`403`).
-- **Narrow it.** `topics` defaults to all five. `conversation=<id>` (up to 20, comma-separated) limits messages and runs to
+- **Narrow it.** `topics` defaults to every supported topic. `conversation=<id>` (up to 20, comma-separated) limits messages and runs to
   those threads; `bot=<slug>` limits runs and bots; `task=<id>` and `party=<actor>` limit tasks to those tasks
   and to the ones that actor owns or asked for (a bot's or person's page). A thread page opens
   `topics=messages,runs&conversation=<id>`.
@@ -290,7 +291,7 @@ data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot_id": "ops", "o
   again (one read at a time; fold a burst into one). Its `execution.text` is **the reply so far** while
   `execution.state` is `leased` or `running`; when the run completes, the final message is in `messages`. `execution.parts`
   is the same run as a list of `{"kind", "text", "at"}`: `reply` (what the bot wrote), `progress` (what it wrote just
-  before a tool call) and `tool` (a short label such as `Ran hub task create`, never the call's arguments; Claude and
+  before a tool call) and `tool` (a short label such as `Filing a task` or `Ran npm`, never the call's arguments; Claude and
   Codex do not report tools, so their pieces are all `reply`). `text` joins the bot's messages with a blank line and leaves
   the tool labels out.
 - **Resume.** The stream ends after about fifteen minutes by design; `event: ready`
@@ -377,8 +378,10 @@ request may succeed later. Some carry one extra fact beside them (a `sign_in` pa
 | 413 | `too_large` | Over 2 MB (uploads 20 MB). |
 | 422 | `idempotency_key` | A write without an `Idempotency-Key`. |
 | 422 | `lint`, `date`, `hierarchy`... | A rule of the product refused the request. `detail` says what to change. |
+| 422 | `import_failed` | A file import was refused. `detail` says why: the file took over 30 seconds, needed over 1 GiB of memory, converted to over 1,000,000 characters, or could not be converted. |
 | 429 | `cap`, `budget` | A daily allowance is used. |
 | 503 | `busy` | The database was busy. Wait for `Retry-After` seconds and retry with the same `Idempotency-Key`. |
+| 503 | `imports_busy` | Two file imports are converting already. Wait a minute and send the import again (`retryable: true`). |
 | 503 | `storage_unavailable` | Try again shortly (`retryable: true`); back off. |
 
 Request validation (a missing field, a wrong type or an unknown field) uses the same envelope:

@@ -1,4 +1,4 @@
-// Journey 7 on a real hub (redesign TESTING.md §L3): Strategy › Org on a phone (then a desktop). Dana, the top of the
+// Journey 7 on a real hub (redesign TESTING.md §L3): Strategy › Org on a phone (one pass: phone). Dana, the top of the
 // org, taps Builder (Claude) and moves it from Engineering to Release: the hub's groups have it there at once. Omar
 // leads Engineering only, so his Move to… offers Engineering's groups and not Release, and a Release teammate's sheet
 // has no Move to…. No approval is filed: org changes beyond that are the Strategy Bot's to suggest in words.
@@ -42,6 +42,7 @@ run('redesign-e2e-org', ['org', 'toured', 'groups'], async ({hub, browser, phone
   await omar.locator(card('bot:builder-openai')).click();
   const mine = omar.locator('dialog.rd-sheet[open]');
   await mine.waitFor();
+  await mine.locator('select[name="to"]').waitFor();
   const options = (await mine.locator('select[name="to"] option').allInnerTexts()).map(o => o.trim());
   assert.ok(options.includes('Engineering') && !options.includes('Release') && !options.includes('No group'),
     `${tag}: a lead moves inside its groups only: ${options}`);
@@ -62,4 +63,4 @@ run('redesign-e2e-org', ['org', 'toured', 'groups'], async ({hub, browser, phone
   await omar.context().close();
   assert.deepEqual(page.errors, [], `${tag}: no page errors`);
   await page.context().close();
-});
+}, {only: 'phone'});   // redesign-org.js branches on the phone only for the pane's height (the phone keeps its pass); the asserts are the hub's answers to Move to, and strategy-org.cjs draws the chart at both widths

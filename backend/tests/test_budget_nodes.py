@@ -1,6 +1,7 @@
 """Money limits as budget nodes (backend/usage_limits.py, backend/migrations/0054_budget_nodes.py): the migration moves a
 bot's limits, the team and group pools and the company default into nodes and keeps the subscription switch; a save
 writes and clears nodes; the readers answer as before."""
+
 import importlib.util
 import json
 import sqlite3
@@ -38,23 +39,27 @@ INSERT INTO registry_metadata VALUES ('usage_limits', '{"daily_usd": 20, "monthl
 """)
     module = _migration()
     module.up(conn)
-    module.up(conn)                                      # the tables are gone; nothing doubles
-    rows = {(r["scope"], r["team_id"], r["bot_id"], r["per_bot"], r["period"]): (r["amount_nano"], r["updated_by_id"])
-            for r in conn.execute("SELECT * FROM budget_nodes")}
+    module.up(conn)  # the tables are gone; nothing doubles
+    rows = {
+        (r["scope"], r["team_id"], r["bot_id"], r["per_bot"], r["period"]): (r["amount_nano"], r["updated_by_id"])
+        for r in conn.execute("SELECT * FROM budget_nodes")
+    }
     assert rows == {
         ("bot", None, "ops", 0, "daily"): (5_000_000_000, "human:ana"),
         ("bot", None, "ops", 0, "hourly"): (1_250_000_000, "human:ana"),
         ("bot", None, "ops", 0, "per_30m"): (700_000_000, "human:ana"),
-        ("bot", None, "cmo", 0, "daily"): (0, None),                   # its own 0; -3 is left behind
+        ("bot", None, "cmo", 0, "daily"): (0, None),  # its own 0; -3 is left behind
         ("company", None, None, 0, "daily"): (80_000_000_000, None),
         ("team", "eng", None, 0, "monthly"): (400_000_000_000, None),
         ("team", "eng", None, 0, "per_30m"): (3_000_000_000, None),
-        ("company", None, None, 1, "daily"): (20_000_000_000, None),   # the default; an amount over the cap is left
+        ("company", None, None, 1, "daily"): (20_000_000_000, None),  # the default; an amount over the cap is left
     }
-    assert json.loads(conn.execute("SELECT value FROM registry_metadata").fetchone()[0]) == {"count_subscription": False}
+    assert json.loads(conn.execute("SELECT value FROM registry_metadata").fetchone()[0]) == {
+        "count_subscription": False
+    }
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert not {"usage_limits", "usage_pools"} & tables
-    with pytest.raises(sqlite3.IntegrityError):         # a node names one scope, consistently
+    with pytest.raises(sqlite3.IntegrityError):  # a node names one scope, consistently
         conn.execute("INSERT INTO budget_nodes VALUES ('x','team',NULL,'ops',0,'daily',1,'','',NULL)")
 
 
@@ -63,12 +68,24 @@ def test_saves_write_and_clear_nodes_and_the_readers_answer_as_before(api):
         usage_limits.save_own(c, "ops", {"daily_usd": 2.5, "monthly_usd": 40}, "human:ana")
         usage_limits.save_pool(c, "group:eng", {"weekly_usd": 9}, "human:ana")
         usage_limits.save_default(c, {"daily_usd": 10}, False, "human:ana")
-        assert usage_limits.own(c, "ops") == {"per_30m_usd": None, "hourly_usd": None, "daily_usd": 2.5,
-                                              "weekly_usd": None, "monthly_usd": 40}
+        assert usage_limits.own(c, "ops") == {
+            "per_30m_usd": None,
+            "hourly_usd": None,
+            "daily_usd": 2.5,
+            "weekly_usd": None,
+            "monthly_usd": 40,
+        }
         default = usage_limits.company(c)
         assert default["daily_usd"] == 10 and default["count_subscription"] is False
-        assert usage_limits.pools(c) == {"group:eng": {"per_30m_usd": None, "hourly_usd": None, "daily_usd": None,
-                                                       "weekly_usd": 9, "monthly_usd": None}}
+        assert usage_limits.pools(c) == {
+            "group:eng": {
+                "per_30m_usd": None,
+                "hourly_usd": None,
+                "daily_usd": None,
+                "weekly_usd": 9,
+                "monthly_usd": None,
+            }
+        }
         limits, source = usage_limits.effective(c, "cmo")
         assert limits["daily_usd"] == 10 and source["daily"] == "company"
         usage_limits.save_own(c, "ops", {"daily_usd": None, "monthly_usd": 40}, "human:ana")
@@ -82,6 +99,7 @@ def test_limits_set_through_the_api_read_back_identically_after_the_move(api):
     the API's own answer before and after the migration is identical."""
     from backend.tests.test_api import get
     from backend.tests.test_usage_limits import put
+
     awkward = {"per_30m_usd": 0.35, "daily_usd": 1234.567891, "weekly_usd": 9999999.999999, "monthly_usd": 0.000001}
     put(api, "usage/limits/ops", awkward)
     put(api, "usage/limits", {"daily_usd": 12.345678, "monthly_usd": 0.1 + 0.2, "count_subscription": False})
@@ -90,22 +108,34 @@ def test_limits_set_through_the_api_read_back_identically_after_the_move(api):
     def answer():
         found = get(api, "usage/limits")
         company = found["pools"]["company"]
-        return (found["default"], {k: v for k, v in found["bots"]["ops"].items() if k.startswith("own_")},
-                {k: company[k] for k in usage_limits.KEYS})
+        return (
+            found["default"],
+            {k: v for k, v in found["bots"]["ops"].items() if k.startswith("own_")},
+            {k: company[k] for k in usage_limits.KEYS},
+        )
+
     before = answer()
     assert before[1] == {"own_" + k: awkward.get(k) for k in usage_limits.KEYS}
     default, own, pool = before
     with api.app.state.store.transaction() as c:
         # The same amounts as the release before budget nodes kept them: REAL USD columns and the default's registry entry.
-        c.execute("CREATE TABLE usage_limits (bot TEXT PRIMARY KEY, daily_usd REAL, monthly_usd REAL, updated_at TEXT, "
-                  "updated_by TEXT, hourly_usd REAL, weekly_usd REAL, per_30m_usd REAL)")
-        c.execute("CREATE TABLE usage_pools (scope TEXT PRIMARY KEY, hourly_usd REAL, daily_usd REAL, weekly_usd REAL, "
-                  "monthly_usd REAL, updated_at TEXT, updated_by TEXT, per_30m_usd REAL)")
+        c.execute(
+            "CREATE TABLE usage_limits (bot TEXT PRIMARY KEY, daily_usd REAL, monthly_usd REAL, updated_at TEXT, "
+            "updated_by TEXT, hourly_usd REAL, weekly_usd REAL, per_30m_usd REAL)"
+        )
+        c.execute(
+            "CREATE TABLE usage_pools (scope TEXT PRIMARY KEY, hourly_usd REAL, daily_usd REAL, weekly_usd REAL, "
+            "monthly_usd REAL, updated_at TEXT, updated_by TEXT, per_30m_usd REAL)"
+        )
         columns = ", ".join(usage_limits.KEYS)
-        c.execute(f"INSERT INTO usage_limits(bot, {columns}) VALUES(?,?,?,?,?,?)",
-                  ("ops", *(own["own_" + k] for k in usage_limits.KEYS)))
-        c.execute(f"INSERT INTO usage_pools(scope, {columns}) VALUES(?,?,?,?,?,?)",
-                  ("company", *(pool[k] for k in usage_limits.KEYS)))
+        c.execute(
+            f"INSERT INTO usage_limits(bot, {columns}) VALUES(?,?,?,?,?,?)",
+            ("ops", *(own["own_" + k] for k in usage_limits.KEYS)),
+        )
+        c.execute(
+            f"INSERT INTO usage_pools(scope, {columns}) VALUES(?,?,?,?,?,?)",
+            ("company", *(pool[k] for k in usage_limits.KEYS)),
+        )
         c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(default), usage_limits.KEY))
         c.execute("DELETE FROM budget_nodes")
         _migration().up(c)
@@ -118,10 +148,14 @@ def _rewind(c):
     found = usage_limits.nodes(c)
     counted = usage_limits.company(c)["count_subscription"]
     columns = ", ".join(usage_limits.KEYS)
-    c.execute("CREATE TABLE usage_limits (bot TEXT PRIMARY KEY, daily_usd REAL, monthly_usd REAL, updated_at TEXT, "
-              "updated_by TEXT, hourly_usd REAL, weekly_usd REAL, per_30m_usd REAL)")
-    c.execute("CREATE TABLE usage_pools (scope TEXT PRIMARY KEY, hourly_usd REAL, daily_usd REAL, weekly_usd REAL, "
-              "monthly_usd REAL, updated_at TEXT, updated_by TEXT, per_30m_usd REAL)")
+    c.execute(
+        "CREATE TABLE usage_limits (bot TEXT PRIMARY KEY, daily_usd REAL, monthly_usd REAL, updated_at TEXT, "
+        "updated_by TEXT, hourly_usd REAL, weekly_usd REAL, per_30m_usd REAL)"
+    )
+    c.execute(
+        "CREATE TABLE usage_pools (scope TEXT PRIMARY KEY, hourly_usd REAL, daily_usd REAL, weekly_usd REAL, "
+        "monthly_usd REAL, updated_at TEXT, updated_by TEXT, per_30m_usd REAL)"
+    )
     default = {"count_subscription": counted}
     for key, caps in found.items():
         values = [caps.get(k) for k in usage_limits.KEYS]
@@ -141,6 +175,7 @@ def test_a_limit_the_api_stored_as_zero_still_overrides_the_default_and_caps_not
     a pool with nothing above zero is no pool."""
     from backend.tests.test_api import get
     from backend.tests.test_usage_limits import put
+
     put(api, "usage/limits", {"daily_usd": 5, "weekly_usd": 0.0000001})
     put(api, "usage/limits/ops", {"daily_usd": 0.0000001, "monthly_usd": 7})
     put(api, "usage/pools/company", {"per_30m_usd": 0.0000001, "weekly_usd": 80})
@@ -149,22 +184,34 @@ def test_a_limit_the_api_stored_as_zero_still_overrides_the_default_and_caps_not
     def state():
         with api.app.state.store.read() as c:
             caps, source = usage_limits.effective(c, "ops")
-            return (get(api, "usage/limits"), caps, source, usage_limits.pools(c), usage_limits.company(c),
-                    usage_limits.state(c, "ops"))
+            return (
+                get(api, "usage/limits"),
+                caps,
+                source,
+                usage_limits.pools(c),
+                usage_limits.company(c),
+                usage_limits.state(c, "ops"),
+            )
+
     before = state()
     _, caps, source, pools, default, _ = before
-    assert (caps["daily_usd"], source["daily"]) == (0.0, "bot")            # its own 0, not the default's $5
+    assert (caps["daily_usd"], source["daily"]) == (0.0, "bot")  # its own 0, not the default's $5
     assert (caps["monthly_usd"], source["monthly"]) == (7, "bot")
-    assert default["weekly_usd"] is None                                   # the default never kept a 0
-    assert pools["company"] == {"per_30m_usd": 0.0, "hourly_usd": None, "daily_usd": 9, "weekly_usd": 80,
-                                "monthly_usd": None}
+    assert default["weekly_usd"] is None  # the default never kept a 0
+    assert pools["company"] == {
+        "per_30m_usd": 0.0,
+        "hourly_usd": None,
+        "daily_usd": 9,
+        "weekly_usd": 80,
+        "monthly_usd": None,
+    }
     assert not before[5]["blocked"]
     with api.app.state.store.transaction() as c:
         _rewind(c)
         _migration().up(c)
     assert state() == before
 
-    put(api, "usage/pools/company", {"daily_usd": None, "weekly_usd": None})   # only the 0 is left: no pool
+    put(api, "usage/pools/company", {"daily_usd": None, "weekly_usd": None})  # only the 0 is left: no pool
     with api.app.state.store.read() as c:
         assert usage_limits.pools(c) == {}
         assert not c.execute("SELECT 1 FROM budget_nodes WHERE scope='company' AND per_bot=0").fetchone()
@@ -182,10 +229,15 @@ INSERT INTO usage_pools VALUES ('group:eng', 0.0, NULL);
 INSERT INTO registry_metadata VALUES ('usage_limits', '{"daily_usd": 0, "monthly_usd": 3}');
 """)
     _migration().up(conn)
-    rows = {(r[0], r[1], r[2], r[3], r[4]): r[5] for r in conn.execute(
-        "SELECT scope, team_id, bot_id, per_bot, period, amount_nano FROM budget_nodes")}
-    assert rows == {("bot", None, "ops", 0, "daily"): 0, ("company", None, None, 0, "daily"): 0,
-                    ("company", None, None, 0, "monthly"): 50_000_000_000,
-                    ("company", None, None, 1, "monthly"): 3_000_000_000}
-    with pytest.raises(sqlite3.IntegrityError):         # the default has no 0
+    rows = {
+        (r[0], r[1], r[2], r[3], r[4]): r[5]
+        for r in conn.execute("SELECT scope, team_id, bot_id, per_bot, period, amount_nano FROM budget_nodes")
+    }
+    assert rows == {
+        ("bot", None, "ops", 0, "daily"): 0,
+        ("company", None, None, 0, "daily"): 0,
+        ("company", None, None, 0, "monthly"): 50_000_000_000,
+        ("company", None, None, 1, "monthly"): 3_000_000_000,
+    }
+    with pytest.raises(sqlite3.IntegrityError):  # the default has no 0
         conn.execute("INSERT INTO budget_nodes VALUES ('x','company',NULL,NULL,1,'daily',0,'','',NULL)")

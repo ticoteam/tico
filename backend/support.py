@@ -10,12 +10,15 @@ timer of its own. Every route shows a person their own tickets and no one else's
 it is stored as plain text and the page escapes it.
 
 A bot (or the Assistant, or a person's token) reports a Tico bug the same way, with one step more: it drafts the report as
-a `support` approval (backend/hubdb.py `lint_support`: the message, its hash, whether the IDs go), a person reads it in
+a `support` approval (backend/hubdb.py `lint_approval`: the message, its hash, whether the IDs go), a person reads it in
 Needs you and says yes, and only then may the bot send it (`file_approved`). The ticket is the approving person's: it is
 filed as them, counts against their day, and its replies show on their Support page. No diagnostics bundle goes this way.
+Unless the team lets bots send without asking (team rule `bot_reports_direct`, on by default): then the same draft is
+decided as the install's default person under the team rule and sent at once (`send_by_rule`, through the same send).
 
 `TICO_SUPPORT=off` removes the feature (an air-gapped install); PRIVACY.md and docs/support.md describe it.
 """
+
 import json
 import logging
 import os
@@ -29,13 +32,13 @@ import httpx
 
 from pydantic import Field
 
-from . import diagnostics, support_asks
+from . import diagnostics, support_asks, team_rules
 from .census import hq_url
-from .auth import Identity
+from .auth import Identity, validate_identity
 from .models import Contract
 from .replication import rehearsal_on
 from .credentials import SEALED
-from .store import H, Problem, encode
+from .store import H, Problem, encode, refused
 
 log = logging.getLogger("tico.support")
 
@@ -48,21 +51,37 @@ CREATE TABLE IF NOT EXISTS support_tickets(
 CREATE INDEX IF NOT EXISTS support_tickets_actor ON support_tickets(actor, created_at);
 """
 MAX_MESSAGE = 4000
-PER_DAY = 10                 # new tickets one person may file in a day; HQ limits the address as well
+PER_DAY = 10  # new tickets one person may file in a day; HQ limits the address as well
 # How often a ticket is asked about, at most. HQ counts every ask from this install (one address) together, so a ticket
 # nobody has written on for an hour is asked about less often.
-FRESH_S = 30                 # a ticket written on (or filed) within ACTIVE_S, or the one in view
-QUIET_FRESH_S = 300          # an open or answered one with nothing new for longer
-CLOSED_FRESH_S = 6 * 3600    # a closed one, in case the team reopened it
+FRESH_S = 30  # a ticket written on (or filed) within ACTIVE_S, or the one in view
+QUIET_FRESH_S = 300  # an open or answered one with nothing new for longer
+CLOSED_FRESH_S = 6 * 3600  # a closed one, in case the team reopened it
 ACTIVE_S = 3600
-ASKED = 20                   # tickets asked about in one refresh, at most
+ASKED = 20  # tickets asked about in one refresh, at most
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 LISTED = 50
 HQ_WAIT = 8
 # The sources this server names when it files (HQ's `source` field; HQ owns the full list and stores `unknown` for any
 # value it does not know): a person, a bot's report a person approved, BotOps, the Health Monitor.
 SOURCES = ("person", "bot_report", "botops", "health_monitor")
-TRANSPORT = None             # tests replace it with an httpx.MockTransport: nothing reaches the network
+# The person's own tickets, as SQL (`_source` says the same in Python). A bot's report, the Health Monitor's and BotOps'
+# are not: they name their source in `sent`, and a ticket kept before that was by its request key (`approval:` for a
+# bot's report, `health:` for the Health Monitor's). The person's chat lists only these; a bot's ticket is still pulled
+# and stored, and the bots' own follow-ups (note) reach HQ. The person's own keys are `idem:` (their idempotency key)
+# or `draft:` (their own approved draft), so no key of theirs can make a ticket a bot's.
+OWN = (
+    "COALESCE(json_extract(sent,'$.source'),'person')='person' "
+    "AND COALESCE(request_key,'') NOT LIKE 'approval:%' AND COALESCE(request_key,'') NOT LIKE 'health:%'"
+)
+RESERVED_KEYS = ("approval:", "health:", "draft:", "idem:", "feedback:")  # request keys the server itself writes
+RULE = "bot_reports_direct"  # the team rule: a bot's report is sent without a card (send_by_rule)
+RULE_VIA = "team rule"  # approvals.decided_via of a draft the rule decided: no person decided it
+RULE_NOTE = "team rule: bots send reports without asking"  # the decision's note, in its history
+# Who may act for a person on their confirmation (`Identity.confirmed`): BotOps and the Assistant, with their yes to a
+# read-back or their tap on a Confirm card (backend/app.py, backend/auth.py). Unconfirmed, they are refused here.
+CONFIRMED_VIA = ("botops", "assistant")
+TRANSPORT = None  # tests replace it with an httpx.MockTransport: nothing reaches the network
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
 EMAIL = re.compile(r"[^@\s<>\",;()\[\]\\]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\.[A-Za-z]{2,24}")
 VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:-[0-9A-Za-z][0-9A-Za-z.-]{0,31})?")
@@ -71,10 +90,12 @@ VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:-[0-9A-Za-z][0-9A-Za
 class SupportTicket(Contract):
     message: str = Field(min_length=1, max_length=MAX_MESSAGE)
     email: str = Field(default="", max_length=254)
-    include_ids: bool = True            # the version and the install ID go with it, unless the person unticks it
+    include_ids: bool = True  # the version and the install ID go with it, unless the person unticks it
     # The desktop app's own version (window.ticoNativeVersion) when the page runs in it; goes with the IDs.
     app_version: str = Field(default="", max_length=40)
-    diagnostics: str = Field(default="", max_length=64)     # the digest of the bundle the person previewed (backend/diagnostics.py)
+    diagnostics: str = Field(
+        default="", max_length=64
+    )  # the digest of the bundle the person previewed (backend/diagnostics.py)
     # What the person is asking for: help, help with setting up (backend/support_asks.py setup_snapshot), or feedback.
     kind: Literal["support", "setup", "feedback"] = "support"
     # Who is filing, for HQ's queue (`source`; HQ owns the list): the person's own app sends nothing, so `person`; only
@@ -85,15 +106,15 @@ class SupportTicket(Contract):
 
 class FeedbackAnswer(Contract):
     moment: Literal["first_result", "day_7", "day_30"]
-    answer: str = Field(default="", max_length=MAX_MESSAGE - 200)     # empty: the person skipped the question
+    answer: str = Field(default="", max_length=MAX_MESSAGE - 200)  # empty: the person skipped the question
 
 
 class SupportFromApproval(Contract):
-    approval: str = Field(min_length=1, max_length=64)     # an approved `support` approval the caller asked for
+    approval: str = Field(min_length=1, max_length=64)  # an approved `support` approval the caller asked for
 
 
 class SupportRefresh(Contract):
-    ticket: str = Field(default="", max_length=64)          # the ticket a person has in view: asked about first
+    ticket: str = Field(default="", max_length=64)  # the ticket a person has in view: asked about first
 
 
 class SupportMessage(Contract):
@@ -112,13 +133,15 @@ class BrowserFailure(Contract):
 
 class AppShell(Contract):
     """The desktop app the page runs in: its version and the end of its log file (app/src/applog.rs)."""
+
     version: str = Field(default="", max_length=40)
     lines: list[Annotated[str, Field(max_length=2000)]] = Field(default_factory=list, max_length=diagnostics.APP_LINES)
-    mac: bool = False           # the Mac app, which is Beta until it is signed (backend/beta.py)
+    mac: bool = False  # the Mac app, which is Beta until it is signed (backend/beta.py)
 
 
 class CheckRow(Contract):
     """One Setup check row (backend/setup_check.py)."""
+
     name: str = Field(min_length=1, max_length=120)
     status: Literal["ok", "bad", "warn", "info"]
     detail: str = Field(default="", max_length=600)
@@ -129,10 +152,11 @@ class CheckRow(Contract):
 class Report(Contract):
     """What a person reports with Report this (an error toast, a failed run, a red Health line, a stuck bot) or from
     Help's Setup check. `group` names the error the same way each time, so the same problem reads as one."""
+
     kind: Literal["toast", "run", "health", "stuck", "setup_check"]
     title: str = Field(default="", max_length=200)
     detail: str = Field(default="", max_length=2000)
-    ref: str = Field(default="", max_length=120)        # the run, Health check or bot it is about
+    ref: str = Field(default="", max_length=120)  # the run, Health check or bot it is about
     group: str = Field(default="", max_length=120)
     checks: list[CheckRow] = Field(default_factory=list, max_length=40)
 
@@ -166,10 +190,15 @@ def require_on(settings):
 
 
 def require_person(who):
-    """A person at their own browser: not a token, not the Assistant acting for them, not a bot or a computer. BotOps
-    acting with a person's delegated rights (backend/app.py delegated_identity) files as that person; BotOps with its
-    own rights is a bot and is refused."""
-    if who.role not in ("owner", "human") or who.via_token or (who.via and not (who.via == "botops" and who.confirmed)):
+    """A person at their own browser: not a personal token, not a bot or a computer, and not the Assistant or BotOps acting
+    for them unless they act on the person's confirmation (`confirmed`: a yes to their read-back, or a tap on a Confirm
+    card). The Assistant's chat turn is a token too (`via_token`, auth.py chat_person), so it counts only when confirmed.
+    Confirmed, they file as that person; BotOps with its own rights is a bot and is refused."""
+    if (
+        who.role not in ("owner", "human")
+        or (who.via_token and who.via != "assistant")
+        or (who.via and not (who.via in CONFIRMED_VIA and who.confirmed))
+    ):
         raise Problem("forbidden", "Only a signed-in person can contact support.", 403)
 
 
@@ -201,10 +230,14 @@ def _ask_hq(method, path, *, body=None, secret="", wait=HQ_WAIT):
         with httpx.Client(timeout=wait, transport=TRANSPORT, follow_redirects=False) as http:
             return http.request(method, hq_url() + path, json=body, headers=headers)
     except httpx.HTTPError as exc:
-        diagnostics.RING.handle(logging.LogRecord("tico.support", logging.WARNING, "", 0,
-            "HQ did not answer (%s)", (type(exc).__name__,), None))
-        raise Problem("support_unreachable", "Could not reach Tico support. Try again in a moment.", 502,
-                      retryable=True) from None
+        diagnostics.RING.handle(
+            logging.LogRecord(
+                "tico.support", logging.WARNING, "", 0, "HQ did not answer (%s)", (type(exc).__name__,), None
+            )
+        )
+        raise Problem(
+            "support_unreachable", "Could not reach Tico support. Try again in a moment.", 502, retryable=True
+        ) from None
 
 
 def _refused_field(response):
@@ -240,17 +273,24 @@ def _messages(value):
     out = []
     for item in (value if isinstance(value, list) else [])[:200]:
         if isinstance(item, dict) and isinstance(item.get("id"), int):
-            out.append({"id": item["id"], "created_at": str(item.get("created") or item.get("created_at") or "")[:30],
-                        "from": "person" if item.get("from") == "person" else "staff",
-                        "body": str(item.get("body") or "")[:8000],
-                        "has_diagnostics": item.get("has_diagnostics") is True})
+            out.append(
+                {
+                    "id": item["id"],
+                    "created_at": str(item.get("created") or item.get("created_at") or "")[:30],
+                    "from": "person" if item.get("from") == "person" else "staff",
+                    "body": str(item.get("body") or "")[:8000],
+                    "has_diagnostics": item.get("has_diagnostics") is True,
+                }
+            )
     return out
 
 
 def _stored_messages(row):
     """A ticket's stored messages; one stored before the time column renames has HQ's `created` instead of `created_at`."""
-    return [{**m, "created_at": m.get("created_at") or m.get("created") or ""} if "created" in m else m
-            for m in json.loads(row["messages"] or "[]")]
+    return [
+        {**m, "created_at": m.get("created_at") or m.get("created") or ""} if "created" in m else m
+        for m in json.loads(row["messages"] or "[]")
+    ]
 
 
 def _last_activity(row):
@@ -259,12 +299,32 @@ def _last_activity(row):
     return max((t for t in times if t and t.tzinfo), default=EPOCH)
 
 
+def _source(row, sent):
+    """Who filed a ticket, as HQ's `source` names it. A ticket the person wrote keeps `sent` as it always was; any other
+    filer is kept in `sent`. A ticket filed before that was kept is told apart by its request key (OWN): a bot's report
+    is `approval:`, the Health Monitor's direct report is `health:`."""
+    if sent.get("source") in SOURCES:
+        return sent["source"]
+    key = row["request_key"] or ""
+    if key.startswith("health:"):
+        return "health_monitor"
+    return "bot_report" if key.startswith("approval:") else "person"
+
+
 def view(row):
     """A ticket as the page sees it. The HQ secret and id are not in it."""
-    messages = _stored_messages(row)
-    return {"id": row["id"], "created_at": row["created_at"], "status": row["status"], "message": row["message"],
-            "email": row["email"], "sent": json.loads(row["sent"] or "{}"), "messages": messages,
-            "unread": sum(1 for m in messages if m["from"] == "staff" and m["id"] > row["seen_id"])}
+    messages, sent = _stored_messages(row), json.loads(row["sent"] or "{}")
+    return {
+        "id": row["id"],
+        "created_at": row["created_at"],
+        "status": row["status"],
+        "message": row["message"],
+        "email": row["email"],
+        "sent": sent,
+        "source": _source(row, sent),
+        "messages": messages,
+        "unread": sum(1 for m in messages if m["from"] == "staff" and m["id"] > row["seen_id"]),
+    }
 
 
 def _context(ticket_id):
@@ -279,11 +339,14 @@ def seal_plaintext_secrets(store, vault):
         # The table is made by Store.initialize, which can run after this (a fresh database): no table, nothing stored yet.
         if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='support_tickets'").fetchone():
             return 0
-        rows = c.execute("SELECT id,hq_secret FROM support_tickets WHERE substr(hq_secret,1,?)<>?",
-                         (len(SEALED), SEALED)).fetchall()
+        rows = c.execute(
+            "SELECT id,hq_secret FROM support_tickets WHERE substr(hq_secret,1,?)<>?", (len(SEALED), SEALED)
+        ).fetchall()
         for row in rows:
-            c.execute("UPDATE support_tickets SET hq_secret=? WHERE id=? AND hq_secret=?",
-                      (vault.cipher.seal(c, _context(row["id"]), row["hq_secret"]), row["id"], row["hq_secret"]))
+            c.execute(
+                "UPDATE support_tickets SET hq_secret=? WHERE id=? AND hq_secret=?",
+                (vault.cipher.seal(c, _context(row["id"]), row["hq_secret"]), row["id"], row["hq_secret"]),
+            )
     if rows:
         log.info("Sealed %d support ticket secret(s) kept in plaintext by an earlier release", len(rows))
     return len(rows)
@@ -293,7 +356,7 @@ class Support:
     def __init__(self, store, settings, census, vault=None):
         self.store, self.settings, self.census, self.vault = store, settings, census, vault
         self.previews = diagnostics.Previews()
-        self.sending = threading.Lock()     # one approval is sent once, even when two calls race
+        self.sending = threading.Lock()  # one approval is sent once, even when two calls race
 
     def secret(self, row):
         """The ticket's HQ secret, opened with the vault. One still in plaintext (sealing failed at start) is sealed
@@ -312,23 +375,45 @@ class Support:
     def compose(self, who):
         """What the form will send by default and where it goes; creates the install ID if it has none yet."""
         from . import releases
+
         version = releases.version()
-        return {"enabled": True, "email": who.email or "", "version": version if VERSION.fullmatch(version) else "",
-                "install_id": self.census.install_id(), "to": hq_url().split("://", 1)[-1].split("/", 1)[0],
-                "max": MAX_MESSAGE, "diagnostics": True}
+        return {
+            "enabled": True,
+            "email": who.email or "",
+            "version": version if VERSION.fullmatch(version) else "",
+            "install_id": self.census.install_id(),
+            "to": hq_url().split("://", 1)[-1].split("/", 1)[0],
+            "max": MAX_MESSAGE,
+            "diagnostics": True,
+        }
 
     def preview(self, who, app, browser=None, performance_hours=24, shell=None, report=None):
         """Build the diagnostics bundle and keep it for this person, so the request that files the ticket sends these
         very bytes. Returns its digest and the text the page shows."""
-        bundle = diagnostics.build(self.store, self.settings, app.state.auth, who, self.census,
-                                   github=getattr(app.state, "github_app", None), performance_hours=performance_hours,
-                                   shell=shell.model_dump() if shell else None,
-                                   report=report.model_dump() if report else None)
+        bundle = diagnostics.build(
+            self.store,
+            self.settings,
+            app.state.auth,
+            who,
+            self.census,
+            github=getattr(app.state, "github_app", None),
+            performance_hours=performance_hours,
+            shell=shell.model_dump() if shell else None,
+            report=report.model_dump() if report else None,
+        )
         if browser:
             from pathlib import Path
+
             ui = Path(__file__).resolve().parent.parent / "ui"
-            files = {p.name for p in ui.glob("*.js")} | {p.name for p in (ui / "app").glob("*.js")} | {"app.bundle.js"}
-            bundle["browser"] = [{**event.model_dump(), "file": event.file if event.file in files else ""} for event in browser]
+            files = (
+                {p.name for p in ui.glob("*.js")}
+                | {p.name for p in (ui / "app").glob("*.js")}
+                | {"app.bundle.js"}
+                | {f"app.bundle.{n}.js" for n in range(2, 100)}
+            )
+            bundle["browser"] = [
+                {**event.model_dump(), "file": event.file if event.file in files else ""} for event in browser
+            ]
             bundle = diagnostics.fit(bundle)
         text = diagnostics.canonical(bundle)
         return {"id": self.previews.keep(who.actor, bundle), "bytes": len(text.encode()), "text": text}
@@ -344,10 +429,13 @@ class Support:
                 raise ValueError("Keep the diagnostics format field unchanged.")
             with self.store.read() as c:
                 from .views import roster
+
                 people = roster(c).get("people") or []
-                redactor = diagnostics.Redactor(diagnostics._domains(self.settings, {"people": people}),
+                redactor = diagnostics.Redactor(
+                    diagnostics._domains(self.settings, {"people": people}),
                     [(b["slug"], [b.get("display_name"), b["id"]]) for b in H.bots(c)],
-                    [(p.get("id", ""), [p.get("name"), p.get("email")]) for p in people])
+                    [(p.get("id", ""), [p.get("name"), p.get("email")]) for p in people],
+                )
             value = redactor.clean(diagnostics.allowed(value))
             value.setdefault("capture", {})["edited"] = True
             text = diagnostics.canonical(value)
@@ -371,13 +459,21 @@ class Support:
         message, email = clean_message(body.message), clean_email(body.email)
         with self.store.read() as c:
             if key:
-                again = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
-                                  (who.actor, key)).fetchone()
+                again = c.execute(
+                    "SELECT * FROM support_tickets WHERE actor=? AND request_key=?", (who.actor, key)
+                ).fetchone()
+                # A key the person sent before it was kept as `idem:<key>`: a retry across the upgrade finds the ticket
+                # its first send made, not a second one. A bare key that starts like a server key is never matched.
+                if not again and key.startswith("idem:") and key[5:] and not key[5:].startswith(RESERVED_KEYS):
+                    again = c.execute(
+                        "SELECT * FROM support_tickets WHERE actor=? AND request_key=?", (who.actor, key[5:])
+                    ).fetchone()
                 if again:
                     return view(again)
             since = H.shift(H.now(), hours=-24)
-            recent = c.execute("SELECT count(*) FROM support_tickets WHERE actor=? AND created_at>?",
-                               (who.actor, since)).fetchone()[0]
+            recent = c.execute(
+                "SELECT count(*) FROM support_tickets WHERE actor=? AND created_at>?", (who.actor, since)
+            ).fetchone()[0]
         if recent >= PER_DAY:
             raise Problem("support_busy", "That is enough requests for today. Try again tomorrow.", 429)
         # The secret HQ answers with is sealed with the vault's key: make sure it opens (or, on a fresh install, make
@@ -419,24 +515,132 @@ class Support:
                 payload["message"] = named
             answer = _ask_hq("POST", "/v1/support", body=payload)
         if answer.status_code == 422 and "diagnostics" in payload:
-            raise Problem("diagnostics_rejected", "Support could not accept this attachment. Review it or remove diagnostics to send just the message.", 422)
+            raise Problem(
+                "diagnostics_rejected",
+                "Support could not accept this attachment. Review it or remove diagnostics to send just the message.",
+                422,
+            )
         made = _answer(answer, (201, 200))
         if "diagnostics" in payload:
             sent["diagnostics"] = len(diagnostics.canonical(payload["diagnostics"]).encode())
         hq_id, hq_secret = str(made.get("ticket_id") or ""), str(made.get("secret") or "")
         if not hq_id or not hq_secret:
-            raise Problem("support_unreachable", "Could not reach Tico support. Try again in a moment.", 502, retryable=True)
+            raise Problem(
+                "support_unreachable", "Could not reach Tico support. Try again in a moment.", 502, retryable=True
+            )
         ticket_id = "sup_" + secrets.token_hex(6)
+        # Kept with the ticket who filed it, unless it is the person's own (OWN reads it back for the chat).
+        kept = sent if source == "person" else {**sent, "source": source}
         with self.store.transaction() as c:
-            c.execute("INSERT INTO support_tickets(id,actor,created_at,status,message,email,sent,hq_id,hq_secret,"
-                      "request_key) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                      (ticket_id, who.actor, H.now(), "open", message, email, encode(sent), hq_id,
-                       self.vault.cipher.seal(c, _context(ticket_id), hq_secret), key or None))
-            H.event(c, who.actor, "support.filed", ticket_id, {"email": bool(email), "ids": bool({k: v for k, v in sent.items() if k != "diagnostics"}),
-                                                              "diagnostics": "diagnostics" in sent})
+            c.execute(
+                "INSERT INTO support_tickets(id,actor,created_at,status,message,email,sent,hq_id,hq_secret,"
+                "request_key) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    ticket_id,
+                    who.actor,
+                    H.now(),
+                    "open",
+                    message,
+                    email,
+                    encode(kept),
+                    hq_id,
+                    self.vault.cipher.seal(c, _context(ticket_id), hq_secret),
+                    key or None,
+                ),
+            )
+            H.event(
+                c,
+                who.actor,
+                "support.filed",
+                ticket_id,
+                {
+                    "email": bool(email),
+                    "ids": bool({k: v for k, v in sent.items() if k != "diagnostics"}),
+                    "diagnostics": "diagnostics" in sent,
+                },
+            )
             if on_filed:
                 on_filed(c, ticket_id)
             return view(c.execute("SELECT * FROM support_tickets WHERE id=?", (ticket_id,)).fetchone())
+
+    def send_by_rule(self, who, approval_id, check=None):
+        """Send a bot's report the team rule lets go without a card (`bot_reports_direct`), once the route has drafted it.
+        The draft is decided as the install's default person under the team rule and sent through `_file_approved`, the
+        send a person's yes gets: the same HQ call, day limit, source and spend. `check(c)` is the privacy check for this
+        send, run under the write lock; when it refuses, the draft waits. Returns {ticket, sent, filed_as}, or None when the
+        draft waits for a person: the rule is off (read under the lock, so a report queued while the owner turned it off
+        waits), or a person already decided the draft. A bot that is paused or revoked is refused and nothing is sent. A
+        spent approval answers with its ticket whatever the rule says now.
+
+        A rule decision is taken back when its send fails, or when the rule is off by the time it is sent, so a draft is
+        never left decided by the rule without a ticket."""
+        if who.role != "bot":
+            return None
+        with self.sending:
+            return self._send_by_rule(who, approval_id, check)
+
+    def _send_by_rule(self, who, approval_id, check):
+        from . import lifecycle
+
+        refusal = None
+        with self.store.transaction() as c:
+            validate_identity(c, who)  # the bot still holds its credential, lease and state, under the lock
+            lifecycle.refuse_send(c, who, None, what="anything")
+            row = H.approval(c, approval_id)
+            if not row or row["kind"] != "support" or row["requested_by_id"] != who.actor:
+                return None
+            if not row["consumed_at"]:
+                if row["decided_via"] == RULE_VIA:
+                    if not team_rules.load(c)[RULE]:
+                        self._unrule(c, who, approval_id)  # the rule went off before this send: a person decides
+                        return None
+                elif row["decision"] is None:
+                    if not team_rules.load(c)[RULE]:
+                        return None
+                    try:
+                        if check is not None:
+                            check(c)
+                    except Problem:
+                        return None  # this send is not allowed for its source: the draft waits
+                    person = H.default_human(c)
+                    if not person:
+                        raise Problem("identity", "This install has no person to file a report for yet.", 409)
+                    c.execute("SAVEPOINT domain_write")
+                    try:
+                        H.approval_decide(c, H.human_actor(person), approval_id, "approved", RULE_NOTE)
+                        c.execute("UPDATE approvals SET decided_via=? WHERE id=?", (RULE_VIA, approval_id))
+                        if row["message_id"]:
+                            # The notice the draft wrote for the default person is read and delivered with its decision,
+                            # as the person's own ack would leave it (app.py acknowledge): the message stays as history.
+                            H.mark_delivered(c, H.KEEPER, row["message_id"], recipient=H.human_actor(person))
+                            H.mark_read(c, H.KEEPER, row["message_id"], recipient=H.human_actor(person))
+                        c.execute("RELEASE domain_write")
+                    except H.Refused as exc:
+                        refusal = refused(c, who, exc)  # the decision undone, the refusal kept and counted
+                else:
+                    return None  # a person decided it: their file_approved sends it, or it is declined
+        if refusal:
+            raise refusal
+        try:
+            sent = self._file_approved(who, approval_id)
+        except Exception:
+            with self.store.transaction() as c:
+                self._unrule(c, who, approval_id)  # not sent: the rule's decision is taken back, the draft waits
+            raise
+        return {"ticket": sent["ticket"], "sent": True, "filed_as": sent["filed_as"]}
+
+    def _unrule(self, c, who, approval_id):
+        """Take a team-rule decision back, while nothing has been sent on it: the draft waits for a person again."""
+        row = H.approval(c, approval_id)
+        if not row or row["decided_via"] != RULE_VIA or row["consumed_at"]:
+            return
+        c.execute(
+            "UPDATE approvals SET decision=NULL, decided_by_id=NULL, decided_at=NULL, decided_via=NULL, "
+            "decided_for=NULL WHERE id=?",
+            (approval_id,),
+        )
+        H.event(c, who.actor, "approval.undo", approval_id, {"was": row["decision"], "via": RULE_VIA})
+        H._recount(c, row["requested_by_id"])
 
     def file_approved(self, who, approval_id):
         """Send the report a person approved, for whoever asked for the approval. The ticket is filed as the person who
@@ -444,52 +648,101 @@ class Support:
         transaction that keeps the ticket: HQ refusing or out of reach spends nothing, so the call can be made again.
         A second call for a spent approval answers with the same ticket."""
         with self.sending:
+            return self._file_approved(who, approval_id)
+
+    def _file_approved(self, who, approval_id):
+        """The send itself, under the lock `sending` that file_approved and send_by_rule both hold."""
+        with self.store.read() as c:
+            row = H.approval(c, approval_id)
+            quarantined = H.is_bot(who.actor) and (H.bot(c, H.actor_id(who.actor)) or {}).get("state") == "quarantined"
+        if not row:
+            raise Problem("not_found", "Approval not found", 404)
+        if row["requested_by_id"] != who.actor:
+            raise Problem("forbidden", "Only whoever asked for this approval may send it.", 403)
+        if quarantined:
+            raise Problem("forbidden", "A quarantined bot sends nothing until a person clears it.", 403)
+        if row["kind"] != "support":
+            raise Problem("approval", f"{approval_id} is a {row['kind']} approval, not a support report.", 422)
+        if row["decision"] != "approved":
+            state = row["decision"] or "waiting for a person"
+            raise Problem("approval", f"This report is {state}: only a report a person approved is sent.", 409)
+        if row["decided_via"] == RULE_VIA and not row["consumed_at"]:
+            # The team rule decided it and nothing was sent: once the rule is off, the draft waits for a person.
+            with self.store.transaction() as c:
+                waits = not team_rules.load(c)[RULE]
+                if waits:
+                    self._unrule(c, who, approval_id)
+            if waits:
+                raise Problem(
+                    "approval", "This report waits for a person: the team rule that would send it is off.", 409
+                )
+        payload = row["payload"] or {}
+        if H.lint_support(payload) or not H.support_text_matches(payload):
+            raise Problem("approval", "The approved message no longer matches its hash; nothing was sent.", 409)
+        person = Identity(row["decided_by_id"], "human")
+        # Who asked decides whose ticket it is. A Health Monitor report (health_reports names the approval, whoever asked)
+        # is the monitor's; a bot's report a person approved is the bot's; a report a person asked for and sent is theirs,
+        # filed as `person`. The monitor's and the bot's keep `approval:` (the monitor's "Seen again" finds its ticket by
+        # it); the person's own keeps `draft:`, so their chat lists it (OWN). A person's draft filed under `approval:` (an
+        # older release, after migration 0072) is found by that key too, so a replay does not file it again, and moves
+        # it to `draft:` so the chat lists it.
+        bot = H.is_bot(who.actor)
+        with self.store.read() as c:
+            health = (
+                c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='health_reports'").fetchone()
+                and c.execute("SELECT 1 FROM health_reports WHERE approval_id=?", (approval_id,)).fetchone()
+            )
+        if health:
+            source, key = "health_monitor", "approval:" + approval_id
+        elif bot:
+            source, key = "bot_report", "approval:" + approval_id
+        else:
+            source, key = "person", "draft:" + approval_id
+        legacy = "approval:" + approval_id
+
+        def spent_ticket(c):
+            return c.execute(
+                "SELECT * FROM support_tickets WHERE actor=? AND request_key IN (?,?) ORDER BY created_at LIMIT 1",
+                (person.actor, key, legacy),
+            ).fetchone()
+
+        def spend(c, _ticket_id=None):
+            spent = c.execute(
+                "UPDATE approvals SET consumed_at=? WHERE id=? AND consumed_at IS NULL", (H.now(), approval_id)
+            ).rowcount
+            if spent:
+                H.event(c, who.actor, "approval.consume", approval_id, {"kind": "support"})
+
+        with self.store.read() as c:
+            done = spent_ticket(c)
+        if done and source == "person" and done["request_key"] == legacy:
+            with self.store.transaction() as c:
+                c.execute(
+                    "UPDATE support_tickets SET request_key=? WHERE id=? AND request_key=?", (key, done["id"], legacy)
+                )
             with self.store.read() as c:
-                row = H.approval(c, approval_id)
-                quarantined = H.is_bot(who.actor) and (H.bot(c, H.actor_id(who.actor)) or {}).get("state") == "quarantined"
-            if not row:
-                raise Problem("not_found", "Approval not found", 404)
-            if row["requested_by_id"] != who.actor:
-                raise Problem("forbidden", "Only whoever asked for this approval may send it.", 403)
-            if quarantined:
-                raise Problem("forbidden", "A quarantined bot sends nothing until a person clears it.", 403)
-            if row["kind"] != "support":
-                raise Problem("approval", f"{approval_id} is a {row['kind']} approval, not a support report.", 422)
-            if row["decision"] != "approved":
-                state = row["decision"] or "waiting for a person"
-                raise Problem("approval", f"This report is {state}: only a report a person approved is sent.", 409)
-            payload = row["payload"] or {}
-            if H.lint_support(payload) or not H.support_text_matches(payload):
-                raise Problem("approval", "The approved message no longer matches its hash; nothing was sent.", 409)
-            person = Identity(row["decided_by_id"], "human")
-            key = "approval:" + approval_id
-            with self.store.read() as c:      # a Health Monitor report a person approved is still the Health Monitor's
-                health = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='health_reports'").fetchone() \
-                    and c.execute("SELECT 1 FROM health_reports WHERE approval_id=?", (approval_id,)).fetchone()
-            source = "health_monitor" if health else "bot_report"
-            if row["consumed_at"]:
-                with self.store.read() as c:
-                    done = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
-                                     (person.actor, key)).fetchone()
-                if not done:
-                    raise Problem("approval", f"{approval_id} was already spent at {row['consumed_at']}.", 409)
-                return {"ticket": view(done), "approval": approval_id, "filed_as": person.actor, "again": True}
-
-            def spend(c, _ticket_id=None):
-                spent = c.execute("UPDATE approvals SET consumed_at=? WHERE id=? AND consumed_at IS NULL",
-                                  (H.now(), approval_id)).rowcount
-                if spent:
-                    H.event(c, who.actor, "approval.consume", approval_id, {"kind": "support"})
-
-            ticket = self.file(person, SupportTicket(message=payload["message"],
-                                                     include_ids=payload.get("include_ids", True) is not False),
-                               key, on_filed=spend, source=source)
-            with self.store.transaction() as c:      # a ticket kept before its approval was spent (an older crash)
+                done = c.execute("SELECT * FROM support_tickets WHERE id=?", (done["id"],)).fetchone()
+        if row["consumed_at"]:
+            if not done:
+                raise Problem("approval", f"{approval_id} was already spent at {row['consumed_at']}.", 409)
+            return {"ticket": view(done), "approval": approval_id, "filed_as": person.actor, "again": True}
+        if done:  # a ticket kept before its approval was spent (an older crash): spend it
+            with self.store.transaction() as c:
                 spend(c)
-            return {"ticket": ticket, "approval": approval_id, "filed_as": person.actor, "again": False}
+            return {"ticket": view(done), "approval": approval_id, "filed_as": person.actor, "again": True}
+        ticket = self.file(
+            person,
+            SupportTicket(message=payload["message"], include_ids=payload.get("include_ids", True) is not False),
+            key,
+            on_filed=spend,
+            source=source,
+        )
+        with self.store.transaction() as c:  # a ticket kept before its approval was spent (an older crash)
+            spend(c)
+        return {"ticket": ticket, "approval": approval_id, "filed_as": person.actor, "again": False}
 
     def write(self, who, ticket_id, text, attachment=""):
-        """Add a message to one of the caller's tickets."""
+        """Add a message to one of the person's own tickets (the chat's; a bot's ticket is not theirs to write on)."""
         text = clean_message(text)
         row = self._own(who, ticket_id)
         payload = {"message": text}
@@ -497,24 +750,33 @@ class Support:
             payload["diagnostics"] = self.attachment(who, attachment)
         answer = _ask_hq("POST", f"/v1/support/{row['hq_id']}/messages", body=payload, secret=self.secret(row))
         if answer.status_code == 422 and attachment:
-            raise Problem("diagnostics_rejected", "Support could not accept this attachment. Review it or remove diagnostics to send just the message.", 422)
+            raise Problem(
+                "diagnostics_rejected",
+                "Support could not accept this attachment. Review it or remove diagnostics to send just the message.",
+                422,
+            )
         _answer(answer, (201, 200))
         self._pull(row)
         return self.one(who, ticket_id)
 
     def note(self, row, text):
-        """Tell HQ that a ticket this install filed has changed, such as a request withdrawn (backend/cloud_agents.py). It
+        """Tell HQ that a ticket this install filed has changed, such as a request withdrawn (backend/cloud_agents.py) or
+        Check health saw its problem again (backend/maintenance_health.py). It
         goes with the ticket's own secret, not as a person's words; a ticket HQ already deleted has no one to hear it."""
-        answer = _ask_hq("POST", f"/v1/support/{row['hq_id']}/messages", body={"message": clean_message(text)},
-                         secret=self.secret(row))
+        answer = _ask_hq(
+            "POST",
+            f"/v1/support/{row['hq_id']}/messages",
+            body={"message": clean_message(text)},
+            secret=self.secret(row),
+        )
         if answer.status_code != 404:
             _answer(answer, (201, 200))
 
     def remove(self, who, ticket_id):
-        """Delete the ticket at HQ, then here."""
+        """Delete one of the person's own tickets at HQ, then here."""
         row = self._own(who, ticket_id)
         answer = _ask_hq("DELETE", f"/v1/support/{row['hq_id']}", secret=self.secret(row))
-        if answer.status_code not in (200, 404):        # 404: the team already deleted it
+        if answer.status_code not in (200, 404):  # 404: the team already deleted it
             _answer(answer, (200,))
         with self.store.transaction() as c:
             c.execute("DELETE FROM support_tickets WHERE id=?", (ticket_id,))
@@ -523,8 +785,12 @@ class Support:
 
     # ------------------------------------------------------------------ the list
     def _own(self, who, ticket_id):
+        """One of the person's own tickets (OWN). A bot's report is not in their chat, so it is not read, answered or
+        deleted there either. The bots' own follow-ups (note) do not come this way."""
         with self.store.read() as c:
-            row = c.execute("SELECT * FROM support_tickets WHERE id=? AND actor=?", (ticket_id, who.actor)).fetchone()
+            row = c.execute(
+                f"SELECT * FROM support_tickets WHERE id=? AND actor=? AND {OWN}", (ticket_id, who.actor)
+            ).fetchone()
         if not row:
             raise Problem("not_found", "Ticket not found", 404)
         return row
@@ -533,9 +799,13 @@ class Support:
         return view(self._own(who, ticket_id))
 
     def listing(self, who):
+        """The person's own tickets, newest first, and the replies on them they have not seen. A bot's ticket is not
+        listed and does not count; the filter runs before LISTED, so bots' tickets never crowd the person's out."""
         with self.store.read() as c:
-            rows = c.execute("SELECT * FROM support_tickets WHERE actor=? ORDER BY created_at DESC, id DESC LIMIT ?",
-                             (who.actor, LISTED)).fetchall()
+            rows = c.execute(
+                f"SELECT * FROM support_tickets WHERE actor=? AND {OWN} ORDER BY created_at DESC, id DESC LIMIT ?",
+                (who.actor, LISTED),
+            ).fetchall()
         tickets = [view(r) for r in rows]
         return {"enabled": True, "tickets": tickets, "unread": sum(t["unread"] for t in tickets)}
 
@@ -546,7 +816,7 @@ class Support:
         except Problem:
             return False
         if answer.status_code == 404:
-            status, messages = "gone", None            # deleted at HQ: stop asking
+            status, messages = "gone", None  # deleted at HQ: stop asking
         elif answer.status_code == 200:
             try:
                 data = answer.json()
@@ -557,20 +827,36 @@ class Support:
         else:
             return False
         with self.store.transaction() as c:
-            c.execute("UPDATE support_tickets SET status=?, messages=COALESCE(?,messages), checked_at=? WHERE id=?",
-                      (status, encode(messages) if messages is not None else None, H.now(), row["id"]))
+            c.execute(
+                "UPDATE support_tickets SET status=?, messages=COALESCE(?,messages), checked_at=? WHERE id=?",
+                (status, encode(messages) if messages is not None else None, H.now(), row["id"]),
+            )
         return True
 
     def refresh(self, who, ticket=""):
-        """Ask HQ about the caller's tickets that are due, the most recently written on first, then list them. `ticket`
+        """Ask HQ about the caller's tickets that are due: the person's own first, then the most recently written on. A
+        bot's ticket is still pulled after them, so HQ's replies to it are kept. Then list the person's own. `ticket`
         is the one a person has in view: it is due every FRESH_S whatever its pace. HQ being down, or asking us to slow
         down (429), ends the round and keeps what was known."""
         now = H.now()
         with self.store.read() as c:
-            rows = c.execute("SELECT * FROM support_tickets WHERE actor=? AND status!='gone' "
-                             "ORDER BY created_at DESC LIMIT ?", (who.actor, LISTED)).fetchall()
+            # The limit cuts the bots' tickets first: the person's own are ordered ahead of them in SQL, and the ticket in
+            # view is asked about whatever its place.
+            rows = c.execute(
+                f"SELECT *, ({OWN}) AS own FROM support_tickets WHERE actor=? AND status!='gone' "
+                "ORDER BY own DESC, created_at DESC LIMIT ?",
+                (who.actor, LISTED),
+            ).fetchall()
+            if ticket and all(r["id"] != ticket for r in rows):
+                rows = (
+                    rows
+                    + c.execute(
+                        f"SELECT *, ({OWN}) AS own FROM support_tickets WHERE actor=? AND id=? AND status!='gone'",
+                        (who.actor, ticket),
+                    ).fetchall()
+                )
         active_since = H.parse_ts(now) - timedelta(seconds=ACTIVE_S)
-        rows = sorted(rows, key=lambda r: (r["id"] == ticket, _last_activity(r)), reverse=True)
+        rows = sorted(rows, key=lambda r: (r["id"] == ticket, r["own"], _last_activity(r)), reverse=True)
         failed, asked = False, 0
         for row in rows:
             if row["id"] == ticket or (row["status"] != "closed" and _last_activity(row) > active_since):
@@ -584,7 +870,7 @@ class Support:
             asked += 1
             if not self._pull(row):
                 failed = True
-                break                                  # HQ is down or busy: do not ask again for every ticket
+                break  # HQ is down or busy: do not ask again for every ticket
         result = self.listing(who)
         result["refresh_failed"] = failed
         return result
@@ -602,12 +888,14 @@ def install(app, store, settings, census):
 
     vault = app.state.vault
     support = Support(store, settings, census, vault)
-    app.state.support = support          # the Health Monitor files its reports through it (backend/health_monitor.py)
+    app.state.support = support  # the Health Monitor files its reports through it (backend/maintenance_health.py)
+    store.report_support = support  # and so does the Check health step, from the scheduler's timer (no app here)
     try:
         seal_plaintext_secrets(store, vault)
-    except Exception as exc:              # KMS unreachable, or credential.key missing: Health names the vault's state
-        log.warning("Support ticket secrets kept in plaintext by an earlier release are not sealed yet: %s",
-                    type(exc).__name__)
+    except Exception as exc:  # KMS unreachable, or credential.key missing: Health names the vault's state
+        log.warning(
+            "Support ticket secrets kept in plaintext by an earlier release are not sealed yet: %s", type(exc).__name__
+        )
     diagnostics.watch_logs()
 
     def person(request):
@@ -645,9 +933,16 @@ def install(app, store, settings, census):
         """Help's Setup check: doctor's checks from this server plus Health's failing lines (backend/setup_check.py).
         It works with support turned off too; only attaching the result needs support."""
         from . import onboarding, setup_check
+
         who = person(request)
-        return setup_check.run(store, who, settings, request.app.state.auth, getattr(request.app.state, "github_app", None),
-                               lambda c: onboarding.config_view(c, settings, who))
+        return setup_check.run(
+            store,
+            who,
+            settings,
+            request.app.state.auth,
+            getattr(request.app.state, "github_app", None),
+            lambda c: onboarding.config_view(c, settings, who),
+        )
 
     @app.post("/api/v2/support/diagnostics")
     def support_edit_diagnostics(request: Request, body: DiagnosticsEdit):
@@ -659,7 +954,9 @@ def install(app, store, settings, census):
     def support_file(request: Request, body: SupportTicket):
         who = person(request)
         require_on(settings)
-        return support.file(who, body, (request.headers.get("idempotency-key") or "")[:200])
+        # The person's own key, kept apart from the keys bots' tickets keep (approval:, health:): see OWN.
+        key = (request.headers.get("idempotency-key") or "")[:200]
+        return support.file(who, body, "idem:" + key if key else "")
 
     @app.get("/api/v2/support/setup-snapshot")
     def support_setup_snapshot(request: Request, asked_from: Literal["wizard", "health", "bot"] = "health"):
@@ -668,8 +965,9 @@ def install(app, store, settings, census):
         require_on(settings)
         github = getattr(request.app.state, "github_app", None)
         with store.read() as c:
-            return support_asks.setup_snapshot(c, who, settings, request.app.state.auth,
-                                               github.row(c) if github else None, asked_from)
+            return support_asks.setup_snapshot(
+                c, who, settings, request.app.state.auth, github.row(c) if github else None, asked_from
+            )
 
     @app.post("/api/v2/support/feedback")
     def support_feedback(request: Request, body: FeedbackAnswer):

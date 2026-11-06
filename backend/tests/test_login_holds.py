@@ -1,12 +1,14 @@
 """A usage limit holds the provider login, survives restarts, and lets one probe turn through per hold window."""
+
 import json
 import pytest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend import health_monitor, login_holds
+from backend import maintenance_health, login_holds
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, expire, get, headers, post, ready, runner
+from backend import bot_settings as BS
 
 CLAUDE = "You've hit your session limit · resets 2:40am (UTC)"
 
@@ -14,7 +16,9 @@ CLAUDE = "You've hit your session limit · resets 2:40am (UTC)"
 def test_a_reset_in_words_is_honored_and_a_past_or_unreadable_one_falls_back_to_the_backoff():
     hit = datetime(2026, 10, 19, 1, 46, 47, tzinfo=timezone.utc)
     assert login_holds.reset_from_text(CLAUDE, hit) == datetime(2026, 10, 19, 2, 40, tzinfo=timezone.utc)
-    assert login_holds.reset_from_text("resets Oct 24, 9am (UTC)", hit) == datetime(2026, 10, 24, 9, tzinfo=timezone.utc)
+    assert login_holds.reset_from_text("resets Oct 24, 9am (UTC)", hit) == datetime(
+        2026, 10, 24, 9, tzinfo=timezone.utc
+    )
     # Just past (it names 1:40 at 1:46), an unknown zone, or no time at all: no reset.
     assert login_holds.reset_from_text("resets 1:40am (UTC)", hit) is None
     assert login_holds.reset_from_text("resets 2:40am (Mars/Base)", hit) is None
@@ -27,16 +31,26 @@ def test_a_reset_in_words_is_honored_and_a_past_or_unreadable_one_falls_back_to_
 
 def limit(api, machine, attempt, errors=(CLAUDE,), **extra):
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "limit-" + attempt["id"]}, machine["token"])
-    events = [{"seq": n, "kind": "error", "payload": {"error": text, "limit": True}} for n, text in enumerate(errors, 1)]
+    events = [
+        {"seq": n, "kind": "error", "payload": {"error": text, "limit": True}} for n, text in enumerate(errors, 1)
+    ]
     post(api, f"attempts/{attempt['id']}/events", {"events": events}, machine["token"])
-    return post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": len(events), "limited": True,
-                                                           "text": "", **extra}, machine["token"])
+    return post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "failed", "last_seq": len(events), "limited": True, "text": "", **extra},
+        machine["token"],
+    )
 
 
 def done(api, machine, attempt):
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "ok-" + attempt["id"]}, machine["token"])
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
-         machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "Done."},
+        machine["token"],
+    )
 
 
 def at(monkeypatch, when, api=None):
@@ -44,7 +58,7 @@ def at(monkeypatch, when, api=None):
     monkeypatch.setattr(H, "now", lambda: when)
     if api is not None:
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (when,))
+            c.execute("UPDATE runner_states SET last_seen_at=?,awake_since=NULL", (when,))
 
 
 def test_thirteen_queued_jobs_after_a_limit_start_one_probe_at_the_reset_not_thirteen_turns(api, monkeypatch):
@@ -55,7 +69,7 @@ def test_thirteen_queued_jobs_after_a_limit_start_one_probe_at_the_reset_not_thi
     assign(api, machine, "ops")
     assign(api, machine, "finance")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     ready(api, machine, ["ops", "finance"])
     for n in range(12):
         post(api, "tasks", {"owner": "ops", "title": f"Review change {n}", "body": "Please review it."})
@@ -69,16 +83,16 @@ def test_thirteen_queued_jobs_after_a_limit_start_one_probe_at_the_reset_not_thi
         assert "resumes at 02:40 UTC when it resets" in H.status(c, "ops")["focus"]
     at(monkeypatch, "2026-10-19T02:25:15.000000Z", api)
     ready(api, machine, ["ops", "finance"])
-    assert claim(api, machine) is None                      # Dev 198's half hour has passed; the login's reset has not
+    assert claim(api, machine) is None  # Dev 198's half hour has passed; the login's reset has not
     at(monkeypatch, "2026-10-19T02:40:01.000000Z", api)
     ready(api, machine, ["ops", "finance"])
     probe = claim(api, machine)
-    assert probe and probe["bot"] in ("ops", "finance")    # both wait on the login; either may go first
-    assert claim(api, machine) is None                      # one probe per login per window; the other jobs wait
+    assert probe and probe["bot"] in ("ops", "finance")  # both wait on the login; either may go first
+    assert claim(api, machine) is None  # one probe per login per window; the other jobs wait
     done(api, machine, probe)
     with api.app.state.store.read() as c:
         assert not login_holds.get(c, machine["runner_id"], "", "fake")
-    assert claim(api, machine)                              # the login works again: the queue moves
+    assert claim(api, machine)  # the login works again: the queue moves
 
 
 def test_a_hold_survives_a_runner_restart_and_a_lost_probe_is_retried_as_the_same_job(api, monkeypatch):
@@ -86,7 +100,7 @@ def test_a_hold_survives_a_runner_restart_and_a_lost_probe_is_retried_as_the_sam
     machine = runner(api)
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=8 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=8 WHERE runner_id=?", (machine["runner_id"],))
     ready(api, machine, ["ops"])
     for n in range(3):
         post(api, "tasks", {"owner": "ops", "title": f"Task {n}", "body": "Please do it."})
@@ -98,7 +112,9 @@ def test_a_hold_survives_a_runner_restart_and_a_lost_probe_is_retried_as_the_sam
     # everything it knew) still gets nothing on the login before then.
     assert hold["until"].startswith("2026-10-19T02:16:47") and not hold["reset"]
     # The computer's config carries it, so a restarted runner keeps the login out of its fallback choice too.
-    assert get(api, "config", machine["token"])["login_holds"] == [{"profile": "", "runtime": "fake", "until": hold["until"]}]
+    assert get(api, "config", machine["token"])["login_holds"] == [
+        {"profile": "", "runtime": "fake", "until": hold["until"]}
+    ]
     at(monkeypatch, "2026-10-19T02:16:00.000000Z", api)
     ready(api, machine, ["ops"])
     assert claim(api, machine) is None
@@ -120,7 +136,9 @@ def test_a_hold_survives_a_runner_restart_and_a_lost_probe_is_retried_as_the_sam
         assert "API quota or billing limit" in H.status(c, "ops")["focus"]
     # Health names the provider whose login is held, not just the bot's own.
     issue = next(i for i in api.get("/api/status", headers=headers()).json()["health_issues"] if i.get("bot") == "ops")
-    assert issue["detail"].startswith("Primary fake API quota or billing limit; queued work waits until 2026-10-19 03:17 UTC")
+    assert issue["detail"].startswith(
+        "Primary fake API quota or billing limit; queued work waits until 2026-10-19 03:17 UTC"
+    )
 
 
 def test_one_hold_covers_every_bot_on_the_login_and_a_persons_message_still_gets_one_try(api, monkeypatch):
@@ -133,7 +151,7 @@ def test_one_hold_covers_every_bot_on_the_login_and_a_persons_message_still_gets
     limit(api, machine, claim(api, machine), errors=("Usage limit",))
     post(api, "tasks", {"owner": "finance", "title": "Close the month", "body": "Please do it."})
     ready(api, machine, ["ops", "finance"])
-    assert claim(api, machine) is None                      # finance signs in with the same login on this computer
+    assert claim(api, machine) is None  # finance signs in with the same login on this computer
     at(monkeypatch, "2026-10-19T01:48:00.000000Z", api)
     post(api, "chat/finance", {"text": "I renewed the plan, try again."})
     retry = claim(api, machine)
@@ -141,13 +159,14 @@ def test_one_hold_covers_every_bot_on_the_login_and_a_persons_message_still_gets
 
 
 def test_try_now_on_a_shared_login_starts_one_probe_across_bots_and_a_second_limit_puts_the_window_back(
-        api, monkeypatch):
+    api, monkeypatch
+):
     at(monkeypatch, "2026-10-19T01:46:47.000000Z")
     machine = runner(api)
     assign(api, machine, "ops")
     assign(api, machine, "finance")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     ready(api, machine, ["ops", "finance"])
     for n in range(3):
         post(api, "tasks", {"owner": "ops", "title": f"Ops {n}", "body": "Please do it."})
@@ -181,10 +200,14 @@ def test_try_now_on_a_shared_login_starts_one_probe_across_bots_and_a_second_lim
 
 def signed_in(api, machine, bots, runtimes):
     """A heartbeat from a computer whose bots are ready and on which `runtimes` are signed in."""
-    report = {"schema_version": 1,
-              "runtimes": {name: {"installed": True, "authenticated": "ready"} for name in runtimes},
-              "bots": {bot: {"ready": True, "runtime": "fake", "repository_present": True, "configuration_valid": True}
-                       for bot in bots}}
+    report = {
+        "schema_version": 1,
+        "runtimes": {name: {"installed": True, "authenticated": "ready"} for name in runtimes},
+        "bots": {
+            bot: {"ready": True, "runtime": "fake", "repository_present": True, "configuration_valid": True}
+            for bot in bots
+        },
+    }
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": report}, token=machine["token"])
 
 
@@ -192,14 +215,20 @@ def test_a_held_login_sends_the_turn_to_a_ready_fallback_and_waits_only_when_non
     # Dev 137's rule: a bot whose own login is spent runs on its fallback when one is ready. The hold only keeps the
     # turn off the spent login; it waits only when every fallback is held too, or there is none.
     view = get(api, "providers")
-    api.put("/api/v2/providers", json={"enabled": ["openai", "anthropic"], "model": view["default"]["model"] or "",
-                                       "expected_revision": view["revision"]},
-            headers={**headers(), "Idempotency-Key": "held-fallback"}).raise_for_status()
+    api.put(
+        "/api/v2/providers",
+        json={
+            "enabled": ["openai", "anthropic"],
+            "model": view["default"]["model"] or "",
+            "expected_revision": view["revision"],
+        },
+        headers={**headers(), "Idempotency-Key": "held-fallback"},
+    ).raise_for_status()
     at(monkeypatch, "2026-10-19T01:46:47.000000Z")
     machine = runner(api)
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=8 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=8 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], ["codex"])
     for n in range(3):
         post(api, "tasks", {"owner": "ops", "title": f"Task {n}", "body": "Please do it."})
@@ -215,13 +244,31 @@ def test_a_held_login_sends_the_turn_to_a_ready_fallback_and_waits_only_when_non
     moved = claim(api, machine)
     assert moved and moved["config"]["primary_held"] == hold["until"]
     post(api, f"attempts/{moved['id']}/started", {"thread_id": "codex-" + moved["id"]}, machine["token"])
-    post(api, f"attempts/{moved['id']}/events", {"events": [{"seq": 1, "kind": "diagnostic", "payload": {
-        "text": "fake login held (usage limit) until 02:40 UTC; running this turn on codex", "fallback": "codex"}}]},
-         machine["token"])
-    post(api, f"attempts/{moved['id']}/complete", {"outcome": "completed", "last_seq": 1, "fallback": "codex",
-                                                   "text": "Done on Codex."}, machine["token"])
+    post(
+        api,
+        f"attempts/{moved['id']}/events",
+        {
+            "events": [
+                {
+                    "seq": 1,
+                    "kind": "diagnostic",
+                    "payload": {
+                        "text": "fake login held (usage limit) until 02:40 UTC; running this turn on codex",
+                        "fallback": "codex",
+                    },
+                }
+            ]
+        },
+        machine["token"],
+    )
+    post(
+        api,
+        f"attempts/{moved['id']}/complete",
+        {"outcome": "completed", "last_seq": 1, "fallback": "codex", "text": "Done on Codex."},
+        machine["token"],
+    )
     with api.app.state.store.read() as c:
-        assert login_holds.get(c, machine["runner_id"], "", "fake") == hold     # the held login was not tried again
+        assert login_holds.get(c, machine["runner_id"], "", "fake") == hold  # the held login was not tried again
     # Codex then meets its own limit on a later turn: both logins are held, so the work waits.
     moved = claim(api, machine)
     assert moved["config"]["primary_held"]
@@ -241,17 +288,28 @@ def test_a_held_login_sends_the_turn_to_a_ready_fallback_and_waits_only_when_non
 @pytest.mark.parametrize("alternate", [False, True])
 def test_a_same_login_named_fallback_uses_the_next_company_row_or_waits_without_a_lease(api, monkeypatch, alternate):
     from backend.execution import fallback_choice
+
     view = get(api, "providers")
-    api.put("/api/v2/providers", json={"enabled": ["openai", "anthropic"] if alternate else ["openai"],
-                                       "model": "gpt-6-luna", "expected_revision": view["revision"]},
-            headers={**headers(), "Idempotency-Key": "same-login-fallback"}).raise_for_status()
+    api.put(
+        "/api/v2/providers",
+        json={
+            "enabled": ["openai", "anthropic"] if alternate else ["openai"],
+            "model": "gpt-6-luna",
+            "expected_revision": view["revision"],
+        },
+        headers={**headers(), "Idempotency-Key": "same-login-fallback"},
+    ).raise_for_status()
     at(monkeypatch, "2026-10-19T01:46:47.000000Z")
     machine = runner(api)
     assign(api, machine, "ops")
-    config = {"runtime": "codex", "harness": "codex", "model": "gpt-6-luna",
-              "fallback": {"harness": "codex", "model": "gpt-6-luna"}}
+    config = {
+        "runtime": "codex",
+        "harness": "codex",
+        "model": "gpt-6-luna",
+        "fallback": {"harness": "codex", "model": "gpt-6-luna"},
+    }
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_patch(config,?) WHERE bot='ops'", (json.dumps(config),))
+        BS.update(c, "ops", config)
     signed_in(api, machine, ["ops"], ["codex", "claude"])
     for n in range(2):
         post(api, "tasks", {"owner": "ops", "title": f"Same login work {n}", "body": "Please do it."})
@@ -259,7 +317,8 @@ def test_a_same_login_named_fallback_uses_the_next_company_row_or_waits_without_
     at(monkeypatch, "2026-10-19T01:50:00.000000Z", api)
     with api.app.state.store.read() as c:
         assert fallback_choice(c, api.app.state.store.settings, machine["runner_id"], "ops", config) == (
-            ("", "claude") if alternate else None)
+            ("", "claude") if alternate else None
+        )
     next_turn = claim(api, machine)
     if alternate:
         assert next_turn and next_turn["config"]["primary_held"]
@@ -275,26 +334,31 @@ def test_a_bot_whose_fallback_is_off_or_not_signed_in_waits_out_the_hold(api, mo
     machine = runner(api)
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=8 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=8 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], [])
     for n in range(2):
         post(api, "tasks", {"owner": "ops", "title": f"Task {n}", "body": "Please do it."})
     limit(api, machine, claim(api, machine))
     at(monkeypatch, "2026-10-19T01:50:00.000000Z", api)
     signed_in(api, machine, ["ops"], [])
-    assert claim(api, machine) is None                      # no other provider is signed in here
+    assert claim(api, machine) is None  # no other provider is signed in here
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback',json('{\"off\":true}')) "
-                  "WHERE bot='ops'")
+        BS.update(c, 'ops', {'fallback': {'off': True}})
     signed_in(api, machine, ["ops"], ["codex"])
-    assert claim(api, machine) is None                      # the bot turned its fallback off
+    assert claim(api, machine) is None  # the bot turned its fallback off
 
 
 def providers_on(api):
     view = get(api, "providers")
-    api.put("/api/v2/providers", json={"enabled": ["openai", "anthropic"], "model": view["default"]["model"] or "",
-                                       "expected_revision": view["revision"]},
-            headers={**headers(), "Idempotency-Key": f"providers-{view['revision']}"}).raise_for_status()
+    api.put(
+        "/api/v2/providers",
+        json={
+            "enabled": ["openai", "anthropic"],
+            "model": view["default"]["model"] or "",
+            "expected_revision": view["revision"],
+        },
+        headers={**headers(), "Idempotency-Key": f"providers-{view['revision']}"},
+    ).raise_for_status()
 
 
 def two_bots(api, monkeypatch, runtimes=("codex",)):
@@ -304,15 +368,27 @@ def two_bots(api, monkeypatch, runtimes=("codex",)):
     for bot in ("ops", "finance"):
         assign(api, machine, bot)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops", "finance"], runtimes)
     return machine
 
 
 def events(api, machine, attempt, rows):
-    post(api, f"attempts/{attempt['id']}/events", {"events": [
-        {"seq": n, "kind": kind, "payload": {"error": text, "limit": True} if kind == "error" else {"text": text}}
-        for n, (kind, text) in enumerate(rows, 1)]}, machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/events",
+        {
+            "events": [
+                {
+                    "seq": n,
+                    "kind": kind,
+                    "payload": {"error": text, "limit": True} if kind == "error" else {"text": text},
+                }
+                for n, (kind, text) in enumerate(rows, 1)
+            ]
+        },
+        machine["token"],
+    )
     return len(rows)
 
 
@@ -323,10 +399,31 @@ def test_a_fallback_that_finishes_the_turn_keeps_the_spent_login_held_for_every_
     for n, bot in enumerate(("ops", "finance"), 1):
         post(api, "tasks", {"owner": bot, "title": f"Work {n}", "body": "Please do it."})
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t-" + first["id"]}, machine["token"])
-    seq = events(api, machine, first, [("error", CLAUDE), ("diagnostic", "fake hit its usage limit; running this "
-                                        "turn on codex (no fallback set; another provider signed in here)")])
-    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": seq, "fallback": "codex",
-                                                   "primary_limited": True, "text": "Done on Codex."}, machine["token"])
+    seq = events(
+        api,
+        machine,
+        first,
+        [
+            ("error", CLAUDE),
+            (
+                "diagnostic",
+                "fake hit its usage limit; running this "
+                "turn on codex (no fallback set; another provider signed in here)",
+            ),
+        ],
+    )
+    post(
+        api,
+        f"attempts/{first['id']}/complete",
+        {
+            "outcome": "completed",
+            "last_seq": seq,
+            "fallback": "codex",
+            "primary_limited": True,
+            "text": "Done on Codex.",
+        },
+        machine["token"],
+    )
     with api.app.state.store.read() as c:
         hold = login_holds.get(c, machine["runner_id"], "", "fake")
     assert hold["until"].startswith("2026-10-19T02:40:00")
@@ -342,28 +439,36 @@ def test_a_fallback_login_whose_hold_ends_gets_one_probe_not_every_waiting_job(a
     machine = two_bots(api, monkeypatch)
     for n, bot in enumerate(("ops", "ops", "ops", "finance", "finance")):
         post(api, "tasks", {"owner": bot, "title": f"Work {n}", "body": "Please do it."})
-    limit(api, machine, claim(api, machine))                                    # Claude (fake) held until 02:40
+    limit(api, machine, claim(api, machine))  # Claude (fake) held until 02:40
     with api.app.state.store.transaction() as c:
-        login_holds.record(c, machine["runner_id"], "", "codex", "2026-10-19T01:50:00.000000Z")   # Codex to 02:20
+        login_holds.record(c, machine["runner_id"], "", "codex", "2026-10-19T01:50:00.000000Z")  # Codex to 02:20
     at(monkeypatch, "2026-10-19T02:00:00.000000Z", api)
     signed_in(api, machine, ["ops", "finance"], ["codex"])
-    assert claim(api, machine) is None                                          # both logins held: everyone waits
+    assert claim(api, machine) is None  # both logins held: everyone waits
     at(monkeypatch, "2026-10-19T02:21:00.000000Z", api)
     signed_in(api, machine, ["ops", "finance"], ["codex"])
     probe = claim(api, machine)
     assert probe["config"]["primary_held"]
-    assert claim(api, machine) is None                                          # the rest wait for Codex's probe
-    expire(api, probe["id"])                                                    # the runner restarts before it begins
+    assert claim(api, machine) is None  # the rest wait for Codex's probe
+    expire(api, probe["id"])  # the runner restarts before it begins
     signed_in(api, machine, ["ops", "finance"], ["codex"])
     again = claim(api, machine)
     assert again and again["job_id"] == probe["job_id"]
     assert claim(api, machine) is None
     post(api, f"attempts/{again['id']}/started", {"thread_id": "codex-" + again["id"]}, machine["token"])
-    seq = events(api, machine, again, [("diagnostic", "fake login held (usage limit) until 02:40 UTC; running this "
-                                                      "turn on codex")])
-    post(api, f"attempts/{again['id']}/complete", {"outcome": "completed", "last_seq": seq, "fallback": "codex",
-                                                   "primary_held": True, "text": "Done."}, machine["token"])
-    with api.app.state.store.read() as c:                                       # Codex works: the others move
+    seq = events(
+        api,
+        machine,
+        again,
+        [("diagnostic", "fake login held (usage limit) until 02:40 UTC; running this turn on codex")],
+    )
+    post(
+        api,
+        f"attempts/{again['id']}/complete",
+        {"outcome": "completed", "last_seq": seq, "fallback": "codex", "primary_held": True, "text": "Done."},
+        machine["token"],
+    )
+    with api.app.state.store.read() as c:  # Codex works: the others move
         assert not login_holds.get(c, machine["runner_id"], "", "codex")
         assert login_holds.get(c, machine["runner_id"], "", "fake")["until"].startswith("2026-10-19T02:40")
     signed_in(api, machine, ["ops", "finance"], ["codex"])
@@ -372,9 +477,19 @@ def test_a_fallback_login_whose_hold_ends_gets_one_probe_not_every_waiting_job(a
 
 class Body:
     def __init__(self, **values):
-        self.__dict__.update({"limited": False, "fallback": None, "primary_limited": False, "primary_held": False,
-                              "profile_used": None, "limit_resets_at": None, "outcome": "failed", "usage": None,
-                              **values})
+        self.__dict__.update(
+            {
+                "limited": False,
+                "fallback": None,
+                "primary_limited": False,
+                "primary_held": False,
+                "profile_used": None,
+                "limit_resets_at": None,
+                "outcome": "failed",
+                "usage": None,
+                **values,
+            }
+        )
 
 
 TURNS = {}
@@ -394,41 +509,68 @@ def test_each_limit_is_held_on_the_login_it_came_from_however_the_turn_ends(api,
     monkeypatch.setattr(login_holds, "limit_texts", lambda c, aid: TURNS[aid])
     with api.app.state.store.transaction() as c:
         # Claude used tokens and then ran out; Codex refused before any token (so no usage segment names it).
-        aid = attempt_with(c, [("error", CLAUDE), ("diagnostic", "fake hit its usage limit; running this turn on codex"),
-                               ("error", "Quota exceeded. Check your plan and billing details.")])
+        aid = attempt_with(
+            c,
+            [
+                ("error", CLAUDE),
+                ("diagnostic", "fake hit its usage limit; running this turn on codex"),
+                ("error", "Quota exceeded. Check your plan and billing details."),
+            ],
+        )
         login_holds.after_turn(c, "r1", "ops", "", "fake", Body(limited=True, fallback="codex"), aid, HIT)
         assert login_holds.get(c, "r1", "", "fake")["until"].startswith("2026-10-19T02:40:00")
         codex = login_holds.get(c, "r1", "", "codex")
         assert codex["until"].startswith("2026-10-19T02:16:47") and codex["error"].startswith("Quota exceeded")
         # On a named subscription, the fallback's hold is on the profile the runner says it used.
-        aid = attempt_with(c, [("diagnostic", "fake hit its usage limit; running this turn on codex"),
-                               ("error", "Quota exceeded.")])
-        login_holds.after_turn(c, "r2", "ops", "work", "fake", Body(limited=True, fallback="codex",
-                                                                    profile_used="work"), aid, HIT)
+        aid = attempt_with(
+            c, [("diagnostic", "fake hit its usage limit; running this turn on codex"), ("error", "Quota exceeded.")]
+        )
+        login_holds.after_turn(
+            c, "r2", "ops", "work", "fake", Body(limited=True, fallback="codex", profile_used="work"), aid, HIT
+        )
         assert login_holds.get(c, "r2", "work", "codex") and login_holds.get(c, "r2", "work", "fake")
         assert not login_holds.get(c, "r2", "", "codex")
         # Three providers: Codex runs out in the middle and Gemini finishes. Codex stays held with its own window.
-        aid = attempt_with(c, [("error", CLAUDE), ("diagnostic", "fake hit its usage limit; running this turn on codex"),
-                               ("error", "Quota exceeded."),
-                               ("diagnostic", "codex hit its usage limit; running this turn on gemini")])
-        assert login_holds.after_turn(c, "r3", "ops", "", "fake", Body(outcome="completed", fallback="gemini"),
-                                      aid, HIT) == {}
+        aid = attempt_with(
+            c,
+            [
+                ("error", CLAUDE),
+                ("diagnostic", "fake hit its usage limit; running this turn on codex"),
+                ("error", "Quota exceeded."),
+                ("diagnostic", "codex hit its usage limit; running this turn on gemini"),
+            ],
+        )
+        assert (
+            login_holds.after_turn(c, "r3", "ops", "", "fake", Body(outcome="completed", fallback="gemini"), aid, HIT)
+            == {}
+        )
         assert login_holds.get(c, "r3", "", "fake")["reset"]
         assert login_holds.get(c, "r3", "", "codex")["until"].startswith("2026-10-19T02:16:47")
         assert not login_holds.get(c, "r3", "", "gemini")
         # A turn sent away from the held login does not count as a new limit on it.
         held = login_holds.get(c, "r3", "", "fake")
-        aid = attempt_with(c, [("diagnostic", "fake login held (usage limit) until 02:40 UTC; running this turn on "
-                                              "gemini")])
-        login_holds.after_turn(c, "r3", "ops", "", "fake", Body(outcome="completed", fallback="gemini",
-                                                                primary_held=True), aid, "2026-10-19T01:55:00.000000Z")
+        aid = attempt_with(
+            c, [("diagnostic", "fake login held (usage limit) until 02:40 UTC; running this turn on gemini")]
+        )
+        login_holds.after_turn(
+            c,
+            "r3",
+            "ops",
+            "",
+            "fake",
+            Body(outcome="completed", fallback="gemini", primary_held=True),
+            aid,
+            "2026-10-19T01:55:00.000000Z",
+        )
         assert login_holds.get(c, "r3", "", "fake") == held
     # And a restarted runner hears of both held logins.
     at(monkeypatch, "2026-10-19T01:55:00.000000Z")
     machine = runner(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET key=replace(key,'r3|',?) WHERE key LIKE 'login-hold:r3|%'",
-                  (machine["runner_id"] + "|",))
+        c.execute(
+            "UPDATE registry_metadata SET key=replace(key,'r3|',?) WHERE key LIKE 'login-hold:r3|%'",
+            (machine["runner_id"] + "|",),
+        )
     at_config = {h["runtime"] for h in get(api, "config", machine["token"])["login_holds"]}
     assert {"fake", "codex"} <= at_config
 
@@ -439,20 +581,20 @@ def test_a_lane_leased_before_the_limit_cannot_clear_the_login_hold(api, monkeyp
     for bot in ("ops", "finance"):
         assign(api, machine, bot)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     ready(api, machine, ["ops", "finance"])
     post(api, "tasks", {"owner": "ops", "title": "Long work", "body": "Please do it."})
     post(api, "tasks", {"owner": "finance", "title": "Close the month", "body": "Please do it."})
     early, spent = claim(api, machine), claim(api, machine)
     at(monkeypatch, "2026-10-19T01:46:47.000000Z", api)
-    limit(api, machine, spent)                                  # the other lane runs the login out
-    done(api, machine, early)                                   # the lane leased before it ends well afterwards
+    limit(api, machine, spent)  # the other lane runs the login out
+    done(api, machine, early)  # the lane leased before it ends well afterwards
     with api.app.state.store.read() as c:
         assert login_holds.get(c, machine["runner_id"], "", "fake")["until"].startswith("2026-10-19T02:40:00")
     owner = early["bot"]
     post(api, "tasks", {"owner": owner, "title": "Next", "body": "Please do it."})
     ready(api, machine, ["ops", "finance"])
-    assert claim(api, machine) is None                          # no bot starts on the held login before the reset
+    assert claim(api, machine) is None  # no bot starts on the held login before the reset
 
 
 def test_a_turn_with_no_fallback_ready_after_all_settles_unstarted_and_the_bot_waits(api, monkeypatch):
@@ -467,28 +609,42 @@ def test_a_turn_with_no_fallback_ready_after_all_settles_unstarted_and_the_bot_w
     moved = claim(api, machine)
     assert moved["config"]["primary_held"]
     # The runner finds Codex not ready after all: it never starts the turn and says so, with no /started.
-    seq = events(api, machine, moved, [("error", "fake login held (usage limit) until 02:40 UTC, and no fallback is "
-                                                 "ready on this computer")])
-    post(api, f"attempts/{moved['id']}/complete", {"outcome": "failed", "last_seq": seq, "limited": True,
-                                                   "primary_held": True, "text": ""}, machine["token"])
+    seq = events(
+        api,
+        machine,
+        moved,
+        [("error", "fake login held (usage limit) until 02:40 UTC, and no fallback is ready on this computer")],
+    )
+    post(
+        api,
+        f"attempts/{moved['id']}/complete",
+        {"outcome": "failed", "last_seq": seq, "limited": True, "primary_held": True, "text": ""},
+        machine["token"],
+    )
     with api.app.state.store.read() as c:
         after = login_holds.get(c, machine["runner_id"], "", "fake")
         assert c.execute("SELECT state FROM jobs WHERE id=?", (moved["job_id"],)).fetchone()[0] == "queued"
     assert (after["until"], after["streak"], after["stuck"]) == (hold["until"], 1, ["ops"])
     # It waits on the earlier API quota hold: not reported as a fresh plan limit.
     with api.app.state.store.read() as c:
-        assert H.status(c, "ops")["focus"].startswith("Primary fake API quota or billing limit, held from an earlier "
-                                                      "turn; no fallback could take this one; retrying after "
-                                                      "2026-10-19 02:16 UTC")
+        assert H.status(c, "ops")["focus"].startswith(
+            "Primary fake API quota or billing limit, held from an earlier "
+            "turn; no fallback could take this one; retrying after "
+            "2026-10-19 02:16 UTC"
+        )
     assert health_detail(api, "ops").startswith("Primary fake API quota or billing limit, held from an earlier turn")
     signed_in(api, machine, ["ops", "finance"], ["codex"])
-    assert claim(api, machine) is None                          # not sent to that fallback again this window
+    assert claim(api, machine) is None  # not sent to that fallback again this window
 
 
-def test_the_runners_report_of_a_fallback_that_never_started_requeues_the_job_and_holds_no_other_login(api, monkeypatch):
+def test_the_runners_report_of_a_fallback_that_never_started_requeues_the_job_and_holds_no_other_login(
+    api, monkeypatch
+):
     # Exactly what the runner sends when a held login's fallback fails before it acknowledges the turn: its own test
     # drives that turn and checks it against the same fixture (runner-rs/src/execute.rs).
-    sent = json.loads((Path(__file__).resolve().parents[2] / "runner-rs/tests/fixtures/held_fallback_unstarted.json").read_text())
+    sent = json.loads(
+        (Path(__file__).resolve().parents[2] / "runner-rs/tests/fixtures/held_fallback_unstarted.json").read_text()
+    )
     machine = two_bots(api, monkeypatch)
     for n in range(2):
         post(api, "tasks", {"owner": "ops", "title": f"Started nowhere {n}", "body": "Please do it."})
@@ -499,40 +655,75 @@ def test_the_runners_report_of_a_fallback_that_never_started_requeues_the_job_an
     signed_in(api, machine, ["ops", "finance"], ["codex"])
     moved = claim(api, machine)
     assert moved["config"]["primary_held"]
-    post(api, f"attempts/{moved['id']}/events", {"events": [{"seq": n, **e} for n, e in enumerate(sent["events"], 1)]},
-         machine["token"])
-    post(api, f"attempts/{moved['id']}/complete", {**sent["completion"], "last_seq": len(sent["events"])}, machine["token"])
+    post(
+        api,
+        f"attempts/{moved['id']}/events",
+        {"events": [{"seq": n, **e} for n, e in enumerate(sent["events"], 1)]},
+        machine["token"],
+    )
+    post(
+        api,
+        f"attempts/{moved['id']}/complete",
+        {**sent["completion"], "last_seq": len(sent["events"])},
+        machine["token"],
+    )
     with api.app.state.store.read() as c:
         after = login_holds.get(c, machine["runner_id"], "", "fake")
         assert c.execute("SELECT state FROM jobs WHERE id=?", (moved["job_id"],)).fetchone()[0] == "queued"
         # The fallback never ran, so it met no limit: only the bot's own login is held, as it was.
-        assert [r[0] for r in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'login-hold:%'")] == \
-            [f"login-hold:{machine['runner_id']}||fake"]
+        assert [r[0] for r in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'login-hold:%'")] == [
+            f"login-hold:{machine['runner_id']}||fake"
+        ]
     assert (after["until"], after["streak"], after["stuck"]) == (hold["until"], 1, ["ops"])
     signed_in(api, machine, ["ops", "finance"], ["codex"])
-    assert claim(api, machine) is None                          # waits out the hold, not leased again and again
+    assert claim(api, machine) is None  # waits out the hold, not leased again and again
 
 
 def test_profiles_sharing_the_computers_own_login_share_its_hold_and_probe(api, monkeypatch):
     from backend import execution
+
     at(monkeypatch, "2026-10-19T01:46:47.000000Z")
     machine = runner(api)
     assign(api, machine, "ops")
     row = {"installed": True, "authenticated": "ready"}
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
-        "schema_version": 1, "bots": {"ops": {"ready": True, "runtime": "fake"}},
-        "runtimes": {"fake": {**row, "profiles": {"team-a": {**row, "shared_login": True},
-                                                  "team-b": {**row, "shared_login": True}, "solo": row}}}}},
-         token=machine["token"])
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "readiness": {
+                "schema_version": 1,
+                "bots": {"ops": {"ready": True, "runtime": "fake"}},
+                "runtimes": {
+                    "fake": {
+                        **row,
+                        "profiles": {
+                            "team-a": {**row, "shared_login": True},
+                            "team-b": {**row, "shared_login": True},
+                            "solo": row,
+                        },
+                    }
+                },
+            },
+        },
+        token=machine["token"],
+    )
     rid = machine["runner_id"]
     with api.app.state.store.transaction() as c:
-        assert [login_holds.canonical(c, rid, p, "fake") for p in ("", "team-a", "team-b", "solo")] == ["", "", "", "solo"]
+        assert [login_holds.canonical(c, rid, p, "fake") for p in ("", "team-a", "team-b", "solo")] == [
+            "",
+            "",
+            "",
+            "solo",
+        ]
         aid = H.new_id()
         monkeypatch.setattr(login_holds, "limit_texts", lambda c, a: [("limit", CLAUDE)])
         login_holds.after_turn(c, rid, "ops", "team-a", "fake", Body(limited=True), aid, HIT)
         # One hold for the computer's own login, whichever alias met the limit, and the runner hears it under "".
-        assert login_holds.get(c, rid, "", "fake")["until"].startswith("2026-10-19T02:40") and not \
-            login_holds.get(c, rid, "team-a", "fake")
+        assert login_holds.get(c, rid, "", "fake")["until"].startswith("2026-10-19T02:40") and not login_holds.get(
+            c, rid, "team-a", "fake"
+        )
         # A bot runs on the computer's own login (#1259), so its turns wait on that hold.
         key = execution.login_key(c, api.app.state.store.settings, rid, "ops", {"runtime": "fake"})
         assert login_holds.holding(c, *key) == "held"
@@ -541,6 +732,7 @@ def test_profiles_sharing_the_computers_own_login_share_its_hold_and_probe(api, 
 
 def test_a_named_fallback_that_is_not_ready_here_leaves_the_job_waiting_not_leased(api, monkeypatch):
     from backend import models_preset
+
     machine = two_bots(api, monkeypatch, runtimes=())
     for n in range(3):
         post(api, "tasks", {"owner": "ops", "title": f"Work {n}", "body": "Please do it."})
@@ -548,10 +740,10 @@ def test_a_named_fallback_that_is_not_ready_here_leaves_the_job_waiting_not_leas
 
     def names(fallback):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback',json(?)) WHERE bot='ops'",
-                      (json.dumps(fallback),))
+            BS.update(c, 'ops', {'fallback': fallback})
+
     names({"harness": "codex", "model": "gpt-5.5"})
-    for minute in ("01:50", "01:55", "02:00"):                      # Codex is not signed in here: no lease, ever
+    for minute in ("01:50", "01:55", "02:00"):  # Codex is not signed in here: no lease, ever
         at(monkeypatch, f"2026-10-19T{minute}:00.000000Z", api)
         signed_in(api, machine, ["ops", "finance"], ())
         assert claim(api, machine) is None
@@ -574,13 +766,19 @@ def fallback_turn(api, machine, rows, **result):
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + attempt["id"]}, machine["token"])
     seq = events(api, machine, attempt, rows)
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": seq, "limited": True,
-                                                     "fallback": "codex", "text": "", **result}, machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "failed", "last_seq": seq, "limited": True, "fallback": "codex", "text": "", **result},
+        machine["token"],
+    )
     return attempt
 
 
 def health_detail(api, bot):
-    return next(i for i in api.get("/api/status", headers=headers()).json()["health_issues"] if i.get("bot") == bot)["detail"]
+    return next(i for i in api.get("/api/status", headers=headers()).json()["health_issues"] if i.get("bot") == bot)[
+        "detail"
+    ]
 
 
 def test_a_fallbacks_quota_names_the_fallback_and_never_holds_the_primary(api, monkeypatch):
@@ -588,23 +786,36 @@ def test_a_fallbacks_quota_names_the_fallback_and_never_holds_the_primary(api, m
     # "claude API quota or billing limit" (Dev 279).
     machine = two_bots(api, monkeypatch)
     post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
-    first = fallback_turn(api, machine, [("diagnostic", "fake unavailable; running this turn on codex"),
-                                         ("error", QUOTA)])
+    first = fallback_turn(
+        api, machine, [("diagnostic", "fake unavailable; running this turn on codex"), ("error", QUOTA)]
+    )
     with api.app.state.store.read() as c:
         assert not login_holds.get(c, machine["runner_id"], "", "fake")
         assert login_holds.get(c, machine["runner_id"], "", "codex")["until"].startswith("2026-10-19T02:16:47")
         focus = H.status(c, "ops")["focus"]
-    assert focus == ("Fallback codex API quota or billing limit at 01:46; primary fake not limited; "
-                     "retrying after 2026-10-19 02:16 UTC")
-    assert health_detail(api, "ops").startswith("Fallback codex API quota or billing limit; primary fake not limited; "
-                                                "queued work waits until 2026-10-19 02:16 UTC")
+    assert focus == (
+        "Fallback codex API quota or billing limit at 01:46; primary fake not limited; "
+        "retrying after 2026-10-19 02:16 UTC"
+    )
+    assert health_detail(api, "ops").startswith(
+        "Fallback codex API quota or billing limit; primary fake not limited; "
+        "queued work waits until 2026-10-19 02:16 UTC"
+    )
     log = api.get(f"/api/runs/{first['id']}/log", headers=headers()).text
     assert "Limit: Fallback codex API quota or billing limit; primary fake not limited" in log
     # Another bot's turn on the same Codex login replaces its hold: Health still names the fallback, not the bot's
     # own runtime.
     with api.app.state.store.transaction() as c:
-        login_holds.record(c, machine["runner_id"], "", "codex", "2026-10-19T01:47:00.000000Z", attempt_id="other",
-                           bot="finance", error=QUOTA)
+        login_holds.record(
+            c,
+            machine["runner_id"],
+            "",
+            "codex",
+            "2026-10-19T01:47:00.000000Z",
+            attempt_id="other",
+            bot="finance",
+            error=QUOTA,
+        )
         assert not login_holds.for_attempt(c, first["id"])
     assert health_detail(api, "ops").startswith("Fallback codex API quota or billing limit; primary fake not limited")
 
@@ -618,13 +829,16 @@ def test_an_older_runners_fallback_quota_with_no_hop_note_is_still_the_fallbacks
         assert login_holds.get(c, "r1", "", "codex")["error"] == QUOTA
         # Unless the runner says the primary was limited: then its notice is the primary's, as before.
         aid = attempt_with(c, [("error", CLAUDE)])
-        login_holds.after_turn(c, "r2", "ops", "", "fake", Body(limited=True, fallback="codex", primary_limited=True),
-                               aid, HIT)
+        login_holds.after_turn(
+            c, "r2", "ops", "", "fake", Body(limited=True, fallback="codex", primary_limited=True), aid, HIT
+        )
         assert login_holds.get(c, "r2", "", "fake")["reset"] and login_holds.get(c, "r2", "", "codex")
 
 
-PAUSED = ("Tico models are paused: this company is out of credit. Your bots use their other models until credit is "
-          "added (out_of_credit)")
+PAUSED = (
+    "Tico models are paused: this company is out of credit. Your bots use their other models until credit is "
+    "added (out_of_credit)"
+)
 
 
 def test_a_company_out_of_credit_holds_the_tico_login_a_minute_and_a_fallbacks_own_limit_as_before(api, monkeypatch):
@@ -634,17 +848,20 @@ def test_a_company_out_of_credit_holds_the_tico_login_a_minute_and_a_fallbacks_o
     hop = ("diagnostic", "pi hit its usage limit; running this turn on codex")
     with api.app.state.store.transaction() as c:
         aid = attempt_with(c, [("error", PAUSED), hop])
-        kept = login_holds.after_turn(c, "r1", "ops", "", "pi", Body(outcome="completed", fallback="codex",
-                                                                     primary_limited=True), aid, HIT)
+        kept = login_holds.after_turn(
+            c, "r1", "ops", "", "pi", Body(outcome="completed", fallback="codex", primary_limited=True), aid, HIT
+        )
         assert kept == {} and login_holds.get(c, "r1", "", "pi")["until"].startswith("2026-10-19T01:47:47")
         # Its fallback ran out too: that login is held as before, with its own wait.
         aid = attempt_with(c, [("error", PAUSED), hop, ("error", QUOTA)])
-        kept = login_holds.after_turn(c, "r2", "ops", "", "pi", Body(limited=True, fallback="codex",
-                                                                     primary_limited=True), aid, HIT)
+        kept = login_holds.after_turn(
+            c, "r2", "ops", "", "pi", Body(limited=True, fallback="codex", primary_limited=True), aid, HIT
+        )
         assert kept["runtime"] == "codex" and kept["until"].startswith("2026-10-19T02:16:47")
         src = login_holds.source(c, aid, "pi", Body(limited=True, fallback="codex", primary_limited=True))
-        assert login_holds.label(src) == ("Fallback codex API quota or billing limit; primary pi also limited "
-                                          "(Tico models paused, out of credit)")
+        assert login_holds.label(src) == (
+            "Fallback codex API quota or billing limit; primary pi also limited (Tico models paused, out of credit)"
+        )
 
 
 RATED = "Tico AI Gateway: rate limited; retrying after the Gateway's requested wait (rate_limited)"
@@ -672,7 +889,8 @@ def test_a_tico_rate_limit_another_model_finished_holds_the_tico_login_a_minute_
         assert kept["runtime"] == "codex" and kept["until"].startswith("2026-10-19T02:16:47")
         assert login_holds.get(c, "r2", "", "pi")["until"].startswith("2026-10-19T01:47:47")
         assert login_holds.label(login_holds.source(c, aid, "pi", body)) == (
-            "Fallback codex API quota or billing limit; primary pi also limited (Tico AI Gateway rate limit)")
+            "Fallback codex API quota or billing limit; primary pi also limited (Tico AI Gateway rate limit)"
+        )
 
 
 def test_a_gateway_reset_already_past_is_its_minute_not_the_backoff(api, monkeypatch):
@@ -690,12 +908,12 @@ def test_a_gateway_reset_already_past_is_its_minute_not_the_backoff(api, monkeyp
         assert login_holds.get(c, "r2", "", "pi")["until"].startswith("2026-10-19T02:46:47")
 
 
-def test_a_primary_held_for_hours_with_its_tico_fallback_out_of_credit_waits_only_the_gateways_minute(
-        api, monkeypatch):
+def test_a_primary_held_for_hours_with_its_tico_fallback_out_of_credit_waits_only_the_gateways_minute(api, monkeypatch):
     """A subscription bot whose last fallback is a Tico model: its own login stays held to its reset, but the turn
     ended on the company's credit, so the bot asks again after the Gateway's minute and runs on Tico models."""
     from backend.execution import cooling_off, limit_cooldown
     from clients import gateway
+
     at(monkeypatch, HIT)
     machine = runner(api)
     assign(api, machine, "ops")
@@ -705,9 +923,20 @@ def test_a_primary_held_for_hours_with_its_tico_fallback_out_of_credit_waits_onl
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + attempt["id"]}, machine["token"])
     seq = events(api, machine, attempt, [("error", CLAUDE), ("diagnostic", hop), ("error", PAUSED)])
-    post(api, f"attempts/{attempt['id']}/complete", {
-        "outcome": "failed", "last_seq": seq, "limited": True, "fallback": "pi", "primary_limited": True, "text": "",
-        "limit_resets_at": "2026-10-19T01:47:47.000000Z"}, machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {
+            "outcome": "failed",
+            "last_seq": seq,
+            "limited": True,
+            "fallback": "pi",
+            "primary_limited": True,
+            "text": "",
+            "limit_resets_at": "2026-10-19T01:47:47.000000Z",
+        },
+        machine["token"],
+    )
     with api.app.state.store.read() as c:
         assert login_holds.get(c, machine["runner_id"], "", "fake")["until"].startswith("2026-10-19T02:40:00")
         assert login_holds.get(c, machine["runner_id"], "", "pi")["until"].startswith("2026-10-19T01:47:47")
@@ -728,8 +957,9 @@ def test_a_primary_usage_limit_names_the_primary_and_its_window(api, monkeypatch
     post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
     limit(api, machine, claim(api, machine))
     with api.app.state.store.read() as c:
-        assert H.status(c, "ops")["focus"] == ("Primary fake plan usage limit (5-hour window) at 01:46; resumes at "
-                                               "02:40 UTC when it resets")
+        assert H.status(c, "ops")["focus"] == (
+            "Primary fake plan usage limit (5-hour window) at 01:46; resumes at 02:40 UTC when it resets"
+        )
         assert not login_holds.get(c, machine["runner_id"], "", "codex")
     assert health_detail(api, "ops").startswith("Primary fake plan usage limit (5-hour window); resumes at 02:40 UTC")
 
@@ -754,16 +984,21 @@ def test_a_refused_request_flagged_with_the_logins_limit_says_it_was_refused(api
 def test_both_limits_in_one_window_keep_two_holds_each_with_its_own_retry(api, monkeypatch):
     machine = two_bots(api, monkeypatch)
     post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
-    first = fallback_turn(api, machine, [("error", CLAUDE), ("diagnostic", "fake hit its usage limit; running this "
-                                                                          "turn on codex"), ("error", QUOTA)])
+    first = fallback_turn(
+        api,
+        machine,
+        [("error", CLAUDE), ("diagnostic", "fake hit its usage limit; running this turn on codex"), ("error", QUOTA)],
+    )
     with api.app.state.store.read() as c:
         assert login_holds.get(c, machine["runner_id"], "", "fake")["until"].startswith("2026-10-19T02:40:00")
         assert login_holds.get(c, machine["runner_id"], "", "codex")["until"].startswith("2026-10-19T02:16:47")
         # The bot waits on the login its turn ended on, whichever hold row is read first.
         assert login_holds.for_attempt(c, first["id"])["runtime"] == "codex"
         focus = H.status(c, "ops")["focus"]
-    assert focus == ("Fallback codex API quota or billing limit at 01:46; primary fake also limited (plan usage limit "
-                     "(5-hour window)) until 02:40 UTC; retrying after 2026-10-19 02:16 UTC")
+    assert focus == (
+        "Fallback codex API quota or billing limit at 01:46; primary fake also limited (plan usage limit "
+        "(5-hour window)) until 02:40 UTC; retrying after 2026-10-19 02:16 UTC"
+    )
 
 
 def test_a_limit_keeps_the_provider_and_login_it_came_from_after_settings_and_holds_change(api, monkeypatch):
@@ -778,14 +1013,27 @@ def test_a_limit_keeps_the_provider_and_login_it_came_from_after_settings_and_ho
     with api.app.state.store.transaction() as c:
         assert H.status(c, "ops")["focus"].startswith(said + " at 01:46")
         # The bot moves to Codex and another turn replaces the login's hold: the run still names what refused it.
-        assert c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                         (json.dumps({"runtime": "codex"}),)).rowcount == 1
+        BS.write(c, "ops", {"runtime": "codex"})
         assert login_holds.get(c, machine["runner_id"], "work", "fake"), "an in-flight turn keeps its reported home"
-        login_holds.record(c, machine["runner_id"], "work", "fake", "2026-10-19T01:47:00.000000Z", attempt_id="other",
-                           bot="finance", error=CLAUDE)
+        login_holds.record(
+            c,
+            machine["runner_id"],
+            "work",
+            "fake",
+            "2026-10-19T01:47:00.000000Z",
+            attempt_id="other",
+            bot="finance",
+            error=CLAUDE,
+        )
         assert not login_holds.for_attempt(c, first["id"])
-        assert json.loads(c.execute("SELECT detail FROM events WHERE action='attempt.limited' AND target=?",
-                                    (first["id"],)).fetchone()[0])["source"]["profile"] == "work"
+        assert (
+            json.loads(
+                c.execute(
+                    "SELECT detail FROM events WHERE action='attempt.limited' AND target=?", (first["id"],)
+                ).fetchone()[0]
+            )["source"]["profile"]
+            == "work"
+        )
     assert f"Limit: {said}" in api.get(f"/api/runs/{first['id']}/log", headers=headers()).text
     assert health_detail(api, "ops").startswith(said)
 
@@ -796,7 +1044,7 @@ def test_a_late_limit_from_a_turn_started_before_the_hold_keeps_the_live_try_now
     for bot in ('ops', 'finance'):
         assign(api, machine, bot)
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET capacity=16 WHERE id=?', (machine['runner_id'],))
+        c.execute('UPDATE runner_states SET capacity=16 WHERE runner_id=?', (machine['runner_id'],))
     ready(api, machine, ['ops', 'finance'])
     for n in range(3):
         for bot in ('ops', 'finance'):
@@ -813,17 +1061,29 @@ def test_a_late_limit_from_a_turn_started_before_the_hold_keeps_the_live_try_now
     post(api, f"attempts/{probe['id']}/started", {'thread_id': 'live-probe'}, machine['token'])
     # The turn started before the hold now ends on the limit too, while the probe is still running.
     at(monkeypatch, '2026-10-19T01:03:00.000000Z', api)
-    post(api, f"attempts/{late['id']}/events", {'events': [
-        {'seq': 1, 'kind': 'error', 'payload': {'error': 'Quota exceeded.', 'limit': True}}]}, machine['token'])
-    post(api, f"attempts/{late['id']}/complete", {'outcome': 'failed', 'last_seq': 1, 'limited': True, 'text': ''},
-         machine['token'])
+    post(
+        api,
+        f"attempts/{late['id']}/events",
+        {'events': [{'seq': 1, 'kind': 'error', 'payload': {'error': 'Quota exceeded.', 'limit': True}}]},
+        machine['token'],
+    )
+    post(
+        api,
+        f"attempts/{late['id']}/complete",
+        {'outcome': 'failed', 'last_seq': 1, 'limited': True, 'text': ''},
+        machine['token'],
+    )
     ready(api, machine, ['ops', 'finance'])
     response = api.post(f"/api/v2/bots/{late['bot']}/limit/retry", json={}, headers=headers())
     assert response.status_code == 409, response.text
     assert claim(api, machine) is None
     # The probe's own result still decides the login: its success frees the waiting work.
-    post(api, f"attempts/{probe['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Done.'},
-         machine['token'])
+    post(
+        api,
+        f"attempts/{probe['id']}/complete",
+        {'outcome': 'completed', 'last_seq': 0, 'text': 'Done.'},
+        machine['token'],
+    )
     ready(api, machine, ['ops', 'finance'])
     assert claim(api, machine)
 
@@ -838,16 +1098,25 @@ def test_a_model_at_capacity_holds_the_login_minutes_and_a_later_real_quota_is_s
     post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
     post(api, "tasks", {"owner": "ops", "title": "More work", "body": "Please do it."})
     # The runner's plan-window reset hours away says nothing about a busy model.
-    limit(api, machine, claim(api, machine), errors=("Selected model is at capacity. Please try a different model.",),
-          limit_resets_at="2026-10-23T08:00:00Z")
+    limit(
+        api,
+        machine,
+        claim(api, machine),
+        errors=("Selected model is at capacity. Please try a different model.",),
+        limit_resets_at="2026-10-23T08:00:00Z",
+    )
     with api.app.state.store.read() as c:
         hold = login_holds.get(c, machine["runner_id"], "", "fake")
         assert hold["until"].startswith("2026-10-23T03:06:45") and hold["capacity"] and hold["streak"] == 0
-        assert H.status(c, "ops")["focus"] == ("Primary fake temporary model capacity at 03:04; retrying after "
-                                               "2026-10-23 03:06 UTC")
+        assert H.status(c, "ops")["focus"] == (
+            "Primary fake temporary model capacity at 03:04; retrying after 2026-10-23 03:06 UTC"
+        )
         # A busy moment is not a spent plan: Health does not say the bot stopped on a subscription limit for it.
-        assert not [f for f in health_monitor._bot_checks(c, api.app.state.store.settings)
-                    if f["check_id"] == "limited_no_fallback"]
+        assert not [
+            f
+            for f in maintenance_health._bot_checks(c, api.app.state.store.settings)
+            if f["check_id"] == "limited_no_fallback"
+        ]
     at(monkeypatch, "2026-10-23T03:06:46.000000Z", api)
     ready(api, machine, ["ops"])
     limit(api, machine, claim(api, machine), errors=("Quota exceeded. Check your plan and billing details.",))
@@ -860,29 +1129,65 @@ def test_a_model_at_capacity_holds_the_login_minutes_and_a_later_real_quota_is_s
 
 def test_a_capacity_notice_during_a_quota_hold_leaves_the_providers_reset_where_it_was(api):
     with api.app.state.store.transaction() as c:
-        quota = login_holds.record(c, "r1", "", "codex", "2026-10-23T04:30:00.000000Z", reset="2026-10-23T05:00:30Z",
-                                   error="Quota exceeded. Check your plan and billing details.")
-        busy = login_holds.record(c, "r1", "", "codex", "2026-10-23T05:00:00.000000Z",
-                                  error="Selected model is at capacity. Please try a different model.")
+        quota = login_holds.record(
+            c,
+            "r1",
+            "",
+            "codex",
+            "2026-10-23T04:30:00.000000Z",
+            reset="2026-10-23T05:00:30Z",
+            error="Quota exceeded. Check your plan and billing details.",
+        )
+        busy = login_holds.record(
+            c,
+            "r1",
+            "",
+            "codex",
+            "2026-10-23T05:00:00.000000Z",
+            error="Selected model is at capacity. Please try a different model.",
+        )
     assert (busy["until"], busy["streak"], busy["reset"], busy["capacity"]) == (quota["until"], 1, True, False)
 
 
 def test_canonical_parses_the_readiness_once_per_transaction(api, monkeypatch):
     # A claim scan asks for the same login per bot and per job; the readiness document is parsed once per login.
     from backend import store as S
+
     machine = runner(api)
     row = {"installed": True, "authenticated": "ready"}
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
-        "schema_version": 1, "bots": {}, "runtimes": {"fake": {**row, "profiles": {
-            "team-a": {**row, "shared_login": True}, "solo": row}}}}}, token=machine["token"])
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "readiness": {
+                "schema_version": 1,
+                "bots": {},
+                "runtimes": {"fake": {**row, "profiles": {"team-a": {**row, "shared_login": True}, "solo": row}}},
+            },
+        },
+        token=machine["token"],
+    )
     rid = machine["runner_id"]
     parsed, real = [], S.readiness_document
     monkeypatch.setattr(S, "readiness_document", lambda value: parsed.append(1) or real(value))
     with api.app.state.store.transaction() as c:
         assert [login_holds.canonical(c, rid, p, "fake") for p in ("team-a", "solo", "team-a")] == ["", "solo", ""]
-        assert len(parsed) == 2                 # one parse per login asked for: team-a and solo
+        assert len(parsed) == 2  # one parse per login asked for: team-a and solo
         assert [login_holds.canonical(c, rid, "team-a", "fake") for _ in range(3)] == [""] * 3 and len(parsed) == 2
         # A write in the same transaction is seen: the runner now shares its login, and its answer changes.
-        c.execute("UPDATE runners SET readiness=? WHERE id=?", (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {
-            "fake": {**row, "profiles": {"solo": {**row, "shared_login": True}}}}}), rid))
+        c.execute(
+            "UPDATE runner_states SET readiness=? WHERE runner_id=?",
+            (
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "bots": {},
+                        "runtimes": {"fake": {**row, "profiles": {"solo": {**row, "shared_login": True}}}},
+                    }
+                ),
+                rid,
+            ),
+        )
         assert login_holds.canonical(c, rid, "solo", "fake") == ""

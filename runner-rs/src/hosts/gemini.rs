@@ -17,13 +17,20 @@ use super::{event, failed, is_limit, Events, HostError, Settings};
 use crate::env::Env;
 use crate::util::{log, text_of};
 
-pub const STREAM_ARGS: &[&str] = &["--output-format", "stream-json", "--approval-mode", "yolo", "--skip-trust"];
+pub const STREAM_ARGS: &[&str] = &[
+    "--output-format",
+    "stream-json",
+    "--approval-mode",
+    "yolo",
+    "--skip-trust",
+];
 pub const DEFAULT_MODEL: &str = "gemini-3.8-flash";
 pub const MODELS: &[&str] = &["gemini-3.8-flash"];
 /// Where the host's saved Gemini memory goes, in its home's `.gemini`, once no turn reads it (set_aside_memory).
 pub const MEMORY_UNREAD: &str = "GEMINI.unread.md";
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
-const RESTORING: &str = "Saved provider session is unavailable; restoring this conversation's context.";
+const RESTORING: &str =
+    "Saved provider session is unavailable; restoring this conversation's context.";
 
 /// Gemini's thinking level for an effort: LOW, MEDIUM or HIGH, HIGH when unset or unknown.
 pub fn effort_for(effort: Option<&str>) -> &'static str {
@@ -36,7 +43,10 @@ pub fn effort_for(effort: Option<&str>) -> &'static str {
 
 fn count(v: &Value, key: &str) -> i64 {
     match &v[key] {
-        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)).unwrap_or(0),
+        Value::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_f64().map(|f| f as i64))
+            .unwrap_or(0),
         Value::String(s) => s.trim().parse().unwrap_or(0),
         Value::Bool(b) => *b as i64,
         _ => 0,
@@ -83,7 +93,11 @@ pub fn set_aside_memory(home: &Path) -> std::io::Result<()> {
         let unread = dir.join(MEMORY_UNREAD);
         let before = bot_read(&unread)?.unwrap_or_default();
         if !before.contains(text.trim()) {
-            let joined = if before.trim().is_empty() { text } else { format!("{}\n\n{text}", before.trim_end()) };
+            let joined = if before.trim().is_empty() {
+                text
+            } else {
+                format!("{}\n\n{text}", before.trim_end())
+            };
             bot_write(&unread, &joined)?;
         }
     }
@@ -97,8 +111,13 @@ pub fn set_aside_memory(home: &Path) -> std::io::Result<()> {
 /// True when a bot's primary or fallback harness is the Gemini CLI, which needs GEMINI_API_KEY.
 pub fn uses_gemini_cli(config: &Value) -> bool {
     let harness = text_of(&config["harness"]);
-    let harness = if harness.is_empty() && config["runtime"] == "gemini" { "gemini".into() } else { harness };
-    harness == "gemini" || (config["fallback"].is_object() && config["fallback"]["harness"] == "gemini")
+    let harness = if harness.is_empty() && config["runtime"] == "gemini" {
+        "gemini".into()
+    } else {
+        harness
+    };
+    harness == "gemini"
+        || (config["fallback"].is_object() && config["fallback"]["harness"] == "gemini")
 }
 
 fn credential_names() -> &'static Mutex<Map<String, Value>> {
@@ -124,7 +143,10 @@ pub fn has_grant(bot: &str, key: &str) -> bool {
 
 /// `has_grant` over a snapshot from `grant_names`.
 pub fn has_grant_in(names: &Map<String, Value>, bot: &str, key: &str) -> bool {
-    names.get(bot).and_then(|n| n.as_array()).is_some_and(|n| n.iter().any(|k| k == key))
+    names
+        .get(bot)
+        .and_then(|n| n.as_array())
+        .is_some_and(|n| n.iter().any(|k| k == key))
 }
 
 /// The gemini runtime's sign-in: a GEMINI_API_KEY grant for every bot that runs the Gemini CLI.
@@ -132,10 +154,17 @@ pub fn sign_in(assignments: &[Value]) -> (&'static str, String) {
     let names = credential_names().lock().unwrap().clone();
     let mut missing: Vec<String> = vec![];
     let mut cli = false;
-    for row in assignments.iter().filter(|r| r["config"]["runtime"] == "gemini" && uses_gemini_cli(&r["config"])) {
+    for row in assignments
+        .iter()
+        .filter(|r| r["config"]["runtime"] == "gemini" && uses_gemini_cli(&r["config"]))
+    {
         cli = true;
         let bot = text_of(&row["bot"]);
-        if !names.get(&bot).and_then(|n| n.as_array()).is_some_and(|n| n.iter().any(|k| k == "GEMINI_API_KEY")) {
+        if !names
+            .get(&bot)
+            .and_then(|n| n.as_array())
+            .is_some_and(|n| n.iter().any(|k| k == "GEMINI_API_KEY"))
+        {
             missing.push(bot);
         }
     }
@@ -144,7 +173,10 @@ pub fn sign_in(assignments: &[Value]) -> (&'static str, String) {
     if !cli {
         ("ready", "Gemini CLI is not used by assigned bots".into())
     } else if !missing.is_empty() {
-        ("missing", format!("Gemini API key required ({})", missing.join(", ")))
+        (
+            "missing",
+            format!("Gemini API key required ({})", missing.join(", ")),
+        )
     } else {
         ("ready", "Gemini API key configured".into())
     }
@@ -173,6 +205,7 @@ struct Inner {
 }
 
 struct Shared {
+    allocation: super::Allocation,
     bot: String,
     home: PathBuf,
     cmd: Vec<String>,
@@ -185,7 +218,14 @@ pub struct GeminiHost(Arc<Shared>);
 
 impl GeminiHost {
     pub fn new(bot: &str, home: &Path, cmd: Vec<String>, tx: Events) -> GeminiHost {
-        GeminiHost(Arc::new(Shared { bot: bot.into(), home: home.to_path_buf(), cmd, tx, inner: Mutex::new(Inner::default()) }))
+        GeminiHost(Arc::new(Shared {
+            allocation: super::Allocation::default(),
+            bot: bot.into(),
+            home: home.to_path_buf(),
+            cmd,
+            tx,
+            inner: Mutex::new(Inner::default()),
+        }))
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -217,67 +257,121 @@ impl GeminiHost {
         }
     }
 
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.0.allocation.track(turn);
+    }
+
     pub fn alive(&self) -> bool {
         self.inner().up
     }
 
     pub fn start_thread(&self, settings: &Settings) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        self.inner().threads.insert(id.clone(), Thread { settings: settings.clone(), started: false, restored: false });
+        self.inner().threads.insert(
+            id.clone(),
+            Thread {
+                settings: settings.clone(),
+                started: false,
+                restored: false,
+            },
+        );
         id
     }
 
     pub fn resume_thread(&self, thread_id: &str, settings: &Settings) -> String {
-        self.inner().threads.insert(thread_id.into(), Thread { settings: settings.clone(), started: true, restored: false });
+        self.inner().threads.insert(
+            thread_id.into(),
+            Thread {
+                settings: settings.clone(),
+                started: true,
+                restored: false,
+            },
+        );
         thread_id.into()
     }
 
     /// Whether the thread's saved session was not on this computer, so the CLI began a new one.
     pub fn restored(&self, thread_id: &str) -> bool {
-        self.inner().threads.get(thread_id).is_some_and(|t| t.restored)
+        self.inner()
+            .threads
+            .get(thread_id)
+            .is_some_and(|t| t.restored)
     }
 
     /// A thread this host started, once the CLI's `init` said its session is up (a resumed one counts as up).
     pub fn confirmed(&self, thread_id: &str) -> Option<String> {
-        self.inner().threads.get(thread_id).filter(|t| t.started).map(|_| thread_id.to_string())
+        self.inner()
+            .threads
+            .get(thread_id)
+            .filter(|t| t.started)
+            .map(|_| thread_id.to_string())
     }
 
     fn argv(&self, thread_id: &str, t: &Thread) -> Vec<String> {
-        let model = t.settings.model.clone().filter(|m| !m.is_empty()).unwrap_or_else(|| DEFAULT_MODEL.into());
+        let model = t
+            .settings
+            .model
+            .clone()
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| DEFAULT_MODEL.into());
         let mut argv = self.0.cmd.clone();
         argv.extend(["--model".into(), model]);
         argv.extend(STREAM_ARGS.iter().map(|s| s.to_string()));
-        argv.extend([if t.started { "--resume" } else { "--session-id" }.into(), thread_id.into()]);
+        argv.extend([
+            if t.started {
+                "--resume"
+            } else {
+                "--session-id"
+            }
+            .into(),
+            thread_id.into(),
+        ]);
         // The prompt stays out of the process list: in headless mode -p appends stdin.
         argv.extend(["-p".into(), String::new()]);
         argv
     }
 
     fn env(&self, settings: &Settings) -> Env {
-        let mut env = if settings.env.is_empty() { crate::env::process_environment() } else { settings.env.clone() };
+        let mut env = if settings.env.is_empty() {
+            crate::env::process_environment()
+        } else {
+            settings.env.clone()
+        };
         if env.get("HOME").is_none_or(|h| h.is_empty()) {
             if let Ok(home) = std::env::var("HOME") {
                 env.insert("HOME".into(), home);
             }
         }
         env.insert("GEMINI_CLI_HOME".into(), self.0.home.display().to_string());
-        env.insert("GEMINI_CLI_SYSTEM_SETTINGS_PATH".into(), self.0.home.join("settings.json").display().to_string());
+        env.insert(
+            "GEMINI_CLI_SYSTEM_SETTINGS_PATH".into(),
+            self.0.home.join("settings.json").display().to_string(),
+        );
         env.insert("GEMINI_CLI_TRUST_WORKSPACE".into(), "true".into());
         env
     }
 
-    fn prepare_home(&self, model: &str, effort: Option<&str>, servers: &[Value]) -> std::io::Result<()> {
+    fn prepare_home(
+        &self,
+        model: &str,
+        effort: Option<&str>,
+        servers: &[Value],
+    ) -> std::io::Result<()> {
         use std::io::Write;
         use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
         std::fs::create_dir_all(&self.0.home)?;
         if !std::fs::symlink_metadata(&self.0.home)?.is_dir() {
-            return Err(std::io::Error::other("Gemini home must be a directory, not a symbolic link"));
+            return Err(std::io::Error::other(
+                "Gemini home must be a directory, not a symbolic link",
+            ));
         }
         if crate::isolation::enabled() {
             // Keep existing CLI sessions in place; only this host-state branch is traversable.
             if let Some(parent) = self.0.home.parent() {
                 if !std::fs::symlink_metadata(parent)?.is_dir() {
-                    return Err(std::io::Error::other("Gemini state parent must not be a symbolic link"));
+                    return Err(std::io::Error::other(
+                        "Gemini state parent must not be a symbolic link",
+                    ));
                 }
                 std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o711))?;
             }
@@ -291,10 +385,21 @@ impl GeminiHost {
             std::fs::set_permissions(&self.0.home, std::fs::Permissions::from_mode(0o700))?;
         }
         set_aside_memory(&self.0.home)?;
-        let tmp = self.0.home.join(format!("settings-{}.json", uuid::Uuid::new_v4().simple()));
+        let tmp = self
+            .0
+            .home
+            .join(format!("settings-{}.json", uuid::Uuid::new_v4().simple()));
         let written = (|| {
-            let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
-            f.write_all((serde_json::to_string_pretty(&settings_file(model, effort, servers)).unwrap() + "\n").as_bytes())?;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            f.write_all(
+                (serde_json::to_string_pretty(&settings_file(model, effort, servers)).unwrap()
+                    + "\n")
+                    .as_bytes(),
+            )?;
             crate::isolation::chown_file(&f)?;
             std::fs::rename(&tmp, self.0.home.join("settings.json"))
         })();
@@ -302,12 +407,18 @@ impl GeminiHost {
         written
     }
 
-    fn launch(&self, thread_id: &str, t: &Thread) -> std::io::Result<(Child, crate::run_diagnostics::Stderr)> {
+    fn launch(
+        &self,
+        thread_id: &str,
+        t: &Thread,
+    ) -> std::io::Result<(Child, crate::run_diagnostics::Stderr)> {
         // Drain stderr independently so a noisy harness cannot block its own exit.
         let mut command = self.command(thread_id, t);
         command.stderr(Stdio::piped());
         let mut child = command.spawn()?;
-        let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &t.settings.env);
+        self.0.allocation.mark();
+        let stderr =
+            crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &t.settings.env);
         Ok((child, stderr))
     }
 
@@ -325,7 +436,12 @@ impl GeminiHost {
         command
     }
 
-    pub fn start_turn(&self, thread_id: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
+    pub fn start_turn(
+        &self,
+        thread_id: &str,
+        text: &str,
+        effort: Option<&str>,
+    ) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
         let child = {
             let mut inner = self.inner();
@@ -335,28 +451,64 @@ impl GeminiHost {
             if inner.turn.is_some() {
                 return Err(failed("gemini host already has a turn running"));
             }
-            let t = inner.threads.get(thread_id).cloned().ok_or_else(|| failed(format!("unknown gemini thread {thread_id}")))?;
-            if self.env(&t.settings).get("GEMINI_API_KEY").is_none_or(|k| k.is_empty()) {
+            let t = inner
+                .threads
+                .get(thread_id)
+                .cloned()
+                .ok_or_else(|| failed(format!("unknown gemini thread {thread_id}")))?;
+            if self
+                .env(&t.settings)
+                .get("GEMINI_API_KEY")
+                .is_none_or(|k| k.is_empty())
+            {
                 return Err(failed("Gemini API key is not configured for this bot"));
             }
-            let model = t.settings.model.clone().filter(|m| !m.is_empty()).unwrap_or_else(|| DEFAULT_MODEL.into());
-            self.prepare_home(&model, effort.or(t.settings.effort.as_deref()), &t.settings.mcp_servers)
-                .map_err(|e| failed(format!("could not write the Gemini settings: {e}")))?;
-            let launched = self.launch(thread_id, &t).map_err(|e| failed(format!("could not start gemini: {e}")))?;
+            let model = t
+                .settings
+                .model
+                .clone()
+                .filter(|m| !m.is_empty())
+                .unwrap_or_else(|| DEFAULT_MODEL.into());
+            self.prepare_home(
+                &model,
+                effort.or(t.settings.effort.as_deref()),
+                &t.settings.mcp_servers,
+            )
+            .map_err(|e| failed(format!("could not write the Gemini settings: {e}")))?;
+            let launched = self
+                .launch(thread_id, &t)
+                .map_err(|e| failed(format!("could not start gemini: {e}")))?;
             inner.turn = Some((thread_id.into(), turn.clone()));
             inner.reply.insert(turn.clone(), String::new());
             launched
         };
-        log(&format!("gemini[{}]: turn started pid {}", self.0.bot, child.0.id().map_or("?".into(), |p| p.to_string())));
-        self.emit(event("status", Some(thread_id), None, json!({"state": "active"})));
+        log(&format!(
+            "gemini[{}]: turn started pid {}",
+            self.0.bot,
+            child.0.id().map_or("?".into(), |p| p.to_string())
+        ));
+        self.emit(event(
+            "status",
+            Some(thread_id),
+            None,
+            json!({"state": "active"}),
+        ));
         let host = self.clone();
         let (tid, t2, text) = (thread_id.to_string(), turn.clone(), text.to_string());
-        let reader = tokio::spawn(async move { host.read_loop(child.0, child.1, tid, t2, text).await });
+        let reader =
+            tokio::spawn(async move { host.read_loop(child.0, child.1, tid, t2, text).await });
         self.inner().reader = Some(reader);
         Ok(turn)
     }
 
-    async fn read_loop(&self, mut child: Child, mut stderr: crate::run_diagnostics::Stderr, tid: String, turn: String, text: String) {
+    async fn read_loop(
+        &self,
+        mut child: Child,
+        mut stderr: crate::run_diagnostics::Stderr,
+        tid: String,
+        turn: String,
+        text: String,
+    ) {
         let mut recovered = false;
         loop {
             let stdout = child.stdout.take();
@@ -379,7 +531,9 @@ impl GeminiHost {
             if let Some(stdout) = stdout {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else { continue };
+                    let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else {
+                        continue;
+                    };
                     saw_event = true;
                     if self.on_message(&msg, &tid, &turn) {
                         result = Some(msg);
@@ -413,7 +567,12 @@ impl GeminiHost {
                     child = c;
                     stderr = s;
                     recovered = true;
-                    self.emit(event("diagnostic", Some(&tid), Some(&turn), json!({"text": RESTORING})));
+                    self.emit(event(
+                        "diagnostic",
+                        Some(&tid),
+                        Some(&turn),
+                        json!({"text": RESTORING}),
+                    ));
                     continue;
                 }
             }
@@ -428,9 +587,21 @@ impl GeminiHost {
             return false;
         }
         let tool = || {
-            ["tool_name", "name"].iter().map(|k| &msg[*k]).find(|v| crate::util::truthy(Some(v))).cloned().unwrap_or(json!("tool"))
+            ["tool_name", "name"]
+                .iter()
+                .map(|k| &msg[*k])
+                .find(|v| crate::util::truthy(Some(v)))
+                .cloned()
+                .unwrap_or(json!("tool"))
         };
-        let item = || ["tool_id", "id"].iter().map(|k| &msg[*k]).find(|v| crate::util::truthy(Some(v))).cloned().unwrap_or(Value::Null);
+        let item = || {
+            ["tool_id", "id"]
+                .iter()
+                .map(|k| &msg[*k])
+                .find(|v| crate::util::truthy(Some(v)))
+                .cloned()
+                .unwrap_or(Value::Null)
+        };
         match msg["type"].as_str().unwrap_or_default() {
             "init" => {
                 if let Some(t) = self.inner().threads.get_mut(tid) {
@@ -442,7 +613,9 @@ impl GeminiHost {
             "message" if msg["role"] == "assistant" => {
                 let text = text_of(&msg["content"]);
                 if !text.is_empty() {
-                    let delta = msg.get("delta").is_none_or(|d| crate::util::truthy(Some(d)));
+                    let delta = msg
+                        .get("delta")
+                        .is_none_or(|d| crate::util::truthy(Some(d)));
                     let piece = {
                         let mut inner = self.inner();
                         let new_message = inner.new_message.remove(turn);
@@ -455,19 +628,43 @@ impl GeminiHost {
                         }
                     };
                     if delta {
-                        self.emit(event("delta", Some(tid), Some(turn), json!({"text": piece, "delta_kind": "text"})));
+                        self.emit(event(
+                            "delta",
+                            Some(tid),
+                            Some(turn),
+                            json!({"text": piece, "delta_kind": "text"}),
+                        ));
                     } else {
-                        self.emit(event("message", Some(tid), Some(turn), json!({"text": text, "final": false})));
+                        self.emit(event(
+                            "message",
+                            Some(tid),
+                            Some(turn),
+                            json!({"text": text, "final": false}),
+                        ));
                     }
                 }
             }
             "tool_use" => {
                 self.inner().new_message.insert(turn.into());
-                self.emit(event("tool", Some(tid), Some(turn), json!({"server": "", "tool": tool(), "status": "started", "item_id": item()})));
+                self.emit(event(
+                    "tool",
+                    Some(tid),
+                    Some(turn),
+                    json!({"server": "", "tool": tool(), "status": "started", "item_id": item()}),
+                ));
             }
             "tool_result" => {
-                let status = if msg["status"] == "error" { "failed" } else { "completed" };
-                self.emit(event("tool", Some(tid), Some(turn), json!({"server": "", "tool": tool(), "status": status, "item_id": item()})));
+                let status = if msg["status"] == "error" {
+                    "failed"
+                } else {
+                    "completed"
+                };
+                self.emit(event(
+                    "tool",
+                    Some(tid),
+                    Some(turn),
+                    json!({"server": "", "tool": tool(), "status": status, "item_id": item()}),
+                ));
             }
             "result" => return true,
             _ => {}
@@ -487,12 +684,24 @@ impl GeminiHost {
             if !inner.done_turns.insert(turn.into()) {
                 return;
             }
-            let requested = inner.threads.get(tid).and_then(|t| t.settings.model.clone()).filter(|m| !m.is_empty()).unwrap_or_else(|| DEFAULT_MODEL.into());
+            let requested = inner
+                .threads
+                .get(tid)
+                .and_then(|t| t.settings.model.clone())
+                .filter(|m| !m.is_empty())
+                .unwrap_or_else(|| DEFAULT_MODEL.into());
             (inner.interrupted.contains(turn), reply, requested)
         };
         let result = result.filter(|r| r.is_object());
-        let stats = result.as_ref().map(|r| r["stats"].clone()).filter(|s| s.is_object()).unwrap_or(json!({}));
-        let mut actual: Vec<String> = stats["models"].as_object().map(|m| m.keys().cloned().collect()).unwrap_or_default();
+        let stats = result
+            .as_ref()
+            .map(|r| r["stats"].clone())
+            .filter(|s| s.is_object())
+            .unwrap_or(json!({}));
+        let mut actual: Vec<String> = stats["models"]
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
         actual.sort();
         let mismatch = !actual.is_empty() && !actual.contains(&requested);
         if result.is_some() {
@@ -503,16 +712,47 @@ impl GeminiHost {
             }
         }
         if interrupted {
-            self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "interrupted"})));
-        } else if result.as_ref().is_some_and(|r| r["status"] == "success") && rc == 0 && !mismatch {
+            self.emit(event(
+                "turn_completed",
+                Some(tid),
+                Some(turn),
+                json!({"status": "interrupted"}),
+            ));
+        } else if result.as_ref().is_some_and(|r| r["status"] == "success") && rc == 0 && !mismatch
+        {
             if !reply.is_empty() {
-                self.emit(event("message", Some(tid), Some(turn), json!({"text": reply, "final": true})));
+                self.emit(event(
+                    "message",
+                    Some(tid),
+                    Some(turn),
+                    json!({"text": reply, "final": true}),
+                ));
             }
-            self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "completed"})));
+            self.emit(event(
+                "turn_completed",
+                Some(tid),
+                Some(turn),
+                json!({"status": "completed"}),
+            ));
         } else {
-            let error = if mismatch { format!("Gemini CLI used {} instead of {requested}", actual.join(", ")) } else { error_text(result.as_ref(), rc, stderr) };
-            let mut failure = event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": is_limit(&error)}));
-            if rc < 0 || result.is_none() && rc != 0 { failure["exit_code"] = json!(rc); failure["process_exit"] = json!(true); }
+            let error = if mismatch {
+                format!(
+                    "Gemini CLI used {} instead of {requested}",
+                    actual.join(", ")
+                )
+            } else {
+                error_text(result.as_ref(), rc, stderr)
+            };
+            let mut failure = event(
+                "turn_failed",
+                Some(tid),
+                Some(turn),
+                json!({"error": error, "limit": is_limit(&error)}),
+            );
+            if rc < 0 || result.is_none() && rc != 0 {
+                failure["exit_code"] = json!(rc);
+                failure["process_exit"] = json!(true);
+            }
             self.emit(failure);
         }
         self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
@@ -530,12 +770,19 @@ impl GeminiHost {
     }
 }
 
-fn stderr_tail(file: &mut crate::run_diagnostics::Stderr) -> String { file.tail() }
+fn stderr_tail(file: &mut crate::run_diagnostics::Stderr) -> String {
+    file.tail()
+}
 
 pub fn error_text(result: Option<&Value>, rc: i32, stderr: &str) -> String {
     if let Some(r) = result {
         let error = match &r["error"] {
-            Value::Object(e) => [e.get("message"), e.get("type")].into_iter().flatten().find(|v| crate::util::truthy(Some(v))).cloned().unwrap_or(Value::Null),
+            Value::Object(e) => [e.get("message"), e.get("type")]
+                .into_iter()
+                .flatten()
+                .find(|v| crate::util::truthy(Some(v)))
+                .cloned()
+                .unwrap_or(Value::Null),
             other => other.clone(),
         };
         if crate::util::truthy(Some(&error)) {
@@ -558,21 +805,43 @@ mod tests {
 
     #[tokio::test]
     async fn turn_launch_keeps_the_bot_identity_and_existing_cli_state() {
-        if !super::super::isolationtests::child("hosts::gemini::tests::turn_launch_keeps_the_bot_identity_and_existing_cli_state") { return; }
+        if !super::super::isolationtests::child(
+            "hosts::gemini::tests::turn_launch_keeps_the_bot_identity_and_existing_cli_state",
+        ) {
+            return;
+        }
         let f = super::super::isolationtests::Fixture::new();
         let home = f.root.join("gemini/acme");
         let host = GeminiHost::new("acme", &home, f.argv(), mpsc::unbounded_channel().0);
-        let thread = Thread { settings: f.settings(), started: true, restored: false };
-        super::super::isolationtests::prefix(&host.command("thread", &thread), &host.argv("thread", &thread));
-        if !f.actual() { return; }
+        let thread = Thread {
+            settings: f.settings(),
+            started: true,
+            restored: false,
+        };
+        super::super::isolationtests::prefix(
+            &host.command("thread", &thread),
+            &host.argv("thread", &thread),
+        );
+        if !f.actual() {
+            return;
+        }
         std::fs::create_dir_all(home.join(".gemini")).unwrap();
         let session = home.join(".gemini/session.json");
         std::fs::write(&session, "saved CLI session").unwrap();
         std::os::unix::fs::symlink(&f.private, home.join("private-link")).unwrap();
         host.prepare_home(DEFAULT_MODEL, None, &[]).unwrap();
-        f.run(host.command("thread", &thread), &[&session, &home.join("settings.json")], &[&session]).await;
+        f.run(
+            host.command("thread", &thread),
+            &[&session, &home.join("settings.json")],
+            &[&session],
+        )
+        .await;
         use std::os::unix::fs::MetadataExt;
-        assert_eq!(home.parent().unwrap().metadata().unwrap().uid(), 0, "parent stays with supervisor");
+        assert_eq!(
+            home.parent().unwrap().metadata().unwrap().uid(),
+            0,
+            "parent stays with supervisor"
+        );
     }
 
     /// A `gemini` that logs its argv, then plays `$FIXTURE` once stdin closes, or, for a `--resume` of a session
@@ -588,10 +857,15 @@ mod tests {
 
     async fn turn_events(rx: &mut mpsc::UnboundedReceiver<Value>) -> Vec<Value> {
         let mut got = vec![];
-        while let Ok(Some(mut ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
-            if ev.get("stderr_tail").is_some() { continue; }
+        while let Ok(Some(mut ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await
+        {
+            if ev.get("stderr_tail").is_some() {
+                continue;
+            }
             let idle = ev["kind"] == "status" && ev["state"] == "idle";
-            ev.as_object_mut().unwrap().retain(|k, _| k != "thread_id" && k != "turn_id");
+            ev.as_object_mut()
+                .unwrap()
+                .retain(|k, _| k != "thread_id" && k != "turn_id");
             got.push(ev);
             if idle {
                 break;
@@ -601,8 +875,18 @@ mod tests {
     }
 
     fn settings(dir: &Path, fixture: &Path) -> Settings {
-        let mut s = Settings { cwd: dir.display().to_string(), model: Some("gemini-3.8-flash".into()), effort: Some("low".into()), ..Default::default() };
-        for (k, v) in [("PATH", "/usr/bin:/bin".to_string()), ("GEMINI_API_KEY", "test-key".into()), ("ARGS_LOG", dir.join("args.log").display().to_string()), ("FIXTURE", fixture.display().to_string())] {
+        let mut s = Settings {
+            cwd: dir.display().to_string(),
+            model: Some("gemini-3.8-flash".into()),
+            effort: Some("low".into()),
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("PATH", "/usr/bin:/bin".to_string()),
+            ("GEMINI_API_KEY", "test-key".into()),
+            ("ARGS_LOG", dir.join("args.log").display().to_string()),
+            ("FIXTURE", fixture.display().to_string()),
+        ] {
             s.env.insert(k.into(), v);
         }
         s
@@ -610,7 +894,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_new_thread_is_confirmed_only_by_the_clis_init() {
-        let dir = std::env::temp_dir().join(format!("gemini-confirm-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("gemini-confirm-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let cmd = fake_gemini(&dir);
         let turn = crate::hosts::fixtures::dir("gemini").join("turn.jsonl");
@@ -621,8 +906,17 @@ mod tests {
             host.start();
             let thread = host.start_thread(&settings(&dir, &fixture));
             host.start_turn(&thread, "hello", None).unwrap();
-            let confirmed = turn_events(&mut rx).await.iter().filter(|e| e["kind"] == "thread_confirmed").count();
-            assert_eq!((confirmed, host.confirmed(&thread).is_some()), (up as usize, up), "{}", fixture.display());
+            let confirmed = turn_events(&mut rx)
+                .await
+                .iter()
+                .filter(|e| e["kind"] == "thread_confirmed")
+                .count();
+            assert_eq!(
+                (confirmed, host.confirmed(&thread).is_some()),
+                (up as usize, up),
+                "{}",
+                fixture.display()
+            );
             host.stop().await;
         }
         std::fs::remove_dir_all(dir).unwrap();
@@ -630,7 +924,8 @@ mod tests {
 
     #[tokio::test]
     async fn every_gemini_fixture_gives_the_python_hosts_events() {
-        let dir = std::env::temp_dir().join(format!("fake-gemini-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("fake-gemini-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let cmd = fake_gemini(&dir);
         for (path, expected) in crate::hosts::fixtures::cases("gemini") {
@@ -642,58 +937,108 @@ mod tests {
             assert_eq!(turn_events(&mut rx).await, expected, "{}", path.display());
             host.stop().await;
         }
-        let written: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("home/settings.json")).unwrap()).unwrap();
+        let written: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("home/settings.json")).unwrap())
+                .unwrap();
         assert_eq!(written, settings_file("gemini-3.8-flash", Some("low"), &[]));
-        assert_eq!(written["tools"]["exclude"], json!(["save_memory"]), "no GEMINI.md memory in the host's home");
-        let declared = [json!({"name": "linear", "transport": "http", "url": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_KEY}"}})];
-        assert_eq!(settings_file("m", None, &declared)["mcpServers"], json!({"linear": {"httpUrl": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_KEY}"}}}));
-        assert_eq!(std::fs::read_to_string(dir.join("args.log.prompt")).unwrap(), "hello");
+        assert_eq!(
+            written["tools"]["exclude"],
+            json!(["save_memory"]),
+            "no GEMINI.md memory in the host's home"
+        );
+        let declared = [
+            json!({"name": "linear", "transport": "http", "url": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_KEY}"}}),
+        ];
+        assert_eq!(
+            settings_file("m", None, &declared)["mcpServers"],
+            json!({"linear": {"httpUrl": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_KEY}"}}})
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("args.log.prompt")).unwrap(),
+            "hello"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn a_saved_gemini_memory_never_reaches_a_turn() {
-        let dir = std::env::temp_dir().join(format!("fake-gemini-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("fake-gemini-{}", uuid::Uuid::new_v4().simple()));
         let home = dir.join("home");
         std::fs::create_dir_all(home.join(".gemini")).unwrap();
-        std::fs::write(home.join(".gemini/GEMINI.md"), "## Gemini Added Memories\n- SENTINEL-OLD\n").unwrap();
-        std::fs::write(home.join(".gemini").join(MEMORY_UNREAD), "- SENTINEL-OLDER\n").unwrap();
+        std::fs::write(
+            home.join(".gemini/GEMINI.md"),
+            "## Gemini Added Memories\n- SENTINEL-OLD\n",
+        )
+        .unwrap();
+        std::fs::write(
+            home.join(".gemini").join(MEMORY_UNREAD),
+            "- SENTINEL-OLDER\n",
+        )
+        .unwrap();
         // The fake CLI copies the global memory it would load into the turn into a log, then plays a turn.
         let path = dir.join("gemini");
         crate::util::write_script(&path, "#!/bin/sh\ncat \"$GEMINI_CLI_HOME/.gemini/GEMINI.md\" >> \"$ARGS_LOG.loaded\" 2>/dev/null\ncat >/dev/null\ncat \"$FIXTURE\"\n");
         let (tx, mut rx) = mpsc::unbounded_channel();
         let host = GeminiHost::new("acme", &home, vec![path.display().to_string()], tx);
         host.start();
-        let thread = host.start_thread(&settings(&dir, &crate::hosts::fixtures::dir("gemini").join("turn.jsonl")));
+        let thread = host.start_thread(&settings(
+            &dir,
+            &crate::hosts::fixtures::dir("gemini").join("turn.jsonl"),
+        ));
         host.start_turn(&thread, "hello", None).unwrap();
-        assert!(turn_events(&mut rx).await.iter().any(|e| e["kind"] == "turn_completed"), "the turn ran");
+        assert!(
+            turn_events(&mut rx)
+                .await
+                .iter()
+                .any(|e| e["kind"] == "turn_completed"),
+            "the turn ran"
+        );
         host.stop().await;
-        assert!(!std::fs::read_to_string(dir.join("args.log.loaded")).unwrap_or_default().contains("SENTINEL"));
+        assert!(!std::fs::read_to_string(dir.join("args.log.loaded"))
+            .unwrap_or_default()
+            .contains("SENTINEL"));
         assert!(!home.join(".gemini/GEMINI.md").exists());
         let unread = std::fs::read_to_string(home.join(".gemini").join(MEMORY_UNREAD)).unwrap();
-        assert!(unread.contains("SENTINEL-OLDER") && unread.contains("SENTINEL-OLD\n"), "kept, unread: {unread}");
+        assert!(
+            unread.contains("SENTINEL-OLDER") && unread.contains("SENTINEL-OLD\n"),
+            "kept, unread: {unread}"
+        );
         // A second turn that finds the same GEMINI.md (two first turns at once) sets nothing aside twice.
-        std::fs::write(home.join(".gemini/GEMINI.md"), "## Gemini Added Memories\n- SENTINEL-OLD\n").unwrap();
+        std::fs::write(
+            home.join(".gemini/GEMINI.md"),
+            "## Gemini Added Memories\n- SENTINEL-OLD\n",
+        )
+        .unwrap();
         set_aside_memory(&home).unwrap();
-        assert_eq!(std::fs::read_to_string(home.join(".gemini").join(MEMORY_UNREAD)).unwrap(), unread);
+        assert_eq!(
+            std::fs::read_to_string(home.join(".gemini").join(MEMORY_UNREAD)).unwrap(),
+            unread
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn a_missing_saved_session_restarts_once_as_a_new_one() {
-        let dir = std::env::temp_dir().join(format!("fake-gemini-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("fake-gemini-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let cmd = fake_gemini(&dir);
         let (tx, mut rx) = mpsc::unbounded_channel();
         let host = GeminiHost::new("acme", &dir.join("home"), vec![cmd], tx);
         host.start();
-        let mut s = settings(&dir, &crate::hosts::fixtures::dir("gemini").join("turn.jsonl"));
+        let mut s = settings(
+            &dir,
+            &crate::hosts::fixtures::dir("gemini").join("turn.jsonl"),
+        );
         s.env.insert("GONE".into(), "lost-session".into());
         let thread = host.resume_thread("lost-session", &s);
         host.start_turn(&thread, "hello", Some("medium")).unwrap();
         let events = turn_events(&mut rx).await;
         assert_eq!(events[1], json!({"kind": "diagnostic", "text": RESTORING}));
-        assert!(events.iter().any(|e| e["kind"] == "turn_completed" && e["status"] == "completed"));
+        assert!(events
+            .iter()
+            .any(|e| e["kind"] == "turn_completed" && e["status"] == "completed"));
         let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
         let runs: Vec<&str> = args.lines().collect();
         assert_eq!(runs[0], "--model gemini-3.8-flash --output-format stream-json --approval-mode yolo --skip-trust --resume lost-session -p ");
@@ -705,28 +1050,44 @@ mod tests {
         bare.start();
         s.env.remove("GEMINI_API_KEY");
         let thread = bare.start_thread(&s);
-        assert_eq!(bare.start_turn(&thread, "x", None).unwrap_err().to_string(), "Gemini API key is not configured for this bot");
+        assert_eq!(
+            bare.start_turn(&thread, "x", None).unwrap_err().to_string(),
+            "Gemini API key is not configured for this bot"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn a_capacity_continuation_with_a_missing_gemini_session_never_restarts() {
-        let dir = std::env::temp_dir().join(format!("fake-gemini-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("fake-gemini-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let cmd = fake_gemini(&dir);
         let (tx, mut rx) = mpsc::unbounded_channel();
         let host = GeminiHost::new("acme", &dir.join("home"), vec![cmd], tx);
         host.start();
-        let mut s = settings(&dir, &crate::hosts::fixtures::dir("gemini").join("turn.jsonl"));
+        let mut s = settings(
+            &dir,
+            &crate::hosts::fixtures::dir("gemini").join("turn.jsonl"),
+        );
         s.require_existing_session = true;
         s.env.insert("GONE".into(), "lost-session".into());
         let thread = host.resume_thread("lost-session", &s);
         host.start_turn(&thread, "continue", None).unwrap();
         let events = turn_events(&mut rx).await;
-        assert!(events.iter().any(|e| e["kind"] == "turn_failed" && e["process_exit"] == true && e["exit_code"] == 1), "{events:?}");
+        assert!(
+            events.iter().any(|e| e["kind"] == "turn_failed"
+                && e["process_exit"] == true
+                && e["exit_code"] == 1),
+            "{events:?}"
+        );
         assert!(!host.restored(&thread));
         let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
-        assert_eq!(args.lines().count(), 1, "a missing continuation must not launch a second session: {args}");
+        assert_eq!(
+            args.lines().count(),
+            1,
+            "a missing continuation must not launch a second session: {args}"
+        );
         assert!(args.contains("--resume lost-session"));
         host.stop().await;
         std::fs::remove_dir_all(dir).unwrap();
@@ -734,13 +1095,33 @@ mod tests {
 
     #[test]
     fn efforts_usage_and_errors_follow_the_python_host() {
-        assert_eq!((effort_for(Some(" Low ")), effort_for(None), effort_for(Some("xhigh"))), ("LOW", "HIGH", "HIGH"));
-        assert_eq!(usage_tokens(&json!({"input_tokens": "12", "output_tokens": 3})), (12, 3, 15));
-        assert_eq!(error_text(Some(&json!({"error": {"type": "quota"}})), 1, "x"), "quota");
-        assert_eq!(error_text(Some(&json!({"status": "error"})), 1, ""), "error");
+        assert_eq!(
+            (
+                effort_for(Some(" Low ")),
+                effort_for(None),
+                effort_for(Some("xhigh"))
+            ),
+            ("LOW", "HIGH", "HIGH")
+        );
+        assert_eq!(
+            usage_tokens(&json!({"input_tokens": "12", "output_tokens": 3})),
+            (12, 3, 15)
+        );
+        assert_eq!(
+            error_text(Some(&json!({"error": {"type": "quota"}})), 1, "x"),
+            "quota"
+        );
+        assert_eq!(
+            error_text(Some(&json!({"status": "error"})), 1, ""),
+            "error"
+        );
         assert_eq!(error_text(None, 2, ""), "gemini exited 2");
         assert!(uses_gemini_cli(&json!({"runtime": "gemini"})));
-        assert!(!uses_gemini_cli(&json!({"runtime": "gemini", "harness": "antigravity"})));
-        assert!(uses_gemini_cli(&json!({"runtime": "gemini", "harness": "antigravity", "fallback": {"harness": "gemini"}})));
+        assert!(!uses_gemini_cli(
+            &json!({"runtime": "gemini", "harness": "antigravity"})
+        ));
+        assert!(uses_gemini_cli(
+            &json!({"runtime": "gemini", "harness": "antigravity", "fallback": {"harness": "gemini"}})
+        ));
     }
 }

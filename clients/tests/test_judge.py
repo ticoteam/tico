@@ -4,6 +4,7 @@ No network. The direct transport is exercised through its `opener` seam with a f
 response; the hub transport through a fake client. The question sets in `questions/` are
 loaded for real, because a set that does not load is a broken release.
 """
+
 import io
 import json
 import unittest
@@ -15,8 +16,11 @@ from clients import judge as J
 ROOT = Path(__file__).resolve().parents[2]
 
 QUESTIONS = {
-    "bucket": {"type": "choice", "instructions": "Where does it go?",
-               "criteria": {"archive": "noise", "reply": "answer it"}},
+    "bucket": {
+        "type": "choice",
+        "instructions": "Where does it go?",
+        "criteria": {"archive": "noise", "reply": "answer it"},
+    },
     "urgency": {"type": "score", "instructions": "How soon?", "criteria": ["never", "today"]},
     "is_ask": {"type": "noul", "instructions": "Is someone asking for something?"},
 }
@@ -63,6 +67,7 @@ class Sets(unittest.TestCase):
     def test_registry_overrides_are_validated_and_explicit_roots_stay_authoritative(self):
         import os, tempfile
         from unittest import mock
+
         with tempfile.TemporaryDirectory() as registry:
             directory = Path(registry) / "questions"
             directory.mkdir()
@@ -82,10 +87,23 @@ class Sets(unittest.TestCase):
                 self.assertEqual(bad.exception.code, "invalid")
                 path.unlink()
                 self.assertEqual(J.load_set(name, registry_dir=registry)["label"], original["label"])
-            base = {"id": "listening-item", "version": 1, "summary": "fixture",
-                    "questions": {"lead": {"type": "noul", "instructions": "A lead"}}}
-            for invalid in ([], {**base, "questions": []}, {**base, "state": 3}, {**base, "questions": {
-                    "lead": {"type": "choice", "dynamic": True, "instructions": "A lead", "criteria": []}}}):
+            base = {
+                "id": "listening-item",
+                "version": 1,
+                "summary": "fixture",
+                "questions": {"lead": {"type": "noul", "instructions": "A lead"}},
+            }
+            for invalid in (
+                [],
+                {**base, "questions": []},
+                {**base, "state": 3},
+                {
+                    **base,
+                    "questions": {
+                        "lead": {"type": "choice", "dynamic": True, "instructions": "A lead", "criteria": []}
+                    },
+                },
+            ):
                 (directory / "listening-item.json").write_text(json.dumps(invalid))
                 with self.assertRaises(J.JudgeError):
                     J.load_set("listening-item", registry_dir=registry)
@@ -93,6 +111,7 @@ class Sets(unittest.TestCase):
     def test_registry_symlinks_and_nonfiles_never_read_outside_or_fall_back(self):
         import os, tempfile
         from unittest import mock
+
         cases = ("file-link", "registry-link", "invalid-json")
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
@@ -104,8 +123,12 @@ class Sets(unittest.TestCase):
                 outside.mkdir()
                 (outside / "questions").mkdir()
                 secret = "outside-question-content-must-not-be-read"
-                data = {"id": "listening-item", "version": 99, "summary": secret,
-                        "questions": {"lead": {"type": "noul", "instructions": secret}}}
+                data = {
+                    "id": "listening-item",
+                    "version": 99,
+                    "summary": secret,
+                    "questions": {"lead": {"type": "noul", "instructions": secret}},
+                }
                 victim = outside / "questions/listening-item.json"
                 victim.write_text(json.dumps(data))
                 path = questions / "listening-item.json"
@@ -154,12 +177,16 @@ class Sets(unittest.TestCase):
                     with self.assertRaises(J.JudgeError) as refused:
                         J.load_set("listening-item", registry_dir=registry)
                 self.assertEqual(refused.exception.code, "invalid")
-                self.assertEqual(refused.exception.detail, "Invalid registry question set. Use a regular, valid JSON file in registry/questions.")
+                self.assertEqual(
+                    refused.exception.detail,
+                    "Invalid registry question set. Use a regular, valid JSON file in registry/questions.",
+                )
                 self.assertNotIn(secret, str(refused.exception))
 
     def test_registry_file_swap_to_an_outside_symlink_is_refused(self):
         import os, tempfile
         from unittest import mock
+
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             questions = root / "registry/questions"

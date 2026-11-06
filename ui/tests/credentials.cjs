@@ -1,4 +1,4 @@
-// Credentials in Library › Tools: an owner (or credential admin) adds a credential from the page's header, finds it on
+// Credentials in Tools › Keys: an owner (or credential admin) adds a credential from the page's header, finds it on
 // the tool whose variable it fills, and grants it to a bot. The secret is sent once, in the create request, and is
 // never shown again (only its preview); a member with no vault access never reads the vault and has nothing to add.
 // The old Credentials address lands here. Fixtures only, no network.
@@ -58,7 +58,7 @@ async function open(browser, me, vault) {
     {
       const {page, seen} = await open(browser, {id: 'ana', name: 'Ana', role: 'owner', cloud: true, credential_access: true}, vault);
       await page.goto('https://tico-ui.test/#/credentials');
-      await page.waitForFunction(() => location.hash === '#/library/tools/jira');
+      await page.waitForFunction(() => location.hash === '#/tools/keys/jira');
       await page.locator('#int-detail h1').filter({hasText: 'Jira'}).waitFor();
       // The tool names a variable the vault does not hold yet.
       await page.locator('.lc-creds [data-lc-add-env="JIRA_BASIC_AUTH"]').waitFor();
@@ -96,7 +96,7 @@ async function open(browser, me, vault) {
     {
       // No vault access: nothing to add, and the vault is not even read.
       const {page, seen} = await open(browser, {id: 'cara', name: 'Cara', role: 'human', cloud: true, credential_access: false}, vault);
-      await page.goto('https://tico-ui.test/#/integrations');
+      await page.goto('https://tico-ui.test/#/tools/keys');
       await page.locator('#int-detail h1').filter({hasText: 'Jira'}).waitFor();
       assert.equal(await page.locator('.lc-add button, [data-lc-add-env], [data-vault-share]').count(), 0);
       assert.equal(seen.reads, 0, 'the vault is not even read');

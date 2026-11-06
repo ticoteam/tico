@@ -27,15 +27,23 @@ TTL_S = 30 * 60
 MOST = 20
 EVENT = "goal.read_back"
 SAVED = "goal.read_back_save"
-NEW = "{new}"                 # a step's goal is the one the change's first step created
+NEW = "{new}"  # a step's goal is the one the change's first step created
 CLOSING_ONE = "Reply yes to save exactly this; any other reply saves nothing."
 CLOSING_MANY = "You can also say yes to some by number (like “yes to 1 and 3”).\n" + CLOSING_ONE
 
 # The routes a yes to a read-back saves through. Everything else on Goals stays a click or a card.
-_SAVING = [re.compile(p) for p in (
-    r"/api/v2/goals", r"/api/v2/goals/(?!refresh$|read-back$)[^/]+", r"/api/v2/goals/[^/]+/why",
-    r"/api/v2/goals/[^/]+/kpis", r"/api/v2/goals/[^/]+/kpis/[^/]+", r"/api/v2/goals/[^/]+/kpis/[^/]+/unlink",
-    r"/api/v2/goal-proposals/[^/]+/decide")]
+_SAVING = [
+    re.compile(p)
+    for p in (
+        r"/api/v2/goals",
+        r"/api/v2/goals/(?!refresh$|read-back$)[^/]+",
+        r"/api/v2/goals/[^/]+/why",
+        r"/api/v2/goals/[^/]+/kpis",
+        r"/api/v2/goals/[^/]+/kpis/[^/]+",
+        r"/api/v2/goals/[^/]+/kpis/[^/]+/unlink",
+        r"/api/v2/goal-proposals/[^/]+/decide",
+    )
+]
 
 # What stays the owner's click, in the one sentence the Strategy Bot passes on (criterion 12).
 CLICK = {
@@ -47,14 +55,41 @@ CLICK = {
     "strategy": "Strategy drafts and bets stay your click on the Strategy page, so I left it out.",
     "recovery": "A recovery suggestion stays your click on its card, so I left it out.",
 }
-_CLICK_KINDS = {"colour": "colour", "color": "colour", "status": "status", "done": "status", "dropped": "status",
-                "drop": "status", "reopen": "status", "archive": "archive", "kpi_archive": "archive",
-                "delete": "archive", "restore": "archive", "reading": "reading", "readings": "reading",
-                "kpi_reading": "reading", "log": "reading", "vision": "vision", "company": "vision",
-                "description": "vision", "strategy": "strategy", "bet": "strategy"}
-_CLICK_FIELDS = {"colour": "colour", "color": "colour", "status": "status", "done": "status", "dropped": "status",
-                 "archived": "archive", "archive": "archive", "value": "reading", "reading": "reading",
-                 "readings": "reading", "vision": "vision"}
+_CLICK_KINDS = {
+    "colour": "colour",
+    "color": "colour",
+    "status": "status",
+    "done": "status",
+    "dropped": "status",
+    "drop": "status",
+    "reopen": "status",
+    "archive": "archive",
+    "kpi_archive": "archive",
+    "delete": "archive",
+    "restore": "archive",
+    "reading": "reading",
+    "readings": "reading",
+    "kpi_reading": "reading",
+    "log": "reading",
+    "vision": "vision",
+    "company": "vision",
+    "description": "vision",
+    "strategy": "strategy",
+    "bet": "strategy",
+}
+_CLICK_FIELDS = {
+    "colour": "colour",
+    "color": "colour",
+    "status": "status",
+    "done": "status",
+    "dropped": "status",
+    "archived": "archive",
+    "archive": "archive",
+    "value": "reading",
+    "reading": "reading",
+    "readings": "reading",
+    "vision": "vision",
+}
 KINDS = ("goal_create", "goal_update", "measure_add", "target_set", "measure_remove", "suggestion")
 GOAL_FIELDS = ("title", "owner", "parent_id", "bet_id", "why")
 MEASURE_FIELDS = ("kpi_id", "name", "definition", "unit", "direction", "cadence", "source_note", "owner")
@@ -76,8 +111,14 @@ def turns_down(method, path):
 def strategy_turn(who):
     """The owner's Assistant's turn in their own chat (backend/auth.py assistant_principal, the only identity `via`
     assistant): the owner's rights, via their Assistant, not a click."""
-    return bool(who.via == "assistant" and not who.confirmed and who.attempt_id and who.role == "owner"
-                and str(who.task_actor or "").startswith("bot:") and who.task_actor != "bot:" + strategy_bot.SLUG)
+    return bool(
+        who.via == "assistant"
+        and not who.confirmed
+        and who.attempt_id
+        and who.role == "owner"
+        and str(who.task_actor or "").startswith("bot:")
+        and who.task_actor != "bot:" + strategy_bot.SLUG
+    )
 
 
 def active():
@@ -94,11 +135,17 @@ _TAIL = r"[\s,.!]*(?:please|thanks|thank you)?[\s.!]*"
 _N = r"#?\d{1,2}"
 _NUMS = rf"{_N}(?:\s*(?:,\s*and|,|&|\+|and)\s*{_N})*"
 PLAIN = re.compile(rf"{_YES}(?:\s+to\s+(?:all|both))?{_TAIL}", re.I)
-SOME = re.compile(rf"{_YES}[\s,:]*(?:to\s+)?(?:numbers?\s+)?(?P<yes>{_NUMS})"
-                  rf"(?:\s*[,;.]?\s*(?:and\s+|but\s+)?(?:no|not)\s+(?:to\s+)?(?P<no>{_NUMS}))?{_TAIL}", re.I)
-EXCEPT = re.compile(rf"{_YES}(?:\s+to\s+all\s+but|(?:\s+to\s+all)?[\s,]*"
-                    rf"(?:except(?:\s+for)?|but\s+not|apart\s+from|other\s+than))\s+(?:numbers?\s+)?(?P<no>{_NUMS})"
-                    rf"{_TAIL}", re.I)
+SOME = re.compile(
+    rf"{_YES}[\s,:]*(?:to\s+)?(?:numbers?\s+)?(?P<yes>{_NUMS})"
+    rf"(?:\s*[,;.]?\s*(?:and\s+|but\s+)?(?:no|not)\s+(?:to\s+)?(?P<no>{_NUMS}))?{_TAIL}",
+    re.I,
+)
+EXCEPT = re.compile(
+    rf"{_YES}(?:\s+to\s+all\s+but|(?:\s+to\s+all)?[\s,]*"
+    rf"(?:except(?:\s+for)?|but\s+not|apart\s+from|other\s+than))\s+(?:numbers?\s+)?(?P<no>{_NUMS})"
+    rf"{_TAIL}",
+    re.I,
+)
 
 
 def agreed(words, count):
@@ -123,15 +170,20 @@ def agreed(words, count):
 
 
 def not_agreed(detail):
-    return Problem("not_agreed", detail + "; nothing was saved. Read it back again (`hub goal read-back`) and save on "
-                   "the owner's yes", 403)
+    return Problem(
+        "not_agreed",
+        detail + "; nothing was saved. Read it back again (`hub goal read-back`) and save on the owner's yes",
+        403,
+    )
 
 
 def stored(c, message_id):
     """The read-back stored with this message: {id, created, changes}, or None."""
-    row = c.execute("SELECT m.id, m.created_at, m.sender_id, m.conversation_id, e.detail FROM messages m "
-                    "JOIN events e ON e.target=m.id AND e.action=? WHERE m.id=? AND m.deleted_at IS NULL",
-                    (EVENT, message_id)).fetchone()
+    row = c.execute(
+        "SELECT m.id, m.created_at, m.sender_id, m.conversation_id, e.detail FROM messages m "
+        "JOIN events e ON e.target=m.id AND e.action=? WHERE m.id=? AND m.deleted_at IS NULL",
+        (EVENT, message_id),
+    ).fetchone()
     if not row:
         return None
     changes = (H._json(row["detail"], {}) or {}).get("changes") or []
@@ -139,8 +191,12 @@ def stored(c, message_id):
     # Require a fresh draft rather than show or save an unverifiable read-back.
     if any("read_owners" not in change for change in changes):
         raise not_agreed("This read-back predates its access checks")
-    return {"id": row["id"], "created_at": row["created_at"], "conversation_id": row["conversation_id"],
-            "changes": changes}
+    return {
+        "id": row["id"],
+        "created_at": row["created_at"],
+        "conversation_id": row["conversation_id"],
+        "changes": changes,
+    }
 
 
 def saves(c, back_id):
@@ -158,14 +214,22 @@ def answered(c, who, cited):
     read-back no more than 30 minutes old."""
     msg = H.message(c, cited) or {}
     room, at = msg.get("conversation_id"), str(msg.get("created_at") or "")
-    before = c.execute("SELECT id FROM messages WHERE conversation_id=? AND id<>? AND created_at<=? AND deleted_at IS NULL "
-                       "ORDER BY created_at DESC, rowid DESC LIMIT 1", (room, cited, at)).fetchone()
+    before = c.execute(
+        "SELECT id FROM messages WHERE conversation_id=? AND id<>? AND created_at<=? AND deleted_at IS NULL "
+        "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (room, cited, at),
+    ).fetchone()
     back = stored(c, before["id"]) if before else None
     if not back or H.message(c, back["id"])["sender_id"] != who.task_actor:
-        raise not_agreed("The owner's message is not a reply to a goal read-back (anything said after the read-back "
-                         "takes the yes back)")
-    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? AND id<>? "
-                      "AND deleted_at IS NULL LIMIT 1", (room, who.actor, at, cited)).fetchone()
+        raise not_agreed(
+            "The owner's message is not a reply to a goal read-back (anything said after the read-back "
+            "takes the yes back)"
+        )
+    later = c.execute(
+        "SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? AND id<>? "
+        "AND deleted_at IS NULL LIMIT 1",
+        (room, who.actor, at, cited),
+    ).fetchone()
     if later:
         raise not_agreed("The owner wrote again after their yes")
     if str(back["created_at"]) < H.shift(H.now(), seconds=-TTL_S):
@@ -180,10 +244,16 @@ def answered(c, who, cited):
 # yes. The cited message must open with a no; its words are the reason, unless they said only no.
 # A Why is left out: proposing one replaces the Strategy Bot's Why still waiting, which a "no" must not reject.
 TURN_DOWN_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag")
-_NO_OPENING = re.compile(r"\s*(?:no|nope|nah|not (?:that|this|now|one)|leave (?:it|that|this)|skip (?:it|that|this)|"
-                         r"don'?t|do not)\b", re.I)
-_BARE_NO = re.compile(r"[\s,.!]*(?:no|nope|nah|no thanks|no thank you|leave it|leave that|skip it|skip that|not now|"
-                      r"not that|don'?t|do not)[\s,.!]*", re.I)
+_NO_OPENING = re.compile(
+    r"\s*(?:no|nope|nah|not (?:that|this|now|one)|leave (?:it|that|this)|skip (?:it|that|this)|"
+    r"don'?t|do not)\b",
+    re.I,
+)
+_BARE_NO = re.compile(
+    r"[\s,.!]*(?:no|nope|nah|no thanks|no thank you|leave it|leave that|skip it|skip that|not now|"
+    r"not that|don'?t|do not)[\s,.!]*",
+    re.I,
+)
 
 
 def turned_down_words(c, cited):
@@ -192,8 +262,12 @@ def turned_down_words(c, cited):
     msg = H.message(c, cited) or {}
     text = " ".join(str(msg.get("body") or "").split())
     if not _NO_OPENING.match(text):
-        raise Problem("not_a_no", "Only the owner's “no” to a suggestion is recorded this way; a yes is a read-back, and "
-                      "anything else is for a draft", 403)
+        raise Problem(
+            "not_a_no",
+            "Only the owner's “no” to a suggestion is recorded this way; a yes is a read-back, and "
+            "anything else is for a draft",
+            403,
+        )
     return "" if _BARE_NO.fullmatch(text) else text[:1000]
 
 
@@ -208,6 +282,7 @@ def owner_actor(c, value, actor):
 
 def _model(path):
     from . import models as M
+
     if path == "/api/v2/goals":
         return M.GoalCreate
     for end, model in (("/why", M.GoalWhy), ("/unlink", M.Empty), ("/decide", M.GoalProposalDecision)):
@@ -241,8 +316,11 @@ def canonical(c, path, body, actor):
 def shown(step, path=None):
     """A save as an answer shows it: the body as the exact JSON to send, which the display names added to every stable
     answer (backend/names.py: `owner_name` beside `owner`) cannot change."""
-    return {"method": step["method"], "path": path or step["path"],
-            "body": json.dumps(step["body"], ensure_ascii=False, separators=(",", ":"))}
+    return {
+        "method": step["method"],
+        "path": path or step["path"],
+        "body": json.dumps(step["body"], ensure_ascii=False, separators=(",", ":")),
+    }
 
 
 def step_path(step, change, done):
@@ -259,8 +337,9 @@ def editor_words(actor):
 def changed_since(c, back, change, done):
     """What someone changed on this change's goals since the read-back, other than its own saves, in words."""
     mine = {m for d in done.values() for m in d.get("marks") or []}
-    goals = [g for g in change.get("watch") or []] + [d["goal_id"] for (n, _), d in done.items()
-                                                       if n == change["n"] and d.get("goal_id")]
+    goals = [g for g in change.get("watch") or []] + [
+        d["goal_id"] for (n, _), d in done.items() if n == change["n"] and d.get("goal_id")
+    ]
     said = []
     # A suggestion settled by someone else since: its decide route would only say it was decided already.
     for step in change["steps"]:
@@ -268,18 +347,29 @@ def changed_since(c, back, change, done):
         p = m and G.proposal(c, m.group(1))
         if p and p["status"] != "pending":
             did = {"confirmed": "accepted", "rejected": "turned down"}.get(p["status"])
-            said.append(f"{editor_words(p['decided_by'])} {did} the suggestion" if did
-                        else f"the suggestion was {p['status']}")
+            said.append(
+                f"{editor_words(p['decided_by'])} {did} the suggestion" if did else f"the suggestion was {p['status']}"
+            )
     for gid in dict.fromkeys(goals):
-        for r in c.execute("SELECT id, actor, field, old, new, status_source FROM goal_events WHERE goal_id=? AND created_at>? "
-                           "ORDER BY created_at", (gid, back["created_at"])):
-            if r["id"] in mine or r["field"] in ("rank", "checkin", "status_source") or (
-                    r["field"] == "status" and r["status_source"] == "auto") or r["field"] == "proposal":
+        for r in c.execute(
+            "SELECT id, actor_id AS actor, kind AS field, old, new, json_extract(data, '$.status_source') AS "
+            "status_source FROM history_events WHERE subject_type='goal' AND subject_id=? AND created_at>? "
+            "ORDER BY created_at",
+            (gid, back["created_at"]),
+        ):
+            if (
+                r["id"] in mine
+                or r["field"] in ("rank", "checkin", "status_source")
+                or (r["field"] == "status" and r["status_source"] == "auto")
+                or r["field"] == "proposal"
+            ):
                 continue
             who = editor_words(r["actor"])
             if r["field"] in ("title", "why", "owner", "status", "kpi_target"):
-                said.append(f"{who} changed the {r['field'].replace('kpi_', '')} from “{r['old'] or 'none'}” to "
-                            f"“{r['new'] or 'none'}”")
+                said.append(
+                    f"{who} changed the {r['field'].replace('kpi_', '')} from “{r['old'] or 'none'}” to "
+                    f"“{r['new'] or 'none'}”"
+                )
             else:
                 said.append(f"{who} changed its {r['field'].replace('_id', '').replace('_', ' ')}")
     return said[:3]
@@ -310,7 +400,7 @@ def read_back_access(c, auth, raw):
 
     row = goal(raw.get("goal_id"))
     if row and "parent_id" in raw:
-        goal(row.get("parent_id"))       # the old parent's words are read back too
+        goal(row.get("parent_id"))  # the old parent's words are read back too
     fields(raw)
     fields(raw.get("measure"))
     p = G.proposal(c, raw["proposal_id"]) if raw.get("proposal_id") else None
@@ -324,6 +414,7 @@ def read_back_access(c, auth, raw):
 
 def read_back_owners(c, auth, owners):
     from .auth import Identity
+
     reader = Identity(G.AUTO_ACTOR, "bot")
     for owner in set(owners):
         if H.is_bot(owner) and not auth.bot_access(c, reader, H.actor_id(owner))["read"]:
@@ -363,34 +454,56 @@ def agreement(c, who, cited, method, path, body, *, auth):
     for change in back["changes"]:
         for i, step in enumerate(change["steps"]):
             target = step_path(step, change, done)
-            if (method == step["method"] and path == target and NEW not in target and sent is not None
-                    and sent == canonical(c, target, step["body"], who.actor)):
+            if (
+                method == step["method"]
+                and path == target
+                and NEW not in target
+                and sent is not None
+                and sent == canonical(c, target, step["body"], who.actor)
+            ):
                 found = (change, i)
                 break
         if found:
             break
     if not found:
-        raise not_agreed("That is not what was read back: save exactly a change from the read-back, no other field, "
-                         "value or goal")
+        raise not_agreed(
+            "That is not what was read back: save exactly a change from the read-back, no other field, value or goal"
+        )
     change, i = found
     if change["n"] not in yes:
         raise not_agreed(f"The owner did not say yes to change {change['n']}")
     if (change["n"], i) in done:
         raise Problem("conflict", f"Change {change['n']} is saved already", 409)
     if said := changed_since(c, back, change, done):
-        raise Problem("goal_changed", f"Change {change['n']} was not saved: since the read-back " + "; ".join(said)
-                      + ". Tell the owner what changed and read it back again", 409)
-    return {"goal_read_back": back["id"], "change": change["n"], "step": i, "steps": len(change["steps"]),
-            "words": words, "kind": change["kind"]}
+        raise Problem(
+            "goal_changed",
+            f"Change {change['n']} was not saved: since the read-back "
+            + "; ".join(said)
+            + ". Tell the owner what changed and read it back again",
+            409,
+        )
+    return {
+        "goal_read_back": back["id"],
+        "change": change["n"],
+        "step": i,
+        "steps": len(change["steps"]),
+        "words": words,
+        "kind": change["kind"],
+    }
 
 
 def record(c, actor, claim, mark, out):
     """Record the save in the write's own transaction: which step of which change, the goal it made or changed and
     the goal history rows it wrote (so they are not read as someone else's change), and add the link to the reply."""
     gid = ((out or {}).get("goal") or {}).get("id") if isinstance(out, dict) else None
-    marks = [r[0] for r in c.execute("SELECT id FROM goal_events WHERE rowid>?", (mark,))]
-    H.event(c, actor, SAVED, claim["goal_read_back"], {"change": claim["change"], "step": claim["step"],
-                                                       "goal_id": gid, "marks": marks})
+    marks = [r[0] for r in c.execute("SELECT id FROM history_events WHERE subject_type='goal' AND rowid>?", (mark,))]
+    H.event(
+        c,
+        actor,
+        SAVED,
+        claim["goal_read_back"],
+        {"change": claim["change"], "step": claim["step"], "goal_id": gid, "marks": marks},
+    )
     return gid
 
 

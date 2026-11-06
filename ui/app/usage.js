@@ -67,6 +67,7 @@ function pageUsage() {
         `<button type="button" role="tab" data-use-range="${k}" aria-selected="${k === state.range}">${label}</button>`).join('')}</div>
       <select id="use-dept" aria-label="Group" hidden></select>
       <span class="use-custom" hidden><input type="date" id="use-from" aria-label="From"><input type="date" id="use-to" aria-label="To"></span>
+      <button type="button" class="ghost use-default" id="use-purge" hidden>Clear automatic queue</button>
     </div>
     <div class="use-bar-row">
       <label>Group by <select id="use-group">${[['bot', 'Bot'], ...USE_DIMENSIONS].map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
@@ -101,6 +102,9 @@ function pageUsage() {
     if (ev.target.closest('[data-use-csv]')) useCsv();
   };
   main.querySelector('.use-tabs').onclick = ev => { const b = ev.target.closest('[data-use-view]'); if (b) useView(b.dataset.useView); };
+  $('#use-purge').onclick = () => usePurgeDialog(state.limits, result => {
+    if (USE === state && $('#use-purge')) toast(`Cleared ${result.cancelled} queued · ${result.kept_people} kept · ${result.still_running} running`);
+  });
   void useLimits();
   useLoad();
 }
@@ -110,6 +114,7 @@ async function useLimits() {
   const state = USE;
   try { state.limits = await get('/v2/usage/limits', {fresh: true}); } catch { state.limits = null; }
   if (USE !== state || !$('#use-limits')) return;
+  $('#use-purge').hidden = !state.limits?.may_edit_default;
   const may = useLimitRows(state.limits, []).length > 0 || useLimitAddable(state.limits, []).length > 0;
   $('#main').querySelector('.use-tabs').hidden = !may;
   if (!may && state.view === 'limits') useView('spend');
@@ -432,13 +437,13 @@ async function useLimitsSave() {
 // Settings > Bots: one bot's limits in a dialog. The Usage page edits every limit in its Limits tab.
 const useAmount = value => { const t = String(value).trim(); return t === '' ? null : Number(t); };
 const useAmounts = form => Object.fromEntries(USE_PERIODS.filter(([key]) => form[key]).map(([key]) => [key, useAmount(form[key].value)]));
-function useDialog(label, body, save, done) {
+function useDialog(label, body, save, done, submitLabel = 'Save') {
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal use-dialog';
   dialog.setAttribute('aria-label', label);
   dialog.innerHTML = `<div class="tmodal-head"><span class="who">${esc(label)}</span><span class="spacer"></span><button type="button" class="ghost tmodal-x" data-close aria-label="Close">✕</button></div>
     <form class="tmodal-body" novalidate>${body}<p class="err" data-error hidden></p>
-      <div class="use-dialog-row"><button type="button" class="ghost" data-close>Cancel</button><button type="submit" class="primary">Save</button></div></form>`;
+      <div class="use-dialog-row"><button type="button" class="ghost" data-close>Cancel</button><button type="submit" class="primary">${esc(submitLabel)}</button></div></form>`;
   document.body.appendChild(dialog);
   dialog.querySelectorAll('[data-close]').forEach(b => b.onclick = () => dialog.close());
   dialog.onclose = () => dialog.remove();
@@ -446,7 +451,7 @@ function useDialog(label, body, save, done) {
   form.onsubmit = async ev => {
     ev.preventDefault(); err.hidden = true;
     const submit = form.querySelector('[type=submit]'); submit.disabled = true;
-    try { await save(form); dialog.close(); done && done(); }
+    try { const result = await save(form); dialog.close(); done && done(result); }
     catch (e) { err.textContent = e.message; err.hidden = false; submit.disabled = false; }
   };
   dialog.showModal();
@@ -461,4 +466,13 @@ function useLimitDialog(slug, name, limit, company, done) {
       value="${limit?.['own_' + key] == null ? '' : usePlain(limit['own_' + key])}" placeholder="${esc(hint(key))}"></span></label>`).join('');
   useDialog(name || slug, held + `<div class="use-fields">${fields}</div>`,
     form => put('/v2/usage/limits/' + encodeURIComponent(slug), useAmounts(form)), done);
+}
+// Drop queued automatic wakes and waits. Tasks, people's messages and live runs stay.
+function usePurgeDialog(limits, done) {
+  const scopes = [['company', 'Whole team'], ...useGroupOrder(limits?.pools?.groups || {})
+    .map(([id, g, chain]) => ['group:' + id, '\u00a0\u00a0'.repeat(chain.length) + (g.name || id)])];
+  useDialog('Clear automatic queue',
+    `<label>Applies to<select name="scope">${scopes.map(([key, label]) => `<option value="${esc(key)}">${esc(label)}</option>`).join('')}</select></label>
+     <p>Cancels queued automatic wakes and waits. Keeps tasks, people's messages and running work.</p>`,
+    form => post('/v2/usage/queues/purge', {scope: form.scope.value}), done, 'Clear queue');
 }

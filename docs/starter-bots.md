@@ -194,6 +194,7 @@ up. The `bookkeeping` template is retired: it is no longer offered, and bots alr
 | `developer_board` | `engineering-lead` | Head of Engineering (head) | A weekly engineering summary (shipped, stuck pull requests, incidents, blocked work), routing proposals, and a hiring proposal when repeated work has no owner | default | GitHub connected |
 | `bug_report` | `issue-triage` | QA Engineer | Label and duplicate proposals, repro-step requests, a weekly issue digest, and a risk-ranked test plan and regression checklist per release | default | GitHub connected; offer it only then |
 | `code_blocks` | `pr-reviewer` | Senior Software Engineer | A weekday review queue with a finished review per pull request (blocking issues first) for a human to post | common | GitHub connected |
+| `code_blocks` | `builder` | Builder | Takes each Dev ticket on its step, builds it on a branch with a test that proves the change, and carries the ticket through review and QA fixes; merges only under the team's merge rules | common | GitHub connected |
 | `new_releases` | `release-notes` | Release Manager | A readiness checklist with a go or no-go call, the changelog entry, plain-language release notes and a suggested version | common | GitHub connected |
 | `monitor_heart` | `incident-scribe` | Site Reliability Engineer | An incident timeline, a blameless postmortem, action items followed to done, an on-call handoff and a weekly incident review | common | Tico only; an incident channel or error-tracker exports optional |
 | `description` | `docs-writer` | Technical Writer | A weekly drift report on READMEs and API docs in the product repositories, with the fixes written for an engineer to commit; internal docs stay with the Librarian | niche | GitHub connected |
@@ -236,7 +237,8 @@ not add a blanket Confirm step. A bot may ask about an uncertain action.
    `bot.yaml` with `enabled: false`, so `hub bot create` seeds it off; starting the setup (**Set up**, go-live) switches it on,
    so nobody approves it separately, and the bot logs it.
 4. **Draft until sending is on.** A bot drafts messages to outsiders until a person who manages it turns mail sending on in Tico
-   (Settings → Bots → Mail sending). Once it is on, the bot sends within the requested work and granted Tools.
+   (Settings → Bots → <bot> → Email sending: On their own or Ask first). Every send goes through Tico's send queue;
+   under Ask first a person approves each one. The bot sends within the requested work and granted Tools.
 5. **Parked until then.** Recruiting a seat creates the starter as `needs_setup`: it answers a human's message and nothing else
    (no routine, task notice, Slack route or bot request wakes it) until its setup playbook ends with `hub bot setup-done`,
    which it calls once its answers and first result are recorded. **Set up** on its page, or any first message, begins the
@@ -250,7 +252,7 @@ A starter's own prompt is not the gate. What the platform does, checked for ever
 
 | It might | The gate | Where |
 |---|---|---|
-| Send, reply to or forward email | The email tool downgrades a send to a Gmail draft unless the mailbox declares the `send` verb, a person has turned the bot's mail switch on in Tico and the recipient is internal, allowed or covered by an approval. The starters declare `read` and `draft` only and `outbound_send: false`; a test refuses `send` in any starter's `access:` | `connectors/mail/policy.py`, `clients/tests/test_catalog.py` |
+| Send, reply to or forward email | The email tool keeps a Gmail draft unless the mailbox declares the `send` verb, and every send goes through Tico's send queue, which decides it under the bot's sending policy (On their own, Ask first or Never, set in Tico) with an undo window; under Ask first a person approves it. The starters declare `read` and `draft` only; a test refuses `send` in any starter's `access:` | `backend/email_sending.py`, `connectors/mail/policy.py`, `clients/tests/test_catalog.py` |
 | Post to Slack | A post needs the `post` verb in the bot's Slack access, and the channel must be on the Slack channel list (Tools > Slack) with posting on, which it is unless an owner or admin turned it off; reading grants no posting right. Externally shared channels are always refused. The starters declare Slack read only, commented out until the owner connects it | [Slack gateway](slack-gateway.md) |
 | Comment on or label a GitHub issue, or review a pull request | **Added in this release.** The team's GitHub App token carries Issues: write, so nothing but a prompt stood between the QA Engineer (`issue-triage`) and a public comment. Its access is now `read`, and its `.claude/settings.json` denies `gh issue edit` and `gh issue comment` next to close, reopen, lock, transfer and create. It leaves proposed labels and comments with the exact commands on the task; writes need the corresponding Tool access. Senior Software Engineer, Release Manager, Technical Writer, Security Engineer, DevOps Engineer and Head of Engineering read GitHub the same way: `read` access, only `gh pr list`, `view`, `diff` and `checks` allowed, and `gh pr review`, `comment`, `merge`, `close`, `edit` and `create` denied, so a review is a draft on the task that a human posts. Turning writing on is the owner's edit of `bot.yaml` and the settings file, described in a comment there. The harness reads `.claude/settings.json`; the Codex runtime does not, so for a Codex-run bot the gate is the read-only access declared, the absence of any default write credential to a product repository, and the prompt | `templates/catalog/issue-triage`, `clients/tests/test_catalog.py` |
 | Invite someone to a calendar event | Any address may be invited. Set `TICO_BLOCK_EXTERNAL_INVITES=1` to limit bots to humans on the team roster (`403 external_attendee` otherwise); an invitation to anyone else is then a human's act | `backend/connectors.py`, `backend/tests/test_security_review.py` |
@@ -307,7 +309,7 @@ pack: sales
 icon: handshake
 suggest: default
 tags: [b2b, pipeline, proposals, rfp, closing, saas, services, enterprise]
-summary: "Works every open deal from first meeting to signature: call follow-ups with a dated next step, mutual action plans, proposals and RFP answers. Messages to outsiders stay drafts until outbound_send is on."
+summary: "Works every open deal from first meeting to signature: call follow-ups with a dated next step, mutual action plans, proposals and RFP answers. Messages to outsiders stay drafts until a person lets it send in Tico."
 pains:
   - "follow-ups fall through the cracks"
   - "every proposal is written from scratch"
@@ -343,12 +345,12 @@ team_templates: [bookkeeping, ar-followup, accounts-payable, expense-auditor, sp
 
 Same layout as every template, plus what makes a starter reviewable:
 
-- `AGENT.md`, under 150 lines (most are 80 to 100): mandate, what it owns, its setup conversation, `## Sending` (matching the Tico mail switch), how it starts and ends a run, how it uses `hub`, quality
+- `AGENT.md`, under 150 lines (most are 80 to 100): mandate, what it owns, its setup conversation, `## Sending` (matching the bot's sending policy in Tico), how it starts and ends a run, how it uses `hub`, quality
   standards and how it escalates. A head's also has `## Hiring`.
 - `playbooks/`: one for the first routine, one for the most common request, and `onboarding.md`.
 - `knowledge/examples/`: one sample of excellent output for the fictional team Acme. Never a real
   team or person.
-- `bot.yaml`: `outbound_send: false`, the first routine declared with `enabled: false`, and
+- `bot.yaml`: no sending setting (sending is set in Tico), the first routine declared with `enabled: false`, and
   `tools:` with `read` unless drafting needs more. A tool the team may not have is a commented block
   the owner uncomments when it is connected, because changing access is an owner decision.
 

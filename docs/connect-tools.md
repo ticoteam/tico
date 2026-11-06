@@ -265,20 +265,31 @@ none, or it is OAuth-only, write [a REST skill](#a-rest-skill) that calls its RE
 When a custom tool's last declaration is removed, its saved learnings remain in Tools as a read-only page.
 The Owner can still delete a learning there.
 
-## Connections
+## Tools list
 
-**Library → Connections** (`#/library/connections`) lists every way the outside world reaches the company: Slack, the
-GitHub App, the mail bots' mailboxes, Email & Phone inboxes, meeting importers, incoming and outgoing webhooks, physical
-mail and Listening. Each row shows its status, whose it is (company, a team or a person), who reads what it brings in,
-the bots on it, and **Configure**, which opens the card that changes it (Slack and GitHub under Tools, the others in
-Settings, Meetings or Strategy).
+**Tools** (`#/tools`) lists every way the company reaches the outside world: API tools (a service bots call with a key),
+mailboxes, Tico addresses and numbers, physical mail, Slack, the GitHub App, meeting importers, Listening, outgoing
+webhooks, and tools bots declare in `bot.yaml` that have no API tool yet. Each row shows its status, how it is reached,
+who can use it, and whether it needs you. Incoming webhooks and triggers live in Automations, not here.
 
 The owner and admins see every row. Anyone else sees their own (their mailbox, webhooks they made) and the company's rows
-they may read: Slack and GitHub once connected, Email & Phone inboxes in their audience, meeting importers if they read
-meetings, incoming webhooks except Finance's, physical mail, and Listening when they receive or read a destination. Bots
-named are only those you may see.
+they may read: an API tool they were given a level on, Slack and GitHub once connected, Tico addresses and numbers in
+their audience, meeting importers if they read meetings, physical mail, and Listening when they receive or read a
+destination. Bots named are only those you may see.
 
-`GET /api/v2/connections?limit=&cursor=` answers `{connections: [{id, kind, name, detail, status, scope, readers, bots,
-more_bots, configure, can_configure}], next}`, at most 100 rows and 96 KB a page; follow `next` with `cursor` (an
-opaque place in the list: rows you may not see never fill a page). CLI:
-`hub connections list`; MCP: `hub_connections_list` (BotOps reads it with the rights of the person who asked).
+`GET /api/v2/tool-index?limit=&cursor=` answers `{rows: [{id, kind, name, detail, way, status: {tone, text}, who,
+who_total, needs_you, href}], counts, next}`, at most 500 rows and 192 KB a page; follow `next` with `cursor`. CLI:
+`hub tool index` (`hub tools index`); MCP: `hub_tool_index` (BotOps reads it with the rights of the person who asked).
+
+### API tools
+
+An API tool (`/api/v2/api-tools`) is a service's base URL, how its key goes on a request, and a cheap check path; known
+services (backend/tool_services.py) fill these in from the name. It holds at most one key per level, **Read** or **Read
+and write**, each a vault credential, and **Who can use it** gives a person or bot a level: Read uses the Read key when
+there is one, else the full key at Read. Only credential administrators add keys or set levels; a person with a level
+reads the tool's page.
+
+Status: **Working**, **Key rejected** (the check got 401 or 403), **Check failed**, **Expires in N days** (14 or fewer),
+**Not checked**, or **Key on computers** (the key still goes to each run's environment, as every key stored before API
+tools did; move it to the proxy on the tool's page). Tico checks each proxied tool every 30 minutes; `hub tool check
+<id>` (MCP `hub_tool_check`) checks now. Checks and calls older than 90 days are deleted.

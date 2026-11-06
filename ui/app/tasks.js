@@ -3,7 +3,7 @@
 'use strict';
 
 // ----------------------------------------------------------------- tasks (#/tasks)
-// One page for every piece of work the team owes: Tico's tasks, shown as **Needs you**, **Open** (a list),
+// One page for every piece of work the team owes: Tico's tasks, shown as **You** (what needs you), **Open** (a list),
 // a **Board** and **Done**. `#/board` and `#/issues` open the matching view; scheduled work is Automations.
 // No priority: every task has a rank in its owner's queue. Labels stand in for projects.
 // A task's thread is comments, not chat: one flat list with the author on every line.
@@ -17,8 +17,10 @@ const COMPANY_COLS = [
 ];
 const STATUS_WORD = {open: 'Open', doing: 'Doing', waiting: 'Waiting', review: 'In review', ready: 'Ready to ship',
                      done: 'Done', closed: 'Closed', declined: 'Declined'};
-// The view tabs: labelled, with counts. The keys are the routes' and the saved preference's.
-const TASK_VIEWS = [['foryou', 'Needs you'], ['list', 'Open'], ['board', 'Board'], ['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
+// The views: labelled, with counts. The keys are the routes' and the saved preference's. The first three are tabs;
+// the rest are in the tab row's More menu, with any tab the row has no room for (task-list.js tasksTabsFit).
+const TASK_VIEWS = [['foryou', 'You'], ['list', 'Open'], ['board', 'Board'], ['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
+const TASK_TAB_VIEWS = ['foryou', 'list', 'board'];
 // Done and Closed share one feed of finished tasks, newest first; each shows its own status.
 const tasksFinishedView = view => view === 'done' || view === 'closed';
 const DONE_CAP = 20;                // The Done list shows 20 at a time
@@ -27,7 +29,6 @@ let TASKS_ST = null;
 const teamOf = id => botRow(id)?.team || '';
 // A run of a schedule (a routine before it became an automation): not work a person asked for, so Done lists leave it out.
 const isRecurringTask = t => !!t.routine_id || /from schedule/.test(String(t.body || ''));
-const isRecurringIssue = i => (i.labels || []).some(l => /^type:recurring$/i.test(l)) || /_Created by dispatcher from schedule/.test(i.body || '');
 const hasFiles = i => /s3:\/\//.test(i.body || '');
 const canMove = () => !!S.me?.mover;
 const taskFinished = t => ['done', 'closed'].includes(String(t?.status || ''));
@@ -149,10 +150,6 @@ const needsWho = t => {
   return needsWords(pid ? 'human:' + pid : '');
 };
 // One shape for the list, the sort and the columns.
-const issueItem = i => ({kind: 'issue', key: `i${i.number}`, n: i.number, title: i.title || '',
-  slug: i.owner_id, actor: `bot:${i.owner_id}`, team: teamOf(i.owner_id), needs: !!i.needs_human,
-  rank: null, updated_at: i.updatedAt, closed: i.state === 'CLOSED' ? i.closedAt : '', lane: 'company',
-  issue: i});
 const taskItem = t => {
   const slug = actorSlug(t.owner_id);
   return {kind: 'hub', key: `t${t.id}`, id: t.id, title: t.title || '', slug, actor: t.owner_id,
@@ -277,6 +274,10 @@ function parseServerTime(value) {
 // An occurrence of a due routine (backend/automation_actions.py) is due at the last second of its due day in the
 // trigger's zone, and that day is the routine's due_on: it reads as that calendar day in any viewer's zone. A step that
 // set its own due keeps the instant, as any task does. Null for other tasks.
+// "Oct 20", with the year only when it isn't this one ("Oct 20, 2028"), so a far-off date can't pass for a past one.
+function shortDay(at) {
+  return at.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(at.getFullYear() === new Date().getFullYear() ? {} : {year: 'numeric'})});
+}
 function occurrenceDay(t) {
   const m = /:(\d{4}-\d{2}-\d{2})$/.exec(t?.occurrence || ''), due = String(t?.due_at || '');
   if (!m || !due.startsWith(m[1] + 'T23:59:59')) return null;
@@ -287,7 +288,7 @@ function taskDueInfo(t) {
   if (!t?.due_at || taskFinished(t)) return null;
   const at = parseServerTime(t.due_at); if (!at) return null;
   const shown = occurrenceDay(t) || new Date(at);
-  const day = shown.toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+  const day = shortDay(shown);
   if (actorSlug(t.owner_id) && !t.occurrence) return {at, day, kind: 'wake', late: false, words: at > Date.now() ? `Wakes ${day}` : `Woke ${day}`};
   const late = at < Date.now();
   // Within the coming week a deadline reads as its weekday ("Due Wed"), further out as its date.
@@ -302,7 +303,7 @@ function taskSnoozed(t) {
   return !!until && !taskFinished(t) && parseServerTime(until) > Date.now();
 }
 function snoozeDay(t) {
-  return new Date(parseServerTime(taskHold(t, 'snoozed')?.until)).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+  return shortDay(new Date(parseServerTime(taskHold(t, 'snoozed')?.until)));
 }
 function snoozeChip(t) {
   return taskSnoozed(t) ? `<span class="tl-due wake" title="Snoozed until ${esc(fmt(taskHold(t, 'snoozed').until))}">Snoozed to ${esc(snoozeDay(t))}</span>` : '';

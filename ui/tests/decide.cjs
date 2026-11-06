@@ -44,6 +44,7 @@ const items = [
       clarified.push(route.request().postDataJSON());
       return route.fulfill({contentType: 'application/json', body: '{}'});
     });
+    await page.evaluate(() => v2Refresh());
     const card = page.locator('#need-card .dc-card');
     const read = async id => {
       await page.locator(`#need-card .dc-card[data-key="task:${id}"]`).waitFor();
@@ -97,10 +98,12 @@ const items = [
     assert.match(await page.evaluate(() => location.hash), /^#\/tasks\?(.*&)?view=foryou/);
     assert.deepEqual(await page.locator('#need-card').evaluate(d => { const r = d.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; }),
       [0, 0, 390, 844], 'a takeover on a phone');
-    // Only rows a card answers carry one; the rest open their task.
+    // Needs you includes full-task rows too; only the answerable rows open a card.
     const rows = await page.locator('#task-body .tl-row[data-task-key^="t"]').evaluateAll(els => Object.fromEntries(els
       .filter(el => /^t-(ask|stale|plain|blank|person)$/.test(el.dataset.taskKey.slice(1))).map(el => [el.dataset.taskKey.slice(1), el.dataset.needCard || ''])));
     assert.deepEqual(rows, {'t-ask': '', 't-stale': 'task:t-stale', 't-plain': 'task:t-plain', 't-blank': '', 't-person': ''});
+    assert.equal(await page.locator('#task-tab-foryou .cnt').innerText(), '5');
+    assert.deepEqual(await page.locator('[data-needs-badge]').allTextContents(), ['5', '5']);
     assert.equal(await page.locator('#task-body details').count(), 0, 'nothing in the list unfolds');
 
     // The bot's plain yes/no ask leads, with Yes and No; the rest of the body is a detail. Yes answers the bot.
@@ -140,7 +143,7 @@ const items = [
     await page.waitForFunction(() => !document.querySelector('#need-card')?.open && !DEC);
     assert.match(await page.evaluate(() => location.hash), /^#\/tasks\?(.*&)?view=foryou/);
 
-    // A row with no card opens its task.
+    // A Needs you row with no card opens its task.
     await page.locator('#task-body [data-task-key="tt-blank"] .tl-title').click();
     await page.locator('#task-peek[open]').waitFor();
     assert.equal(await page.evaluate(() => !!document.querySelector('#need-card')?.open), false);
@@ -152,11 +155,13 @@ const items = [
     await page.waitForFunction(() => location.hash === '#/task/t-person');
     await page.evaluate(() => { location.hash = '#/tasks?view=foryou'; });
 
-    // Go through, in the phone's header, says how many cards wait and opens the first.
+    // Catch up, in the phone's header, opens the first card without repeating the count.
     const go = page.locator('#tasks-pane [data-go-through]:visible');
-    assert.equal(await go.count(), 0, 'nothing waits on a card: no Go through');
+    assert.equal(await go.count(), 0, 'nothing waits on a card: no Catch up');
+    assert.equal(await page.locator('#task-body .tl-row').count(), 3, 'full-task rows still need the person');
+    assert.equal(await page.locator('#task-tab-foryou .cnt').innerText(), '3');
     await page.evaluate(() => { DEC_HANDLED.delete('task:t-stale'); needsListsRedraw(); });
-    assert.equal((await go.textContent()).trim(), 'Go through · 1');
+    assert.equal((await go.textContent()).trim(), 'Catch up');
     assert.equal(await go.evaluate(el => el.classList.contains('tl-decide-head')), true);
     await go.click();
     await read('t-stale');

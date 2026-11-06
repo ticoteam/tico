@@ -7,6 +7,7 @@ A new invite skips `mutate`: its answer holds the link's token, and the request 
 a table that otherwise holds only hashes. A repeat of the request makes a second link, which is harmless beside a stored
 secret; the first expires unused.
 """
+
 from typing import Annotated
 
 from fastapi import Query, Request
@@ -18,7 +19,7 @@ from ..store import Problem
 from . import readers as R
 
 Limit = Annotated[int, Query(ge=1, le=500)]
-Cursor = Annotated[int, Query(ge=0)]        # the `next` of the page before: what the app sends back as is
+Cursor = Annotated[int, Query(ge=0)]  # the `next` of the page before: what the app sends back as is
 
 
 class ReaderInput(Contract):
@@ -61,8 +62,12 @@ def register(app, store, auth, mutate):
         available, reason = R.availability(settings)
         with store.read() as c:
             items, after = P.page(R.list_rows(c, limit, cursor), limit, cursor)
-        return {"readers": items, "next": after, "sign_in": {"available": available, "reason": reason},
-                "email_available": R.notices_available()}
+        return {
+            "readers": items,
+            "next": after,
+            "sign_in": {"available": available, "reason": reason},
+            "email_available": R.notices_available(),
+        }
 
     @app.post("/api/v2/readers")
     def readers_add(request: Request, body: ReaderInput):
@@ -74,7 +79,9 @@ def register(app, store, auth, mutate):
     def readers_change(request: Request, reader_id: str, body: ReaderChange):
         """The way out of one audience without losing the rest: `audience_ids` replaces the whole set."""
         who = company_admin(request)
-        return mutate(request, body, lambda c: R.update(c, who.actor, reader_id, body.audience_ids, body.notify, body.name))
+        return mutate(
+            request, body, lambda c: R.update(c, who.actor, reader_id, body.audience_ids, body.notify, body.name)
+        )
 
     @app.delete("/api/v2/readers/{reader_id}")
     def readers_remove(request: Request, reader_id: str, body: Empty | None = None):
@@ -98,6 +105,7 @@ def register(app, store, auth, mutate):
     @app.post("/api/v2/audiences/{audience_id}/invites")
     def invites_create(request: Request, audience_id: str, body: InviteInput | None = None):
         from ..auth import validate_identity
+
         who = company_admin(request)
         R.require_available(settings)
         with store.transaction() as c:

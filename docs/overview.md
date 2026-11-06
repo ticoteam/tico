@@ -1,8 +1,10 @@
-# Overview
+# Company
 
-Open Overview from the desktop sidebar or the mobile More menu. It is where Tico opens. Overview has four tabs:
-**Mine**, your own My dashboard and the landing page (`#/home`); **Company**, the company's Dashboard (`#/overview`);
-**Campus** (`#/overview/campus`); and **Graph** (`#/overview/graph`). Owners and admins also see **Company page**.
+Open Company from the desktop sidebar or the mobile More menu (it was called Overview; ⌘K still finds it by that name).
+It is where Tico opens. Strategy, Finance (for those who see it) and Growth sit under it in the sidebar; its chevron
+folds them, kept per browser. Company has four tabs: **Mine**, your own My dashboard and the landing page (`#/home`);
+**Dashboard**, the company's Dashboard (`#/overview`); **Campus** (`#/overview/campus`); and **Graph**
+(`#/overview/graph`). Owners and admins also see **Share** ([Company page](company-page.md)).
 
 ## My dashboard
 
@@ -25,11 +27,11 @@ in the sidebar tree; its arrow still folds it) is the same grid for one group. B
 | `growth` | Everyone (the [Growth page](growth.md), `#/growth`) | The owner, admins, and a bot acting as itself, which pins only its own cards there |
 | `team:<group>` | Whoever may Read the group: **Seen by** opens the group's Access (permissions.md, People and groups) | The owner, admins, and a person who leads the group or a group above it |
 | `bot:<slug>` | Whoever may Read the bot | The bot itself, or a person who manages it |
-| `task:<id>` | Whoever may read the task | The bot on it (owner or requester), its people, someone who can move it |
+| `task:<id>` | Whoever may read the task | The owner, requester, a person who can move tasks, or the org owner; a bot only tasks it owns or requested, acting as itself |
 | `person:<id>` | That person only (My dashboard) | That person, or BotOps and the Assistant acting for them |
 
 A Dashboard nobody arranged shows Tasks by status, Done per week, Needs you and Latest pages for the company; a team page
-shows the first three for its team; the Growth page shows its five growth cards (see [growth.md](growth.md)). The first
+shows the first three for its team; the Growth page shows its default growth cards (see [growth.md](growth.md)). The first
 change saves them as real pins. Arranging: drag a card by its grip, and its
 ⋯ menu edits it, resizes it (small, medium, large) or removes it; **Add card** and **Add page** add one. On a phone the
 grid is one column.
@@ -53,7 +55,7 @@ grid is one column.
 | Growth funnel | The five funnel stages' KPIs, their conversion, and the North Star | none |
 | Growth channels | Each channel's new customers, CAC and LTV:CAC for the month, with its open tests | count (1 to 20) |
 | Growth retention | Cohort retention at 30, 90 and 180 days | months (3 to 12) |
-| Growth board | Open marketing tests by stage: Testing, Scaling, Idea | count per lane (1 to 5) |
+| Growth board | Open marketing tests by stage: Live, Working, In development, On deck | count per lane (1 to 5) |
 
 The growth cards go on the Growth page only; a growth card at any other place is refused.
 
@@ -62,10 +64,14 @@ whose owner they may read, automations they may see. Spend shows to the owner an
 lead. A card that shows the reader nothing is hidden for them.
 
 **Pins** put a page (`page:<file id>`) or a card (`card:<id>`) at a place, in order and at a size. The pinning rule keeps
-a page's data from spreading on its own: a bot pins only its own pages and cards, to its own sidebar or a task it holds or
-asked for. A person pins to the Dashboard or a team page, and a page they pin there may be read by that place's audience;
-a private task's file is never pinned there. Each pin and unpin of a page is in the file's activity (docs/files.md).
+a page's data from spreading on its own: a bot pins only its own pages to its sidebar, and its own cards to its sidebar
+or a task it holds or asked for. A person pins to the Dashboard or a team page, and a page they pin there may be read
+by that place's audience; a private task's file is never pinned there. Each pin and unpin of a page is in the file's
+activity (docs/files.md).
 A page published with `--task` pins itself to the top of that task; a page's full view says where it is pinned.
+Any person or bot acting as itself who can read a task may link a page they can read there. Task pins widen nothing.
+This uses the task place's `can_link` flag; `can_edit` still controls arranging pins and creating cards.
+Unlinking is for whoever linked it, the task's owner or requester, or the org owner.
 A bot's sidebar pins are its sidebar widgets: `page:<file id>` and `card:<id>` beside Tasks, Updates and Files, any
 number, and the built-ins may be hidden so the sidebar is only pages. The Assistant's sidebar keeps its own widgets.
 
@@ -83,7 +89,7 @@ Every visible computer becomes a building in a small solarpunk office campus. Bo
 
 Buildings have open cutaway offices, rear garden terraces, solar canopies, glass sides and warm lighting. A recessed, illuminated Loop connects the buildings, with small moving pods. Pods and tunnels are decorative scenery, not bot traffic or execution telemetry. Every teammate is represented; larger teams use additional floors. Select a building to step inside, then select a person or bot to see their permitted status and open their existing page. Tap outside or press Escape to return. Drag to rotate and scroll to zoom. Keyboard-accessible building and teammate buttons appear when focused; the Campus button is available inside a building.
 
-The scene uses the existing `/employees`, `/humans`, `/v2/status` and `/v2/computers` responses. Bots with queued work that is not starting are listed above the campus with their reason and one fix, from the Health answer the app already polls (`/v2/health` `stuck`); a stuck bot's teammate card says why. A bot left in setup (`needs_setup`) for over a day is listed there too, with how long, and a person who may manage it gets **Finish with defaults**: the same setup-done call as `hub bot setup-done`, so the bot starts claiming its work and its template's first routine is turned on, as Start setup would have. Nothing finishes setup on its own. The person the "Finish setting up" reminder goes to gets one message about it, once per bot, unless that reminder is still open (`backend/setup_stuck.py`). Below them one line says how many bots are running on a fallback provider because their plan ran out, since when, and how many are limited (`on_fallback` and `limited` in the same answer). Computer inventory loads only while Overview is open and follows the existing refresh clock. Readable bot assignments also identify buildings, so inventory failure does not remove their offices. Authorized computers with no bots remain visible as empty offices. Revoked computers are excluded from inventory. Human placement uses visible operators, users, owners and reporting chains, with one representation per person per building.
+The scene uses the existing `/employees`, `/humans`, `/v2/status` and `/v2/computers` responses. Bots with queued work that is not starting are listed above the campus with their reason and one fix, from the Health answer the app already polls (`/v2/health` `stuck`); a stuck bot's teammate card says why. A bot left in setup (`needs_setup`) for over a day is listed there too, with how long, and a person who may manage it gets **Finish with defaults**: the same setup-done call as `hub bot setup-done`, so the bot starts claiming its work and its template's first routine is turned on, as Start setup would have. Nothing finishes setup on its own. The person the "Finish setting up" reminder goes to gets one message about it, once per bot, unless that reminder is still open (`backend/setup_stuck.py`). Below them one line says how many bots are running on a fallback provider because their plan ran out, since when, and how many are limited (`on_fallback` and `limited` in the same answer). Computer inventory loads only while Campus is open and follows the existing refresh clock. Readable bot assignments also identify buildings, so inventory failure does not remove their offices. Authorized computers with no bots remain visible as empty offices. Revoked computers are excluded from inventory. Human placement uses visible operators, users, owners and reporting chains, with one representation per person per building.
 
 Hidden people, invisible or retired bots and other people's personal branches are excluded. A bot without Read access has no machine or activity details and is placed in the Shared pavilion; its location is never inferred from computer inventory. The pavilion also includes unassigned bots, external agents without a known computer, and people with no placed bots. Free-text task focus and raw inventory details never cross the renderer boundary. Human presence is not tracked. A bot's desk follows its status as soon as it changes while live updates are connected; otherwise it catches up at the next refresh (every 30 seconds without live updates, every 2 minutes with them). If status refresh fails, bots become unknown and stop their activity animation.
 
@@ -123,7 +129,7 @@ keyboard and a phone.
 
 ## Bot hours vs human hours
 
-The **Bot hours vs human hours** card sits at the top of the Overview, above the campus. It compares how much time your bots spent working with the hours your people work, as an estimate.
+The **Bot hours vs human hours** card sits at the top of Campus, above the campus. It compares how much time your bots spent working with the hours your people work, as an estimate.
 
 - **Headline:** bot hours per human hour over the last 7 days, for example **6×**. Below 10 it shows one decimal (0.4×, 2.5×); from 10 up, a whole number.
 - **Chart:** one point a week for up to the last 12 weeks, with a dashed **Parity 1×** line where bots and people work the same hours. The current week is dotted and hollow: it is the week "so far", not a finished week. Hover a point, or tap it on a phone, to see that week's numbers, for example "Week of Oct 12: 243 bot hours · 40 human hours · 6.1×".
@@ -135,7 +141,7 @@ How the two numbers are counted:
 - **Human hours** are the people on the org chart × 40 hours a week. Hidden people and bots don't count. The org chart keeps no history, so every week uses today's count of people.
 - **Weeks** run Monday to Sunday in the company's time zone (Pacific time).
 
-It is an estimate: nobody's actual working time is tracked, and every person counts as 40 hours. The card shows totals only, never a bot's or a person's own hours. Everyone who can open the Overview sees it; bots can't read it.
+It is an estimate: nobody's actual working time is tracked, and every person counts as 40 hours. The card shows totals only, never a bot's or a person's own hours. Everyone who can open Campus sees it; bots can't read it.
 
 What you see before there is enough data:
 
@@ -143,7 +149,7 @@ What you see before there is enough data:
 - **No people on the org chart:** bot hours for the last 7 days with no ratio, and "Add people to the org chart to compare".
 - **Less than 7 days of runs:** the headline for the days so far and "Chart fills in as weeks pass".
 
-The numbers come from `GET /api/v2/overview/bot-hours` (`backend/bot_hours.py`), which reads the runs Tico already records; nothing new is stored. The answer is kept for a minute, and the card asks again at most every 5 minutes while the Overview is open. `backend/tests/test_bot_hours.py` checks the counting with sample runs, and the browser test `ui/tests/overview-hours.cjs` checks the card, the hover, the table and a phone-sized screen.
+The numbers come from `GET /api/v2/overview/bot-hours` (`backend/bot_hours.py`), which reads the runs Tico already records; nothing new is stored. The answer is kept for a minute, and the card asks again at most every 5 minutes while Campus is open. `backend/tests/test_bot_hours.py` checks the counting with sample runs, and the browser test `ui/tests/overview-hours.cjs` checks the card, the hover, the table and a phone-sized screen.
 
 ## Replay the last 24 hours
 

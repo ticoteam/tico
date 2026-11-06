@@ -169,13 +169,20 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   // A page with no task on it is sent no task changes; one open task there, only its own.
   assert.deepEqual(await page.evaluate(() => {
     const route = S.route, open = TASK_CHAT;
-    S.route = '#/meetings';
+    S.route = '#/settings';
     const none = new URL(liveUrl(), location.href).searchParams.get('topics').split(',');
     TASK_CHAT = {id: 't9'};
     const one = new URL(liveUrl(), location.href).searchParams;
     S.route = route; TASK_CHAT = open; LIVE.taskKey = liveTaskKey(liveTaskScope());
     return [none.includes('tasks'), one.get('task'), one.get('topics').includes('tasks')];
   }), [false, 't9', true]);
+  assert.equal(await page.evaluate(() => {
+    const route = S.route;
+    S.route = '#/meetings';
+    const topics = new URL(liveUrl(), location.href).searchParams.get('topics');
+    S.route = route; LIVE.taskKey = liveTaskKey(liveTaskScope());
+    return topics.includes('tasks');
+  }), true, 'meeting details follow tasks so new links can arrive');
   await page.locator('#task-body', {hasText: 'Draft the final release notes'}).waitFor();
   assert.equal(reads.tasks, listed, 'the change came with the event');
   // A new task arrives whole too: a busy team's bots create tasks every few seconds, and every open tab gets each one.

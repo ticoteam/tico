@@ -41,7 +41,7 @@ async function fitted(page, tag) {
 }
 
 async function chart(page, tag) {
-  await page.locator(card('bot:builder')).waitFor();
+  await page.locator(card('bot:builder') + ':enabled').waitFor();
   assert.equal(await page.locator('.rdo-card.top').innerText().then(t => t.split('\n')[0]), 'Ana Silva', tag + ': the owner on top');
   for (const helper of ['bot:botops', 'bot:librarian', 'bot:coo', 'bot:mail-sorter', 'bot:goal-manager'])
     assert.equal(await page.locator(card(helper)).count(), 0, `${tag}: ${helper} is off the chart`);
@@ -158,7 +158,18 @@ async function chart(page, tag) {
     // audited by the hub); a teammate outside them has no Move to….
     {
       const tag = 'phone lead';
-      const {page, errors, writes} = await openStrategy(browser, {viewer: 'ben'});
+      const {page, errors, writes} = await openStrategy(browser, {viewer: 'ben', hash: '#/strategy/market/briefing'});
+      // Hold the lead-bearing groups while the roster draws: an early tap must not open a sheet with no Move to….
+      let releaseGroups;
+      const groupsGate = new Promise(resolve => { releaseGroups = resolve; });
+      await page.route('**/api/v2/groups', async route => { await groupsGate; await route.fallback(); });
+      await page.evaluate(() => { location.hash = '#/strategy/org'; });
+      const sdr = page.locator(card('bot:sdr'));
+      await sdr.waitFor();
+      assert.equal(await sdr.isDisabled(), true, tag + ': cards wait for groups with leads');
+      await sdr.evaluate(el => el.click());
+      assert.equal(await page.locator('dialog.rd-sheet[open]').count(), 0, tag + ': no sheet while groups load');
+      releaseGroups();
       await chart(page, tag);
       const ask = async (ref, to, label) => {
         await page.locator(card(ref)).click();

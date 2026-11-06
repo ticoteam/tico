@@ -1,4 +1,4 @@
-/* ui/app/dashboard.js — Overview › Mine (My dashboard, #/home, the landing page), Overview › Company (the Dashboard)
+/* ui/app/dashboard.js — Company › Mine (My dashboard, #/home, the landing page), Company › Dashboard
    and team pages (#/team/<group>): a grid of pinned built-in cards and pages (backend/cards.py). My dashboard is the
    place person:me, the reader's own. Each card shows its reader only what they may already see; a person who arranges the
    place drags, sizes, adds and removes pins. The bot sidebar draws its card and page widgets with the same pieces.
@@ -25,8 +25,8 @@ const dashApi = place => '/v2/places/' + encodeURIComponent(place);
 // The place as it reads: the Growth page's for the month picked there.
 const dashReadUrl = state => dashApi(state.place) + (state.month ? '?month=' + encodeURIComponent(state.month) : '');
 const dashKey = state => state.place + (state.month ? '?month=' + state.month : '');
-const dashTabsHTML = on => `<nav class="tabs slim strat-tabs dash-tabs" aria-label="Overview">${
-  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Company'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ['graph', OVERVIEW_GRAPH, 'Graph'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Share']] : [])].map(([id, href, label]) =>
+const dashTabsHTML = on => `<nav class="tabs slim strat-tabs dash-tabs" aria-label="Company">${
+  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Dashboard'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ['graph', OVERVIEW_GRAPH, 'Graph'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Share']] : [])].map(([id, href, label]) =>
     `<a href="${href}"${on === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const dashNum = n => n == null ? '–' : Number(n).toLocaleString(undefined, {maximumFractionDigits: 2});
 const dashMoney = n => n == null ? '–' : '$' + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
@@ -127,12 +127,18 @@ function dashAudienceWords(aud) {
 // ---- the page
 // A place seen before is drawn at once from what it showed last (S.lastRead.places), then read again; the grid is drawn
 // again only when the answer differs, so its page widgets are not reloaded for nothing.
+// Startup asks for My dashboard (or the company's) beside the roster when it is the page the app opens on, a round
+// trip sooner (boot.js); pageDashboard's read then takes that answer (api.js getPrefetch).
+function dashPrefetch() {
+  const place = location.hash === HOME ? 'person:me' : location.hash === OVERVIEW ? 'dashboard' : '';
+  if (place) getPrefetch(dashApi(place));
+}
 async function pageDashboard(place, {month = ''} = {}) {
   const team = place.startsWith('team:'), own = DASH_PLACES[place];
   const state = {place, month, view: null, choices: null, root: null, menu: null, editing: false, readAt: Date.now()};
   const key = state.key = dashKey(state), kept = (S.lastRead.places ||= {})[key];
   const main = $('#main'); main.classList.add('dash-layout');
-  const head = own ? own.head(state) : `<h1>${team ? '' : 'Overview'}</h1>${team ? '' : dashTabsHTML(place === 'person:me' ? 'mine' : 'dashboard')}<span class="spacer"></span>`;
+  const head = own ? own.head(state) : `<h1>${team ? '' : 'Company'}</h1>${team ? '' : dashTabsHTML(place === 'person:me' ? 'mine' : 'dashboard')}<span class="spacer"></span>`;
   main.innerHTML = `<div class="dash" id="dash-root"><header class="dash-head">${head}
       <span class="dash-actions" hidden>${team ? '<button type="button" class="ghost dash-audience" data-dash-audience></button>' : ''}
         <button type="button" class="ghost" data-dash-add="card" hidden><span class="dash-plus" aria-hidden="true">+</span>Card</button>
@@ -243,7 +249,7 @@ function dashDraw(state) {
   grid.innerHTML = v.pins.length ? '' : `<p class="empty">${v.can_edit ? 'Add a card or a page' : 'Nothing pinned'}</p>`;
   v.pins.forEach((pin, i) => {
     const el = document.createElement('article');
-    el.className = 'dash-pin'; el.dataset.size = pin.size || 'medium'; el.dataset.at = String(i);
+    el.className = 'dash-pin' + (pin.card ? '' : ' dash-pin-page'); el.dataset.size = pin.size || 'medium'; el.dataset.at = String(i);
     el.innerHTML = `<header class="dash-pin-head">
         ${v.can_edit ? `<button type="button" class="dash-grip" data-dash-grip aria-label="Move ${esc(dashPinTitle(pin, v))}" title="Move">${BOT_SVG.grip}</button>` : ''}
         <h2>${pin.card ? esc(dashHeading(pin.card)) : ''}${pin.card && dashTeamShown(pin.card, v) ? ` <span class="muted">· ${esc(pin.card.team_name)}</span>` : ''}</h2>

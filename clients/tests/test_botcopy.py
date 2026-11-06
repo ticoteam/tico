@@ -3,6 +3,7 @@
 Real git in a temporary workspace: the contract is what ends up in the new repository (and what never does) and what the
 three-way merge commits or refuses.
 """
+
 import subprocess
 from pathlib import Path
 
@@ -27,8 +28,12 @@ AGENT = "# Scribe\n\n## Owns\n- Meeting notes\n\nLine one.\nLine two.\nLine thre
 
 
 def run(path, *argv):
-    done = subprocess.run(["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@t", *argv],
-                          capture_output=True, text=True, check=True)
+    done = subprocess.run(
+        ["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@t", *argv],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     return done.stdout.strip()
 
 
@@ -51,19 +56,36 @@ def workspace(tmp_path):
     original = root / "bot-scribe"
     original.mkdir(parents=True)
     run(original, "init", "-q", "-b", "main")
-    save(original, {
-        "AGENT.md": AGENT, "bot.yaml": MANIFEST, "state.md": "# State\nBusy with the Q3 notes.\n",
-        "memory/learnings.md": "# Learnings\n2026-01-02 the client hates bullet points.\n",
-        "knowledge/company.md": "# Acme\n", "playbooks/notes.md": "Take notes.\n", "skills/triage/SKILL.md": "Triage it.\n",
-        "skills/triage/scripts/run.sh": "echo triage\n", "reports/week-1.md": "A report.\n",
-        ".env": "JIRA_BASIC_AUTH=hunter2\n", "secrets/jira.env": "TOKEN=hunter2\n", "software/key.pem": "-----BEGIN-----\n",
-        "google-sa.json": "{}", ".gitignore": "*.log\n"}, "History one")
+    save(
+        original,
+        {
+            "AGENT.md": AGENT,
+            "bot.yaml": MANIFEST,
+            "state.md": "# State\nBusy with the Q3 notes.\n",
+            "memory/learnings.md": "# Learnings\n2026-01-02 the client hates bullet points.\n",
+            "knowledge/company.md": "# Acme\n",
+            "playbooks/notes.md": "Take notes.\n",
+            "skills/triage/SKILL.md": "Triage it.\n",
+            "skills/triage/scripts/run.sh": "echo triage\n",
+            "reports/week-1.md": "A report.\n",
+            ".env": "JIRA_BASIC_AUTH=hunter2\n",
+            "secrets/jira.env": "TOKEN=hunter2\n",
+            "software/key.pem": "-----BEGIN-----\n",
+            "google-sa.json": "{}",
+            ".gitignore": "*.log\n",
+        },
+        "History one",
+    )
     save(original, {"memory/decisions.md": "# Decisions\nUse Jira.\n"}, "History two")
     return root
 
 
 def files_of(path):
-    return {str(p.relative_to(path)): p.read_text() for p in sorted(path.rglob("*")) if p.is_file() and ".git" not in p.parts}
+    return {
+        str(p.relative_to(path)): p.read_text()
+        for p in sorted(path.rglob("*"))
+        if p.is_file() and ".git" not in p.parts
+    }
 
 
 def test_a_copy_is_a_fresh_repository_of_the_originals_files_without_secrets_or_memory(workspace):
@@ -75,16 +97,31 @@ def test_a_copy_is_a_fresh_repository_of_the_originals_files_without_secrets_or_
     assert run(copy, "log", "--format=%s").splitlines() == [f"Copied from scribe at {sha[:12]}"]
     files = files_of(copy)
     # Instructions, skills, playbooks, knowledge; never a secret, whatever its name; memory and state are a blank start.
-    assert {"AGENT.md", "bot.yaml", "playbooks/notes.md", "skills/triage/SKILL.md", "skills/triage/scripts/run.sh",
-            "knowledge/company.md", ".gitignore", "state.md", "memory/learnings.md", "memory/decisions.md"} == set(files)
-    assert not any(secret in files for secret in (".env", "secrets/jira.env", "software/key.pem", "google-sa.json", "reports/week-1.md"))
+    assert {
+        "AGENT.md",
+        "bot.yaml",
+        "playbooks/notes.md",
+        "skills/triage/SKILL.md",
+        "skills/triage/scripts/run.sh",
+        "knowledge/company.md",
+        ".gitignore",
+        "state.md",
+        "memory/learnings.md",
+        "memory/decisions.md",
+    } == set(files)
+    assert not any(
+        secret in files
+        for secret in (".env", "secrets/jira.env", "software/key.pem", "google-sa.json", "reports/week-1.md")
+    )
     assert "Busy with the Q3 notes" not in files["state.md"] and "bullet points" not in files["memory/learnings.md"]
     assert sorted(built["left_out"]["secrets"]) == [".env", "google-sa.json", "secrets/jira.env", "software/key.pem"]
     # bot.yaml is the copy's own: its name, its label, none of the original's routines, the tools it needs.
     manifest = files["bot.yaml"]
     assert "name: scribe-two" in manifest and "owner:scribe-two" in manifest and "Scribe Two" in manifest
     assert "routines: []" in manifest and "JIRA_BASIC_AUTH" in manifest
-    assert botcopy.declared_tools(botcopy.tree(workspace / "bot-scribe", sha)) == [{"service": "jira", "env": "JIRA_BASIC_AUTH"}]
+    assert botcopy.declared_tools(botcopy.tree(workspace / "bot-scribe", sha)) == [
+        {"service": "jira", "env": "JIRA_BASIC_AUTH"}
+    ]
     # The original is untouched, and the copy is its own repository.
     assert run(workspace / "bot-scribe", "status", "--porcelain") == ""
     assert run(copy, "rev-parse", "--show-toplevel") == str(copy.resolve())
@@ -102,7 +139,7 @@ def test_the_originals_memory_is_copied_only_when_asked_and_a_secret_never(works
 def test_an_existing_folder_is_never_overwritten_and_only_committed_content_is_copied(workspace):
     (workspace / "bot-scribe" / "AGENT.md").write_text("# An edit nobody committed\n")
     botcopy.build_copy(workspace, "scribe", "scribe-two")
-    assert files_of(workspace / "bot-scribe-two")["AGENT.md"] == AGENT          # the commit, not the working tree
+    assert files_of(workspace / "bot-scribe-two")["AGENT.md"] == AGENT  # the commit, not the working tree
     with pytest.raises(botcopy.CopyError) as again:
         botcopy.build_copy(workspace, "scribe", "scribe-two")
     assert again.value.code == "exists"
@@ -121,13 +158,26 @@ def copy_of(workspace):
 def test_update_from_the_original_merges_what_each_side_changed(workspace):
     base, original, copy = copy_of(workspace)
     # The original improves one line of AGENT.md and adds a playbook; the copy changes another line and one of its own files.
-    save(original, {"AGENT.md": AGENT.replace("Line two.", "Line 2, better."), "playbooks/new.md": "New.\n"}, "Original moves on")
-    save(copy, {"AGENT.md": AGENT.replace("Line five.", "Line 5, mine."), "playbooks/mine.md": "Mine.\n"}, "Copy changes")
+    save(
+        original,
+        {"AGENT.md": AGENT.replace("Line two.", "Line 2, better."), "playbooks/new.md": "New.\n"},
+        "Original moves on",
+    )
+    save(
+        copy, {"AGENT.md": AGENT.replace("Line five.", "Line 5, mine."), "playbooks/mine.md": "Mine.\n"}, "Copy changes"
+    )
     done = botcopy.update_from_original(workspace, "scribe", "scribe-two", base)
     assert done["status"] == "updated" and done["updated"] == ["AGENT.md", "playbooks/new.md"]
     merged = files_of(copy)
-    assert "Line 2, better." in merged["AGENT.md"] and "Line 5, mine." in merged["AGENT.md"] and merged["playbooks/mine.md"] == "Mine.\n"
-    assert run(copy, "log", "-1", "--format=%s").startswith("Update from scribe: ") and run(copy, "status", "--porcelain") == ""
+    assert (
+        "Line 2, better." in merged["AGENT.md"]
+        and "Line 5, mine." in merged["AGENT.md"]
+        and merged["playbooks/mine.md"] == "Mine.\n"
+    )
+    assert (
+        run(copy, "log", "-1", "--format=%s").startswith("Update from scribe: ")
+        and run(copy, "status", "--porcelain") == ""
+    )
     assert done["current_sha"] == run(original, "rev-parse", "HEAD") and "playbooks/new.md" in done["original_diff"]
     # Up to date now: nothing to do.
     assert botcopy.update_from_original(workspace, "scribe", "scribe-two", done["current_sha"])["status"] == "current"
@@ -135,7 +185,11 @@ def test_update_from_the_original_merges_what_each_side_changed(workspace):
 
 def test_update_from_the_original_that_conflicts_changes_nothing(workspace):
     base, original, copy = copy_of(workspace)
-    save(original, {"AGENT.md": AGENT.replace("Line two.", "Theirs."), "playbooks/notes.md": "Take better notes.\n"}, "Original moves on")
+    save(
+        original,
+        {"AGENT.md": AGENT.replace("Line two.", "Theirs."), "playbooks/notes.md": "Take better notes.\n"},
+        "Original moves on",
+    )
     save(copy, {"AGENT.md": AGENT.replace("Line two.", "Mine.")}, "Copy changes")
     before = run(copy, "rev-parse", "HEAD")
     done = botcopy.update_from_original(workspace, "scribe", "scribe-two", base)
@@ -162,8 +216,12 @@ def test_a_skill_is_committed_into_each_target_and_a_different_one_is_not_replac
     (workspace / "bot-three" / "skills").mkdir()
     (workspace / "bot-three" / "skills" / "triage").mkdir()
     (workspace / "bot-three" / "skills" / "triage" / "SKILL.md").write_text("Unsaved.\n")
-    done = {row["bot"]: row for row in botcopy.copy_skill(workspace, "triage", "scribe", ["one", "two", "three", "ghost"])}
-    assert done["one"]["status"] == "copied" and done["two"]["status"] == "exists" and done["three"]["status"] == "dirty"
+    done = {
+        row["bot"]: row for row in botcopy.copy_skill(workspace, "triage", "scribe", ["one", "two", "three", "ghost"])
+    }
+    assert (
+        done["one"]["status"] == "copied" and done["two"]["status"] == "exists" and done["three"]["status"] == "dirty"
+    )
     assert done["ghost"]["status"] == "no_repository"
     assert files_of(workspace / "bot-one")["skills/triage/scripts/run.sh"] == "echo triage\n"
     assert run(workspace / "bot-one", "log", "-1", "--format=%s") == "Copy the triage skill from scribe"
@@ -180,6 +238,7 @@ def test_a_skill_is_committed_into_each_target_and_a_different_one_is_not_replac
 # ------------------------------------------------------------------ an original that is on GitHub, not in this workspace
 class Person:
     """The api acting for the requester, answering the few calls a copy makes."""
+
     def __init__(self, answers):
         self.answers, self.calls = answers, []
 
@@ -201,6 +260,7 @@ def elsewhere(workspace, tmp_path, monkeypatch):
         subprocess.run(["git", "clone", "-q", str(tmp_path / "remote" / ("bot-" + slug)), str(into)], check=True)
         cloned.append(Path(into))
         return Path(into)
+
     monkeypatch.setattr(botcopy, "fetch_repository", fetch)
     return cloned
 
@@ -209,12 +269,22 @@ def elsewhere(workspace, tmp_path, monkeypatch):
 def test_an_original_on_another_computer_is_fetched_read_only_used_and_cleaned_up(workspace, tmp_path, monkeypatch):
     cloned = elsewhere(workspace, tmp_path, monkeypatch)
     base = run(tmp_path / "remote" / "bot-scribe", "rev-parse", "HEAD")
-    person = Person({"github/repos": {"repository": "Acme/bot-scribe-two", "html_url": "https://github.com/Acme/bot-scribe-two"},
-                     "bots/scribe/copy": {"slug": "scribe-two", "display_name": "Scribe Two", "credentials": {"granted": [], "needs": []}},
-                     "bots/scribe-two/update-from-original": {"original": "scribe", "base_sha": base}})
+    person = Person(
+        {
+            "github/repos": {"repository": "Acme/bot-scribe-two", "html_url": "https://github.com/Acme/bot-scribe-two"},
+            "bots/scribe/copy": {
+                "slug": "scribe-two",
+                "display_name": "Scribe Two",
+                "credentials": {"granted": [], "needs": []},
+            },
+            "bots/scribe-two/update-from-original": {"original": "scribe", "base_sha": base},
+        }
+    )
     made = botcopy.run_copy(person, person, {"bot": "scribe"}, workspace)
     assert made["from_sha"] == base and (workspace / "bot-scribe-two" / "AGENT.md").read_text() == AGENT
-    assert not (workspace / "bot-scribe-two" / ".env").exists() and not cloned[-1].exists()      # the temporary clone is gone
+    assert (
+        not (workspace / "bot-scribe-two" / ".env").exists() and not cloned[-1].exists()
+    )  # the temporary clone is gone
     assert person.calls[0] == "bots/scribe/copy" and made["published"] is True
     # The same for bringing the copy up to date, suggesting back, and a skill from it.
     save(tmp_path / "remote" / "bot-scribe", {"playbooks/new.md": "New.\n"}, "Moves on")

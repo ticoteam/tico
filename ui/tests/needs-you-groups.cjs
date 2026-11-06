@@ -1,4 +1,4 @@
-// Needs you on a busy company: grouped by what each item takes (Decide, Pay, Sign in or connect, Review and send, Do)
+// Needs you (the You tab) on a busy company: grouped by kind (Answer, Pay, Connect, Review, Do)
 // with a count per group, in the server's order (due first); an approval reads what it approves; a deadline shows as a
 // due chip; a card with folded duplicates says "+N"; an ask with a recommendation offers "Do what you recommend", which
 // posts once and closes the card. Its card (a tap on the row) leads with the same button (and R). Overview shows the count and how many
@@ -13,7 +13,7 @@ const SHOTS = process.env.NEEDS_SHOTS || '';
 const inDays = days => new Date(Date.now() + days * 86400000).toISOString();
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
-const base = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
+const base = (id, title, over = {}) => ({id, title, body: 'Details.', person_ask: 'Can you take care of this today?', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
 const TASKS = [
   base('t-keys', 'Add the new OpenAI keys', {requester_id: 'bot:botops', due_at: inDays(2)}),
@@ -50,6 +50,7 @@ const NEEDS = [
   card('t-invoice', {need: 'pay'}),
   card('t-deck', {need: 'review'}),
   card('t-call', {need: 'do', merged: ['t-merged', 't-old-merged']}),
+  card('t-old', {kind: 'question', need: 'decide', person_ask: ''}),
 ];
 const WENT_AWAY = {expired: 3, withdrawn: 1, assistant: 2, total: 6, days: 7};
 
@@ -66,7 +67,7 @@ async function shot(target, name) {
     let needs = NEEDS;
     const taken = [];
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json',
-      body: JSON.stringify({items: needs, went_away: WENT_AWAY})}));
+      body: JSON.stringify({items: needs, count: needs.length, plate_count: needs.length, went_away: WENT_AWAY})}));
     await page.route('**/api/v2/needs-you/recommended', route => {
       taken.push(route.request().postDataJSON());
       needs = needs.filter(x => x.id !== 't-pick');
@@ -74,7 +75,7 @@ async function shot(target, name) {
     });
     await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
     await page.locator('#task-view [data-view="foryou"]').click();
-    assert.equal((await page.locator('#task-group .v').textContent()).trim(), 'What it takes');
+    assert.equal((await page.locator('#task-group .v').textContent()).trim(), 'Kind');
 
     // Groups in order, each with its count; approvals sit in the group their kind takes.
     const groups = await page.locator('#task-body [data-group]').evaluateAll(gs => gs.map(g => ({
@@ -82,7 +83,8 @@ async function shot(target, name) {
       count: g.querySelector('.tl-count, .tl-gcount, .count')?.textContent.trim()})));
     assert.deepEqual(groups.map(g => [g.key, g.count]),
       [['need:decide', '1'], ['need:pay', '2'], ['need:connect', '1'], ['need:review', '2'], ['need:do', '1'], ['older', '1']], JSON.stringify(groups));
-    assert.deepEqual(groups.map(g => g.label), ['Answer', 'Pay', 'Sign in or connect', 'Review and send', 'Do', 'Older questions']);
+    assert.deepEqual(groups.map(g => g.label), ['Answer', 'Pay', 'Connect', 'Review', 'Do', 'Older questions']);
+    assert.equal(await page.locator('#task-tab-foryou .cnt').innerText(), '8');
     const review = page.locator('#task-body [data-group="need:review"]');
     assert.ok((await review.textContent()).includes("Send: '$200 for each rental owner you introduce' to Jennie Ooten"));
     assert.ok((await page.locator('#task-body [data-group="need:pay"]').textContent()).includes('Pay $1,200: LinkedIn ads for October'));
@@ -93,11 +95,11 @@ async function shot(target, name) {
     assert.match(await page.locator('#task-body [data-group="need:connect"] .tl-row').first().textContent(), /Due (\w{3}|tomorrow|today)/);
     assert.equal((await pick.locator('.tl-folded').textContent()).trim(), '+1');
     assert.equal(await page.locator('#task-body .tl-row', {hasText: 'Switch the payroll vendor'}).count(), 0);
-    // Older questions, opened, holds the unmerged old question and not the merged one.
     const older = page.locator('#task-body [data-group="older"]');
     if ((await older.locator('[data-group-toggle]').getAttribute('aria-expanded')) !== 'true') await older.locator('[data-group-toggle]').click();
-    assert.deepEqual(await older.locator('.tl-row').evaluateAll(rs => rs.map(r => r.textContent.includes('Which logo on the invoice?')
-      ? 'control' : r.textContent.includes('Which launch day?') ? 'merged' : 'other')), ['control']);
+    assert.equal(await older.locator('.tl-row').count(), 1);
+    assert.ok((await older.textContent()).includes('Which logo on the invoice?'));
+    assert.equal(await older.locator('[data-need-card]').count(), 0, 'an open question can need the full task');
     const rec = pick.locator('[data-recommend]');
     assert.equal((await rec.textContent()).trim(), 'Do what you recommend');
     await shot(page, 'needs-you-groups');
@@ -124,10 +126,10 @@ async function shot(target, name) {
     await page.evaluate(() => { location.hash = '#/overview/campus'; });
     const strip = page.locator('#overview-needs');
     await strip.waitFor();
-    assert.equal(await strip.locator('strong').textContent(), 'Needs you 6');
+    assert.equal(await strip.locator('strong').textContent(), 'Needs you 7');
     assert.equal(await strip.locator('.muted').textContent(), '6 went away on their own this week (3 expired, 1 withdrawn, 2 answered by your Assistant)');
     await shot(strip, 'overview-needs');
     assert.deepEqual(errors, []);
-    console.log('Needs you groups: what-it-takes groups with counts, titled approvals, due chips, folded duplicates, one-tap recommendation, overview strip');
+    console.log('Needs you groups: kind groups with counts, titled approvals, due chips, folded duplicates, one-tap recommendation, overview strip');
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});

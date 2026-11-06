@@ -271,6 +271,37 @@
    "default": false
   },
   {
+   "slug": "builder",
+   "template": "builder",
+   "name": "Builder",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Takes a Dev ticket that Head of Engineering has put on its step, builds the change on a branch with a test that proves it, opens the pull request and carries the ticket through review and QA fixes. It merges only when the team's merge rules allow it and the checks pass at the head.",
+   "when": "Offer when GitHub is connected and the team turns Dev tickets into code.",
+   "tags": [
+    "saas",
+    "github",
+    "code",
+    "developer-tools"
+   ],
+   "pains": [
+    "bugs and small changes wait in a queue before anyone starts on them",
+    "a fix goes back and forth between the author and the reviewers for days",
+    "a change is merged without a test that would have caught the bug",
+    "nobody can say which ticket a pull request came from or what it was meant to do"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_slack"
+   ],
+   "first_routine": "Dev ticket build · When a Dev ticket reaches In Progress",
+   "tools": [
+    "github"
+   ],
+   "default": false
+  },
+  {
    "slug": "chief-of-staff",
    "template": "chief-of-staff",
    "name": "Chief of Staff",

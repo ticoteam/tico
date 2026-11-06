@@ -62,6 +62,7 @@ A stop (`cell init` installing another core restarts the unit) lets an update un
 TimeoutStopSec in the unit). Each company's last status is kept in <company>/updater-status.json, so a restarted
 service still answers it; one that was still running when the service died says so.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -92,21 +93,23 @@ from . import cell as C
 STABLE = re.compile(r"v?([0-9]{1,6})\.([0-9]{1,6})\.([0-9]{1,6})")
 UNDER_WAY = ("pulling", "restarting")
 MAX_BODY = 1024
-SLEEP_LEAD = 1.0                 # how long POST /sleep's work waits after its answer, so the answer gets back first
+SLEEP_LEAD = 1.0  # how long POST /sleep's work waits after its answer, so the answer gets back first
 TOKEN_MIN, TOKEN_MAX = 32, 4096
 STATUS_FILE = "updater-status.json"
-RESCAN = 5.0                     # how soon a new company's listener is up, and a removed one's gone
-FREEBIND = getattr(socket, "IP_FREEBIND", 15)   # Linux: bind before Docker has made the company's bridge
+RESCAN = 5.0  # how soon a new company's listener is up, and a removed one's gone
+FREEBIND = getattr(socket, "IP_FREEBIND", 15)  # Linux: bind before Docker has made the company's bridge
 CORES = Path("/opt/tico-cell")  # core-<vX.Y.Z> per release, where HQ installs them (tico-services hosting/cloud.py)
 CORE_URL = "https://github.com/ticoteam/tico/archive/refs/tags/%s.tar.gz"
-CORE_MAX = 256 << 20             # the archive as downloaded (a release's is a few MB)
-CORE_TREE_MAX = 1 << 30          # and unpacked: a bad archive cannot fill the disk the companies share
+CORE_MAX = 256 << 20  # the archive as downloaded (a release's is a few MB)
+CORE_TREE_MAX = 1 << 30  # and unpacked: a bad archive cannot fill the disk the companies share
 CORE_MEMBERS = 100_000
-CORE_FETCH_S = 300               # the whole download
-CORE_RUN_S = 1800                # the core's own `cell update`: pull, stop, snapshot, the health wait (TimeoutStopSec)
+CORE_FETCH_S = 300  # the whole download
+CORE_RUN_S = 1800  # the core's own `cell update`: pull, stop, snapshot, the health wait (TimeoutStopSec)
 CORE_NAME = re.compile(r"core-(v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6})")
-INSPECT = ('{{index .Config.Labels "com.docker.compose.service"}}|{{.State.Status}}|'
-           '{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.RestartCount}}')    # docker/updater.py's own
+INSPECT = (
+    '{{index .Config.Labels "com.docker.compose.service"}}|{{.State.Status}}|'
+    '{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.RestartCount}}'
+)  # docker/updater.py's own
 
 
 def triple(version) -> tuple[int, int, int] | None:
@@ -211,21 +214,33 @@ class Service:
     `run_core` are where release cores go, the download, and the child run of a core's `cell update`; `lead` is the
     wait before POST /sleep's work."""
 
-    def __init__(self, root: Path, system: C.System | None = None, *, make_cell=None, core=None, bind=None,
-                 subnet=None, cores=None, fetch=None, run_core=None, lead=SLEEP_LEAD):
+    def __init__(
+        self,
+        root: Path,
+        system: C.System | None = None,
+        *,
+        make_cell=None,
+        core=None,
+        bind=None,
+        subnet=None,
+        cores=None,
+        fetch=None,
+        run_core=None,
+        lead=SLEEP_LEAD,
+    ):
         self.root, self.system = Path(root), system or C.System()
         self.make_cell = make_cell or (lambda: C.Cell(self.root, self.system))
         self.core = core or host_core
         self.cores, self.fetch, self.run_core = Path(cores or CORES), fetch or fetch_archive, run_core or run_child
-        self.lead = lead                        # POST /sleep's work waits this long after its answer
-        self.installing = threading.Lock()      # one core install at a time: two companies to one release share it
+        self.lead = lead  # POST /sleep's work waits this long after its answer
+        self.installing = threading.Lock()  # one core install at a time: two companies to one release share it
         self.bind = bind or (lambda index: (C.networks(index)["default_gateway"], C.UPDATER_PORT))
         self.subnet = subnet or (lambda index: C.networks(index)["default_subnet"])
         self.guard = threading.Lock()
         self.status: dict[str, dict] = {}
         self.errors: dict[str, collections.deque] = {}
         self.workers: set[threading.Thread] = set()
-        self.sleeps: dict[str, dict] = {}       # slug -> the sleep reserved for it (under `guard`): {"wake_at", "committed"}
+        self.sleeps: dict[str, dict] = {}  # slug -> the sleep reserved for it (under `guard`): {"wake_at", "committed"}
         self.listeners: dict[str, Listener] = {}
         self.published: set[str] = set()
         self.stopping = threading.Event()
@@ -242,8 +257,11 @@ class Service:
                 if isinstance(saved, dict) and saved.get("state") in ("healthy", "rolled_back", "failed", *UNDER_WAY):
                     found.update({k: v for k, v in saved.items() if isinstance(v, (str, bool))})
             if found["state"] in UNDER_WAY:
-                found.update(state="failed", message="Not settled: the cell updater stopped while this update ran. "
-                                                     "The company's next start finishes it or rolls it back.")
+                found.update(
+                    state="failed",
+                    message="Not settled: the cell updater stopped while this update ran. "
+                    "The company's next start finishes it or rolls it back.",
+                )
             self.status[slug] = found
             self.errors[slug] = collections.deque(maxlen=50)
         return self.status[slug]
@@ -253,8 +271,14 @@ class Service:
             s = self.state(slug)
             s.update(fields)
             if fields.get("state") in ("failed", "rolled_back"):
-                self.errors[slug].append("%s %s: %s" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), s["state"],
-                                                        str(s.get("message") or "")[:250]))
+                self.errors[slug].append(
+                    "%s %s: %s"
+                    % (
+                        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        s["state"],
+                        str(s.get("message") or "")[:250],
+                    )
+                )
             text = json.dumps(s, sort_keys=True) + "\n"
         d = self.root / "companies" / slug
         if d.is_dir():
@@ -340,24 +364,30 @@ class Service:
             s = self.state(slug)
             if s["state"] in UNDER_WAY:
                 return 409, {"error": "an update is already running", **s}
-            if (self.sleeps.get(slug) or {}).get("committed"):     # the server is stopping: update it when it wakes
-                return 409, {"error": "an update is already running", **s,
-                             "message": "This company is going to sleep; try again when it wakes."}
-            if self.sleeps.pop(slug, None):     # a pending sleep gives way: its work finds no reservation and stops
+            if (self.sleeps.get(slug) or {}).get("committed"):  # the server is stopping: update it when it wakes
+                return 409, {
+                    "error": "an update is already running",
+                    **s,
+                    "message": "This company is going to sleep; try again when it wakes.",
+                }
+            if self.sleeps.pop(slug, None):  # a pending sleep gives way: its work finds no reservation and stops
                 log(f"{slug}: sleep canceled by an update to {version}")
             before = dict(s)
             s.update(state="pulling", to=version, message="", snapshot="", restored=False, **{"from": running})
-        try:                            # staff's `cell update` (or add, stop...) holds the company: not now
+        try:  # staff's `cell update` (or add, stop...) holds the company: not now
             with self.make_cell().lock("company-" + slug, timeout=0):
                 pass
         except C.CellError:
             with self.guard:
                 self.status[slug] = before
-                return 409, {"error": "an update is already running", **before,
-                             "message": "Another cell command is changing this company; try again when it is done."}
+                return 409, {
+                    "error": "an update is already running",
+                    **before,
+                    "message": "Another cell command is changing this company; try again when it is done.",
+                }
         self.set(slug)
         worker = threading.Thread(target=self.work, args=(slug, version), name="update-" + slug)
-        with self.guard:                # the answer is the status as accepted, as the sidecar's: the worker moves on
+        with self.guard:  # the answer is the status as accepted, as the sidecar's: the worker moves on
             accepted = dict(self.state(slug))
             self.workers.add(worker)
         worker.start()
@@ -386,14 +416,14 @@ class Service:
         with self.guard:
             if self.busy(slug):
                 return 409, {"error": "busy"}
-        try:                            # the same probe /update makes: staff's command holds the company, not now
+        try:  # the same probe /update makes: staff's command holds the company, not now
             with self.make_cell().lock("company-" + slug, timeout=0):
                 pass
         except C.CellError:
             return 409, {"error": "busy"}
         mine = {"wake_at": wake_at, "committed": False}
         worker = threading.Thread(target=self.sleep_work, args=(slug, mine), name="sleep-" + slug, daemon=True)
-        with self.guard:                # again: an update may have been admitted during the probe
+        with self.guard:  # again: an update may have been admitted during the probe
             if self.busy(slug):
                 return 409, {"error": "busy"}
             self.sleeps[slug] = mine
@@ -436,7 +466,7 @@ class Service:
 
     def work(self, slug: str, version: str) -> None:
         cell = self.make_cell()
-        cell.lock_wait = 0              # a command that took the company since the request: refused, not queued
+        cell.lock_wait = 0  # a command that took the company since the request: refused, not queued
         try:
             target, refused, newer = self.check(cell, slug, version)
             if refused:
@@ -447,8 +477,11 @@ class Service:
                 try:
                     folder = self.install_core(target)
                 except (Refused, OSError, tarfile.TarError) as e:
-                    self.set(slug, state="failed", message=cell.scrub(f"Not updated: could not install the {target} "
-                                                                       f"core: {e}")[:600])
+                    self.set(
+                        slug,
+                        state="failed",
+                        message=cell.scrub(f"Not updated: could not install the {target} core: {e}")[:600],
+                    )
                     return
             try:
                 cell.pull(target)
@@ -466,10 +499,12 @@ class Service:
                 self.set(slug, state="rolled_back", message=detail, snapshot=cell.taken, restored=bool(cell.taken))
             elif e.code in ("rollback_failed", "unhealthy"):
                 self.set(slug, state="failed", message=detail, snapshot=cell.taken)
-            else:                       # refused before anything changed, or put back as it was (cell.py `restarted`)
+            else:  # refused before anything changed, or put back as it was (cell.py `restarted`)
                 self.set(slug, state="failed", message="Not updated: " + detail)
         except Exception as e:  # noqa: BLE001  the status says it, rather than a dead thread saying nothing
-            self.set(slug, state="failed", message=cell.scrub(f"the cell updater failed: {type(e).__name__}: {e}")[:600])
+            self.set(
+                slug, state="failed", message=cell.scrub(f"the cell updater failed: {type(e).__name__}: {e}")[:600]
+            )
         finally:
             log(f"{slug}: update to {version}: {self.status.get(slug, {}).get('state', '')}")
             with self.guard:
@@ -536,8 +571,12 @@ class Service:
         before = set(os.listdir(snaps)) if snaps.is_dir() else set()
         env = {k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "TICO_"))}
         env["TICO_CELL_ROOT"] = str(self.root)
-        code, out = self.run_core([sys.executable, "-m", "setup", "cell", "update", "--company", slug, "--version", target,
-                                   "--json"], folder, env, CORE_RUN_S)
+        code, out = self.run_core(
+            [sys.executable, "-m", "setup", "cell", "update", "--company", slug, "--version", target, "--json"],
+            folder,
+            env,
+            CORE_RUN_S,
+        )
         answer = {}
         for line in reversed(out.splitlines()):
             with contextlib.suppress(ValueError):
@@ -557,10 +596,15 @@ class Service:
         elif error:
             self.set(slug, state="failed", message="Not updated: " + detail)
         else:
-            self.set(slug, state="failed", message=(
-                f"The {target} core's `cell update` gave no answer (exit {code}"
-                + (f", stopped after {CORE_RUN_S // 60} minutes" if code == 124 else "")
-                + "). `cell status` says where the company is; its next start finishes a pending update or rolls it back."))
+            self.set(
+                slug,
+                state="failed",
+                message=(
+                    f"The {target} core's `cell update` gave no answer (exit {code}"
+                    + (f", stopped after {CORE_RUN_S // 60} minutes" if code == 124 else "")
+                    + "). `cell status` says where the company is; its next start finishes a pending update or rolls it back."
+                ),
+            )
 
     def diagnostics(self, slug: str) -> dict:
         """docker/updater.py's diagnostics, for this company's containers only."""
@@ -569,21 +613,34 @@ class Service:
         def out(argv: list[str]) -> str:
             r = self.system.run(argv, timeout=15)
             return r.stdout.strip() if r.returncode == 0 else ""
+
         containers = []
         for ident in out(cell.compose(slug, "ps", "-a", "-q")).split()[:50]:
             row = out(["docker", "inspect", "--format", INSPECT, ident]).split("|")
             if len(row) == 4:
-                containers.append({"name": row[0], "state": row[1], "health": row[2],
-                                   "restarts": int(row[3]) if row[3].isdigit() else 0})
+                containers.append(
+                    {
+                        "name": row[0],
+                        "state": row[1],
+                        "health": row[2],
+                        "restarts": int(row[3]) if row[3].isdigit() else 0,
+                    }
+                )
         with self.guard:
             self.state(slug)
             recent = list(self.errors[slug])
         core, c = self.core(), cell.load(slug) or {}
         runs = c.get("version") if isinstance(c.get("version"), str) else ""
         note = self.lag(runs) if triple(runs) and (not triple(core) or triple(runs) > triple(core)) else ""
-        return {"mode": "cell", "version": core, "docker": out(["docker", "version", "--format", "{{.Server.Version}}"]),
-                "compose": out(["docker", "compose", "version", "--short"]), "containers": containers, "errors": recent,
-                "note": note}
+        return {
+            "mode": "cell",
+            "version": core,
+            "docker": out(["docker", "version", "--format", "{{.Server.Version}}"]),
+            "compose": out(["docker", "compose", "version", "--short"]),
+            "containers": containers,
+            "errors": recent,
+            "note": note,
+        }
 
     # --- listeners --------------------------------------------------------------------------------------------
 
@@ -614,7 +671,7 @@ class Service:
             listener.server_close()
         with self.guard:
             running = list(self.workers)
-        for worker in running:          # an update under way finishes: a kill half-way would leave it to a restart
+        for worker in running:  # an update under way finishes: a kill half-way would leave it to a restart
             worker.join()
 
 
@@ -638,7 +695,7 @@ class Listener(ThreadingHTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "tico-cell-updater"
-    timeout = 10                        # a client that sends nothing does not keep a thread
+    timeout = 10  # a client that sends nothing does not keep a thread
 
     def reply(self, code: int, body: dict) -> None:
         data = json.dumps(body).encode()
@@ -673,12 +730,14 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(*self.server.service.post(self.server.slug, self.server.index, self.path, self.rfile.read(length)))
 
     def log_message(self, *args):
-        pass                            # request lines are not kept: nothing here needs them
+        pass  # request lines are not kept: nothing here needs them
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="python3 -m setup.cell_updater",
-                                description="Each cell company's updater (docs/cell.md); `cell init` runs it.")
+    p = argparse.ArgumentParser(
+        prog="python3 -m setup.cell_updater",
+        description="Each cell company's updater (docs/cell.md); `cell init` runs it.",
+    )
     p.add_argument("--root", default=os.environ.get("TICO_CELL_ROOT") or C.ROOT)
     args = p.parse_args(argv)
     Service(Path(args.root)).run()

@@ -10,6 +10,7 @@ and set `reviewed_by` to their name. What is cut from the original transcript is
 It prints any secret-looking values (keys, tokens, email addresses) it found; run.py refuses a case that still has one.
 Only text files are copied; a binary file is listed with empty text for the person to replace or drop.
 """
+
 import argparse
 import importlib.util
 import sys
@@ -30,8 +31,9 @@ TEXT_LIMIT = 200_000
 
 
 def fetch_text(url, base, token):
-    request = urllib.request.Request(url if "://" in url else base.rstrip("/") + url,
-                                     headers={"Authorization": "Bearer " + token})
+    request = urllib.request.Request(
+        url if "://" in url else base.rstrip("/") + url, headers={"Authorization": "Bearer " + token}
+    )
     with urllib.request.urlopen(request, timeout=60) as response:
         body = response.read(TEXT_LIMIT + 1)
     return body[:TEXT_LIMIT].decode("utf-8", "replace")
@@ -46,7 +48,10 @@ def capture(server, base, token, task_id):
     files = server.request("GET", f"tasks/{task_id}/files", token=token)[1] or {}
     for f in files.get("files") or []:
         for v in f.get("versions") or []:
-            text_like = str(v.get("mime") or "").startswith("text/") or v.get("mime") in ("application/json", "application/yaml")
+            text_like = str(v.get("mime") or "").startswith("text/") or v.get("mime") in (
+                "application/json",
+                "application/yaml",
+            )
             v["text"] = fetch_text(v["url"], base, token) if text_like and v.get("url") else ""
     bot = str(detail["task"]["owner_id"]).removeprefix("bot:")
     instructions = server.request("GET", f"bots/{bot}/instructions", token=token)[1] or {}
@@ -62,7 +67,9 @@ def main(argv=None):
     parser.add_argument("--out", required=True, help="a private folder outside this repository")
     args = parser.parse_args(argv)
     out = Path(args.out)
-    if (Path(__file__).resolve().parents[2] / ".git").exists() and out.resolve().is_relative_to(Path(__file__).resolve().parents[2]):
+    if (Path(__file__).resolve().parents[2] / ".git").exists() and out.resolve().is_relative_to(
+        Path(__file__).resolve().parents[2]
+    ):
         raise SystemExit("write cases outside this repository: it is public")
     out.mkdir(parents=True, exist_ok=True)
     server = botops_run.Live(args.url)
@@ -75,9 +82,11 @@ def main(argv=None):
         path = out / f"{case['id']}.yaml"
         path.write_text(yaml.safe_dump(case, sort_keys=False, allow_unicode=True, width=120))
         hits = replay.secrets_in(case)
-        print(f"{path}: draft, {len(case['conversation'])} opening messages, {len(case['files'])} files, "
-              f"{len(case['original']['transcript'])} messages after; prompt {'exact' if case['prompt']['exact'] else 'NEWER than the task'}"
-              + (f"; {len(hits)} secret-looking values to cut" if hits else ""))
+        print(
+            f"{path}: draft, {len(case['conversation'])} opening messages, {len(case['files'])} files, "
+            f"{len(case['original']['transcript'])} messages after; prompt {'exact' if case['prompt']['exact'] else 'NEWER than the task'}"
+            + (f"; {len(hits)} secret-looking values to cut" if hits else "")
+        )
     return 0
 
 

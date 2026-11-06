@@ -1,13 +1,13 @@
 # ui/
 
-The web UI: plain HTML, CSS and classic scripts, served as they are. There is no build step and no
-module system. Every script shares the page's globals (`S`, `$`, `esc`, `get`, `post`, `route`, ...).
+The web UI: plain HTML, CSS and classic scripts. There is no module system yet: every script shares the page's
+globals (`S`, `$`, `esc`, `get`, `post`, `route`, ...). A script is JavaScript or TypeScript (below).
 
     index.html        the markup skeleton, then <link> and <script> tags in load order; no inline script.
                       The tags between the `<!-- bundle:css:start/end -->` and `<!-- bundle:js:start/end -->`
                       markers are the styles and app scripts; the server bundles them (below)
     styles/*.css      the stylesheet, one file per area, linked in cascade order
-    app/*.js          the app: routing, state, sidebar and one file per page or feature
+    app/*.js, *.ts    the app: routing, state, sidebar and one file per page or feature
     *.js              features that mount into a page through a small `window.*` API
                       (docs-page.js, goals-kpis.js, first-run.js, support.js, ...)
     assets/, vendor/  images, the text font (Inter) and the icon font, marked
@@ -18,17 +18,36 @@ module system. Every script shares the page's globals (`S`, `$`, `esc`, `get`, `
 
 The many files are for editing. The server (`backend/ui_bundle.py`) concatenates the files listed between the
 markers, in that order, into `/tico/ui/app.bundle.js` and `/tico/ui/app.bundle.css` (each file after a
-`// file: app/name.js` comment), and serves index.html with each region replaced by one tag,
-`?v=<content hash>`. The bundles are immutable for that URL (`Cache-Control: public, max-age=31536000,
+`// file: app/name.js` comment), cut between files into parts of at most 512 KB (`app.bundle.2.js`, ...: WebKit's
+disk cache keeps nothing larger than an eighth of its size), and serves index.html with each region replaced by the
+parts' tags, each `?v=<hash of the whole bundle>`. The bundles are immutable for that URL (`Cache-Control: public, max-age=31536000,
 immutable`, strong ETag, gzip when the browser accepts it); index.html is revalidated on every load. It
-rebuilds when a listed file changes, so editing needs no step. index.html is the only list: adding a file to it
+rebuilds when a listed file changes, so editing a `.js` file needs no step. index.html is the only list: adding a file to it
 adds it to the bundle.
 
 A file that is not strict cannot share the bundle's one script (the bundle opens with `'use strict'` once), so
 start every `app/` file and every feature file (`ui/*.js`) with it. `TICO_UI_BUNDLE=off` serves the files separately, as listed. The browser
 tests run the real bundler and serve the bundle by default; `TICO_UI_BUNDLE=off npm run test:ui` runs them on
 the separate files. The feature files (`ui/*.js`) are in the bundle too, ahead of `app/`; only `theme.js` (in the head, before
-the first paint) and `vendor/` load on their own.
+the first paint) and `vendor/` load on their own. The page names `theme.js` and `vendor/marked.min.js` with `?v=<content hash>` too, and the
+server keeps them for a year at that URL (`STANDALONE` in backend/ui_bundle.py), so opening the app revalidates neither.
+
+## TypeScript
+
+Write a new file as TypeScript, `app/name.ts`, and list it in index.html by that name: strict types, no `any`, and
+only syntax that erases (no `enum`, `namespace` or constructor parameter properties), since it stays a classic
+script whose top-level names are globals like any other file's. `npm run build:ui` (scripts/build-ui.cjs, after
+`npm ci`) compiles each `.ts` file to `build/ui/` at the same path (`build/ui/app/name.js`) with esbuild's per-file
+transform: types stripped, nothing bundled, the file's place in the load order unchanged. `npm run watch:ui`
+recompiles on every change. `build/` is not committed. Each output has an external source map beside it
+(`name.js.map`, which its last line names), served as `/tico/ui/app/name.js.map`, so with the files served separately
+(`TICO_UI_BUNDLE=off`) a stack trace and the developer tools show the `.ts`. The bundle drops that line: its parts have
+no maps, for `.js` files either. `build/ui/manifest.json` records each source's, output's and map's
+sha256, and the bundle and the server's `/tico/ui/<name>.ts` route serve the output only while both match
+(backend/ui_build.py): a missing or stale build is a 503 naming the command, and `python -m backend.server` refuses
+to start on one (it compiles first when the checkout has Node and `npm ci`; so do pytest and `npm run test:ui`). The
+image compiles the UI in its own stage (Dockerfile `ui-build`) and ships only the output: the server image has no
+Node. `bash scripts/check_ui_types.sh` type-checks the `.ts` files with the rest.
 
 An open tab does not pick up a new release by itself. The config carries the release (`version`) and the served build
 (`ui_build`, the `?v=` of the two bundle tags joined by a dot); `app/notices.js` compares both with what the page loaded with, on the
@@ -64,11 +83,12 @@ Every file in `app/` and every feature file starts with `'use strict'`, as the o
 | issues, hub-v2, needs-you, bot-tasks | shared request rows and tables, hub v2 helpers, Needs you, a bot's tasks |
 | chat, pill, bot-page, bot-conversation, person-page, assistant-page | bot chat and its live reply, the composer, the bot and human pages, your Assistant |
 | tasks, task-board, task-modal, task-code, task-runs, tasks-page, pull-refresh, decide, recurring | Tasks: rows and cards, dragging on the board and its folds, the modal and its conversation (the session as a chat), the modal's Code and Subtasks rail and the PR badge, its Runs section (checkpoint, attempts, subagents, background work), the page and its pull to refresh, Decide (one card at a time), routines |
-| meetings, mail, messaging, credentials, sql, integrations, help, computer-screen, computer-performance | one page each (computer-screen loads noVNC from `vendor/novnc/` with `import()`) |
+| tools, tools-api, inboxes, inboxes-* | Tools: the list and its router, one API tool, and the inbox kinds' pages under it (mailbox, numbers, addresses, letters out, their settings) |
+| meetings, mail, messaging, sql, integrations, help, computer-screen, computer-performance | one page each (computer-screen loads noVNC from `vendor/novnc/` with `import()`) |
 | settings, settings-*, subscriptions, vault, catalog | Settings: shell, one file per tab, the bot editor, access editor, subscriptions (computers, groups, a bot's), credential vault, template cards |
 | welcome, updates, goals, overview | setup, Updates, Goals, and the optional building overview |
 | company-page | the Company page for owners and admins: Overview's Company page tab and its share panel, and the section behind Manage with transparency, editions and approvals, audiences, disclosure, the stats board, readers, previews (`styles/company-page.css`; the reader's page itself is rendered by `backend/company_page/render.py`) |
-| router, drawer, search, org-fan, nav-events, viewport, refresh, native, boot | `route()`, account menu and phone drawer, search, mobile team switcher, keyboard viewport, the refresh loop, the desktop bridge, startup |
+| router, drawer, search, org-fan, nav-events, viewport, refresh, native, boot-timing, boot-snap, boot | `route()`, account menu and phone drawer, search, mobile team switcher, keyboard viewport, the refresh loop, the desktop bridge, how long opening took (marks, the desktop app's log line), the last screen shown again while the app opens (IndexedDB, same person only, read-mostly pages), startup |
 
 Files under about 1,500 lines; split a file along its section comments when it grows past that.
 

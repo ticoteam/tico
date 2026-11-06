@@ -14,9 +14,9 @@
           - {id: 1a0c5e27-1000-4000-8000-000000000001, title: "Docs for v0.5.20 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "Shipped. Notes are on the Company page.", created: "2026-11-02T23:10:00Z", updated: "2026-11-03T08:02:00Z"}
           - {id: 2b1d6f38-1000-4000-8000-000000000002, title: "Docs for v0.5.19 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-02T15:12:00Z", updated: "2026-11-02T16:40:00Z"}
           - {id: 3c2e7a49-1000-4000-8000-000000000003, title: "Docs for v0.5.18 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-01T23:08:00Z", updated: "2026-11-02T09:00:00Z"}
-          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
-          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
-          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
+          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
+          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
+          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
           - {id: b1c2d3e4-1000-4000-8000-000000000007, title: "Approve the v0.5.17 publish notes", status: open, owner: "human:dana", requester: "bot:release-manager", note: "Superseded by v0.5.20, which shipped.", created: "2026-10-30T10:00:00Z", updated: "2026-11-02T23:30:00Z"}
           - {id: 7d21c4a0-1000-4000-8000-000000000008, title: "Approve the v0.5.0 release publish", status: waiting, owner: "human:dana", requester: "bot:release-manager", note: "Ready for your publish approval.", created: "2026-10-29T09:00:00Z", updated: "2026-11-01T09:00:00Z"}
           - {id: 8e6d2f1b-1000-4000-8000-000000000009, title: "Org chart: approve the new Engineering group", status: waiting, owner: "human:dana", requester: "bot:keeper", note: "Waiting on your yes.", created: "2026-10-25T14:00:00Z", updated: "2026-10-28T14:00:00Z"}
@@ -33,7 +33,7 @@
     - '^message send'
   reply: |
     Closes the bot-made items the record shows are finished, replaced or duplicates, in bulk, as Dana: the three "Docs for"
-    tasks already done, the three identical "[Health Monitor] test ping" tasks, and the v0.5.17 publish task replaced by
+    tasks already done, the three identical "[Check health] test ping" tasks, and the v0.5.17 publish task replaced by
     v0.5.20. These are closed directly, not on a Confirm card, because the record shows they are done or replaced. It does
     not refuse because a bot requested them. Live decisions stay open: the v0.5.0 publish, the org-chart yes and the CEO Bot
     questions. The website deploy task (no activity since Oct 14) is either left alone or put on at most one card for her to
@@ -53,9 +53,9 @@
           - {id: 1a0c5e27-1000-4000-8000-000000000001, title: "Docs for v0.5.20 release notes", status: open, owner: "human:dana", requester: "bot:technical-writer", note: "Shipped. Notes are on the Company page.", created: "2026-11-02T23:10:00Z", updated: "2026-11-03T08:02:00Z"}
           - {id: 2b1d6f38-1000-4000-8000-000000000002, title: "Docs for v0.5.19 release notes", status: open, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-02T15:12:00Z", updated: "2026-11-02T16:40:00Z"}
           - {id: 3c2e7a49-1000-4000-8000-000000000003, title: "Docs for v0.5.18 release notes", status: open, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-01T23:08:00Z", updated: "2026-11-02T09:00:00Z"}
-          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
-          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
-          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
+          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
+          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
+          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
           - {id: b1c2d3e4-1000-4000-8000-000000000007, title: "Approve the v0.5.17 publish notes", status: open, owner: "human:dana", requester: "bot:release-manager", note: "Superseded by v0.5.20, which shipped.", created: "2026-10-30T10:00:00Z", updated: "2026-11-02T23:30:00Z"}
           - {id: 7d21c4a0-1000-4000-8000-000000000008, title: "Approve the v0.5.0 release publish", status: waiting, owner: "human:dana", requester: "bot:release-manager", note: "Ready for your publish approval.", created: "2026-10-29T09:00:00Z", updated: "2026-11-01T09:00:00Z"}
           - {id: 8e6d2f1b-1000-4000-8000-000000000009, title: "Org chart: approve the new Engineering group", status: waiting, owner: "human:dana", requester: "bot:keeper", note: "Waiting on your yes.", created: "2026-10-25T14:00:00Z", updated: "2026-10-28T14:00:00Z"}
@@ -66,7 +66,7 @@
       out:
         automations:
           - {id: auto_docs_release, name: "Docs and release notes for each release", owner: "bot:technical-writer", trigger: "release published (about twice a day)", enabled: true, runs_7d: 14, creates: "one task per release, owner human:dana"}
-          - {id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
+          - {id: auto_health_pings, name: "Check health runner queue ping", owner: "bot:botops", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
         next: null
     - match: '^automation (show|get) auto_docs_release'
       out:
@@ -146,7 +146,6 @@
         by_bot:
           - {bot: "bot:technical-writer", display_name: "Technical Writer", total: 20, task: 20, question: 0, approval: 0, this_week: 12, older_than_3_days: 8}
           - {bot: "bot:botops", display_name: "BotOps", total: 26, task: 18, question: 8, approval: 0, this_week: 19, older_than_3_days: 7}
-          - {bot: "bot:health-monitor", display_name: "Health Monitor", total: 22, task: 22, question: 0, approval: 0, this_week: 22, older_than_3_days: 0}
           - {bot: "bot:engineering-lead", display_name: "Engineering Lead", total: 19, task: 11, question: 8, approval: 0, this_week: 16, older_than_3_days: 3}
           - {bot: "bot:release-manager", display_name: "Release Manager", total: 18, task: 9, question: 6, approval: 3, this_week: 15, older_than_3_days: 3}
           - {bot: "bot:pr-reviewer", display_name: "PR Reviewer", total: 15, task: 11, question: 2, approval: 2, this_week: 13, older_than_3_days: 2}
@@ -175,7 +174,7 @@
     - '^assistant propose .*approvals'
   reply: |
     Gives the exact count from the board's own numbers: 193 items needing Dana, split as 130 tasks, 57 bot questions and
-    6 approvals, and the split by bot (the Technical Writer, BotOps, Health Monitor, and so on, with the numbers the tool
+    6 approvals, and the split by bot (the Technical Writer, BotOps, Check health, and so on, with the numbers the tool
     returned). These numbers match the tool output exactly, not the owner's round figure. It says most of the 193 are
     leftover asks and test pings, not decisions, and gives the cause in one line (repeat test pings, per-release docs tasks,
     old questions). Then it names the few real decisions from the record: the v0.5.0 publish approval, the Engineering group
@@ -220,7 +219,7 @@
     - match: '^brief'
       out:
         alerts:
-          - "Runner queue: 6 test pings from Health Monitor open on you since Nov 2."
+          - "Runner queue: 6 test pings from Check health open on you since Nov 2."
           - "Release v0.5.20 shipped at 23:00 UTC; its docs task is done but still open."
         waiting_on_you: {count: 193}
         bots_down: []

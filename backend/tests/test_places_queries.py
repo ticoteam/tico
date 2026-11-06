@@ -1,5 +1,6 @@
 """GET /api/v2/places/{place} reads each pin, its card or page and what a card shows in batches, so the statements
 it takes do not grow with how many pins a place has (or how many cards of the same kind it shows)."""
+
 import contextlib
 
 from backend.tests import test_api as T
@@ -37,7 +38,9 @@ def place_statements(api, monkeypatch, path, token="ana-test"):
                     yield c
                 finally:
                     c.set_trace_callback(None)
+
         return borrowed
+
     with monkeypatch.context() as patched:
         for name in ("read", "read_transaction", "transaction"):
             patched.setattr(store, name, traced(getattr(store, name)))
@@ -74,4 +77,5 @@ def test_the_dashboard_takes_the_same_statements_however_many_pins_it_shows(tmp_
     assert few > 0 and many > 0, (few, many)
     assert many - few <= 4, (
         f"GET /api/v2/places/dashboard takes {many} statements with 5 more pins a kind against {few} with 1: a read "
-        "runs once per pin again instead of once for the whole place. Batch it (see cards.prime_pins).")
+        "runs once per pin again instead of once for the whole place. Batch it (see cards.prime_pins)."
+    )

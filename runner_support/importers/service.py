@@ -21,8 +21,19 @@ GRANULARITY = 30
 
 
 class ImporterService:
-    def __init__(self, config, directory=None, *, client=None, state=None, classes=None, now=None,
-                 backfill_days=None, only=None, transport=None):
+    def __init__(
+        self,
+        config,
+        directory=None,
+        *,
+        client=None,
+        state=None,
+        classes=None,
+        now=None,
+        backfill_days=None,
+        only=None,
+        transport=None,
+    ):
         self.config = config
         self.client = client or Client(config["url"], config["token"], timeout=60, retries=1)
         self.state = state if state is not None else (State(directory) if directory else None)
@@ -35,8 +46,13 @@ class ImporterService:
     def importer(self, source):
         if source not in self.instances:
             self.instances[source] = self.classes(source)(
-                self.config, self.state, self.client, transport=self.transport, now=self.now,
-                backfill_days=self.backfill_days)
+                self.config,
+                self.state,
+                self.client,
+                transport=self.transport,
+                now=self.now,
+                backfill_days=self.backfill_days,
+            )
         return self.instances[source]
 
     def assigned(self):
@@ -49,7 +65,7 @@ class ImporterService:
         try:
             self.client.post("imports/sources/" + source + "/status", body)
         except Exception:
-            pass                        # the next pass reports again; a failed report is not a failed sync
+            pass  # the next pass reports again; a failed report is not a failed sync
 
     def sync(self, source):
         """One importer, one pass. Returns how many meetings changed; never raises a secret."""
@@ -61,7 +77,7 @@ class ImporterService:
             log("Tico " + importer.name + ": " + exc.code + ", " + str(exc))
             self.report(source, state="error", error_code=exc.code, message=str(exc)[:200])
             return None
-        except Exception as exc:        # a bug or a hub outage: name the type, never the text
+        except Exception as exc:  # a bug or a hub outage: name the type, never the text
             self.failures[source] = self.failures.get(source, 0) + 1
             log("Tico " + importer.name + ": sync_error, " + describe(exc))
             self.report(source, state="error", error_code="sync_error", message=CODES["sync_error"])
@@ -83,15 +99,23 @@ class ImporterService:
             imported = self.sync(source)
             done[source] = imported
             failures = self.failures.get(source, 0)
-            delay = self.importer(source).interval if not failures else min(
-                self.importer(source).interval, RETRY_SECONDS * 2 ** min(failures - 1, 3))
+            delay = (
+                self.importer(source).interval
+                if not failures
+                else min(self.importer(source).interval, RETRY_SECONDS * 2 ** min(failures - 1, 3))
+            )
             self.due[source] = time.monotonic() + delay
         return done
 
     def run(self):
         from ..freshness import CodeWatch
-        cloud = Outage("Tico importers", "cannot reach the Tico server", "still cannot reach the Tico server",
-                       "Tico server reachable again")
+
+        cloud = Outage(
+            "Tico importers",
+            "cannot reach the Tico server",
+            "still cannot reach the Tico server",
+            "Tico server reachable again",
+        )
         watch = CodeWatch("Tico importers")
         while not self.stop.is_set():
             try:
@@ -99,7 +123,7 @@ class ImporterService:
                 cloud.recovered()
             except Exception as exc:
                 cloud.failed(exc)
-            if watch.wait(self.stop, GRANULARITY):   # the checkout moved: the supervisor starts it on the new code
+            if watch.wait(self.stop, GRANULARITY):  # the checkout moved: the supervisor starts it on the new code
                 return
 
 

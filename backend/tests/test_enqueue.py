@@ -6,12 +6,18 @@ lines, an external agent's inbox, an imported transcript) and records, for every
 and whether a job was queued for it. The expected rows were recorded while the `queue_bot_message` trigger did the
 queueing; `backend/enqueue.py` must queue exactly the same jobs.
 """
+
+import importlib
 import json
 
 import pytest
 
-from backend.store import H, encode
+from backend import bot_settings as BS
+from backend.store import H
 from backend.tests.test_api import api, post, setup_attempt  # noqa: F401
+
+# The table's DDL: migration 0070 owns it (bot_settings.py has none).
+_BOT_SETTINGS_TABLE = importlib.import_module("backend.migrations.0070_bot_settings").TABLE
 
 
 def _mark(c):
@@ -21,13 +27,16 @@ def _mark(c):
 def _written(api, since):
     """(sender, recipient, kind, queued) for every message written after `since`, in write order."""
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT m.sender_id, m.recipient_id, m.kind, "
-                         "EXISTS(SELECT 1 FROM jobs j WHERE j.message_id=m.id AND j.id=m.id "
-                         "AND j.bot_id=substr(m.recipient_id,5)) AS queued, "
-                         "(SELECT count(*) FROM jobs j WHERE j.message_id=m.id) AS jobs "
-                         "FROM messages m WHERE m.rowid>? ORDER BY m.rowid", (since,)).fetchall()
+        rows = c.execute(
+            "SELECT m.sender_id, m.recipient_id, m.kind, "
+            "EXISTS(SELECT 1 FROM jobs j WHERE j.message_id=m.id AND j.id=m.id "
+            "AND j.bot_id=substr(m.recipient_id,5)) AS queued, "
+            "(SELECT count(*) FROM jobs j WHERE j.message_id=m.id) AS jobs "
+            "FROM messages m WHERE m.rowid>? ORDER BY m.rowid",
+            (since,),
+        ).fetchall()
     for r in rows:
-        assert r["jobs"] == r["queued"], dict(r)          # a job is the message's own: id = message id, its bot
+        assert r["jobs"] == r["queued"], dict(r)  # a job is the message's own: id = message id, its bot
     return [(r["sender_id"], r["recipient_id"], r["kind"], bool(r["queued"])) for r in rows]
 
 
@@ -93,8 +102,15 @@ def test_quiet_live_and_self_messages_queue_nothing(api):
     at = _since(api)
     with api.app.state.store.transaction() as c:
         conv = H.open_conversation(c, "human:ana", ["human:ana", ops], kind="chat")
-        for refs in ({"quiet": True}, {"live": {"kind": "transcript"}}, {"live": {"kind": "decision"}},
-                     {"live": {"kind": "tool"}}, {"live": {"kind": "ask"}}, {"quiet": False}, {"quiet": 0}):
+        for refs in (
+            {"quiet": True},
+            {"live": {"kind": "transcript"}},
+            {"live": {"kind": "decision"}},
+            {"live": {"kind": "tool"}},
+            {"live": {"kind": "ask"}},
+            {"quiet": False},
+            {"quiet": 0},
+        ):
             H._write_message(c, "human:ana", ops, "words", conv, "say", refs, None, None)
         H._write_message(c, ops, ops, "a note to self", conv, "say", {}, None, None)
     assert [w[3] for w in _written(api, at)] == [False, False, False, False, True, True, True, False]
@@ -112,7 +128,7 @@ def test_a_paused_bot_still_gets_its_job_queued(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='archived' WHERE slug='ops'")
     at = _since(api)
-    with pytest.raises(H.Refused):              # an archived bot is not written to at all
+    with pytest.raises(H.Refused):  # an archived bot is not written to at all
         with api.app.state.store.transaction() as c:
             H.say(c, "human:ana", ops, "Still there?")
     assert _written(api, at) == []
@@ -120,8 +136,7 @@ def test_a_paused_bot_still_gets_its_job_queued(api):
 
 def test_a_thread_with_members_queues_the_mentioned_bot_through_its_carrier(api):
     ops, coo = _bot(api, "ops"), _bot(api, "coo")
-    thread = post(api, "threads", {"title": "Launch", "audience": "members",
-                                   "members": ["human:ben", ops, coo]})
+    thread = post(api, "threads", {"title": "Launch", "audience": "members", "members": ["human:ben", ops, coo]})
     at = _since(api)
     post(api, f"threads/{thread['id']}/messages", {"text": "@ops take this one"})
     written = _written(api, at)
@@ -145,14 +160,18 @@ def _external(api, harness="hermes", computer=None):
         config = {"name": "ops", "runtime": "fake", "status": "active", "harness": harness}
         if computer:
             config["app_delivery"] = {"computer": computer}
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode(config),))
+        BS.write(c, "ops", config)
 
 
 def test_an_external_agents_bot_gets_no_job_unless_a_registered_computer_delivers_it(api):
     ops = _bot(api, "ops")
     r, _, _attempt = setup_attempt(api)
-    for computer, revoked, queued in ((None, False, False), (r["runner_id"], False, True),
-                                      ("no-such-computer", False, False), (r["runner_id"], True, False)):
+    for computer, revoked, queued in (
+        (None, False, False),
+        (r["runner_id"], False, True),
+        ("no-such-computer", False, False),
+        (r["runner_id"], True, False),
+    ):
         _external(api, computer=computer)
         if revoked:
             with api.app.state.store.transaction() as c:
@@ -166,6 +185,7 @@ def test_an_external_agents_bot_gets_no_job_unless_a_registered_computer_deliver
 
 def test_an_imported_transcript_queues_nothing(api):
     from backend import external_sync
+
     ops = _bot(api, "ops")
 
     class Provider:
@@ -177,9 +197,17 @@ def test_an_imported_transcript_queues_nothing(api):
 
     at = _since(api)
     with api.app.state.store.transaction() as c:
-        external_sync.import_messages(c, Provider(), "ana", "ops", "ext-1",
-                                      [Line("user", "Draft the post.", "2026-01-01T00:00:00Z"),
-                                       Line("assistant", "Here it is.", "2026-01-01T00:00:01Z")])
+        external_sync.import_messages(
+            c,
+            Provider(),
+            "ana",
+            "ops",
+            "ext-1",
+            [
+                Line("user", "Draft the post.", "2026-01-01T00:00:00Z"),
+                Line("assistant", "Here it is.", "2026-01-01T00:00:01Z"),
+            ],
+        )
     assert _written(api, at) == [("human:ana", ops, "say", False), (ops, "human:ana", "say", False)]
 
 
@@ -191,8 +219,9 @@ def test_a_bot_hand_off_held_as_a_note_queues_nothing(api):
         H.say(c, ops, coo, "FYI the invoices are filed.")
     sent = [w for w in _written(api, at) if w[0] == ops]
     with api.app.state.store.read() as c:
-        refs = json.loads(c.execute("SELECT refs FROM messages WHERE sender_id=? ORDER BY rowid DESC LIMIT 1",
-                                    (ops,)).fetchone()[0])
+        refs = json.loads(
+            c.execute("SELECT refs FROM messages WHERE sender_id=? ORDER BY rowid DESC LIMIT 1", (ops,)).fetchone()[0]
+        )
     assert sent == [(ops, coo, "say", False)] and refs.get("quiet")
 
 
@@ -209,50 +238,109 @@ _LEGACY_TRIGGER = (
     "SELECT 1 FROM runners r WHERE r.id=json_extract(config,'$.app_delivery.computer') "
     "AND r.revoked_at IS NULL)) BEGIN "
     "INSERT INTO jobs(id,message_id,bot_id,created_at) "
-    "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END")
+    "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END"
+)
+
+
+_DECLARED = (
+    ("inbox", {"harness": "hermes"}),
+    ("desk", {"harness": "openclaw", "app_delivery": {"computer": "mac"}}),
+    ("gone", {"harness": "dots", "app_delivery": {"computer": "old-mac"}}),
+    ("ops", {"harness": "claude"}),
+)
 
 
 def _bare(trigger):
+    """The trigger's database (bot_config.config, the oracle) when `trigger`, else the one enqueue reads: bot_settings."""
     import sqlite3
+
     conn = sqlite3.connect(":memory:")
     conn.executescript(
         "CREATE TABLE messages(id TEXT PRIMARY KEY, sender_id TEXT, recipient_id TEXT, refs TEXT, created_at TEXT);"
         "CREATE TABLE jobs(id TEXT PRIMARY KEY, message_id TEXT, bot_id TEXT, created_at TEXT);"
-        "CREATE TABLE bot_config(bot TEXT PRIMARY KEY, config TEXT);"
         "CREATE TABLE runners(id TEXT PRIMARY KEY, revoked_at TEXT);"
         "INSERT INTO runners VALUES('mac', NULL), ('old-mac', '2026-01-01');"
-        "INSERT INTO bot_config VALUES"
-        "('inbox', '{\"harness\":\"hermes\"}'),"
-        "('desk', '{\"harness\":\"openclaw\",\"app_delivery\":{\"computer\":\"mac\"}}'),"
-        "('gone', '{\"harness\":\"dots\",\"app_delivery\":{\"computer\":\"old-mac\"}}'),"
-        "('ops', '{\"harness\":\"claude\"}');")
+    )
     if trigger:
+        conn.execute("CREATE TABLE bot_config(bot TEXT PRIMARY KEY, config TEXT)")
+        for bot, config in _DECLARED:
+            conn.execute("INSERT INTO bot_config VALUES(?,?)", (bot, json.dumps(config)))
         conn.execute(_LEGACY_TRIGGER)
+    else:
+        conn.execute("CREATE TABLE bot_config(bot TEXT PRIMARY KEY)")
+        conn.execute(_BOT_SETTINGS_TABLE)
+        for bot, config in _DECLARED:
+            BS.write(conn, bot, config)
     return conn
 
 
 def test_enqueue_matches_the_dropped_trigger_on_every_odd_input():
     from backend.enqueue import enqueue
     from backend.harnesses import EXTERNAL_HARNESSES
-    assert set(EXTERNAL_HARNESSES) == {h.strip("'") for h in _HARNESSES.split(",")}   # the oracle's list is current
+
+    assert set(EXTERNAL_HARNESSES) == {h.strip("'") for h in _HARNESSES.split(",")}  # the oracle's list is current
     senders = (None, "", "human:ana", "bot:ops", "BOT:ops")
-    recipients = ("bot:ops", "BOT:ops", "Bot:inbox", "bot:inbox", "bot:desk", "bot:gone", "bot:", "human:ana", "ops",
-                  "", None, "xbot:ops")
-    refs = (None, "{}", "[]", '"words"', "1", "null", '{"quiet":true}', '{"quiet":false}', '{"quiet":0}',
-            '{"quiet":0.0}', '{"quiet":1}', '{"quiet":""}', '{"quiet":"no"}', '{"quiet":[]}', '{"quiet":{}}',
-            '{"quiet":null}', '{"live":{"kind":"transcript"}}', '{"live":{"kind":"decision"}}',
-            '{"live":{"kind":"tool"}}', '{"live":{"kind":"ask"}}', '{"live":{"kind":""}}', '{"live":{"kind":1}}',
-            '{"live":"transcript"}', '{"live":["transcript"]}', '{"live":{"kind":"Transcript"}}',
-            '{"live":{"kind":"transcript"},"quiet":false}', '{"command":true}', '{"task":["t1"]}',
-            '{"quiet":NaN}', '{"quiet":Infinity}', '{"quiet":-Infinity}', '{"task":"t1","depth":Infinity}')
+    recipients = (
+        "bot:ops",
+        "BOT:ops",
+        "Bot:inbox",
+        "bot:inbox",
+        "bot:desk",
+        "bot:gone",
+        "bot:",
+        "human:ana",
+        "ops",
+        "",
+        None,
+        "xbot:ops",
+    )
+    refs = (
+        None,
+        "{}",
+        "[]",
+        '"words"',
+        "1",
+        "null",
+        '{"quiet":true}',
+        '{"quiet":false}',
+        '{"quiet":0}',
+        '{"quiet":0.0}',
+        '{"quiet":1}',
+        '{"quiet":""}',
+        '{"quiet":"no"}',
+        '{"quiet":[]}',
+        '{"quiet":{}}',
+        '{"quiet":null}',
+        '{"live":{"kind":"transcript"}}',
+        '{"live":{"kind":"decision"}}',
+        '{"live":{"kind":"tool"}}',
+        '{"live":{"kind":"ask"}}',
+        '{"live":{"kind":""}}',
+        '{"live":{"kind":1}}',
+        '{"live":"transcript"}',
+        '{"live":["transcript"]}',
+        '{"live":{"kind":"Transcript"}}',
+        '{"live":{"kind":"transcript"},"quiet":false}',
+        '{"command":true}',
+        '{"task":["t1"]}',
+        '{"quiet":NaN}',
+        '{"quiet":Infinity}',
+        '{"quiet":-Infinity}',
+        '{"task":"t1","depth":Infinity}',
+    )
     legacy, current = _bare(True), _bare(False)
     n = 0
     for sender in senders:
         for recipient in recipients:
             for ref in refs:
                 n += 1
-                row = {"id": f"m{n}", "sender_id": sender, "recipient_id": recipient, "refs": ref,
-                       "created_at": "2026-11-02T00:00:00Z"}
+                row = {
+                    "id": f"m{n}",
+                    "sender_id": sender,
+                    "recipient_id": recipient,
+                    "refs": ref,
+                    "created_at": "2026-11-02T00:00:00Z",
+                }
                 values = tuple(row[k] for k in ("id", "sender_id", "recipient_id", "refs", "created_at"))
                 legacy.execute("INSERT INTO messages VALUES(?,?,?,?,?)", values)
                 current.execute("INSERT INTO messages VALUES(?,?,?,?,?)", values)
@@ -260,7 +348,7 @@ def test_enqueue_matches_the_dropped_trigger_on_every_odd_input():
     jobs = "SELECT id, message_id, bot_id, created_at FROM jobs ORDER BY id"
     want = legacy.execute(jobs).fetchall()
     assert want and current.execute(jobs).fetchall() == want
-    assert len(want) < n                       # the matrix exercises both outcomes
+    assert len(want) < n  # the matrix exercises both outcomes
 
 
 def test_a_bare_hub_database_queues_nothing():
@@ -268,7 +356,19 @@ def test_a_bare_hub_database_queues_nothing():
     import sqlite3
 
     from backend.enqueue import enqueue
+
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE messages(id TEXT PRIMARY KEY)")
-    assert enqueue(conn, {"id": "m1", "sender_id": "human:ana", "recipient_id": "bot:ops", "refs": "{}",
-                          "created_at": "2026-11-02T00:00:00Z"}) is None
+    assert (
+        enqueue(
+            conn,
+            {
+                "id": "m1",
+                "sender_id": "human:ana",
+                "recipient_id": "bot:ops",
+                "refs": "{}",
+                "created_at": "2026-11-02T00:00:00Z",
+            },
+        )
+        is None
+    )

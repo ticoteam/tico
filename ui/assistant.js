@@ -22,6 +22,9 @@
 .asst-said{margin:6px 0;padding:4px 10px;border-left:3px solid var(--line);font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
 .asst-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .asst-state{font-size:12.5px;color:var(--muted)}
+.asst-row button[aria-busy="true"],.asst-row button[aria-busy="true"]:disabled{opacity:1;cursor:progress;display:inline-flex;align-items:center;gap:6px}
+.asst-row button[aria-busy="true"]::before{content:"";flex:none;width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:p-spin .8s linear infinite}
+@media (prefers-reduced-motion:reduce){.asst-row button[aria-busy="true"]::before{animation-duration:2.4s}}
 .asst-off{padding:14px 0}
 .asst-err{color:var(--fail);font-size:12.5px}
 .asst-card .asst-once code{color:var(--ink);user-select:all;font-size:13px}
@@ -52,10 +55,12 @@
     return `<div class="asst-once" data-shown-once><span class="asst-state">One-time code for a new computer${until ? `, until ${esc(until)}` : ''}. It is shown only here and works once: use it where the computer's setup asks for a code (Settings &gt; Computers &gt; Add computer shows the commands).</span><code>${esc(once.code)}</code></div>`;
   }
   const SENT = new Set(['message', 'body', 'text', 'comment']);
-  function actionCard(action, esc, open = false, assistantName = '') {
+  // `busy`: the button pressed ('confirm' / 'cancel') while its answer is on its way: it spins (chat.css p-spin) and says
+  // so, the other is off, and a thread rebuilt meanwhile draws the same.
+  function actionCard(action, esc, open = false, assistantName = '', busy = '') {
     // A bulk card that ran with some steps refused is done, and says which did not go through.
     const done = {done: 'Done.' + (action.result?.error ? ' ' + action.result.error : ''), failed: 'It did not go through' + (action.result?.error ? ': ' + action.result.error : '.'),
-      canceled: 'Canceled.', withdrawn: 'Withdrawn: nothing ran.', expired: 'Expired: ask again.', running: 'Running…'}[action.status];
+      canceled: 'Canceled.', withdrawn: 'Withdrawn: nothing ran.', expired: 'Expired: ask again.', running: 'Confirmed · working on it'}[action.status];
     // Never cut a value: a long one is folded behind "Show more", whole.
     const shown = v => { const t = typeof v === 'string' ? v : JSON.stringify(v); return t.length > 160
       ? `<details class="asst-long"><summary>${esc(t.slice(0, 120))}… <span>Show more</span></summary>${esc(t)}</details>` : esc(t); };
@@ -69,7 +74,8 @@
     const title = plain ? what : summary || 'A change for you';
     // A task change (old → new) and a bulk card's one line per step read as words; any other card's fields are the
     // request itself, so they go under Details with the method and path.
-    const readable = action.path === '/api/v2/assistant/batch' || (action.diff || []).some(d => 'old' in d || d.group) || !plain && !summary;
+    const routine = (action.diff || []).some(d => d.routine);
+    const readable = routine || action.path === '/api/v2/assistant/batch' || (action.diff || []).some(d => 'old' in d || d.group) || !plain && !summary;
     const fields = action.diff?.length
       ? `<ul class="asst-body" aria-label="Changes">${action.diff.map(d => `<li><strong>${esc(d.field)}</strong>: ${'old' in d ? shown(d.old ?? '') + ' → ' : ''}${shown(d.new)}</li>`).join('')}</ul>`
       : Object.keys(action.body || {}).length
@@ -81,15 +87,18 @@
     const who = action.by_name ? action.by_name + ' says: ' : {assistant: 'The assistant says: ', botops: 'BotOps says: '}[by] || '';
     // The same sentence, or its first 300 characters (a summary is cut there), repeats the title.
     const said = summary, repeats = said === title || said.length >= 300 && title.startsWith(said);
+    const button = (verb, cls, label, doing, title = '') => busy === verb
+      ? `<button class="${cls}" type="button" data-${verb} disabled aria-busy="true">${doing}</button>`
+      : `<button class="${cls}" type="button" data-${verb}${busy ? ' disabled' : ''}${title}>${label}</button>`;
     return `<div class="asst-card" tabindex="-1" data-action="${esc(action.id)}" data-status="${esc(action.status)}">
       <div class="asst-who">${esc(name.replace(/^The /, ''))} asks</div>
       <details class="asst-raw"${open ? ' open' : ''}><summary title="Details"><b data-what>${esc(title)}</b><span class="nav-icon" aria-hidden="true">expand_more</span></summary>
-        ${said && !repeats ? `<p class="asst-state">${esc(who)}“${esc(said)}”</p>` : ''}${readable ? '' : fields}${action.original_summary
+        ${said && !repeats ? `<p class="asst-state">${esc(who)}“${esc(said)}”</p>` : ''}${routine ? `<ul class="asst-body" aria-label="Request">${Object.entries(action.body || {}).map(([k, v]) => `<li><strong>${esc(k)}</strong>: ${shown(v)}</li>`).join('')}</ul>` : readable ? '' : fields}${action.original_summary
         ? `<p class="asst-state">First written as: “${esc(action.original_summary)}”</p>` : ''}<code>${esc(action.method)} ${esc(action.path)}</code></details>
       ${sends}${readable ? fields : ''}
-      ${action.status === 'pending'
-        ? `<div class="asst-row"><button class="primary" type="button" data-confirm title="Runs as you, only when you confirm">Confirm</button>
-            <button class="ghost" type="button" data-cancel>Cancel</button></div>`
+      ${busy || action.status === 'pending'
+        ? `<div class="asst-row">${button('confirm', 'primary', 'Confirm', 'Confirming…', ' title="Runs as you, only when you confirm"')}
+            ${button('cancel', 'ghost', 'Cancel', 'Canceling…')}</div>`
         : `<div class="asst-state">${esc(done || action.status)}</div>${onceHTML(action.id, esc)}`}</div>`;
   }
 
@@ -104,15 +113,16 @@
   const painted = new WeakMap();         // host -> the card HTML it shows
   const drawn = new Map();               // action id -> {card, html}: the element last drawn for it
   const UNSETTLED = new Set(['pending', 'running']);
-  const deciding = new Set();            // cards whose Confirm / Cancel is on its way: a fetch never repaints them
+  const deciding = new Map();            // action id -> 'confirm' / 'cancel' on its way: a fetch never repaints it
   async function cards(root, deps) {
     if (!root) return;
     style();
     const {get, post, esc, toast, reload, assistantName} = deps;
     const hostsOf = id => [...root.querySelectorAll('[data-action-host]')].filter(h => h.dataset.actionHost === id);
+    const draw = (action, open) => actionCard(action, esc, open, assistantName, deciding.get(action.id));
     const paint = (host, action) => {
       seenActions.set(action.id, action);
-      const html = actionCard(action, esc, openRaw.has(action.id), assistantName);
+      const html = draw(action, openRaw.has(action.id));
       if (painted.get(host) === html) return;            // nothing changed: leave it alone
       const kept = drawn.get(action.id);
       // A rebuilt thread's new host gets the card it had before, moved, not drawn again (one shown twice is drawn).
@@ -128,17 +138,19 @@
       // The card moves between hosts, so what it does is found from the card, never from the host it was drawn in.
       card.querySelector('details.asst-raw')?.addEventListener('toggle', ev => {
         openRaw[ev.target.open ? 'add' : 'delete'](action.id);
-        const now = actionCard(action, esc, ev.target.open, assistantName);
+        const now = draw(action, ev.target.open);
         drawn.set(action.id, {card, html: now});
         if (card.parentElement) painted.set(card.parentElement, now);
       });
       const decide = async verb => {
         const host = card.parentElement || host0;
         const focused = card.contains(document.activeElement);
-        card.querySelectorAll('button').forEach(b => { b.disabled = true; });
-        // A thread rebuilt while this runs draws the card as running, not with its buttons live again.
-        seenActions.set(action.id, {...action, status: 'running'});
-        deciding.add(action.id);
+        // At once, the pressed button spins ("Confirming…") and the other is off; a thread rebuilt while this runs (the
+        // server runs every step before it answers) puts back the same, never live buttons.
+        const waiting = {...action, status: 'running'};
+        deciding.set(action.id, verb);
+        for (const h of new Set([...hostsOf(action.id), host])) { painted.delete(h); paint(h, waiting); }
+        if (focused) drawn.get(action.id)?.card.focus({preventScroll: true});
         let next = null;
         try {
           const answer = await post(`/v2/assistant/actions/${encodeURIComponent(action.id)}/${verb}`, {});

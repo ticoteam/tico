@@ -3,13 +3,14 @@
 Rust owns every ticket, session and WebSocket. The backend authorizes people and runners,
 publishes grants only after their opening audit transaction commits, and records close reports.
 """
+
 from fastapi import Request
 
 from .store import H, Problem
 
 MODES = ("off", "view", "control")
 CAPABILITY = "screen_v1"
-WIDTH, HEIGHT = 1440, 900   # the runner's default display, when its report names none
+WIDTH, HEIGHT = 1440, 900  # the runner's default display, when its report names none
 
 UNAVAILABLE = "This computer has no screen. Turn it on on the computer first."
 
@@ -27,8 +28,9 @@ def size(row):
 def first_offer(c, rid):
     """A new computer's first screen offer sets its Screen to Control, unless a person already chose one. Control
     widens no one's access: only the computer's operator and admins open a screen (may_change)."""
-    if c.execute("UPDATE runners SET screen='control',screen_default_pending=0 WHERE id=? AND screen_default_pending=1",
-                 (rid,)).rowcount:
+    if c.execute(
+        "UPDATE runners SET screen='control',screen_default_pending=0 WHERE id=? AND screen_default_pending=1", (rid,)
+    ).rowcount:
         H.event(c, "system", "runner.screen", rid, {"mode": "control", "reason": "first offer"})
 
 
@@ -49,6 +51,7 @@ def _allows(mode, control):
 def registry(store):
     if getattr(store, "screen_sessions", None) is None:
         from .screen_relay import RemoteRegistry
+
         store.screen_sessions = RemoteRegistry(store)
     return store.screen_sessions
 
@@ -56,12 +59,14 @@ def registry(store):
 def install(app, store, auth, mutate, execution, settings):
     from . import models as M
     from .views import human_only
+
     sessions = registry(store)
     from .screen_relay import install_policy
+
     install_policy(app, store, auth, execution, settings)
 
     def computer(c, rid):
-        return c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+        return c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
 
     @app.post("/api/v2/runners/{rid}/screen")
     def screen_mode(request: Request, rid: str, body: M.ScreenMode):
@@ -79,6 +84,7 @@ def install(app, store, auth, mutate, execution, settings):
             c.execute("UPDATE runners SET screen=?,screen_default_pending=0 WHERE id=?", (body.mode, rid))
             H.event(c, who.actor, "runner.screen", rid, {"mode": body.mode})
             return {"screen": body.mode, "screen_available": available(runner)}
+
         result = mutate(request, body, work)
         # The mode now stored, not this request's (a replayed older request must not reopen anything).
         with store.read() as c:
@@ -112,21 +118,33 @@ def install(app, store, auth, mutate, execution, settings):
             width, height = size(runner)
             session, ticket = sessions.admit(rid, who.actor, body.control, width, height, mode)
             admitted.append(session)
-            H.event(c, who.actor, "runner.screen_open", rid,
-                    {"session_id": session.id, "control": body.control,
-                     "relay_lease": session.relay_lease})
+            H.event(
+                c,
+                who.actor,
+                "runner.screen_open",
+                rid,
+                {"session_id": session.id, "control": body.control, "relay_lease": session.relay_lease},
+            )
             # A `runner` change row is the runner's `screen_open` event (backend/events.py runner_read).
-            c.execute("INSERT INTO changes(topic,kind,subject_id,ref,created_at) VALUES('runner','screen_open',?,?,?)",
-                      (rid, session.id, H.now()))
-            return {"session_id": session.id, "ticket": ticket, "control": body.control,
-                    "ws_path": f"/api/v2/runners/{rid}/screen/ws?ticket={ticket}",
-                    "width": width, "height": height}
+            c.execute(
+                "INSERT INTO changes(topic,kind,subject_id,ref,created_at) VALUES('runner','screen_open',?,?,?)",
+                (rid, session.id, H.now()),
+            )
+            return {
+                "session_id": session.id,
+                "ticket": ticket,
+                "control": body.control,
+                "ws_path": f"/api/v2/runners/{rid}/screen/ws?ticket={ticket}",
+                "width": width,
+                "height": height,
+            }
+
         try:
-            result = store.write(who, work)     # never `mutate`: its replay record would keep the ticket
+            result = store.write(who, work)  # never `mutate`: its replay record would keep the ticket
             sessions.publish(admitted[0])  # prepared grants become visible only after the audit commit
             return result
         except Exception:
-            for session in admitted:            # the write failed after admission: close it, waking any socket
+            for session in admitted:  # the write failed after admission: close it, waking any socket
                 sessions.end(session, 1011, "could not open the screen")
             raise
 

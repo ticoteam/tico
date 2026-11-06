@@ -4,6 +4,7 @@ Department tags come from the org builder's fixed catalog, not arbitrary group n
 controls who edits the rule; it does not narrow the company-wide close rule's task selection.
 Every close uses the normal keeper close path, with its audit and ordinary reopen as undo.
 """
+
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -30,9 +31,14 @@ INSERT OR IGNORE INTO task_rules VALUES(
 def departments(settings):
     from . import recruit, recruit_rank
     import yaml
+
     # Read the same fixed department source as the org builder without rebuilding its bot catalog.
     value = yaml.safe_load(recruit.departments_file(settings).read_text()) or {}
-    return [{"id": d["id"], "name": d["name"]} for d in value.get("departments", []) if d.get("id") in recruit_rank.DEPARTMENT_IDS]
+    return [
+        {"id": d["id"], "name": d["name"]}
+        for d in value.get("departments", [])
+        if d.get("id") in recruit_rank.DEPARTMENT_IDS
+    ]
 
 
 def department_of(c, settings, actor):
@@ -72,7 +78,11 @@ def validate(triggers, actions):
     if not triggers or not actions:
         raise Problem("invalid", "Choose at least one trigger and action", 422)
     for trigger in triggers:
-        if not isinstance(trigger.get("key"), str) or trigger.get("key") not in TRIGGERS or set(trigger) != {"key", "hours"}:
+        if (
+            not isinstance(trigger.get("key"), str)
+            or trigger.get("key") not in TRIGGERS
+            or set(trigger) != {"key", "hours"}
+        ):
             raise Problem("invalid", "Choose an available task trigger", 422)
         hours = trigger.get("hours")
         if isinstance(hours, bool) or not isinstance(hours, int) or not 1 <= hours <= 8760:
@@ -92,7 +102,13 @@ def save(c, settings, auth, who, body, key=None):
     require_change(c, settings, auth, who, department)
     if not before and c.execute("SELECT count(*) FROM task_rules").fetchone()[0] >= MAX_RULES:
         raise Problem("conflict", "Edit an existing rule; the task rule list is full", 409)
-    triggers = body.triggers if body.triggers is not None else json.loads(before["triggers"]) if before else [{"key": "done_untouched", "hours": 24}]
+    triggers = (
+        body.triggers
+        if body.triggers is not None
+        else json.loads(before["triggers"])
+        if before
+        else [{"key": "done_untouched", "hours": 24}]
+    )
     actions = body.actions if body.actions is not None else json.loads(before["actions"]) if before else ["close"]
     validate(triggers, actions)
     name = body.name if body.name is not None else before["name"] if before else "Close after done"
@@ -104,13 +120,31 @@ def save(c, settings, auth, who, body, key=None):
     if preset == SR.DAILY and (not at or not SR.AT_RE.fullmatch(at)):
         raise Problem("invalid", "Choose a daily time", 422)
     key, now = key or "task-rule-" + H.new_id(), H.now()
-    c.execute("INSERT INTO task_rules VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
-              "name=excluded.name,department=excluded.department,triggers=excluded.triggers,"
-              "actions=excluded.actions,enabled=excluded.enabled,preset=excluded.preset,daily_at=excluded.daily_at,updated_at=excluded.updated_at",
-              (key, name, department, encode(triggers), encode(actions), int(on), preset, at,
-               before["created_by"] if before else who.actor, before["created_at"] if before else now, now))
-    H.event(c, who.actor, "task_rule.updated" if before else "task_rule.created", key,
-            {"before": before, "after": get(c, key)})
+    c.execute(
+        "INSERT INTO task_rules VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+        "name=excluded.name,department=excluded.department,triggers=excluded.triggers,"
+        "actions=excluded.actions,enabled=excluded.enabled,preset=excluded.preset,daily_at=excluded.daily_at,updated_at=excluded.updated_at",
+        (
+            key,
+            name,
+            department,
+            encode(triggers),
+            encode(actions),
+            int(on),
+            preset,
+            at,
+            before["created_by"] if before else who.actor,
+            before["created_at"] if before else now,
+            now,
+        ),
+    )
+    H.event(
+        c,
+        who.actor,
+        "task_rule.updated" if before else "task_rule.created",
+        key,
+        {"before": before, "after": get(c, key)},
+    )
     return row(c, settings, get(c, key), who, auth)
 
 
@@ -127,28 +161,52 @@ def row(c, settings, rule, who=None, auth=None, now=None, last=None):
     when = [TRIGGERS[t["key"]][0](t) for t in triggers]
     then = [ACTIONS[a][0] for a in actions]
     if last is None:
-        found = c.execute("SELECT * FROM system_runs WHERE job=? ORDER BY started_at DESC LIMIT 1", (rule["id"],)).fetchone()
+        found = c.execute(
+            "SELECT * FROM system_runs WHERE job=? ORDER BY started_at DESC LIMIT 1", (rule["id"],)
+        ).fetchone()
         last = dict(found) if found else None
     cfg = config(rule)
     following = SR.next_due(cfg, H.parse_ts(last["started_at"]) if last else None, now) if cfg["on"] else None
-    return {"key": rule["id"], "kind": "task_rule", "name": rule["name"],
-            "what": "Closes eligible done tasks across the company. Reopen a task to undo.",
-            "when": when, "then": then, "department": {"id": department, "name": chart.get(department, department), "in_chart": department in chart},
-            "triggers": triggers, "actions": actions, "schedule": SR.PRESETS[cfg["preset"]][0].format(at=cfg["daily_at"] or ""),
-            "ai": False, "needed": False, "records": True, "controllable": False, "group": "task_rules",
-            "switch": True, "on": cfg["on"], "preset": cfg["preset"], "at": cfg["daily_at"], "owner_only": False,
-            "presets": [{"key": p, "label": SR.PRESETS[p][0].format(at="a time")} for p in SR.EVERY_PRESET],
-            "can_change": can_change(c, settings, auth, who, department),
-            "last": {k: bool(last[k]) if k == "ok" else last[k] for k in ("started_at", "finished_at", "ok", "result", "runs")} if last else None,
-            "next": SR._stamp(following) if following else None,
-            "search": " ".join([rule["name"], *when, *then, chart.get(department, department), "done close tasks"]).lower()}
+    return {
+        "key": rule["id"],
+        "kind": "task_rule",
+        "name": rule["name"],
+        "what": "Closes eligible done tasks across the company. Reopen a task to undo.",
+        "when": when,
+        "then": then,
+        "department": {"id": department, "name": chart.get(department, department), "in_chart": department in chart},
+        "triggers": triggers,
+        "actions": actions,
+        "schedule": SR.PRESETS[cfg["preset"]][0].format(at=cfg["daily_at"] or ""),
+        "ai": False,
+        "needed": False,
+        "records": True,
+        "controllable": False,
+        "group": "task_rules",
+        "switch": True,
+        "on": cfg["on"],
+        "preset": cfg["preset"],
+        "at": cfg["daily_at"],
+        "owner_only": False,
+        "presets": [{"key": p, "label": SR.PRESETS[p][0].format(at="a time")} for p in SR.EVERY_PRESET],
+        "can_change": can_change(c, settings, auth, who, department),
+        "last": {
+            k: bool(last[k]) if k == "ok" else last[k] for k in ("started_at", "finished_at", "ok", "result", "runs")
+        }
+        if last
+        else None,
+        "next": SR._stamp(following) if following else None,
+        "search": " ".join([rule["name"], *when, *then, chart.get(department, department), "done close tasks"]).lower(),
+    }
 
 
 def listing(c, settings, who=None, auth=None, now=None):
-    return [row(c, settings, dict(r), who, auth, now) for r in c.execute("SELECT * FROM task_rules ORDER BY created_at,id")]
+    return [
+        row(c, settings, dict(r), who, auth, now) for r in c.execute("SELECT * FROM task_rules ORDER BY created_at,id")
+    ]
 
 
-HISTORY_ACTIVITY_SQL = "NOT (actor='keeper' AND (field='github' OR field GLOB 'check_back_*'))"
+HISTORY_ACTIVITY_SQL = "NOT (actor_id='keeper' AND (kind='github' OR kind GLOB 'check_back_*'))"
 MESSAGE_ACTIVITY_SQL = "m.sender_id<>'keeper'"
 
 
@@ -157,23 +215,38 @@ def untouched(c, task, hours, now):
     # scoped messages in shared conversations; unrelated chat must not restart a task's wait.
     times = [task.get(k) for k in ("created_at", "updated_at", "done_at", "checkpoint_at")]
     # Observed GitHub facts have history, but viewing them and keeper notices are not work on the task.
-    times += [r[0] for r in c.execute(f"SELECT max(created_at) FROM task_events WHERE task_id=? AND {HISTORY_ACTIVITY_SQL}", (task["id"],))]
-    message = c.execute("SELECT max(max(m.created_at,coalesce(m.edited_at,m.created_at),coalesce(m.deleted_at,m.created_at))) "
-                        "FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                        f"WHERE m.conversation_id=? AND {H.MESSAGE_TASK_SQL}=? AND {MESSAGE_ACTIVITY_SQL}",
-                        (task["conversation_id"], task["id"])).fetchone()[0]
+    times += [
+        r[0]
+        for r in c.execute(
+            f"SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? "
+            f"AND {HISTORY_ACTIVITY_SQL}",
+            (task["id"],),
+        )
+    ]
+    message = c.execute(
+        "SELECT max(max(m.created_at,coalesce(m.edited_at,m.created_at),coalesce(m.deleted_at,m.created_at))) "
+        "FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+        f"WHERE m.conversation_id=? AND {H.MESSAGE_TASK_SQL}=? AND {MESSAGE_ACTIVITY_SQL}",
+        (task["conversation_id"], task["id"]),
+    ).fetchone()[0]
     times.append(message)
     parsed = [H.parse_ts(t) for t in times if t]
     return task["status"] == "done" and bool(parsed) and max(parsed) <= now - timedelta(hours=hours)
 
 
 def safe(c, task):
-    if task.get("waiting_on") or task.get("snoozed_until") or task.get("pinned"):
+    from . import task_holds
+
+    task = task_holds.with_holds(c, task)
+    if task.get("snoozed_until") or task.get("pinned"):
         return False
     # Pin tags are a durable task-level pin; the rail's pinned filtered views are only bookmarks.
     if {str(x).lower() for x in json.loads(task.get("labels") or "[]")} & {"pin", "pinned"}:
         return False
-    if c.execute("SELECT 1 FROM task_tags tt JOIN tags g ON g.id=tt.tag_id WHERE tt.task_id=? AND lower(g.key) IN ('pin','pinned') LIMIT 1", (task["id"],)).fetchone():
+    if c.execute(
+        "SELECT 1 FROM task_tags tt JOIN tags g ON g.id=tt.tag_id WHERE tt.task_id=? AND lower(g.key) IN ('pin','pinned') LIMIT 1",
+        (task["id"],),
+    ).fetchone():
         return False
     if c.execute("SELECT 1 FROM approvals WHERE task_id=? AND decision IS NULL LIMIT 1", (task["id"],)).fetchone():
         return False
@@ -182,10 +255,14 @@ def safe(c, task):
 
 def close(c, task, rule):
     # Only the status event carries the history note. task_close also records step consistency.
-    H.task_close(c, H.KEEPER, task["id"], quiet=True)
+    H.task_close(c, H.KEEPER, task["id"], quiet=True, strict=False)
     note = f"Closed by rule '{rule['name']}'"
-    c.execute("UPDATE task_events SET note=? WHERE task_id=? AND field='status' AND new='closed' "
-              "AND rowid=(SELECT max(rowid) FROM task_events WHERE task_id=? AND field='status')", (note, task["id"], task["id"]))
+    c.execute(
+        "UPDATE history_events SET note=? WHERE subject_type='task' AND subject_id=? AND kind='status' "
+        "AND new='closed' AND rowid=(SELECT max(rowid) FROM history_events WHERE subject_type='task' "
+        "AND subject_id=? AND kind='status')",
+        (note, task["id"], task["id"]),
+    )
     H.event(c, H.KEEPER, "task_rule.closed", task["id"], {"rule": rule["id"], "name": rule["name"]})
 
 
@@ -198,17 +275,19 @@ ACTIONS = {"close": ("close it", close)}
 DUE_SQL = (
     "SELECT t.* FROM tasks t WHERE t.status='done' AND t.closed_at IS NULL "
     "AND t.updated_at<=? AND coalesce(t.done_at,t.updated_at)<=? AND coalesce(t.checkpoint_at,t.updated_at)<=? "
-    "AND t.waiting_on IS NULL AND t.snoozed_until IS NULL "
+    "AND NOT " + H.SNOOZED % "t" + " "
     "AND NOT EXISTS (SELECT 1 FROM task_tags tt JOIN tags g ON g.id=tt.tag_id "
     "WHERE tt.task_id=t.id AND lower(g.key) IN ('pin','pinned')) "
     "AND NOT EXISTS (SELECT 1 FROM json_each(t.labels) WHERE lower(value) IN ('pin','pinned')) "
     "AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.task_id=t.id AND a.decision IS NULL) "
-    f"AND NOT EXISTS (SELECT 1 FROM task_events WHERE task_id=t.id AND {HISTORY_ACTIVITY_SQL} AND created_at>?) "
+    "AND NOT EXISTS (SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=t.id "
+    f"AND {HISTORY_ACTIVITY_SQL} AND created_at>?) "
     "AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
     f"WHERE m.conversation_id=t.conversation_id AND {H.MESSAGE_TASK_SQL}=t.id "
     f"AND ((m.kind='ask' AND {H.OPEN_ASK_SQL}) OR ({MESSAGE_ACTIVITY_SQL} AND "
     "max(m.created_at,coalesce(m.edited_at,m.created_at),coalesce(m.deleted_at,m.created_at))>?))) "
-    "ORDER BY t.updated_at,t.id LIMIT ?")
+    "ORDER BY t.updated_at,t.id LIMIT ?"
+)
 
 
 def tick(store, now, failures):
@@ -233,7 +312,7 @@ def tick(store, now, failures):
                 validate(triggers, actions)
                 hours = max(t["hours"] for t in triggers)
                 cutoff = SR._stamp(now - timedelta(hours=hours))
-                candidates = c.execute(DUE_SQL, (cutoff,cutoff,cutoff,cutoff,cutoff,remaining)).fetchall()
+                candidates = c.execute(DUE_SQL, (cutoff, cutoff, cutoff, cutoff, cutoff, remaining)).fetchall()
                 count = 0
                 for candidate in candidates:
                     if count >= remaining:
@@ -244,7 +323,10 @@ def tick(store, now, failures):
                     for action in dict.fromkeys(actions):
                         ACTIONS[action][1](c, task, rule)
                     count += 1
-                run.did(SR.count_words(count, "task closed", "tasks closed") if count else "No eligible done tasks", quiet=not count)
+                run.did(
+                    SR.count_words(count, "task closed", "tasks closed") if count else "No eligible done tasks",
+                    quiet=not count,
+                )
                 SR.save(c, run)
             remaining -= count
         except Exception as exc:

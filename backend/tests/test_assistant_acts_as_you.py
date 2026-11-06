@@ -35,8 +35,14 @@ def test_the_turn_closes_a_task_the_person_owns_as_them_on_the_cite(api):
     closed = post(api, "tasks/" + task, {"version": current["version"], "status": "done"}, token=token)
     assert closed["status"] == "done"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT via FROM task_events WHERE task_id=? AND field='status' ORDER BY created_at DESC LIMIT 1",
-                         (task,)).fetchone()[0] == "assistant"
+        assert (
+            c.execute(
+                "SELECT via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (task,),
+            ).fetchone()[0]
+            == "assistant"
+        )
 
 
 def test_a_bulk_change_on_the_turn_records_each_task_as_the_person_via_assistant(api):
@@ -47,9 +53,12 @@ def test_a_bulk_change_on_the_turn_records_each_task_as_the_person_via_assistant
     done = post(api, "task-bulk", {"filter": {"owner": "human:ana", "status": "open"}, "action": "close"}, token=token)
     assert done["changed"] >= 2, done
     with api.app.state.store.read() as c:
-        latest = {}                                  # newest first: keep the first row seen for each task
-        for task_id, via in c.execute("SELECT task_id, via FROM task_events WHERE task_id IN (?,?) AND field='status' "
-                                      "ORDER BY created_at DESC", ids).fetchall():
+        latest = {}  # newest first: keep the first row seen for each task
+        for task_id, via in c.execute(
+            "SELECT subject_id, via FROM history_events WHERE subject_type='task' AND subject_id IN (?,?) "
+            "AND kind='status' ORDER BY created_at DESC",
+            ids,
+        ).fetchall():
             latest.setdefault(task_id, via)
     assert latest == {ids[0]: "assistant", ids[1]: "assistant"}, latest
 
@@ -92,8 +101,11 @@ def test_a_write_that_carries_a_secret_is_never_admitted_from_a_chat(api):
     r, attempt = assistant_turn(api, "ben-test")
     token = attempt["token"]
     # A status change is gated; a body that names a secret key is never admitted from a chat, whatever the words.
-    leaked = {"status": "done", "version": get(api, "tasks/" + task, token).get("task", {}).get("version", 1),
-              "api_key": "not-for-a-chat"}
+    leaked = {
+        "status": "done",
+        "version": get(api, "tasks/" + task, token).get("task", {}).get("version", 1),
+        "api_key": "not-for-a-chat",
+    }
     res = api.post("/api/v2/tasks/" + task, json=leaked, headers=headers(token))
     assert res.status_code == 403 and res.json()["error"]["code"] == "confirm_required", res.text
 
@@ -102,8 +114,10 @@ def test_a_message_older_than_thirty_minutes_no_longer_lends_its_words(api):
     r, attempt = assistant_turn(api, "ana-test")
     token = attempt["token"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created_at=? WHERE id=(SELECT message_id FROM jobs ORDER BY created_at DESC LIMIT 1)",
-                  (H.shift(H.now(), seconds=-(assistant.INSTRUCTION_TTL_S + 60)),))
+        c.execute(
+            "UPDATE messages SET created_at=? WHERE id=(SELECT message_id FROM jobs ORDER BY created_at DESC LIMIT 1)",
+            (H.shift(H.now(), seconds=-(assistant.INSTRUCTION_TTL_S + 60)),),
+        )
     # Archiving a bot is gated (not a task create, which is exempt), so the stale citation leaves only a card.
     revision = post(api, "bots/ops/archive", {"expected_revision": 1}, token=token, expected=403)
     assert revision["error"]["code"] == "confirm_required"
@@ -144,8 +158,12 @@ def test_a_batch_commit_never_approves_on_an_assistant_walk(api):
     bid = post(api, "batch", {})["id"]
     r, attempt = assistant_turn(api, "ana-test")
     token = attempt["token"]
-    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "approve", "text": "Go ahead",
-                                       "heard": "go ahead"}, token=token)
+    post(
+        api,
+        f"batch/{bid}/respond",
+        {"kind": "decide", "decision": "approve", "text": "Go ahead", "heard": "go ahead"},
+        token=token,
+    )
     done = post(api, f"batch/{bid}/commit", {}, token=token)
     assert any("Approving is the person's own decision" in str(err) for err in done["errors"]), done["errors"]
     assert not get(api, "approvals/" + approval["id"]).get("decision")
@@ -158,6 +176,7 @@ def test_a_batch_commit_never_approves_on_an_assistant_walk(api):
 
 def test_admits_on_turn_refuses_what_the_person_alone_decides():
     from backend.assistant import admits_on_turn
+
     assert admits_on_turn("POST", "/api/v2/tasks", {"title": "x"})
     assert admits_on_turn("PATCH", "/api/v2/automations/a1", {"name": "x"})
     assert admits_on_turn("POST", "/api/v2/bots/ops/archive", {"expected_revision": 1})
@@ -177,10 +196,12 @@ def test_an_outward_step_is_a_card_on_create_and_on_change_but_a_name_is_not(api
     assert assistant.automation_sends_outside(store, "POST", "/api/v2/automations", {"name": "Hook", "steps": [hook]})
     aid = post(api, "automations", flow(owner="person:ana"))["id"]
     assert assistant.automation_sends_outside(store, "PATCH", f"/api/v2/automations/{aid}", {"steps": [hook]})
-    assert not assistant.automation_sends_outside(store, "PATCH", f"/api/v2/automations/{aid}",
-                                                  {"name": "Forward invoices"})
-    assert not assistant.automation_sends_outside(store, "POST", "/api/v2/automations",
-                                                  {**flow(owner="person:ana"), "name": "Forward invoices"})
+    assert not assistant.automation_sends_outside(
+        store, "PATCH", f"/api/v2/automations/{aid}", {"name": "Forward invoices"}
+    )
+    assert not assistant.automation_sends_outside(
+        store, "POST", "/api/v2/automations", {**flow(owner="person:ana"), "name": "Forward invoices"}
+    )
     token = assistant_turn(api, "ana-test")[1]["token"]
     created = api.post("/api/v2/automations", json=flow(owner="person:ana", steps=[hook]), headers=headers(token))
     assert created.status_code == 403 and created.json()["error"]["code"] == "confirm_required", created.text
@@ -200,7 +221,7 @@ def card(api, token, path, body, method="POST", summary="Archive the Ops bot", f
 
 
 def test_the_assistants_background_run_puts_one_card_in_the_persons_own_chat(api):
-    coo = setup_attempt(api, "coo")[2]["token"]           # the Assistant bot's own identity (its daily sweep)
+    coo = setup_attempt(api, "coo")[2]["token"]  # the Assistant bot's own identity (its daily sweep)
     made = card(api, coo, "/api/v2/bots/ops/archive", {"expected_revision": 1}, for_person="human:ana")["action"]
     assert made["owner"] == "human:ana" and made["proposer"] == "assistant" and made["status"] == "pending"
     assert made["conversation_id"] == api_room(api, "ana-test")
@@ -213,7 +234,9 @@ def test_the_assistants_background_run_puts_one_card_in_the_persons_own_chat(api
 def test_a_background_card_never_approves_and_is_capped_per_person_per_day(api):
     coo = setup_attempt(api, "coo")[2]["token"]
     approve = {"actions": [{"path": "/api/v2/approvals/a1", "body": {"decision": "approved"}}]}
-    card(api, coo, "/api/v2/assistant/batch", approve, summary="Approve the spend", for_person="human:ana", expected=403)
+    card(
+        api, coo, "/api/v2/assistant/batch", approve, summary="Approve the spend", for_person="human:ana", expected=403
+    )
     for n in range(5):
         card(api, coo, "/api/v2/bots/ops/archive", {"expected_revision": n + 1}, for_person="human:ana")
     card(api, coo, "/api/v2/bots/ops/archive", {"expected_revision": 9}, for_person="human:ana", expected=429)
@@ -224,14 +247,20 @@ def test_one_card_holds_closes_an_automation_change_and_a_rule_stop(api):
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:ops", "Send the invoice", "Monday.", "human:ana")["id"]
     token = assistant_turn(api, "ana-test")[1]["token"]
-    batch = {"actions": [
-        {"path": "/api/v2/tasks/" + task, "body": {"status": "done", "version": 1}},
-        {"method": "PATCH", "path": "/api/v2/automations/" + aid, "body": {"name": "Weekly digest"}},
-    ]}
+    batch = {
+        "actions": [
+            {"path": "/api/v2/tasks/" + task, "body": {"status": "done", "version": 1}},
+            {"method": "PATCH", "path": "/api/v2/automations/" + aid, "body": {"name": "Weekly digest"}},
+        ]
+    }
     made = card(api, token, "/api/v2/assistant/batch", batch, summary="Close it and rename the automation")["action"]
     assert [s["method"] for s in made["body"]["actions"]] == ["POST", "PATCH"]
     # A step that is never admitted (the Assistant's own switches) is refused on the card as well.
-    switch = {"actions": [{"method": "POST", "path": "/api/v2/rules", "body": {"kind": "external", "assistant_direct": False}}]}
+    switch = {
+        "actions": [
+            {"method": "POST", "path": "/api/v2/rules", "body": {"kind": "external", "assistant_direct": False}}
+        ]
+    }
     card(api, token, "/api/v2/assistant/batch", switch, summary="Switch the Assistant off", expected=422)
 
 
@@ -239,8 +268,13 @@ def test_a_background_card_is_only_for_a_real_active_person(api):
     coo = setup_attempt(api, "coo")[2]["token"]
     card(api, coo, "/api/v2/bots/ops/archive", {"expected_revision": 1}, for_person="human:ghost", expected=404)
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM conversations WHERE owner_id='human:ghost' OR "
-                         "id IN (SELECT conversation_id FROM assistant_actions WHERE owner='human:ghost')").fetchone()[0] == 0
+        assert (
+            c.execute(
+                "SELECT count(*) FROM conversations WHERE owner_id='human:ghost' OR "
+                "id IN (SELECT conversation_id FROM assistant_actions WHERE owner='human:ghost')"
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_a_routine_run_of_the_assistant_bot_is_never_the_persons_turn(api):
@@ -261,11 +295,100 @@ def test_the_providers_keys_are_never_a_chat_write(api):
     assert res.status_code == 403 and res.json()["error"]["code"] == "confirm_required", res.text
 
 
+def morning(api, token, for_person="human:ana", body="Close the invoice first.", expected=200):
+    r = api.post("/api/v2/assistant/morning", json={"for": for_person, "body": body}, headers=headers(token))
+    assert r.status_code == expected, r.text
+    return r.json()
+
+
+def test_the_morning_day_is_the_company_day_in_los_angeles(monkeypatch):
+    """The cap counts company days (updates.ZONE), not UTC days: 22:00 on Nov 5 in Los Angeles is already Nov 6 in UTC,
+    and midnight in Los Angeles starts the next day."""
+
+    def day_at(ts):
+        monkeypatch.setattr(H, "now", lambda: ts)
+        return assistant.morning_day()
+
+    assert day_at("2026-11-05T23:30:00.000000Z") == ("2026-11-05", "2026-11-06T08:00:00.000000Z")
+    assert day_at("2026-11-06T06:00:00.000000Z") == ("2026-11-05", "2026-11-06T08:00:00.000000Z")
+    assert day_at("2026-11-06T07:59:59.000000Z")[0] == "2026-11-05"
+    assert day_at("2026-11-06T08:00:00.000000Z") == ("2026-11-06", "2026-11-07T08:00:00.000000Z")
+
+
+def test_the_morning_message_lands_in_the_persons_assistant_chat(api, monkeypatch):
+    monkeypatch.setattr(H, "now", lambda: "2026-11-06T09:00:00.000000Z")  # 01:00 on Nov 6 in Los Angeles
+    coo = setup_attempt(api, "coo")[2]["token"]  # the Assistant bot's own identity (its background run)
+    made = morning(api, coo, body="Close the invoice first.")
+    assert made["day"] == "2026-11-06" and made["next_at"] == "2026-11-07T08:00:00.000000Z", made
+    assert made["conversation_id"] == api_room(api, "ana-test") and made["conversation_id"] != api_room(api, "ben-test")
+    with api.app.state.store.read() as c:
+        sender, recipient, kind, body, refs = c.execute(
+            "SELECT sender_id, recipient_id, kind, body, refs FROM messages WHERE id=?", (made["message_id"],)
+        ).fetchone()
+        audit = c.execute(
+            "SELECT actor FROM events WHERE action='assistant.morning' AND target=?", (made["message_id"],)
+        ).fetchone()
+    assert (sender, recipient, kind, body) == ("bot:coo", "human:ana", "say", "Close the invoice first.")
+    assert json.loads(refs) == {"assistant": True, "morning": "2026-11-06"}, refs
+    assert audit is not None and audit[0] == "human:ana"
+
+
+def test_a_second_morning_message_the_same_company_day_is_refused_with_the_next_time(api, monkeypatch):
+    # The run is claimed at 23:59:30 UTC (15:59 in Los Angeles), so its lease covers both calls. The second call is past
+    # UTC midnight and still the same company day: it is refused, and says when the next one can go.
+    monkeypatch.setattr(H, "now", lambda: "2026-11-05T23:59:30.000000Z")
+    coo = setup_attempt(api, "coo")[2]["token"]
+    assert morning(api, coo)["day"] == "2026-11-05"
+    monkeypatch.setattr(H, "now", lambda: "2026-11-06T00:00:45.000000Z")
+    refused = api.post("/api/v2/assistant/morning", json={"for": "human:ana", "body": "Again."}, headers=headers(coo))
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "already_sent_today", refused.text
+    assert refused.json()["error"]["next_at"] == "2026-11-06T08:00:00.000000Z", refused.text
+
+
+def test_only_the_assistants_background_run_sends_the_morning_message(api):
+    coo = setup_attempt(api, "coo")[2]["token"]
+    other_bot = setup_attempt(api, "ops")[2]["token"]
+    morning(api, other_bot, expected=403)
+    morning(api, "ana-test", expected=403)  # a person, even the one it is for
+    morning(api, coo, for_person="bot:ops", expected=403)  # only a person gets one
+
+
+def test_the_assistants_chat_turn_never_sends_the_morning_message(api):
+    """The chat turn is the person's own request in their Assistant room, not the background run that sends this."""
+    turn = assistant_turn(api, "ana-test")[1]["token"]
+    morning(api, turn, expected=403)
+
+
+def test_a_morning_message_is_only_for_an_active_person(api):
+    coo = setup_attempt(api, "coo")[2]["token"]
+    morning(api, coo, for_person="human:ghost", expected=404)
+    post(api, "access/people/cara", {"sign_in": False})
+    morning(api, coo, for_person="human:cara", expected=404)
+
+
+def test_a_morning_message_is_at_most_two_thousand_characters(api):
+    coo = setup_attempt(api, "coo")[2]["token"]
+    r = api.post("/api/v2/assistant/morning", json={"for": "human:ana", "body": "x" * 2001}, headers=headers(coo))
+    assert r.status_code == 422, r.text
+
+
+def test_the_morning_tool_is_offered_to_the_assistant_and_its_bot_and_to_no_one_else():
+    offered = {
+        kind: {t["name"] for t in hubtools.listing(local=True, kind=kind)}
+        for kind in ("assistant", "bot", "owner", "admin", "member", "botops", "agent")
+    }
+    assert "hub_assistant_morning" in offered["assistant"] and "hub_assistant_morning" in offered["bot"]
+    assert not any(
+        "hub_assistant_morning" in names for kind, names in offered.items() if kind not in ("assistant", "bot")
+    )
+
+
 def _turn_message_id(api, attempt):
     """The person's message that started this turn (the `turn` a run cites)."""
     with api.app.state.store.read() as c:
-        return c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
-                         (attempt["id"],)).fetchone()["message_id"]
+        return c.execute(
+            "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (attempt["id"],)
+        ).fetchone()["message_id"]
 
 
 def test_a_turn_never_edits_deletes_or_redacts_a_message_the_person_wrote(api):
@@ -277,9 +400,11 @@ def test_a_turn_never_edits_deletes_or_redacts_a_message_the_person_wrote(api):
     assert not assistant.admits_on_turn("PATCH", f"/api/v2/messages/{mid}", {"body": "yes"})
     assert not assistant.admits_on_turn("DELETE", f"/api/v2/messages/{mid}")
     assert not assistant.admits_on_turn("POST", f"/api/v2/messages/{mid}/redact", {})
-    for method, path, body in (("PATCH", f"/api/v2/messages/{mid}", {"body": "yes"}),
-                               ("DELETE", f"/api/v2/messages/{mid}", None),
-                               ("POST", f"/api/v2/messages/{mid}/redact", {})):
+    for method, path, body in (
+        ("PATCH", f"/api/v2/messages/{mid}", {"body": "yes"}),
+        ("DELETE", f"/api/v2/messages/{mid}", None),
+        ("POST", f"/api/v2/messages/{mid}/redact", {}),
+    ):
         raw = api.request(method, path, json=body, headers=cited)
         assert raw.status_code == 403 and raw.json()["error"]["code"] == "confirm_required", (method, raw.text)
     with api.app.state.store.read() as c:
@@ -299,8 +424,11 @@ def test_a_message_edited_after_it_was_posted_lends_no_words(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE messages SET edited_at=NULL WHERE id=?", (mid,))
         assert not assistant.edited(c, {"id": mid, "edited_at": None, "revision": 0})
-        c.execute("INSERT INTO message_revisions(id,message_id,origin_id,revision,body,deleted,actor,created_at) "
-                  "VALUES(?,?,?,?,?,?,?,?)", ("rev-1", mid, "origin-1", 1, "yes", 0, "human:ana", H.now()))
+        c.execute(
+            "INSERT INTO message_revisions(id,message_id,origin_id,revision,body,deleted,actor,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            ("rev-1", mid, "origin-1", 1, "yes", 0, "human:ana", H.now()),
+        )
         assert assistant.edited(c, {"id": mid, "edited_at": None, "revision": 0})
         assert assistant.edited(c, {"id": mid, "edited_at": None, "revision": 1})
 
@@ -310,6 +438,7 @@ def test_a_message_edited_after_it_was_posted_lends_no_words(api):
 # name fails the test. A route that does touch a credential, a sign-in, an invite, a subscription or a signing key is on
 # NEVER instead (backend/assistant.py), and a route here must never be one of those.
 REVIEWED = {
+    "POST /api/v2/finance/ad-imports": "turns Finance's ad spend import on or off and picks, by id, which saved keys it reads with; reads or writes no secret",
     "POST /api/v2/humans/{pid}": "a profile edit; 'login' is a last-login field",
     "POST /api/v2/people/{pid}": "a profile edit; 'login' is a last-login field",
     "POST /api/v2/runners/heartbeat": "the runner's own heartbeat; 'provider' is a field name",
@@ -332,8 +461,16 @@ REVIEWED = {
     "POST /api/v2/bots/{bot}/copy": "copies a bot the person may copy; no secret is shown in the chat, and the route checks the person's right",
     "POST /api/v2/settings/catalog/{key}/plan": "plans a setting and names the run it would make; the run is checked by the gate when it is made",
     "PUT /api/v2/access/rules": "refused by the keys on its body (credential and Assistant rules, in admits_on_turn); the walk sends no body",
+    "POST /api/v2/api-tools/{tool_id}/check": "one authenticated GET per stored key; it reads, records the result and returns no value",
     "PUT /api/v2/usage/limits": "a spend cap, not a credential; the person sets it on their own word",
     "POST /api/v2/assistant/actions": "the Assistant's own card route: a proposal the person confirms",
+    "POST /api/v2/api-tools/{tool_id}/check": "Check now: one authenticated GET to the vendor per key; reveals and changes nothing",
+    "POST /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
+    "PUT /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
+    "PATCH /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
+    "DELETE /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
+    "POST /api/v2/computers/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
+    "POST /api/v2/runners/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
 }
 
 
@@ -341,8 +478,10 @@ def test_every_route_that_touches_a_credential_or_a_sign_in_is_never_a_chat_writ
     """Walks app.routes: any route whose handler reads or writes a credential, a grant, a computer's sign-in or keys, a
     subscription, a signing key, an invite, or the providers, must be on NEVER for every write it takes
     (or be reviewed in REVIEWED with its reason). A new such route that is neither fails here, not in a chat."""
-    touches = re.compile(r"credential|model_login|computer_keys|shared_key|attach_shared|login|logout|password|service_key|"
-                         r"enroll|pairing|subscription|signing|replace_lost|invite|provider")
+    touches = re.compile(
+        r"credential|model_login|computer_keys|shared_key|attach_shared|login|logout|password|service_key|"
+        r"enroll|pairing|subscription|signing|replace_lost|invite|provider"
+    )
     checked, offenders = 0, []
     for route in api.app.routes:
         methods = getattr(route, "methods", None)
@@ -392,13 +531,15 @@ def _template_tools():
                 words.append(token)
             fn = fn_of(words)
             if fn:
-                tools.add(remotecli.tool_name(fn))
+                name = remotecli.tool_name(fn)
+                # The CLI's aliases dispatch to these tools, not to a tool named after the command's spelling.
+                tools.update(hubtools.CLI_TOOL_ALIASES.get(name, (name,)))
     return tools
 
 
 def test_the_assistant_turn_is_offered_the_tools_its_template_runs_and_never_the_hidden_ones():
     """The Assistant's MCP listing: every tool its template runs is offered, the NEVER tools are not, and the listing stays
-    small enough for the model (about 165 KB today; the cliff is past 200 KB)."""
+    small enough for the model (about 185 KB today; the cliff is past 200 KB)."""
     everything = {t["name"] for t in hubtools.TOOLS}
     offered = hubtools.listing(local=True, kind="assistant")
     names = {t["name"] for t in offered}

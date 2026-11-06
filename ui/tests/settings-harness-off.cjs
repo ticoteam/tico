@@ -92,11 +92,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.match(muse.text, /Muse Code \(off\)/, 'Muse Code says it is off');
     assert.ok(!options.some(o => o.value === 'gemini'), 'a harness with no models stays out');
     assert.ok(options.some(o => o.value === 'hermes' && !o.disabled), 'external harnesses are unaffected');
-    const note = page.locator('[data-add-choice] [data-choice-off]');
-    await note.waitFor();
-    assert.match(await note.innerText(), /Muse Code.*Models/, 'the note names Muse Code and Models');
-    await note.locator('[data-off-providers]').click();
-    await page.locator('#set-providers').waitFor();
+    assert.equal(await page.locator('[data-add-choice] [data-choice-off]').count(), 0, 'no off line: the harness option already says (off)');
     await page.evaluate(() => document.querySelector('#bot-editor').close());
     // Enabling Meta makes Muse Code pickable and lists the Wonder models under it.
     await settle();

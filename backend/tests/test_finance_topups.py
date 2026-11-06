@@ -1,6 +1,7 @@
 """Gateway credit top-ups (spec §9): money moved from a bank account onto the Gateway credit prepaid asset that usage
 draws down. A top-up moves assets only, so neither P&L moves. It is refused for a card or other non-bank money
 account, for an amount that is not positive, for a book that is a provider's, and while 1100 is missing or inactive."""
+
 from decimal import Decimal
 
 from backend.finance import actions as FA
@@ -8,15 +9,32 @@ from backend.finance import reads as FR
 from backend.finance.store import ledger as SL
 from backend.finance.store import banking as SK
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
+    AT,
+    MERCURY,
+    OWNER,
+    FakeMercury,
+    account,
+    act,
+    books,
+    connect,
+    finance_template,
+    spend,
+    store,
+    sync_once,
+)
 from backend.tests.test_finance_payments import _checking
 
-PLAIN = "human:eve"          # a web teammate with no grants or rights
+PLAIN = "human:eve"  # a web teammate with no grants or rights
 
 
 def _balance(c, code) -> int:
-    return int(c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id "
-                         "WHERE a.code=?", (code,)).fetchone()[0])
+    return int(
+        c.execute(
+            "SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id "
+            "WHERE a.code=?",
+            (code,),
+        ).fetchone()[0]
+    )
 
 
 def _pnl(c, basis, start="2026-10-01", end="2026-10-31") -> dict[str, int]:
@@ -25,8 +43,11 @@ def _pnl(c, basis, start="2026-10-01", end="2026-10-31") -> dict[str, int]:
 
 
 def _bank_code(c, money_id: str) -> str:
-    return str(c.execute("SELECT a.code FROM fin_money_accounts m JOIN fin_accounts a ON a.id=m.account_id "
-                         "WHERE m.id=?", (money_id,)).fetchone()[0])
+    return str(
+        c.execute(
+            "SELECT a.code FROM fin_money_accounts m JOIN fin_accounts a ON a.id=m.account_id WHERE m.id=?", (money_id,)
+        ).fetchone()[0]
+    )
 
 
 def _entries(c) -> int:
@@ -34,8 +55,16 @@ def _entries(c) -> int:
 
 
 def _meter(as_of, **prices):
-    rows = [{"model": model, "category": "image" if model.endswith("image") else "text", "charged": True, "calls": 1,
-             "price_usd": Decimal(price)} for model, price in prices.items()]
+    rows = [
+        {
+            "model": model,
+            "category": "image" if model.endswith("image") else "text",
+            "charged": True,
+            "calls": 1,
+            "price_usd": Decimal(price),
+        }
+        for model, price in prices.items()
+    ]
     return {"month": "2026-10", "rows": rows, "as_of": as_of}
 
 
@@ -45,33 +74,48 @@ def test_a_top_up_posts_gateway_credit_against_the_bank_account(books):
         money = _checking(c)
         bank = _bank_code(c, money)
         before = _balance(c, bank)
-        made = act(c, OWNER, "gateway_topup", {"money_account_id": money, "amount": 10_000, "date": "2026-10-20",
-                                               "memo": "October top-up"})
+        made = act(
+            c,
+            OWNER,
+            "gateway_topup",
+            {"money_account_id": money, "amount": 10_000, "date": "2026-10-20", "memo": "October top-up"},
+        )
         assert made.status == "committed", made
         assert _balance(c, "1100") == 10_000
         assert _balance(c, bank) == before - 10_000
         entry = str(made.result["entry_id"])
-        assert [(str(r[0]), int(r[1])) for r in c.execute(
-            "SELECT a.code, l.amount FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id WHERE l.entry_id=? "
-            "ORDER BY l.amount DESC", (entry,))] == [("1100", 10_000), (bank, -10_000)]
-        assert tuple(c.execute("SELECT entry_date, memo, source FROM fin_entries WHERE id=?", (entry,)).fetchone()) == \
-            ("2026-10-20", "October top-up", "bank")
+        assert [
+            (str(r[0]), int(r[1]))
+            for r in c.execute(
+                "SELECT a.code, l.amount FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id WHERE l.entry_id=? "
+                "ORDER BY l.amount DESC",
+                (entry,),
+            )
+        ] == [("1100", 10_000), (bank, -10_000)]
+        assert tuple(c.execute("SELECT entry_date, memo, source FROM fin_entries WHERE id=?", (entry,)).fetchone()) == (
+            "2026-10-20",
+            "October top-up",
+            "bank",
+        )
         # No date given: the day the action runs.
         made = act(c, OWNER, "gateway_topup", {"money_account_id": money, "amount": 2_500})
         assert made.status == "committed", made
-        assert c.execute("SELECT entry_date FROM fin_entries WHERE id=?", (made.result["entry_id"],)).fetchone()[0] \
+        assert (
+            c.execute("SELECT entry_date FROM fin_entries WHERE id=?", (made.result["entry_id"],)).fetchone()[0]
             == "2026-10-15"
+        )
         assert _balance(c, "1100") == 12_500
 
 
 def test_a_top_up_changes_neither_the_cash_nor_the_accrual_pnl(books):
     connect(books, FakeMercury())
     with books.transaction() as c:
-        spend(c, "6100", 5_000)                       # some expense this month, so the check is not on zeros
+        spend(c, "6100", 5_000)  # some expense this month, so the check is not on zeros
         cash, accrual = _pnl(c, "cash"), _pnl(c, "accrual")
         assert cash == accrual == {"6100": 5_000}
-        made = act(c, OWNER, "gateway_topup", {"money_account_id": _checking(c), "amount": 10_000,
-                                               "date": "2026-10-20"})
+        made = act(
+            c, OWNER, "gateway_topup", {"money_account_id": _checking(c), "amount": 10_000, "date": "2026-10-20"}
+        )
         assert made.status == "committed", made
         assert (_pnl(c, "cash"), _pnl(c, "accrual")) == (cash, accrual)
 
@@ -79,11 +123,13 @@ def test_a_top_up_changes_neither_the_cash_nor_the_accrual_pnl(books):
 def test_usage_draws_the_gateway_credit_down_after_a_top_up(books):
     connect(books, FakeMercury())
     with books.transaction() as c:
-        made = act(c, OWNER, "gateway_topup", {"money_account_id": _checking(c), "amount": 10_000,
-                                               "date": "2026-10-15"})
+        made = act(
+            c, OWNER, "gateway_topup", {"money_account_id": _checking(c), "amount": 10_000, "date": "2026-10-15"}
+        )
         assert made.status == "committed", made
-        assert FA.usage_snapshot(c, _meter("2026-10-15T16:00:00Z", **{"tico-medium": "0.50"}),
-                                 fetched_at="2026-10-15T16:01:00.000000Z")
+        assert FA.usage_snapshot(
+            c, _meter("2026-10-15T16:00:00Z", **{"tico-medium": "0.50"}), fetched_at="2026-10-15T16:01:00.000000Z"
+        )
         assert [(p["line"], p["amount"]) for p in FA.post_usage(c, "2026-10-15T16:05:00.000000Z")] == [("ai", 50)]
         assert (_balance(c, "1100"), _balance(c, "5100")) == (9_950, 50)
 
@@ -94,21 +140,23 @@ def test_a_top_up_refuses_a_card_an_unknown_account_a_zero_or_negative_amount_an
         bank = _checking(c)
         card = str(c.execute("SELECT id FROM fin_money_accounts WHERE kind='card_program'").fetchone()[0])
         made = act(c, OWNER, "gateway_topup", {"money_account_id": bank, "amount": 10_000})
-        assert made.status == "committed", made      # the action exists, so the refusals below are the only reason
+        assert made.status == "committed", made  # the action exists, so the refusals below are the only reason
         entries, credit = _entries(c), _balance(c, "1100")
-        for payload in ({"money_account_id": card, "amount": 10_000},
-                        {"money_account_id": "no-such-account", "amount": 10_000},
-                        {"money_account_id": bank, "amount": 0},
-                        {"money_account_id": bank, "amount": -500},
-                        {"money_account_id": bank},
-                        {"money_account_id": bank, "amount": 100.0},
-                        {"money_account_id": bank, "amount": 100, "memo": "x" * 141},
-                        {"money_account_id": bank, "amount": 100, "expense": True}):
+        for payload in (
+            {"money_account_id": card, "amount": 10_000},
+            {"money_account_id": "no-such-account", "amount": 10_000},
+            {"money_account_id": bank, "amount": 0},
+            {"money_account_id": bank, "amount": -500},
+            {"money_account_id": bank},
+            {"money_account_id": bank, "amount": 100.0},
+            {"money_account_id": bank, "amount": 100, "memo": "x" * 141},
+            {"money_account_id": bank, "amount": 100, "expense": True},
+        ):
             got = act(c, OWNER, "gateway_topup", payload)
             assert (got.status, got.code) == ("failed", "invalid"), (payload, got)
         assert (_entries(c), _balance(c, "1100")) == (entries, credit)
         got = act(c, PLAIN, "gateway_topup", {"money_account_id": bank, "amount": 100})
-        assert (got.status, got.code) == ("denied", "denied"), got      # a teammate without the books right
+        assert (got.status, got.code) == ("denied", "denied"), got  # a teammate without the books right
 
 
 def test_a_top_up_is_refused_while_the_books_are_a_providers(books):
@@ -145,9 +193,17 @@ def test_a_top_up_is_refused_when_the_books_have_no_gateway_credit_account_and_n
 
 def _txn(raw_id: str, amount: float, day: str = "2026-10-15", account_id: str = "acct-chk", **extra):
     """A Mercury outgoing transfer on the checking account (what the bank brings in as a feed row)."""
-    return {**MERCURY["txn_bank_fee"], "id": raw_id, "accountId": account_id, "amount": amount,
-            "kind": "externalTransfer", "createdAt": f"{day}T10:00:00Z", "postedAt": f"{day}T10:00:00Z",
-            "counterpartyName": "Gateway", **extra}
+    return {
+        **MERCURY["txn_bank_fee"],
+        "id": raw_id,
+        "accountId": account_id,
+        "amount": amount,
+        "kind": "externalTransfer",
+        "createdAt": f"{day}T10:00:00Z",
+        "postedAt": f"{day}T10:00:00Z",
+        "counterpartyName": "Gateway",
+        **extra,
+    }
 
 
 def _feed_id(c, provider_id: str) -> str:
@@ -164,7 +220,7 @@ def test_a_top_up_then_its_bank_row_posts_the_cash_once(books):
     the row posts nothing of its own."""
     fake = FakeMercury()
     connect(books, fake)
-    sync_once(books, fake)                 # the account's opening is posted before anyone tops up from it
+    sync_once(books, fake)  # the account's opening is posted before anyone tops up from it
     with books.transaction() as c:
         money = _checking(c)
         bank = _bank_code(c, money)
@@ -174,15 +230,27 @@ def test_a_top_up_then_its_bank_row_posts_the_cash_once(books):
         before = _moves(c, bank)
     assert before[1:] == (0, 10_000)
     fake.txns["txn-topup"] = _txn("txn-topup", -100.0, day="2026-10-16")
-    fake.events_list.append({"id": "evt-topup", "resourceType": "transaction", "resourceId": "txn-topup",
-                             "operationType": "create", "resourceVersion": 1})
+    fake.events_list.append(
+        {
+            "id": "evt-topup",
+            "resourceType": "transaction",
+            "resourceId": "txn-topup",
+            "operationType": "create",
+            "resourceVersion": 1,
+        }
+    )
     sync_once(books, fake, "2026-10-15T12:30:00.000000Z")
     with books.read() as c:
         assert _moves(c, bank) == before
-        assert c.execute("SELECT COUNT(*) FROM fin_entries WHERE source_id IN (SELECT id FROM fin_feed_txns)"
-                         ).fetchone()[0] == 0          # the row posted no entry of its own
-        assert tuple(c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE provider_id='txn-topup'").fetchone()
-                     ) == ("posted", entry)
+        assert (
+            c.execute("SELECT COUNT(*) FROM fin_entries WHERE source_id IN (SELECT id FROM fin_feed_txns)").fetchone()[
+                0
+            ]
+            == 0
+        )  # the row posted no entry of its own
+        assert tuple(
+            c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE provider_id='txn-topup'").fetchone()
+        ) == ("posted", entry)
 
 
 def test_a_bank_row_already_in_the_feed_is_the_top_up_when_its_feed_id_is_given(books):
@@ -195,14 +263,15 @@ def test_a_bank_row_already_in_the_feed_is_the_top_up_when_its_feed_id_is_given(
     with books.transaction() as c:
         money = _checking(c)
         bank = _bank_code(c, money)
-        posted = _moves(c, bank)               # the row as it arrived: its cash, against Other expenses
+        posted = _moves(c, bank)  # the row as it arrived: its cash, against Other expenses
         feed_id = _feed_id(c, "txn-topup")
         made = act(c, OWNER, "gateway_topup", {"money_account_id": money, "amount": 10_000, "feed_id": feed_id})
         assert made.status == "committed", made
     with books.read() as c:
         assert _moves(c, bank) == (posted[0], posted[1] - 10_000, 10_000)
-        assert tuple(c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE provider_id='txn-topup'").fetchone()
-                     ) == ("posted", str(made.result["entry_id"]))
+        assert tuple(
+            c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE provider_id='txn-topup'").fetchone()
+        ) == ("posted", str(made.result["entry_id"]))
 
 
 def test_a_top_up_from_an_account_with_no_connection_goes_through_clearing(books):
@@ -210,9 +279,20 @@ def test_a_top_up_from_an_account_with_no_connection_goes_through_clearing(books
     bank's own line is not touched."""
     with books.transaction() as c:
         money = SL.new_id()
-        c.execute("INSERT INTO fin_money_accounts(id, book_id, kind, name, provider, account_id, created_at, created_by)"
-                  " VALUES(?,?,?,?,?,?,?,?)", (money, SL.book(c).id, "bank", "Checking", "mercury",  # type: ignore[union-attr]
-                                               account(c, "1000"), AT, OWNER))
+        c.execute(
+            "INSERT INTO fin_money_accounts(id, book_id, kind, name, provider, account_id, created_at, created_by)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (
+                money,
+                SL.book(c).id,
+                "bank",
+                "Checking",
+                "mercury",  # type: ignore[union-attr]
+                account(c, "1000"),
+                AT,
+                OWNER,
+            ),
+        )
         bank = _bank_code(c, money)
         cash = _balance(c, bank)
         made = act(c, OWNER, "gateway_topup", {"money_account_id": money, "amount": 10_000, "date": "2026-10-15"})
@@ -226,9 +306,21 @@ def test_a_top_up_is_refused_while_an_unposted_bank_row_of_its_amount_is_in_the_
     connect(books, FakeMercury())
     with books.transaction() as c:
         money = _checking(c)
-        SK.insert(c, "fin_feed_txns", {
-            "money_account_id": money, "provider_id": "txn-waiting", "txn_date": "2026-10-15", "amount": -10_000,
-            "counterparty": "Gateway", "currency": "USD", "status": "new", "created_at": AT, "created_by": OWNER})
+        SK.insert(
+            c,
+            "fin_feed_txns",
+            {
+                "money_account_id": money,
+                "provider_id": "txn-waiting",
+                "txn_date": "2026-10-15",
+                "amount": -10_000,
+                "counterparty": "Gateway",
+                "currency": "USD",
+                "status": "new",
+                "created_at": AT,
+                "created_by": OWNER,
+            },
+        )
         entries = _entries(c)
         got = act(c, OWNER, "gateway_topup", {"money_account_id": money, "amount": 10_000, "date": "2026-10-15"})
         assert (got.status, got.code) == ("failed", "conflict"), got
@@ -242,8 +334,10 @@ def test_a_bank_row_that_is_a_top_ups_bank_side_cannot_be_recategorized(books):
     connect(books, fake)
     with books.transaction() as c:
         money = _checking(c)
-        assert act(c, OWNER, "gateway_topup", {"money_account_id": money, "amount": 10_000,
-                                               "date": "2026-10-15"}).status == "committed"
+        assert (
+            act(c, OWNER, "gateway_topup", {"money_account_id": money, "amount": 10_000, "date": "2026-10-15"}).status
+            == "committed"
+        )
     fake.txns["txn-topup"] = _txn("txn-topup", -100.0)
     sync_once(books, fake)
     with books.transaction() as c:

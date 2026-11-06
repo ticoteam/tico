@@ -18,6 +18,7 @@ with at least 10 minutes remaining. The helper first reuses the turn's own start
 while it has that long left, and the supervisor holds each hub answer for a few minutes (`hub_token`), so a busy
 turn asks the hub a few times an hour, not once per git command.
 """
+
 import json
 import os
 import shlex
@@ -46,7 +47,9 @@ TURN_PATH_KEY = "TICO_TURN_PATH"
 # A fixed token, for when the runner's registration file is not known (tests, embedding).
 # The bot's repository (`owner/name`) as the hub resolved it, for the turn's publish step.
 REPOSITORY_KEY = "TICO_GITHUB_REPOSITORY"
-FAILED_HELPER = '!f() { echo "Tico: GitHub App token unavailable; check Settings > Tools > GitHub" >&2; echo quit=true; }; f'
+FAILED_HELPER = (
+    '!f() { echo "Tico: GitHub App token unavailable; check Settings > Tools > GitHub" >&2; echo quit=true; }; f'
+)
 STATIC_HELPER = "!f() { echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f"
 # The hub's own margins (backend/github_app.py): a held token is reused while it has this long left.
 GIT_MARGIN, TURN_MARGIN = 10 * 60, 45 * 60
@@ -91,8 +94,11 @@ def hub_token(client, body):
         with _flights_lock:
             flights.pop(key, None)
     tokens = granted.get("tokens") if isinstance(granted, dict) else None
-    until = _expiry(granted.get("expires_at"), *(group.get("expires_at") for group in tokens or ())) \
-        if isinstance(granted, dict) and granted.get("token") else 0
+    until = (
+        _expiry(granted.get("expires_at"), *(group.get("expires_at") for group in tokens or ()))
+        if isinstance(granted, dict) and granted.get("token")
+        else 0
+    )
     # BotOps' answer depends on the runs live when it was asked; the hub says so with hold=false (older hubs: by name).
     holdable = isinstance(granted, dict) and granted.get("hold", body.get("bot") != "botops") is not False
     if holdable and until - margin > time.time():
@@ -121,18 +127,24 @@ def fresh_helper(config_path, bot, socket_path=None):
     """A git credential helper that fetches a token each time git asks to `get`: from the hub
     with the runner's registration, or from the supervisor's socket when there is one."""
     where = ("--socket", str(socket_path)) if socket_path else (("--config", str(config_path)) if config_path else ())
-    run = " ".join(shlex.quote(part) for part in (
-        sys.executable, "-m", "runner_support.git_credentials", *where, "--bot", bot))
+    run = " ".join(
+        shlex.quote(part) for part in (sys.executable, "-m", "runner_support.git_credentials", *where, "--bot", bot)
+    )
     return f"!f() {{ [ \"$1\" = get ] || exit 0; cd {shlex.quote(str(ROOT))} && exec {run}; }}; f"
 
 
 def environment(token, helper=STATIC_HELPER):
     return {
-        "GH_TOKEN": token, "GITHUB_TOKEN": token, "GIT_TERMINAL_PROMPT": "0",
+        "GH_TOKEN": token,
+        "GITHUB_TOKEN": token,
+        "GIT_TERMINAL_PROMPT": "0",
         "GIT_CONFIG_COUNT": "3",
-        "GIT_CONFIG_KEY_0": KEY, "GIT_CONFIG_VALUE_0": "",
-        "GIT_CONFIG_KEY_1": KEY, "GIT_CONFIG_VALUE_1": helper,
-        "GIT_CONFIG_KEY_2": "credential.https://github.com.useHttpPath", "GIT_CONFIG_VALUE_2": "true",
+        "GIT_CONFIG_KEY_0": KEY,
+        "GIT_CONFIG_VALUE_0": "",
+        "GIT_CONFIG_KEY_1": KEY,
+        "GIT_CONFIG_VALUE_1": helper,
+        "GIT_CONFIG_KEY_2": "credential.https://github.com.useHttpPath",
+        "GIT_CONFIG_VALUE_2": "true",
     }
 
 
@@ -144,8 +156,10 @@ def token_problem(exc, repository=""):
     status, code = getattr(exc, "status", 0), str(getattr(exc, "code", "") or "")
     detail = " ".join(str(getattr(exc, "detail", "") or "").split())[:200]
     if code == "github_repo_not_accessible" or status == 409 and "not reachable" in detail:
-        why = ("the GitHub App is not installed on it or cannot reach it; add it to the App's repository access "
-               "on GitHub, then check Settings > Tools > GitHub")
+        why = (
+            "the GitHub App is not installed on it or cannot reach it; add it to the App's repository access "
+            "on GitHub, then check Settings > Tools > GitHub"
+        )
     elif status == 403 and "organization" in detail:
         why = f"it is outside the connected GitHub organization ({detail})"
     elif status:
@@ -153,6 +167,7 @@ def token_problem(exc, repository=""):
     else:
         why = f"the server did not answer ({type(exc).__name__})"
     from .redact import scrub_credentials
+
     return scrub_credentials(f"Tico could not get a GitHub token {what}: {why}")
 
 
@@ -188,7 +203,11 @@ def apply(env, client, bot, config_path=None, socket_path=None):
         granted = {**granted, 'token': '', 'tokens': []}
     elif stored and stored != granted["token"] and granted.get("repository"):
         env[OTHER_TOKEN_KEY] = stored
-    helper = fresh_helper(config_path, bot, socket_path) if (config_path or socket_path or "tokens" in granted) else STATIC_HELPER
+    helper = (
+        fresh_helper(config_path, bot, socket_path)
+        if (config_path or socket_path or "tokens" in granted)
+        else STATIC_HELPER
+    )
     env.update(environment(granted["token"], helper if applied else failed_helper(reason)))
     if "tokens" in granted:
         env[TOKENS_KEY] = json.dumps(granted["tokens"])
@@ -199,7 +218,11 @@ def apply(env, client, bot, config_path=None, socket_path=None):
             env["TICO_GITHUB_BOT"] = bot
             if config_path and not socket_path:
                 env["TICO_GITHUB_CONFIG"] = str(config_path)
-            env["PATH"] = str(ROOT / "runner_support" / "credential_bin") + os.pathsep + env.get("PATH", os.environ.get("PATH", os.defpath))
+            env["PATH"] = (
+                str(ROOT / "runner_support" / "credential_bin")
+                + os.pathsep
+                + env.get("PATH", os.environ.get("PATH", os.defpath))
+            )
             env[TURN_PATH_KEY] = env["PATH"]
             if sys.platform == "darwin":
                 startup = str(ROOT / "runner_support" / "shell_init")
@@ -232,13 +255,25 @@ def publish_history(path, repository, env=None, url=None, timeout=60):
     `current` (nothing to do), `skipped` (not a checkout with commits) or `failed`; detail says why
     for `failed` and `skipped`."""
     path = Path(path)
+    from clients.repo_safety import outside_installation
+
+    try:
+        outside_installation(path)
+    except ValueError as exc:
+        return "failed", str(exc)
     if not repository or not (path / ".git").exists():
         return "skipped", "no repository link" if not repository else "not a git checkout"
     env = safe_git.environment(env)
 
     def git(*args, timeout=15):
-        return isolation.run([*safe_git.prefix(path), "-C", str(path), *args], capture_output=True, text=True,
-                             stdin=subprocess.DEVNULL, env=env, timeout=timeout)
+        return isolation.run(
+            [*safe_git.prefix(path), "-C", str(path), *args],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            env=env,
+            timeout=timeout,
+        )
 
     def why(result):
         lines = (result.stderr or result.stdout or "").strip().splitlines()
@@ -253,7 +288,7 @@ def publish_history(path, repository, env=None, url=None, timeout=60):
         if git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").returncode == 0:
             return "current", ""
         wanted = url or f"https://github.com/{repository}.git"
-        origin = git("config", "--get", "remote.origin.url")      # as configured, before any insteadOf rewrite
+        origin = git("config", "--get", "remote.origin.url")  # as configured, before any insteadOf rewrite
         current = origin.stdout.strip() if origin.returncode == 0 else ""
         if current and current != wanted and not _same_repository(current, repository):
             return "failed", f"origin is {current}, not {repository}; left as it is"
@@ -266,23 +301,39 @@ def publish_history(path, repository, env=None, url=None, timeout=60):
         listed = git("ls-remote", "--heads", "origin", timeout=timeout)
         if listed.returncode != 0:
             text = why(listed)
-            return "failed", ("GitHub refused the bot's token" if any(w in text for w in ("uthentication", "403", "Permission", "denied"))
-                              else "could not reach " + repository + ": " + text)
-        remote = {line.split("\t")[1].removeprefix("refs/heads/"): line.split("\t")[0]
-                  for line in listed.stdout.splitlines() if "\t" in line}
+            return "failed", (
+                "GitHub refused the bot's token"
+                if any(w in text for w in ("uthentication", "403", "Permission", "denied"))
+                else "could not reach " + repository + ": " + text
+            )
+        remote = {
+            line.split("\t")[1].removeprefix("refs/heads/"): line.split("\t")[0]
+            for line in listed.stdout.splitlines()
+            if "\t" in line
+        }
         if remote:
             # Anything already there must be an ancestor of what is pushed, or this would rewrite it.
             names = [branch] if branch in remote else sorted(remote)[:20]
             fetched = git("fetch", "--quiet", "--no-tags", "origin", *names, timeout=timeout).returncode == 0
-            if fetched and branch in remote and git("merge-base", "--is-ancestor", remote[branch], "HEAD").returncode == 0:
+            if (
+                fetched
+                and branch in remote
+                and git("merge-base", "--is-ancestor", remote[branch], "HEAD").returncode == 0
+            ):
                 pass
             elif fetched and _unrelated(git, [remote[name] for name in names]):
                 # No commit in common (a template copy beside the bot's real history): the readiness check keys
                 # on "unrelated history" and holds turns, unlike a checkout that merely diverged from GitHub.
-                return "failed", (f"{repository} holds unrelated history on {', '.join(names)}"
-                                  + ("" if branch in remote else f", not {branch}") + "; nothing pushed")
+                return "failed", (
+                    f"{repository} holds unrelated history on {', '.join(names)}"
+                    + ("" if branch in remote else f", not {branch}")
+                    + "; nothing pushed"
+                )
             elif branch not in remote:
-                return "failed", f"{repository} already has history on {', '.join(sorted(remote))}, not {branch}; nothing pushed"
+                return (
+                    "failed",
+                    f"{repository} already has history on {', '.join(sorted(remote))}, not {branch}; nothing pushed",
+                )
             else:
                 return "failed", f"{repository} already has different history on {branch}; nothing pushed"
         pushed = git("push", "-q", "-u", "origin", branch, timeout=timeout)
@@ -303,8 +354,14 @@ def fast_forward(path, env=None, timeout=60):
     env = safe_git.environment(env)
 
     def git(*args, timeout=15):
-        return isolation.run([*safe_git.prefix(path), "-C", str(path), *args], capture_output=True, text=True,
-                             stdin=subprocess.DEVNULL, env=env, timeout=timeout)
+        return isolation.run(
+            [*safe_git.prefix(path), "-C", str(path), *args],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            env=env,
+            timeout=timeout,
+        )
 
     try:
         if git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").returncode != 0:
@@ -343,8 +400,14 @@ def remote_history(repository, env=None, url=None, timeout=30):
     env = safe_git.environment(env)
     wanted = url or f"https://github.com/{repository}.git"
     try:
-        done = isolation.run([*safe_git.PREFIX, "ls-remote", "--heads", wanted], capture_output=True, text=True,
-                             stdin=subprocess.DEVNULL, env=env, timeout=timeout)
+        done = isolation.run(
+            [*safe_git.PREFIX, "ls-remote", "--heads", wanted],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            env=env,
+            timeout=timeout,
+        )
     except subprocess.TimeoutExpired:
         return "unknown", "timed out"
     except (OSError, subprocess.SubprocessError) as exc:
@@ -363,28 +426,46 @@ def clone_repository(path, repository, env=None, url=None, timeout=180):
     (or the machine's own git access). Only a missing or empty folder is cloned into; anything already
     there is left as it is. Returns (state, detail), state `cloned` or `failed`; detail says why."""
     path = Path(path)
+    from clients.repo_safety import outside_installation
+
+    try:
+        outside_installation(path)
+    except ValueError as exc:
+        return "failed", str(exc)
     if path.exists() and (not path.is_dir() or any(path.iterdir())):
         return "failed", f"{path.name} already exists here and is not an empty folder; left as it is"
-    fresh = not path.exists() or not any(path.iterdir())      # nothing in it is anyone's yet
+    fresh = not path.exists() or not any(path.iterdir())  # nothing in it is anyone's yet
     env = safe_git.environment(env)
     wanted = url or f"https://github.com/{repository}.git"
     try:
-        done = isolation.run([*safe_git.PREFIX, "clone", "--quiet", wanted, str(path)], capture_output=True, text=True,
-                             stdin=subprocess.DEVNULL, env=env, timeout=timeout)
+        done = isolation.run(
+            [*safe_git.PREFIX, "clone", "--quiet", wanted, str(path)],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            env=env,
+            timeout=timeout,
+        )
     except subprocess.TimeoutExpired:
         discard_partial(path, fresh)
-        return "failed", f"git clone timed out after {timeout} seconds; a large repository or a slow network needs longer"
+        return (
+            "failed",
+            f"git clone timed out after {timeout} seconds; a large repository or a slow network needs longer",
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         discard_partial(path, fresh)
         return "failed", type(exc).__name__
     if done.returncode == 0:
         if empty_clone(path):
             discard_partial(path, fresh)
-            return "failed", (f"GitHub's {repository} is empty: the computer that built the bot has not published its "
-                              "history yet; it is cloned once it has")
+            return "failed", (
+                f"GitHub's {repository} is empty: the computer that built the bot has not published its "
+                "history yet; it is cloned once it has"
+            )
         return "cloned", ""
     discard_partial(path, fresh)
     from .redact import env_secrets, git_failure
+
     text = git_failure(done.stderr or done.stdout, env_secrets(env), limit=240) or f"exit {done.returncode}"
     if any(word in text for word in ("uthentication", "403", "Permission to", "denied to")):
         return "failed", f"GitHub refused the bot's token: {text}"
@@ -401,10 +482,22 @@ def empty_clone(path):
         if not (path / ".git").is_dir() or any(entry.name != ".git" for entry in path.iterdir()):
             return False
         env = safe_git.clean_environment()
-        head = isolation.run([*safe_git.prefix(path), "-C", str(path), "rev-parse", "--verify", "--quiet", "HEAD"],
-                             capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env, timeout=10)
-        refs = isolation.run([*safe_git.prefix(path), "-C", str(path), "for-each-ref", "--count=1"],
-                             capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env, timeout=10)
+        head = isolation.run(
+            [*safe_git.prefix(path), "-C", str(path), "rev-parse", "--verify", "--quiet", "HEAD"],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            env=env,
+            timeout=10,
+        )
+        refs = isolation.run(
+            [*safe_git.prefix(path), "-C", str(path), "for-each-ref", "--count=1"],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            env=env,
+            timeout=10,
+        )
     except (OSError, subprocess.SubprocessError):
         return False
     return head.returncode != 0 and refs.returncode == 0 and not refs.stdout.strip()
@@ -457,14 +550,17 @@ def credential(config_path, bot, socket_path=None, repository=None):
     if other:
         return other
     from clients.tico import Client
+
     try:
         if socket_path:
-            return credential_socket.request(socket_path, os.environ.get("HUB_TOKEN", ""), timeout=15,
-                                             repository=repository, purpose="git")
+            return credential_socket.request(
+                socket_path, os.environ.get("HUB_TOKEN", ""), timeout=15, repository=repository, purpose="git"
+            )
         if config_path:
             config = json.loads(Path(config_path).read_text())
             granted = Client(config["url"], config["token"], timeout=10, retries=1).post(
-                "github/token", {"bot": bot, "purpose": "git"})
+                "github/token", {"bot": bot, "purpose": "git"}
+            )
             return select_token(granted, repository)
     except Exception as exc:
         reason = str(exc) if socket_path else token_problem(exc, repository)
@@ -481,8 +577,27 @@ def gh_repository(argv, env):
         if skip:
             skip = False
             continue
-        if arg in ('--body', '-b', '--title', '-t', '--body-file', '-F', '--field', '-f', '--raw-field', '--header', '-H',
-                   '--comment', '--notes', '-m', '--message', '--jq', '-q', '--search', '--template'):
+        if arg in (
+            '--body',
+            '-b',
+            '--title',
+            '-t',
+            '--body-file',
+            '-F',
+            '--field',
+            '-f',
+            '--raw-field',
+            '--header',
+            '-H',
+            '--comment',
+            '--notes',
+            '-m',
+            '--message',
+            '--jq',
+            '-q',
+            '--search',
+            '--template',
+        ):
             skip = True
             continue
         if arg in ("-R", "--repo") and index + 1 < len(argv):
@@ -503,8 +618,9 @@ def gh_repository(argv, env):
             return repository_name(argv[2])
     if env.get("GH_REPO"):
         return repository_name(env["GH_REPO"])
-    remote = subprocess.run(["git", "config", "--get", "remote.origin.url"], capture_output=True,
-                            text=True, timeout=10, env=env)
+    remote = subprocess.run(
+        ["git", "config", "--get", "remote.origin.url"], capture_output=True, text=True, timeout=10, env=env
+    )
     return repository_name(remote.stdout) if remote.returncode == 0 else None
 
 
@@ -514,8 +630,9 @@ def gh_main(argv=None):
     repository = None
     try:
         repository = gh_repository(argv, env)
-        token = credential(env.get("TICO_GITHUB_CONFIG"), env.get("TICO_GITHUB_BOT"),
-                           env.get(credential_socket.SOCKET_ENV), repository)
+        token = credential(
+            env.get("TICO_GITHUB_CONFIG"), env.get("TICO_GITHUB_BOT"), env.get(credential_socket.SOCKET_ENV), repository
+        )
     except (OSError, subprocess.SubprocessError):
         token = ""
     if token:
@@ -528,13 +645,14 @@ def gh_main(argv=None):
 
 def main(argv=None):
     import argparse
+
     parser = argparse.ArgumentParser(description="git credential helper backed by the Tico hub")
     parser.add_argument("--config")
     parser.add_argument("--socket")
     parser.add_argument("--bot", required=True)
     args = parser.parse_args(argv)
     wanted = dict(line.split("=", 1) for line in sys.stdin.read().splitlines() if "=" in line)
-    if wanted.get("host") != (os.environ.get("TICO_GITHUB_HOST") or "github.com"):   # the override is for tests
+    if wanted.get("host") != (os.environ.get("TICO_GITHUB_HOST") or "github.com"):  # the override is for tests
         return
     token = credential(args.config, args.bot, args.socket, repository_name(wanted.get("path")))
     if token:

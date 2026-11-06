@@ -31,6 +31,7 @@
           "bot:ops"
         ],
         "path": "/<conversation>/",
+        "pinned_for_everyone_at": null,
         "retention_days": null,
         "room_key": "ops",
         "root_id": "<conversation>",
@@ -62,6 +63,7 @@
           "human:ana"
         ],
         "path": "/<id1>/",
+        "pinned_for_everyone_at": null,
         "retention_days": null,
         "room_key": null,
         "root_id": "<id1>",
@@ -93,6 +95,7 @@
           "bot:ops"
         ],
         "path": "/<id2>/",
+        "pinned_for_everyone_at": null,
         "retention_days": null,
         "room_key": null,
         "root_id": "<id2>",
@@ -122,6 +125,7 @@
           "human:ana"
         ],
         "path": "/<id3>/",
+        "pinned_for_everyone_at": null,
         "retention_days": null,
         "room_key": null,
         "root_id": "<id3>",
@@ -153,6 +157,7 @@
           "human:ana"
         ],
         "path": "/<id4>/",
+        "pinned_for_everyone_at": null,
         "retention_days": null,
         "room_key": null,
         "root_id": "<id4>",

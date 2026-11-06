@@ -12,6 +12,13 @@ Run every kind and print one verdict per kind:
 Each kind is one pytest run with the `slow` tests included; the default `pytest` run leaves those out. Running a
 single file the same way: `python3 -m pytest -q -o addopts= -m "" -p no:cacheprovider e2e/tests/test_upgrade.py`.
 
+PR checks run the slow MCP sweep, CLI sweep and API golden contract in a separate parallel `contracts` job when
+`backend/`, `clients/`, `e2e/`, `templates/`, `skills/` or roles/company inputs change. Shared CI/configuration changes,
+deleted or uncertain inputs, and every main push run them too. The default suite still excludes other slow tests;
+release validation runs every test. To run the PR contracts locally:
+
+    python3 -m pytest -q -n 4 -m slow backend/tests/test_e2e_mcp.py backend/tests/test_e2e_cli.py e2e/tests/test_contract.py
+
 ## Kinds
 
 | kind     | file                                  | what it proves |
@@ -31,7 +38,8 @@ declined, one left open), a goal with a KPI, a reading and a check-in, and an au
 ## Goldens
 
 `goldens/*.json` hold `{request, status, body}` for each capture. A normal run never rewrites them. Re-record only on
-purpose (`--record`), and review `git diff e2e/goldens` before committing. The normalizer (`normalize.py`) replaces
+purpose (`--record`, or `TICO_E2E_RECORD=1 python3 -m pytest -q -m slow e2e/tests/test_contract.py`), and review
+`git diff e2e/goldens` before committing. The normalizer (`normalize.py`) replaces
 the scenario's ids by their names, other ids by numbered labels, timestamps, digests and cursors by fixed words,
 durations and opaque versions by `<volatile>` and `<opaque>`, and rounds floats. A field that appears, disappears
 or changes shape still shows.
@@ -89,7 +97,7 @@ not from these kinds.
 
 | Plan kind | Where it lives | Not covered |
 |---|---|---|
-| Browser journeys | `scripts/ui-tests.cjs --group e2e` (`ui/tests/e2e-*.cjs`), on RunsOn | No rollback smoke journey |
+| Browser journeys | `scripts/ui-tests.cjs --group e2e` (`ui/tests/e2e-*.cjs`; the Automations, Meetings and sign-in journeys run inside `redesign-e2e-automations`, `meeting-linked-tasks` and `model-login`), on RunsOn | No rollback smoke journey |
 | Bots end-to-end | `backend/tests/test_e2e_bots.py`, `test_e2e_bot_rename.py` | A real Rust runner on a demo computer |
 | MCP | `backend/tests/test_e2e_mcp.py` (every remote tool) | Claude Code and Codex sessions that run a scripted task (need real harnesses and model access) |
 | CLI | `backend/tests/test_e2e_cli.py` (every hub command in templates and skills) | |

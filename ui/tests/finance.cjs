@@ -315,7 +315,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/finance/pay-from') return rights.includes('finance.pay')
       ? json({accounts: [{id: 'm1', name: 'Checking', provider: 'mercury', last4: '0001', balance: 17105000}, {id: 'm2', name: 'Savings', provider: 'mercury', last4: '0002', balance: 1315000}],
         currency: 'USD', view_version: 'v1'}) : denied();
-    // The bills address: only an Email & Phone inbox's address has an inbox; any other is kept with inbox_id null.
+    // The bills address: only a Tico address has an inbox; any other is kept with inbox_id null.
     if (p === '/api/v2/finance/bills-address' && method === 'PUT') {
       if (body.address === 'nope@acme.example') return denied();
       billsEmail = body.address;
@@ -396,8 +396,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       const tag = 'owner';
       const {page, errors, writes, reads, hub} = await open(browser);
       await page.locator('.fin-pl').waitFor();
-      assert.deepEqual(await tabs(page), ['P&L', 'Balance sheet', 'Payables', 'Receivables', 'Cards', 'Transactions', 'Tax', 'Sources', 'Access'], tag + ': every tab, in order');
-      assert.equal(await page.locator('#side a[data-nav="finance"]').count(), 1, tag + ': Finance in the sidebar');
+      assert.deepEqual(await tabs(page), ['P&L', 'Budgets', 'Balance sheet', 'Payables', 'Receivables', 'Cards', 'Transactions', 'Tax', 'Sources', 'Access'], tag + ': every tab, in order');
+      await page.locator('#side a[data-nav="finance"]').waitFor({state: 'visible'});   // Finance in the sidebar once its access read lands
       const firsts = await page.locator('.fin-pl tbody td:first-child').allInnerTexts();
       for (const want of ['Gross profit', 'Gross margin', 'Total operating expenses', 'Net income']) assert.ok(firsts.includes(want), `${tag}: the statement has ${want}`);
       assert.equal(await page.locator('.fin-pl thead th.fin-p').count() > 0, true, tag + ': projected columns are shaded');
@@ -1302,12 +1302,12 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(await page.locator('.fin-pl a[href*="/line/"]').count(), 0, tag + ': no drill-down while viewing as');
       assert.match(await page.evaluate(() => location.hash), /view_as=human%3Acara/, tag + ': View as lives in the address');
       await page.goBack();
-      await page.waitForFunction(() => location.hash === '#/finance/access' && !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 9);
+      await page.waitForFunction(() => location.hash === '#/finance/access' && !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 10);
       await page.goForward();
       await page.locator('.fin-as').waitFor();
       assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions'], tag + ': Forward views as again');
       await page.locator('.fin-as button').click();
-      await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 9);
+      await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 10);
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }

@@ -11,7 +11,7 @@ const AU_STEP_STATUS = {skipped: 'skipped', failed: 'failed', spend_cap: 'spend 
 // A run's outcome in one to three words: what its last action did.
 const AU_DONE = {archive: 'Archived', leave_for_you: 'Left for you', draft_reply: 'Draft reply', send_reply: 'Replied',
   create_task: 'Task created', label: 'Labeled', forward: 'Forwarded', wake_bot: 'Bot woken', note: 'Noted',
-  post_update: 'Update posted', call_webhook: 'Webhook called', assign: 'Assigned'};
+  post_update: 'Update posted', call_webhook: 'Webhook called', assign: 'Assigned', unsubscribe: 'Unsubscribed'};
 
 async function auRunsLoad(state, more = false) {
   const id = state.cur?.id;
@@ -68,7 +68,10 @@ function auRunStepText(rs) {
   const o = rs.outputs || {};
   // A step that is waiting (a queued mail action, a bot's turn) has already said what it did.
   if (rs.status === 'waiting') return [auRunStepDid({...rs, status: 'ok'}), 'waiting'].filter(Boolean).join(' · ');
-  if (rs.status !== 'ok') return (AU_STEP_STATUS[rs.status] || rs.status || '') + (o.error ? ' · ' + o.error : '');
+  if (rs.status !== 'ok') {
+    const reason = o.error || (rs.status === 'failed' ? o.actions?.find(a => a.ok === false)?.detail : '');
+    return (AU_STEP_STATUS[rs.status] || rs.status || '') + (reason ? ' · ' + String(reason).split('\n')[0].slice(0, 80) : '');
+  }
   return auRunStepDid(rs);
 }
 function auRunStepDid(rs) {

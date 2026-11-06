@@ -3,8 +3,8 @@
 A release is a version tag. Everything it ships is built once, by the Release validation run for that commit and
 version, and that same build is what the gate tests. Pushing `vX.Y.Z` runs `.github/workflows/release.yml`, which
 builds nothing: it takes that run's runner binaries and image digests, builds the installer bundle and publishes the
-GitHub release. Running installations look for that release to show
-"New version" in the sidebar. A release is not held for its notes: the release command tags the validated commit,
+GitHub release. Running installations look for that release and offer it as
+"Update to vX" in the sidebar. A release is not held for its notes: the release command tags the validated commit,
 and once the release is published it files one task for the Technical Writer to write that version's section of
 [CHANGELOG.md](../CHANGELOG.md). The installed `CHANGELOG.md` supplies the in-app, API and MCP product changelog,
 so a release's notes reach users with the next build that contains them. No separate product announcement is required.
@@ -20,6 +20,9 @@ releases. A Claude Code session or any other outside session that finishes work 
 task ("Release vX.Y.Z: <what>") instead of pushing the tag itself; the Release Manager tags, rolls out and records it,
 so the tasks waiting on the release learn it shipped. Tico itself never moves a task on a tag, release or deploy; it
 only marks the merged PR links the running release contains as Shipped (backend/github.py).
+
+Tico's own repository is the exception: it releases itself through [release windows](#release-windows) in GitHub
+Actions. Its Release Manager bot no longer tags or rolls out Tico releases; it only monitors them.
 
 **When releases are cut.** The Release Manager hears about Dev tickets at Pending Release once, as one task:
 "Release: <n> tickets at Pending Release". It arrives once a day at a set hour (10:00 company time by default;
@@ -37,9 +40,98 @@ nothing is sent.
 pull request merged in the release repository; prereleases excepted). It wakes each ticket's QA owner (tickets
 tagged `qa` only: the post-release tests), leaves each ticket a quiet "Shipped in vX.Y.Z" note, and files the
 Technical Writer ONE task for the release, "Docs for vX.Y.Z: N tickets", listing each ticket with its pull request.
+Private tickets are counted but not named. The writer skips them; their owners handle any docs for changes people see.
+The writer links its open PR on that General task. Tico sends it through the company's ticket review pools
+(Review 1, then Review 2 if configured), recording each verdict at the PR head. A push needs a new review.
+Current-head approvals and green checks wake the writer to merge under the repo's rules, or send the merge to
+an existing repo writer when the writer lacks access. Changes and a needed rebase return to the writer.
+Older open bot PRs enter this same route at a limited rate; Health names PRs waiting over 24 hours without a review.
 It is separate from the release command's "Release notes for vX.Y.Z" task. Docs and release notes are not part of
 the pre-release checklist. Only the owner, a person who moves Dev tickets, the Release Manager and the bot that
 manages the Dev tickets type run `hub release now`. Routines can run `on: release_published` for one task per release.
+
+## Release windows
+
+Tico's own releases (ticoteam/tico) ship from two windows a day, run by `.github/workflows/train.yml` and
+`scripts/release_train.py`. No one tags by hand.
+
+- **When.** A window opens at 14:30 and 22:00 UTC: 07:30 and 15:00 in Los Angeles in summer, an hour earlier in
+  winter. It stays open until a `vX.Y.Z` release is published after it opened. Nothing is stored: every run works this
+  out from GitHub, so a late schedule or a missed event costs time, never a wrong release.
+- **At the open**, the canary's release is promoted to stable if the bake gate passes (below). Then, if main has moved
+  past the newest release, Release validation (`ci.yml`) is dispatched for main's head as the next patch.
+- **The first green candidate ships.** When a validation of this window goes green, the window tags that commit,
+  publishes it (`release.yml`, dispatched on the tag) and updates the canary. That closes the window. The release is
+  published as not latest; only once the canary runs it healthy does the window make it the latest GitHub release and
+  move the images' `latest` tags, so new installs, update checks and desktop apps never get a release the canary has
+  not run. The canary's updater installs that exact version, latest or not. Latest never moves backwards (a newer
+  release that is already latest stays so, and the issue says so), and a marking that failed or did not finish is
+  retried by the backstop and each window step once the canary runs that release healthy.
+- **Notes.** When a release publishes, the monitoring Release Manager files the Technical Writer's "Release notes for
+  vX.Y.Z" task.
+- **A red candidate keeps the window open.** The failure goes on the one open `release-train` issue, once: a failure
+  the issue's last comment already reports is not posted again. Each push to main while the window is open validates
+  the new head, one validation at a time. A red or cancelled head waits for the next push; it is not run again, except
+  by a manual run (below), which validates it again (a flaky check). A window still red at the next open carries on.
+  The next window that ships closes the issue.
+- **Canary and stable.** The canary is Tico Team's install, stable is TIDY's. Both are updated through their update
+  keys ([Service keys](service-keys.md#update-keys)) with `GET`/`POST /api/v2/system/update`, never a browser or SSH.
+- **The bake gate.** Stable takes the canary's release only when the canary has run it for 4 hours (`BAKE_HOURS`), its
+  last update is healthy, `RELEASE_HOLD` is empty and no open issue is labelled `release-blocker`. Anything the gate
+  cannot read holds the release and is reported on the issue. Promotion runs at each open, and again just before a new
+  release goes to the canary.
+- **Holding.** Set the repository variable `RELEASE_HOLD` to a reason (or open a `release-blocker` issue) to keep
+  stable where it is. Set `RELEASE_TRAINS` to anything but `on` to stop the windows altogether.
+- **By hand.** `gh workflow run train.yml --ref main` runs one window step now (promote, then ship or validate,
+  validating a red or cancelled head again), even with `RELEASE_TRAINS` off. `python3 scripts/release_train.py status` (with `GITHUB_TOKEN`, and the install
+  variables to see them) shows the window, the next step and what each install runs.
+
+Triggers: the two window schedules, every push to main, every finished Release validation run, a manual run, and a
+backstop schedule every 20 minutes (at :05, :25 and :45, never a window's minute) that takes a step in an open window
+if an event was missed (it never opens a window or promotes). A small read-only job decides first, so a push with
+nothing to do ends in seconds. Every job that acts (the window job and the hotfix) shares one concurrency group, so two
+never start a build or a release at once. One race remains: GitHub keeps one waiting job per group, so a hotfix queued
+behind a running window job can still be replaced by a window job whose read-only check ran just before the hotfix
+was queued; a hotfix that shows as cancelled that way is simply run again.
+
+Settings, in the GitHub environment `release` (deployments from `main` and `v*` tags only): variables `CANARY_URL`
+and `STABLE_URL`, secrets `CANARY_UPDATE_KEY` and `STABLE_UPDATE_KEY`. Repository variables: `RELEASE_TRAINS`
+(`on` to go live), `RELEASE_HOLD`, `BAKE_HOURS` (default 4). The window tags with the Actions token, which starts no
+workflow, so it dispatches `release.yml` on the tag (with `latest=false`).
+
+### A release that did not publish
+
+A tag with no published release keeps the window from moving on (the next version would skip it). When the Release
+workflow on the tag failed, the window runs it once more, 30 minutes after the first run started, and then updates the
+canary and marks it latest as usual; the release-train issue records it. If the second run fails too, the issue says
+so and a person finishes it by hand: read the failed run, fix the cause (a registry or GitHub outage usually clears),
+then
+
+```sh
+gh workflow run release.yml --ref vX.Y.Z -f desktop=false -f latest=false   # publish, not latest
+gh workflow run train.yml --ref main                                        # canary, then latest
+```
+
+The window step sees the release published, updates the canary and marks the release latest. To mark it latest
+without the window: `gh release edit vX.Y.Z --latest`, and for each of `tico`, `tico-runner` and `tico-updater`,
+`docker buildx imagetools create -t ghcr.io/ticoteam/<image>:latest ghcr.io/ticoteam/<image>:vX.Y.Z`. A release whose
+canary update failed stays published but not latest; the next window ships the next patch over it.
+
+### Hotfixes
+
+A hotfix is for a major production issue only: data loss, a security hole, an outage, an install that cannot update.
+Everything else waits for the next window. Land the fix on main, then:
+
+```sh
+gh workflow run hotfix.yml --ref main -f reason="Tasks vanish from the board after an update" [-f sha=<commit>] [-f promote_stable=false] [-f override_hold=true]
+```
+
+Anyone with write access may run it, bots included. It validates the commit as the next patch, publishes it, updates
+the canary, marks it latest once the canary is healthy and, unless `promote_stable` is off, updates stable right
+after, with no bake. Holds still apply: with `RELEASE_HOLD` set or a `release-blocker` issue open, stable is left
+where it is unless `override_hold` is on, and the override is written, with who ran it, in the run summary and on the
+issue. The reason is required and goes on a `release-train` issue: closed when the hotfix succeeds, left open when it
+fails. A hotfix release also closes the current window.
 
 ## The fast path
 
@@ -54,8 +146,9 @@ manages the Dev tickets type run `hub release now`. Routines can run `on: releas
 6. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
 7. **Desktop follows**: built only when the shell changed, and attached to the published release when it is done.
 
-Releases are started by the Release Manager only. Release validation never runs on a schedule or on a push to main:
-each run is a full gate for one candidate.
+These steps are the release command's, for a team whose Release Manager releases. Tico's own repository releases
+through [release windows](#release-windows) instead. Release validation never runs on a schedule or on a push to main
+itself: each run is a full gate for one candidate, dispatched for an exact commit and version.
 
 ## Supported versions
 
@@ -76,9 +169,14 @@ migration file changed after it ran are all refused before anything is written.
 
 ## Migrations
 
-Every persistent schema change is a file in `backend/migrations`: `NNNN_name.sql` (its statements) or `NNNN_name.py`
-(an `up(conn)` that does not commit). The number is the next after the highest file. A file runs once, in its own
-transaction with its `schema_migrations` row, so a failure leaves neither. Never edit a file that has run: its checksum is
+Every persistent schema change is a file in `backend/migrations`: `YYYYMMDDHHMMSS_name.sql` (its statements) or `.py`
+(an `up(conn)` that does not commit), using a UTC timestamp. Create it with `python3 scripts/new_migration.py name`
+(add `--py` for Python). Existing `NNNN_` files keep their names and contents. Versions sort as full strings; legacy
+files precede timestamp files. Every unrecorded file runs, even if it sorts before one already applied. Each migration
+stands alone and must not depend on another unmerged migration's schema, so parallel PRs can merge in either order.
+CI rejects PR-added legacy names or duplicate timestamps against the current base tip and PR, with exact `git mv`
+suggestions. A file runs once, in its own transaction with its `schema_migrations` row, so a failure leaves neither.
+Never edit a file that has run: its checksum is
 recorded, and a start refuses the database if it changed. Make the change in a new file. Temporary views and tables
 (`CREATE TEMP`, `backend/sql.py`) are per connection and stay in code. hubdb's `MIGRATIONS` list (user_version 71; a file from a
 release that ran growth segments as step 72 opens too, `NEWEST_USER_VERSION`) and the cloud steps in `Store.initialize`
@@ -114,7 +212,7 @@ Per install, in this order:
 1. **Stop the writers.** Stop the server; nothing else writes to the database. Runners and the Mac app reach an install
    only through its API (each keeps its own state file, not the hub database), so the server stop is the stop.
    Work in progress is picked up afterwards: a job whose lease runs out is recovered, and a webhook send caught
-   mid-delivery returns to ready after two minutes. Docker: `docker compose stop server`. Mac: `scripts/tico -e acme server stop`.
+   mid-delivery returns to ready after two minutes. Docker: `docker compose stop server`. Mac: `scripts/tico-computer -e acme server stop`.
 2. **Take the consistent backup while stopped.** The checkpoint copies every page of the database into a new private
    file and checks that the copy is complete, without an integrity scan, so it is quick enough to run with the server down:
 
@@ -133,7 +231,7 @@ Per install, in this order:
    tico-release.json`), so a rollback knows what each bot was on.
 4. **Start the new release.** Docker: set `TICO_TAG=vX.Y.Z` in `.env`, then `docker compose pull && docker compose up -d`.
    Mac: check out `vX.Y.Z` in the install's checkout (`git -C <checkout> checkout vX.Y.Z`) and restart it with
-   `scripts/tico -e acme server restart`. On start, preflight accepts schema 71 and newer, then the rename files run in
+   `scripts/tico-computer -e acme server restart`. On start, preflight accepts schema 71 and newer, then the rename files run in
    order, each in its own transaction with its `schema_migrations` row. A database that has both an old and a new name
    of one column is refused, not guessed at (`RenameConflict`). A failed migration leaves the file at the schema it had,
    and the server does not start on it.
@@ -195,10 +293,16 @@ Run tests on your computer while you work. On pull requests to main, the PR chec
 that a measured static dependency map says use a changed file: what each tracked file imports (transitively), runs
 by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data files, folders it lists or globs). The
 Caddy image job runs only when a change reaches the image inputs or `backend/caddy_assets.py`; otherwise the plan
-compiles the changed files and runs the Dockerfile's import check itself. Conftest, `pytest.ini`, workflows,
-dependencies, `docs/` (except `docs/images` and `docs/history`), CHANGELOG.md, the selector, and deleted or
-unparsable files fall back to the full default Python suite and core browser scripts. Main pushes always run that full default suite, and a newer main push never
-cancels an earlier one; only a pull request's superseded run is canceled. Runner/harness changes also run
+compiles the changed files and runs the Dockerfile's import check itself. A `docs/` page, CHANGELOG.md or a GitHub
+file runs the tests that read it (by path, folder or listing) and the tests of the code that reads it, not everything
+that imports that code. A change to how the checks run (the PR checks workflow, `scripts/ci_install.sh`, the browser
+system packages) runs the tests that read it and one short core browser script, and a workflow change also builds the
+Caddy image. Conftest, `pytest.ini`, dependency pins and deleted or unparsable files fall back to the full default
+Python suite and core browser scripts. A draft pull request runs no checks (every job is skipped); marking it ready
+for review does. Main requires no check, so a skipped run is not a pass: wait until the ready-for-review run's checks
+show passing, not skipped, before merging. Main has no PR-check run of its own: its pull requests tested each change
+and Release validation runs the whole gate on each candidate; a daily PR caches run (`pr-cache.yml`) keeps the
+main-branch caches pull requests restore from fresh. A pull request's superseded run is canceled. Runner/harness changes also run
 slow conformance on the Rust runner and all its fake harnesses; UI changes select their browser scripts, including
 imported-history for chat changes, or every browser script when the UI mapping is uncertain.
 
@@ -208,7 +312,8 @@ Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A
 one retry. Pip and npm download caches remain enabled. Checks run on 4-vCPU RunsOn Spot VMs in Tico's own AWS
 account (fork PRs on GitHub-hosted runners). `scripts/pr_checks.py` sizes the Python and browser groups so each VM
 finishes in about `TICO_CI_JOB_SECONDS` (180) including setup, using JUnit per-file and browser per-script timings
-from the last successful full main run, with collected test counts until timings exist. New files use the observed
+from the latest successful Release validation run (its `test-timings` artifact: the same pytest flags, slow tests
+included), with collected test counts until timings exist. New files use the observed
 seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check links each job and its elapsed seconds in its summary. It also
 fails if a required job failed or was canceled. The target is under ten minutes from start to completed checks;
 hosted run receipts, including cache state, establish whether that target is met.
@@ -238,7 +343,7 @@ That is the default suite: pytest in parallel without the tests marked `@pytest.
 core browser scripts (`CORE` in `scripts/ui-tests.cjs`) with the load-aware concurrency described below. The check records wall time and load; it
 takes about two minutes, and a run over 300 seconds still passes and says it is slow. There is no budget on the
 number of tests: keep every test that guards a real failure, and none of wording or copy. Release validation builds the three images and the Release workflow publishes them with the
-GitHub release. The PR checks workflow runs this full default suite on main and on uncertain PR selections; known PR mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
+GitHub release. The PR checks workflow runs this full default suite on uncertain PR selections; known PR mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
 slow tests and every browser script, and release candidate validation covers that full suite.
 
 ## Hosted release validation
@@ -266,12 +371,27 @@ frozen can check that candidate without changing it. The candidate's `scripts/re
 It can also run one slice of the gate (`--part product|browser|python|desktop`, with `--shard K/N` splitting the Python test
 files, or the browser scripts, into N groups balanced by the times in `scripts/test-timings.json`; refresh the browser
 times with `--record-browser-timings` from a validation's browser logs). The hosted workflow selects product, four browser
-shards, 24 Python shards and desktop. Every part starts with the candidate and runs its setup while the Linux
-binaries build; each waits for them before its tests. Only product needs the images and waits for the image builds;
+shards, 28 Python shards and desktop. Every part starts with the candidate and runs its setup while the Linux
+binaries build. Product, desktop and Python shards 1–2 wait for those binaries; the other shards start their tests
+immediately. Only product needs the images and waits for the image builds;
 without `--part`, the command runs the whole gate, with desktop only where the Linux app builds. The desktop
 part runs the Tauri app's tests on Linux, among them a company app updating from a feed this candidate publishes
 (`scripts/app_release.py`) and serves (`backend/downloads.py`) behind a hub session: it must find, download, verify and
 install the update. It does not cover the macOS or Windows installers.
+Python tests marked `alone` run without workers after their shard's parallel tests pass, so wall-clock budgets do not
+compete with other pytest workers. Both passes share one check and contribute to its JUnit report and shard timings.
+Python shard planning reads candidate files using pytest.ini's discovery settings (pytest defaults when absent),
+conftest collection ignores and selection ignores, without importing pytest or collecting the suite on each VM.
+Recorded seconds determine weights; an unrecorded file uses its source test-function count (at least one) times
+recorded seconds per estimated test. Sorted paths break ties, so every VM computes the same plan and every candidate
+file belongs to exactly one shard. Native test files occupy shards 1–2. Markers still select tests at execution:
+release includes slow tests and excludes Docker isolation, while default/PR shards use `not slow`.
+The coverage guard (`scripts/release_checks.py --check-shard-coverage --release`) collects the release selection once
+on `python-1`, immediately after Python setup while the native Linux binaries are building. This uses its roughly
+two-minute binary wait rather than adding collection to the critical Python shards. PR planning reuses its existing
+default collection in `scripts/pr_checks.py`, before affected-file filtering, so the guard adds no collection or job.
+Both guards fail if a collected file is missing from the filesystem plan; extra empty or deselected candidates are
+allowed. The existing no-test-passed check still rejects a release shard that proves nothing.
 Beside the gate, eight `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into eight
 groups by `evals/factory/timings.json`. A failed check fails the release; NOTE lines
 (tickets over 24 h, a step over 12 h) go in the job summary for the Release Manager to read.
@@ -439,7 +559,7 @@ The workflow then:
 - attaches the Mac runner and relay, `tico-runner-{macos-arm64,macos-x86_64}.gz`. No gate part runs on a Mac, so they
   are not built by validation: when `runner-rs` (its harness manifests included) and `relay-rs` did not change since the previous
   release, its Mac binaries are published with this one (a checkout checks a binary's `--build-id`, the source
-  fingerprint). When they did change, the `macos` job builds them beside the publication and `macos-assets` adds them
+  fingerprint). When they did change, the `macos` job builds them after the publication and `macos-assets` adds them
   to the published release, then rewrites both checksum files. Until then a Mac checkout's update says `waiting`
   (runner_support/release_update.py `binary_pending`) and tries again, instead of failing and waiting hours;
 - checks each validated image says it is `vX.Y.Z`, then points `ghcr.io/ticoteam/{tico,tico-runner,tico-updater}:vX.Y.Z`
@@ -457,7 +577,10 @@ rebuilds and pushes one small layer per image.
 
 ## Desktop apps follow the release
 
-The desktop app never holds up the server release. The Release workflow compares the tag with the previous release
+The desktop app never holds up the server release. Only `validated`, `runner-changes` and `release` run before core
+publication; the Mac binaries, desktop, recorder and company build branches start afterwards so their fan-out cannot
+compete with publication for job slots. A manual rebuild of an already published tag still runs those branches when
+`release` is skipped. The Release workflow compares the tag with the previous release
 tag: when nothing the shell is built from changed (`app/`, `scripts/app_release.py`, `scripts/company_apps.py` and the
 two desktop workflows), it builds nothing and copies the previous release's desktop files and `latest.json` onto the new
 release, with the manifest's URLs moved to the new tag. The app keeps its earlier version, so installed apps are not
@@ -466,6 +589,16 @@ it (with a Rust cache, so only the app crate recompiles) and the files are added
 updater manifest last. A failed desktop build leaves the server release published and the Release run red; rerun the
 workflow from the tag (Run workflow, `desktop` checked) once it is fixed. The app's version is the release's
 (v0.3.6 → app 0.3.6, including any prerelease suffix), stamped from the tag at build time.
+
+The comparison excludes desktop tests (`app/tests/`, the vendored GLib's `tests/` and `benches/`),
+`app/src/testdata/` and Markdown docs anywhere under `app/`. Recorder follows the same carry-forward rule with
+`recorder/`, `scripts/app_release.py` and `.github/workflows/recorder.yml` as its inputs and
+`recorder-latest.json` as its manifest. Recorder tests (`recorder/tests/` and the `cfg(test)`-only
+`src/network_tests.rs`, `src/stream_tests.rs` and `src/app/tests.rs`), `recorder/bench/`, `recorder/ui/preview/`
+and Markdown docs anywhere under `recorder/` do not trigger an update. `recorder/CHANGES.md` still counts because
+it supplies updater notes. Changes to shipped Rust code, `ui/app`, configuration, icons, dependencies, packaging
+or those build workflows still build new apps. A missing previous updater manifest or the manual `desktop`
+override also forces a build.
 
 Because the files arrive a few minutes after the release, a hub that looks for them in that window finds none and asks
 again a minute later. A hub accepts an app version older than its own release when the files are that release's assets.
@@ -529,7 +662,7 @@ leaves the other installs untouched, and the bot asks the owner what to do next.
 
 Setup, once:
 
-- **Write on the repository.** An owner or admin ticks the repository in Settings → Repositories and gives the bot
+- **Write on the repository.** An owner or admin ticks the repository in Settings → General → Repositories and gives the bot
   write on it: `hub bot repos <slug> --chosen <owner>/<repo>:write` (list the bot's other chosen repositories in the
   same command; `--chosen` replaces them), or the same in the bot's settings ([Repositories](repositories.md)).
 - **An update key per install.** The owner of each install, the team's own included, runs
@@ -583,7 +716,7 @@ images from the same release as the UI. Preserve inbound links when moving pages
 
 ## Company apps
 
-A version tag whose shell changed builds, beside the generic desktop app, `.github/workflows/company-app.yml` for
+A version tag whose shell changed builds, after core publication and beside the generic desktop app, `.github/workflows/company-app.yml` for
 each configured company: its macOS universal DMG and signed updater archive, Windows NSIS
 installer with signature, and Linux AppImage with signature plus Debian package. The app version
 is stamped from the tag. Company builds restore the generic build's Rust cache (compiled dependencies and the Tauri CLI)
@@ -616,6 +749,12 @@ files, public GitHub release assets or job summaries. Each list entry has these 
 
 `runner_url` and `prefix` are optional. `prefix` must match the server's storage prefix.
 `icon_url` is an HTTPS PNG URL or a path on `url`. URLs require HTTPS except loopback HTTP.
+The URL must be reachable without authentication from GitHub's build runners and return a PNG
+of at most 1 MiB. If it is `/api/v2/team/icon`, the owner must upload a team icon on that server
+(Settings > Team, or `POST /api/v2/team/icon`); the endpoint returns 404 until one is set.
+Builds retry transient icon download errors up to eight times, waiting 30, 60, 90, then at most 120 seconds between
+attempts, so a server restarting for the update can recover. Permanent HTTP errors and invalid or oversized PNGs fail
+immediately; retry logs contain no company URL or remote error text.
 The UUID must remain stable across renames to preserve installed preferences and login state.
 
 Company apps put nothing in the macOS menu bar; the Dock shows the company logo with the
@@ -668,6 +807,18 @@ The public release depends on no desktop build. Entries are validated within
 their own company job; a malformed company does not prevent valid companies from publishing.
 Entries without a slug produce a generic warning and cannot be dispatched. Unparseable JSON
 fails the matrix with a generic error and does not prevent the public release.
+
+Company build diagnostics name the failed operation without printing private values. Configuration
+and icon fetching run before installing build dependencies. An icon download error reports the HTTP
+status or DNS/TLS/timeout category and names `TICO_COMPANY_APPS.icon_url`; it does not indicate a
+signing or publishing failure. For a 404, verify the icon exists; for 401/403, allow unauthenticated
+icon access. Correct the entry's `icon_url` (and `url` for a relative path) in the repository's
+Settings > Secrets and variables > Actions > `TICO_COMPANY_APPS` if the address is wrong.
+Missing configuration fields and required environment variables are named explicitly. Icon generation,
+bundling, Apple certificate import, artifact encryption/decryption and publication have separate
+failure labels; private tool output and raw exception text remain suppressed. An old catch-all
+failure log cannot establish which HTTP status or network error occurred; collect the new diagnostic
+before changing credentials or assuming the icon is missing.
 
 Validate a private list locally without printing it or fetching icons:
 `python scripts/company_apps.py matrix --dry-run` with `TICO_COMPANY_APPS` supplied through

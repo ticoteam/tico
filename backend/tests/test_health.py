@@ -11,6 +11,7 @@ from backend.tests.test_getting_started import SIGNED_IN, add_bot, enrolled, hea
 from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
 from backend.enqueue import enqueue_stored
 from backend.tests.usage_rows import segment
+from backend import bot_settings as BS
 
 
 @pytest.fixture(autouse=True)
@@ -36,8 +37,17 @@ def test_all_good(environment, monkeypatch):
     with_backup(monkeypatch, {"mode": "remote", "last_replicated_at": H.now(), "target_kind": "s3"})
     body, checks = health_of(api)
     assert {k: v["status"] for k, v in checks.items() if k != "signin"} == {
-        "version": "ok", "computers": "ok", "models": "ok", "waiting": "ok", "queue": "ok", "task_check_backs": "ok",
-        "github": "info", "backups": "ok", "failed": "ok", "stalled_runs": "ok", "turns:" + body["computers"][0]["id"]: "ok"}
+        "version": "ok",
+        "computers": "ok",
+        "models": "ok",
+        "waiting": "ok",
+        "queue": "ok",
+        "github": "info",
+        "backups": "ok",
+        "failed": "ok",
+        "stalled_runs": "ok",
+        "turns:" + body["computers"][0]["id"]: "ok",
+    }
     assert body["computers"][0]["online"] and body["computers"][0]["runtimes"][0]["ready"]
 
 
@@ -46,12 +56,15 @@ def test_stalled_health_does_not_disclose_another_persons_private_task(environme
     add_bot(api, 'helper')
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, 'human:riley', 'Private repair request', '', 'bot:helper', private=True)
-        H.event(c, H.KEEPER, 'task.stall_escalated', task['id'], {'wakes': 3})
+        c.execute("UPDATE jobs SET state='completed'")
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), seconds=-3600), task['id']))
+    with api.app.state.store.read() as c:
+        assert task['id'] in [row['id'] for row in H.stalled_tasks(c)], 'real detection names it'
     assert 'stalled_tasks' not in health_of(api)[1]
 
 
 @pytest.mark.parametrize('hidden', [False, 'private', 'activity'])
-def test_an_escalated_task_waiting_on_its_own_quiet_hold_is_not_progressing(environment, hidden):
+def test_a_task_waiting_on_its_own_quiet_hold_is_not_progressing(environment, hidden):
     api = environment()
     add_bot(api, 'helper')
     add_bot(api, 'holder')
@@ -61,17 +74,21 @@ def test_an_escalated_task_waiting_on_its_own_quiet_hold_is_not_progressing(envi
         H.TR.relate(c, 'bot:helper', window['id'], hold['id'], 'blocked_by')
         H.task_update(c, 'bot:helper', window['id'], status='waiting', note="Waiting on the hold's ack.")
         c.execute("UPDATE jobs SET state='completed'")
-        c.execute("UPDATE tasks SET private=0, updated_at=? WHERE id IN (?,?)",
-                  (H.shift(H.now(), seconds=-3600), window['id'], hold['id']))
-        H.event(c, H.KEEPER, 'task.stall_escalated', window['id'], {'wakes': 3})
+        c.execute(
+            "UPDATE tasks SET private=0, updated_at=? WHERE id IN (?,?)",
+            (H.shift(H.now(), seconds=-3600), window['id'], hold['id']),
+        )
         if hidden == 'private':
             c.execute("UPDATE tasks SET private=1 WHERE id=?", (hold['id'],))
         elif hidden == 'activity':
             from backend import bot_access as A
+
             only_ana = A.audience({'people': ['ana']})
-            c.execute("INSERT INTO bot_config(bot,config,owner_id,access) VALUES('holder','{}','ana',?) "
-                      "ON CONFLICT(bot) DO UPDATE SET access=excluded.access",
-                      (A.stored({'see': A.OPEN_LEVEL, 'read': only_ana, 'write': only_ana}),))
+            c.execute(
+                "INSERT INTO bot_config(bot,owner_id,access) VALUES('holder','ana',?) ON CONFLICT(bot) DO UPDATE SET access=excluded.access",
+                (A.stored({'see': A.OPEN_LEVEL, 'read': only_ana, 'write': only_ana}),),
+            )
+            BS.write(c, 'holder', {})
     for status in ('open', 'review'):
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE tasks SET status=? WHERE id=?", (status, hold['id']))
@@ -79,7 +96,20 @@ def test_an_escalated_task_waiting_on_its_own_quiet_hold_is_not_progressing(envi
         if hidden or status == 'review':
             assert check is None
         else:
-            assert check['status'] == 'warn' and [item['task'] for item in check['items']] == [window['id']]
+            # The hold is quiet with nothing set to move it, so it is named as well.
+            assert check['status'] == 'warn' and {item['task'] for item in check['items']} == {window['id'], hold['id']}
+
+
+def test_a_bot_task_nothing_moves_is_named_as_not_progressing(environment):
+    api = environment()
+    add_bot(api, 'helper')
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, 'human:morgan', 'Repair the queue', '', 'bot:helper', private=False)
+        c.execute("UPDATE jobs SET state='completed'")
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-1), task['id']))
+    check = health_of(api)[1]['stalled_tasks']
+    assert check['status'] == 'warn' and [item['task'] for item in check['items']] == [task['id']]
+    assert 'Repair the queue' in check['summary']
 
 
 def test_an_offline_computer_holds_its_bots(environment):
@@ -88,8 +118,10 @@ def test_an_offline_computer_holds_its_bots(environment):
     add_bot(api, "helper")
     heartbeat(api, runner, seconds_ago=600, runtimes=SIGNED_IN)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
-                  (runner, H.now()))
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
+            (runner, H.now()),
+        )
     body, checks = health_of(api)
     assert checks["computers"]["status"] == "bad" and checks["waiting"]["status"] == "bad"
     assert body["waiting"][0]["bot"] == "helper" and body["waiting"][0]["reason"] == "computer_offline"
@@ -97,9 +129,12 @@ def test_an_offline_computer_holds_its_bots(environment):
     # A second computer that is up makes it a warning, not an outage.
     heartbeat(api, runner, seconds_ago=5, runtimes=SIGNED_IN)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at) "
-                  "SELECT 'r2','Old laptop',owner_id,'h2',created_at,? FROM runners WHERE id=?",
-                  (H.shift(H.now(), hours=-2), runner))
+        c.execute(
+            "INSERT INTO runners(id,label,owner_id,token_hash,created_at) "
+            "SELECT 'r2','Old laptop',owner_id,'h2',created_at FROM runners WHERE id=?",
+            (runner,),
+        )
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r2'", (H.shift(H.now(), hours=-2),))
     body, checks = health_of(api)
     assert checks["computers"]["status"] == "warn" and "Old laptop" in checks["computers"]["summary"]
 
@@ -110,12 +145,17 @@ def silent_computer(api, seconds_ago):
     add_bot(api, "helper")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET owner_id='riley' WHERE id=?", (runner,))
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
-                  (runner, H.now()))
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
+            (runner, H.now()),
+        )
         # A chat message in a conversation, as the product writes them: it queues its job, and Pipeline counts it.
         c.execute("INSERT INTO conversations(id,kind,participants,created_at) VALUES('cv1','chat','[]',?)", (H.now(),))
-        c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
-                  "VALUES('m1','cv1','human:ana','bot:helper','chat','hi',?)", (H.now(),))
+        c.execute(
+            "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
+            "VALUES('m1','cv1','human:ana','bot:helper','chat','hi',?)",
+            (H.now(),),
+        )
         enqueue_stored(c, 'm1')
     heartbeat(api, runner, seconds_ago=seconds_ago, runtimes=SIGNED_IN)
     return runner
@@ -127,17 +167,25 @@ def machine_issue(api, headers):
 
 def test_a_computer_silent_with_work_queued_goes_to_its_owner(environment):
     from backend.tests.test_people_access import person_headers
+
     api = environment()
     runner = silent_computer(api, 300)
     riley, quinn, owner = person_headers(api, "riley"), as_person(api, "quinn"), signed_in()
     # A few minutes offline is a blip that clears itself.
-    assert machine_issue(api, riley)["title"] == "Owner Mac is offline" and not machine_issue(api, riley)["needs_person"]
+    assert (
+        machine_issue(api, riley)["title"] == "Owner Mac is offline" and not machine_issue(api, riley)["needs_person"]
+    )
     # Past ten minutes with work queued it is an outage: said on Health and Overview, nobody interrupted yet.
     heartbeat(api, runner, seconds_ago=700, runtimes=SIGNED_IN)
     issue = machine_issue(api, riley)
-    assert issue["title"] == "Owner Mac stopped checking in" and issue["severity"] == "error" and not issue["needs_person"]
+    assert (
+        issue["title"] == "Owner Mac stopped checking in" and issue["severity"] == "error" and not issue["needs_person"]
+    )
     body, checks = health_of(api)
-    assert checks["waiting"]["status"] == "bad" and "Owner Mac has not checked in for 11 minutes" in checks["waiting"]["summary"]
+    assert (
+        checks["waiting"]["status"] == "bad"
+        and "Owner Mac has not checked in for 11 minutes" in checks["waiting"]["summary"]
+    )
     assert body["stuck"][0]["why"].startswith("Owner Mac has not checked in for 11 minutes")
     # Past thirty, the person who enrolled it has it in Needs you; nobody else does while they are here.
     heartbeat(api, runner, seconds_ago=1900, runtimes=SIGNED_IN)
@@ -151,10 +199,14 @@ def test_a_computer_silent_with_work_queued_goes_to_its_owner(environment):
 def test_a_computer_stops_on_all_its_queued_work_not_what_the_viewer_may_read(environment, monkeypatch):
     from backend import views
     from backend.tests.test_people_access import person_headers
+
     api = environment()
     silent_computer(api, 1900)
-    monkeypatch.setattr(views.pipeline_stats, "job_queues",                  # someone else's private request
-                        lambda c, who, bots, now=None: {b: {"queued": 0, "uncertain": 0} for b in bots})
+    monkeypatch.setattr(
+        views.pipeline_stats,
+        "job_queues",  # someone else's private request
+        lambda c, who, bots, now=None: {b: {"queued": 0, "uncertain": 0} for b in bots},
+    )
     issue = machine_issue(api, person_headers(api, "riley"))
     assert issue["title"] == "Owner Mac stopped checking in" and issue["needs_person"]
 
@@ -175,10 +227,19 @@ def test_lag_is_judged_by_how_long_it_has_lasted_against_the_sync_interval(monke
     from types import SimpleNamespace
 
     from backend import health
+
     remote = SimpleNamespace(loopback=False)
     status_at = lambda minutes: health._backups(
-        {"backup": {"mode": "remote", "target_kind": "s3", "last_replicated_at": H.now(),
-                    "behind_since": H.shift(H.now(), minutes=-minutes)}}, remote)["status"]
+        {
+            "backup": {
+                "mode": "remote",
+                "target_kind": "s3",
+                "last_replicated_at": H.now(),
+                "behind_since": H.shift(H.now(), minutes=-minutes),
+            }
+        },
+        remote,
+    )["status"]
     monkeypatch.delenv("TICO_BACKUP_SYNC_INTERVAL", raising=False)
     assert [status_at(m) for m in (5, 15, 120)] == ["ok", "warn", "bad"]
     # Ten sync intervals is the warning time: ten minutes at 1m, a hundred minutes at 10m.
@@ -190,11 +251,16 @@ def test_a_replica_with_no_database_file_says_copies_are_not_arriving():
     from types import SimpleNamespace
 
     from backend import health, replication
+
     backup = {"mode": "remote", "target_kind": "s3", "last_replicated_at": None, "reason": replication.NO_RECENT_COPY}
     check = health._backups({"backup": backup}, SimpleNamespace(loopback=False))
     assert check["status"] == "warn" and check["summary"] == replication.NO_RECENT_COPY
-    assert health._backups({"backup": {"mode": "remote", "last_replicated_at": None}},
-                           SimpleNamespace(loopback=False))["summary"] == "Set up, but nothing has been copied yet."
+    assert (
+        health._backups({"backup": {"mode": "remote", "last_replicated_at": None}}, SimpleNamespace(loopback=False))[
+            "summary"
+        ]
+        == "Set up, but nothing has been copied yet."
+    )
     behind = {**backup, "behind_since": H.shift(H.now(), hours=-2)}
     assert health._backups({"backup": behind}, SimpleNamespace(loopback=False))["status"] == "bad"
 
@@ -203,6 +269,7 @@ def test_a_pile_up_of_local_files_is_a_stuck_backup():
     from types import SimpleNamespace
 
     from backend import health
+
     remote = {"mode": "remote", "target_kind": "s3", "last_replicated_at": H.now()}
     check = lambda **extra: health._backups({"backup": {**remote, **extra}}, SimpleNamespace(loopback=False))
     assert check(unsent_files=1000)["status"] == "ok"
@@ -217,7 +284,7 @@ def test_others_see_counts_not_details(environment):
     heartbeat(api, runner, seconds_ago=600)
     body, checks = health_of(api, as_person(api, "quinn"))
     assert body["audience"] == "human" and body["computers"] == [] and body["waiting"] == []
-    assert set(checks) == {"computers", "waiting", "queue", "failed", "stalled_runs", "task_check_backs"}
+    assert set(checks) == {"computers", "waiting", "queue", "failed", "stalled_runs"}
     assert all(not row["fixes"] for row in checks.values())
     assert "helper" not in checks["waiting"]["summary"]
 
@@ -228,22 +295,78 @@ def test_a_bot_reads_computers_and_failed_runs_without_admin_detail(environment)
     heartbeat(api, runner, seconds_ago=5, runtimes=SIGNED_IN)
     add_bot(api, "qa")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('qa','hermes','x',?,'human:ana')",
-                  (H.now(),))
+        c.execute(
+            "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('qa','hermes','x',?,'human:ana')",
+            (H.now(),),
+        )
     api.app.state.store.settings.test_identities["qa-bot"] = Identity("bot:qa", "bot", agent="hermes")
     body, checks = health_of(api, signed_in("qa-bot"))
     assert body["audience"] == "bot" and "storage" not in body
     assert body["computers"][0]["online"] and set(body["computers"][0]) == {
-        "id", "label", "online", "resting", "last_seen_at", "platform", "disk", "update", "turn_counts", "turn_summary"}
+        "id",
+        "label",
+        "online",
+        "resting",
+        "last_seen_at",
+        "platform",
+        "disk",
+        "update",
+        "turn_counts",
+        "turn_summary",
+    }
     assert body["failures"] == [] and set(checks) == {
-        "computers", "waiting", "queue", "failed", "stalled_runs", "task_check_backs", "turns:" + body["computers"][0]["id"]}
+        "computers",
+        "waiting",
+        "queue",
+        "failed",
+        "stalled_runs",
+        "turns:" + body["computers"][0]["id"],
+    }
     assert api.get("/api/v2/health/issues", headers=signed_in("qa-bot")).status_code == 200
+
+
+def test_a_low_disk_check_names_the_computers_own_clean_up(environment):
+    """The runner reports the clean-up it ran by itself (runner-rs/src/disk_clean.rs); the server takes the field and
+    the disk warning says what it freed, for the bot and person who look next."""
+    from backend.models import StructuredReadiness
+
+    api = environment()
+    runner = enrolled(api)
+    gb = 1024**3
+    cleanup = {
+        "at": "2026-11-06T08:03:00+00:00",
+        "free_before_bytes": gb // 5,
+        "free_after_bytes": 2 * gb,
+        "low_bytes": 15 * gb,
+        "freed_bytes": 2 * gb,
+        "still_low": True,
+        "classes": [{"kind": "tmp", "count": 4, "bytes": gb}, {"kind": "finished_task_cache", "count": 2, "bytes": gb}],
+    }
+    report = StructuredReadiness.model_validate(
+        {
+            "schema_version": 1,
+            "runtimes": {},
+            "bots": {},
+            "disk": {"total_bytes": 100 * gb, "free_bytes": 2 * gb},
+            "disk_cleanup": cleanup,
+        }
+    ).model_dump()
+    assert report["disk_cleanup"]["classes"][0] == {"kind": "tmp", "count": 4, "bytes": gb}
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
+            (H.now(), json.dumps(report), runner),
+        )
+    body, checks = health_of(api)
+    assert "freed 2.0 GB" in checks["disk:" + runner]["summary"]
+    assert body["computers"][0]["disk"]["cleanup"]["freed_bytes"] == 2 * gb
 
 
 def test_a_local_credential_key_that_is_not_backed_up_is_a_warning_or_a_note():
     from types import SimpleNamespace
 
     from backend import health
+
     remote = {"mode": "remote", "last_replicated_at": H.now(), "target_kind": "s3"}
     server, local = SimpleNamespace(loopback=False), SimpleNamespace(loopback=True)
     check = lambda backup, where=server: health._backups({"backup": backup}, where)
@@ -253,13 +376,22 @@ def test_a_local_credential_key_that_is_not_backed_up_is_a_warning_or_a_note():
     # Backups are set up and the key is not in them: a warning that says why.
     missing = check({**remote, "credential_key": {"present": True, "copied_at": None, "current": False}})
     assert missing["status"] == "warn" and "credential key" in missing["summary"] and missing["fixes"]
-    assert check({**remote, "credential_key": {"present": True, "copied_at": "2026-01-01T00:00:00Z", "current": True}})["status"] == "ok"
+    assert (
+        check({**remote, "credential_key": {"present": True, "copied_at": "2026-01-01T00:00:00Z", "current": True}})[
+            "status"
+        ]
+        == "ok"
+    )
     # No off-disk backup: the key is named in the note, and a quick start stays a note once it is copied.
     only = {"mode": "local-only", "last_replicated_at": None, "target_kind": "local"}
     held = {"present": True, "copied_at": "2026-01-01T00:00:00Z", "current": True}
     assert "credential key" in check({**only, "credential_key": held})["summary"]
     quiet = check({**only, "credential_key": held}, local)
-    assert quiet["status"] == "info" and "credential key" in quiet["summary"] and quiet["fixes"][0]["href"].endswith("#backups-and-restore")
+    assert (
+        quiet["status"] == "info"
+        and "credential key" in quiet["summary"]
+        and quiet["fixes"][0]["href"].endswith("#backups-and-restore")
+    )
     assert check({**only, "credential_key": {**held, "copied_at": None, "current": False}}, local)["status"] == "warn"
     assert "credential key" in check({"mode": "off", "credential_key": held})["summary"]
     # github-app.key and slack.key, when present, must be in the backup as they are now too.
@@ -273,12 +405,24 @@ def test_a_local_credential_key_that_is_not_backed_up_is_a_warning_or_a_note():
 
 def test_secrets_a_missing_key_file_cannot_open_are_named_with_the_fix(environment):
     from backend import slack_app
+
     api = environment()
     state = api.app.state
     settings, store, github = state.store.settings, state.store, state.github_app
     with store.transaction() as c:
-        github.save(c, "human:ana", "Acme", True, {"id": 7, "slug": "acme-tico", "client_id": "Iv1.synthetic",
-                                                   "pem": "synthetic-pem", "webhook_secret": "whsec-synthetic"})
+        github.save(
+            c,
+            "human:ana",
+            "Acme",
+            True,
+            {
+                "id": 7,
+                "slug": "acme-tico",
+                "client_id": "Iv1.synthetic",
+                "pem": "synthetic-pem",
+                "webhook_secret": "whsec-synthetic",
+            },
+        )
         state.directory.put_credentials(c, "human:ana", "entra", {"client_secret": "s"}, "app c in t")
     slack_app.save(store, settings, "human:ana", "xoxb-synthetic-0000000000", "xapp-synthetic-0000000000")
     assert "sealed_secrets" not in health_of(api)[1]
@@ -287,65 +431,66 @@ def test_secrets_a_missing_key_file_cannot_open_are_named_with_the_fix(environme
         (data / name).rename(data / (name + ".elsewhere"))
     check = health_of(api)[1]["sealed_secrets"]
     assert check["status"] == "warn" and check["fixes"]
-    for words in ("GitHub App", "directory sync", "Slack tokens", "github-app.key is missing", "slack.key is missing",
-                  "credential-key/github-app.key"):
+    for words in (
+        "GitHub App",
+        "directory sync",
+        "Slack tokens",
+        "github-app.key is missing",
+        "slack.key is missing",
+        "credential-key/github-app.key",
+    ):
         assert words in check["summary"]
-    assert not (data / "github-app.key").exists()           # Health and the reads behind it make no new key
-    (data / "slack.key").write_bytes(b"\x01" * 32)          # the wrong key is named too
+    assert not (data / "github-app.key").exists()  # Health and the reads behind it make no new key
+    (data / "slack.key").write_bytes(b"\x01" * 32)  # the wrong key is named too
     assert "the key they were sealed with" in health_of(api)[1]["sealed_secrets"]["summary"]
     for name in ("github-app.key", "slack.key"):
         (data / (name + ".elsewhere")).replace(data / name)
     assert "sealed_secrets" not in health_of(api)[1]
 
 
-def test_listening_health_checks_custom_categories_without_question_text(environment, monkeypatch):
-    import json
-    from backend import listening
-    monkeypatch.setattr(listening, "_warning_revisions", listening.OrderedDict())
-    api = environment()
-    settings = api.app.state.store.settings
-    (settings.registry_dir / "listening.yaml").write_text("""
-destinations:
-  leads: {category: custom, threshold: 0.75, receiver: bot:ana, unless: {category: veto, threshold: 0.70}}
-""")
-    directory = settings.registry_dir / "questions"
-    directory.mkdir()
-    path = directory / "listening-item.json"
-    secret = "private-question-fixture-value"
-    qset = {"id": "listening-item", "version": 9, "summary": secret, "questions": {
-        "custom": {"type": "choice", "instructions": secret, "criteria": {"yes": secret, "no": None}}}}
-    path.write_text(json.dumps(qset))
-    listening.destinations(settings)
-    body, checks = health_of(api)
-    assert checks["listening"]["status"] == "warn"
-    assert secret not in json.dumps(body)
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email) VALUES('sam','Sam','sam@example.com')")
-    assert "listening" not in health_of(api, as_person(api, "sam"))[1]
-
-
 def test_a_bot_its_computer_cannot_start_is_stuck_with_the_reason_and_one_fix(environment):
     """Queued work behind "Claude login required" is named at once (not after 15 minutes), with a sign-in fix
     for administrators; someone without Read access on the bot hears nothing about it."""
     import json
+
     api = environment()
     runner = enrolled(api)
     add_bot(api, "release")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?",
-                  (H.now(), json.dumps({"schema_version": 1, "runtimes": {
-                      "claude": {"installed": True, "authenticated": "missing", "detail": "Claude login required"}},
-                      "bots": {"release": {"ready": False, "runtime": "claude", "problems": ["Claude login required"]}}}), runner))
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('release',?,1,?,'t')",
-                  (runner, H.now()))
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('release',?,'ana')", (json.dumps({"runtime": "claude"}),))
+        c.execute("UPDATE runners SET label='Team box' WHERE id=?", (runner,))
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
+            (
+                H.now(),
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "runtimes": {
+                            "claude": {"installed": True, "authenticated": "missing", "detail": "Claude login required"}
+                        },
+                        "bots": {
+                            "release": {"ready": False, "runtime": "claude", "problems": ["Claude login required"]}
+                        },
+                    }
+                ),
+                runner,
+            ),
+        )
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('release',?,1,?,'t')",
+            (runner, H.now()),
+        )
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('release','ana')")
+        BS.write(c, "release", {"runtime": "claude"})
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         conversation = H.open_conversation(c, owner, [owner, "bot:release"], kind="chat")
         H._write_message(c, owner, "bot:release", "ship it", conversation, "say", {}, None, None)
     body, checks = health_of(api)
     assert checks["queue"]["status"] == "bad"
     assert "release" in checks["queue"]["summary"] and checks["queue"]["fixes"]
-    [issue] = [i for i in api.get("/api/v2/health/issues", headers=signed_in()).json()["issues"] if i["kind"] == "queue"]
+    [issue] = [
+        i for i in api.get("/api/v2/health/issues", headers=signed_in()).json()["issues"] if i["kind"] == "queue"
+    ]
     assert issue["bot"] == "release" and issue["queued"] == 1 and issue["oldest_minutes"] == 0
     assert issue["reason"] == "not_ready" and "Claude login required" in issue["text"] and issue["fixes"]
     [row] = body["stuck"]
@@ -354,12 +499,15 @@ def test_a_bot_its_computer_cannot_start_is_stuck_with_the_reason_and_one_fix(en
     # The model picker gets the same answer from the same rule (backend/readiness.py can_run).
     picker = api.get("/api/v2/operations", headers=signed_in()).json()["runnable"]["release"]["claude"]
     assert picker["can_run"] is False and picker["short"] == "sign in" and picker["sign_in"]["runner_id"] == runner
-    assert health_of(api, as_person(api, "quinn"))[0]["stuck"][0]["fix"] is None   # readable: the reason, no fix
+    assert health_of(api, as_person(api, "quinn"))[0]["stuck"][0]["fix"] is None  # readable: the reason, no fix
     from backend import bot_access as A
+
     only_ana = A.audience({"people": ["ana"]})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET access=? WHERE bot='release'",
-                  (A.stored({"see": only_ana, "read": only_ana, "write": only_ana}),))
+        c.execute(
+            "UPDATE bot_config SET access=? WHERE bot='release'",
+            (A.stored({"see": only_ana, "read": only_ana, "write": only_ana}),),
+        )
     body, checks = health_of(api, as_person(api, "quinn"))
     assert body["stuck"] == [] and "release" not in json.dumps(body)
 
@@ -369,36 +517,72 @@ def test_a_chat_waiting_on_its_own_model_sign_in_says_so_and_other_waits_keep_th
     model is not signed in on its own computer. A bot on another runtime that waits on something else keeps its reason,
     even while the team's default model is signed in nowhere."""
     import json
+
     api = environment()
     revision = api.get("/api/v2/providers", headers=signed_in()).json()["revision"]
-    assert api.put("/api/v2/providers", headers=signed_in(), json={
-        "enabled": ["openai", "anthropic"], "runtime": "claude", "expected_revision": revision}).status_code == 200
+    assert (
+        api.put(
+            "/api/v2/providers",
+            headers=signed_in(),
+            json={"enabled": ["openai", "anthropic"], "runtime": "claude", "expected_revision": revision},
+        ).status_code
+        == 200
+    )
     runner = enrolled(api)
     add_bot(api, "writer")
     add_bot(api, "coder")
 
     def report(claude):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE runners SET last_seen_at=?, readiness=? WHERE id=?", (H.now(), json.dumps({
-                "schema_version": 1, "runtimes": {
-                    "claude": {"installed": True, "authenticated": claude, "detail": "" if claude == "ready" else "Claude login required"},
-                    "codex": {"installed": True, "authenticated": "ready"}},
-                "bots": {"writer": {"ready": claude == "ready", "runtime": "claude",
-                                    "problems": [] if claude == "ready" else ["Claude login required"]},
-                         "coder": {"ready": False, "runtime": "codex", "problems": ["Missing bot repository or AGENT.md"]}}}),
-                runner))
+            c.execute(
+                "UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
+                (
+                    H.now(),
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "runtimes": {
+                                "claude": {
+                                    "installed": True,
+                                    "authenticated": claude,
+                                    "detail": "" if claude == "ready" else "Claude login required",
+                                },
+                                "codex": {"installed": True, "authenticated": "ready"},
+                            },
+                            "bots": {
+                                "writer": {
+                                    "ready": claude == "ready",
+                                    "runtime": "claude",
+                                    "problems": [] if claude == "ready" else ["Claude login required"],
+                                },
+                                "coder": {
+                                    "ready": False,
+                                    "runtime": "codex",
+                                    "problems": ["Missing bot repository or AGENT.md"],
+                                },
+                            },
+                        }
+                    ),
+                    runner,
+                ),
+            )
 
     report("missing")
     chats = {}
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('coder',?,'ana')", (json.dumps({"runtime": "codex"}),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('coder','ana')")
+        BS.write(c, 'coder', {'runtime': 'codex'})
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         for bot in ("writer", "coder"):
-            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
-                      (bot, runner, H.now()))
+            c.execute(
+                "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
+                (bot, runner, H.now()),
+            )
             chats[bot] = H.open_conversation(c, owner, [owner, "bot:" + bot], kind="chat")
             H._write_message(c, owner, "bot:" + bot, "start setup", chats[bot], "say", {}, None, None)
-    snapshot = lambda bot: api.get("/api/v2/conversations/" + chats[bot]["id"] + "/snapshot", headers=signed_in()).json()["execution"]
+    snapshot = lambda bot: api.get(
+        "/api/v2/conversations/" + chats[bot]["id"] + "/snapshot", headers=signed_in()
+    ).json()["execution"]
     writer, coder = snapshot("writer"), snapshot("coder")
     assert writer["state"] == "queued" and writer["readiness_reason"] == "model_sign_in"
     assert writer["label"] == "Saved — Claude login required"
@@ -412,22 +596,49 @@ def test_an_antigravity_bot_is_not_told_to_sign_in_to_gemini_cli(environment):
     """The sign-in hint and Health's stuck check judge the bot's own harness, not its provider's default: an Antigravity
     bot on Gemini, on a computer where the Gemini sign-in is missing, keeps its own reason and gets no Gemini sign-in fix."""
     import json
+
     api = environment()
     revision = api.get("/api/v2/providers", headers=signed_in()).json()["revision"]
-    assert api.put("/api/v2/providers", headers=signed_in(), json={
-        "enabled": ["google"], "runtime": "gemini", "expected_revision": revision}).status_code == 200
+    assert (
+        api.put(
+            "/api/v2/providers",
+            headers=signed_in(),
+            json={"enabled": ["google"], "runtime": "gemini", "expected_revision": revision},
+        ).status_code
+        == 200
+    )
     runner = enrolled(api)
     add_bot(api, "scout")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?", (H.now(), json.dumps({
-            "schema_version": 1, "runtimes": {
-                "gemini": {"installed": True, "authenticated": "missing", "detail": "Gemini login required"}},
-            "bots": {"scout": {"ready": False, "runtime": "gemini", "problems": ["Missing bot repository or AGENT.md"]}}}),
-            runner))
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('scout',?,'ana')",
-                  (json.dumps({"runtime": "gemini", "harness": "antigravity"}),))
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('scout',?,1,?,'t')",
-                  (runner, H.now()))
+        c.execute("UPDATE runners SET label='Team box' WHERE id=?", (runner,))
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
+            (
+                H.now(),
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "runtimes": {
+                            "gemini": {"installed": True, "authenticated": "missing", "detail": "Gemini login required"}
+                        },
+                        "bots": {
+                            "scout": {
+                                "ready": False,
+                                "runtime": "gemini",
+                                "problems": ["Missing bot repository or AGENT.md"],
+                            }
+                        },
+                    }
+                ),
+                runner,
+            ),
+        )
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('scout','ana')")
+        BS.write(c, 'scout', {"runtime": "gemini", "harness": "antigravity"})
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('scout',?,1,?,'t')",
+            (runner, H.now()),
+        )
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         chat = H.open_conversation(c, owner, [owner, "bot:scout"], kind="chat")
         H._write_message(c, owner, "bot:scout", "start setup", chat, "say", {}, None, None)
@@ -439,33 +650,54 @@ def test_an_antigravity_bot_is_not_told_to_sign_in_to_gemini_cli(environment):
     assert "Gemini" not in json.dumps(row) and "login" not in row["fix"] and "move" not in row["fix"]
     # Judged as Gemini CLI, the same computer's answer is a sign-in: the hint the bot must not get.
     from backend.readiness import can_run
+
     with api.app.state.store.transaction() as c:
         assert can_run(c, "scout", "gemini")["sign_in"] is True
         assert "sign_in" not in can_run(c, "scout", "gemini", harness="antigravity")
 
+
 def test_computer_sign_in_names_only_a_model_its_bots_run_on(environment):
     """The company default is Codex but the bots here run on Claude: no Codex warning, still a Sign in button."""
     import json
+
     api = environment()
     revision = api.get("/api/v2/providers", headers=signed_in()).json()["revision"]
-    assert api.put("/api/v2/providers", headers=signed_in(), json={
-        "enabled": ["openai", "anthropic"], "runtime": "codex", "expected_revision": revision}).status_code == 200
+    assert (
+        api.put(
+            "/api/v2/providers",
+            headers=signed_in(),
+            json={"enabled": ["openai", "anthropic"], "runtime": "codex", "expected_revision": revision},
+        ).status_code
+        == 200
+    )
     runner = enrolled(api)
     add_bot(api, "writer")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('writer',?,'ana')", (json.dumps({"runtime": "claude"}),))
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('writer',?,1,?,'t')",
-                  (runner, H.now()))
-    heartbeat(api, runner, runtimes={"codex": {"installed": True, "authenticated": "missing"},
-                                     "claude": {"installed": True, "authenticated": "ready"}})
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('writer','ana')")
+        BS.write(c, 'writer', {'runtime': 'claude'})
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('writer',?,1,?,'t')",
+            (runner, H.now()),
+        )
+    heartbeat(
+        api,
+        runner,
+        runtimes={
+            "codex": {"installed": True, "authenticated": "missing"},
+            "claude": {"installed": True, "authenticated": "ready"},
+        },
+    )
     body, checks = health_of(api)
     assert "computer_signin" not in checks
     assert next(r for r in body["computers"][0]["runtimes"] if r["name"] == "codex")["signable"]
     add_bot(api, "coder")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('coder',?,'ana')", (json.dumps({"runtime": "codex"}),))
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('coder',?,1,?,'t')",
-                  (runner, H.now()))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('coder','ana')")
+        BS.write(c, 'coder', {'runtime': 'codex'})
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('coder',?,1,?,'t')",
+            (runner, H.now()),
+        )
     assert "sign in to Codex" in health_of(api)[1]["computer_signin"]["summary"]
 
 
@@ -473,14 +705,23 @@ def test_a_computer_with_no_bots_and_no_company_default_is_asked_to_sign_in_on_t
     """No default model: the computer installs only providers.default_runtime (Claude before Codex), so that is the
     one it is asked to sign in on and the one it needs; Codex, installed anyway, is only signable."""
     from backend.store import encode
+
     api = environment()
-    with api.app.state.store.transaction() as c:      # a stored record with no default model
+    with api.app.state.store.transaction() as c:  # a stored record with no default model
         c.execute("DELETE FROM registry_metadata WHERE key='providers'")
-        c.execute("INSERT INTO registry_metadata VALUES('providers',?)",
-                  (encode({"revision": 1, "enabled": ["openai", "anthropic"], "runtime": "", "model": ""}),))
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('providers',?)",
+            (encode({"revision": 1, "enabled": ["openai", "anthropic"], "runtime": "", "model": ""}),),
+        )
     runner = enrolled(api)
-    heartbeat(api, runner, runtimes={"codex": {"installed": True, "authenticated": "missing"},
-                                     "claude": {"installed": True, "authenticated": "missing"}})
+    heartbeat(
+        api,
+        runner,
+        runtimes={
+            "codex": {"installed": True, "authenticated": "missing"},
+            "claude": {"installed": True, "authenticated": "missing"},
+        },
+    )
     body, checks = health_of(api)
     runtimes = {r["name"]: r for r in body["computers"][0]["runtimes"]}
     assert runtimes["claude"]["sign_in"] and runtimes["claude"]["needed"]
@@ -495,100 +736,130 @@ def test_a_bot_over_the_daily_token_threshold_is_flagged(environment):
     add_bot(api, "loop")
     api.app.state.store.settings.token_alert_input = 1000
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started_at) VALUES('t1','loop',?)", (H.now(),))
-        c.execute("INSERT INTO turns(id,bot,started_at) VALUES('t0','loop',?)", (H.shift(H.now(), hours=-30),))
+        c.execute("INSERT INTO attempts(id,bot_id,created_at) VALUES('t1','loop',?)", (H.now(),))
+        c.execute("INSERT INTO attempts(id,bot_id,created_at) VALUES('t0','loop',?)", (H.shift(H.now(), hours=-30),))
         segment(c, "t1", input_tokens=1100, cached_tokens=90000)
         segment(c, "t0", input_tokens=9000)
     checks = health_of(api)[1]
     assert checks["tokens"]["status"] == "warn" and "1,100 uncached input tokens in 24 h" in checks["tokens"]["summary"]
 
 
-def test_a_bot_that_has_not_finished_setup_warns_once_its_held_work_is_old(environment):
-    """A parked bot holds its work on purpose, so it is not "slow"; but work an hour old means nobody is finishing setup."""
-    api = environment()
-    add_bot(api, "support")
-    with api.app.state.store.transaction() as c:
-        task = H.task_create(c, H.KEEPER, "Ticket 42", "", "bot:support")    # from before an upgrade
-        c.execute("INSERT INTO bot_config(bot,config,owner_id,onboarding_state) VALUES('support','{}','ana','needs_setup') "
-                  "ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup'")
-    assert "setup:support" not in health_of(api)[1]                 # just filed: setup may be under way
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET created_at='2026-01-02T03:04:05Z' WHERE id=?", (task["id"],))
-    check = health_of(api)[1]["setup:support"]
-    assert check["status"] == "warn" and check["summary"] == "support is still onboarding; 1 task waiting since 2026-01-02."
-    assert check["label"] == "Onboarding not finished"
-    assert check["fixes"][0]["href"] == "#/bot/support"
-    assert "setup:support" not in health_of(api, as_person(api, "quinn"))[1]
-
-
 def _parked(api, slug, days_ago, created_by="", operator="morgan"):
     add_bot(api, slug)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config,owner_id,onboarding_state,created_by) VALUES(?,'{}',?,'needs_setup',?) "
-                  "ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup',owner_id=excluded.owner_id,"
-                  "created_by=excluded.created_by", (slug, operator, created_by))
+        c.execute(
+            "INSERT INTO bot_config(bot,owner_id,onboarding_state,created_by) VALUES(?,?,'needs_setup',?) ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup', owner_id=excluded.owner_id, created_by=excluded.created_by",
+            (slug, operator, created_by),
+        )
+        BS.write(c, slug, {})
         c.execute("UPDATE bots SET created_at=? WHERE slug=?", (H.shift(H.now(), days=-days_ago), slug))
 
 
-def test_a_bot_left_in_setup_for_a_day_is_stuck_and_its_manager_may_finish_it(environment):
-    """Overview's stuck list names a bot parked over a day, and only someone who may manage it gets the finish."""
+def test_a_bot_left_in_setup_warns_once_its_held_work_is_old_is_stuck_for_a_day_and_is_nudged_once(environment):
+    """One install: held work an hour old warns (a parked bot holds work on purpose, so it is not "slow"); a bot parked
+    over a day is on Overview's stuck list and only someone who may manage it gets the finish; and a bot left in setup
+    is nudged once to whoever its setup reminder goes to, and to nobody while that reminder is open."""
+    from backend import setup_stuck
+
     api = environment()
+    add_bot(api, "held")
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, H.KEEPER, "Ticket 42", "", "bot:held")  # from before an upgrade
+        c.execute(
+            "INSERT INTO bot_config(bot,owner_id,onboarding_state) VALUES('held','ana','needs_setup') ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup'"
+        )
+        BS.write(c, 'held', {})
+    assert "setup:held" not in health_of(api)[1]  # just filed: setup may be under way
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET created_at='2026-01-02T03:04:05Z' WHERE id=?", (task["id"],))
+    check = health_of(api)[1]["setup:held"]
+    assert (
+        check["status"] == "warn" and check["summary"] == "held is still onboarding; 1 task waiting since 2026-01-02."
+    )
+    assert check["label"] == "Onboarding not finished"
+    assert check["fixes"][0]["href"] == "#/bot/held"
+    assert "setup:held" not in health_of(api, as_person(api, "quinn"))[1]
+    with api.app.state.store.transaction() as c:  # finished, so it is out of the lists below
+        c.execute("UPDATE bot_config SET onboarding_state='onboarded' WHERE bot='held'")
+        c.execute("DELETE FROM jobs WHERE bot_id='held'")
+
     _parked(api, "support", 14)
-    _parked(api, "sales", 0)                        # added today: setup may be under way
+    _parked(api, "sales", 0)  # added today: setup may be under way
     stuck = {row["bot"]: row for row in health_of(api)[0]["stuck"]}
     assert set(stuck) == {"support"} and stuck["support"]["reason"] == "setup"
     assert stuck["support"]["why"] == "Stuck in onboarding for 14 days"
     assert stuck["support"]["fix"]["finish"] == {"bot": "support"}
-    quinn = as_person(api, "quinn")                 # neither an owner of it nor an administrator
+    quinn = as_person(api, "quinn")  # neither an owner of it nor an administrator
     assert all(row["fix"] is None for row in health_of(api, quinn)[0]["stuck"])
     assert api.post("/api/v2/bots/support/onboarded", json={}, headers=quinn).status_code == 403
-    assert api.post("/api/v2/bots/support/onboarded", json={}, headers=signed_in()).json()["onboarding_state"] == "onboarded"
+    assert (
+        api.post("/api/v2/bots/support/onboarded", json={}, headers=signed_in()).json()["onboarding_state"]
+        == "onboarded"
+    )
     assert health_of(api)[0]["stuck"] == []
 
-
-def test_a_bot_left_in_setup_is_nudged_once_to_whoever_its_setup_reminder_goes_to(environment):
-    """The same person as the "Finish onboarding" reminder, and nobody while that reminder is open: one ask per bot."""
-    from backend import setup_stuck
-    api = environment()
-    as_person(api, "quinn")
-    _parked(api, "support", 3, created_by="human:quinn")
-    _parked(api, "sales", 3, operator="quinn")      # nobody known added it: its operator, as the reminder picks
+    _parked(api, "tess", 3, created_by="human:quinn")
+    _parked(api, "rob", 3, operator="quinn")  # nobody known added it: its operator, as the reminder picks
     _parked(api, "ops", 3, created_by="human:quinn")
     with api.app.state.store.transaction() as c:
-        assert H._setup_reminder(c, "ops")["owner_id"] == "human:quinn"     # it already has its ask
+        # An install from before the reminders were retired still holds ops's open "Finish onboarding" task: it has its ask.
+        reminder = H.task_create(
+            c, H.KEEPER, "Finish onboarding ops", "Still onboarding.", "human:quinn", deduplicate=False, lint=False
+        )
+        H.event(c, H.KEEPER, "bot.setup_reminder", "ops", {"task": reminder["id"], "owner": "human:quinn"})
+        assert H._open_setup_reminder(c, "ops")["owner_id"] == "human:quinn"
         told = setup_stuck.nudge(c)
-        assert told == {"support": ["human:quinn"], "sales": ["human:quinn"]}
+        assert told == {"tess": ["human:quinn"], "rob": ["human:quinn"]}
         assert setup_stuck.nudge(c) == {}
-        notes = c.execute("SELECT recipient_id,body FROM messages WHERE sender_id='keeper' AND body LIKE '%waiting in setup%'")
+        notes = c.execute(
+            "SELECT recipient_id,body FROM messages WHERE sender_id='keeper' AND body LIKE '%waiting in setup%'"
+        )
         assert sorted(r["recipient_id"] for r in notes) == ["human:quinn", "human:quinn"]
 
 
 def test_a_repository_a_computer_could_not_copy_is_named_with_gits_reason(request):
     from backend.repositories import save_metadata
+
     api = request.getfixturevalue("environment")()
     runner = enrolled(api)
     heartbeat(api, runner, seconds_ago=5, runtimes=SIGNED_IN)
-    why = ("Cloning the local mirror of acme/web failed: error: unable to create file a: Filename too long. "
-           "Retrying in 5 minutes, or restart the computer's runner to retry now")
+    why = (
+        "Cloning the local mirror of acme/web failed: error: unable to create file a: Filename too long. "
+        "Retrying in 5 minutes, or restart the computer's runner to retry now"
+    )
     with api.app.state.store.transaction() as c:
-        save_metadata(c, "computer-repositories:" + runner, {"repositories": [
-            {"full_name": "acme/web", "state": "failed", "last_fetch": None, "size_mb": 0, "error": why},
-            {"full_name": "acme/api", "state": "cloned", "last_fetch": None, "size_mb": 1}]})
+        save_metadata(
+            c,
+            "computer-repositories:" + runner,
+            {
+                "repositories": [
+                    {"full_name": "acme/web", "state": "failed", "last_fetch": None, "size_mb": 0, "error": why},
+                    {"full_name": "acme/api", "state": "cloned", "last_fetch": None, "size_mb": 1},
+                ]
+            },
+        )
     check = health_of(api)[1]["repository_copies"]
     assert check["status"] == "warn"
     assert "acme/web on " in check["summary"] and "Filename too long" in check["summary"]
     assert "acme/api" not in check["summary"]
-    heartbeat(api, runner, seconds_ago=3600, runtimes=SIGNED_IN)          # an offline computer is reported elsewhere
+    heartbeat(api, runner, seconds_ago=3600, runtimes=SIGNED_IN)  # an offline computer is reported elsewhere
     assert "repository_copies" not in health_of(api)[1]
 
 
 def _hosted(api, runner, bot, report):
     import json
+
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?",
-                  (H.now(), json.dumps({"schema_version": 1, "runtimes": SIGNED_IN, "bots": {bot: report}}), runner))
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t') "
-                  "ON CONFLICT(bot) DO NOTHING", (bot, runner, H.now()))
+        c.execute("UPDATE runners SET label='Team box' WHERE id=?", (runner,))
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
+            (H.now(), json.dumps({"schema_version": 1, "runtimes": SIGNED_IN, "bots": {bot: report}}), runner),
+        )
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t') "
+            "ON CONFLICT(bot) DO NOTHING",
+            (bot, runner, H.now()),
+        )
 
 
 def test_a_harness_deny_on_a_github_write_the_access_allows_is_named(environment):
@@ -598,8 +869,12 @@ def test_a_harness_deny_on_a_github_write_the_access_allows_is_named(environment
     runner = enrolled(api)
     add_bot(api, "monitor")
     deny = "Claude Code settings deny: gh issue, gh pr create, git push"
-    tool = {"service": "github", "identity": "acme/app", "can": ["read", "write", "pull_requests"],
-            "scope": {"repo": "acme/app"}}
+    tool = {
+        "service": "github",
+        "identity": "acme/app",
+        "can": ["read", "write", "pull_requests"],
+        "scope": {"repo": "acme/app"},
+    }
     _hosted(api, runner, "monitor", {"ready": True, "runtime": "claude", "warnings": [deny], "tools": [tool]})
     check = health_of(api)[1]["harness_denies"]
     assert check["status"] == "warn" and check["label"] == "Harness permissions"
@@ -608,15 +883,37 @@ def test_a_harness_deny_on_a_github_write_the_access_allows_is_named(environment
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email) VALUES('sam','Sam','sam@example.com')")
     assert "harness_denies" not in health_of(api, as_person(api, "sam"))[1]
-    _hosted(api, runner, "monitor", {"ready": True, "runtime": "claude", "warnings": [deny],
-                                     "tools": [dict(tool, can=["read"])]})
+    _hosted(
+        api,
+        runner,
+        "monitor",
+        {"ready": True, "runtime": "claude", "warnings": [deny], "tools": [dict(tool, can=["read"])]},
+    )
     assert "harness_denies" not in health_of(api)[1]
-    _hosted(api, runner, "monitor", {"ready": True, "runtime": "claude", "warnings": [deny],
-                                     "tools": [dict(tool, identity="bot-monitor", scope={"repo": "bot-monitor"})]})
+    _hosted(
+        api,
+        runner,
+        "monitor",
+        {
+            "ready": True,
+            "runtime": "claude",
+            "warnings": [deny],
+            "tools": [dict(tool, identity="bot-monitor", scope={"repo": "bot-monitor"})],
+        },
+    )
     assert "harness_denies" not in health_of(api)[1]
     # Denying merge and review to a bot that opens pull requests is a policy, not a leftover.
-    _hosted(api, runner, "monitor", {"ready": True, "runtime": "claude", "tools": [tool],
-                                     "warnings": ["Claude Code settings deny: gh pr merge, gh pr review, gh release create"]})
+    _hosted(
+        api,
+        runner,
+        "monitor",
+        {
+            "ready": True,
+            "runtime": "claude",
+            "tools": [tool],
+            "warnings": ["Claude Code settings deny: gh pr merge, gh pr review, gh release create"],
+        },
+    )
     assert "harness_denies" not in health_of(api)[1]
 
 
@@ -630,17 +927,22 @@ def test_a_read_only_reviewer_given_every_repository_keeps_its_denies(environmen
     add_bot(api, "reviewer")
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO repositories(full_name,enabled,bot_repo) VALUES('acme/product',1,0)")
-        c.execute("INSERT INTO bot_config(bot,config,repo,owner_id) VALUES('reviewer',?,'bot-reviewer','ana') ON CONFLICT(bot) DO "
-                  "UPDATE SET config=excluded.config,repo=excluded.repo", ('{"repo_access_mode": "all"}',))
+        c.execute(
+            "INSERT INTO bot_config(bot,repo,owner_id) VALUES('reviewer','bot-reviewer','ana') ON CONFLICT(bot) DO UPDATE SET repo=excluded.repo"
+        )
+        BS.write(c, 'reviewer', {'repo_access_mode': 'all'})
     read = {"service": "github", "identity": "acme/docs", "can": ["read"], "scope": {"repo": "acme/docs"}}
     deny = "Claude Code settings deny: gh pr comment, gh pr create, gh pr review"
     _hosted(api, runner, "reviewer", {"ready": True, "runtime": "claude", "warnings": [deny], "tools": [read]})
     from backend.bot_tools import listing
+
     with api.app.state.store.read() as c:
-        assert any(t["identity"] == "acme/product" and "write" in t["can"] for t in listing(c, settings, "reviewer")["tools"])
+        assert any(
+            t["identity"] == "acme/product" and "write" in t["can"] for t in listing(c, settings, "reviewer")["tools"]
+        )
     assert "harness_denies" not in health_of(api)[1]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='reviewer'", ('{"repo_access_mode": "chosen"}',))
+        BS.write(c, 'reviewer', {'repo_access_mode': 'chosen'})
         c.execute("INSERT INTO bot_repo_access VALUES('reviewer','acme/product','write')")
     summary = health_of(api)[1]["harness_denies"]["summary"]
     assert "reviewer may write to acme/product" in summary and "gh pr create, gh pr comment" in summary
@@ -650,17 +952,29 @@ def test_harness_denies_answers_each_bot_as_a_bot_by_bot_pass_does(environment, 
     """The shared reads behind harness_denies give each bot the answer its own listing gives, for bots in each state."""
     from backend import bot_tools
     from backend.health import harness_denies
+
     api = environment()
     settings = api.app.state.store.settings
     monkeypatch.setattr(settings, "github_owner", "acme")
     runner = enrolled(api)
     deny = "Claude Code settings deny: gh pr create, git push"
-    write = {"service": "github", "identity": "acme/app", "can": ["read", "write", "pull_requests"], "scope": {"repo": "acme/app"}}
-    states = {                                  # bot: (its bot_config row's settings, or None for no row, its bot.yaml tools)
+    write = {
+        "service": "github",
+        "identity": "acme/app",
+        "can": ["read", "write", "pull_requests"],
+        "scope": {"repo": "acme/app"},
+    }
+    states = {  # bot: (its bot_config row's settings, or None for no row, its bot.yaml tools)
         "chosen": ('{"repo_access_mode": "chosen"}', [write]),
         "reader": ('{"repo_access_mode": "own"}', [dict(write, can=["read"])]),
-        "owner": ('{"repo_access_mode": "own"}', [dict(write, identity="acme/bot-owner", scope={"repo": "acme/bot-owner"})]),
-        "everywhere": ('{"repo_access_mode": "all"}', [dict(write, identity="acme/other", scope={"repo": "acme/other"})]),
+        "owner": (
+            '{"repo_access_mode": "own"}',
+            [dict(write, identity="acme/bot-owner", scope={"repo": "acme/bot-owner"})],
+        ),
+        "everywhere": (
+            '{"repo_access_mode": "all"}',
+            [dict(write, identity="acme/other", scope={"repo": "acme/other"})],
+        ),
         "unconfigured": (None, [write]),
     }
     readiness = {}
@@ -671,13 +985,20 @@ def test_harness_denies_answers_each_bot_as_a_bot_by_bot_pass_does(environment, 
         readiness[slug] = {"ready": True, "runtime": "claude", "warnings": [deny], "tools": tools}
         with api.app.state.store.transaction() as c:
             if config:
-                c.execute("INSERT INTO bot_config(bot,config,repo,owner_id) VALUES(?,?,?,'ana')", (slug, config, "bot-" + slug))
-            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')", (slug, runner, H.now()))
+                c.execute("INSERT INTO bot_config(bot,repo,owner_id) VALUES(?,?,'ana')", (slug, 'bot-' + slug))
+                BS.write(c, slug, json.loads(config))
+            c.execute(
+                "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
+                (slug, runner, H.now()),
+            )
             if slug == "chosen":
                 c.execute("INSERT INTO bot_repo_access VALUES('chosen','acme/app','write')")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?",
-                  (H.now(), json.dumps({"schema_version": 1, "runtimes": SIGNED_IN, "bots": readiness}), runner))
+        c.execute("UPDATE runners SET label='Team box' WHERE id=?", (runner,))
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
+            (H.now(), json.dumps({"schema_version": 1, "runtimes": SIGNED_IN, "bots": readiness}), runner),
+        )
     with api.app.state.store.read_transaction() as c:
         batched = harness_denies(c, settings)
         # The bot-by-bot pass: each bot's listing reads its own rows, with nothing primed and no shared reads.
@@ -687,9 +1008,11 @@ def test_harness_denies_answers_each_bot_as_a_bot_by_bot_pass_does(environment, 
         bot_by_bot = harness_denies(c, settings)
     assert batched == bot_by_bot
     assert {bot for bot, _, _ in batched} == {"chosen", "everywhere", "unconfigured"}
+
     # A failure in the shared read falls back to the bot-by-bot pass instead of ending the health response.
     def unreadable(c, bots):
         raise RuntimeError("unreadable")
+
     with api.app.state.store.read_transaction() as c:
         monkeypatch.setattr(bot_tools, "prime_state", unreadable)
         assert harness_denies(c, settings) == batched
@@ -697,88 +1020,135 @@ def test_harness_denies_answers_each_bot_as_a_bot_by_bot_pass_does(environment, 
 
 def _listened(api, *, routed_days_ago, saved_days_ago, judged=None):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO listen_items(id,source,native_id,url,content,content_hash,first_seen_at) "
-                  "VALUES('i1','reddit','1','https://example.com/1','a post','h1',?)",
-                  (H.shift(H.now(), days=-routed_days_ago - 1),))
-        c.execute("INSERT INTO intake_items(id,destination,item_id,judgment_id,created_at) VALUES('in1','leads','i1','j1',?)",
-                  (H.shift(H.now(), days=-routed_days_ago),))
-        c.execute("INSERT INTO listen_items(id,source,native_id,url,content,content_hash,first_seen_at) "
-                  "VALUES('i2','reddit','2','https://example.com/2','a later post','h2',?)",
-                  (H.shift(H.now(), days=-saved_days_ago),))
+        c.execute(
+            "INSERT INTO listen_items(id,source,native_id,url,content,content_hash,first_seen_at) "
+            "VALUES('i1','reddit','1','https://example.com/1','a post','h1',?)",
+            (H.shift(H.now(), days=-routed_days_ago - 1),),
+        )
+        c.execute(
+            "INSERT INTO intake_items(id,destination,item_id,judgment_id,created_at) VALUES('in1','leads','i1','j1',?)",
+            (H.shift(H.now(), days=-routed_days_ago),),
+        )
+        c.execute(
+            "INSERT INTO listen_items(id,source,native_id,url,content,content_hash,first_seen_at) "
+            "VALUES('i2','reddit','2','https://example.com/2','a later post','h2',?)",
+            (H.shift(H.now(), days=-saved_days_ago),),
+        )
         if judged:
-            c.execute("INSERT INTO listen_judgments(id,item_id,question_set,scores,judged_at) VALUES('j1','i1',?,'{}',?)",
-                      (judged, H.shift(H.now(), days=-routed_days_ago)))
+            c.execute(
+                "INSERT INTO listen_judgments(id,item_id,question_set,scores,judged_at) VALUES('j1','i1',?,'{}',?)",
+                (judged, H.shift(H.now(), days=-routed_days_ago)),
+            )
 
 
-def test_listening_that_routed_before_but_lost_its_registry_file_is_bad(environment, monkeypatch):
-    """A server move that leaves listening.yaml behind keeps saving posts and sends them nowhere, silently."""
+def test_listening_health_names_a_lost_registry_a_quiet_source_a_missing_question_set_and_hides_custom_questions(
+    environment, monkeypatch
+):
+    """One install, each listening finding in turn, the listen rows cleared between them."""
+    import json
     from backend import listening
-    monkeypatch.setattr(listening, "_warning_revisions", listening.OrderedDict())
+
     api = environment()
     settings = api.app.state.store.settings
+
+    def fresh():
+        monkeypatch.setattr(listening, "_warning_revisions", listening.OrderedDict())
+        with api.app.state.store.transaction() as c:
+            for table in ("listen_judgments", "intake_items", "listen_items"):
+                c.execute(f"DELETE FROM {table}")
+
+    # A server move that leaves listening.yaml behind keeps saving posts and sends them nowhere, silently.
+    fresh()
     (settings.registry_dir / "listening.yaml").unlink(missing_ok=True)
-    assert "listening" not in health_of(api)[1]                 # never routed: nothing was lost
+    assert "listening" not in health_of(api)[1]  # never routed: nothing was lost
     _listened(api, routed_days_ago=14, saved_days_ago=2)
     check = health_of(api)[1]["listening"]
     assert check["status"] == "bad"
     assert "listening.yaml is missing from the company registry" in check["summary"]
     assert "1 post saved since went to no inbox" in check["summary"]
     (settings.registry_dir / "listening.yaml").write_text("destinations: {}\n")
-    check = health_of(api)[1]["listening"]          # emptied on purpose is possible: a warning, not bad
+    check = health_of(api)[1]["listening"]  # emptied on purpose is possible: a warning, not bad
     assert check["status"] == "warn" and "has no valid destinations" in check["summary"]
 
-
-def test_listening_that_stopped_saving_posts_is_not_flagged(environment, monkeypatch):
-    from backend import listening
-    monkeypatch.setattr(listening, "_warning_revisions", listening.OrderedDict())
-    api = environment()
-    (api.app.state.store.settings.registry_dir / "listening.yaml").unlink(missing_ok=True)
+    fresh()  # a source that stopped saving posts is not flagged
+    (settings.registry_dir / "listening.yaml").unlink(missing_ok=True)
     _listened(api, routed_days_ago=60, saved_days_ago=40)
     assert "listening" not in health_of(api)[1]
 
-
-def test_listening_scoring_with_the_shipped_questions_after_its_own_went_missing_is_named(environment, monkeypatch):
-    from backend import listening
-    monkeypatch.setattr(listening, "_warning_revisions", listening.OrderedDict())
-    api = environment()
-    settings = api.app.state.store.settings
+    fresh()  # scoring with the shipped questions after its own went missing
     (settings.registry_dir / "listening.yaml").write_text(
-        "destinations:\n  leads: {category: lead, threshold: 0.75, receiver: bot:ana}\n")
+        "destinations:\n  leads: {category: lead, threshold: 0.75, receiver: bot:ana}\n"
+    )
     shipped = listening.question_set(settings)
     _listened(api, routed_days_ago=3, saved_days_ago=1, judged=f"listening-item@{shipped['version'] + 4}")
     check = health_of(api)[1]["listening"]
     assert check["status"] == "warn" and f"({shipped['label']})" in check["summary"]
     assert f"listening-item@{shipped['version'] + 4}" in check["summary"]
 
+    fresh()  # custom categories are checked without their question text
+    (settings.registry_dir / "listening.yaml").write_text("""
+destinations:
+  leads: {category: custom, threshold: 0.75, receiver: bot:ana, unless: {category: veto, threshold: 0.70}}
+""")
+    directory = settings.registry_dir / "questions"
+    directory.mkdir()
+    path = directory / "listening-item.json"
+    secret = "private-question-fixture-value"
+    qset = {
+        "id": "listening-item",
+        "version": 9,
+        "summary": secret,
+        "questions": {"custom": {"type": "choice", "instructions": secret, "criteria": {"yes": secret, "no": None}}},
+    }
+    path.write_text(json.dumps(qset))
+    listening.destinations(settings)
+    body, checks = health_of(api)
+    assert checks["listening"]["status"] == "warn"
+    assert secret not in json.dumps(body)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO humans(id,name,email) VALUES('sam','Sam','sam@example.com')")
+    assert "listening" not in health_of(api, as_person(api, "sam"))[1]
+
 
 def test_a_computer_on_the_python_runner_is_told_to_update_and_the_heartbeat_takes_the_engine(environment):
     import json
     from backend.models import StructuredReadiness
+
     report = StructuredReadiness.model_validate({"engine": {"name": "python", "note": "TICO_RUNNER_ENGINE=python"}})
     assert report.model_dump()["engine"] == {"name": "python", "build": "", "note": "TICO_RUNNER_ENGINE=python"}
     assert "engine" not in StructuredReadiness.model_validate({}).model_dump()
     api = environment()
     runner = enrolled(api)
-    for engine, warned in (({"name": "rust", "build": "0123456789abcdef"}, False),
-                           ({"name": "python", "note": "TICO_RUNNER_ENGINE=python"}, True)):
+    for engine, warned in (
+        ({"name": "rust", "build": "0123456789abcdef"}, False),
+        ({"name": "python", "note": "TICO_RUNNER_ENGINE=python"}, True),
+    ):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE runners SET label='Team box', last_seen_at=?, readiness=? WHERE id=?",
-                      (H.now(), json.dumps({"schema_version": 1, "runtimes": {}, "bots": {}, "engine": engine}), runner))
+            c.execute("UPDATE runners SET label='Team box' WHERE id=?", (runner,))
+            c.execute(
+                "UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
+                (H.now(), json.dumps({"schema_version": 1, "runtimes": {}, "bots": {}, "engine": engine}), runner),
+            )
         check = health_of(api)[1].get("engine:" + runner)
         assert bool(check) == warned
     assert check["status"] == "warn" and check["summary"] == (
-        "Team box runs the Python runner, which Tico no longer ships. Update this computer.")
+        "Team box runs the Python runner, which Tico no longer ships. Update this computer."
+    )
 
 
 def claimable(c, runner, *bots):
     """`bots` as a claim on `runner` could take their work: configured, and ready there. Anything less is a reason the
     claim holds the work (execution.claim_refusal), which Health names instead of "slow"."""
     import json
+
     for bot in bots:
-        c.execute("INSERT OR IGNORE INTO bot_config(bot,config,owner_id) VALUES(?,'{}','ana')", (bot,))
-    document = json.loads(c.execute("SELECT readiness FROM runners WHERE id=?", (runner,)).fetchone()[0] or "{}")
+        if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES(?,'ana')", (bot,)).rowcount:
+            BS.write(c, bot, {})
+    document = json.loads(
+        c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (runner,)).fetchone()[0] or "{}"
+    )
     document.setdefault("bots", {}).update({bot: {"ready": True} for bot in bots})
-    c.execute("UPDATE runners SET readiness=? WHERE id=?", (json.dumps(document), runner))
+    c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (json.dumps(document), runner))
 
 
 def test_refusal_quarantine_explains_the_claim_hold_and_matches_bot_status(environment):
@@ -791,7 +1161,9 @@ def test_refusal_quarantine_explains_the_claim_hold_and_matches_bot_status(envir
             with pytest.raises(H.Refused):
                 H.refuse(c, "bot:helper", "identity", words)
         assert H.bot(c, "helper")["state"] == "quarantined"
-        c.execute("UPDATE events SET created_at='2030-10-26T23:55:00Z' WHERE action='quarantine' AND target='bot:helper'")
+        c.execute(
+            "UPDATE events SET created_at='2030-10-26T23:55:00Z' WHERE action='quarantine' AND target='bot:helper'"
+        )
     body, checks = health_of(api)
     [held] = body["stuck"]
     status = api.get("/api/v2/status", headers=signed_in()).json()["bots"]
@@ -803,10 +1175,19 @@ def test_refusal_quarantine_explains_the_claim_hold_and_matches_bot_status(envir
     assert "Refused write (identity): " + words in held["why"]
     assert "BotOps must review" not in held["why"]
     assert "a person who manages it can clear it sooner" in held["why"]
-    # Both the summary report and its diagnostic items must exclude manager-only refused words.
-    assert "Quarantined" in checks["queue"]["summary"]
-    assert words not in json.dumps(checks["queue"])
-    assert "Refused write" not in json.dumps(checks["queue"])
+    # Both the summary report and its diagnostic items must exclude manager-only refused words. The quarantine is its
+    # own Health check, not part of the queue check.
+    assert checks["quarantine"]["status"] == "bad" and "Quarantined" in checks["quarantine"]["summary"]
+    assert words not in json.dumps(checks["quarantine"])
+    assert "Refused write" not in json.dumps(checks["quarantine"])
+    assert "Quarantined" not in json.dumps(checks["queue"])
+    # BotOps reviews a quarantine, so it stays on Health and never turns the person's status dot red.
+    issue = next(
+        row
+        for row in api.get("/api/v2/operations", headers=signed_in()).json()["issues"]
+        if row["bot"] == "helper" and row["kind"] == "bot"
+    )
+    assert issue["needs_person"] is False
 
 
 def test_manual_quarantine_has_no_lift_promise_and_other_holds_keep_their_explanation(environment):
@@ -835,8 +1216,12 @@ def test_quarantine_refused_words_keep_manager_access_and_mask_secrets(environme
     runner = silent_computer(api, 0)
     with api.app.state.store.transaction() as c:
         claimable(c, runner, "helper")
-        H.quarantine(c, "helper", "10 repeated refusals today",
-                     refusal={"rule": "identity", "detail": "Private request token=synthetic-private-value"})
+        H.quarantine(
+            c,
+            "helper",
+            "10 repeated refusals today",
+            refusal={"rule": "identity", "detail": "Private request token=synthetic-private-value"},
+        )
     [held] = health_of(api)[0]["stuck"]
     assert "token=[hidden]" in held["why"] and "synthetic-private-value" not in held["why"]
     reader = as_person(api, "quinn")
@@ -848,7 +1233,7 @@ def test_quarantine_refused_words_keep_manager_access_and_mask_secrets(environme
 
 
 def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeypatch):
-    from backend import execution, health
+    from backend import execution, health, start_places
 
     api = environment()
     runner = enrolled(api)
@@ -856,8 +1241,10 @@ def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeyp
     add_bot(api, "helper")
     old = H.shift(H.now(), minutes=-30)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
-                  (runner, H.now()))
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
+            (runner, H.now()),
+        )
         claimable(c, runner, "helper")
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         task = H.task_create(c, owner, "Interrupted task", "", "bot:helper", private=False)
@@ -869,11 +1256,15 @@ def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeyp
 
         running_chat = H.open_conversation(c, owner, [owner, "bot:helper"], kind="chat")
         H._write_message(c, owner, "bot:helper", "running turn", running_chat, "say", {}, None, None)
-        running_job = c.execute("SELECT id FROM jobs WHERE bot_id='helper' AND state='queued' ORDER BY created_at DESC LIMIT 1").fetchone()["id"]
+        running_job = c.execute(
+            "SELECT id FROM jobs WHERE bot_id='helper' AND state='queued' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()["id"]
         c.execute("UPDATE jobs SET state='running' WHERE id=?", (running_job,))
-        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,started_at) "
-                  "VALUES('helper-running',?,'helper',?,1,'x','running',?,?,?)",
-                  (running_job, runner, H.shift(H.now(), hours=1), H.now(), H.now()))
+        c.execute(
+            "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,started_at) "
+            "VALUES('helper-running',?,'helper',?,1,'x','running',?,?,?)",
+            (running_job, runner, H.shift(H.now(), hours=1), H.now(), H.now()),
+        )
         online = {r["id"] for r in health._online_runners(c)}
         monkeypatch.setattr(execution, "bot_claimable", lambda *args, **kwargs: ("lane_held", None, False))
 
@@ -882,13 +1273,16 @@ def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeyp
 
         # Removing the fenced-only override reproduces the old, misleading busy reason.
         original = health._fenced_queue_reason
-        monkeypatch.setattr(health, "_fenced_queue_reason", lambda row, refused, first, person: (refused, first, person))
+        monkeypatch.setattr(
+            health, "_fenced_queue_reason", lambda row, refused, first, person: (refused, first, person)
+        )
         [without_override] = health._waiting(c, online)[1]
         assert without_override["reason"] == "busy"
         monkeypatch.setattr(health, "_fenced_queue_reason", original)
 
-        # With every slot occupied, no_slot is the truthful immediate wait reason, while dead stays explicit.
-        c.execute("UPDATE runners SET capacity=1 WHERE id=?", (runner,))
+        # With every slot occupied, no_slot is the truthful immediate wait reason, while dead stays explicit. One running
+        # turn fills the computer's only place, so it is full at the default claim bound (2 x the limit, not reached).
+        c.execute("UPDATE runner_states SET capacity=1 WHERE runner_id=?", (runner,))
         [full] = health._waiting(c, online)[1]
         assert (full["reason"], full["wait_reason"]) == ("busy", "no_slot") and full["dead"] >= 1
 
@@ -901,7 +1295,11 @@ def fenced_task_jobs(c, bot, created):
     interrupted = H.task_comment(c, owner, task["id"], "interrupted work")
     c.execute("UPDATE jobs SET state='uncertain',created_at=? WHERE message_id=?", (created, interrupted["id"]))
     H.task_comment(c, owner, task["id"], "queued behind interrupted work")
-    jobs = [r["id"] for r in c.execute("SELECT id FROM jobs WHERE bot_id=? AND state='queued'", (bot,)) if r["id"] not in before]
+    jobs = [
+        r["id"]
+        for r in c.execute("SELECT id FROM jobs WHERE bot_id=? AND state='queued'", (bot,))
+        if r["id"] not in before
+    ]
     c.executemany("UPDATE jobs SET created_at=? WHERE id=?", [(created, job) for job in jobs])
     return jobs
 
@@ -916,8 +1314,10 @@ def test_work_held_on_purpose_behind_an_interrupted_run_is_not_stuck(environment
     heartbeat(api, runner)
     add_bot(api, "helper")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
-                  (runner, H.now()))
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
+            (runner, H.now()),
+        )
         claimable(c, runner, "helper")
         jobs = fenced_task_jobs(c, "helper", H.shift(H.now(), minutes=-30))
         online = {r["id"] for r in health._online_runners(c)}
@@ -943,29 +1343,33 @@ def test_a_silent_computer_splits_its_queue_as_pipeline_does(environment):
 def test_a_persons_message_waiting_two_minutes_on_a_computer_with_room_is_stuck(environment):
     """Someone is sitting there waiting for the reply: two minutes, not the fifteen other queued work gets."""
     from backend import health
+
     api = environment()
     runner = enrolled(api)
     heartbeat(api, runner)
     add_bot(api, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('ops',?,1,?,'t')",
-                  (runner, H.now()))
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('ops',?,1,?,'t')",
+            (runner, H.now()),
+        )
         claimable(c, runner, "ops")
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         chat = H.open_conversation(c, owner, [owner, "bot:ops"], kind="chat")
         H._write_message(c, owner, "bot:ops", "hello?", chat, "say", {}, None, None)
         online = {r["id"] for r in health._online_runners(c)}
-        assert health._waiting(c, online)[1] == []                    # just sent
+        assert health._waiting(c, online)[1] == []  # just sent
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-3),))
         [row] = health._waiting(c, online)[1]
         assert row["bot"] == "ops" and row["reason"] == "slow"
         c.execute("UPDATE messages SET sender_id='bot:helper' WHERE conversation_id=?", (chat["id"],))
-        assert health._waiting(c, online)[1] == []                    # a bot's request gets the usual fifteen
+        assert health._waiting(c, online)[1] == []  # a bot's request gets the usual fifteen
 
 
 def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico_bug(environment):
     """Past its drain a computer due an update claims nothing while any turn runs: its queued work waits on that."""
-    from backend import health, health_monitor
+    from backend import health, maintenance_health
+
     api = environment()
     runner = enrolled(api)
     heartbeat(api, runner)
@@ -974,8 +1378,10 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET label='Team box' WHERE id=?", (runner,))
         for bot in ("ops", "dev"):
-            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
-                      (bot, runner, H.now()))
+            c.execute(
+                "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
+                (bot, runner, H.now()),
+            )
         claimable(c, runner, "ops", "dev")
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         for bot in ("ops", "dev"):
@@ -983,25 +1389,33 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
             H._write_message(c, owner, "bot:" + bot, "hello?", chat, "say", {}, None, None)
         job = c.execute("SELECT id FROM jobs WHERE bot_id='dev'").fetchone()["id"]
         c.execute("UPDATE jobs SET state='leased' WHERE id=?", (job,))
-        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
-                  "VALUES('a-dev',?,'dev',?,1,'x','running',?,?)", (job, runner, H.shift(H.now(), hours=1), H.now()))
+        c.execute(
+            "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
+            "VALUES('a-dev',?,'dev',?,1,'x','running',?,?)",
+            (job, runner, H.shift(H.now(), hours=1), H.now()),
+        )
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-30),))
         online = {r["id"] for r in health._online_runners(c)}
         [row] = health._waiting(c, online)[2]
-        assert row["bot"] == "ops" and row["reason"] == "slow"         # nothing says it is updating: a bug
-        c.execute("INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,reported_at) "
-                  "VALUES(?,'0.4.46','docker','waiting','0.4.48',?)", (runner, H.now()))
+        assert row["bot"] == "ops" and row["reason"] == "slow"  # nothing says it is updating: a bug
+        c.execute(
+            "INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,reported_at) "
+            "VALUES(?,'0.4.46','docker','waiting','0.4.48',?)",
+            (runner, H.now()),
+        )
         [row] = health._waiting(c, online)[2]
         assert row["reason"] == "updating" and row["running"] == 1 and row["target"] == "0.4.48"
         [turn] = row["turns"]
-        assert turn["run"] == "a-dev" and turn["bot"] == "dev" and turn["task_title"] == ""   # a chat: no task
+        assert turn["run"] == "a-dev" and turn["bot"] == "dev" and turn["task_title"] == ""  # a chat: no task
         since = turn["since"][11:16]
-        found = {f["check_id"]: f for f in health_monitor.findings(c, api.app.state.store.settings)}
+        found = {f["check_id"]: f for f in maintenance_health.findings(c, api.app.state.store.settings)}
     assert "queue_idle" not in found
     held = found["runner_outdated"]
-    assert held["kind"] == health_monitor.SETUP
-    assert (f"Team box is holding new work to update to Tico 0.4.48: it starts once dev's turn (running since {since} "
-            "UTC) ends; it holds 1 queued job(s) for ops.") in held["detail"]
+    assert held["kind"] == maintenance_health.SETUP
+    assert (
+        f"Team box is holding new work to update to Tico 0.4.48: it starts once dev's turn (running since {since} "
+        "UTC) ends; it holds 1 queued job(s) for ops."
+    ) in held["detail"]
     # Nothing to update by hand, and nothing to watch: BotOps is told not to hold its own computer watching this one.
     assert "BotOps: update the runner" not in held["fix"] and "record the wait" in held["fix"]
     assert "person's choice" in held["fix"]
@@ -1016,13 +1430,25 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
 
     def fix(**change):
         with store.transaction() as c:
-            c.execute("UPDATE runner_versions SET " + ",".join(f"{k}=?" for k in change) + " WHERE runner_id=?",
-                      (*change.values(), runner))
-            found = {f["check_id"]: f for f in health_monitor.findings(c, store.settings)}["runner_outdated"]["fix"]
-            c.execute("UPDATE runner_versions SET release='0.4.46',update_state='waiting',update_error='' WHERE runner_id=?",
-                      (runner,))
+            c.execute(
+                "UPDATE runner_versions SET " + ",".join(f"{k}=?" for k in change) + " WHERE runner_id=?",
+                (*change.values(), runner),
+            )
+            found = {f["check_id"]: f for f in maintenance_health.findings(c, store.settings)}["runner_outdated"]["fix"]
+            c.execute(
+                "UPDATE runner_versions SET release='0.4.46',update_state='waiting',update_error='' WHERE runner_id=?",
+                (runner,),
+            )
         return found
+
     assert fix(update_error="could not start the update: OSError").startswith("BotOps: update the runner on Team box")
+    assert "No local work needs a decision" in fix(
+        update_state="blocked",
+        update_error="only flattened Tico links: AGENTS.md; repaired automatically on the next update",
+    )
+    assert fix(update_state="blocked", update_error="the checkout has 1 changed file: AGENTS.md").startswith(
+        "BotOps: update"
+    )
     assert fix(release="0.0.1").startswith("BotOps: update the runner on Team box")
     with store.transaction() as c:
         c.execute("UPDATE attempts SET state='completed' WHERE id='a-dev'")
@@ -1033,6 +1459,7 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
     """TK-SHNKOY4E: a Mac held its update ~28 min behind one BotOps turn that watched another computer's update.
     Health names the bot, its task and when it started, so a person can tell that turn from real work."""
     from backend import health
+
     api = environment()
     runner = enrolled(api)
     heartbeat(api, runner)
@@ -1042,41 +1469,56 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
         c.execute("UPDATE runners SET label='Mac' WHERE id=?", (runner,))
         c.execute("UPDATE bots SET display_name='BotOps' WHERE slug='botops'")
         for bot in ("ops", "botops", "audit"):
-            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
-                      (bot, runner, H.now()))
+            c.execute(
+                "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
+                (bot, runner, H.now()),
+            )
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         for bot in ("ops", "botops", "audit"):
             chat = H.open_conversation(c, owner, [owner, "bot:" + bot], kind="chat")
             H._write_message(c, owner, "bot:" + bot, "hello?", chat, "say", {}, None, None)
-        started = {"audit": H.shift(H.now(), minutes=-5), "botops": H.shift(H.now(), minutes=-28)}   # newest first
-        run = {"audit": "a-audit", "botops": "b-botops"}   # ids and slugs sort newest first too: only `since` orders
+        started = {"audit": H.shift(H.now(), minutes=-5), "botops": H.shift(H.now(), minutes=-28)}  # newest first
+        run = {"audit": "a-audit", "botops": "b-botops"}  # ids and slugs sort newest first too: only `since` orders
         for bot, since in started.items():
             job = c.execute("SELECT id FROM jobs WHERE bot_id=?", (bot,)).fetchone()["id"]
             c.execute("UPDATE jobs SET state='leased' WHERE id=?", (job,))
-            c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
-                      "started_at) VALUES(?,?,?,?,1,?,'running',?,?,?)",
-                      (run[bot], job, bot, runner, "x" + bot, H.shift(H.now(), hours=1), since, since))
+            c.execute(
+                "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
+                "started_at) VALUES(?,?,?,?,1,?,'running',?,?,?)",
+                (run[bot], job, bot, runner, "x" + bot, H.shift(H.now(), hours=1), since, since),
+            )
         watch = H.task_create(c, "bot:botops", "Watch HotMic's update to 0.3.48", "x", "bot:botops", lint=False)
         secret = H.task_create(c, "bot:audit", "Private release gate", "x", "bot:audit", lint=False, private=True)
         c.execute("UPDATE tasks SET carried_by='b-botops' WHERE id=?", (watch["id"],))
         c.execute("UPDATE tasks SET carried_by='a-audit' WHERE id=?", (secret["id"],))
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-30),))
-        c.execute("INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,reported_at) "
-                  "VALUES(?,'0.3.46','mac','waiting','0.3.48',?)", (runner, H.now()))
+        c.execute(
+            "INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,reported_at) "
+            "VALUES(?,'0.3.46','mac','waiting','0.3.48',?)",
+            (runner, H.now()),
+        )
         online = {r["id"] for r in health._online_runners(c)}
         [row] = health._waiting(c, online)[2]
         assert row["reason"] == "updating" and row["running"] == 2
-        botops, qa = row["turns"]                                       # oldest first
+        botops, qa = row["turns"]  # oldest first
         assert (botops["bot"], botops["run"], botops["task"], botops["task_title"]) == (
-            "botops", "b-botops", watch["id"], "Watch HotMic's update to 0.3.48")
-        assert (qa["bot"], qa["task"], qa["task_title"]) == ("audit", "", "")   # its only task is private
+            "botops",
+            "b-botops",
+            watch["id"],
+            "Watch HotMic's update to 0.3.48",
+        )
+        assert (qa["bot"], qa["task"], qa["task_title"]) == ("audit", "", "")  # its only task is private
         words = health.updating_words(row)
-        assert words.startswith("Mac is holding new work to update to Tico 0.3.48: it starts once 2 running turns "
-                                f"end: BotOps's turn (running since {started['botops'][11:16]} UTC); audit's turn")
+        assert words.startswith(
+            "Mac is holding new work to update to Tico 0.3.48: it starts once 2 running turns "
+            f"end: BotOps's turn (running since {started['botops'][11:16]} UTC); audit's turn"
+        )
         assert "Private release gate" not in words and words.endswith(health.OUTSIDE_WAIT)
         one = {**row, "turns": row["turns"][:1], "running": 1}
-        assert (f"it starts once BotOps's turn on \u201cWatch HotMic's update to 0.3.48\u201d (running since "
-                f"{started['botops'][11:16]} UTC) ends. {health.OUTSIDE_WAIT}") in health.updating_words(one)
+        assert (
+            f"it starts once BotOps's turn on \u201cWatch HotMic's update to 0.3.48\u201d (running since "
+            f"{started['botops'][11:16]} UTC) ends. {health.OUTSIDE_WAIT}"
+        ) in health.updating_words(one)
 
         # Health says it to each caller as they may read it: a bot whose activity they may not read is "another
         # bot", and a task hidden from them (auth.task_sql) is not named (Senior review of PR 638).
@@ -1093,6 +1535,7 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
         def why(auth):
             [out] = health._stuck(c, [{**one, "runtime": ""}], online, None, False, auth)
             return out["why"]
+
         since = started["botops"][11:16]
         assert f"BotOps's turn on \u201cWatch HotMic" in why(Access(set(), "1"))
         assert f"once another bot's turn (running since {since} UTC) ends" in why(Access({"botops"}, "1"))
@@ -1108,14 +1551,16 @@ def test_roadmap_suggestions_warn_from_the_routing_rule_and_only_to_administrato
 
     def health(chosen=None, labels=("roadmap",), headers=None, **states):
         with api.app.state.store.transaction() as c:
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('pm',?,'morgan') ON CONFLICT(bot) "
-                      "DO UPDATE SET config=excluded.config", ('{"template": "product-manager"}',))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('pm','morgan') ON CONFLICT(bot) DO NOTHING")
+            BS.write(c, 'pm', {'template': 'product-manager'})
             c.execute("UPDATE bots SET state='active', display_name=upper(slug) WHERE slug IN ('pm','ops')")
             for bot, state in states.items():
                 c.execute("UPDATE bots SET state=? WHERE slug=?", (state, bot))
-            c.execute("INSERT INTO registry_metadata(key,value) VALUES('roadmaps',?) ON CONFLICT(key) "
-                      "DO UPDATE SET value=excluded.value",
-                      (json.dumps({"labels": list(labels), "suggestions_bot": chosen}),))
+            c.execute(
+                "INSERT INTO registry_metadata(key,value) VALUES('roadmaps',?) ON CONFLICT(key) "
+                "DO UPDATE SET value=excluded.value",
+                (json.dumps({"labels": list(labels), "suggestions_bot": chosen}),),
+            )
         return health_of(api, headers)[1].get("roadmap_suggestions")
 
     def label(**kwargs):
@@ -1123,22 +1568,27 @@ def test_roadmap_suggestions_warn_from_the_routing_rule_and_only_to_administrato
         return row and row["label"]
 
     fix = [{"label": "Open Public roadmap", "href": "#/settings/roadmap", "tab": "", "click": ""}]
-    assert health(labels=(), pm="archived") is None              # no public label: nobody can suggest anything
-    assert health() is None                                      # Automatic finds the Product Manager
+    assert health(labels=(), pm="archived") is None  # no public label: nobody can suggest anything
+    assert health() is None  # Automatic finds the Product Manager
     assert health(pm="archived") == {
-        "id": "roadmap_suggestions", "label": "No bot receives roadmap suggestions", "status": "warn",
-        "summary": "Visitors who suggest a feature on your public roadmap are being turned away.", "fixes": fix}
+        "id": "roadmap_suggestions",
+        "label": "No bot receives roadmap suggestions",
+        "status": "warn",
+        "summary": "Visitors who suggest a feature on your public roadmap are being turned away.",
+        "fixes": fix,
+    }
     archived = health(chosen="ops", ops="archived")
     assert archived["label"] == "The bot chosen for roadmap suggestions is archived; suggestions now go to PM"
     assert (archived["status"], archived["fixes"]) == ("warn", fix)
     assert label(chosen="ops", ops="paused") == (
-        "The bot chosen for roadmap suggestions isn't active; suggestions now go to PM")
+        "The bot chosen for roadmap suggestions isn't active; suggestions now go to PM"
+    )
     assert label(chosen="ops", ops="archived", pm="archived") == "No bot receives roadmap suggestions"
-    assert health(chosen="ops", pm="archived") is None           # choosing an active bot clears it
+    assert health(chosen="ops", pm="archived") is None  # choosing an active bot clears it
     assert health(pm="archived", headers=as_person(api, "quinn")) is None
 
 
-def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment):
+def test_health_names_queued_bot_for_bot_reader(environment, monkeypatch):
     api = environment()
     runner = enrolled(api)
     add_bot(api, "helper")
@@ -1146,39 +1596,55 @@ def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment):
     api.app.state.store.settings.test_identities["observer-bot"] = Identity("bot:observer", "bot", agent="hermes")
     old = H.shift(H.now(), hours=-3)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('observer','hermes','x',?,'human:ana')", (H.now(),))
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')", (runner, H.now()))
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.now(), runner))
+        c.execute(
+            "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('observer','hermes','x',?,'human:ana')",
+            (H.now(),),
+        )
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
+            (runner, H.now()),
+        )
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), runner))
         cv = H.open_conversation(c, 'human:morgan', ['human:morgan', 'bot:helper'], kind='chat')
         H._write_message(c, 'human:morgan', 'bot:helper', 'check the queue', cv, 'say', {}, None, None)
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='helper'", (old,))
-        tasks = [H.task_create(c, 'human:morgan', title, '', 'bot:helper', private=False)
-                 for title in ('Repair the queue', 'Check the diagnosis')]
+        tasks = [
+            H.task_create(c, 'human:morgan', title, '', 'bot:helper', private=False)
+            for title in ('Repair the queue', 'Check the diagnosis')
+        ]
         for task in tasks:
             c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (old, task['id']))
-            H.event(c, H.KEEPER, 'task.stall_escalated', task['id'], {'wakes': 3})
         c.execute("UPDATE bots SET state='paused' WHERE slug='helper'")
     headers = signed_in('observer-bot')
     body, checks = health_of(api, headers)
     [queued] = checks['queue']['items']
-    assert (queued['bot'], queued['queued'], queued['oldest'], queued['oldest_minutes'], queued['reason']) == ('helper', 3, old, 180, 'paused')
+    assert (queued['bot'], queued['queued'], queued['oldest'], queued['oldest_minutes'], queued['reason']) == (
+        'helper',
+        3,
+        old,
+        180,
+        'paused',
+    )
     assert queued['fix'] == 'hub run list helper' and queued['fixes']
     issues = api.get('/api/v2/health/issues', headers=headers).json()['issues']
     assert next(i for i in issues if i['kind'] == 'queue') == {**queued, 'kind': 'queue', 'severity': 'high'}
-    assert {i['task'] for i in issues if i['kind'] == 'stalled_tasks'} == {t['id'] for t in tasks}
-    assert all(t['title'] in checks['stalled_tasks']['summary'] for t in tasks)
 
     # Capacity stays an explained queue; bots no longer receive a no-slot alert.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug='helper'")
         claimable(c, runner, 'helper')
-        c.execute("UPDATE runners SET capacity=1 WHERE id=?", (runner,))
+        c.execute("UPDATE runner_states SET capacity=1 WHERE runner_id=?", (runner,))
         H._write_message(c, 'human:morgan', 'bot:helper', 'one more request', cv, 'say', {}, None, None)
         job = c.execute("SELECT id FROM jobs WHERE bot_id='helper' ORDER BY created_at DESC LIMIT 1").fetchone()[0]
         c.execute("UPDATE jobs SET state='running' WHERE id=?", (job,))
-        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
-                  "VALUES('helper-running',?,'helper',?,1,'x','running',?,?)",
-                  (job, runner, H.shift(H.now(), hours=1), H.now()))
+        c.execute(
+            "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
+            "VALUES('helper-running',?,'helper',?,1,'x','running',?,?)",
+            (job, runner, H.shift(H.now(), hours=1), H.now()),
+        )
+    from backend import start_places
+
+    monkeypatch.setattr(start_places, "LIVE_CAP_FACTOR", 1)  # one running turn fills the computer
     queue = health_of(api, headers)[1]['queue']
     assert queue['status'] == 'info' and not queue.get('items')
     issues = api.get('/api/v2/health/issues', headers=headers).json()['issues']
@@ -1188,6 +1654,7 @@ def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment):
 def test_aged_prs_use_synced_condition_age_and_clear_on_review_or_resolution(environment, monkeypatch):
     from backend import github as G
     from backend import task_relations
+
     api = environment()
     add_bot(api, 'builder')
     add_bot(api, 'reviewer')
@@ -1201,14 +1668,29 @@ def test_aged_prs_use_synced_condition_age_and_clear_on_review_or_resolution(env
             task = H.task_create(c, 'human:morgan', f'Build change {i + 1}', '', 'bot:builder', private=i == 3)
             tasks.append(task)
             H.task_link(c, 'human:morgan', task['id'], url)
-            payload = {'action': 'refresh', 'pull_request': {'html_url': url, 'state': 'open',
-                       'mergeable': i != 0, 'head': {'sha': str(i + 1) * 40, 'ref': f'change-{i + 1}'}}}
+            payload = {
+                'action': 'refresh',
+                'pull_request': {
+                    'html_url': url,
+                    'state': 'open',
+                    'mergeable': i != 0,
+                    'head': {'sha': str(i + 1) * 40, 'ref': f'change-{i + 1}'},
+                },
+            }
             with monkeypatch.context() as clock:
                 clock.setattr(H, 'now', lambda: young if i == 2 else old)
                 G.pull_request(c, payload)
                 if i != 0:
-                    G.pr_signal(c, 'status', {'sha': str(i + 1) * 40, 'state': 'success', 'context': 'tests',
-                                            'repository': {'full_name': 'AcmeCorp/atlas'}})
+                    G.pr_signal(
+                        c,
+                        'status',
+                        {
+                            'sha': str(i + 1) * 40,
+                            'state': 'success',
+                            'context': 'tests',
+                            'repository': {'full_name': 'AcmeCorp/atlas'},
+                        },
+                    )
         child = H.task_create(c, 'human:morgan', 'Review 1: PR #2', '', 'bot:reviewer', private=False)
         task_relations.set_parent(c, 'human:morgan', child['id'], tasks[1]['id'])
         c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (child['id'],))
@@ -1216,8 +1698,18 @@ def test_aged_prs_use_synced_condition_age_and_clear_on_review_or_resolution(env
         task_relations.set_parent(c, 'human:morgan', hidden['id'], tasks[1]['id'])
         c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (hidden['id'],))
         # Refreshes do not reset a wait, and a fresh check on the same head does not either.
-        G.pull_request(c, {'action': 'refresh', 'pull_request': {'html_url': urls[0], 'mergeable': False, 'state': 'open', 'head': {'sha': '1' * 40}}})
-        G.pr_signal(c, 'status', {'sha': '2' * 40, 'state': 'success', 'context': 'tests', 'repository': {'full_name': 'AcmeCorp/atlas'}})
+        G.pull_request(
+            c,
+            {
+                'action': 'refresh',
+                'pull_request': {'html_url': urls[0], 'mergeable': False, 'state': 'open', 'head': {'sha': '1' * 40}},
+            },
+        )
+        G.pr_signal(
+            c,
+            'status',
+            {'sha': '2' * 40, 'state': 'success', 'context': 'tests', 'repository': {'full_name': 'AcmeCorp/atlas'}},
+        )
         # A human-owned task is outside the bot PR check.
         c.execute("UPDATE tasks SET owner_id='human:morgan' WHERE id=?", (tasks[4]['id'],))
     _, checks = health_of(api)
@@ -1229,12 +1721,26 @@ def test_aged_prs_use_synced_condition_age_and_clear_on_review_or_resolution(env
     issues = api.get('/api/v2/health/issues', headers=signed_in()).json()['issues']
     assert {i['pr'] for i in issues if i['kind'] == 'aged_prs'} == set(urls[:2])
     assert next(i for i in issues if i.get('pr') == urls[1])['whose_move'] == 'bot:reviewer'
-    assert 'hidden-reviewer' not in json.dumps({'check': checks['aged_prs'],
-                                               'issues': [i for i in issues if i['kind'] == 'aged_prs']})
+    assert 'hidden-reviewer' not in json.dumps(
+        {'check': checks['aged_prs'], 'issues': [i for i in issues if i['kind'] == 'aged_prs']}
+    )
     with api.app.state.store.transaction() as c:
-        G.pull_request(c, {'action': 'refresh', 'pull_request': {'html_url': urls[0], 'mergeable': True, 'state': 'open', 'head': {'sha': '1' * 40}}})
-        G.pr_signal(c, 'pull_request_review', {'action': 'submitted', 'pull_request': {'html_url': urls[1]},
-                    'review': {'id': 1, 'state': 'approved', 'commit_id': '2' * 40, 'user': {'login': 'reviewer'}}})
+        G.pull_request(
+            c,
+            {
+                'action': 'refresh',
+                'pull_request': {'html_url': urls[0], 'mergeable': True, 'state': 'open', 'head': {'sha': '1' * 40}},
+            },
+        )
+        G.pr_signal(
+            c,
+            'pull_request_review',
+            {
+                'action': 'submitted',
+                'pull_request': {'html_url': urls[1]},
+                'review': {'id': 1, 'state': 'approved', 'commit_id': '2' * 40, 'user': {'login': 'reviewer'}},
+            },
+        )
     assert 'aged_prs' not in health_of(api)[1]
 
 
@@ -1242,8 +1748,14 @@ def test_a_status_the_loop_has_not_checked_for_too_long_is_a_warning_then_bad(mo
     from types import SimpleNamespace
 
     from backend import health
+
     remote = SimpleNamespace(loopback=False)
-    backup = lambda checked: {"mode": "remote", "target_kind": "s3", "last_replicated_at": H.now(), "checked_at": checked}
+    backup = lambda checked: {
+        "mode": "remote",
+        "target_kind": "s3",
+        "last_replicated_at": H.now(),
+        "checked_at": checked,
+    }
     check_at = lambda minutes: health._backups({"backup": backup(H.shift(H.now(), minutes=-minutes))}, remote)
     monkeypatch.delenv("TICO_BACKUP_SYNC_INTERVAL", raising=False)
     assert check_at(5)["status"] == "ok"
@@ -1256,11 +1768,16 @@ def test_a_pile_up_is_judged_against_two_sync_intervals_of_local_files(monkeypat
     from types import SimpleNamespace
 
     from backend import health
+
     remote = {"mode": "remote", "target_kind": "s3", "last_replicated_at": H.now()}
-    check = lambda unsent: health._backups({"backup": {**remote, "unsent_files": unsent}}, SimpleNamespace(loopback=False))
+    check = lambda unsent: health._backups(
+        {"backup": {**remote, "unsent_files": unsent}}, SimpleNamespace(loopback=False)
+    )
     monkeypatch.setenv("TICO_BACKUP_SYNC_INTERVAL", "1m")
     assert check(1000)["status"] == "ok" and check(1001)["status"] == "warn"
-    monkeypatch.setenv("TICO_BACKUP_SYNC_INTERVAL", "1h")    # a busy database writes about 3,600 files an hour; the limit is 7,200
+    monkeypatch.setenv(
+        "TICO_BACKUP_SYNC_INTERVAL", "1h"
+    )  # a busy database writes about 3,600 files an hour; the limit is 7,200
     assert check(3600)["status"] == "ok" and check(7200)["status"] == "ok"
     stuck = check(7201)
     assert stuck["status"] == "warn" and "7,201 unsent files" in stuck["summary"]
@@ -1270,26 +1787,45 @@ def test_batched_computer_load_and_overload_reads_answer_what_each_computer_read
     """Health and the computers list read every computer's load and overload in one pass (performance.py); each
     answer must be the one that computer's own read gives: off, revoked, calm, overloaded and recently overloaded."""
     from backend import performance
+
     api = environment()
     now = 1_800_000_000
     busy, off, calm, revoked = enrolled(api), "r-off", "r-calm", "r-gone"
     with api.app.state.store.transaction() as c:
         for rid in (off, calm, revoked):
-            c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at) "
-                      "SELECT ?,?,owner_id,?,created_at,last_seen_at FROM runners WHERE id=?", (rid, rid, "h" + rid, busy))
+            c.execute(
+                "INSERT INTO runners(id,label,owner_id,token_hash,created_at) "
+                "SELECT ?,?,owner_id,?,created_at FROM runners WHERE id=?",
+                (rid, rid, "h" + rid, busy),
+            )
+            c.execute(
+                "UPDATE runner_states SET last_seen_at=(SELECT last_seen_at FROM runner_states WHERE runner_id=?) "
+                "WHERE runner_id=?",
+                (busy, rid),
+            )
         c.execute("UPDATE runners SET performance='off' WHERE id=?", (off,))
         c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), revoked))
         for rid, cpu in ((busy, 95), (off, 95), (calm, 10), (revoked, 95)):
-            for k in range(6):                       # six readings a minute apart, the newest just now
+            for k in range(6):  # six readings a minute apart, the newest just now
                 ts = now - 60 * k
-                c.execute("INSERT INTO runner_load_samples VALUES(?,?,?,?,?,?,?,?,?)",
-                          (rid, ts, ts, cpu, 90, 100, 0, 0, 1))
-        c.execute("INSERT INTO perf_overloads(runner_id,started_at,last_seen_at,ended_at,reasons,cpu_max,mem_max,runs_max) "
-                  "VALUES(?,?,?,?,'[]',99,99,1)", (busy, now - 7200, now - 3600, now - 3500))      # ended long ago
-        c.execute("INSERT INTO perf_overloads(runner_id,started_at,last_seen_at,ended_at,reasons,cpu_max,mem_max,runs_max) "
-                  "VALUES(?,?,?,?,'[]',99,99,1)", (busy, now - 900, now - 100, now - 50))         # ended just now
-        c.execute("INSERT INTO perf_overloads(runner_id,started_at,last_seen_at,ended_at,reasons,cpu_max,mem_max,runs_max) "
-                  "VALUES(?,?,?,NULL,'[]',99,99,1)", (calm, now - 900, now - 100))                # still open
+                c.execute(
+                    "INSERT INTO runner_load_samples VALUES(?,?,?,?,?,?,?,?,?)", (rid, ts, ts, cpu, 90, 100, 0, 0, 1)
+                )
+        c.execute(
+            "INSERT INTO perf_overloads(runner_id,started_at,last_seen_at,ended_at,reasons,cpu_max,mem_max,runs_max) "
+            "VALUES(?,?,?,?,'[]',99,99,1)",
+            (busy, now - 7200, now - 3600, now - 3500),
+        )  # ended long ago
+        c.execute(
+            "INSERT INTO perf_overloads(runner_id,started_at,last_seen_at,ended_at,reasons,cpu_max,mem_max,runs_max) "
+            "VALUES(?,?,?,?,'[]',99,99,1)",
+            (busy, now - 900, now - 100, now - 50),
+        )  # ended just now
+        c.execute(
+            "INSERT INTO perf_overloads(runner_id,started_at,last_seen_at,ended_at,reasons,cpu_max,mem_max,runs_max) "
+            "VALUES(?,?,?,NULL,'[]',99,99,1)",
+            (calm, now - 900, now - 100),
+        )  # still open
     ids = [busy, off, calm, revoked]
     with api.app.state.store.read() as c:
         loads = performance.load_statuses(c, ids, now=now)

@@ -30,9 +30,13 @@ def check(api):
 
 def counts(api):
     with api.app.state.store.read() as c:
-        return {t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-                for t in ("market_insights", "market_evidence")} | {
-            "page_events": c.execute("SELECT count(*) FROM market_events WHERE field LIKE 'page.%'").fetchone()[0]}
+        return {
+            t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in ("market_insights", "market_evidence")
+        } | {
+            "page_events": c.execute(
+                "SELECT count(*) FROM history_events WHERE subject_type IN ('market_entity','market_edge','market_evidence','market_document') AND kind LIKE 'page.%'"
+            ).fetchone()[0]
+        }
 
 
 @pytest.fixture
@@ -41,12 +45,18 @@ def seeded(api, tmp_path):
     return api
 
 
-@pytest.mark.parametrize("url", ["http://127.0.0.1/pricing", "http://localhost/x", "http://169.254.169.254/latest",
-                                 "http://[::1]/", "ftp://northwind.example/x", "file:///etc/passwd",
-                                 "https://user:pw@northwind.example/x"])
-def test_an_internal_or_odd_address_is_refused_when_it_is_added(seeded, url):
-    watch(seeded, url=url, expected=422)
-    assert get(seeded, "market/watches")["watches"] == []
+def test_an_internal_or_odd_address_is_refused_when_it_is_added(seeded):
+    for url in [
+        "http://127.0.0.1/pricing",
+        "http://localhost/x",
+        "http://169.254.169.254/latest",
+        "http://[::1]/",
+        "ftp://northwind.example/x",
+        "file:///etc/passwd",
+        "https://user:pw@northwind.example/x",
+    ]:
+        watch(seeded, url=url, expected=422)
+        assert get(seeded, "market/watches")["watches"] == [], url
 
 
 def test_a_name_that_resolves_to_a_private_address_is_blocked_when_read(seeded, monkeypatch):
@@ -74,7 +84,7 @@ def test_the_first_read_is_a_baseline_and_a_small_change_files_nothing(seeded, m
     pages(monkeypatch, BASE, BASE + "\nNew!", BASE + "\nNew!")
     before = counts(seeded)
     assert check(seeded)["changed"] == 0
-    assert check(seeded)["changed"] == 0           # fewer than 40 characters
+    assert check(seeded)["changed"] == 0  # fewer than 40 characters
     assert counts(seeded) == before
 
 
@@ -84,8 +94,8 @@ def test_small_edits_that_add_up_file_one_insight_on_the_check_that_crosses_the_
     pages(monkeypatch, BASE, first, second)
     before = counts(seeded)
     assert check(seeded)["changed"] == 0
-    assert check(seeded)["changed"] == 0           # 21 characters: under the line, and not the new baseline
-    assert check(seeded)["changed"] == 1           # 44 against the baseline
+    assert check(seeded)["changed"] == 0  # 21 characters: under the line, and not the new baseline
+    assert check(seeded)["changed"] == 1  # 44 against the baseline
     assert counts(seeded)["market_insights"] - before["market_insights"] == 1
 
 
@@ -95,16 +105,25 @@ def test_a_real_change_files_one_insight_one_evidence_and_one_event_once(seeded,
     before = counts(seeded)
     assert check(seeded)["changed"] == 0
     assert check(seeded)["changed"] == 1
-    assert check(seeded)["changed"] == 0           # same text again: nothing new
+    assert check(seeded)["changed"] == 0  # same text again: nothing new
     after = counts(seeded)
     assert {k: after[k] - before[k] for k in after} == {"market_insights": 1, "market_evidence": 1, "page_events": 1}
     with seeded.app.state.store.read() as c:
         evidence = H._rows(c.execute("SELECT source_kind, source_url, quote FROM market_evidence"))[-1]
-        event = H._rows(c.execute("SELECT subject_kind, subject_id, field FROM market_events WHERE field LIKE 'page.%'"))[0]
+        event = H._rows(
+            c.execute(
+                "SELECT substr(subject_type, 8) AS subject_kind, subject_id, kind AS field FROM history_events "
+                "WHERE subject_type LIKE 'market%' AND kind LIKE 'page.%'"
+            )
+        )[0]
         insight = H._rows(c.execute("SELECT kind, about, status FROM market_insights WHERE about = 'Northwind'"))[0]
     assert evidence["source_kind"] == "page-change" and evidence["source_url"] == PAGE
     assert "Pro plan now costs" in evidence["quote"]
-    assert (event["subject_kind"], event["subject_id"], event["field"]) == ("entity", "company/northwind", "page.pricing")
+    assert (event["subject_kind"], event["subject_id"], event["field"]) == (
+        "entity",
+        "company/northwind",
+        "page.pricing",
+    )
     assert insight["kind"] == "property-change" and insight["status"] == "new"
 
 
@@ -116,6 +135,7 @@ def test_a_page_is_read_with_no_transaction_open(seeded, monkeypatch):
     def fetch(url):
         open_at_fetch.append(len(store.writer.queue))
         return BASE
+
     monkeypatch.setattr(W, "fetch_page", fetch)
     check(seeded)
     assert open_at_fetch == [0]
@@ -129,6 +149,7 @@ def test_a_failing_page_marks_its_watch_and_the_others_still_run(seeded, monkeyp
         if "northwind" in url:
             raise RuntimeError("boom")
         return BASE
+
     monkeypatch.setattr(W, "fetch_page", fetch)
     assert check(seeded) == {"read": 2, "changed": 0, "errors": 1}
     by = {w["url"]: w for w in get(seeded, "market/watches")["watches"]}
@@ -142,7 +163,7 @@ def test_stopping_keeps_the_row_and_a_stopped_page_is_not_read(seeded, monkeypat
     pages(monkeypatch, BASE)
     assert check(seeded)["read"] == 0
     assert [w["id"] for w in get(seeded, "market/watches")["watches"]] == [made["id"]]
-    watch(seeded)                                   # the same page can be watched again once stopped
+    watch(seeded)  # the same page can be watched again once stopped
 
 
 def test_the_same_page_twice_and_the_cap_on_active_watches_are_409(seeded):
@@ -151,8 +172,10 @@ def test_the_same_page_twice_and_the_cap_on_active_watches_are_409(seeded):
     store = seeded.app.state.store
     with store.transaction() as c:
         for n in range(W.MAX_ACTIVE - 1):
-            c.execute("INSERT INTO market_watches (id, entity_id, url, kind, active, created_at) VALUES (?,?,?,?,1,?)",
-                      (f"w{n}", "company/northwind", f"https://northwind.example/p{n}", "other", H.now()))
+            c.execute(
+                "INSERT INTO market_watches (id, entity_id, url, kind, active, created_at) VALUES (?,?,?,?,1,?)",
+                (f"w{n}", "company/northwind", f"https://northwind.example/p{n}", "other", H.now()),
+            )
     assert watch(seeded, url="https://northwind.example/over", expected=409)["error"]["code"] == "limit"
 
 
@@ -168,11 +191,26 @@ def test_a_page_change_trips_a_cited_bet_only_once_the_insight_is_applied(seeded
 
     def bet_tasks():
         with seeded.app.state.store.read() as c:
-            return [(t["title"], t["owner_id"]) for t in H._rows(c.execute("SELECT title, owner_id FROM tasks WHERE title LIKE 'Bet %'"))]
-    assert bet_tasks() == []                       # a raw diff may be layout or wording: no fit check yet
+            return [
+                (t["title"], t["owner_id"])
+                for t in H._rows(c.execute("SELECT title, owner_id FROM tasks WHERE title LIKE 'Bet %'"))
+            ]
+
+    assert bet_tasks() == []  # a raw diff may be layout or wording: no fit check yet
     with seeded.app.state.store.read() as c:
         insight_id = c.execute("SELECT id FROM market_insights WHERE source_ref LIKE 'watch:%'").fetchone()[0]
-    post(seeded, f"market/insights/{insight_id}/apply",
-         {"evidence": {"source_kind": "page-change", "source_url": PAGE, "quote": "Pro plan now $12", "our_read": "A price rise."},
-          "entity_id": "company/northwind", "summary": "Raised the Pro plan to $12."})
+    post(
+        seeded,
+        f"market/insights/{insight_id}/apply",
+        {
+            "evidence": {
+                "source_kind": "page-change",
+                "source_url": PAGE,
+                "quote": "Pro plan now $12",
+                "our_read": "A price rise.",
+            },
+            "entity_id": "company/northwind",
+            "summary": "Raised the Pro plan to $12.",
+        },
+    )
     assert bet_tasks() == [("Bet 1: may be wrong", "bot:goal-manager")]

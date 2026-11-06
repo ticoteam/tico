@@ -15,6 +15,7 @@ starts today, so a competitor removed and added again is a new edge beside the e
 evidence row: the owner's say-so on this page. Only the owner and the Librarian write here
 (`market.require_writer`).
 """
+
 import re
 from datetime import date, timedelta
 from typing import Literal
@@ -35,35 +36,57 @@ SITE = re.compile(r"^(https?://)?([a-z0-9-]+(\.[a-z0-9-]+)+)(:\d+)?(/\S*)?$", re
 
 def _evidence(c, actor):
     row, _events = MK.create_evidence(
-        c, actor, evidence_key=MK.evidence_id(EVIDENCE), source_kind="other",
-        our_read="Set by the owner on the Strategy page.")
+        c,
+        actor,
+        evidence_key=MK.evidence_id(EVIDENCE),
+        source_kind="other",
+        our_read="Set by the owner on the Strategy page.",
+    )
     return [row["id"]]
 
 
 def _days():
-    today = date.fromisoformat(H.now()[:10])             # the hub clock (UTC): a demo build dates its rows by its own now
+    today = date.fromisoformat(H.now()[:10])  # the hub clock (UTC): a demo build dates its rows by its own now
     return today.isoformat(), (today - timedelta(days=1)).isoformat()
 
 
 def _current(c, where, args):
     today, _ = _days()
-    return H._rows(c.execute(
-        "SELECT * FROM market_edges WHERE (valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR "
-        f"substr(valid_until_on,1,10)>=?) AND ({where})", (today, today, *args)))
+    return H._rows(
+        c.execute(
+            "SELECT * FROM market_edges WHERE (valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR "
+            f"substr(valid_until_on,1,10)>=?) AND ({where})",
+            (today, today, *args),
+        )
+    )
 
 
 def _end(c, actor, edge, ev):
     """The edge holds no longer: its last day was yesterday. One that started today starts yesterday too."""
     _, yesterday = _days()
     since = edge["valid_from_on"] if edge["valid_from_on"] and str(edge["valid_from_on"])[:10] <= yesterday else None
-    MK.update_edge(c, actor, edge["id"], until=yesterday, evidence_ids=ev,
-                   **({"since": yesterday} if edge["valid_from_on"] and not since else {}))
+    MK.update_edge(
+        c,
+        actor,
+        edge["id"],
+        until=yesterday,
+        evidence_ids=ev,
+        **({"since": yesterday} if edge["valid_from_on"] and not since else {}),
+    )
 
 
 def _own(c, actor, name, ev):
     if not MK.entity(c, MK.OWN_COMPANY_ID):
-        MK.create_entity(c, actor, type="company", name=name or "Our company", summary=(name or "Our company") + ".",
-                         evidence_ids=ev, force=True, entity_id=MK.OWN_COMPANY_ID)
+        MK.create_entity(
+            c,
+            actor,
+            type="company",
+            name=name or "Our company",
+            summary=(name or "Our company") + ".",
+            evidence_ids=ev,
+            force=True,
+            entity_id=MK.OWN_COMPANY_ID,
+        )
     return MK.OWN_COMPANY_ID
 
 
@@ -84,19 +107,32 @@ def mirror(c, actor, segment_id, status, company=""):
         nonlocal ev
         ev = ev or _evidence(c, actor)
         return ev
+
     edges = _current(c, "rel='operates_in' AND src=? AND dst=?", (MK.OWN_COMPANY_ID, segment_id))
     if status == "serving" and not edges:
         today, _ = _days()
-        MK.create_edge(c, actor, src=_own(c, actor, company, proof()), rel="operates_in", dst=segment_id, since=today,
-                       evidence_ids=proof())
+        MK.create_edge(
+            c,
+            actor,
+            src=_own(c, actor, company, proof()),
+            rel="operates_in",
+            dst=segment_id,
+            since=today,
+            evidence_ids=proof(),
+        )
     elif status != "serving":
         for edge in edges:
             _end(c, actor, edge, proof())
     flagged = bool(seg["properties"].get("next"))
     if (status == "next") != flagged:
         props = {k: v for k, v in seg["properties"].items() if k != "next"}
-        MK.update_entity(c, actor, segment_id, properties={**props, "next": True} if status == "next" else props,
-                         evidence_ids=proof())
+        MK.update_entity(
+            c,
+            actor,
+            segment_id,
+            properties={**props, "next": True} if status == "next" else props,
+            evidence_ids=proof(),
+        )
 
 
 def target(c, actor, segment_id, to, company=""):
@@ -135,9 +171,10 @@ def remove_segment(c, actor, segment_id):
     for edge in _current(c, "src=? OR dst=?", (segment_id, segment_id)):
         _end(c, actor, edge, ev)
     props = MK.entity(c, segment_id)["properties"]
-    if "next" in props:                                  # added again later, it is not Next until someone says so
-        MK.update_entity(c, actor, segment_id, properties={k: v for k, v in props.items() if k != "next"},
-                         evidence_ids=ev)
+    if "next" in props:  # added again later, it is not Next until someone says so
+        MK.update_entity(
+            c, actor, segment_id, properties={k: v for k, v in props.items() if k != "next"}, evidence_ids=ev
+        )
     MK.retire_entity(c, actor, segment_id)
     return {"id": segment_id, "removed": True}
 
@@ -169,25 +206,50 @@ def add_competitor(c, actor, text, company=""):
     if not name:
         raise Problem("validation", "Give a name or a site", 422)
     ev = _evidence(c, actor)
-    found = [r for r in MK._resolve_existing(c, name, [], {"domain": host} if host else {})
-             if r["status"] == "active" and r["type"] in ("company", "product") and r["id"] != MK.OWN_COMPANY_ID]
+    found = [
+        r
+        for r in MK._resolve_existing(c, name, [], {"domain": host} if host else {})
+        if r["status"] == "active" and r["type"] in ("company", "product") and r["id"] != MK.OWN_COMPANY_ID
+    ]
     if found:
         entity = found[0]
     else:
-        proof, _ = MK.create_evidence(c, actor, source_url=url, source_kind="site" if url else "other",
-                                      our_read="A competitor the owner named on the Strategy page.")
-        entity, _ = MK.create_entity(c, actor, type="company", name=name, external_ids={"domain": host} if host else None,
-                                     evidence_ids=[proof["id"]], force=True)
+        proof, _ = MK.create_evidence(
+            c,
+            actor,
+            source_url=url,
+            source_kind="site" if url else "other",
+            our_read="A competitor the owner named on the Strategy page.",
+        )
+        entity, _ = MK.create_entity(
+            c,
+            actor,
+            type="company",
+            name=name,
+            external_ids={"domain": host} if host else None,
+            evidence_ids=[proof["id"]],
+            force=True,
+        )
     if entity["id"] not in {x["id"] for x in competitors(c)}:
         today, _ = _days()
-        MK.create_edge(c, actor, src=entity["id"], rel="competes_with", dst=_own(c, actor, company, ev), since=today,
-                       evidence_ids=ev)
+        MK.create_edge(
+            c,
+            actor,
+            src=entity["id"],
+            rel="competes_with",
+            dst=_own(c, actor, company, ev),
+            since=today,
+            evidence_ids=ev,
+        )
     return {"id": entity["id"], "name": entity["name"], "url": _site(entity)}
 
 
 def remove_competitor(c, actor, entity_id):
-    edges = _current(c, "rel='competes_with' AND ((src=? AND dst=?) OR (src=? AND dst=?))",
-                     (entity_id, MK.OWN_COMPANY_ID, MK.OWN_COMPANY_ID, entity_id))
+    edges = _current(
+        c,
+        "rel='competes_with' AND ((src=? AND dst=?) OR (src=? AND dst=?))",
+        (entity_id, MK.OWN_COMPANY_ID, MK.OWN_COMPANY_ID, entity_id),
+    )
     if not edges:
         raise Problem("not_found", f"{entity_id} is not a competitor", 404)
     ev = _evidence(c, actor)
@@ -227,8 +289,9 @@ def install(app, store, auth, mutate):
         def work(c):
             writer(who)
             if who.role == "bot":
-                raise Problem("forbidden", "Only a person marks a segment Us or Next; propose it to the owner instead",
-                              403)
+                raise Problem(
+                    "forbidden", "Only a person marks a segment Us or Next; propose it to the owner instead", 403
+                )
             return target(c, who.actor, body.id, body.target, company())
 
         return mutate(request, body, work)

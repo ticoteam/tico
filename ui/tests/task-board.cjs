@@ -76,6 +76,15 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       if (p === '/api/me') return json(me);
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
+      if (p === '/api/v2/needs-you') {
+        // Needs you draws from this feed; held with the first task list so the first visit shows its skeleton.
+        if (!process.env.TICO_TAG_TEST_ONLY) await initialTasksGate;
+        const actor = 'human:' + me.id;
+        const items = tasks.filter(t => t.lane === 'company' && !['done', 'closed', 'declined'].includes(t.status)
+          && (t.owner_id === actor || t.waiting_on === actor || t.ask?.recipient_id === actor))
+          .map(t => ({...t, kind: t.ask ? 'question' : t.waiting_on ? 'waiting' : 'task'}));
+        return json({items, count: items.length, plate_count: items.length});
+      }
       if (p === '/api/humans') return json({people});
       if (p === '/api/v2/tasks/flow') {
         flowAsked.push(Object.fromEntries(url.searchParams));
@@ -189,13 +198,14 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       await page.setViewportSize({width, height: 900});
       const result = await page.evaluate(() => {
         const head = document.querySelector('.tl-head');
-        const items = ['h1', '.tl-search', '#task-new', '#task-view'].map(s => head.querySelector(s).getBoundingClientRect());
+        const items = ['h1', '.tl-search', '#task-new', '#task-view', '[data-go-through]']
+          .map(s => head.querySelector(s)).filter(el => el.checkVisibility()).map(el => el.getBoundingClientRect());
         return {tops: items.map(r => Math.round(r.top)), right: Math.max(...items.map(r => r.right)), edge: head.getBoundingClientRect().right,
-          search: items[1].width, overflow: head.scrollWidth > head.clientWidth + 1};
+          search: head.querySelector('.tl-search').getBoundingClientRect().width, overflow: head.scrollWidth > head.clientWidth + 1};
       });
       if (oneLine) assert(Math.max(...result.tops) - Math.min(...result.tops) <= 8, `${width}px toolbar wraps: ${JSON.stringify(result)}`);
       assert(result.right <= result.edge + 1 && !result.overflow, `${width}px toolbar overflows: ${JSON.stringify(result)}`);
-      assert(result.search >= 60, `${width}px search is too narrow: ${JSON.stringify(result)}`);
+      if (await page.locator('.tl-search').isVisible()) assert(result.search >= 60, `${width}px search is too narrow: ${JSON.stringify(result)}`);
     };
     await checkDesktopToolbar(1280);
     await checkDesktopToolbar(1000, false);
@@ -203,20 +213,32 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.setViewportSize({width: 1200, height: 900});
     // Labelled tabs (no icon-only buttons), the selected one marked for screen readers.
     assert.deepEqual(await page.locator('#task-view [role=tab]').evaluateAll(tabs => tabs.map(b => [b.firstChild.textContent, b.getAttribute('aria-selected')])),
-      [['Needs you', 'true'], ['Open', 'false'], ['Board', 'false'], ['Done', 'false'], ['Closed', 'false']]);
+      [['You', 'true'], ['Open', 'false'], ['Board', 'false']]);
+    assert.equal((await page.locator('#task-view-more').innerText()).trim(), 'More', 'Done and Closed are in More');
+    // New task is one + button, named for screen readers.
+    assert.equal((await page.locator('#task-new').innerText()).trim(), '');
+    assert.equal(await page.locator('#task-new').getAttribute('aria-label'), 'New task');
     assert.equal(await page.locator('#task-view .nav-icon').count(), 0);
+    assert.equal(await page.locator('.tl-type-search').isHidden(), true, 'You has no board or search cut');
+    assert.equal(await page.locator('.tl-filters').isHidden(), true);
+    // Open keeps the searchable toolbar and filters; check its layout and keyboard order too.
+    await page.locator('#task-view [data-view="list"]').click();
+    await checkDesktopToolbar(1280);
+    await checkDesktopToolbar(1000, false);
+    await checkDesktopToolbar(768, false);
+    await page.setViewportSize({width: 1200, height: 900});
     await page.locator('#task-q').focus();
     await page.keyboard.press('Tab');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'task-new');
-    await page.keyboard.press('Tab');
-    assert.equal(await page.evaluate(() => document.activeElement.id), 'task-who');
     await page.keyboard.press('Tab');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'task-filter');
     await page.locator('#task-q').focus();
     await page.keyboard.press('Shift+Tab');
     assert.equal(await page.evaluate(() => document.activeElement.dataset.taskType), 'general', 'the type selector precedes search');
     await page.keyboard.press('Shift+Tab');
-    assert.equal(await page.evaluate(() => document.activeElement.dataset.view), 'foryou', 'one tab stop for the view tabs');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'task-view-more', 'More follows the tabs');
+    await page.keyboard.press('Shift+Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.view), 'list', 'one tab stop for the view tabs');
     if (screenshotDir) await page.screenshot({path: path.join(screenshotDir, 'task-toolbar-desktop.png')});
 
     // List and Board are every open task again, by column; For you stays who needs me.
@@ -227,6 +249,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.waitForFunction(() => document.querySelectorAll('#task-body .bcol').length === 4 && document.querySelectorAll('#task-body .bcard').length === 3);
     if (screenshotDir) await page.screenshot({path: path.join(screenshotDir, 'task-board-kanban.png')});
     // Stats: status changes over time. A tile picks the charted stage; an owner row narrows to that owner.
+    await page.locator('#task-more').click();
+    assert.deepEqual(await page.locator('#task-filter-pop .tl-mi').allInnerTexts(), ['Stats', 'Pin to sidebar'], 'the ⋯ menu');
     await page.locator('#task-stats').click();
     await page.locator('#task-stats-dialog .flow-chart .flow-bar').first().waitFor();
     assert.equal(await page.locator('#task-stats-dialog .flow-col').count(), 12, 'twelve weeks by default');
@@ -261,10 +285,10 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.locator('#task-peek[open]').waitFor();
     assert.equal(await page.locator('#task-modal[open]').count(), 0, 'a card opens beside the board, not over it');
     await page.locator('#task-peek [data-modal-close]').click();
-    // Needs you: the tasks that wait on me, grouped by what they take; grouped by who asks, a way into that bot's chat.
+    // You: the tasks that wait on me, grouped by kind; grouped by who asks, a way into that bot's chat.
     await page.locator('#task-view [data-view="foryou"]').click();
     await page.locator('#task-body .tl-row').first().waitFor();
-    assert.equal(await page.locator('#task-group .v').innerText(), 'What it takes');
+    assert.equal(await page.locator('#task-group .v').innerText(), 'Kind');
     await page.locator('#task-group').click();
     await page.locator('[data-pick-group="requester"]').click();
     await page.locator('#task-body .tl-ghead a.tl-gchat').waitFor();
@@ -373,6 +397,9 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getComputedTiming().iterations === Infinity));
     await page.locator('#task-view [data-view="foryou"]').click();
     await page.locator('#task-body .tl').waitFor();
+    assert.equal(await page.locator('.tl-type-search').isHidden(), true);
+    assert.equal(await page.locator('.tl-filters').isHidden(), true);
+    await page.locator('#task-view [data-view="list"]').click();
     const mobile = await page.evaluate(() => {
       const head = document.querySelector('.tl-head');
       const rect = s => head.querySelector(s).getBoundingClientRect();
@@ -401,11 +428,18 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.locator('.tl-head h1').click();
     assert((await searchRow()).box <= 34, 'emptied, it is an icon again');
     // The filter bar scrolls sideways on a narrow phone: its edge fades while more is to the right, not at the end.
+    // On Open with two filter chips, the bar is wider than a 330px phone.
+    await page.evaluate(() => { TASKS_ST.filters = {...TASKS_ST.filters, owner: ['human:reviewer'], tag: ['quarterly-budget-review']}; tasksTools(TASKS_ST); });
     await page.setViewportSize({width: 330, height: 844});
-    await page.waitForFunction(() => document.querySelector('#task-bar').classList.contains('more'));
+    await page.waitForFunction(() => document.querySelector('#task-bar').classList.contains('more'), null, {timeout: t(5000)}).catch(async e => {
+      const bar = await page.locator('#task-bar').evaluate(b => ({cls: b.className, sw: b.scrollWidth, cw: b.clientWidth, sl: b.scrollLeft,
+        kids: [...b.children].map(k => `${k.className || k.id}:${k.hidden ? 'hidden' : Math.round(k.getBoundingClientRect().width)}`), view: TASKS_ST.view}));
+      throw new Error('narrow phone filter bar never fades: ' + JSON.stringify(bar), {cause: e});
+    });
     await page.locator('#task-bar').evaluate(bar => { bar.scrollLeft = bar.scrollWidth; });
     await page.waitForFunction(() => !document.querySelector('#task-bar').classList.contains('more'));
     await page.locator('#task-bar').evaluate(bar => { bar.scrollLeft = 0; });
+    await page.evaluate(() => { TASKS_ST.filters = {...TASKS_ST.filters, owner: [], tag: []}; tasksTools(TASKS_ST); });
     await page.setViewportSize({width: 375, height: 844});
     await page.locator('#task-filter').click();
     await page.waitForFunction(() => document.querySelector('#task-filter-pop').matches(':popover-open'));
@@ -428,7 +462,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
         {view, activeCount});
       assert.equal(await page.locator(`#task-view [data-view="${view}"]`).getAttribute('aria-selected'), 'true');
     }
-    // A view other than Needs you stays in the address, so a board link is stable; #/tasks/<id> opens the task.
+    // A view other than You stays in the address, so a board link is stable; #/tasks/<id> opens the task.
     await page.goto('http://tico-ui.test/#/tasks?view=board');
     await page.waitForFunction(() => TASKS_ST?.view === 'board');
     await page.waitForFunction(() => location.hash.includes('type='));    // the type is written into the address
@@ -553,7 +587,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       await page.goto('http://tico-ui.test/#/settings/tasks');
       const form = page.locator('#settings-tags [data-tag-create]');
       await form.waitFor();
-      await form.locator('.tag-advanced > summary').click();
+      // A settings refresh preserves Advanced, so open it only when it is shut.
+      if (!await form.locator('.tag-advanced').evaluate(d => d.open)) await form.locator('.tag-advanced > summary').click();
       return form;
     };
     let form = await newTag();
@@ -566,16 +601,21 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: quarterly-roadmap-review-for-the-platfor');
     await form.locator('button[type="submit"]').click();
     await page.waitForURL('**/#/tag/quarterly-roadmap-review-for-the-platfor');
+    await page.locator('[data-tag-heading]', {hasText: 'Quarterly roadmap review for the platform team now'}).waitFor();
     assert.equal(posted.at(-1).body.key, 'quarterly-roadmap-review-for-the-platfor');
     // A cut that lands on a word gap drops the hyphen, so the key is 39 characters and the server keeps it as posted.
     form = await newTag();
     await form.locator('input[name="label"]').fill('Notes on the customer interviews we ran in spring 2027');
-    assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: notes-on-the-customer-interviews-we-ran');
+    // The key line is written on input. Wait for the text rather than reading it once, so a redraw in between cannot fail the read.
+    await page.waitForFunction(() => document.querySelector('#settings-tags [data-tag-key-line]')?.innerText === 'Key: notes-on-the-customer-interviews-we-ran');
     await form.locator('input[name="key"]').fill('  Spring Interviews ');
     assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: spring-interviews', 'a typed key shows as it will be saved');
     assert.equal(await page.evaluate(() => tagKeyTyped('a'.repeat(39) + ' b')), 'a'.repeat(39), 'a typed key cut at a gap ends without a hyphen');
     await form.locator('button[type="submit"]').click();
     await page.waitForURL('**/#/tag/spring-interviews');
+    // The hash changes before the view transition draws the tag. Settle that page before changing fixtures or
+    // returning to Settings, where the previous form and starter can still be visible with their old tag list.
+    await page.locator('[data-tag-heading]', {hasText: 'Notes on the customer interviews we ran in spring 2027'}).waitFor();
     assert.equal(posted.at(-1).body.key, 'spring-interviews');
     for (const key of ['quarterly-roadmap-review-for-the-platfor', 'spring-interviews']) tags.splice(tags.findIndex(tag => tag.key === key), 1);
 
@@ -585,6 +625,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       // The Tasks tab is remembered. Clicking it again starts a second tag-list render that
       // can replace the starter button between pointer down and pointer up.
       await page.goto('http://tico-ui.test/#/settings/tasks');
+      await page.locator('#settings-tags .tags-empty').waitFor();
       await page.locator('#settings-tags [data-release-starter]').waitFor();
     };
     await settingsTags();

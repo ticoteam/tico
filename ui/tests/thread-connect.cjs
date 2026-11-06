@@ -1,6 +1,7 @@
-// Slack links per role, at desktop and phone width (ui/app/thread-connect.js, ui/app/connections.js), against fakes of
+// Slack links per role, at desktop and phone width (ui/app/thread-connect.js, Slack's page under Tools in
+// ui/app/redesign-library.js), against fakes of
 // /api/v2/slack/links (backend/slack_threads.py):
-// - an admin links a thread to a Slack channel from Library › Connections, pages the links, checks a suspended one
+// - an admin links a thread to a Slack channel from Tools › Slack, pages the links, checks a suspended one
 //   again, unlinks one, and reads the API's refusal inline;
 // - a person who is not an admin sees no Slack section, never asks for links, and gets no Slack in a thread's sheet;
 // - an admin who is not the owner sees the Slack section and the thread's Slack form;
@@ -57,7 +58,8 @@ async function open(browser, who, {viewport = DESKTOP} = {}) {
     if (p === '/api/employees') return json([]);
     if (p === '/api/humans') return json({people: Object.values(PEOPLE).map(({id, name, email}) => ({id, name, email}))});
     if (p === '/api/v2/events') return route.abort();
-    if (p === '/api/v2/connections') return json({connections: [], next: null});
+    if (p === '/api/v2/tools') return json({integrations: []});
+    if (p.startsWith('/api/v2/tools/')) return json({service: decodeURIComponent(p.split('/').pop()), title: 'Slack', access: '', writes: 'read', owner: 'tico', declared_as: '', body: '', queries: [], learnings: [], read_only: true});
     // Threads: the sidebar list, one thread, its timeline.
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: [], threads: state.threads, dms: [], next_cursor: null});
     const single = p.match(/^\/api\/v2\/threads\/([^/]+)$/);
@@ -112,9 +114,8 @@ async function sheet(page) {
   await page.goto('https://tico-ui.test/#/thread/t-plan');
   await page.getByText('We are ready on our side.').waitFor();
   await page.locator('[data-thv-menu]').click();
-  await page.locator('.thv-pop').getByText('Who can read').click();
-  await page.locator('#thread-share[open]').waitFor();
-  return page.locator('#thread-share');
+  await page.locator('#thread-settings[open]').waitFor();
+  return page.locator('#thread-settings');
 }
 
 (async () => {
@@ -123,11 +124,11 @@ async function sheet(page) {
     for (const viewport of [DESKTOP, PHONE]) {
       const tag = viewport === PHONE ? 'phone' : 'desktop';
 
-      // ---- The owner on Library › Connections: Slack.
+      // ---- The owner on Tools › Slack: its linked threads.
       {
         const {page, seen} = await open(browser, 'ana', {viewport});
-        await page.goto('https://tico-ui.test/#/library/connections');
-        const slack = page.locator('#cn-slack');
+        await page.goto('https://tico-ui.test/#/tools/slack');
+        const slack = page.locator('#tool-slack-links');
         await slack.locator('[data-link="sl2"]').waitFor();
         assert.match(await slack.locator('[data-link="sl1"] .cn-name').textContent(), /Marketing → #marketing/, `${tag}: thread → #channel`);
         assert.match(await slack.locator('[data-link="sl1"] .cn-status').textContent(), /Live/);
@@ -140,7 +141,7 @@ async function sheet(page) {
         assert.equal(await slack.locator('.cn-xmore').isHidden(), true, `${tag}: nothing more`);
         // Resume a suspended link, then unlink a live one.
         await slack.locator('[data-link="sl2"] [data-slack-resume]').click();
-        await page.waitForFunction(() => /Waiting/.test(document.querySelector('#cn-slack [data-link="sl2"] .cn-status')?.textContent || ''));
+        await page.waitForFunction(() => /Waiting/.test(document.querySelector('#tool-slack-links [data-link="sl2"] .cn-status')?.textContent || ''));
         await slack.locator('[data-link="sl1"] [data-slack-unlink]').click();
         await slack.locator('[data-link="sl1"]').waitFor({state: 'detached'});
         assert.ok(seen.calls.includes('DELETE /api/v2/slack/links/sl1'));
@@ -153,11 +154,11 @@ async function sheet(page) {
         await slack.locator('[name=thread]').selectOption('t-plan');
         await slack.locator('[name=channel]').fill('#general');
         await slack.locator('[data-cn-link]').click();
-        await page.waitForFunction(() => /already linked/.test(document.querySelector('#cn-slack .cn-err')?.textContent || ''));
+        await page.waitForFunction(() => /already linked/.test(document.querySelector('#tool-slack-links .cn-err')?.textContent || ''));
         await slack.locator('[name=channel]').fill('#launch');
         await slack.locator('[name=history]').check();
         await slack.locator('[data-cn-link]').click();
-        await page.waitForFunction(() => /Launch plan → #launch/.test(document.querySelector('#cn-slack .cn-list')?.textContent || ''));
+        await page.waitForFunction(() => /Launch plan → #launch/.test(document.querySelector('#tool-slack-links .cn-list')?.textContent || ''));
         assert.deepEqual(seen.linked, {thread_id: 't-plan', channel: '#launch', history: true});
         assert.equal(await slack.locator('.cn-err').textContent(), '', `${tag}: the refusal clears`);
 
@@ -170,9 +171,9 @@ async function sheet(page) {
       // ---- A person who is neither admin nor owner: no sections, no calls, nothing in a thread's sheet.
       {
         const {page, seen} = await open(browser, 'bob', {viewport});
-        await page.goto('https://tico-ui.test/#/library/connections');
-        await page.locator('#cn-root .cn-none').waitFor();
-        assert.equal(await page.locator('#cn-slack').isHidden(), true, `${tag}: no Slack section`);
+        await page.goto('https://tico-ui.test/#/tools/slack');
+        await page.locator('#int-detail h1').waitFor();
+        assert.equal(await page.locator('#tool-slack-links').isHidden(), true, `${tag}: no Slack section`);
         // Bob started the thread, so he may open its sheet; Slack is not his to change.
         const dlg = await sheet(page);
         assert.equal(await dlg.locator('[data-tcn="slack"]').count(), 0, `${tag}: no Slack`);
@@ -185,8 +186,8 @@ async function sheet(page) {
       // ---- An admin who is not the owner: Slack.
       {
         const {page, seen} = await open(browser, 'cara', {viewport});
-        await page.goto('https://tico-ui.test/#/library/connections');
-        await page.locator('#cn-slack [data-link="sl1"]').waitFor();
+        await page.goto('https://tico-ui.test/#/tools/slack');
+        await page.locator('#tool-slack-links [data-link="sl1"]').waitFor();
         const dlg = await sheet(page);
         await dlg.locator('[data-tcn="slack"] [name=tcn-channel]').waitFor();
         assert.deepEqual(seen.errors, []);
@@ -197,9 +198,9 @@ async function sheet(page) {
       {
         const {page, seen, state} = await open(browser, 'ana', {viewport});
         state.slackOff = true; state.links = [];
-        await page.goto('https://tico-ui.test/#/library/connections');
-        await page.locator('#cn-slack .cn-none').waitFor();
-        assert.equal(await page.locator('#cn-slack [data-cn-open]').isHidden(), true, `${tag}: no Link a thread`);
+        await page.goto('https://tico-ui.test/#/tools/slack');
+        await page.locator('#tool-slack-links .cn-none').waitFor();
+        assert.equal(await page.locator('#tool-slack-links [data-cn-open]').isHidden(), true, `${tag}: no Link a thread`);
         const dlg = await sheet(page);
         await page.waitForLoadState('networkidle');
         assert.equal(await dlg.locator('[name=tcn-channel]').count(), 0, `${tag}: no Slack form with Slack off`);

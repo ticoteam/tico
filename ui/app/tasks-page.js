@@ -45,12 +45,12 @@ function pageTasks(forced, openId = '') {
   main.innerHTML = `<div class="tasks-page"><div class="tasks-pane" id="tasks-pane">
       <header class="tl-head">
         <h1>Tasks</h1>
-        <div class="tl-tabs" id="task-view" role="tablist" aria-label="Task views"></div>
+        <div class="tl-views"><div class="tl-tabs" id="task-view" role="tablist" aria-label="Task views"></div><span id="task-view-more-wrap"></span></div>
         <span class="spacer"></span>
         <div class="tl-type-search"><div class="tl-types" id="task-type" role="group" aria-label="Task type"></div>
         <div class="tl-search">${TL_ICON.search}<input type="search" id="task-q" spellcheck="false" aria-label="Search tasks" placeholder="Search" autocomplete="off"><kbd aria-hidden="true">/</kbd></div></div>
         <button type="button" class="tl-decide tl-decide-head" data-go-through hidden></button>
-        <button class="primary tl-new" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}<span>New task</span></button>
+        <button class="primary tl-new" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}</button>
       </header>
       <div class="tl-bar" id="task-bar">
         <span class="tl-who-wrap" id="task-who-wrap" hidden></span>
@@ -59,8 +59,7 @@ function pageTasks(forced, openId = '') {
           <button type="button" class="linkish tl-clear" id="task-filter-clear" hidden>Clear</button></div>
         <span class="spacer"></span>
         <button type="button" class="tl-decide tl-decide-bar" data-go-through hidden></button>
-        ${S.me?.role === 'bot' ? '' : `<button type="button" class="tl-addf tl-ic" id="task-stats" aria-label="Task stats" title="Task stats">${TL_ICON.chart}</button>`}
-        <button type="button" class="tl-addf tl-ic tl-pin" id="task-pin" aria-pressed="false" aria-label="Pin to the sidebar" title="Pin to the sidebar">${TL_ICON.pin}</button>
+        <button type="button" class="tl-addf tl-ic" id="task-more" aria-haspopup="menu" aria-expanded="false" aria-label="More" title="More">${TL_ICON.dots}</button>
         <button type="button" class="tl-addf tl-selmode" id="task-select-mode" aria-pressed="false" hidden>Select</button>
         <span class="tl-groupby" id="task-group-wrap"></span>
       </div>
@@ -71,16 +70,20 @@ function pageTasks(forced, openId = '') {
     <div id="task-filter-pop" class="tl-pop" popover></div><div id="task-card-pops"></div>`;
   const bar = $('#task-bar');
   bar.onscroll = () => tasksBarEdge(bar);
-  if (window.ResizeObserver) new ResizeObserver(() => tasksBarEdge(bar)).observe(bar);
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => tasksBarEdge(bar)).observe(bar);
+    // A narrower row moves tabs into More; measured on the next frame, outside the observer's own delivery.
+    new ResizeObserver(() => requestAnimationFrame(() => tasksTabsFit(state, true))).observe($('#tasks-pane .tl-head'));
+  }
   $('#task-type').onclick = ev => {
     const button = ev.target.closest('[data-task-type]');
     if (button) taskPipelineSelect(state, button.dataset.taskType);
     else if (ev.target.closest('#task-type-more')) taskPipelineMenu(state, $('#task-type-more'));
   };
-  $('#task-pin').onclick = () => tasksPinToggle(state);
-  // Go through: the Needs you cards from the first, one at a time (decide.js).
+  $('#task-more').onclick = ev => tasksMoreMenu(state, ev.currentTarget);
+  $('#task-view-more-wrap').onclick = ev => { const b = ev.target.closest('#task-view-more'); if (b) tasksViewsMenu(state, b); };
+  // Catch up: the Needs you cards from the first, one at a time (decide.js).
   for (const b of document.querySelectorAll('#tasks-pane [data-go-through]')) b.onclick = () => decideGoThrough();
-  $('#task-stats')?.addEventListener('click', () => taskStatsOpen(state));
   $('#task-new').onclick = () => { const p = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); };
   const search = $('#task-q');
   search.oninput = () => {
@@ -106,7 +109,7 @@ function pageTasks(forced, openId = '') {
     tasksSetView(state, b.dataset.view);
   };
   tabs.onkeydown = ev => {
-    const list = [...tabs.querySelectorAll('[role=tab]')], at = list.indexOf(document.activeElement);
+    const list = [...tabs.querySelectorAll('[role=tab]:not([hidden])')], at = list.indexOf(document.activeElement);
     if (at < 0) return;
     const to = {ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: list.length - 1}[ev.key];
     if (to == null) return;
@@ -148,7 +151,7 @@ function pageTasks(forced, openId = '') {
   pop.addEventListener('keydown', tasksMenuKeys);
   pop.addEventListener('toggle', ev => {
     if (ev.newState !== 'closed') return;
-    $('#task-type-more')?.setAttribute('aria-expanded', 'false');
+    for (const id of ['#task-type-more', '#task-view-more', '#task-more']) $(id)?.setAttribute('aria-expanded', 'false');
     const anchor = state.menuAnchor; state.menuAnchor = null;
     if (anchor?.isConnected && (pop.contains(document.activeElement) || document.activeElement === document.body)) anchor.focus();
   });
@@ -229,13 +232,13 @@ function tasksKeep(state) {
   S.lastRead.tasks = {key: activeTasksPath(), tasks: state.tasks, labels: state.labels, tags: state.tags, filtered: state.filtered,
     since: state.activeComplete ? state.since : null, fullAt: state.fullAt};
 }
-function taskOwnerOptions(selected = '') {
+function taskOwnerOptions(selected = '', blank = 'Who is this for?') {
   const people = (S.people || []).filter(p => !p.hidden)
     .slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
   const bots = (S.emps || []).filter(e => e.status !== 'archived' && (!isHiddenBot(e.id) || [e.id, 'bot:' + e.id].includes(selected)))
     .slice().sort((a, b) => byBotOrder(a, b) || String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
   const pick = value => value === selected ? ' selected' : '';
-  return `<option value="">Who is this for?</option>
+  return `<option value="">${esc(blank)}</option>
     <optgroup label="Humans">${people.map(p =>
       `<option value="human:${esc(p.id)}"${pick('human:' + p.id) || pick(p.id)}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
     <optgroup label="Bots">${bots.map(e =>
@@ -284,6 +287,7 @@ function openTaskCreate(owner = '', opts = {}) {
         <div class="r3">
           <label>Tags <input type="text" name="labels" list="task-label-list-new" placeholder="bug, pricing-page" aria-label="Tag keys, comma separated" size="18" value="${esc((opts.labels || []).join(', '))}"><datalist id="task-label-list-new">${(TASKS_ST?.labels || []).map(l => `<option value="${esc(l)}">`).join('')}</datalist></label>
           <label><input type="checkbox" name="top"> Top of their queue</label>
+          <label><input type="checkbox" name="follow"> Follow</label>
         </div>
         <label>Serves <select name="goal" aria-label="The goal this task serves"><option value="">No goal</option></select></label>
         <label>Details (required)<textarea name="body" required aria-label="Details" placeholder="Details"></textarea></label>
@@ -324,6 +328,7 @@ function openTaskCreate(owner = '', opts = {}) {
     const labels = form.labels.value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
     if (labels.length) payload.labels = labels;
     if (form.top.checked) payload.top = true;
+    if (form.elements.follow.checked) payload.follow = true;
     if (form.link.value.trim()) payload.links = [form.link.value.trim()];
     if (parent) payload.relations = [{task: parent.id, kind: 'parent'}];
     try {
@@ -376,7 +381,10 @@ async function tasksRead(state, opts = {}) {
   state.loading = !state.kept && !(state.tasks || []).some(t => !['done', 'closed'].includes(String(t.status)));
   if (!cursor) tasksRender(state);
   const others = () => [v2Get('/v2/tasks/labels'),
-    taskTypesLoad().then(t => { state.typesLoaded = true; return t; }).catch(() => TASK_TYPES)];
+    taskTypesLoad().then(t => { state.typesLoaded = true; return t; }).catch(() => TASK_TYPES),
+    // A load after a save also reads the personal queue: its membership comes from the feed, including other boards.
+    // The first load and polls already read it in refresh(), alongside the task request.
+    ...(state.read && !opts.poll ? [v2NeedsRead()] : [])];
   let changed = null, active = null, lab, held = null;
   const seen = new Set(), isFinished = t => ['done', 'closed'].includes(String(t.status));
   if (cursor) {
@@ -410,7 +418,6 @@ async function tasksRead(state, opts = {}) {
   state.loading = false; state.read = true;
   tasksTypeCheck(state);
   tasksTools(state); tasksRender(state);
-  if (tasksNeedsQueue(state)) void askFilteredLoad(state);
   tasksFilterMenuLoaded(state);
   tasksPeekSync(state);
   tasksFinishPending(state, seq);
@@ -547,7 +554,8 @@ function companyNeedGroups(items) {
   const needById = new Map((S.v2.needs || []).map(item => [String(item.id), item]));
   const groups = new Map();
   for (const it of items) {
-    if (!it.task || it.col === 'done' || !taskNeedsViewer(it.task)) continue;
+    // The server's queue already includes every counted task, including bot-owned escalations to their manager.
+    if (!it.task) continue;
     const need = needById.get(String(it.id)), actor = companyNeedActor(it.task, need);
     if (!groups.has(actor)) groups.set(actor, {actor, items: [], firstNeed: Infinity, firstRank: Infinity, updated_at: ''});
     const group = groups.get(actor);
@@ -559,7 +567,7 @@ function companyNeedGroups(items) {
   return [...groups.values()].sort((a, b) => a.firstNeed - b.firstNeed || a.firstRank - b.firstRank
     || String(b.updated_at).localeCompare(String(a.updated_at)) || actorLabel(a.actor).localeCompare(actorLabel(b.actor)));
 }
-function tasksTabsPaint(state) { tasksPaint($('#task-view'), tasksTabsHTML(state)); }
+function tasksTabsPaint(state) { const painted = tasksPaint($('#task-view'), tasksTabsHTML(state)); tasksTabsFit(state, painted); }
 // The body redraws on every load (the 30-second poll reloads the list): only rows that changed are replaced, so the
 // focus, the scroll, the cursor, the selection and the open peek all stay. A hidden row leaves the selection.
 // A `data-patch-key` node keeps what the person did in it (opened, typed) through redraws. With a `data-patch-sig` its
@@ -622,14 +630,14 @@ function tasksRender(state) {
     : active.id === 'board-more' ? '#board-more' : active.matches('[data-clear-filters]') ? '[data-clear-filters]' : '';
   decidePaintButton();
   el.dataset.view = state.view;
-  el.setAttribute('role', 'tabpanel'); el.setAttribute('aria-labelledby', 'task-tab-' + state.view);
+  el.setAttribute('role', 'tabpanel');
   const items = taskItems(state);
   let html = state.loading && !tasksFinishedView(state.view) && !items.length
     ? skelRows(6)
     : tasksFinishedView(state.view) ? tasksDoneHTML(items, state)
     : state.view === 'board' ? tasksBoardHTML(items, state)
     : tasksListHTML(items, state);
-  // Needs you holds the server's list a page at a time: its order, groups, approvals and questions come with each page.
+  // The whole-list count includes unread pages, which load as the list scrolls or through Show more.
   const paged = tasksNeedsQueue(state) && !state.loading;
   if (paged) html += needsMoreButton();
   tasksPatch(el, html);

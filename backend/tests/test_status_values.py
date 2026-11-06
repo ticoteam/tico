@@ -1,5 +1,6 @@
 """The status and state lists (backend/status_values.py): refused outside the list, one spelling per meaning, and an
 upgrade that names what it cannot map rather than guessing."""
+
 import importlib
 import sqlite3
 
@@ -20,7 +21,7 @@ def _fresh_store(tmp_path):
 
 
 # Columns whose CHECK wants a real value, not a placeholder.
-OVERRIDES = {("fin_payments", "method"): "ach", ("bot_config", "config"): "{}", ("fin_cards", "kind"): "standing"}
+OVERRIDES = {("fin_payments", "method"): "ach", ("fin_cards", "kind"): "standing"}
 
 
 def _required(conn, table, skip):
@@ -60,27 +61,41 @@ def test_a_value_outside_the_list_is_refused(db, table, column, enforce):
             assert f"status_values_{column}" in message
 
 
-@pytest.mark.parametrize("table,column,value", [
-    ("jobs", "state", "canceled"), ("webhook_sends", "state", "canceled"),
-    ("fin_payments", "status", "canceled"), ("fin_transfers", "status", "canceled"),
-    ("tasks", "status", "doing"), ("attempts", "state", "input"), ("automation_runs", "status", "held"),
-    ("bots", "state", "archived"), ("goals", "status", "gray"), ("approvals", "decision", "withdrawn"),
-    ("bot_status", "state", "waiting_bot"), ("bot_config", "onboarding_state", "needs_setup"),
-])
+@pytest.mark.parametrize(
+    "table,column,value",
+    [
+        ("jobs", "state", "canceled"),
+        ("webhook_sends", "state", "canceled"),
+        ("fin_payments", "status", "canceled"),
+        ("fin_transfers", "status", "canceled"),
+        ("tasks", "status", "doing"),
+        ("attempts", "state", "input"),
+        ("automation_runs", "status", "held"),
+        ("bots", "state", "archived"),
+        ("goals", "status", "gray"),
+        ("approvals", "decision", "withdrawn"),
+        ("bot_status", "state", "waiting_bot"),
+        ("bot_config", "onboarding_state", "needs_setup"),
+    ],
+)
 def test_a_listed_value_is_accepted(db, table, column, value):
     with sqlite3.connect(db, isolation_level=None) as conn:
         conn.execute("PRAGMA foreign_keys=OFF")
         values = _required(conn, table, column)
         values[column] = value
-        conn.execute(f"INSERT INTO {table} ({', '.join(values)}) VALUES ({', '.join('?' for _ in values)})",
-                     tuple(values.values()))
+        conn.execute(
+            f"INSERT INTO {table} ({', '.join(values)}) VALUES ({', '.join('?' for _ in values)})",
+            tuple(values.values()),
+        )
 
 
 def test_the_cancelled_spelling_is_refused_on_a_fresh_file(db):
     with sqlite3.connect(db, isolation_level=None) as conn:
         conn.execute("PRAGMA foreign_keys=OFF")
         with pytest.raises(sqlite3.IntegrityError, match="jobs.state: invalid value"):
-            conn.execute("INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES('j1','m1','b1','cancelled','t')")
+            conn.execute(
+                "INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES('j1','m1','b1','cancelled','t')"
+            )
 
 
 def test_a_fresh_file_is_at_the_current_version_with_the_lists_installed(db):
@@ -93,6 +108,7 @@ def test_a_fresh_file_is_at_the_current_version_with_the_lists_installed(db):
 
 
 # The upgrade, on small hand-made tables (what an existing file held before migration 0002).
+
 
 def _old_file(path):
     conn = sqlite3.connect(path, isolation_level=None)
@@ -120,9 +136,10 @@ def _upgrade_as_migrate_runs_it(conn):
 
 def test_the_upgrade_keeps_values_it_cannot_map_logs_them_and_still_guards_new_writes(tmp_path, caplog):
     conn = _old_file(tmp_path / "old.db")
-    conn.executemany("INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,?,?)",
-                     [("j1", "m", "b", "queued", "t"), ("j2", "m", "b", "stalled", "t"),
-                      ("j3", "m", "b", "cancelled", "t")])
+    conn.executemany(
+        "INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,?,?)",
+        [("j1", "m", "b", "queued", "t"), ("j2", "m", "b", "stalled", "t"), ("j3", "m", "b", "cancelled", "t")],
+    )
     with caplog.at_level("WARNING", logger="backend.status_values"):
         _upgrade_as_migrate_runs_it(conn)
     assert "jobs.state = 'stalled' (1 rows)" in caplog.text
@@ -146,7 +163,10 @@ def test_a_check_column_with_an_unknown_value_keeps_its_rows_and_gets_no_check(t
         INSERT INTO bots VALUES('a','active'),('b','hibernating');
     """)
     _upgrade_as_migrate_runs_it(conn)
-    assert conn.execute("SELECT slug,state FROM bots ORDER BY slug").fetchall() == [("a", "active"), ("b", "hibernating")]
+    assert conn.execute("SELECT slug,state FROM bots ORDER BY slug").fetchall() == [
+        ("a", "active"),
+        ("b", "hibernating"),
+    ]
     assert "status_values_state" not in conn.execute("SELECT sql FROM sqlite_master WHERE name='bots'").fetchone()[0]
     # Once the row is fixed, the next enforce (every start) adds the CHECK.
     conn.execute("UPDATE bots SET state='paused' WHERE slug='b'")
@@ -157,8 +177,10 @@ def test_a_check_column_with_an_unknown_value_keeps_its_rows_and_gets_no_check(t
 
 def test_the_upgrade_rewrites_cancelled_and_refuses_it_afterwards(tmp_path):
     conn = _old_file(tmp_path / "old.db")
-    conn.executemany("INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,?,?)",
-                     [("j1", "m", "b", "queued", "t"), ("j2", "m", "b", "cancelled", "t")])
+    conn.executemany(
+        "INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,?,?)",
+        [("j1", "m", "b", "queued", "t"), ("j2", "m", "b", "cancelled", "t")],
+    )
     _upgrade_as_migrate_runs_it(conn)
     assert conn.execute("SELECT state FROM jobs ORDER BY id").fetchall() == [("queued",), ("canceled",)]
     with pytest.raises(sqlite3.IntegrityError, match="jobs.state: invalid value"):
@@ -196,37 +218,46 @@ def test_a_stale_needs_onboarding_row_maps_to_needs_setup_and_bot_status_keeps_i
     """)
     _upgrade_as_migrate_runs_it(conn)
     assert conn.execute("SELECT bot,onboarding_state FROM bot_config ORDER BY bot").fetchall() == [
-        ("ready", "onboarded"), ("starter", "needs_setup")]
+        ("ready", "onboarded"),
+        ("starter", "needs_setup"),
+    ]
     assert conn.execute("SELECT bot,state FROM bot_status ORDER BY bot").fetchall() == [
-        ("starter", "idle"), ("stuck", "limited")]
+        ("starter", "idle"),
+        ("stuck", "limited"),
+    ]
     with pytest.raises(sqlite3.IntegrityError, match="status_values_state"):
         conn.execute("UPDATE bot_status SET state='active' WHERE bot='stuck'")
 
 
 def test_migration_0032_moves_every_stored_cancelled_and_skips_what_this_file_lacks(tmp_path):
     from backend.migrations import renames_data
+
     canceled = importlib.import_module("backend.migrations.0032_one_spelling_canceled")
     conn = sqlite3.connect(tmp_path / "old.db")
-    tables = {(table, column) for table, column in canceled.COLUMNS if table != "bot_transitions"}   # one table absent
+    tables = {(table, column) for table, column in canceled.COLUMNS if table != "bot_transitions"}  # one table absent
     for table in {table for table, _column in tables}:
         columns = [column for t, column in tables if t == table]
         conn.execute(f"CREATE TABLE {table}(id TEXT, {', '.join(columns)})")
         for column in columns:
-            conn.executemany(f"INSERT INTO {table}(id,{column}) VALUES(?,?)", [("old", "cancelled"), ("kept", "failed")])
+            conn.executemany(
+                f"INSERT INTO {table}(id,{column}) VALUES(?,?)", [("old", "cancelled"), ("kept", "failed")]
+            )
     conn.execute("INSERT INTO seats(id,request_state) VALUES('going','cancelling')")
-    conn.execute("CREATE TABLE fin_feed_txns(id TEXT, provider_status TEXT)")        # Mercury's word stays as sent
+    conn.execute("CREATE TABLE fin_feed_txns(id TEXT, provider_status TEXT)")  # Mercury's word stays as sent
     conn.execute("INSERT INTO fin_feed_txns VALUES('t','cancelled')")
     conn.execute("CREATE TABLE notes(id TEXT, cancelled_at TEXT, cancelled_by TEXT)")
     conn.execute("INSERT INTO notes VALUES('n','2026-01-01T00:00:00Z','human:ana')")
     conn.execute("CREATE TABLE events(action TEXT)")
     conn.executemany("INSERT INTO events VALUES(?)", [(old,) for old in canceled.EVENTS] + [("task.create",)])
     conn.execute("DROP TABLE fin_cards")
-    conn.execute("CREATE TABLE fin_cards(id TEXT, provider_status TEXT, status TEXT NOT NULL DEFAULT 'active' "
-                 "CHECK (status IN ('active','frozen','cancelled')))")
+    conn.execute(
+        "CREATE TABLE fin_cards(id TEXT, provider_status TEXT, status TEXT NOT NULL DEFAULT 'active' "
+        "CHECK (status IN ('active','frozen','cancelled')))"
+    )
     conn.execute("INSERT INTO fin_cards VALUES('c','cancelled','cancelled')")
 
     canceled.up(conn)
-    canceled.up(conn)     # a repeat changes nothing
+    canceled.up(conn)  # a repeat changes nothing
 
     for table, column in tables:
         values = {row[0] for row in conn.execute(f"SELECT {column} FROM {table}")}

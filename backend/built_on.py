@@ -19,10 +19,12 @@ def remember(c, bot, runner_id):
         return
     if not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone():
         return
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value "
-              "WHERE NOT EXISTS (SELECT 1 FROM runners WHERE revoked_at IS NULL "
-              "AND id=json_extract(registry_metadata.value, '$.runner_id'))",
-              (PREFIX + bot, encode({"runner_id": runner_id, "at": H.now()})))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value "
+        "WHERE NOT EXISTS (SELECT 1 FROM runners WHERE revoked_at IS NULL "
+        "AND id=json_extract(registry_metadata.value, '$.runner_id'))",
+        (PREFIX + bot, encode({"runner_id": runner_id, "at": H.now()})),
+    )
 
 
 def computer(c, bot):
@@ -34,7 +36,7 @@ def computer(c, bot):
     runner_id = (H._json(row["value"], {}) or {}).get("runner_id") if row else None
     if not runner_id:
         return None
-    return c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
+    return c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
 
 
 def forget(c, bot):

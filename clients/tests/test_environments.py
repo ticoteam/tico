@@ -20,15 +20,19 @@ class Base(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        patch = mock.patch.dict(os.environ, {"TICO_ENVIRONMENTS_DIR": str(self.root / "environments"),
-                                             "HOME": str(self.root / "home")})
+        patch = mock.patch.dict(
+            os.environ, {"TICO_ENVIRONMENTS_DIR": str(self.root / "environments"), "HOME": str(self.root / "home")}
+        )
         patch.start()
         self.addCleanup(patch.stop)
         (self.root / "home").mkdir()
         self.seeded = []
         self.real_seed = ENV.seed_database
-        seed = mock.patch.object(ENV, "seed_database",
-                                 lambda directory, workspace, values, **kw: self.seeded.append(values) or ["coo", "sales"])
+        seed = mock.patch.object(
+            ENV,
+            "seed_database",
+            lambda directory, workspace, values, **kw: self.seeded.append(values) or ["coo", "sales"],
+        )
         seed.start()
         self.addCleanup(seed.stop)
 

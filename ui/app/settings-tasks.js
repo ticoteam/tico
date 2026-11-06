@@ -1,17 +1,17 @@
 /* ui/app/settings-tasks.js — Settings > Tasks: what bots may put on you
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
-// What bots may put on you (backend/ask_ingest.py): your own Off / Rehearsal / On, how many open items you take before
-// the filter tightens, the chores budget and your lines; an owner or admin also sets the team default everyone starts
+// What bots may put on you (backend/ask_ingest.py): your own Off or On, how many open items you take before
+// the check tightens and your criteria; an owner or admin also sets the team default everyone starts
 // from. A change applies to the next item; nothing already on a plate moves.
 const ASK_FILTER_MODES = [['off', 'Off', 'Bots put things on you as before.'],
-  ['rehearsal', 'Rehearsal', 'Nothing changes; Filtered for you lists what On would have kept off.'],
-  ['on', 'On', 'Over your budget, bots keep what doesn’t meet your lines; you can let any of it through.']];
+  ['on', 'On', 'Asks that don’t meet your criteria are refused.']];
 let ASK_FILTER = null;
 async function askFilterSettingsLoad() {
   const el = $('#set-ask-filter'); if (!el) return;
   const r = await v2Get('/v2/ask-ingest/settings');
-  if (!r?.settings) { $('#set-ask-filter-card').hidden = true; return; }
+  // Settings may have been left while this was read.
+  if (!r?.settings) { const card = $('#set-ask-filter-card'); if (card) card.hidden = true; return; }
   ASK_FILTER = {...r, editing: ASK_FILTER?.editing || 'mine'};
   askFilterSettingsPaint();
 }
@@ -25,10 +25,9 @@ function askFilterSettingsPaint() {
       <button type="button" role="radio" aria-checked="${team}" data-ask-filter-edit="team">Team default</button></div>` : ''}
     <p class="settings-cell-note">${team ? 'Everyone without their own settings uses these.'
       : mine.own ? 'Your own settings.' : 'You use the team default until you save your own.'}</p>
-    <fieldset class="ask-filter-modes"><legend>Filter</legend>${ASK_FILTER_MODES.map(([k, label, help]) =>
+    <fieldset class="ask-filter-modes"><legend>Mode</legend>${ASK_FILTER_MODES.map(([k, label, help]) =>
       `<label><input type="radio" name="mode" value="${k}"${v.mode === k ? ' checked' : ''}> <b>${esc(label)}</b> <span class="muted">${esc(help)}</span></label>`).join('')}</fieldset>
     <label>Open items before it tightens <input type="number" name="budget" min="1" max="200" value="${esc(v.budget)}" required></label>
-    <label>Hands-only chores at a time <input type="number" name="chores_budget" min="1" max="100" value="${esc(v.chores_budget)}" required></label>
     <label>What you want to be asked about, one per line (up to 10)
       <textarea name="criteria" rows="6">${esc((v.criteria || []).join('\n'))}</textarea></label>
     <div class="row"><button class="primary" type="submit">Save</button>
@@ -52,14 +51,21 @@ function askFilterSettingsPaint() {
   form.onsubmit = async ev => {
     ev.preventDefault();
     const f = new FormData(form);
-    const body = {mode: f.get('mode'), budget: Number(f.get('budget')), chores_budget: Number(f.get('chores_budget')),
+    const body = {mode: f.get('mode'), budget: Number(f.get('budget')),
       criteria: String(f.get('criteria') || '').split('\n').map(s => s.trim()).filter(Boolean), team};
     msg.textContent = 'Saving…';
     try { await put('/v2/ask-ingest/settings', body); toast('Saved; the next item uses it'); await askFilterSettingsLoad(); }
     catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
   };
 }
-const ASK_REPLAY_WOULD = {through: 'Reaches you', hands: 'Hands needed', fyi: 'FYI', sent_back: 'Sent back', merged: 'Merged', failed_open: 'Reaches you (no answer)'};
+const ASK_REPLAY_WHY = {
+  status: 'A progress note: post it as an update', covered: 'Same as one you already have open',
+  unclear: 'Doesn’t say what to decide', own_work: 'Work a bot can do itself',
+  criteria: 'Over your budget and meets none of your lines',
+  recommends: 'Needs one of your criteria and a recommendation',
+  urgent_only: 'Your plate is full and it isn’t urgent',
+};
+const ASK_REPLAY_WOULD = {through: 'Reaches you', fyi: 'Refused: post an update', sent_back: 'Refused', merged: 'Merged', failed_open: 'Reaches you (no answer)'};
 // One day replayed a page at a time (POST /v2/ask-ingest/replay); what would stay off the plate leads.
 async function askFilterReplay(form) {
   const msg = $('[data-ask-replay-msg]', form), list = $('.ask-filter-replay-rows', form), button = $('button', form);
@@ -76,10 +82,10 @@ async function askFilterReplay(form) {
     } while (offset != null);
     const off = rows.filter(r => ['sent_back', 'fyi', 'merged'].includes(r.would));
     msg.textContent = `${rows.length} items; On would have kept ${off.length} off your plate`;
-    list.innerHTML = [...off, ...rows.filter(r => !off.includes(r))].map(r => `<div class="tl-filtered-row" role="listitem">
-      <span class="tl-filtered-text"><span class="req-from">${esc(r.asker_name || actorLabel(r.asker))}:</span> ${esc(r.private ? 'A private item' : r.title || 'Untitled')}
-        <span class="muted">${esc(ASK_FILTER_WHY[r.reason] || '')} · ${esc(r.load)} open then</span></span>
-      <span class="tl-filtered-act">${esc(ASK_REPLAY_WOULD[r.would] || r.would)}</span></div>`).join('');
+    list.innerHTML = [...off, ...rows.filter(r => !off.includes(r))].map(r => `<div class="ask-replay-row" role="listitem">
+      <span class="ask-replay-text"><span class="req-from">${esc(r.asker_name || actorLabel(r.asker))}:</span> ${esc(r.private ? 'A private item' : r.title || 'Untitled')}
+        <span class="muted">${esc(ASK_REPLAY_WHY[r.reason] || '')} · ${esc(r.load)} open then</span></span>
+      <span class="ask-replay-act">${esc(ASK_REPLAY_WOULD[r.would] || r.would)}</span></div>`).join('');
   } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
   button.disabled = false;
 }

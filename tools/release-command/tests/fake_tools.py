@@ -1,4 +1,5 @@
 """Synthetic git/Actions/hub for the release boundary tests; no network, repositories or credentials."""
+
 import json
 import os
 from pathlib import Path
@@ -10,15 +11,26 @@ args = sys.argv[1:]
 name = os.environ['FAKE_TOOL']
 FROZEN = 'a' * 40
 
+
 def run(candidate=FROZEN, title=None):
     conclusion = (root / 'conclusion').read_text() if (root / 'conclusion').exists() else 'success'
-    return dict(id=42, path='.github/workflows/ci.yml', event='workflow_dispatch', head_branch='main',
-                head_sha=candidate, display_title=title or f'Validate {FROZEN} as v1.0.1 from v1.0.0',
-                status='completed' if (root / 'watched').exists() else 'in_progress', conclusion=conclusion,
-                created_at='2026-01-02T01:00:00Z', run_attempt=1 + reruns())
+    return dict(
+        id=42,
+        path='.github/workflows/ci.yml',
+        event='workflow_dispatch',
+        head_branch='main',
+        head_sha=candidate,
+        display_title=title or f'Validate {FROZEN} as v1.0.1 from v1.0.0',
+        status='completed' if (root / 'watched').exists() else 'in_progress',
+        conclusion=conclusion,
+        created_at='2026-01-02T01:00:00Z',
+        run_attempt=1 + reruns(),
+    )
+
 
 def reruns():
     return len((root / 'reruns').read_text().splitlines()) if (root / 'reruns').exists() else 0
+
 
 if name == 'git':
     if args[:1] == ['fetch'] or args[:1] == ['status']:
@@ -41,8 +53,14 @@ elif name == 'gh':
             runs = [run()] if (root / 'dispatched').exists() or (root / 'watched').exists() else []
             print(json.dumps(dict(workflow_runs=runs)))
         else:
-            print(json.dumps(run('c' * 40 if config.get('wrong_commit') else FROZEN,
-                                 'Validate ' + 'c' * 40 + ' as v1.0.1 from v1.0.0' if config.get('wrong_title') else None)))
+            print(
+                json.dumps(
+                    run(
+                        'c' * 40 if config.get('wrong_commit') else FROZEN,
+                        'Validate ' + 'c' * 40 + ' as v1.0.1 from v1.0.0' if config.get('wrong_title') else None,
+                    )
+                )
+            )
     elif args[:2] == ['workflow', 'run']:
         assert f'candidate_sha={FROZEN}' in args and 'version=v1.0.1' in args, args
         (root / 'dispatched').touch()

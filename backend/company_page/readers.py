@@ -11,6 +11,7 @@ The rules that matter:
   `release.view_model`, which copies named fields, so a field those modules grow later still can't reach a reader.
 - A reader's message is outside text: fenced, screened, capped, and it reaches a person's queue with no bot woken.
 """
+
 import base64
 import csv
 import hashlib
@@ -38,14 +39,16 @@ MESSAGE_MAX, MESSAGES_PER_DAY = 4000, 10
 ASK_ID_MAX = 100
 PAGE_SIZE = 10
 NOTICE_ATTEMPTS = 3
-NOTICE_BATCH = 50                       # the issuer's most recipients in one request
+NOTICE_BATCH = 50  # the issuer's most recipients in one request
 NOTICE_MAX_AGE_HOURS = 24
 NOTICE_WAIT_MIN, NOTICE_WAIT_MAX = 60, 3600
 RANK = {"board": 0, "investors": 1, "custom": 2, "public": 3}
 # What the issuer will send to. Stricter than the list: a reader's address can come from any sign-in provider.
 SENDABLE = re.compile(r"[^@\s<>\",;()\[\]\\]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\.[A-Za-z]{2,24}")
-EMAIL = re.compile(r"[^@\s<>\"',;:()\[\]\\]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
-                   r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+")
+EMAIL = re.compile(
+    r"[^@\s<>\"',;:()\[\]\\]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+"
+)
 
 # Set by reader_app.install: what `reader_view` and `notify_edition`, which take only a connection, need of the install.
 _state = {"store": None, "settings": None, "oidc": None, "not_before": 0.0}
@@ -67,6 +70,7 @@ def availability(settings):
     if not getattr(settings, "reader_origin", ""):
         return False, "No reader address is set (TICO_READER_ORIGIN), so private audiences are off"
     from .reader_app import sign_in_configured
+
     if not sign_in_configured(settings):
         return False, "No sign-in provider is set up (OIDC), so private audiences are off"
     return True, ""
@@ -115,9 +119,11 @@ def _audience_ids(c, ids):
 
 def audiences_of(c, reader_id):
     """The enabled audiences a reader on the list is in, highest first: [{id, name, kind}]."""
-    rows = c.execute("SELECT a.id,a.name,a.kind FROM audience_readers ar JOIN audiences a ON a.id=ar.audience_id "
-                     "JOIN readers r ON r.id=ar.reader_id WHERE ar.reader_id=? AND r.removed_at IS NULL AND a.enabled=1",
-                     (reader_id,)).fetchall()
+    rows = c.execute(
+        "SELECT a.id,a.name,a.kind FROM audience_readers ar JOIN audiences a ON a.id=ar.audience_id "
+        "JOIN readers r ON r.id=ar.reader_id WHERE ar.reader_id=? AND r.removed_at IS NULL AND a.enabled=1",
+        (reader_id,),
+    ).fetchall()
     return sorted((dict(r) for r in rows), key=lambda a: (RANK.get(a["kind"], len(RANK)), a["name"], a["id"]))
 
 
@@ -146,8 +152,10 @@ def add(c, actor, email, audience_ids=(), name=None):
         if c.execute("SELECT count(*) FROM readers WHERE removed_at IS NULL").fetchone()[0] >= READERS_MAX:
             raise Problem("too_many", f"A company has at most {READERS_MAX} readers", 422)
         reader_id = H.new_id()
-        c.execute("INSERT INTO readers(id,email,name,added_by,created_at) VALUES(?,?,?,?,?)",
-                  (reader_id, email, name, actor, H.now()))
+        c.execute(
+            "INSERT INTO readers(id,email,name,added_by,created_at) VALUES(?,?,?,?,?)",
+            (reader_id, email, name, actor, H.now()),
+        )
     _link(c, reader_id, ids)
     if added or ids:
         H.event(c, actor, "reader.added" if added else "reader.audiences", reader_id, {"audiences": ids})
@@ -156,8 +164,10 @@ def add(c, actor, email, audience_ids=(), name=None):
 
 def _link(c, reader_id, ids):
     for audience_id in ids:
-        c.execute("INSERT OR IGNORE INTO audience_readers(id,audience_id,reader_id,created_at) VALUES(?,?,?,?)",
-                  (H.new_id(), audience_id, reader_id, H.now()))
+        c.execute(
+            "INSERT OR IGNORE INTO audience_readers(id,audience_id,reader_id,created_at) VALUES(?,?,?,?)",
+            (H.new_id(), audience_id, reader_id, H.now()),
+        )
 
 
 def update(c, actor, reader_id, audience_ids=None, notify=None, name=None):
@@ -196,23 +206,40 @@ def remove(c, actor, reader_id):
 
 
 def _cancel_notices(c, reader_id):
-    c.execute("UPDATE reader_notices SET status='canceled',updated_at=? WHERE reader_id=? AND status='pending'",
-              (H.now(), reader_id))
+    c.execute(
+        "UPDATE reader_notices SET status='canceled',updated_at=? WHERE reader_id=? AND status='pending'",
+        (H.now(), reader_id),
+    )
 
 
 def view_of(c, row):
-    return {"id": row["id"], "email": row["email"], "name": row["name"], "notify": bool(row["notify"]),
-            "signed_in": bool(row["idp_sub"]), "added_by": row["added_by"], "created_at": row["created_at"],
-            "audiences": [{"id": a["id"], "name": a["name"], "kind": a["kind"]} for a in
-                          (dict(r) for r in c.execute(
-                              "SELECT a.id,a.name,a.kind FROM audience_readers ar JOIN audiences a ON a.id=ar.audience_id "
-                              "WHERE ar.reader_id=? ORDER BY a.name,a.id", (row["id"],)))]}
+    return {
+        "id": row["id"],
+        "email": row["email"],
+        "name": row["name"],
+        "notify": bool(row["notify"]),
+        "signed_in": bool(row["idp_sub"]),
+        "added_by": row["added_by"],
+        "created_at": row["created_at"],
+        "audiences": [
+            {"id": a["id"], "name": a["name"], "kind": a["kind"]}
+            for a in (
+                dict(r)
+                for r in c.execute(
+                    "SELECT a.id,a.name,a.kind FROM audience_readers ar JOIN audiences a ON a.id=ar.audience_id "
+                    "WHERE ar.reader_id=? ORDER BY a.name,a.id",
+                    (row["id"],),
+                )
+            )
+        ],
+    }
 
 
 def list_rows(c, limit=100, offset=0):
     """The list as an iterator, in the order it was added: the route pages and byte-caps it."""
-    rows = c.execute("SELECT * FROM readers WHERE removed_at IS NULL ORDER BY created_at,id LIMIT ? OFFSET ?",
-                     (limit + 1, offset))
+    rows = c.execute(
+        "SELECT * FROM readers WHERE removed_at IS NULL ORDER BY created_at,id LIMIT ? OFFSET ?", (limit + 1, offset)
+    )
     return (view_of(c, dict(r)) for r in rows.fetchall())
 
 
@@ -224,11 +251,13 @@ def import_csv(c, actor, text, audience_ids=()):
     ids = _audience_ids(c, audience_ids)
     added = existing = invalid_count = 0
     invalid = []
+
     def bad(line, reason):
         nonlocal invalid_count
         invalid_count += 1
         if len(invalid) < CSV_INVALID_SHOWN:
             invalid.append({"line": line, "reason": reason})
+
     reader = csv.reader(io.StringIO(str(text), newline=""))
     email_at, name_at, line = 0, None, 0
     try:
@@ -263,12 +292,17 @@ def import_csv(c, actor, text, audience_ids=()):
 def _by_account(c, issuer, sub, email):
     """The reader this account already is. The account wins over any address: its address follows the account when the new
     one is free, and otherwise stays as it was, so a changed email never takes over another reader's row."""
-    row = c.execute("SELECT * FROM readers WHERE idp_issuer=? AND idp_sub=? AND removed_at IS NULL",
-                    (issuer, sub)).fetchone()
+    row = c.execute(
+        "SELECT * FROM readers WHERE idp_issuer=? AND idp_sub=? AND removed_at IS NULL", (issuer, sub)
+    ).fetchone()
     if not row:
         return None
-    if str(row["email"]).lower() != email and not c.execute(
-            "SELECT 1 FROM readers WHERE lower(email)=? AND removed_at IS NULL AND id<>?", (email, row["id"])).fetchone():
+    if (
+        str(row["email"]).lower() != email
+        and not c.execute(
+            "SELECT 1 FROM readers WHERE lower(email)=? AND removed_at IS NULL AND id<>?", (email, row["id"])
+        ).fetchone()
+    ):
         c.execute("UPDATE readers SET email=? WHERE id=?", (email, row["id"]))
     return dict(row)
 
@@ -298,12 +332,15 @@ def start_session(c, reader_id, previous=""):
     read: that is looked up on every request."""
     now = H.now()
     if previous:
-        c.execute("UPDATE reader_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL",
-                  (now, digest(previous)))
+        c.execute(
+            "UPDATE reader_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL", (now, digest(previous))
+        )
     c.execute("DELETE FROM reader_sessions WHERE expires_at<=?", (now,))
     token = secrets.token_urlsafe(32)
-    c.execute("INSERT INTO reader_sessions(id,reader_id,token_hash,created_at,expires_at) VALUES(?,?,?,?,?)",
-              (H.new_id(), reader_id, digest(token), now, H.shift(now, days=SESSION_DAYS)))
+    c.execute(
+        "INSERT INTO reader_sessions(id,reader_id,token_hash,created_at,expires_at) VALUES(?,?,?,?,?)",
+        (H.new_id(), reader_id, digest(token), now, H.shift(now, days=SESSION_DAYS)),
+    )
     return token
 
 
@@ -311,16 +348,20 @@ def session_reader(c, token):
     """The reader behind a session token, or None: unknown, revoked, expired or removed are all nobody."""
     if not token or len(token) > 200:
         return None
-    row = c.execute("SELECT r.* FROM reader_sessions s JOIN readers r ON r.id=s.reader_id "
-                    "WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND r.removed_at IS NULL",
-                    (digest(token), H.now())).fetchone()
+    row = c.execute(
+        "SELECT r.* FROM reader_sessions s JOIN readers r ON r.id=s.reader_id "
+        "WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND r.removed_at IS NULL",
+        (digest(token), H.now()),
+    ).fetchone()
     return dict(row) if row else None
 
 
 def end_session(c, token):
     if token:
-        c.execute("UPDATE reader_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL",
-                  (H.now(), digest(token)))
+        c.execute(
+            "UPDATE reader_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL",
+            (H.now(), digest(token)),
+        )
 
 
 # ---------------------------------------------------------------------------------------------- invites
@@ -333,8 +374,10 @@ def create_invite(c, actor, audience_id, days=INVITE_DAYS):
     if not 1 <= int(days) <= INVITE_DAYS_MAX:
         raise Problem("expires", f"An invite lasts 1 to {INVITE_DAYS_MAX} days", 422)
     now, invite_id, token = H.now(), H.new_id(), secrets.token_urlsafe(32)
-    c.execute("INSERT INTO reader_invites(id,audience_id,token_hash,created_by,created_at,expires_at) VALUES(?,?,?,?,?,?)",
-              (invite_id, audience_id, digest(token), actor, now, H.shift(now, days=int(days))))
+    c.execute(
+        "INSERT INTO reader_invites(id,audience_id,token_hash,created_by,created_at,expires_at) VALUES(?,?,?,?,?,?)",
+        (invite_id, audience_id, digest(token), actor, now, H.shift(now, days=int(days))),
+    )
     H.event(c, actor, "reader.invited", invite_id, {"audience": audience_id})
     row = c.execute("SELECT * FROM reader_invites WHERE id=?", (invite_id,)).fetchone()
     return invite_view(dict(row)), token
@@ -342,16 +385,33 @@ def create_invite(c, actor, audience_id, days=INVITE_DAYS):
 
 def invite_view(row, now=None):
     now = now or H.now()
-    state = ("used" if row["used_at"] else "revoked" if row["revoked_at"] else
-             "expired" if row["expires_at"] <= now else "open")
-    return {"id": row["id"], "audience_id": row["audience_id"], "state": state, "created_by": row["created_by"],
-            "created_at": row["created_at"], "expires_at": row["expires_at"], "used_at": row["used_at"],
-            "used_by": row["used_by"], "revoked_at": row["revoked_at"]}
+    state = (
+        "used"
+        if row["used_at"]
+        else "revoked"
+        if row["revoked_at"]
+        else "expired"
+        if row["expires_at"] <= now
+        else "open"
+    )
+    return {
+        "id": row["id"],
+        "audience_id": row["audience_id"],
+        "state": state,
+        "created_by": row["created_by"],
+        "created_at": row["created_at"],
+        "expires_at": row["expires_at"],
+        "used_at": row["used_at"],
+        "used_by": row["used_by"],
+        "revoked_at": row["revoked_at"],
+    }
 
 
 def invite_rows(c, audience_id, limit=100, offset=0):
-    rows = c.execute("SELECT * FROM reader_invites WHERE audience_id=? ORDER BY created_at DESC,id LIMIT ? OFFSET ?",
-                     (audience_id, limit + 1, offset)).fetchall()
+    rows = c.execute(
+        "SELECT * FROM reader_invites WHERE audience_id=? ORDER BY created_at DESC,id LIMIT ? OFFSET ?",
+        (audience_id, limit + 1, offset),
+    ).fetchall()
     return (invite_view(dict(r)) for r in rows)
 
 
@@ -386,11 +446,15 @@ def redeem_invite(c, token, issuer, sub, email):
         if c.execute("SELECT count(*) FROM readers WHERE removed_at IS NULL").fetchone()[0] >= READERS_MAX:
             raise InviteRefused("too_many")
         reader_id = H.new_id()
-        c.execute("INSERT INTO readers(id,email,idp_issuer,idp_sub,added_by,created_at) VALUES(?,?,?,?,?,?)",
-                  (reader_id, email, issuer, sub, row["created_by"], now))
+        c.execute(
+            "INSERT INTO readers(id,email,idp_issuer,idp_sub,added_by,created_at) VALUES(?,?,?,?,?,?)",
+            (reader_id, email, issuer, sub, row["created_by"], now),
+        )
         reader = get(c, reader_id)
-    claimed = c.execute("UPDATE reader_invites SET used_at=?,used_by=? "
-                        "WHERE id=? AND used_at IS NULL AND revoked_at IS NULL", (now, reader["id"], row["id"]))
+    claimed = c.execute(
+        "UPDATE reader_invites SET used_at=?,used_by=? WHERE id=? AND used_at IS NULL AND revoked_at IS NULL",
+        (now, reader["id"], row["id"]),
+    )
     if claimed.rowcount != 1:
         raise InviteRefused("spent")
     _link(c, reader["id"], [row["audience_id"]])
@@ -403,10 +467,14 @@ def edition_ids(c, audience_ids):
     """{anchor: edition id} of the editions published to these audiences now. An anchor outlives a correction and says
     nothing of its source, so it can only be looked up by computing it, and only among what these audiences can read."""
     from . import editions
+
     if not audience_ids:
         return {}
-    rows = c.execute("SELECT id,audience_id,author,period_start,period_end FROM editions WHERE status='published' "
-                     "AND audience_id IN (" + ",".join("?" * len(audience_ids)) + ")", tuple(audience_ids)).fetchall()
+    rows = c.execute(
+        "SELECT id,audience_id,author,period_start,period_end FROM editions WHERE status='published' "
+        "AND audience_id IN (" + ",".join("?" * len(audience_ids)) + ")",
+        tuple(audience_ids),
+    ).fetchall()
     return {editions.anchor_of(dict(r)): r["id"] for r in rows}
 
 
@@ -422,6 +490,7 @@ def compose(c, reader_id, at, before=None):
     if not audience:
         return None, []
     from . import editions, release, stats
+
     settings = _state["settings"]
     updates = editions.stream(c, [audience["id"]], before=before, limit=PAGE_SIZE, company_name=settings.company_name)
     updates = list(updates)
@@ -443,6 +512,7 @@ def reader_view(c, reader_id, at, before=None):
 def signed_out_view(c):
     """What a signed-out visitor to a private page gets to see: the header, and nothing an audience holds."""
     from . import release
+
     return release.view_model(c, {"kind": "private", "name": ""}, [], [], None, "private", _state["settings"])
 
 
@@ -450,27 +520,35 @@ def record_views(c, reader_id, ids):
     """Seen by: one row per reader and edition, the first time they were actually given it."""
     for edition_id in ids:
         if edition_id:
-            c.execute("INSERT OR IGNORE INTO edition_views(id,edition_id,reader_id,viewed_at) VALUES(?,?,?,?)",
-                      (H.new_id(), edition_id, reader_id, H.now()))
+            c.execute(
+                "INSERT OR IGNORE INTO edition_views(id,edition_id,reader_id,viewed_at) VALUES(?,?,?,?)",
+                (H.new_id(), edition_id, reader_id, H.now()),
+            )
 
 
 def unseen(c, reader_id, ids):
     """Those not yet recorded, so an ordinary reload takes no write lock."""
-    return [e for e in ids if e and not c.execute(
-        "SELECT 1 FROM edition_views WHERE edition_id=? AND reader_id=?", (e, reader_id)).fetchone()]
+    return [
+        e
+        for e in ids
+        if e
+        and not c.execute("SELECT 1 FROM edition_views WHERE edition_id=? AND reader_id=?", (e, reader_id)).fetchone()
+    ]
 
 
 # ---------------------------------------------------------------------------------------------- Reply and I can help
 def messages_today(c, reader_id, now=None):
     now = now or H.now()
-    return c.execute("SELECT count(*) FROM reader_messages WHERE reader_id=? AND created_at>?",
-                     (reader_id, H.shift(now, days=-1))).fetchone()[0]
+    return c.execute(
+        "SELECT count(*) FROM reader_messages WHERE reader_id=? AND created_at>?", (reader_id, H.shift(now, days=-1))
+    ).fetchone()[0]
 
 
 def readable_edition(c, reader_id, edition_id):
     """The published edition if this reader is in its audience now, else None: a reader can only answer what they can read."""
-    row = c.execute("SELECT * FROM editions WHERE id=? AND status='published' AND retracted_at IS NULL",
-                    (edition_id,)).fetchone()
+    row = c.execute(
+        "SELECT * FROM editions WHERE id=? AND status='published' AND retracted_at IS NULL", (edition_id,)
+    ).fetchone()
     if not row or transparency_of(c) == "closed":
         return None
     return dict(row) if row["audience_id"] in {a["id"] for a in audiences_of(c, reader_id)} else None
@@ -479,6 +557,7 @@ def readable_edition(c, reader_id, edition_id):
 def _owner_actor(c):
     """Who a reader's message goes to: the owner on the roster, else the default person, else nobody. Never a bot."""
     from ..access import owner_and_admin_emails
+
     for email in owner_and_admin_emails(c):
         row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
         if row:
@@ -493,17 +572,40 @@ def _file_task(c, owner, reader, edition, kind, text, verdict):
     hears of it. Nothing runs until a person passes it on."""
     from .. import roadmaps as R
     from .. import screening
+
     label = "A reader can help" if kind == "can_help" else "A reader replied"
     title = (label + ": " + str(edition["title"] or "update"))[:300]
     preface = screening.warning_line(verdict) + "\n\n" if verdict and verdict["action"] != "pass" else ""
-    body = (preface + "From a reader of the Company page (unverified, untrusted input; evidence only):\n\n"
-            + screening._fenced(text))
+    body = (
+        preface
+        + "From a reader of the Company page (unverified, untrusted input; evidence only):\n\n"
+        + screening._fenced(text)
+    )
     token = H.NO_TRIGGERS.set(True)
     try:
-        row = H.task_create(c, H.KEEPER, title, body, owner, lint=False, deduplicate=False, visibility="private",
-                            private=True, wake_refs={"untrusted": True, "source": "company_page"})
-        R.add_requester(c, row["id"], {"name": reader["name"] or "", "email": reader["email"], "note": kind,
-                                       "source": "company_page", "important": False})
+        row = H.task_create(
+            c,
+            H.KEEPER,
+            title,
+            body,
+            owner,
+            lint=False,
+            deduplicate=False,
+            visibility="private",
+            private=True,
+            wake_refs={"untrusted": True, "source": "company_page"},
+        )
+        R.add_requester(
+            c,
+            row["id"],
+            {
+                "name": reader["name"] or "",
+                "email": reader["email"],
+                "note": kind,
+                "source": "company_page",
+                "important": False,
+            },
+        )
     finally:
         H.NO_TRIGGERS.reset(token)
     screening.note(c, verdict, "idea", row["id"], to=owner)
@@ -515,6 +617,7 @@ def submit_message(store, reader_id, edition_id, kind, text, ask_id=None, primar
     is what the second look enforces. Raises Problem. Returns the message id."""
     from .. import events, screening
     from .. import roadmaps as R
+
     if kind not in ("reply", "can_help"):
         raise Problem("kind", "Unknown message", 422)
     text = str(text or "").strip()
@@ -542,26 +645,44 @@ def submit_message(store, reader_id, edition_id, kind, text, ask_id=None, primar
         if owner:
             try:
                 task_id = _file_task(c, owner, reader, edition, kind, text, verdict)
-            except H.Refused as exc:     # kept for the owner's list, which reads the message itself
+            except H.Refused as exc:  # kept for the owner's list, which reads the message itself
                 log.warning("A reader's message has no task: refused (%s)", exc.rule)
-        c.execute("INSERT INTO reader_messages(id,reader_id,edition_id,kind,ask_id,body,task_id,created_at) "
-                  "VALUES(?,?,?,?,?,?,?,?)", (message_id, reader_id, edition_id, kind, ask_id, text, task_id, H.now()))
+        c.execute(
+            "INSERT INTO reader_messages(id,reader_id,edition_id,kind,ask_id,body,task_id,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (message_id, reader_id, edition_id, kind, ask_id, text, task_id, H.now()),
+        )
         logged = events.claim(c, since, "external:company_page")
     store.ring(logged)
     return message_id
 
 
 def message_rows(c, limit=100, offset=0):
-    rows = c.execute("SELECT m.*,r.email,r.name FROM reader_messages m JOIN readers r ON r.id=m.reader_id "
-                     "ORDER BY m.created_at DESC,m.id LIMIT ? OFFSET ?", (limit + 1, offset)).fetchall()
-    return ({"id": r["id"], "kind": r["kind"], "body": r["body"], "ask_id": r["ask_id"], "edition_id": r["edition_id"],
-             "task_id": r["task_id"], "created_at": r["created_at"], "untrusted": True,
-             "reader": {"id": r["reader_id"], "email": r["email"], "name": r["name"]}} for r in rows)
+    rows = c.execute(
+        "SELECT m.*,r.email,r.name FROM reader_messages m JOIN readers r ON r.id=m.reader_id "
+        "ORDER BY m.created_at DESC,m.id LIMIT ? OFFSET ?",
+        (limit + 1, offset),
+    ).fetchall()
+    return (
+        {
+            "id": r["id"],
+            "kind": r["kind"],
+            "body": r["body"],
+            "ask_id": r["ask_id"],
+            "edition_id": r["edition_id"],
+            "task_id": r["task_id"],
+            "created_at": r["created_at"],
+            "untrusted": True,
+            "reader": {"id": r["reader_id"], "email": r["email"], "name": r["name"]},
+        }
+        for r in rows
+    )
 
 
 # ---------------------------------------------------------------------------------------------- notices and unsubscribe
 def _secret(settings, purpose):
     from ..oidc import _session_secret
+
     return hmac.new(_session_secret(settings), b"company-page-reader:" + purpose, hashlib.sha256).digest()
 
 
@@ -589,8 +710,9 @@ def unsubscribe_valid(settings, token):
 def unsubscribe_address(c, email):
     """Stop this address's notices, if it has any. The caller answers the same either way, so the page can't be used to
     learn who is on the list."""
-    row = c.execute("SELECT id FROM readers WHERE lower(email)=? AND removed_at IS NULL",
-                    (str(email or "").strip().lower(),)).fetchone()
+    row = c.execute(
+        "SELECT id FROM readers WHERE lower(email)=? AND removed_at IS NULL", (str(email or "").strip().lower(),)
+    ).fetchone()
     if row:
         set_notify(c, row["id"], False)
 
@@ -607,17 +729,22 @@ def notify_edition(c, edition_id):
         return {"status": "rehearsal", "count": 0}
     if transparency_of(c) == "closed":
         return {"status": "closed", "count": 0}
-    edition = c.execute("SELECT audience_id FROM editions WHERE id=? AND status='published' AND retracted_at IS NULL",
-                        (edition_id,)).fetchone()
+    edition = c.execute(
+        "SELECT audience_id FROM editions WHERE id=? AND status='published' AND retracted_at IS NULL", (edition_id,)
+    ).fetchone()
     if not edition:
         return {"status": "no_edition", "count": 0}
     now, count = H.now(), 0
-    rows = c.execute("SELECT r.id FROM audience_readers ar JOIN readers r ON r.id=ar.reader_id JOIN audiences a "
-                     "ON a.id=ar.audience_id WHERE ar.audience_id=? AND a.enabled=1 AND r.notify=1 AND r.removed_at IS NULL",
-                     (edition["audience_id"],)).fetchall()
+    rows = c.execute(
+        "SELECT r.id FROM audience_readers ar JOIN readers r ON r.id=ar.reader_id JOIN audiences a "
+        "ON a.id=ar.audience_id WHERE ar.audience_id=? AND a.enabled=1 AND r.notify=1 AND r.removed_at IS NULL",
+        (edition["audience_id"],),
+    ).fetchall()
     for row in rows:
-        count += c.execute("INSERT OR IGNORE INTO reader_notices(id,edition_id,reader_id,created_at,updated_at) "
-                           "VALUES(?,?,?,?,?)", (H.new_id(), edition_id, row["id"], now, now)).rowcount
+        count += c.execute(
+            "INSERT OR IGNORE INTO reader_notices(id,edition_id,reader_id,created_at,updated_at) VALUES(?,?,?,?,?)",
+            (H.new_id(), edition_id, row["id"], now, now),
+        ).rowcount
     if count and store is not None and hasattr(c, "after_commit"):
         c.after_commit.append(lambda: kick())
     return {"status": "queued", "count": count}
@@ -627,12 +754,14 @@ def notices_available():
     """Whether this install's sign-in provider sends these emails. Only a Tico account does; any other leaves the page
     working with no email. Reads discovery at most hourly, and never raises."""
     from .reader_app import NOTICE_ENDPOINT
+
     return bool(_state["oidc"] and _state["oidc"].offers(NOTICE_ENDPOINT))
 
 
 def rehearsing(settings):
     """A rehearsal is a copy of real data, and the addresses in it are real people's: it sends nothing."""
     from ..replication import rehearsal_on
+
     return bool(getattr(settings, "rehearsal", False)) or rehearsal_on()
 
 
@@ -652,6 +781,7 @@ def kick():
                 drain()
         finally:
             _RUNNING.release()
+
     threading.Thread(target=work, name="tico-reader-notices", daemon=True).start()
 
 
@@ -671,20 +801,28 @@ def _waiting(store):
     then the page is what says there is news."""
     now = H.now()
     with store.transaction() as c:
-        c.execute("UPDATE reader_notices SET status='failed',updated_at=? WHERE status='pending' AND created_at<?",
-                  (now, H.shift(now, hours=-NOTICE_MAX_AGE_HOURS)))
+        c.execute(
+            "UPDATE reader_notices SET status='failed',updated_at=? WHERE status='pending' AND created_at<?",
+            (now, H.shift(now, hours=-NOTICE_MAX_AGE_HOURS)),
+        )
         closed = transparency_of(c) == "closed"
-        c.execute("UPDATE reader_notices SET status='canceled',updated_at=? WHERE status='pending' AND (? OR id NOT IN ("
-                  "SELECT n.id FROM reader_notices n JOIN readers r ON r.id=n.reader_id JOIN editions e ON e.id=n.edition_id "
-                  "JOIN audiences a ON a.id=e.audience_id JOIN audience_readers ar ON ar.audience_id=a.id AND ar.reader_id=r.id "
-                  "WHERE n.status='pending' AND r.removed_at IS NULL AND r.notify=1 AND a.enabled=1 AND e.status='published'))",
-                  (now, closed))
-        first = c.execute("SELECT edition_id FROM reader_notices WHERE status='pending' ORDER BY created_at,id LIMIT 1").fetchone()
+        c.execute(
+            "UPDATE reader_notices SET status='canceled',updated_at=? WHERE status='pending' AND (? OR id NOT IN ("
+            "SELECT n.id FROM reader_notices n JOIN readers r ON r.id=n.reader_id JOIN editions e ON e.id=n.edition_id "
+            "JOIN audiences a ON a.id=e.audience_id JOIN audience_readers ar ON ar.audience_id=a.id AND ar.reader_id=r.id "
+            "WHERE n.status='pending' AND r.removed_at IS NULL AND r.notify=1 AND a.enabled=1 AND e.status='published'))",
+            (now, closed),
+        )
+        first = c.execute(
+            "SELECT edition_id FROM reader_notices WHERE status='pending' ORDER BY created_at,id LIMIT 1"
+        ).fetchone()
         if not first:
             return None, []
-        rows = c.execute("SELECT n.id,n.attempts,r.email FROM reader_notices n JOIN readers r ON r.id=n.reader_id "
-                         "WHERE n.status='pending' AND n.edition_id=? ORDER BY n.created_at,n.id LIMIT ?",
-                         (first["edition_id"], NOTICE_BATCH)).fetchall()
+        rows = c.execute(
+            "SELECT n.id,n.attempts,r.email FROM reader_notices n JOIN readers r ON r.id=n.reader_id "
+            "WHERE n.status='pending' AND n.edition_id=? ORDER BY n.created_at,n.id LIMIT ?",
+            (first["edition_id"], NOTICE_BATCH),
+        ).fetchall()
         rows = [dict(r) for r in rows]
         # The issuer refuses a whole request over one address it can't send to, so that one doesn't go in.
         unsendable = [r["id"] for r in rows if len(r["email"]) > 254 or not SENDABLE.fullmatch(r["email"])]
@@ -697,6 +835,7 @@ def drain():
     """Send what is waiting, a batch at a time, outside any transaction. Never logs an address. Only a limit or a network
     failure leaves notices waiting; every other answer is final for that batch, and the page works regardless."""
     from ..oidc import SignInError
+
     store, settings, oidc = _state["store"], _state["settings"], _state["oidc"]
     if store is None or oidc is None or rehearsing(settings) or time.time() < _state["not_before"]:
         return
@@ -713,17 +852,17 @@ def drain():
         except SignInError as exc:
             log.warning("Reader notices wait: %s", exc.reason)
             return _notices_retry(store, batch)
-        if answer is None:                  # this provider sends no notices
+        if answer is None:  # this provider sends no notices
             _notices_done(store, edition_id, batch, "unavailable")
             continue
         status, body = answer
         if status == 202:
             _notices_done(store, edition_id, batch, "sent", body)
-        elif status == 429:                 # the install's allowance, not these readers': they wait for it to refill
+        elif status == 429:  # the install's allowance, not these readers': they wait for it to refill
             _state["not_before"] = time.time() + _retry_after(body)
             log.info("Reader notices wait: the issuer's limit")
             return
-        elif status == 409:                 # the issuer doesn't know this install's reader address
+        elif status == 409:  # the issuer doesn't know this install's reader address
             log.warning("Reader notices weren't sent: the issuer has no reader address for this install")
             _notices_done(store, edition_id, batch, "unavailable")
         else:
@@ -742,8 +881,10 @@ def _notices_done(store, edition_id, batch, status, body=None):
     counts = {k: v for k, v in (body or {}).items() if k in ("sent", "failed", "limited") and isinstance(v, int)}
     with store.transaction() as c:
         for row in batch:
-            c.execute("UPDATE reader_notices SET status=?,attempts=attempts+1,updated_at=? WHERE id=?",
-                      (status, H.now(), row["id"]))
+            c.execute(
+                "UPDATE reader_notices SET status=?,attempts=attempts+1,updated_at=? WHERE id=?",
+                (status, H.now(), row["id"]),
+            )
         H.event(c, H.KEEPER, "reader.notices", edition_id, {"status": status, "readers": len(batch), **counts})
 
 
@@ -751,15 +892,19 @@ def _notices_retry(store, batch):
     with store.transaction() as c:
         for row in batch:
             status = "failed" if row["attempts"] + 1 >= NOTICE_ATTEMPTS else "pending"
-            c.execute("UPDATE reader_notices SET status=?,attempts=attempts+1,updated_at=? WHERE id=?",
-                      (status, H.now(), row["id"]))
+            c.execute(
+                "UPDATE reader_notices SET status=?,attempts=attempts+1,updated_at=? WHERE id=?",
+                (status, H.now(), row["id"]),
+            )
 
 
 def notices_of(c, edition_id):
     """What became of an edition's notices, for the owner: readers by state, and what the issuer said of those it took. It
     answers per request, so `limited` and `failed` here are counts it reported, not named readers."""
     states = dict.fromkeys(("pending", "sent", "failed", "unavailable", "canceled"), 0)
-    for row in c.execute("SELECT status,count(*) n FROM reader_notices WHERE edition_id=? GROUP BY status", (edition_id,)):
+    for row in c.execute(
+        "SELECT status,count(*) n FROM reader_notices WHERE edition_id=? GROUP BY status", (edition_id,)
+    ):
         states[row["status"]] = row["n"]
     reported = {"delivered": 0, "failed": 0, "limited": 0}
     for row in c.execute("SELECT detail FROM events WHERE action='reader.notices' AND target=?", (edition_id,)):

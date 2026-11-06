@@ -1,0 +1,69 @@
+{
+  "id": "support",
+  "name": "Support desk",
+  "summary": "A shared support inbox. Promotions are archived; five questions send each message to the desk, engineering, billing, sales or the archive; the last step drafts a reply for review.",
+  "sort": {
+    "instructions": "Where does this message belong? Pick the one that fits best.",
+    "criteria": {
+      "me": "Unclear, or a person has to decide",
+      "support": "A customer asks for help with the product or their account",
+      "engineering": "A bug report or a product problem",
+      "finance": "A charge, an invoice, a refund or a payment",
+      "sales": "Someone who is not yet a customer asks about buying, pricing or a demo",
+      "archive": "Nothing is asked of anyone"
+    }
+  },
+  "destinations": [
+    {"id": "me", "name": "Me", "color": "amber",
+     "then": [{"do": "leave_for_you", "args": {}}]},
+    {"id": "support", "name": "Support", "color": "teal",
+     "then": [{"do": "create_task", "args": {
+       "title": "Customer: {{message.subject}}",
+       "body": "From {{message.from}}.",
+       "owner": {"role": "support_lead"}}}]},
+    {"id": "engineering", "name": "Engineering", "color": "violet",
+     "then": [{"do": "create_task", "args": {
+       "title": "Bug or product issue: {{message.subject}}",
+       "body": "From {{message.from}}.",
+       "owner": {"role": "engineering_manager"}}}]},
+    {"id": "finance", "name": "Finance", "color": "green",
+     "then": [{"do": "create_task", "args": {
+       "title": "Billing: {{message.subject}}",
+       "body": "From {{message.from}}.",
+       "owner": {"role": "finance_lead"}}}]},
+    {"id": "sales", "name": "Sales", "color": "blue",
+     "then": [{"do": "wake_bot", "args": {
+       "bot": {"role": "sales_lead"},
+       "title": "Pre-sales question: {{message.subject}}",
+       "text": "A pre-sales question reached the support desk: {{message.subject}} from {{message.from}}. Read the thread and take the next step."}}]},
+    {"id": "archive", "name": "Archive", "color": "gray",
+     "then": [{"do": "archive", "args": {}}]}
+  ],
+  "steps": [
+    {"id": "rules", "type": "filter", "rules": [
+      {"when": [{"field": "message.category", "op": "is", "value": "promotions"}],
+       "to": "archive", "next": "end", "stop": true}
+    ]},
+    {"id": "ask", "type": "decide", "level": "low", "out": "q", "questions": {
+      "customer": {"type": "noul", "instructions": "Is a customer asking for help with the product or their account?"},
+      "bug": {"type": "noul", "instructions": "Is it a bug report or a product problem?"},
+      "billing": {"type": "noul", "instructions": "Is it about a charge, an invoice, a refund or a payment?"},
+      "presales": {"type": "noul", "instructions": "Is someone who is not yet a customer asking about buying, pricing or a demo?"},
+      "nothing": {"type": "noul", "instructions": "Does it need nothing from anyone: a thank-you, an auto-reply or a receipt?"}}},
+    {"id": "route", "type": "filter", "rules": [
+      {"when": [{"field": "q.customer", "op": "is", "value": "yes", "min": 0.75}],
+       "to": "support", "next": "end", "stop": true},
+      {"when": [{"field": "q.bug", "op": "is", "value": "yes", "min": 0.75}],
+       "to": "engineering", "next": "end", "stop": true},
+      {"when": [{"field": "q.billing", "op": "is", "value": "yes", "min": 0.75}],
+       "to": "finance", "next": "end", "stop": true},
+      {"when": [{"field": "q.presales", "op": "is", "value": "yes", "min": 0.75}],
+       "to": "sales", "next": "end", "stop": true},
+      {"when": [{"field": "q.nothing", "op": "is", "value": "yes", "min": 0.75}],
+       "to": "archive", "next": "end", "stop": true}
+    ]},
+    {"id": "draft", "type": "llm", "out": "draft",
+     "prompt": "Route this message first: support for a customer's question or account; engineering for a bug or product problem; finance for a charge, invoice, refund or payment; sales for someone who is not yet a customer; archive when nothing is asked of anyone; me when unsure. If a customer is waiting, write the reply in the support voice as the body: friendly, plain, and never a promised date or refund. Leave the body empty when no reply is needed.",
+     "choose": {"to": ["me", "support", "engineering", "finance", "sales", "archive"], "default": "me", "mode": "draft"}}
+  ]
+}

@@ -1,10 +1,15 @@
 """The one migration authority for the hub database.
 
-A schema change that persists is a file in this directory, numbered: `NNNN_name.sql` (its statements) or `NNNN_name.py`
+A schema change that persists is a file in this directory: `YYYYMMDDHHMMSS_name.sql` (its statements, UTC) or `.py`
 (a module whose `up(conn)` makes the change, without committing). `apply` runs each file the database has not recorded,
 in order. Each one runs in its own transaction together with its `schema_migrations` row, so a failure leaves neither
 behind and the next start tries it again. An applied file is never edited: its checksum is recorded, and a start refuses
 a database whose recorded checksum no longer matches its file.
+
+Create one with `python3 scripts/new_migration.py name` (add `--py` for `up(conn)`). Existing `NNNN_name` files keep
+their names and checksums. Versions sort as full strings, with legacy files before timestamp files. Every pending file
+runs, even if a newer version has already run. A migration must not depend on another unmerged migration's schema:
+each stands alone, so parallel PRs may merge in either order. CI requires new files to use unique UTC timestamps.
 
 `hubdb.migrate` (every hubdb.connect) calls `apply` right after hubdb's numbered steps and before its own startup schema
 code and the module schema code in `Store.initialize` (the SCHEMA scripts, ensure_schema and add_column calls), so a
@@ -27,6 +32,7 @@ code does not know or whose file has changed, and a file below `MIN_BRIDGE_USER_
 version must open first. `Store.initialize(adopt_legacy=True)`, the legacy import (manage.migrate_legacy), skips only that
 last refusal.
 """
+
 import hashlib
 import importlib.util
 import re
@@ -49,9 +55,11 @@ NEWEST_USER_VERSION = 74
 CLOUD_VERSION = 77
 # A legacy row has no file to hash, so its checksum says so.
 LEGACY = "legacy"
-TABLE = ("CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY, checksum TEXT NOT NULL, "
-         "applied_at TEXT NOT NULL)")
-NAME = re.compile(r"(\d{4})_[a-z0-9_]+\.(sql|py)")
+TABLE = (
+    "CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY, checksum TEXT NOT NULL, "
+    "applied_at TEXT NOT NULL)"
+)
+NAME = re.compile(r"(\d{4}|\d{14})_[a-z0-9_]+\.(sql|py)")
 LEGACY_USER = re.compile(r"legacy_user_version_(\d+)")
 LEGACY_CLOUD = re.compile(r"legacy_cloud_(\d+)")
 
@@ -71,16 +79,19 @@ class Migration:
 
 
 def files(directory=None):
-    """The migration files in version order. A name that starts with a digit must match NNNN_name.sql or .py: a file
-    named like one but not matching is an error, not skipped. Only digit-led names are listed, so this module does not
+    """The migration files in full string version order. Digit-led names use NNNN_ or YYYYMMDDHHMMSS_ and .sql/.py.
+    A name that does not match is an error, not skipped. Only digit-led names are listed, so this module does not
     read every tracked file (a bare "*" listing makes the dependency map treat any change as its input)."""
     found = []
     for path in Path(directory or DIRECTORY).glob("[0-9]*"):
         if not NAME.fullmatch(path.name):
-            raise MigrationError(f"{path.name} is not a migration name: use NNNN_name.sql or NNNN_name.py")
+            raise MigrationError(
+                f"{path.name} is not a migration name: use YYYYMMDDHHMMSS_name.sql or .py "
+                "(NNNN_name.sql or .py for existing legacy files)"
+            )
         found.append(Migration(path))
     found.sort(key=lambda migration: migration.version)
-    numbers = [migration.version[:4] for migration in found]
+    numbers = [migration.version.split("_", 1)[0] for migration in found]
     if len(set(numbers)) != len(numbers):
         raise MigrationError("Two migration files share a number: " + ", ".join(m.version for m in found))
     return found
@@ -128,11 +139,13 @@ def _verify(recorded, known):
             if checksum != current:
                 raise MigrationError(
                     f"Migration {version} was applied to this database with checksum {checksum[:12]}, but its file now "
-                    f"has {current[:12]}. An applied migration is never edited: make the change in a new file.")
+                    f"has {current[:12]}. An applied migration is never edited: make the change in a new file."
+                )
         elif not (checksum == LEGACY and _legacy_known(version)):
             raise MigrationError(
                 f"This database has schema migration {version}, which this code does not know. It was written by a "
-                "newer Tico: run that release, or restore a backup taken before it.")
+                "newer Tico: run that release, or restore a backup taken before it."
+            )
 
 
 def preflight(path, *, adopt_legacy=False, directory=None):
@@ -148,8 +161,10 @@ def preflight(path, *, adopt_legacy=False, directory=None):
         if "schema_migrations" in tables:
             _verify(conn.execute("SELECT version, checksum FROM schema_migrations").fetchall(), files(directory))
         if version > NEWEST_USER_VERSION:
-            raise MigrationError(f"This database is at schema version {version}, newer than this code "
-                                 f"({NEWEST_USER_VERSION}). Run a newer Tico.")
+            raise MigrationError(
+                f"This database is at schema version {version}, newer than this code "
+                f"({NEWEST_USER_VERSION}). Run a newer Tico."
+            )
         if version < MIN_BRIDGE_USER_VERSION and not adopt_legacy:
             if version == 0 and not {"cloud_migrations", "schema_migrations"} & tables:
                 # No Tico history: a new file that some module touched first (hubdb.connect builds it), or one this
@@ -159,7 +174,8 @@ def preflight(path, *, adopt_legacy=False, directory=None):
             raise MigrationError(
                 f"This database is at schema version {version}, below {MIN_BRIDGE_USER_VERSION}, the oldest this server "
                 f"upgrades. Start it once with Tico v0.5.x (the release that writes version {MIN_BRIDGE_USER_VERSION}), "
-                "then upgrade to this release.")
+                "then upgrade to this release."
+            )
 
 
 def _record_legacy(conn):
@@ -173,8 +189,10 @@ def _record_legacy(conn):
         if newest:
             names.append(f"legacy_cloud_{newest}")
     for name in names:
-        conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_at) VALUES(?,?,?)",
-                     (name, LEGACY, H.now()))
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_at) VALUES(?,?,?)",
+            (name, LEGACY, H.now()),
+        )
 
 
 def _broken_references(conn):
@@ -204,10 +222,14 @@ def _run(conn, migration):
                 after = _broken_references(conn)
                 broken = {key: n - before.get(key, 0) for key, n in after.items() if n > before.get(key, 0)}
                 if broken:
-                    raise MigrationError(f"Migration {migration.version} left rows referring to missing rows "
-                                         f"(table, parent: rows): {broken}. Nothing was changed.")
-            conn.execute("INSERT INTO schema_migrations(version,checksum,applied_at) VALUES(?,?,?)",
-                         (migration.version, migration.checksum, H.now()))
+                    raise MigrationError(
+                        f"Migration {migration.version} left rows referring to missing rows "
+                        f"(table, parent: rows): {broken}. Nothing was changed."
+                    )
+            conn.execute(
+                "INSERT INTO schema_migrations(version,checksum,applied_at) VALUES(?,?,?)",
+                (migration.version, migration.checksum, H.now()),
+            )
             conn.execute("COMMIT")
         except BaseException:
             if conn.in_transaction:
@@ -220,7 +242,9 @@ def _run(conn, migration):
 
 def apply(conn, directory=None):
     """Record the histories the database already has, then run each migration file it has not, in version order."""
-    adopting = not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").fetchone()
+    adopting = not conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+    ).fetchone()
     conn.execute(TABLE)
     if adopting:
         _record_legacy(conn)
@@ -228,11 +252,7 @@ def apply(conn, directory=None):
     recorded = conn.execute("SELECT version, checksum FROM schema_migrations").fetchall()
     _verify(recorded, known)
     applied = {version for version, _ in recorded}
-    newest = max((m.version for m in known if m.version in applied), default="")
     for migration in known:
         if migration.version in applied:
             continue
-        if migration.version < newest:
-            raise MigrationError(f"Migration {migration.version} sorts before {newest}, which this database has already "
-                                 "applied. Renumber it.")
         _run(conn, migration)

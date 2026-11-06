@@ -1,42 +1,80 @@
-# Background runs the Assistant starts itself (the daily sweep). They act as the Assistant, not as the person: a write uses
-# only the Assistant's own rights, and anything that needs the person's rights goes on one Confirm card.
+# Background runs the Assistant starts itself (the morning message). They act as the Assistant, not as the person: a write uses
+# only the Assistant's own rights. The morning message sends at most one `hub assistant morning` per person a day and closes,
+# declines and proposes nothing.
 
 - id: background-daily-sweep
   group: background
   background: true
   prompt: |
-    Daily sweep for human:dana's queue. Find the items the record shows are done, replaced or duplicates, and stale bot-made
-    items. Propose them all as one Confirm card for her (`hub assistant propose --for human:dana`). When one source made 5 or
-    more items this week, name its stop on the card. Your final reply is the short summary posted in her Assistant DM.
+    Morning message. Follow playbooks/daily-sweep.md for every person on the roster.
   hub:
+    - match: '^human list'
+      out:
+        - {id: dana, name: "Dana Reyes", email: "dana@acme.example", title: "Founder", team: "", reports_to: "", github: ""}
+    - match: '^strategy show'
+      out:
+        current: {n: 3, status: published, summary: "Grow self-serve trials.", published_at: "2026-10-20T17:00:00Z", published_by: "human:dana"}
+        bets: [{id: bet_trials, statement: "Self-serve trials", status: active, rank: 0}]
+        label: Bets
+        label_one: Bet
+        may_edit: false
+        goals_by_bet: {bet_trials: [{id: goal_4f2a9c1b, title: "Paid trials to 400 a month by year end", owner_id: "human:dana", status: yellow}]}
+        live_by_bet: {bet_trials: 1}
+        health_by_bet: {bet_trials: yellow}
+    - match: '^goal list'
+      out:
+        owner: "human:dana"
+        goals:
+          - {id: goal_4f2a9c1b, title: "Paid trials to 400 a month by year end", owner_id: "human:dana", parent_id: null, status: yellow, status_note: "Paid trials per month is 318 against 400", status_source: auto, bet_id: bet_trials, rank: 0, updated_at: "2026-10-31T18:00:00Z"}
+        chain: []
+        reports: []
+        company: []
+    - match: '^goal show goal_4f2a9c1b'
+      out:
+        id: goal_4f2a9c1b
+        title: "Paid trials to 400 a month by year end"
+        owner_id: "human:dana"
+        status: yellow
+        bet_id: bet_trials
+        kpis: [{id: kpi_trials, name: "Paid trials per month", unit: "", latest: {value: 318, period_end: "2026-10-31"}, freshness: fresh, target_label: "→ 400 by Dec 31", status: yellow, reason: "318 against 400"}]
+        children: []
+        chain: []
+        tasks: []
+        events: []
+        checkins: [{id: chk_1, goal_id: goal_4f2a9c1b, created_at: "2026-10-06T16:00:00Z", author: "human:dana", body: "Campaign starts mid-October.", signal: at_risk}]
+        proposals: []
+    - match: '^proposal list'
+      out: {proposals: []}
     - match: '^task list'
       out:
         tasks:
           - {id: 1a0c5e27-1000-4000-8000-000000000001, title: "Docs for v0.5.20 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "Shipped.", created: "2026-11-02T23:10:00Z", updated: "2026-11-03T08:02:00Z"}
-          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
-          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
-          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
-          - {id: b1c2d3e4-1000-4000-8000-000000000007, title: "Approve the v0.5.17 publish notes", status: open, owner: "human:dana", requester: "bot:release-manager", note: "Superseded by v0.5.20, which shipped.", created: "2026-10-30T10:00:00Z", updated: "2026-11-02T23:30:00Z"}
-          - {id: c2d3e4f5-1000-4000-8000-000000000011, title: "Website preview deploy failing", status: open, owner: "human:dana", requester: "bot:engineering-lead", note: "", created: "2026-10-14T09:00:00Z", updated: "2026-10-14T09:00:00Z"}
-          - {id: 7d21c4a0-1000-4000-8000-000000000008, title: "Approve the v0.5.0 release publish", status: waiting, owner: "human:dana", requester: "bot:release-manager", note: "Ready for your publish approval.", created: "2026-10-29T09:00:00Z", updated: "2026-11-01T09:00:00Z"}
+          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
+          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
         next_offset: null
+    - match: '^needs-you show'
+      out:
+        board: "3 need you: 3 tasks"
+        counts: {tasks: 3, questions: 0, approvals: 0, held: 0}
+        by_bot: {"bot:technical-writer": 1, "bot:botops": 2}
+    - match: '^assistant morning'
+      out: {message_id: msg_morning_1, conversation_id: conv_dana_assistant, day: "2026-11-05", next_at: "2026-11-06T00:00:00-08:00"}
     - match: '^assistant propose'
-      out: {ok: true, proposal: {id: prop_sweep_1, status: waiting_for_confirm, actions: 6}}
+      out: {ok: true, proposal: {id: prop_sweep_1, status: waiting_for_confirm, actions: 4}}
     - match: '^task (bulk close|close)'
       out: {ok: true, closed: 0}
   must:
-    - '^assistant propose .*--for human:dana'
-    - '^assistant propose .*/api/v2/assistant/batch'
+    - '^assistant morning --for human:dana\b'
   must_not:
     - '^task (bulk close|close)\b'
     - '^approval (approve|decline)'
     - '^question answer'
     - '^automation update'
     - '^message send'
+    - '^assistant (propose|send)\b'
   reply: |
-    The final reply is a short summary for the Assistant DM, and ONE Confirm card (`hub assistant propose --for human:dana
-    --path /api/v2/assistant/batch`) holds every close: the done "Docs for" task, the three identical test pings, the
-    superseded v0.5.17 task, and the stale website deploy task (no activity since Oct 14), grouped with counts. The three
-    test pings are under the five-items-in-a-week line, so the card names no stop for them. The run closes nothing directly
-    and sends no message: it acts as the Assistant, not as Dana. It approves and declines nothing and leaves the v0.5.0
-    publish approval off the card. The summary says what is waiting on her confirmation and that nothing has changed yet.
+    Sends ONE morning message to Dana, with `hub assistant morning --for human:dana --body "<message>"`, short and
+    addressed to "you": at most three things only she can do, each with its goal linked, such as a check-in on the yellow
+    trials goal (318 against 400, last check-in Oct 6). The message does not list the done docs task, the two test pings or
+    any queue clean-up, and it is not a tidy card. The run closes nothing, declines nothing, answers nothing, proposes no
+    card and sends no other message. Its final reply is a short run record for her.

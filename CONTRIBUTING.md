@@ -6,8 +6,8 @@ and [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). This lets
 include your contribution in the current Tico or in a future Apache 2.0 release. It does not
 license Tico as a whole under Apache 2.0.
 
-There is no separate contributor license agreement (CLA): you sign off each commit instead
-(see below). Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+There is no separate contributor license agreement (CLA): outside contributors sign off each
+commit instead (see below). Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Before you start
 
@@ -34,6 +34,31 @@ list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run th
 them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
 for one file, `node scripts/ui-tests.cjs <name>` for one browser script. If you touch `app/`, also run `cargo check`
 there.
+
+## Before you push
+
+`scripts/check.sh` is the fast local gate. It runs each static check that applies to what you changed (the Python
+lint baseline, shellcheck, actionlint, cargo fmt, the migration order, the UI API types and the pyright boundary
+modules), one line per check with its time, and exits non-zero if one fails. It compares against the merge-base
+with origin/main, so committed, uncommitted and new files are all checked. `scripts/check.sh --all` runs every check
+on every tracked file; CI runs the same checks. Turn on the pre-push hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+After that, each `git push` runs `scripts/check.sh` first. To push without it once, use `git push --no-verify`.
+shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
+`scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
+
+The UI's JavaScript has a type check and a Biome lint, both seconds long: `bash scripts/check_ui_types.sh` and
+`bash scripts/check_ui_lint.sh`. Each counts findings per file against `ui/types-baseline.json` or
+`ui/lint-baseline.json`. The counts only shrink: after you fix findings, lower the baseline with
+`python3 scripts/ui_baseline.py tsc --write` (or `biome`).
+The UI's API calls are checked against the backend's routes by `bash scripts/check_ui_routes.sh`: it imports the app and
+walks its routes (no server), and counts the calls that match no route per file in `ui/routes-baseline.json`, which
+only shrinks the same way. Fix a call by pointing it at the route it should reach; the baseline is written with
+`python3 scripts/check_ui_routes.py --write`.
 
 ## Profiling API test setup
 
@@ -71,7 +96,7 @@ documented in `app/vendor/README.md`; retain them when updating Cargo locks.
 
 ## Developer Certificate of Origin
 
-Every commit in a pull request must be signed off, which says you wrote it or have the right to
+Every commit in an outside contributor's pull request must be signed off, which says you wrote it or have the right to
 submit it under the contribution licenses above, as set out in the
 [Developer Certificate of Origin](https://developercertificate.org/). Add the sign-off with `-s`:
 
@@ -84,6 +109,9 @@ That appends `Signed-off-by: Your Name <you@example.com>`, using your git `user.
 have already made: `git rebase --signoff main` (then `git push --force-with-lease`). A pull request
 with unsigned commits will be asked to sign them before it is merged.
 
+This applies to outside contributors. Tico team members and the company's own bots commit work the
+company already owns, so their commits need no sign-off, and their pull requests are never held for one.
+
 ## Pull requests
 
 - Make the smallest change that fixes the problem, against `main`.
@@ -93,6 +121,9 @@ with unsigned commits will be asked to sign them before it is merged.
   wording or docs prose, trivial getters or exhaustive parametrizations of one path. Mark a test
   `@pytest.mark.slow` if it needs real git, Docker or a server.
 - Added or changed an icon in `ui/`? Run `python3 scripts/build-icon-font.py` to rebuild the icon font subset (a test fails until you do).
+- New UI files are TypeScript (`ui/app/name.ts`, strict types, no `any`). After `npm ci`, `npm run build:ui` compiles
+  them to `build/ui/` (`npm run watch:ui` while editing); the server will not serve a stale build.
+  `bash scripts/check_ui_types.sh` type-checks them.
 - Keep the tests green, and do not add a dependency, a network call in the UI or a build step
   without saying why.
 - Comments explain why, in the present tense. They do not name who asked or when.
@@ -100,12 +131,19 @@ with unsigned commits will be asked to sign them before it is merged.
   the fictional team Acme (`acme.example`).
 - Describe the behavior change and how you checked it in the pull request.
 
+## How we work
+
+- Trunk-based: everything lands on `main` through short-lived branches named `<who>/<topic>`, one ticket per PR.
+- Draft PRs run no CI. Mark the PR ready for review to start the checks.
+- The author merges, once the checks are green and the PR is reviewed.
+- If a release candidate goes red because of your merge, fixing it comes before anything else.
+
 ## Releases
 
 Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's notes after it is published.
 
-A release is a version tag. Once the release checks are green on the frozen commit, the Release
-Manager pushes `vX.Y.Z` on `main`. The tag builds the Docker images and publishes the GitHub release,
-and running installs then offer the update; the version's section in [CHANGELOG.md](CHANGELOG.md)
-follows. Contributors do not tag.
-The steps are in [docs/releasing.md](docs/releasing.md).
+A release is a version tag, and contributors do not tag. Tico releases from two windows a day (14:30 and 22:00 UTC):
+GitHub Actions validates main's head, ships the first green candidate to Tico Team's install, and promotes it to
+stable after it has baked. A hotfix is for major production issues only. The Release Manager bot no longer tags or
+rolls out Tico releases; it only monitors them. The details are in
+[docs/releasing.md](docs/releasing.md#release-windows).

@@ -110,20 +110,20 @@
     Declines only the three September publish approvals (v0.4.9, v0.4.10, v0.4.11), one command each, as Dana, with no card.
     It leaves the Harbor Co send from Oct 30 undeclined and says so in a line. It approves nothing and messages nobody.
 
-- id: followups-also-health-monitor
+- id: followups-also-check-health
   group: followups
-  prompt: "also the Health Monitor ones"
+  prompt: "also the Check health ones"
   history:
-    - {from: "human:dana", body: "Have Health Monitor stop pinging me with test tasks. Only the runner queue ones."}
+    - {from: "human:dana", body: "Have Check health stop pinging me with test tasks. Only the runner queue ones."}
     - {from: "assistant", body: "Turned off the runner queue ping automation. Say undo to put it back. The three test pings already in your queue are still open."}
   hub:
     - match: '^task list'
       out:
         tasks:
-          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
-          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
-          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
-          - {id: e7a1c3d9-8200-4000-8000-000000000007, title: "[Health Monitor] cell-2 disk at 91 percent", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "A real finding: free space on cell-2.", created: "2026-11-02T20:00:00Z", updated: "2026-11-02T20:00:00Z"}
+          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
+          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
+          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
+          - {id: e7a1c3d9-8200-4000-8000-000000000007, title: "[Check health] cell-2 disk at 91 percent", status: open, owner: "human:dana", requester: "bot:botops", note: "A real finding: free space on cell-2.", created: "2026-11-02T20:00:00Z", updated: "2026-11-02T20:00:00Z"}
         next_offset: null
     - match: '^task close (4d3f8b5a|5e4a9c6b|6f5b0d7c)'
       out: {ok: true, closed: true, note: "closed as the person, via Assistant"}
@@ -132,7 +132,7 @@
     - match: '^automation (list|show)'
       out:
         automations:
-          - {id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: false, runs_7d: 4, creates: "one task per run, owner human:dana"}
+          - {id: auto_health_pings, name: "Check health runner queue ping", owner: "bot:botops", trigger: "every 6 hours", enabled: false, runs_7d: 4, creates: "one task per run, owner human:dana"}
         next: null
   must:
     - '^task (bulk close\b.*|close )4d3f8b5a\S*'
@@ -144,33 +144,33 @@
     - '^approval (approve|decline)(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
   reply: |
-    Closes the three open Health Monitor test pings, by their ids, as Dana (one bulk close, or one close per id), and says so
-    with the count and how to reopen them. It leaves the real Health Monitor finding about cell-2's disk open, since it is not a test ping, and says
-    so in a line. It does not message Health Monitor and does not touch the automation again.
+    Closes the three open Check health test pings, by their ids, as Dana (one bulk close, or one close per id), and says so
+    with the count and how to reopen them. It leaves the real Check health finding about cell-2's disk open, since it is not a test ping, and says
+    so in a line. It does not message Check health and does not touch the automation again.
 
 - id: followups-stop-them-coming-back
   group: followups
   prompt: "Stop them from coming back."
   history:
-    - {from: "human:dana", body: "Close the test pings from Health Monitor."}
+    - {from: "human:dana", body: "Close the test pings from Check health."}
     - {from: "assistant", body: "Closed the three test pings. The source still makes them every 6 hours, so more will come."}
   hub:
     - match: '^origin show'
       out:
-        item: {kind: task, id: "4d3f8b5a-1000-4000-8000-000000000004", title: "[Health Monitor] test ping: runner queue"}
-        made_by: "bot:health-monitor"
-        source: {kind: automation, id: auto_health_pings, name: "Health Monitor runner queue ping", trigger: "every 6 hours"}
+        item: {kind: task, id: "4d3f8b5a-1000-4000-8000-000000000004", title: "[Check health] test ping: runner queue"}
+        made_by: "bot:botops"
+        source: {kind: automation, id: auto_health_pings, name: "Check health runner queue ping", trigger: "every 6 hours"}
         siblings_this_week: 22
         stops:
           - {fix: "Turn the automation off", command: "hub automation update auto_health_pings --disable --summary 'stop test pings'"}
-          - {fix: "Or a rule that stops it", command: "hub rules add --kind internal --text 'Health Monitor test pings do not go into the owner queue' --who human:dana"}
+          - {fix: "Or a rule that stops it", command: "hub rules add --kind internal --text 'Check health test pings do not go into the owner queue' --who human:dana"}
     - match: '^automation (list|show)'
       out:
         automations:
-          - {id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
+          - {id: auto_health_pings, name: "Check health runner queue ping", owner: "bot:botops", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
         next: null
       after:
-        - {when: '^automation update auto_health_pings .*--disable', out: {automations: [{id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: false, runs_7d: 24, creates: "one task per run, owner human:dana"}], next: null}}
+        - {when: '^automation update auto_health_pings .*--disable', out: {automations: [{id: auto_health_pings, name: "Check health runner queue ping", owner: "bot:botops", trigger: "every 6 hours", enabled: false, runs_7d: 24, creates: "one task per run, owner human:dana"}], next: null}}
     - match: '^automation update auto_health_pings .*--disable'
       out: {ok: true, id: auto_health_pings, enabled: false, version: 4, summary: "turned off at the owner's request via Assistant"}
     - match: '^automation update auto_health_pings'
@@ -185,9 +185,9 @@
     - '^approval (approve|decline)(?! -h\b| --help)'
     - '^automation update auto_docs_release'
   reply: |
-    Stops the source, not the symptom: turns off the Health Monitor runner queue ping automation (auto_health_pings), or adds a
+    Stops the source, not the symptom: turns off the Check health runner queue ping automation (auto_health_pings), or adds a
     rule that stops it, as Dana. It says which, in one line, and how to undo it. It does not close more tasks, does not touch
-    the release docs automation, and does not message Health Monitor.
+    the release docs automation, and does not message Check health.
 
 - id: followups-answer-keep-it
   group: followups
