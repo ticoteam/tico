@@ -43,8 +43,9 @@ Cancel keeps the current access. Sign-in switches show **Saved** on success; a r
   **Left**) brings them back (their old tokens stay revoked).
 - **Remove** (under **Left**, owner only) deletes someone added by mistake for good, with their unused tokens, sent invites
   and allow-list address. Only a left human with no history can be removed: nothing they did (an event, a message, a task, an
-  approval, a used token) or that names them anywhere else, and not synced from a directory. Anyone else stays as left
-  (`Has history; stays as left`). The audit event `person.removed` keeps their name and email.
+  approval, a used token) or that names them anywhere else, and not synced from a directory. A seat that reports to them is
+  not history: Remove moves those seats to their manager, or to the owner removing them, and each move is logged. Anyone else stays as left (`Has history; stays as left`). The audit event `person.removed`
+  keeps their name and email.
 - **Bot limit per member**: 25 active bots by default. A team still on the old default of 5 is moved to 25 once on upgrade;
   a 5 someone set by changing it from another number, and any other number, stays.
 
