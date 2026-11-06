@@ -7551,7 +7551,9 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     if parent and parent["owner_id"] != actor and parent["owner_id"] not in told and parent["owner_id"] != subtask_told:
         _wake(conn, after, parent["owner_id"], f"Child closed: {after['title']}", quiet_bots=True, quiet=True)
     if not with_parent:
-        _parent_finished(conn, after, row["status"], actor, told=subtask_told)
+        # A question task Tico sends back unanswered (still_needed) goes on its bot's roundup instead: no wake.
+        _parent_finished(conn, after, row["status"], actor, told=subtask_told,
+                         wake=not (quiet and actor == KEEPER and row.get("questions")))
     _recount(conn, after["owner_id"])
     _recount(conn, after["requester_id"])
     return after
