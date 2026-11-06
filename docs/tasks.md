@@ -1326,7 +1326,9 @@ owner, requester or a mover) may steer, queue or set the goal; anyone else may d
 (`compose.send_way`, [Steer, queue or defer](using-tico.md#steer-queue-or-defer)), or the nearest one you may use
 here (Steer becomes Queue; otherwise Defer). Set as goal is for one comment. A comment that names no way (the API, CLI
 or MCP) is a Steer, as the paragraph on comments above says. `GET /api/v2/threads/{thread_id}/reach` (with `text`,
-`delivery`, `defer_for`, `in_reply_to`) answers who it would reach, each with its mode, before it is sent. Before you send, the box says what the chosen way does, and after, if the server
+`delivery`, `defer_for`, `in_reply_to`) answers who it would reach, each with its mode, before it is sent: **Reaches
+N** under the box opens that list by name (Now, After its turn, Next turn, Notified), as the chosen way and the
+@mentions you type change. Before you send, the box says what the chosen way does, and after, if the server
 sent it another way (a defer that rode along). With no bot on the task (everyone on it is a person) the send is a plain arrow, and the box says no bot gets the
 message. `GET /v2/tasks/{id}` carries
 this view: each bot reply in `comments` has its `run`; `execution` is the owning bot's newest run in the task's own
@@ -1578,7 +1580,9 @@ A task's **followers** are the people and bots who follow its thread, each at a 
   @mentioned.
 - Filing a task does not follow it, for people and bots alike. Choose **Follow** on the new-task form, `follow: true`
   on `POST /api/v2/tasks`, `hub task create --follow`, or `follow` on `hub_task_create`.
-- Commenting does not follow a task either. An @mention does.
+- Commenting does not follow a task either. An @mention does. Under the comment box, **Follow** (shown until you
+  follow) follows the task once your comment is in; it stays ticked or unticked for your next task
+  (`compose.follow.task`).
 - Only someone who can see the task follows it: a private task's followers are its requester, owner, readers and
   inherited readers who chose to. Someone taken off Who can see is no longer listed.
 - Anyone who can see the task follows or unfollows it and sets their own level. Whoever may change the task (as for
