@@ -27,8 +27,9 @@ def _listed_ids(api, token=TOKEN):
     return [a["id"] for a in _call(api, "GET", "automations", token)["automations"]]
 
 
-def test_the_owner_lists_the_sweep_with_its_controls(environment):
+def test_the_sweep_is_listed_edited_paused_run_by_the_owner_and_hidden_from_quinn(environment):
     api, aid = _installed(environment)
+    # The owner lists the sweep with its controls.
     assert aid.startswith("auto_")
     listed = next(a for a in _call(api, "GET", "automations")["automations"] if a["id"] == aid)
     assert listed["name"] == SWEEP_TITLE and listed["owner_id"] == "bot:coo" and listed["enabled"] is True
@@ -38,29 +39,7 @@ def test_the_owner_lists_the_sweep_with_its_controls(environment):
     assert shown["steps"][0]["type"] == "bot_turn" and shown["steps"][0]["bot"] == "bot:coo"
     assert shown["can_edit"] is True and shown["can_pause"] is True
 
-
-def test_the_owner_changes_its_schedule_and_switch(environment):
-    api, aid = _installed(environment)
-    edited = _call(api, "PATCH", f"automations/{aid}",
-                   body={"trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}})
-    assert edited["version"] == 2 and edited["trigger"]["cron"] == "0 9 * * *"
-    paused = _call(api, "PATCH", f"automations/{aid}", body={"enabled": False})
-    assert paused["enabled"] is False and paused["version"] == 2     # a pause is not a new version
-    resumed = _call(api, "PATCH", f"automations/{aid}", body={"enabled": True})
-    assert resumed["enabled"] is True
-
-
-def test_the_owner_run_now_creates_a_run(environment):
-    api, aid = _installed(environment)
-    run = _call(api, "POST", f"automations/{aid}/run", body={})["run"]
-    assert run["id"]
-    runs = _call(api, "GET", f"automations/{aid}/runs")["runs"]
-    assert [r["id"] for r in runs] == [run["id"]]
-    assert _call(api, "GET", f"automations/{aid}")["last_run"]["id"] == run["id"]
-
-
-def test_a_person_who_is_not_above_the_assistant_does_not_see_the_sweep(environment):
-    api, aid = _installed(environment)
+    # A person who is not above the Assistant does not see the sweep, and changes nothing about it.
     as_person(api, "quinn")                    # registers the identity; its token is "quinn"
     quinn = "quinn"
     assert aid not in _listed_ids(api, quinn)
@@ -70,3 +49,19 @@ def test_a_person_who_is_not_above_the_assistant_does_not_see_the_sweep(environm
     assert _call(api, "GET", f"automations/{aid}/runs", quinn, expected=403)
     still = _call(api, "GET", f"automations/{aid}")
     assert still["enabled"] is True and still["version"] == 1
+
+    # The owner changes its schedule and switch.
+    edited = _call(api, "PATCH", f"automations/{aid}",
+                   body={"trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}})
+    assert edited["version"] == 2 and edited["trigger"]["cron"] == "0 9 * * *"
+    paused = _call(api, "PATCH", f"automations/{aid}", body={"enabled": False})
+    assert paused["enabled"] is False and paused["version"] == 2     # a pause is not a new version
+    resumed = _call(api, "PATCH", f"automations/{aid}", body={"enabled": True})
+    assert resumed["enabled"] is True
+
+    # Run now creates a run.
+    run = _call(api, "POST", f"automations/{aid}/run", body={})["run"]
+    assert run["id"]
+    runs = _call(api, "GET", f"automations/{aid}/runs")["runs"]
+    assert [r["id"] for r in runs] == [run["id"]]
+    assert _call(api, "GET", f"automations/{aid}")["last_run"]["id"] == run["id"]

@@ -143,7 +143,7 @@ Check health runs as a [Maintenance](maintenance.md) step. It has no separate Sy
 | **Stall checks** | Every minute: allocates waiting tickets, closes timed-out checks, drops queued work its bot can no longer read, and alerts once when an Engineering task has been blocked over four hours (to its manager, or else its requester). It does not wake a bot about one stalled task: the task roundup lists those. | Every minute |  |
 | **Task roundup (retired)** | Grouped task lists now run through [Maintenance Find stuck](maintenance.md), with its switch, schedule and wake limits. | Maintenance schedule |  |
 | **Turn fixer** | Frees turns proven dead (lease lost and process gone, or stopped before they started) with a note on the task; holds a dead turn that may have pushed, sent or paid for BotOps instead of retrying it; keeps one Health finding per busy-turns incident and hands what it cannot fix to BotOps. See [Computers](computers.md#the-turn-fixer). | Every 10 seconds |  |
-| **Waiting checks** | Turns a bot's plain ask to a person into a small task. It no longer sends a waiting task back to work; a waiting task that waits on nothing is listed on the task roundup after a day. | Hourly |  |
+| **Waiting checks** | Turns a bot's plain ask to a person into a small task, and sends a bot's task waiting on nothing tracked back to open after two hours (not before its due date or snooze ends). A task sent back three times in 24 hours stays waiting, and its manager bot (or BotOps, never a person) is told once a day. | Hourly |  |
 | **Snooze ends** | Brings snoozed tasks back when their date comes and starts deferred runs that are due. | Every 10 seconds |  |
 | **Go-live expiry** | Ends a go-live waiting for a computer that never reports. | Every 10 minutes |  |
 | **Page monitors** | Reads each competitor page the Librarian or owner watches (at most 50 a day, the longest unchecked first) and files a market insight only when one changed. See [Market watch](market-watch.md). | Daily | a watched page |
@@ -162,7 +162,6 @@ Check health runs as a [Maintenance](maintenance.md) step. It has no separate Sy
 | **Thread retention** | Deletes messages past the time their thread keeps them, in short batches. | Every 15 minutes | |
 | **Skill usage** | Folds skill uses into daily counts for Library › Skills and deletes raw uses older than 90 days. | Hourly | |
 | **Production checks** | Reads a few production invariants in plain code and shows each failing one on Health. | Every 15 minutes | |
-| **Thread routing** (AI) | Wakes the bots a person's unaddressed thread message is for, three at most. | As messages arrive | |
 | **Thread ranking** (AI) | Gives each thread with new messages in the last 14 days a level from 1 to 10, for the threads API's `sort=important` order. In that order a thread that needs attention comes first, whatever its level. A thread is ranked at most once an hour, and at most 20 threads a pass and 40 an hour. A thread never ranked sits at 5; a failed call keeps its last level. That order otherwise leaves out level 1 threads, threads of finished tasks, and task threads no person owns or asked for. It also stops for the day once the server's Decide calls reach 80% of the bots' daily call budget, so the checks that act on tasks keep room. | Every 5 minutes | |
 | **Bot thread digest** | Starts one run an hour for each bot with new messages in the threads it follows on digest. | Hourly | |
 | **Nightly memory tidy** | Proposes memory and knowledge edits for the pilot bots. | Nightly at 03:30 | |
@@ -191,7 +190,7 @@ Check health runs as a [Maintenance](maintenance.md) step. It has no separate Sy
 | **Sleep when idle** | Asks HQ to put this server to sleep once nobody has used it for the set time. | Every 5 minutes; every minute on a cell | sleep set, or a cell |
 | **Cloud machines** | Starts bots' cloud machines for work and stops them when idle. | Every 10 seconds | a Tico Cloud company |
 
-Every row shows its last run. **Meeting notes sync** and **Document sync** record one run per pass, **Thread routing** one per pass of waiting messages, **Start fresh when the topic changes** one per check, and **Start assigned tasks** one per start.
+Every row shows its last run. **Meeting notes sync** and **Document sync** record one run per pass, **Start fresh when the topic changes** one per check, and **Start assigned tasks** one per start.
 
 Not listed, because they are not timed jobs of their own: the automations engine (its runs are each automation's own), the workers that send webhooks and sync Finance's bank, books and Gateway (they act on queued work and show it on that work's page), the one-off backfills a release runs once, and the restart of a worker that stopped.
 

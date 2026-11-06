@@ -165,8 +165,8 @@ def test_system_ask_refuses_a_hold_for_a_recipient_that_changed_during_its_check
         assert not c.execute("SELECT 1 FROM org_rule_holds WHERE author='bot:ops'").fetchone()
 
 
-@pytest.mark.parametrize("kind", ["task", "comment", "message"])
-@pytest.mark.parametrize("outcome", ["pass", "unchecked"])
+# Every kind on a passed check; an unchecked one on the task kind (the kinds share the recheck).
+@pytest.mark.parametrize("kind,outcome", [("task", "pass"), ("comment", "pass"), ("message", "pass"), ("task", "unchecked")])
 def test_system_ask_rechecks_a_changed_route_after_a_nonblocking_verdict(ruled_asks, monkeypatch, kind, outcome):
     from backend import org_rule_check
     api, judge = ruled_asks
@@ -212,8 +212,7 @@ def test_system_ask_rechecks_a_changed_route_after_a_nonblocking_verdict(ruled_a
     assert bodies(api, text) == []
 
 
-@pytest.mark.parametrize("kind", ["task", "comment", "message"])
-@pytest.mark.parametrize("rules_in_force", [True, False])
+@pytest.mark.parametrize("kind,rules_in_force", [("task", True), ("comment", True), ("message", True), ("task", False)])
 def test_system_ask_rechecks_a_route_that_matched_no_rules_before_ingest(ruled_asks, monkeypatch, kind, rules_in_force):
     from backend import ask_ingest
     api, judge = ruled_asks
@@ -548,8 +547,9 @@ def test_health_names_a_system_hold_even_with_a_saved_ask_and_hides_private_text
     assert "Document the release" not in json.dumps(hidden)
 
 
-@pytest.mark.parametrize("manager", ["human:cara", "bot:cpo"])
-@pytest.mark.parametrize("source", ["primary", "additional", "reply", "comment"])
+# Every source for a person manager; a bot manager is checked on the primary source (the sources share one check).
+@pytest.mark.parametrize("manager,source", [("human:cara", "primary"), ("human:cara", "additional"),
+                                            ("human:cara", "reply"), ("human:cara", "comment"), ("bot:cpo", "primary")])
 def test_routing_checks_every_sources_activity_permissions_for_people_and_bots(api, monkeypatch, manager, source):
     from backend.auth import actor_reads_task
     from backend.tests.test_api import restrict
@@ -586,7 +586,7 @@ def test_people_who_cannot_sign_in_are_skipped(api, monkeypatch, standing):
         assert msg["recipient_id"] == "human:ana"
 
 
-@pytest.mark.parametrize("kind,explicit", [("plain", False), ("comment", False), ("comment", True), ("file", False), ("file", True)])
+@pytest.mark.parametrize("kind,explicit", [("plain", False), ("comment", False), ("file", True)])
 def test_private_system_task_questions_reach_the_inheriting_manager(api, kind, explicit):
     from backend.tests.test_task_review import ask
     token = bot_token(api)

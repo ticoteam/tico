@@ -7,7 +7,7 @@ reads as `snoozed_until`, `snoozed_by_id` and `snoozed_note` through hubdb.TASKS
 - it is left out of the board, task lists (`GET /api/v2/tasks` unless `snoozed=all|only`), Needs you and Decide;
 - nothing automatic moves it: the task roundup skips it (backend/task_roundup.py), and no "Due:"
   reminder goes out (`H.not_yet_due`). The keeper's notices about it reach its owner bot quietly (`H._wake`), as does
-  another bot's comment (`H.comment_wakes`). A person's comment and Run now still reach the bot, and notices to anyone else
+  another bot's comment (the wake rule's `parked` hold). A person's comment and Run now still reach the bot, and notices to anyone else
   (a requester bot handed it for review) are as usual.
 - a snooze sets no follow-up time (tasks.check_back_at): a date set here is not a follow-up, so nothing is left behind
   when the snooze ends or is ended early.

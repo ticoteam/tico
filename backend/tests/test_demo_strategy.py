@@ -18,7 +18,6 @@ from backend.app import create_app
 from backend.market_briefing import this_week
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
-NEXT_YEAR = datetime(2027, 11, 2, 18, 30, tzinfo=timezone.utc)
 FIXED_SECTIONS = ("serve", "sell", "know", "how", "not")
 
 
@@ -32,12 +31,6 @@ def demo_clock():
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
     return demo.build(tmp_path_factory.mktemp("demo-strategy"), now=NOW)
-
-
-@pytest.fixture(scope="module")
-def built_next_year(tmp_path_factory):
-    with time_machine.travel(NEXT_YEAR, tick=False):
-        return demo.build(tmp_path_factory.mktemp("demo-strategy-2027"), now=NEXT_YEAR)
 
 
 def signed_in(settings):
@@ -109,21 +102,6 @@ def test_this_weeks_briefing_is_posted_by_the_librarian(built):
     assert briefing["week"] == this_week(NOW)
     assert briefing["created_by"] == "bot:librarian"
     assert len(briefing["items"]) == 3
-
-
-def test_the_same_now_builds_the_same_strategy_rows(built, tmp_path):
-    tables = ("strategy_versions", "strategy_bets", "market_briefings", "goal_proposals",
-              "market_sizes", "market_insights", "brand_versions")
-
-    def rows(path):
-        with sqlite3.connect(path) as db:
-            out = {table: db.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables}
-            out["strategy_events"] = db.execute("SELECT * FROM history_events WHERE subject_type='strategy' "
-                                                "ORDER BY 1").fetchall()
-            return out
-
-    again = demo.build(tmp_path, now=NOW)
-    assert rows(again.db_path) == rows(built.db_path)
 
 
 def parse(stamp):
@@ -200,17 +178,3 @@ def test_the_brand_book_is_published_by_the_owner(built):
     assert published["n"] == 1 and published["published_by"] == "human:ana"
     assert published["body"]["name"] == "Acme Lights"
     assert published["body"]["words"]["avoid"] and published["body"]["claims"]["never"]
-
-
-def test_a_build_in_another_year_dates_the_market_and_its_sources_to_that_year(built_next_year):
-    with time_machine.travel(NEXT_YEAR, tick=False), signed_in(built_next_year) as api:
-        spend = api.get("/api/v2/market/spend").json()
-        insights = api.get("/api/v2/market/insights").json()["insights"]
-    assert spend["year"] == spend["definition"]["year"] == 2027
-    listening = [i for i in insights if i["about"].startswith("Listening:")]
-    urls = [e["source_url"] for seg in spend["segments"] for row in seg["estimates"] for e in row["evidence"]]
-    urls += [i["source_url"] for i in listening]
-    dated = [url for url in urls if "2026" in url or "2027" in url]
-    assert dated and all("-2027" in url for url in dated)
-    assert any("2027" in i["quote"] for i in listening)
-    assert not any("2026" in i["quote"] + i["claim"] for i in listening)

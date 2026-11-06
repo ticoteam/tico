@@ -634,7 +634,7 @@
     },
     "/api/v2/api-tools/{tool_id}": {
       "get": {
-        "summary": "One API tool: its keys (never a value), who can use it at which level, its last checks and calls",
+        "summary": "One API tool: its keys (never a value), who can use it at which level, its last checks and calls; to whoever may change it, who can see it and why. A tool the caller may not see is a 404",
         "operationId": "getApiTool",
         "parameters": [
           {
@@ -654,6 +654,75 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiTool"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tools"
+        ]
+      },
+      "patch": {
+        "summary": "Change a tool's settings (credential administrators) or who can see it: audience null for Everyone, or an audience for Only listed (the owner, or a credential administrator who can see it, who then stays on the list)",
+        "operationId": "updateApiTool",
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tool Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/backend__api_tools__ToolUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiToolSettings"
                 }
               }
             }
@@ -34963,6 +35032,56 @@
         ]
       }
     },
+    "/api/v2/skills/bundles/{sha256}": {
+      "get": {
+        "summary": "An approved version's files by its bundle sha, checked against the sha before it is served",
+        "operationId": "getSkillBundle",
+        "parameters": [
+          {
+            "name": "sha256",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sha256"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Skills"
+        ]
+      }
+    },
     "/api/v2/skills/install-targets": {
       "get": {
         "summary": "Who the caller may install a skill for: writable bots, people, and teams as current members",
@@ -43426,6 +43545,121 @@
         ]
       }
     },
+    "/api/v2/threads/{thread_id}/reach": {
+      "get": {
+        "summary": "Who a message would reach, each with its mode, given `text` (its @mentions), `delivery` (steer when none), `defer_for` and `in_reply_to`; `outside` lists @mentions it would not reach, `adds_reader` a private task's new reader. Writes nothing",
+        "operationId": "getThreadReach",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "text",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Text"
+            }
+          },
+          {
+            "name": "delivery",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "steer",
+                    "queue",
+                    "defer"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Delivery"
+            }
+          },
+          {
+            "name": "defer_for",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Defer For"
+            }
+          },
+          {
+            "name": "in_reply_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "In Reply To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadReach"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Threads"
+        ]
+      }
+    },
     "/api/v2/threads/{thread_id}/read": {
       "post": {
         "summary": "Read up to `seq` in the thread; the highest mark wins, so a device that is ahead keeps its place",
@@ -48114,43 +48348,7 @@
         "type": "object",
         "properties": {
           "tool": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              },
-              "service": {
-                "type": "string"
-              },
-              "base_url": {
-                "type": "string"
-              },
-              "auth_scheme": {
-                "type": "string"
-              },
-              "check_path": {
-                "type": "string"
-              },
-              "delivery": {
-                "enum": [
-                  "proxy",
-                  "computer"
-                ]
-              }
-            },
-            "required": [
-              "auth_scheme",
-              "base_url",
-              "check_path",
-              "delivery",
-              "id",
-              "name",
-              "service"
-            ],
-            "additionalProperties": true
+            "$ref": "#/components/schemas/ApiToolSettings"
           },
           "keys": {
             "type": "array",
@@ -48205,7 +48403,8 @@
                 "kind": {
                   "enum": [
                     "bot",
-                    "person"
+                    "person",
+                    "finance"
                   ]
                 },
                 "name": {
@@ -48225,6 +48424,10 @@
                     "string",
                     "null"
                   ]
+                },
+                "fixed": {
+                  "type": "boolean",
+                  "description": "Finance reads this key; it goes when the source is disconnected, not here"
                 }
               },
               "required": [
@@ -48298,13 +48501,73 @@
           },
           "can_manage": {
             "type": "boolean"
+          },
+          "private": {
+            "type": "boolean"
+          },
+          "can_set_audience": {
+            "type": "boolean"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessAudience"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only to whoever may change it; null is Everyone"
+          },
+          "seen_by": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "subject": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "person",
+                    "group",
+                    "bot",
+                    "finance"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "why": {
+                  "enum": [
+                    "Owner",
+                    "Listed",
+                    "Can use it"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "name",
+                "subject",
+                "why"
+              ],
+              "additionalProperties": true
+            },
+            "description": "Only to whoever may change it: who can see an Only listed tool, and why"
           }
         },
         "required": [
           "access",
           "can_manage",
+          "can_set_audience",
           "checks",
           "keys",
+          "private",
           "recent",
           "status",
           "tool"
@@ -48363,6 +48626,49 @@
         "required": [
           "next",
           "rows"
+        ],
+        "additionalProperties": true
+      },
+      "ApiToolSettings": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "auth_scheme": {
+            "type": "string"
+          },
+          "check_path": {
+            "type": "string"
+          },
+          "delivery": {
+            "enum": [
+              "proxy",
+              "computer"
+            ]
+          },
+          "private": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "auth_scheme",
+          "base_url",
+          "check_path",
+          "delivery",
+          "id",
+          "name",
+          "private",
+          "service"
         ],
         "additionalProperties": true
       },
@@ -66093,7 +66399,10 @@
             "type": "string"
           },
           "recipient_id": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "kind": {
             "type": "string"
@@ -79017,6 +79326,73 @@
         ],
         "additionalProperties": true
       },
+      "ThreadReach": {
+        "type": "object",
+        "properties": {
+          "thread_id": {
+            "type": "string"
+          },
+          "way": {
+            "type": "string",
+            "enum": [
+              "steer",
+              "queue",
+              "defer"
+            ]
+          },
+          "reaches": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "mention, ask, dm, home, sub_thread, reply, follower or digest"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "steer",
+                    "queue",
+                    "defer",
+                    "digest"
+                  ]
+                },
+                "defer_for": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "adds_reader": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "actor",
+                "mode",
+                "reason"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "outside": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "outside",
+          "reaches",
+          "thread_id"
+        ],
+        "additionalProperties": true
+      },
       "ThreadReactions": {
         "type": "array",
         "items": {
@@ -79618,6 +79994,10 @@
           },
           "href": {
             "type": "string"
+          },
+          "private": {
+            "type": "boolean",
+            "description": "An API tool whose Who can see it is Only listed"
           }
         },
         "required": [
@@ -81720,6 +82100,96 @@
           "url"
         ],
         "additionalProperties": true
+      },
+      "backend__api_tools__ToolUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "auth_scheme": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Scheme"
+          },
+          "check_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Path"
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(proxy|computer)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessAudience"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ToolUpdate"
       },
       "backend__company_page__api_editions__Correction": {
         "properties": {

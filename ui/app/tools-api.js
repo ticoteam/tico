@@ -8,7 +8,11 @@
    GET …/activity?result=&cursor= ({rows, next}: newest first, a page at a time). A row is a call through the proxy
    (kind 'call': method, path with query keys only, result sent | refused | failed) or, for a key on computers, the
    newest time a run took it (kind 'use'); each has `at`. Revealing a key is the vault's own audited
-   request (POST /api/v2/credentials/<id>/reveal). Styles: ui/styles/tools.css.
+   request (POST /api/v2/credentials/<id>/reveal). Who can see it: `private` (Only listed) puts a Private pill after the
+   name; whoever may change it (`can_set_audience`) gets the card with `audience` and `seen_by` ([{subject, kind, id,
+   name, why}]: Owner, Listed, Can use it) and saves through PATCH /api/v2/api-tools/<id> {audience: null | audience},
+   picking with the page audience's editor (accessEditor, ui/app/settings-access.js). An access row of kind 'finance'
+   is Finance reading the key: shown, never changed here. Styles: ui/styles/tools.css.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -27,6 +31,7 @@ const taResult = r => { const [word, tone] = TA_RESULTS[r] || [r || '', '']; ret
 const taWho = row => row.bot ? botDisplayName(row.bot) : personDisplay(String(row.actor || '').replace(/^human:/, ''));
 const taCall = c => c.kind === 'use' ? 'Key taken by a run' : `${c.method || ''} ${c.path || ''}`.trim();
 const taFace = a => a.kind === 'bot' ? avatar(a.subject.slice(4), 22)
+  : a.kind === 'finance' || a.kind === 'group' ? `<span class="tt-tile sm" aria-hidden="true"><span class="nav-icon">${a.kind === 'finance' ? 'account_balance' : 'group'}</span></span>`
   : personAvatar((S.people || []).find(p => p.id === a.subject.split(':')[1]) || {name: a.name}, 22);
 
 // ----------------------------------------------------------------- the page
@@ -54,7 +59,7 @@ function taDrawHead() {
   root.querySelector('[data-ta-crumb]').textContent = tool.name;
   const sub = ['API key', taHost(tool.base_url)].filter(Boolean).join(' · ');
   root.querySelector('[data-ta-head]').innerHTML = `<header class="tt-title"><span class="tt-tile lg" aria-hidden="true"><span class="nav-icon">api</span></span>
-      <div class="tt-title-text"><h1>${esc(tool.name)}</h1><p class="muted">${esc(sub)}</p></div>
+      <div class="tt-title-text"><h1>${esc(tool.name)}${TA.data.private ? TOOLS_PRIVATE : ''}</h1><p class="muted">${esc(sub)}</p></div>
       <div class="tt-title-act">${toolsPill(status)}${tool.base_url && tool.check_path ? '<button type="button" class="ghost small" data-ta-check>Check now</button>' : ''}${
         manage ? '<button type="button" class="ghost small" data-ta-settings>Settings</button>' : ''}</div></header>
     <nav class="tt-tabs" aria-label="${esc(tool.name)}">${[['overview', base, 'Overview'], ['activity', base + '/activity', 'Activity']].map(([k, href, label]) =>
@@ -66,16 +71,16 @@ function taDrawOverview() {
   const d = TA.data, body = $('#tool-api [data-ta-body]');
   if (formBusy(body)) return;   // a half-typed Add stays put
   body.innerHTML = `<div class="tt-cols"><div class="tt-col">${taWhoCard(d)}${taRecentCard(d)}</div>
-    <div class="tt-col">${taKeysCard(d)}${taCheckCard(d)}${taLimitsCard()}</div></div>`;
+    <div class="tt-col">${d.can_set_audience ? taSeeCard(d) : ''}${taKeysCard(d)}${taCheckCard(d)}${taLimitsCard()}</div></div>`;
 }
 function taWhoCard(d) {
   const manage = d.can_manage;
-  const rows = (d.access || []).map(a => `<tr data-ta-subject-row="${esc(a.subject)}">
+  const rows = (d.access || []).map(a => `<tr data-ta-subject-row="${esc(a.subject)}"${a.fixed ? ' data-ta-fixed' : ''}>
       <td class="tt-who-name">${taFace(a)}<span>${esc(a.name || a.subject)}${a.kind === 'bot' ? ' <span class="muted">· bot</span>' : ''}</span></td>
-      <td>${manage ? `<div class="theme-seg" role="radiogroup" aria-label="Level for ${esc(a.name)}">${TA_LEVELS.map(([k, label]) =>
+      <td>${manage && !a.fixed ? `<div class="theme-seg" role="radiogroup" aria-label="Level for ${esc(a.name)}">${TA_LEVELS.map(([k, label]) =>
         `<button type="button" role="radio" aria-checked="${a.level === k}" data-ta-level="${k}" data-ta-subject="${esc(a.subject)}">${label}</button>`).join('')}</div>` : esc(taLevelName(a.level))}</td>
       <td class="muted tt-used">${a.last_used_at ? esc(ago(a.last_used_at)) : ''}</td>
-      <td class="mb-act">${manage ? `<button type="button" class="ghost tt-x" data-ta-remove="${esc(a.subject)}" aria-label="Remove ${esc(a.name)}" title="Remove">×</button>` : ''}</td></tr>`).join('');
+      <td class="mb-act">${manage && !a.fixed ? `<button type="button" class="ghost tt-x" data-ta-remove="${esc(a.subject)}" aria-label="Remove ${esc(a.name)}" title="Remove">×</button>` : ''}</td></tr>`).join('');
   const taken = new Set((d.access || []).map(a => a.subject));
   const people = (S.people || []).filter(p => !p.hidden && !p.archived && !taken.has('human:' + p.id));
   const bots = (S.emps || []).filter(e => e.status !== 'archived' && !taken.has('bot:' + e.id));
@@ -88,6 +93,37 @@ function taWhoCard(d) {
     ${add}${rows ? `<table class="settings-table tt-who-table"><tbody>${rows}</tbody></table>` : '<p class="muted" data-ta-nobody>Nobody yet.</p>'}
     <p class="muted tt-foot">Assistants act as their person.</p></section>`;
 }
+// Who can see it: Everyone (today's rules) or Only listed; the owner, the list and whoever can use it see it.
+const TA_LISTS = {person: 'people', group: 'teams', bot: 'bots'};
+function taSeeCard(d) {
+  const only = !!d.private, me = 'human:' + (S.me?.id || ''), owner = (d.seen_by || []).some(r => r.why === 'Owner' && r.subject === me);
+  const choice = [['everyone', 'Everyone', !only], ['only', 'Only listed', only]].map(([k, label, on]) =>
+    `<button type="button" class="${on ? 'primary' : 'ghost'} small" data-ta-see="${k}" aria-pressed="${on}">${label}</button>`).join('');
+  const rows = (d.seen_by || []).map(r => `<tr data-ta-seen="${esc(r.subject)}" data-why="${esc(r.why)}">
+      <td class="tt-who-name">${taFace(r)}<span>${esc(r.name || r.id)}${r.kind === 'bot' ? ' <span class="muted">· bot</span>' : ''}</span></td>
+      <td class="muted">${esc(r.why)}</td>
+      <td class="mb-act">${r.why === 'Listed' && TA_LISTS[r.kind] && (owner || r.subject !== me)
+        ? `<button type="button" class="ghost tt-x" data-ta-unlist="${esc(r.subject)}" aria-label="Remove ${esc(r.name || r.id)}" title="Remove">×</button>` : ''}</td></tr>`).join('');
+  return `<section class="card" id="tool-see"><header><h2>Who can see it</h2>${only ? '<button type="button" class="ghost small settings-head-act" data-ta-see-add>Add</button>' : ''}</header>
+    <div class="row tt-see-choice" role="group" aria-label="Who can see it">${choice}</div>
+    ${only ? `<table class="settings-table tt-who-table tt-see-table"><thead><tr><th>Who</th><th>Why</th><th aria-hidden="true"></th></tr></thead><tbody>${rows}</tbody></table>` : ''}</section>`;
+}
+const taAudience = d => {
+  const a = d.audience || {};
+  return {everyone: false, people: [...(a.people || [])], teams: [...(a.teams || [])], bots: [...(a.bots || [])]};
+};
+const taSaveAudience = audience => patch(taPath(TA.id), {audience: audience && !audience.everyone ? audience : null});
+async function taSeeAdd() {
+  const state = TA, level = taAudience(state.data);
+  try {
+    const groups = await get('/v2/groups');
+    await accessEditor({name: state.data.tool.name, singleAudience: true,
+      initialData: {see: level, read: level, write: level, teams: Array.isArray(groups) ? groups : groups.groups || []},
+      save: taSaveAudience,
+      after: async () => { await taLoad(); if (TA === state) { taDrawHead(); taDrawOverview(); } }});
+  } catch (e) { toast(e.message, true); }
+}
+
 function taRecentCard(d) {
   const base = '#/tools/api/' + encodeURIComponent(TA.id);
   const rows = (d.recent || []).map(c => `<tr><td class="muted tnum" title="${esc(fmt(c.at))}">${esc(ago(c.at))}</td><td>${esc(taWho(c))}</td>
@@ -191,6 +227,19 @@ async function taClick(ev) {
   if (b.hasAttribute('data-ta-proxy')) {
     if (!await settingsConfirm({title: 'Move to proxy?', text: 'Calls go through Tico and are logged. The key leaves the computers on their next run.', ok: 'Move to proxy', danger: false})) return;
     return write(() => patch(taPath(id), {delivery: 'proxy'}));
+  }
+  if (b.dataset.taSee && b.getAttribute('aria-pressed') !== 'true') {
+    if (b.dataset.taSee === 'only') return write(() => taSaveAudience(taAudience(TA.data)));
+    if (!await settingsConfirm({title: 'Show to everyone?', text: 'Credential admins can see it and its keys.', ok: 'Everyone', danger: false})) return;
+    return write(() => taSaveAudience(null));
+  }
+  if (b.hasAttribute('data-ta-see-add')) return taSeeAdd();
+  if (b.dataset.taUnlist) {
+    const row = (TA.data.seen_by || []).find(r => r.subject === b.dataset.taUnlist), audience = taAudience(TA.data);
+    const list = TA_LISTS[row?.kind];
+    if (!list) return;
+    audience[list] = audience[list].filter(x => x !== row.id);
+    return write(() => taSaveAudience(audience));
   }
   if (b.hasAttribute('data-ta-settings')) return taSettingsDialog();
   if (b.dataset.taReveal) return taReveal(b.dataset.taReveal);

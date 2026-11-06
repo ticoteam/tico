@@ -95,9 +95,12 @@ def credentials_for(c, vault, who, original, slug, tools, needed):
             wanted.setdefault(entry["env"], entry.get("service") or "")
     granted, needs = [], []
     admin = administrator(c, who, vault.admins)
+    # A key of a tool the requester may not see (backend/api_tools.py `visible`) is as if the original did not hold it.
+    from .api_tools import hidden_keys
+    hidden = hidden_keys(c, who, vault.admins)
     for env, service in sorted(wanted.items()):
         held = [row for row in c.execute("SELECT * FROM credentials WHERE env=? AND ciphertext IS NOT NULL ORDER BY id", (env,))
-                if effective_grant(c, row["id"], "bot:" + original)]
+                if row["id"] not in hidden and effective_grant(c, row["id"], "bot:" + original)]
         item = {"env": env, "service": service}
         if not held:
             needs.append({**item, "needs": f"needs credential {env}", "detail": "The original has no stored credential for it."})

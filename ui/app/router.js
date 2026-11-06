@@ -105,6 +105,7 @@ function route(hash = location.hash) {
   else if (S.route.startsWith('#/seat/')) { const [id, template] = S.route.slice(7).split('?')[0].split('/').map(decodeURIComponent); void pageSeat(id, template || ''); }
   else if (S.route === ASSISTANT) pageAssistant();
   else if (S.route === LEARNED) pageLearned();
+  else if (S.route === SKILLS_CONNECT || S.route.startsWith(SKILLS_CONNECT + '?')) pageSkillsConnect();   // the skills helper's approve page
   else if (S.route.startsWith('#/person/')) {
     const parts = S.route.slice(9).split('/').map(decodeURIComponent);
     pagePerson(parts[0], parts[1]);
