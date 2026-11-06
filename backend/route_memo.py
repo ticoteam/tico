@@ -56,6 +56,9 @@ class _Same:
     def __hash__(self):
         return id(self.obj)
 
+    def __repr__(self):
+        return f"_Same({self.obj!r})"
+
 
 def _module_level(obj):
     """Whether `obj` is what its module names at its qualified name: one object for the life of the process. A class

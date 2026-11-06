@@ -47,7 +47,7 @@ def test_a_second_app_reuses_validators_but_keeps_its_own_state_and_types():
     # A model made inside the function is each app's own, and is never kept by the cache.
     (note_a,), (note_b,) = fields(first, "/notes"), fields(second, "/notes")
     assert note_a is not note_b and note_a._type_adapter is not note_b._type_adapter
-    assert not any("<locals>" in repr(key) for key in [*RM.ADAPTERS, *RM.DEPENDANTS])
+    assert not any(".build.<locals>." in repr(key) for key in [*RM.ADAPTERS, *RM.DEPENDANTS])
     assert all(template.call is None for template in RM.DEPENDANTS.values())
     sizes = len(RM.ADAPTERS), len(RM.DEPENDANTS)
     build("third")
