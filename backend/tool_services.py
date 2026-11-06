@@ -6,7 +6,9 @@ and check path from here, and the data migration that made a tool for every stor
 check path is an authenticated GET that answers 2xx for a good key and 401 (403 for Vercel) for a bad one: each was
 tried with a made-up key. Services whose API answers a bad key with something else (400 from Gemini, xAI, Resend and
 Attio, 410 from Todoist, 200 from Apollo) or has no cheap GET (Linear's GraphQL) get no check path, since a check that
-cannot tell a bad key from a good one would show Working for both. Their calls still go through the proxy.
+cannot tell a bad key from a good one would show Working for both. Their calls still go through the proxy. Google Ads
+is known by name only: its OAuth needs several values on each call, which no proxy key can carry, so it has no base URL
+and its tools stay on computers.
 
 `apply_auth` is the one place a key is put on a request, shared by the check here and the proxy (track B), so the two
 can never disagree about where a service expects its key. `is_tool_key` and `insert_tool` are the one rule for which
@@ -69,6 +71,13 @@ SERVICES = {
     "todoist": _s("Todoist", "https://api.todoist.com", "", env="TODOIST_API_TOKEN"),
     "apollo": _s("Apollo", "https://api.apollo.io", "", "header:X-Api-Key", "APOLLO_API_KEY"),
     "deepgram": _s("Deepgram", "https://api.deepgram.com", "", "header:Authorization", "DEEPGRAM_API_KEY"),
+    # A bearer call to /me with a bad token answers 401 (code 190); in the query string it would answer 400.
+    "meta-ads": _s("Meta Ads", "https://graph.facebook.com/v26.0", "/me", env="META_ACCESS_TOKEN",
+                   aliases=("facebook ads", "fb ads", "meta", "facebook")),
+    # OAuth (client id and secret, refresh token, developer token, login customer id): no single key goes on a call, so
+    # there is no proxy address or check. Bots use it from their computers; Finance's ad spend import
+    # (backend/finance/ad_import.py) exchanges the refresh token itself.
+    "google-ads": _s("Google Ads", "", env="GOOGLE_ADS_DEVELOPER_TOKEN", aliases=("adwords",)),
 }
 
 
