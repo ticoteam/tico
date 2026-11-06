@@ -266,7 +266,8 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       assert.equal(await subs.nth(5).locator(':scope > .upd-nones').count(), 1, `${label}: the line comes after the cards`);
       assert.equal(await p.locator('#upd-feed [data-upd-node="b:pr"], #upd-feed [data-upd-node="b:brand"]').count(), 0, `${label}: no row each`);
       const nones = p.locator('#upd-feed .upd-nones');
-      assert.match(await nones.innerText(), /^\s*No update yet\s*$/, `${label}: one label, no names`);
+      assert.deepEqual(await nones.evaluate(r => [r.querySelectorAll('.upd-name').length, [...r.children].filter(c => !c.matches('.upd-whos')).map(c => c.textContent.trim())]),
+        [0, ['No update yet']], `${label}: one label, no names`);
       const who = nones.locator('.upd-who');
       assert.deepEqual(await who.evaluateAll(els => els.map(e => [e.tagName, e.getAttribute('aria-label'), e.getAttribute('title')])),
         [['A', 'PR Bot', 'PR Bot'], ['BUTTON', 'Events Bot, 1 report', 'Events Bot, 1 report'], ['A', 'Brand Bot', 'Brand Bot']], `${label}: an avatar each, named`);
