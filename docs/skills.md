@@ -41,15 +41,48 @@ and nothing applies to people who join later.
 The install list shows two things: what was asked (`desired`: the version the install points at) and what the runner or the
 skills helper reports as staged (`staged`: the sha it actually has). A difference between them is shown as is.
 
+## The Skills page
+
+Library › Skills (`#/library/skills`) has three tabs.
+
+- **Directory**: every approved skill with its version, installs, uses in the last 30 days and when it was last used. A skill opens
+  its page: versions (when and by whom each was approved), the files of any version, **Install** (for yourself, a bot you can write,
+  a person if you're an admin, or a team: a team installs for its current members at once, and nobody who joins later), and its
+  usage over 7 or 30 days by trigger (model, person, nested), by who and the last 20 uses.
+- **Proposals**: admins see every proposal, anyone else their own. Each shows new or update, who proposed it and its screen:
+  Pending, Screened with its risk, or Not screened with **Re-run**. A proposal opens its screening (summary, findings by file and line,
+  pattern hits), its diff (or its files when it's new) and a Stale flag when the skill moved on. **Approve** for a high-risk or
+  unsafe screen needs the "I've read this" tick, as the server does (422 `acknowledgement_required`). **Decline** asks for a reason.
+- **Installed**: your installs and those of the bots you can write: Latest or pinned (with the newer version when there is one),
+  what is wanted against what is staged there (short sha), and **Remove**.
+
+**Use in my Claude Code** shows the one line that sets up the skills helper on your computer, with Copy:
+`curl -fsSL --create-dirs <your Tico>/api/v2/skills/helper.mjs -o ~/.tico/skills-helper.mjs && node ~/.tico/skills-helper.mjs setup`.
+
+Usage. Each use is one row (skill, who, trigger, where, when) from the runner, the skills helper or a typed `/name`. The hourly
+**Skill usage** job folds them into daily counts and deletes raw rows older than 90 days; the daily counts stay. The page counts
+days before the job's last run from the daily counts and the rest from the raw rows, so a use shows at once. Admins see who used a
+skill; anyone else sees the totals and their own uses (and the ones they asked a bot for). A use links its task or thread only for
+someone who may read it.
+
+Coverage. A skill's installs say **Used**, **Unused** or **Unknown**. Unused needs data: the target reports staging (a receipt),
+reports usage (a bot always; a person through a skills helper with reporting on), has had the install for 30 days, and has no use
+in those 30 days. Anything else is Unknown, never Unused. Skills used on computers that aren't in the directory aren't collected,
+so the page has no "popular, not in the directory" list.
+
 ## API
 
 Under `/api/v2/skills`: the directory (`GET skills`), a skill with its versions and installs (`GET skills/{name}`), a version with
 its files (`GET skills/{name}/versions/{number}`), proposals (`POST skills/proposals`, `GET skills/proposals`,
 `GET skills/proposals/{id}`, and `approve`, `decline`, `withdraw`, `rescreen` under it), and installs (`POST skills/{name}/installs`,
-`POST skills/{name}/installs/bulk`, `GET skills/installs?target_type=&target_id=`, `DELETE skills/installs/{id}`). The contract is
-in `docs/openapi/v2.json` under the Skills tag.
+`POST skills/{name}/installs/bulk`, `GET skills/installs?target_type=&target_id=`, `DELETE skills/installs/{id}`). The Skills page
+reads four more: usage per skill (`GET skills/usage?days=7|30`), one skill's usage (`GET skills/{name}/usage?days=7|30`), who the
+caller may install for (`GET skills/install-targets`) and the caller's own installs with those of the bots they can write
+(`GET skills/installed`). A skill can't be named `usage`, `installed` or `install-targets` (nor `proposals` or `installs`): those
+paths are the routes. The contract is in `docs/openapi/v2.json` under the Skills tag.
 
 ## Privacy
 
 Events and logs name a skill, its version and sha, and who did what. They never hold a file's contents or a prompt. A proposal's
-files are readable by its proposer and by admins.
+files are readable by its proposer and by admins. Usage rows hold the skill, who, the trigger, where (task or thread) and when: never a prompt, the
+skill's arguments or a file.

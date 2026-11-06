@@ -3480,6 +3480,7 @@ STABLE.extend([
     ("/api/v2/skills/proposals/{pid}/withdraw", "post", "Skills", "withdrawSkillProposal", "The proposer withdraws a pending proposal", None),
     ("/api/v2/skills/proposals/{pid}/rescreen", "post", "Skills", "rescreenSkillProposal", "Admins or the proposer send a pending proposal back to screening", None),
     ("/api/v2/skills/usage", "get", "Skills", "listSkillUsage", "Each skill's use over 7 or 30 days: by trigger, people and bots, last used, top users (admins; others see themselves)", None),
+    ("/api/v2/skills/installed", "get", "Skills", "listMySkillInstalls", "Your installs and those of the bots you may write, desired and staged, with updates available", None),
     ("/api/v2/skills/install-targets", "get", "Skills", "listSkillInstallTargets", "Who the caller may install a skill for: writable bots, people, and teams as current members", None),
     ("/api/v2/skills/{name}/usage", "get", "Skills", "getSkillUsage", "One skill's use: totals, per actor, the last 20 uses with readable links, and install coverage", None),
     ("/api/v2/skills/installs", "get", "Skills", "listSkillInstalls", "The installs of one bot or person, with what is wanted and what is staged there", None),

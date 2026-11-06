@@ -8821,7 +8821,7 @@ def create_app(settings=None):
     install_branches(app, store, auth, mutate, settings_admin, execution)
     from .bot_copy import install as install_bot_copy
     install_bot_copy(app, store, auth, mutate, settings_admin, place_now)
-    # Usage reads first: `skills/usage` and `skills/install-targets` must not be read as a skill's name.
+    # Usage reads first: `skills/usage`, `skills/installed` and `skills/install-targets` are not skill names.
     from .skill_usage import install as install_skill_usage
     install_skill_usage(app, store, auth)
     from .skills import install as install_skills

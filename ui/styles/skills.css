@@ -1,0 +1,44 @@
+/* Library › Skills (ui/app/skills.js). Builds on Tools' list, tabs and cards (ui/styles/tools.css); theme tokens only,
+   so light and dark follow the theme. At 760px the tables stack and nothing scrolls sideways. */
+.sk .tt-tabs{margin-bottom:12px}
+.sk-name a{display:flex;flex-direction:column;min-width:0;color:var(--ink);text-decoration:none}
+.sk-name a:hover{text-decoration:none}
+.sk-name strong{font-weight:600;overflow-wrap:anywhere}
+.sk-desc{font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52ch}
+.sk-list td.sk-name{max-width:0;width:50%}
+.sk-installed td.sk-name{width:auto;max-width:none}
+.sk-num,.sk-ver,.sk-when,.sk-kind,.sk-sha-cell{white-space:nowrap}
+.sk-act{width:1%;text-align:right}
+.sk-sha{font:var(--t-xs, .8rem) var(--mono);color:var(--muted)}
+.sk-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:8px;margin:8px 0 4px}
+.sk-stat{display:flex;flex-direction:column;padding:8px 10px;border:1px solid var(--line);border-radius:8px;min-width:0}
+.sk-stat strong{font-size:var(--t-lg);font-weight:600}
+.sk-stat .muted{font-size:var(--t-xs, .8rem)}
+.sk-sub{margin:14px 0 4px;font-size:var(--t-label);font-weight:600;color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase}
+.sk-paths{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0}
+.sk-paths button{all:unset;cursor:pointer;padding:3px 8px;border-radius:6px;font:var(--t-sm) var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.sk-paths button[aria-selected="true"]{background:var(--surface2);color:var(--ink)}
+.sk-file,.sk-diff,.sk-cmd{margin:0;padding:10px 12px;max-width:100%;max-height:480px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface2);
+  font:var(--t-sm)/var(--lh-read, 1.5) var(--mono);color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
+.sk-cmd{max-height:none;user-select:all}
+.sk-diff{padding:6px 0;background:var(--surface)}
+.sk-diff>span{display:block;padding:0 12px;min-height:1.2em}
+.sk-diff .add{background:var(--ok-bg);color:var(--ok)}
+.sk-diff .del{background:var(--fail-bg);color:var(--fail)}
+.sk-diff .hunk,.sk-diff .file{color:var(--muted)}
+.sk-decide{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:0 0 12px}
+.sk-ack{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm)}
+.sk-dialog{width:min(560px,calc(100vw - 32px))}
+.sk-field{display:grid;gap:4px;margin:0 0 10px;font-size:var(--t-sm);color:var(--muted)}
+.sk-field select,.sk-field input{min-width:0;width:100%}
+#skills-root .card{margin:0 0 12px}
+#skills-root .card>header .theme-seg button{min-width:40px}
+
+@media (max-width:760px){
+  .sk-list td.sk-name{width:auto;max-width:none;grid-column:1 / -1}
+  .sk-desc{white-space:normal;max-width:none;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical}
+  .sk-list tr{grid-template-columns:repeat(3,minmax(0,auto)) minmax(0,1fr)}
+  .sk-list td.sk-num[data-label]::after{content:" " attr(data-label);color:var(--muted);font-size:var(--t-xs, .8rem)}
+  .sk-list td.sk-screen,.sk-list td.sk-sha-cell{white-space:normal}
+  .sk-act{width:auto;text-align:left}
+}

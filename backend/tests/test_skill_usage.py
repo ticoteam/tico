@@ -184,7 +184,26 @@ def test_install_targets_offer_only_who_the_caller_may_install_for(api):
     assert {"ana", "ben", "cara"} <= {p["id"] for p in ana["people"]} and bot_id(api, "ops") in {b["id"] for b in ana["bots"]}
 
 
-@pytest.mark.parametrize("path", ["skills/usage", "skills/triage/usage", "skills/install-targets"])
+def test_installed_lists_my_installs_and_the_bots_i_may_write_only(api):
+    publish(api)
+    ops, finance = bot_id(api, "ops"), bot_id(api, "finance")
+    with api.app.state.store.transaction() as c:
+        restrict(c, ops, see={"everyone": True}, read={"everyone": True}, write={"people": ["ana"]})
+    for target_type, target_id in (("Bot", ops), ("Bot", finance), ("Human", "cara"), ("Human", "ben")):
+        r = api.post("/api/v2/skills/triage/installs", json={"target_type": target_type, "target_id": target_id,
+                                                          "version_policy": "latest"}, headers=headers("ana-test"))
+        assert r.status_code == 200, r.text
+    mine = {(i["target"]["type"], i["target"]["id"]) for i in get(api, "skills/installed", "cara-test")["installs"]}
+    assert ("Human", "cara") in mine and ("Human", "ben") not in mine, "her own, never Ben's"
+    assert ("Bot", ops) not in mine, "not a bot she may only read"
+    writable = {b["id"] for b in get(api, "skills/install-targets", "cara-test")["bots"]}
+    assert {i for t, i in mine if t == "Bot"} == writable & {ops, finance}
+    (row,) = [i for i in get(api, "skills/installed", "cara-test")["installs"] if i["target"]["id"] == "cara"]
+    assert row["version_policy"] == "latest" and row["latest"] == 1 and row["update_available"] is False
+    assert row["desired"]["number"] == 1 and row["staged"] is None
+
+
+@pytest.mark.parametrize("path", ["skills/usage", "skills/triage/usage", "skills/install-targets", "skills/installed"])
 def test_the_reads_answer_people_and_refuse_nobody_signed_in(api, path):
     publish(api)
     assert api.get("/api/v2/" + path).status_code in (401, 403)

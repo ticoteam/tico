@@ -6,8 +6,8 @@ backend/skill_devices.py). The rollup (scheduler FIXED, hourly) recomputes whole
 last run touches, from the raw rows, so running it twice changes nothing; then it deletes raw rows older than 90 days.
 A day that is partly pruned is never recomputed (its rollup was made while its rows were all there).
 
-Reads count older days from the rollup and today and yesterday from the raw rows, so a use shows at once. Who used a
-skill is for admins: anyone else sees the totals and their own rows only. A use links to its task or thread only when
+Reads count the days before the last rollup's day from the rollup and the rest from the raw rows, so a use shows at
+once. Who used a skill is for admins: anyone else sees the totals and their own rows only. A use links to its task or thread only when
 the caller may read that task or thread. Coverage says "unknown" where Tico has no data, never "unused": an install
 is unused only when its target reports staging (a receipt), has had the install for 30 days, reports usage (a
 person's skills helper with reporting on), and shows no use in those 30 days.
@@ -103,15 +103,19 @@ def _caller(c, auth, who):
 
 
 def _bounds(at, days):
-    """(the first day counted, the day the raw rows take over from the rollup: yesterday)."""
+    """(the first day counted, the last day counted: today)."""
     today = at.astimezone(timezone.utc).date()
-    return (today - timedelta(days=days - 1)).isoformat(), (today - timedelta(days=1)).isoformat()
+    return (today - timedelta(days=days - 1)).isoformat(), today.isoformat()
 
 
-def _uses_sql(days, at, skill_id=None):
-    """A subquery of uses in the window, (skill_id, actor_type, actor_id, trigger, n, at), and its arguments: the
-    rollup's days before yesterday and the raw rows from yesterday on, for one skill or all."""
-    first, split = _bounds(at, days)
+def _uses_sql(c, days, at, skill_id=None):
+    """A subquery of uses in the window, (skill_id, actor_type, actor_id, trigger, n, at), and its arguments, for one
+    skill or all: the rollup's days before the day of its last run, and the raw rows from that day on. A day before
+    the last run was recomputed whole from the rows it had then, so nothing is counted twice or missed (a late row
+    waits for the next run)."""
+    first = _bounds(at, days)[0]
+    since = _watermark(c)
+    split = max(first, _day(since)) if since else first
     one = " AND skill_id=?" if skill_id else ""
     sql = ("SELECT skill_id, actor_type, actor_id, trigger, uses_count AS n, used_on AS at FROM skill_usage_dailies "
            f"WHERE used_on >= ? AND used_on < ?{one} "
@@ -151,7 +155,7 @@ def overview(c, auth, who, days, at=None):
     else sees only themselves there)."""
     at = at or datetime.now(timezone.utc)
     admin, me = _caller(c, auth, who)
-    sub, args = _uses_sql(days, at)
+    sub, args = _uses_sql(c, days, at)
     out = {}
 
     def entry(skill_id):
@@ -211,7 +215,7 @@ def coverage(c, auth, who, skill, at):
     since = _stamp(at - timedelta(days=UNUSED_DAYS))
     rows = [r for r in SK._installs(c, "i.skill_id=?", (skill["id"],))
             if SK._may_see(c, auth, who, r["target_type"], r["target_id"])]
-    sub, args = _uses_sql(UNUSED_DAYS, at, skill["id"])
+    sub, args = _uses_sql(c, UNUSED_DAYS, at, skill["id"])
     counts = {(r["actor_type"], r["actor_id"]): r["uses"] for r in c.execute(
         f"SELECT actor_type, actor_id, SUM(n) AS uses FROM ({sub}) GROUP BY actor_type, actor_id", args)}
     reporting = {r["person_id"] for r in c.execute(
@@ -237,7 +241,7 @@ def detail(c, auth, who, name, days, at=None):
     at = at or datetime.now(timezone.utc)
     skill = SK._skill_or_404(c, name)
     admin, me = _caller(c, auth, who)
-    sub, args = _uses_sql(days, at, skill["id"])
+    sub, args = _uses_sql(c, days, at, skill["id"])
     totals = {"uses": 0, "by_trigger": dict.fromkeys(TRIGGERS, 0), "people": 0, "bots": 0, "last_used_at": None}
     actors = {}
     for r in c.execute(f"SELECT actor_type, actor_id, trigger, SUM(n) AS uses, MAX(at) AS last FROM ({sub}) "
@@ -281,6 +285,40 @@ def detail(c, auth, who, name, days, at=None):
             "popular_elsewhere": None}
 
 
+def _writable_bots(c, auth, who):
+    """[{id, name}] of the bots the caller may write (so install skills on), by name."""
+    rows = {r["id"]: r for r in H.bots(c) if r.get("state") != "archived"}
+    levels = auth.bot_accesses(c, who, sorted(rows)) if rows else {}
+    return sorted(({"id": i, "name": rows[i].get("display_name") or rows[i].get("slug") or i}
+                   for i, level in levels.items() if i in rows and level.get("write")), key=lambda b: b["name"].lower())
+
+
+def installed(c, auth, who):
+    """The caller's own installs and those of the bots they may write: what each asks for, what is staged, and
+    whether a pinned install has a newer version."""
+    admin, me = _caller(c, auth, who)
+    bots = [b["id"] for b in _writable_bots(c, auth, who)]
+    clauses, args = [], []
+    if me[0] == "Human":
+        clauses.append("(i.target_type='Human' AND i.target_id=?)")
+        args.append(me[1])
+    for start in range(0, len(bots), 500):
+        part = bots[start:start + 500]
+        clauses.append(f"(i.target_type='Bot' AND i.target_id IN ({','.join('?' * len(part))}))")
+        args.extend(part)
+    if not clauses:
+        return {"installs": []}
+    rows = SK._installs(c, " OR ".join(clauses), args)[:SK.LIST_CAP * 4]
+    out = []
+    for r in rows:
+        view = SK._install_view(r)
+        view["latest"] = r["latest_number"]
+        view["update_available"] = bool(r["version_policy"] == "pinned" and r["latest_number"] and r["pinned_number"]
+                                        and r["latest_number"] > r["pinned_number"])
+        out.append(view)
+    return {"installs": out}
+
+
 def targets(c, auth, who):
     """Who the caller may install a skill for: bots they can write, people (an admin: everyone; anyone else:
     themselves), and each team as its current members the caller may install for (nested teams included)."""
@@ -288,10 +326,7 @@ def targets(c, auth, who):
     from . import teammate_access
     from . import views
     admin, me = _caller(c, auth, who)
-    rows = {r["id"]: r for r in H.bots(c) if r.get("state") != "archived"}
-    levels = auth.bot_accesses(c, who, sorted(rows)) if rows else {}
-    bots = sorted(({"id": i, "name": rows[i].get("display_name") or rows[i].get("slug") or i}
-                   for i, level in levels.items() if i in rows and level.get("write")), key=lambda b: b["name"].lower())
+    bots = _writable_bots(c, auth, who)
     roster = views.roster(c, shared=True)
     shown = P.visible_people(roster)
     if admin:
@@ -322,7 +357,8 @@ def targets(c, auth, who):
 
 
 def install(app, store, auth):
-    """The read routes. Installed before backend/skills.py's, so `skills/usage` is not read as a skill's name."""
+    """The read routes. Installed before backend/skills.py's, so `skills/usage`, `skills/installed` and
+    `skills/install-targets` are not read as a skill's name."""
     def reader(request):
         who = request.state.identity
         auth.domain(who)
@@ -344,6 +380,13 @@ def install(app, store, auth):
         who = reader(request)
         with store.read() as c:
             return targets(c, auth, who)
+
+    @app.get("/api/v2/skills/installed")
+    def skills_installed(request: Request):
+        """The caller's installs and those of the bots they may write, with desired and staged versions."""
+        who = reader(request)
+        with store.read() as c:
+            return installed(c, auth, who)
 
     @app.get("/api/v2/skills/{name}/usage")
     def skill_usage(request: Request, name: str, days: int = Query(default=30)):
