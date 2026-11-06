@@ -318,8 +318,8 @@
   reply: |
     Counts the queue from Needs you (151: 33 tasks, 93 questions, 14 approvals, 8 held messages, and the rest), not from the
     tasks Dana owns. In this turn, as Dana, it closes the owned tasks that are done or duplicates in one bulk close by id.
-    It answers the BotOps runner-queue test-ping question with "No, drop this." It declines every other stale bot question and
-    every stale approval (the old merge requests and the v0.5.0 publish). The only items it keeps, and does not act on, are
+    It declines the BotOps runner-queue test-ping question and every other stale bot question the same way, by answering each
+    "No, drop this." (a decline is that answer), and declines every stale approval (the old merge requests and the v0.5.0 publish). The only items it keeps, and does not act on, are
     the projector contract review with Growth's paid-search question on it (spend $4,000 more or hold at $2,000), and the
     $4,000 Acme Ads spend approval. Each kept item gets its link and reason. It approves nothing and sends no message. It
     re-reads Needs you once at the end and reports the new count, 14, with its split by kind. Undo covers the closed tasks
