@@ -7,7 +7,7 @@ is sent and kept.
 
 ## For a human
 
-The **?** beside Search (on a computer, at the end of the sidebar's Ask row; on a phone, beside Search in the More
+The **?** beside Search (on a computer, at the end of the sidebar's Tico Assistant row; on a phone, beside Search in the More
 drawer) opens a chat with the **Tico team**. It is its own conversation, apart from the Assistant: on a computer a panel
 over the bottom left of the page, on a phone the whole screen above the tab bar. The **?** carries a dot when the team
 has replied to one of your requests and you haven't seen it.
