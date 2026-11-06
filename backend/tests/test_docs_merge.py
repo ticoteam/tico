@@ -5,6 +5,7 @@ import pytest
 
 from backend import docs_merge
 from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)
+from backend.tests.test_groups import add_bots
 from backend.tests.test_groups_leads import as_bot
 
 DOCS_PR = {"repo": "ticoteam/tico", "pr": 2303, "head_sha": "a" * 40, "title": "Docs for v0.5.75"}
@@ -32,6 +33,12 @@ class FakeGitHub:
         if self.status != 200:
             return FakeResponse(self.status)
         return FakeResponse(200, self.files)
+
+
+def docs_bot(api):
+    with api.app.state.store.transaction() as c:
+        add_bots(c, docs=({}, "ana"))
+    as_bot(api, "docs", "docs-test")
 
 
 def changed(*names):
@@ -87,7 +94,7 @@ def test_a_request_without_a_repository_or_number_is_left_to_the_approval_checks
 
 
 def test_a_bot_asking_to_merge_docs_only_is_refused_with_the_code(api, monkeypatch):
-    as_bot(api, "docs", "docs-test")
+    docs_bot(api)
     monkeypatch.setattr(docs_merge, "changed_files", lambda service, repo, number: ["docs/setup.md"])
     r = api.post("/api/v2/approvals", json={"kind": "merge", "payload": DOCS_PR}, headers=headers("docs-test"))
     assert r.status_code == 422, r.text
@@ -96,7 +103,7 @@ def test_a_bot_asking_to_merge_docs_only_is_refused_with_the_code(api, monkeypat
 
 
 def test_a_bot_asking_to_merge_mixed_changes_still_gets_an_approval(api, monkeypatch):
-    as_bot(api, "docs", "docs-test")
+    docs_bot(api)
     monkeypatch.setattr(docs_merge, "changed_files", lambda service, repo, number: ["docs/a.md", "backend/x.py"])
     r = api.post("/api/v2/approvals", json={"kind": "merge", "payload": DOCS_PR}, headers=headers("docs-test"))
     assert r.status_code == 200, r.text
