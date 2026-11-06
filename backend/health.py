@@ -2777,7 +2777,7 @@ def _dev_board_check(c, who, auth):
 
     now = H.now()
     rows = c.execute(
-        "SELECT tasks.id,tasks.number,tasks.owner_id,tasks.updated_at,s.name step_name "
+        "SELECT tasks.id,tasks.number,tasks.owner_id,tasks.status,tasks.updated_at,s.name step_name "
         f"FROM {H.TASKS} tasks JOIN task_types y ON y.id=tasks.type_id "
         "LEFT JOIN task_steps s ON s.id=tasks.step_id "
         "WHERE tasks.number IS NOT NULL AND y.numbered=1 AND (y.role='engineering' OR y.name='Dev tickets') "
@@ -2790,20 +2790,26 @@ def _dev_board_check(c, who, auth):
         f"AND ({auth.task_sql(c, who)}) ORDER BY tasks.updated_at LIMIT ?",
         (*H.ACTIVE_STATUSES, H.shift(now, hours=-DEV_IDLE_HOURS), *LIVE_JOBS, DIAGNOSTIC_LIMIT),
     ).fetchall()
+    from . import question_tasks
+
+    waits = question_tasks.waiting_on_many(c, [dict(row) for row in rows])
     items = []
     for row in rows:
         hours = int((H.parse_ts(now) - H.parse_ts(row["updated_at"])).total_seconds() // 3600)
         bot = H.actor_name(c, row["owner_id"])
         step = row["step_name"] or "no step"
+        waiting = waits.get(row["id"])
+        waits_on = f", waiting on {H.actor_name(c, waiting)}" if waiting else ""
         items.append(
             {
                 "task": row["id"],
                 "ticket": row["number"],
+                "waits_on": waiting,
                 "step": row["step_name"] or "",
                 "bot": row["owner_id"],
                 "name": bot,
                 "hours": hours,
-                "text": f"#{row['number']} ({step}), {bot}: nothing changed for {hours} h.",
+                "text": f"#{row['number']} ({step}), {bot}: nothing changed for {hours} h{waits_on}.",
                 "fixes": [_fix("Open task", "#/tasks/" + row["id"])],
             }
         )
