@@ -144,3 +144,14 @@ section.card.tt-soon>header .pill{margin-left:auto}
   .tt-key .pill{grid-column:2;justify-self:start}
   .tt-squares{max-width:none;gap:2px}
 }
+/* A Google Ads or Meta Ads tool's Finance card (ui/app/tools-api.js taFinanceCard): ad spend import and each account's bot */
+#tool-finance .taf-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin:0 0 8px;font-size:var(--t-sm)}
+#tool-finance .taf-k{min-width:84px;color:var(--muted)}
+#tool-finance .taf-row select,#tool-finance .taf-row input[type=date]{max-width:100%}
+#tool-finance .taf-note{margin:0 0 8px;font-size:var(--t-sm);overflow-wrap:anywhere}
+#tool-finance .taf-keys{margin:4px 0 10px;font-size:var(--t-sm)}
+#tool-finance .taf-key{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;margin:6px 0}
+#tool-finance .taf-key>span{min-width:120px;color:var(--muted)}
+#tool-finance .taf-key select{max-width:100%;min-width:0}
+#tool-finance .taf-table{width:100%;font-size:var(--t-sm)}
+#tool-finance .taf-table td select{max-width:160px}

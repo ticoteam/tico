@@ -1709,6 +1709,81 @@ export type FinanceActionRequest = {
   payload?: Record<string, unknown>;
 };
 
+export type FinanceAdAccount = {
+  active: boolean;
+  bot_slug: string | null;
+  currency: string;
+  external_id: string;
+  id: string;
+  name: string;
+  tool_id: string;
+};
+
+export type FinanceAdAccountPatch = {
+  bot_slug: string | null;
+};
+
+export type FinanceAdAccounts = {
+  accounts: Array<{
+  active: boolean;
+  bot_slug: string | null;
+  currency: string;
+  external_id: string;
+  id: string;
+  month_to_date: number;
+  name: string;
+}>;
+  books_lines: Array<{
+  code: string;
+  id: string;
+  name: string;
+}>;
+  elsewhere: {
+  tool_id?: string;
+  tool_name?: string;
+} | null;
+  import: {
+  account_id: string;
+  account_name: string;
+  enabled: boolean;
+  every_hours: number;
+  history_from: string;
+  last_error: string;
+  last_import_at: string | null;
+  run_requested: boolean;
+  saved: boolean;
+  status: "never" | "ok" | "reconnect" | "failed";
+};
+  month: string;
+  month_label: string;
+  platform: "google_ads" | "meta_ads";
+  platform_label: string;
+  slots: Array<{
+  credential_id: string;
+  label: string;
+  options: Array<{
+  id: string;
+  name: string;
+}>;
+  required: boolean;
+  slot: string;
+}>;
+  tool_id: string;
+  tool_name: string;
+};
+
+export type FinanceAdImportRequest = {
+  account_id?: string | null;
+  credentials?: Record<string, string | null> | null;
+  enabled: boolean;
+  history_from?: string | null;
+  tool_id: string;
+};
+
+export type FinanceAdRunRequest = {
+  tool_id: string;
+};
+
 export type FinanceBalanceSheet = {
   as_of: string;
   assets: Array<{
@@ -9328,6 +9403,13 @@ export type ListFinanceActionKindsParams = {
 export type ListFinanceActionKindsBody = never;
 export type ListFinanceActionKindsResponse = FinanceActionKinds;
 
+/** GET /api/v2/finance/ad-accounts */
+export type ListFinanceAdAccountsParams = {
+  tool_id: string;
+};
+export type ListFinanceAdAccountsBody = never;
+export type ListFinanceAdAccountsResponse = FinanceAdAccounts;
+
 /** GET /api/v2/finance/bills */
 export type ListFinanceBillsParams = {
   aging?: "current" | "1_30" | "31_60" | "61_90" | "over_90" | null;
@@ -11074,6 +11156,13 @@ export type RunAutomationParams = {
 export type RunAutomationBody = RunNow | null;
 export type RunAutomationResponse = AutomationRunNow;
 
+/** POST /api/v2/finance/ad-imports/run */
+export type RunFinanceAdImportParams = {
+  "Idempotency-Key": string;
+};
+export type RunFinanceAdImportBody = FinanceAdRunRequest;
+export type RunFinanceAdImportResponse = FinanceAdAccounts;
+
 /** POST /api/v2/maintenance/run */
 export type RunMaintenanceParams = {
   "Idempotency-Key": string;
@@ -11088,6 +11177,13 @@ export type RunSystemRoutineParams = {
 };
 export type RunSystemRoutineBody = Empty;
 export type RunSystemRoutineResponse = unknown;
+
+/** POST /api/v2/finance/ad-imports */
+export type SaveFinanceAdImportParams = {
+  "Idempotency-Key": string;
+};
+export type SaveFinanceAdImportBody = FinanceAdImportRequest;
+export type SaveFinanceAdImportResponse = FinanceAdAccounts;
 
 /** PATCH /api/v2/maintenance */
 export type SaveMaintenanceParams = {
@@ -11917,6 +12013,14 @@ export type UpdateEditionParams = {
 };
 export type UpdateEditionBody = EditionBody;
 export type UpdateEditionResponse = unknown;
+
+/** PATCH /api/v2/finance/ad-accounts/{ad_account_id} */
+export type UpdateFinanceAdAccountParams = {
+  "Idempotency-Key": string;
+  ad_account_id: string;
+};
+export type UpdateFinanceAdAccountBody = FinanceAdAccountPatch;
+export type UpdateFinanceAdAccountResponse = FinanceAdAccount;
 
 /** POST /api/v2/goals/{gid} */
 export type UpdateGoalParams = {

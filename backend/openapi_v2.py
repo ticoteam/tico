@@ -1684,6 +1684,17 @@ STABLE.extend([
     ("/api/v2/finance/connections", "post", "Finance", "createFinanceConnection",
      "Connect Mercury with a stored token credential (finance admins): the token is tested, its accounts listed and "
      "mapped into the books. The Idempotency-Key is the action's key", "FinanceConnectionResult"),
+    ("/api/v2/finance/ad-accounts", "get", "Finance", "listFinanceAdAccounts",
+     "A Google Ads or Meta Ads tool's ad spend (finance admins): whether Finance imports it every 4 hours and from which "
+     "day, the books line it books as, which stored keys hold each value (names only), the last import's result, and "
+     "each ad account with the bot it counts for and its spend this month in cents", "FinanceAdAccounts"),
+    ("/api/v2/finance/ad-imports", "post", "Finance", "saveFinanceAdImport",
+     "Save a tool's ad spend import (finance admins): on or off, history_from, the books line and {slot: credential "
+     "id}. One enabled import per platform (409 otherwise); switching on asks for a run at once", "FinanceAdAccounts"),
+    ("/api/v2/finance/ad-imports/run", "post", "Finance", "runFinanceAdImport",
+     "Import an enabled tool's ad spend now instead of at the next 4-hourly run (finance admins)", "FinanceAdAccounts"),
+    ("/api/v2/finance/ad-accounts/{ad_account_id}", "patch", "Finance", "updateFinanceAdAccount",
+     "Pick the bot an ad account's spend counts for, or null for none (finance admins)", "FinanceAdAccount"),
     ("/api/v2/finance/expenses", "get", "Finance", "getFinanceExpenses",
      "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line. The owner may pass "
      "view_as", "FinanceReport"),
@@ -1835,6 +1846,22 @@ SCHEMAS.update({
                                                     "updated_at": "s"}))}),
     "FinanceWebhookDeliveries": obj({"deliveries": items(obj({
         "trigger": "s", "delivery": "s", "received_at": "s", "type": "s", "via": "s", "outcome": "s", "body": "s"}))}),
+    "FinanceAdAccount": obj({"id": "s", "tool_id": "s", "external_id": "s", "name": "s", "currency": "s",
+                             "bot_slug": "n", "active": "b"}),
+    "FinanceAdAccounts": obj({
+        "tool_id": "s", "tool_name": "s", "platform": {"type": "string", "enum": ["google_ads", "meta_ads"]},
+        "platform_label": "s",
+        "import": obj({"saved": "b", "enabled": "b", "history_from": "s", "account_id": "s", "account_name": "s",
+                       "status": {"type": "string", "enum": ["never", "ok", "reconnect", "failed"]},
+                       "last_import_at": "n", "last_error": "s", "run_requested": "b", "every_hours": "i"}),
+        "slots": items(obj({"slot": "s", "label": "s", "required": "b", "credential_id": "s",
+                            "options": items(obj({"id": "s", "name": "s"}))})),
+        "books_lines": items(obj({"id": "s", "code": "s", "name": "s"})),
+        "elsewhere": {"type": ["object", "null"], "properties": {"tool_id": {"type": "string"},
+                                                                  "tool_name": {"type": "string"}}},
+        "month": "s", "month_label": "s",
+        "accounts": items(obj({"id": "s", "external_id": "s", "name": "s", "currency": "s", "bot_slug": "n",
+                               "active": "b", "month_to_date": "i"}))}),
     "FinanceConnectionResult": obj({"action_id": "n", "kind": "s", "status": "s", "code": "s", "reason": "s",
                                     "approver": "n", "result": "o"}, required=["status", "kind"]),
     "FinanceBillsAddress": obj({"bills_email": "n", "inbox_id": "n"}),

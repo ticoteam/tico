@@ -8781,6 +8781,8 @@ def create_app(settings=None):
     screening.install(app, store, auth, mutate)    # prompt-injection screening at webhooks, mail, ideas and watchers
     from . import finance_routes
     finance_routes.install(app, store, auth, mutate)    # Finance: budgets, P&L, expenses, actions (backend/finance)
+    from . import finance_ads_routes
+    finance_ads_routes.install(app, store, auth, mutate)    # Finance: ad spend import settings on ad tools' pages
     from .company_page import api_readers
     api_readers.register(app, store, auth, mutate)      # Company page readers, invites and messages, for owners and admins
     from .company_page import api_editions

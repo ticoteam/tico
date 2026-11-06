@@ -17,6 +17,7 @@ from backend.credentials import Vault
 from backend.finance import ad_import as AI
 from backend.finance.store import ads as SA
 from backend.store import Store
+from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.test_finance_fixtures import AT, OWNER, books, finance_template, store  # noqa: F401  (fixtures)
 
 Handler = Callable[[str, str, dict[str, str], bytes | None], tuple[int, Any]]
@@ -364,3 +365,81 @@ def test_the_store_answers_empty_without_its_tables(tmp_path):
     conn = sqlite3.connect(tmp_path / "bare.sqlite")
     conn.row_factory = sqlite3.Row
     assert SA.imports(conn) == [] and SA.accounts(conn) == [] and SA.live_spend(conn, "2026-10-01", "2026-10-31") == []
+
+
+# ------------------------------------------------------------------------------------------------ the API
+def _api_setup(api: Any) -> Store:
+    from backend.finance import actions as FA
+    from backend.finance.core.ledger import Account
+    from backend.finance.store import ledger as SL
+    store = api.app.state.store
+    with store.transaction() as c:
+        assert FA.ensure_setup(c, store.settings.owner_email)
+        book = SL.book(c)
+        assert book is not None
+        six = str(c.execute("SELECT id FROM fin_accounts WHERE code='6000'").fetchone()[0])
+        SL.insert_account(c, Account(id="acct-ads", book_id=book.id, code="6300", name="Advertising", type="expense",
+                                     subtype="", parent_id=six), OWNER, AT)
+    return store
+
+
+def test_the_ad_spend_api_is_for_finance_admins_and_keeps_one_import_per_platform(api):
+    from backend import openapi_v2
+    from backend.tests.test_api import headers
+    from backend.tests.test_openapi_v2 import conforms
+    store = _api_setup(api)
+    tool(store, "google-ads", "google-ads")
+    tool(store, "google-ads-2", "google-ads")
+    keys = google_keys(store)
+    document = openapi_v2.generate()
+
+    def answer(response: Any, schema: str) -> dict[str, Any]:
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert conforms(body, document["components"]["schemas"][schema], document) is None
+        return body
+
+    refused = api.get("/api/v2/finance/ad-accounts", params={"tool_id": "google-ads"}, headers=headers("cara-test"))
+    assert refused.status_code == 403 and "finance admins" in refused.text
+    assert api.post("/api/v2/finance/ad-imports", json={"tool_id": "google-ads", "enabled": True},
+                    headers=headers("cara-test")).status_code == 403
+    first = answer(api.get("/api/v2/finance/ad-accounts", params={"tool_id": "google-ads"}, headers=headers()),
+                   "FinanceAdAccounts")
+    assert first["platform"] == "google_ads" and first["import"]["saved"] is False
+    assert first["import"]["history_from"].endswith("-01-01") and first["import"]["account_id"] == "acct-ads"
+    assert {s["slot"]: s["credential_id"] for s in first["slots"]} == keys
+    on = answer(api.post("/api/v2/finance/ad-imports", json={"tool_id": "google-ads", "enabled": True,
+                                                             "history_from": "2026-01-01"}, headers=headers()),
+                "FinanceAdAccounts")
+    assert on["import"]["enabled"] and on["import"]["run_requested"] and on["import"]["every_hours"] == 4
+    # A second Google Ads tool can't import too: the same spend would count twice.
+    twice = api.post("/api/v2/finance/ad-imports", json={"tool_id": "google-ads-2", "enabled": True},
+                     headers=headers())
+    assert twice.status_code == 409
+    other = api.get("/api/v2/finance/ad-accounts", params={"tool_id": "google-ads-2"}, headers=headers()).json()
+    assert other["elsewhere"] == {"tool_id": "google-ads", "tool_name": "google-ads"}
+    # Not a key the platform can use: refused; clearing a required one and switching on: refused.
+    assert api.post("/api/v2/finance/ad-imports", json={"tool_id": "google-ads", "enabled": True,
+                                                        "credentials": {"client_id": "nope"}},
+                    headers=headers()).status_code == 422
+    gap = api.post("/api/v2/finance/ad-imports", json={"tool_id": "google-ads", "enabled": True,
+                                                       "credentials": {"developer_token": None}}, headers=headers())
+    assert gap.status_code == 422 and "Developer token" in gap.text
+    assert api.get("/api/v2/finance/ad-accounts", params={"tool_id": "acme"}, headers=headers()).status_code == 404
+    with store.transaction() as c:
+        aid = SA.upsert_account(c, "google-ads", "google_ads", "5550001111", "Consumer", "USD", AT)
+        SA.replace_spend(c, aid, "2026-01-01", "2026-12-31", [SA.SpendRow(AT[:10], "77", "Search", 4200, "USD")], AT)
+    patched = answer(api.patch(f"/api/v2/finance/ad-accounts/{aid}", json={"bot_slug": "ops"}, headers=headers()),
+                     "FinanceAdAccount")
+    assert patched["bot_slug"] == "ops"
+    assert api.patch(f"/api/v2/finance/ad-accounts/{aid}", json={"bot_slug": "nobody"},
+                     headers=headers()).status_code == 422
+    assert api.patch(f"/api/v2/finance/ad-accounts/{aid}", json={"bot_slug": "ops"},
+                     headers=headers("cara-test")).status_code == 403
+    cleared = api.patch(f"/api/v2/finance/ad-accounts/{aid}", json={"bot_slug": None}, headers=headers()).json()
+    assert cleared["bot_slug"] is None
+    run = answer(api.post("/api/v2/finance/ad-imports/run", json={"tool_id": "google-ads"}, headers=headers()),
+                 "FinanceAdAccounts")
+    assert run["import"]["run_requested"] and [a["external_id"] for a in run["accounts"]] == ["5550001111"]
+    off = api.post("/api/v2/finance/ad-imports", json={"tool_id": "google-ads", "enabled": False}, headers=headers())
+    assert off.json()["import"]["enabled"] is False and off.json()["import"]["run_requested"] is False

@@ -127,7 +127,7 @@ def candidates(c: Any, platform: str) -> list[Candidate]:
     and ids only; no value is read."""
     out: list[Candidate] = []
     for r in c.execute("SELECT id, name, env, tool_id, created_at FROM credentials WHERE ciphertext IS NOT NULL "
-                       "ORDER BY created_at, id"):
+                       "AND source<>'finance' ORDER BY created_at, id"):
         hit = _slot_of(platform, str(r["env"] or ""), str(r["name"] or ""))
         if hit is None:
             continue

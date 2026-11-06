@@ -3,8 +3,8 @@
 // …/check, GET …/activity) and the mailboxes fake (support/mailboxes-fake.cjs) for a mailbox's page and its Limits.
 // Covers: the list, its filters and Needs you; an API tool's level change, Check now and Move to proxy; the Activity
 // tab's filter; Who can see it (Private pills, Only listed's Who | Why, Remove, Add through the audience picker, back
-// to Everyone) and Finance's read-only row; the mailbox Limits card; the old addresses' redirects; 390px with no
-// sideways scroll; light and dark.
+// to Everyone) and Finance's read-only row; a Google Ads tool's Finance card (bot pick, switching the import on); the
+// mailbox Limits card; the old addresses' redirects; 390px with no sideways scroll; light and dark.
 // TICO_UI_SHOTS=<dir> saves a screenshot of each page in each theme and width.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -62,6 +62,9 @@ function apiFake() {
       status: {tone: 'fail', text: 'Key rejected'}, needs_you: true, can_manage: true,
       private: true, can_set_audience: true, audience: {everyone: false, people: ['cara'], teams: [], bots: []}},
   };
+  tools['t-gads'] = {tool: {id: 't-gads', name: 'Google Ads', service: 'google-ads', base_url: '', auth_scheme: 'bearer', check_path: '', delivery: 'computer'},
+    keys: [key('k-gads', 'Google Ads · GOOGLE_ADS_DEVELOPER_TOKEN', 'dt_…01ab', 'read_write', {env: 'GOOGLE_ADS_DEVELOPER_TOKEN'})],
+    access: [], checks: [], recent: [], status: {tone: 'idle', text: 'Key on computers'}, needs_you: false, can_manage: true, private: false, can_set_audience: false};
   // Who can see it as backend/api_tools.py seen_by lists it: the owner, the list, then whoever can use it.
   const NAMES = {ana: 'Ana', cara: 'Cara', 'g-books': 'Bookkeeping'};
   const seenBy = t => !t.audience ? [] : [{subject: 'human:ana', kind: 'person', id: 'ana', name: 'Ana', why: 'Owner'},
@@ -70,9 +73,30 @@ function apiFake() {
     ...t.audience.bots.map(id => ({subject: 'bot:' + id, kind: 'bot', id, name: id, why: 'Listed'})),
     ...t.access.map(a => ({subject: a.subject, kind: a.kind, id: a.id, name: a.name, why: 'Can use it'}))];
   for (const t of Object.values(tools)) t.seen_by = seenBy(t);
+  // Finance's ad spend for the Google Ads tool, as backend/finance/ads.py view answers it (a finance admin).
+  const slot = (s, label, required, id, name) => ({slot: s, label, required, credential_id: id, options: id ? [{id, name}] : []});
+  const fin = {tool_id: 't-gads', tool_name: 'Google Ads', platform: 'google_ads', platform_label: 'Google Ads',
+    import: {saved: true, enabled: false, history_from: '2026-01-01', account_id: 'acct-ads', account_name: 'Advertising', status: 'ok',
+      last_import_at: at(95), last_error: '', run_requested: false, every_hours: 4},
+    slots: [slot('client_id', 'Client ID', true, 'g1', 'Google Ads · GOOGLE_ADS_CLIENT_ID'), slot('client_secret', 'Client secret', true, 'g2', 'Google Ads · GOOGLE_ADS_CLIENT_SECRET'),
+      slot('refresh_token', 'Refresh token', true, 'g3', 'Google Ads · GOOGLE_ADS_REFRESH_TOKEN'), slot('developer_token', 'Developer token', true, 'k-gads', 'Google Ads · GOOGLE_ADS_DEVELOPER_TOKEN'),
+      slot('login_customer_id', 'Login customer ID', false, 'g5', 'Google Ads · GOOGLE_ADS_LOGIN_CUSTOMER_ID'), slot('customer_ids', 'Customer IDs', false, '', '')],
+    books_lines: [{id: 'acct-sw', code: '6100', name: 'Software'}, {id: 'acct-ads', code: '6300', name: 'Advertising'}],
+    elsewhere: null, month: '2026-11', month_label: 'November',
+    accounts: [{id: 'ad-1', external_id: '5550001111', name: 'Consumer search', currency: 'USD', bot_slug: 'sales', active: true, month_to_date: 76000},
+      {id: 'ad-2', external_id: '5550002222', name: 'Paid rental', currency: 'USD', bot_slug: null, active: true, month_to_date: 120050}]};
   const calls = [call(1, 'sent'), refused(2), call(3, 'sent'), call(4, 'failed', {status_code: null, detail: 'ConnectTimeout: timed out'})];
-  const fake = {tools, writes: [], reads: []};
+  const fake = {tools, fin, writes: [], reads: []};
   fake.answer = (p, method, body, url) => {
+    if (p === '/api/v2/finance/ad-accounts' && method === 'GET') return url.searchParams.get('tool_id') === 't-gads' ? structuredClone(fin)
+      : {status: 403, body: {error: {code: 'denied', detail: 'Ad spend is for finance admins', retryable: false}}};
+    if (p.startsWith('/api/v2/finance/ad-')) {
+      fake.writes.push({method, path: p, body});
+      if (p === '/api/v2/finance/ad-imports') { Object.assign(fin.import, body, {run_requested: !!body.enabled}); return structuredClone(fin); }
+      if (p === '/api/v2/finance/ad-imports/run') { fin.import.run_requested = true; return structuredClone(fin); }
+      const row = fin.accounts.find(a => p.endsWith('/' + a.id));
+      if (row && method === 'PATCH') { row.bot_slug = body.bot_slug; return {...row}; }
+    }
     if (p === '/api/v2/tool-index') return {rows: structuredClone(ROWS), counts: COUNTS, next: null};
     if (p === '/api/v2/tools') return {integrations: []};
     if (p === '/api/v2/groups') return {groups: [{id: 'g-books', name: 'Bookkeeping'}]};
@@ -199,6 +223,38 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         assert.equal(await sideways(page), false, `${tag}: Activity has no sideways scroll`);
         await shot(page, `api-activity-${tag}`);
         assert.deepEqual(seen.errors, [], `${tag}: API page errors`);
+        await page.close();
+      }
+      // A Google Ads tool: Finance's card (finance admins) with the import's settings and each ad account's bot.
+      {
+        const {page, seen, api} = await start(browser, '#/tools/api/t-gads', {width, ready: '#tool-finance tr[data-taf-account]'});
+        const card = page.locator('#tool-finance');
+        assert.deepEqual(await card.locator('thead th').allTextContents(), ['Ad account', 'Spend goes to', 'November to date'], `${tag}: Finance columns`);
+        assert.match(await card.innerText(), /Ad spend[\s\S]*every 4 h · from[\s\S]*Books as[\s\S]*Google Ads[\s\S]*Last import/, `${tag}: Finance rows`);
+        assert.equal(await card.locator('[data-taf-account="ad-2"] .pill').innerText(), 'Not assigned', `${tag}: unassigned account`);
+        assert.equal(await card.locator('[data-taf-account="ad-1"] .pill').count(), 0, `${tag}: assigned account`);
+        assert.match(await card.locator('[data-taf-account="ad-2"]').innerText(), /\$1,200\.50/, `${tag}: month to date`);
+        assert.equal(await card.locator('[data-taf-line]').inputValue(), 'acct-ads', `${tag}: books line`);
+        const pick = await card.locator('[data-taf-bot="ad-2"] option').nth(1).getAttribute('value');
+        await card.locator('[data-taf-bot="ad-2"]').selectOption(pick);
+        await page.waitForFunction(() => !document.querySelector('#tool-finance [data-taf-account="ad-2"] .pill'));
+        assert.deepEqual(api.writes.at(-1), {method: 'PATCH', path: '/api/v2/finance/ad-accounts/ad-2', body: {bot_slug: pick}}, `${tag}: bot write`);
+        await card.locator('[data-taf-on="true"]').click();
+        await page.locator('#tool-finance [data-taf-run]').waitFor();
+        const on = api.writes.at(-1);
+        assert.equal(on.path, '/api/v2/finance/ad-imports', `${tag}: import write`);
+        assert.deepEqual({...on.body, credentials: Object.keys(on.body.credentials).sort()}, {tool_id: 't-gads', enabled: true, history_from: '2026-01-01', account_id: 'acct-ads',
+          credentials: ['client_id', 'client_secret', 'developer_token', 'login_customer_id', 'refresh_token']}, `${tag}: switched on`);
+        assert.equal(await sideways(page), false, `${tag}: the ad tool page has no sideways scroll`);
+        await shot(page, `ads-${tag}`);
+        assert.deepEqual(seen.errors, [], `${tag}: ad tool errors`);
+        await page.close();
+      }
+      // An API tool that is not an ad platform has no Finance card.
+      {
+        const {page, api} = await start(browser, '#/tools/api/t-billing', {width, ready: '#tool-keys'});
+        assert.equal(await page.locator('#tool-finance').count(), 0, `${tag}: no Finance card`);
+        assert.equal(api.writes.length, 0, `${tag}: nothing written`);
         await page.close();
       }
       // A key on computers: Move to proxy patches delivery.

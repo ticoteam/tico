@@ -12,7 +12,10 @@
    name; whoever may change it (`can_set_audience`) gets the card with `audience` and `seen_by` ([{subject, kind, id,
    name, why}]: Owner, Listed, Can use it) and saves through PATCH /api/v2/api-tools/<id> {audience: null | audience},
    picking with the page audience's editor (accessEditor, ui/app/settings-access.js). An access row of kind 'finance'
-   is Finance reading the key: shown, never changed here. Styles: ui/styles/tools.css.
+   is Finance reading the key: shown, never changed here. A Google Ads or Meta Ads tool also shows a Finance card to
+   finance admins (GET /api/v2/finance/ad-accounts?tool_id=; anyone else is refused and sees no card): the ad spend
+   import's settings and each ad account's bot (POST /api/v2/finance/ad-imports, …/ad-imports/run, PATCH
+   …/ad-accounts/<id>). Styles: ui/styles/tools.css.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -37,7 +40,7 @@ const taFace = a => a.kind === 'bot' ? avatar(a.subject.slice(4), 22)
 // ----------------------------------------------------------------- the page
 async function pageToolApi(id, tab) {
   const run = (TA?.run || 0) + 1, same = TA?.id === id && $('#tool-api');
-  TA = {run, id, tab, data: same ? TA.data : null, act: {rows: [], cursor: '', result: same ? TA.act.result : ''}};
+  TA = {run, id, tab, data: same ? TA.data : null, fin: same ? TA.fin : null, act: {rows: [], cursor: '', result: same ? TA.act.result : ''}};
   if (!same) $('#main').innerHTML = `<div class="tt tt-page" id="tool-api" data-tool="${esc(id)}">
     <nav class="tt-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span><span data-ta-crumb>${esc(id)}</span></nav>
     <div data-ta-head></div><div data-ta-body>${skelRows(4, {card: true})}</div></div>`;
@@ -48,7 +51,7 @@ async function pageToolApi(id, tab) {
   catch (e) { if (TA?.run === run) root.querySelector('[data-ta-body]').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   if (TA?.run !== run) return;
   taDrawHead();
-  if (tab === 'activity') await taActivity(true); else taDrawOverview();
+  if (tab === 'activity') await taActivity(true); else { taDrawOverview(); void taFinanceLoad(); }
 }
 async function taLoad() {
   const state = TA, d = await get(taPath(state.id), {fresh: true});
@@ -71,7 +74,8 @@ function taDrawOverview() {
   const d = TA.data, body = $('#tool-api [data-ta-body]');
   if (formBusy(body)) return;   // a half-typed Add stays put
   body.innerHTML = `<div class="tt-cols"><div class="tt-col">${taWhoCard(d)}${taRecentCard(d)}</div>
-    <div class="tt-col">${d.can_set_audience ? taSeeCard(d) : ''}${taKeysCard(d)}${taCheckCard(d)}${taLimitsCard()}</div></div>`;
+    <div class="tt-col">${d.can_set_audience ? taSeeCard(d) : ''}${taFinanceSlot(d)}${taKeysCard(d)}${taCheckCard(d)}${taLimitsCard()}</div></div>`;
+  taFinanceBind(body.querySelector('[data-ta-finance]'));
 }
 function taWhoCard(d) {
   const manage = d.can_manage;
@@ -251,6 +255,80 @@ async function taClick(ev) {
     if (!await settingsConfirm({title: `Remove ${key?.name || 'this key'}?`, text: 'Calls that used it stop working.', ok: 'Remove'})) return;
     return write(() => writeRequest('DELETE', taPath(id, '/keys/' + encodeURIComponent(b.dataset.taKeyDelete))));
   }
+}
+// ----------------------------------------------------------------- Finance: ad spend (finance admins only)
+const TAF_SERVICES = ['google-ads', 'meta-ads'];
+const tafMoney = (cents, currency) => { try { return (cents / 100).toLocaleString('en-US', {style: 'currency', currency: currency || 'USD'}); } catch { return (cents / 100).toFixed(2); } };
+const tafOptions = (rows, picked, empty) => `<option value="">${esc(empty)}</option>${rows.map(([v, label]) =>
+  `<option value="${esc(v)}"${v === picked ? ' selected' : ''}>${esc(label)}</option>`).join('')}`;
+function taFinanceSlot(d) {
+  return TAF_SERVICES.includes(d.tool?.service) ? `<div data-ta-finance>${TA.fin ? taFinanceCard(TA.fin) : ''}</div>` : '';
+}
+async function taFinanceLoad() {
+  const state = TA; if (!TAF_SERVICES.includes(state?.data?.tool?.service)) return;
+  let found = null;
+  try { found = await get('/v2/finance/ad-accounts?tool_id=' + encodeURIComponent(state.id), {fresh: true}); } catch { found = null; }
+  if (TA !== state) return;
+  state.fin = found;
+  const slot = $('#tool-api [data-ta-finance]');
+  if (slot && !formBusy(slot)) { slot.innerHTML = found ? taFinanceCard(found) : ''; taFinanceBind(slot); }
+}
+function taFinanceCard(f) {
+  const imp = f.import, on = imp.enabled, other = f.elsewhere;
+  const seg = `<div class="theme-seg" role="radiogroup" aria-label="Ad spend">${[[true, 'On'], [false, 'Off']].map(([v, label]) =>
+    `<button type="button" role="radio" aria-checked="${on === v}" data-taf-on="${v}"${other && v && !on ? ' disabled' : ''}>${label}</button>`).join('')}</div>`;
+  const status = {reconnect: '<span class="pill needs" data-taf-status>Reconnect</span>', failed: '<span class="pill fail" data-taf-status>Failed</span>'}[imp.status] || '';
+  const bots = (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.id, botDisplayName(e.id)]);
+  const keys = f.slots.map(k => `<label class="taf-key"><span>${esc(k.label)}</span><select data-taf-slot="${esc(k.slot)}">${
+    tafOptions(k.options.map(o => [o.id, o.name]), k.credential_id, k.required ? 'Choose a key' : 'None')}</select></label>`).join('');
+  const rows = f.accounts.filter(a => a.active || a.month_to_date).map(a => `<tr data-taf-account="${esc(a.id)}">
+      <td>${esc(a.name)} <span class="muted mono">${esc(a.external_id)}</span></td>
+      <td>${a.bot_slug ? '' : '<span class="pill needs">Not assigned</span> '}<select data-taf-bot="${esc(a.id)}" aria-label="Spend goes to">${tafOptions(bots, a.bot_slug || '', 'Not assigned')}</select></td>
+      <td class="tnum">${esc(tafMoney(a.month_to_date, a.currency))}</td></tr>`).join('');
+  return `<section class="card" id="tool-finance"><header><h2>Finance</h2>${status}</header>
+    <div class="taf-row"><span class="taf-k">Ad spend</span>${seg}<span class="muted">every ${imp.every_hours} h · from</span><input type="date" data-taf-from value="${esc(imp.history_from)}" aria-label="From"></div>
+    ${other ? `<p class="muted taf-note">Imports from ${esc(other.tool_name)}</p>` : ''}
+    <div class="taf-row"><span class="taf-k">Books as</span><select data-taf-line aria-label="Books line">${tafOptions(f.books_lines.map(l => [l.id, l.name]), imp.account_id, 'Choose a line')}</select><span class="muted">· ${esc(f.platform_label)}</span></div>
+    <div class="taf-row"><span class="taf-k">Last import</span><span class="muted" data-taf-last>${esc(imp.last_import_at ? ago(imp.last_import_at) : 'Never')}</span>${on ? '<button type="button" class="ghost small" data-taf-run>Import now</button>' : ''}</div>
+    ${imp.last_error ? `<p class="muted taf-note" data-taf-error>${esc(imp.last_error)}</p>` : ''}
+    <details class="taf-keys"><summary>Keys</summary>${keys}</details>
+    ${rows ? `<div class="scroll"><table class="taf-table"><thead><tr><th>Ad account</th><th>Spend goes to</th><th>${esc(f.month_label)} to date</th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : '<p class="muted taf-note">No ad accounts yet</p>'}</section>`;
+}
+// The card's writes: each answers with the card's new state, drawn in place; a refusal is a toast.
+function taFinanceBind(slot) {
+  if (!slot || slot.dataset.bound) return;
+  slot.dataset.bound = '1';
+  const state = TA;
+  const save = async (run, el) => {
+    if (el) el.disabled = true;
+    try { const f = await run(); if (TA !== state) return; if (f?.import) state.fin = f; else await taFinanceLoad(); }
+    catch (e) { toast(e.message, true); }
+    if (TA === state && slot.isConnected) { slot.innerHTML = state.fin ? taFinanceCard(state.fin) : ''; }
+  };
+  const settings = extra => post('/v2/finance/ad-imports', {tool_id: state.id, enabled: state.fin.import.enabled, ...extra});
+  slot.addEventListener('click', ev => {
+    const b = ev.target.closest('button'); if (!b || !state.fin) return;
+    if (b.dataset.tafOn !== undefined && b.getAttribute('aria-checked') !== 'true') {
+      const credentials = Object.fromEntries(state.fin.slots.filter(k => k.credential_id).map(k => [k.slot, k.credential_id]));
+      void save(() => settings({enabled: b.dataset.tafOn === 'true', history_from: state.fin.import.history_from,
+        account_id: state.fin.import.account_id, credentials}), b);
+    }
+    if (b.hasAttribute('data-taf-run')) void save(() => post('/v2/finance/ad-imports/run', {tool_id: state.id}).then(f => { toast('Importing'); return f; }), b);
+  });
+  slot.addEventListener('change', ev => {
+    const el = ev.target; if (!state.fin) return;
+    if (el.matches('[data-taf-from]') && el.value) void save(() => settings({history_from: el.value}), el);
+    else if (el.matches('[data-taf-line]')) void save(() => settings({account_id: el.value}), el);
+    else if (el.matches('[data-taf-slot]')) void save(() => settings({credentials: {[el.dataset.tafSlot]: el.value || null}}), el);
+    else if (el.matches('[data-taf-bot]')) {
+      void save(async () => {
+        const row = await patch('/v2/finance/ad-accounts/' + encodeURIComponent(el.dataset.tafBot), {bot_slug: el.value || null});
+        const a = state.fin.accounts.find(x => x.id === row.id); if (a) a.bot_slug = row.bot_slug;
+        return state.fin;
+      }, el);
+    }
+  });
 }
 document.addEventListener('submit', ev => {
   const form = ev.target.closest?.('#tool-api [data-ta-add-form]'); if (!form || !TA) return;
