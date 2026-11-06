@@ -756,6 +756,11 @@ def create_app(settings=None):
                     chunks.append(chunk)
                 request._body = b"".join(chunks)
                 return await call_next(request)
+            # A person's skills helper with no token yet (backend/skill_devices.py): it asks for a code and polls for its
+            # token with its own secret, and its source is served to anyone. The person's approval is the signed-in step.
+            from . import skill_devices
+            if skill_devices.public(request) or request.url.path == "/api/v2/skills/helper.mjs" and request.method == "GET":
+                return await call_next(request)
             agent_door = (request.url.path == "/api/v2/agents/pairings" and request.method == "POST"
                           or request.url.path.startswith("/api/v2/agents/pairings/") and request.method == "GET"
                           or request.url.path in ("/api/v2/agents/setup-script", "/api/v2/agents/sync-skill")
@@ -8623,6 +8628,10 @@ def create_app(settings=None):
     company_page_api.register(app, store, auth, mutate, settings)
     from .service_keys import install_service_keys
     install_service_keys(app, store, auth, mutate)
+    # People's own Claude Code (docs/skills.md, People's Claude Code): the helper's devices, then its marketplace.
+    from . import skill_devices, skill_marketplace
+    skill_devices.install(app, store, auth, mutate, settings)
+    skill_marketplace.install(app, store, auth, settings)
     install_views(app, store, auth, mutate, task_view)
     @app.get("/api/v2/attempts/{aid}/goal")
     def attempt_goal(request: Request, aid: str):

@@ -978,3 +978,4 @@ class SkillDeviceCodeRow(TypedDict):
     expires_at: str
     created_at: str
     updated_at: str
+    client_hash: str | None
