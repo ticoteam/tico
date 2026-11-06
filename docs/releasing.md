@@ -44,7 +44,7 @@ Private tickets are counted but not named. The writer skips them; their owners h
 The writer links its open PR on that General task. Tico sends it through the company's ticket review pools
 (Review 1, then Review 2 if configured), recording each verdict at the PR head. A push needs a new review.
 Current-head approvals and green checks wake the writer to merge under the repo's rules, or send the merge to
-an existing repo writer when the writer lacks access. Changes and a needed rebase return to the writer.
+an existing repo writer when the writer lacks access. Changes and a conflict return to the writer.
 Older open bot PRs enter this same route at a limited rate; Health names PRs waiting over 24 hours without a review.
 It is separate from the release command's "Release notes for vX.Y.Z" task. Docs and release notes are not part of
 the pre-release checklist. Only the owner, a person who moves Dev tickets, the Release Manager and the bot that
@@ -348,8 +348,8 @@ slow tests and every browser script, and release candidate validation covers tha
 
 ## Merge queue
 
-Main takes changes only through its merge queue. Mark the pull request ready for review, then run `gh pr merge <N> --merge`
-(`--squash` and `--auto` also enqueue). The queue adds the pull request to a group, merges the group onto the current main, runs the selected
+Main takes changes only through its merge queue. Mark the pull request ready for review, then enqueue it with
+`gh pr merge <N> --merge`. The queue adds the pull request to a group, merges the group onto the current main, runs the selected
 checks on that merge commit, and moves main only when they pass.
 
 - **Each push to a pull request** (GitHub-hosted, free): plan, static checks, recorder change detection, and the `checks`
@@ -362,8 +362,11 @@ checks on that merge commit, and moves main only when they pass.
 Agents run the tests they touched with `scripts/remote.py` before they mark a PR ready; the queue runs the selected set
 once per group.
 
+**Enqueue once.** A pull request needs no rebase to be current: the queue merges it onto the current main. Rebase only when
+GitHub reports a conflict. `--admin` and the REST merge endpoint skip the queue; do not use them.
+
 **A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. Fix the
-failure on the branch, push, mark the PR ready again if it went back to draft, and merge again. The red run is the first
+failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. The red run is the first
 place a test failure shows, because a push to a pull request runs only lint.
 
 **Hotfixes do not bypass the queue.** Land the fix through the queue like any change, then dispatch `hotfix.yml` once it
