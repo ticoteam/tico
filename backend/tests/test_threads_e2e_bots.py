@@ -156,9 +156,12 @@ def test_a_bot_post_is_activity_for_a_person_and_not_an_unread_count(api):
     say(api, "cara-test", t["id"], "@cpo standup: what is the status?")
     unread = ok(call(api, "GET", f"threads/{t['id']}", "ana-test"))["me"]["unread"]
     assert unread == 1, "a person's message is unread"
+    from backend import threads
+    with api.app.state.store.transaction() as c:      # Ana started it (a live follow); she turns it to mentions only
+        threads.follow(c, threads.actor_viewer(c, "human:ana"), t["id"], notify="mentions")
     attempt = claim(api, r, "cpo")
     assert attempt is not None
-    # The bot answers without addressing anyone: activity, which shows as a dot, never a count.
+    # The bot answers without addressing anyone: for anyone not following live, activity (a dot), never a count.
     posted = call(api, "POST", f"threads/{t['id']}/messages", attempt["token"], {"text": "Status: green"})
     assert posted.status_code in (200, 201), posted.text
     me = ok(call(api, "GET", f"threads/{t['id']}", "ana-test"))["me"]
