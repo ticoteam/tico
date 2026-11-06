@@ -33,9 +33,13 @@ Nothing here widens what any bot may do. Every rule below either keeps a right o
 | registry blocklist and owner-handles-personally lists | company `blocked_recipients` and `owner_handles` |
 | registry paused inbox | that inbox's mode **Never** |
 | registry `max_sends_per_day`, `max_external_recipients` | company `daily_cap`, `max_outside_recipients`, applied only when lower than today's value |
+| (new) outside Cc, writing check, second review of a bot's own email | on by default; a mailbox or bot layer can turn one on, never off |
 | registry per-recipient cooldown, standing allowances | dropped. They only ever lifted asks or rate-limited them. |
 | GitHub Issue approvals (`--approval-issue`) | gone. The only approvals are a Tico send approval card, or a person's Tico message after a verified preview. |
 | a pending send whose approval predates the queue (text-hash approval, no `email_send_id`) | no longer approved: it asks again with a new card |
+
+All of these show, and can be changed, on Tools › Settings › Email › Sending (company) and each mailbox's Limits card:
+Never send to, Owner handles personally, Outside people per email, and the Always ask for checks.
 
 **Who sends.** A Workspace mailbox (one the server can mint a Gmail token for) is now sent by the server itself on
 its scheduler tick, after the undo window and pacing. A computer that tries to claim one of those sends gets 403
