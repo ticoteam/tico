@@ -121,15 +121,17 @@ the thread list. Catch up shows every thread with new messages for you, ones tha
 messages. A group DM and every other new thread need a name; only a DM with one teammate may go unnamed.
 
 A card has **Later**, **Mute** and **Mark read**, and a reply box if you can post in its thread. Type a reply and a
-**Send** button appears. Send posts the reply, and the sent message stays on the card while Catch up stays open. The card
-stays until you choose **Mark read**, **Mute** or **Later**, or you read the thread somewhere else. Reopening Catch up
-shows only the new messages from others, not your reply. A reply a rule holds is not added to the card: a notice says
-it was held, and the box is cleared. While a reply is sending, its box and **Send** are disabled, even if you close and
-reopen Catch up. What you type stays in the box as you move between cards; closing Catch up clears it.
+**Send** button appears. Send posts the reply. If you already follow the thread, the sent message stays on the card while
+Catch up stays open, and the card stays until you choose **Mark read**, **Mute** or **Later**, or you read the thread
+somewhere else. If you did not follow it, posting makes you follow it, and the card leaves Catch up as if you had read the
+thread somewhere else. Reopening Catch up shows only the new messages from others, not your reply. A reply a rule holds is
+not added to the card: a notice says it was held, and the box is cleared. While a reply is sending, its box and **Send**
+are disabled, even if you close and reopen Catch up. What you type stays in the box as you move between cards; closing
+Catch up clears it.
 
 **Mark read**, **Mute** and **Later** each move the card on and show **Undo** in place of the progress bar for 5
-seconds. **Mute** also sets the thread's follow level to muted. To bring the card back where it was, click **Undo**, or
-press Ctrl+Z (Cmd+Z on a Mac) when you are not typing.
+seconds. **Mark read** and **Mute** mark the thread read, and **Mute** also sets its follow level to muted. To bring the
+card back where it was, click **Undo**, or press Ctrl+Z (Cmd+Z on a Mac) when you are not typing.
 
 **Later** sends nothing, so the thread stays unread. The card goes to the back of the list and comes back in the same
 visit once the cards not yet put off are done; it is also there the next time you open Catch up. On the last card left,
