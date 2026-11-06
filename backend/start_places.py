@@ -3,7 +3,7 @@
 from types import MappingProxyType
 from typing import Any
 
-from .store import H
+from .store import H, readiness_document
 from . import bot_settings as BS
 
 START_SECONDS = 180
@@ -211,6 +211,47 @@ def turn_limit(runner):
     return min(setting, reported)
 
 
+# One build at once per this many bytes of a computer's reported disk. A turn on a task with a worktree on the computer
+# adds its own checkout and the setup's node_modules or Cargo target, so a small disk fills after a few of them.
+BUILD_DISK_BYTES = 15 * 10**9
+# The builds at once when the computer has not reported its disk.
+BUILD_UNKNOWN = 4
+# Never fewer than this many, however small the disk, so a second repo turn is not held behind the first.
+BUILD_FLOOR = 2
+# The wait a turn shows when its computer already runs its builds at once. Only a turn on a task with a worktree
+# on that computer waits for it; any other turn starts as usual.
+BUILD_WAIT = "builds at once"
+
+
+def build_limit(runner):
+    """The most turns this computer may run at once on tasks with a worktree on it: one per BUILD_DISK_BYTES of its
+    reported disk, at least BUILD_FLOOR, or BUILD_UNKNOWN without a disk report. Never more than `turn_limit`."""
+    total = (readiness_document(runner["readiness"]).get("disk") or {}).get("total_bytes")
+    limit = max(BUILD_FLOOR, total // BUILD_DISK_BYTES) if isinstance(total, int) and total > 0 else BUILD_UNKNOWN
+    return min(limit, turn_limit(runner))
+
+
+# A turn works on a repo here when its task has a worktree link for this computer that is not removed: the rule the
+# worktree inventory uses for a live tree. attempts.task_id is the task the claim gave the turn, so no other lookup is needed.
+BUILD_TASK_SQL = ("EXISTS(SELECT 1 FROM task_links l WHERE l.task_id=a.task_id AND l.kind='worktree' "
+                  "AND l.computer_id=a.runner_id AND coalesce(l.state,'unknown')<>'removed')")
+BUILDS_HELD_SQL = ("SELECT count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
+                   "WHERE a.runner_id=? AND a.id IS NOT ? AND a.task_id IS NOT NULL AND a.state IN ('leased','running') "
+                   "AND (a.state='running' OR (a.lease_until>? AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) "
+                   "AND " + BUILD_TASK_SQL)
+
+
+def builds_held(c, runner_id, exclude=None):
+    """Turns that hold a place on this computer and work in a worktree here: what `build_limit` is checked against."""
+    now = H.now()
+    return c.execute(BUILDS_HELD_SQL, (runner_id, exclude, now, now)).fetchone()[0]
+
+
+def is_build(c, aid):
+    """Whether the turn's task has a worktree on the computer it is claimed on (a build turn)."""
+    return bool(c.execute("SELECT " + BUILD_TASK_SQL + " FROM attempts a WHERE a.id=?", (aid,)).fetchone()[0])
+
+
 # Claims stop once a computer holds this many times its turn limit in claimed work, waiting turns included. A parked
 # turn has no harness process and takes no start place, so a login or quota wait does not hold the computer's other
 # work; the bound only stops the server from leasing without limit.
@@ -359,6 +400,10 @@ def reserve(c, attempt, settings=None, *, harness_allocated=False):
     if bot_cap is not None and bot_held(c, attempt['bot_id'], exclude=aid) >= bot_cap:
         waiting(c, aid, BOT_WAIT)
         return {'reserved': False, 'waiting': BOT_WAIT}
+    # A build turn waits for a build slot on its computer; a turn with no repo work is not counted and is not held here.
+    if is_build(c, aid) and builds_held(c, rid, exclude=aid) >= build_limit(runner):
+        waiting(c, aid, BUILD_WAIT)
+        return {'reserved': False, 'waiting': BUILD_WAIT}
     capacity = turn_limit(runner)
     # Waiters ready to run take their turns by original claim order. Login/lane waiters are not ready yet.
     ahead = c.execute("SELECT 1 FROM start_places p JOIN attempts a ON a.id=p.attempt_id "
@@ -485,7 +530,7 @@ def describe(counts):
         since = H.parse_ts(wait['oldest'])
         minutes = max(0, int((now - since).total_seconds() / 60)) if now is not None and since is not None else 0
         age = f"{minutes // 60} h" if minutes >= 60 else f"{minutes} min"
-        reason = ("waiting: " + wait['reason'] if wait['reason'].startswith(('computer busy', 'computer not reporting', 'at ', 'asleep;'))
+        reason = ("waiting: " + wait['reason'] if wait['reason'].startswith(('computer busy', 'computer not reporting', 'at ', 'asleep;', BUILD_WAIT))
                   else "waiting for " + wait['reason'])
         parts.append(f"{wait['count']} {reason} (oldest {age})")
     if not counts['waiting']:
