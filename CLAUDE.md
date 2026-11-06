@@ -56,7 +56,10 @@ Tests stay at zero failures. An intermittent test is fixed quickly or deleted; n
 never ship around a known failure. If a test may fail, it shouldn't exist.
 
 ## Before you push
-Run scripts/check.sh before pushing; `git config core.hooksPath .githooks` runs it on every push.
+Turn on the pre-push hook once per clone: `git config core.hooksPath .githooks`. It is expected in every clone, bots' included.
+Each push runs `scripts/check.sh` (the checks for what you changed) and `scripts/check_conflicts.sh`, which stops the push
+when the branch would not merge into origin/main and names the files. Skip once with `git push --no-verify`; the PR checks
+run the same static checks, so a skipped failure still shows there. CONTRIBUTING.md lists where the local gate differs from CI.
 
 ## How we work
 Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The author marks the PR ready for

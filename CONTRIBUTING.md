@@ -37,21 +37,47 @@ there.
 
 ## Before you push
 
-`scripts/check.sh` is the fast local gate. It runs each static check that applies to what you changed (the Python
-lint baseline, shellcheck, actionlint, cargo fmt, the migration order, the UI API types and the pyright boundary
-modules), one line per check with its time, and exits non-zero if one fails. It compares against the merge-base
-with origin/main, so committed, uncommitted and new files are all checked. `scripts/check.sh --all` runs every check
-on every tracked file; CI runs the same checks. Turn on the pre-push hook once per clone:
+`scripts/check.sh` is the local gate, and the pre-push hook runs it. The hook is expected in every clone, bots' included.
+Turn it on once (every worktree of the clone shares the setting):
 
 ```bash
 git config core.hooksPath .githooks
+```
+
+Each `git push` then runs, in order: a quiet `git fetch origin main` (20 seconds at most; an offline push goes on with the
+main fetched last time), `scripts/check.sh`, and `scripts/check_conflicts.sh`. A failure stops the push and prints what to
+do. `check.sh` prints one line per check with its time; a check whose inputs did not change prints SKIP.
+
+`check.sh` runs the checks CI's static job runs, on what you changed: the Python lint baseline and ruff format, shellcheck,
+actionlint, the migration order, the UI API types, the OpenAPI document, Biome, the UI's API paths, the runner wire contract, and pyright on the
+boundary modules. It also runs cargo fmt on the Rust crates. `scripts/check.sh --all` runs every check on every tracked
+file, which is what CI's static job runs on each pull request.
+
+`scripts/check_conflicts.sh` asks git whether the pushed commit merges into origin/main. When it would not, the push stops,
+the conflicting files are listed, and the fix is to rebase onto origin/main, resolve, continue and push again. It needs git
+2.40 or later; an older git, or a missing origin/main, is reported as skipped and does not fail.
+
+To push past the hook once, use `git push --no-verify`. The pull request's static checks still run on the commit.
+
+Where the local gate differs from CI:
+
+- Uncommitted and untracked files are checked locally; CI checks only the pushed commit. The hook says so when the tree is dirty.
+- The baselines (ruff, tsc, Biome, API paths) compare with origin/main as the hook last fetched it. CI compares with the pull request's base at the time of its run, so a base that moved since the fetch can differ.
+- `check.sh` uses the Python and Node on your PATH. CI uses a pinned Python 3.15 venv and Node 22 with `npm ci`.
+- `check.sh` runs cargo fmt on the Rust crates; CI's static job does not (the merge queue's rust lint does).
+- Tests, clippy, the desktop app, the recorder and the Caddy checks are not in `check.sh`. The merge queue runs the tests a change reaches; run the ones you touched with `scripts/remote.py`.
+- Diff-aware skips: a check is skipped only when no file it reads changed. A skip that should have run is a bug in its trigger.
+
+A clone that rebases also registers the merge driver for `docs/openapi/v2.json` once. It is separate from the hook:
+
+```bash
 git config merge.tico-json.driver 'python3 scripts/json_merge.py %O %A %B'
 ```
 
-After that, each `git push` runs `scripts/check.sh` first. To push without it once, use `git push --no-verify`.
-The second line makes a rebase merge two edits to `docs/openapi/v2.json` by key (`scripts/json_merge.py`), so they stop
-conflicting; without it git merges that file as text. The generated `ui/types/api.d.ts` is not committed:
-`scripts/check_ui_types.sh` writes it.
+That makes a rebase merge two edits to `docs/openapi/v2.json` by key (`scripts/json_merge.py`), so they stop conflicting;
+without it git merges that file as text. The generated `ui/types/api.d.ts` is not committed: `scripts/check_ui_types.sh`
+writes it.
+
 shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
 `scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
 
