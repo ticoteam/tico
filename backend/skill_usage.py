@@ -245,23 +245,6 @@ def _link(c, auth, who, viewer, row):
     return task_id, thread_id
 
 
-def _reporting(c):
-    """The people with a skills helper that reports usage."""
-    return {r["person_id"] for r in c.execute(
-        "SELECT DISTINCT person_id FROM skill_devices WHERE reporting_enabled=1 AND revoked_at IS NULL")}
-
-
-def _state(row, uses, reporting, since):
-    """used | unused | unknown for one install row: unused only with a receipt, a target that reports usage (a bot, or
-    a person whose helper reports), the install 30 days old, and no use."""
-    if uses:
-        return "used"
-    reports = row["target_type"] == "Bot" or row["target_id"] in reporting
-    if row["staged_sha256"] and reports and row["created_at"] <= since:
-        return "unused"
-    return "unknown"
-
-
 def coverage(c, auth, who, skill, at):
     """The installs the caller may see, each with its uses in the last 30 days and whether Tico can tell it is used:
     used | unused | unknown."""
@@ -271,29 +254,48 @@ def coverage(c, auth, who, skill, at):
     sub, args = _uses_sql(c, UNUSED_DAYS, at, skill["id"])
     counts = {(r["actor_type"], r["actor_id"]): r["uses"] for r in c.execute(
         f"SELECT actor_type, actor_id, SUM(n) AS uses FROM ({sub}) GROUP BY actor_type, actor_id", args)}
-    reporting = _reporting(c)
+    reporting = {r["person_id"] for r in c.execute(
+        "SELECT DISTINCT person_id FROM skill_devices WHERE reporting_enabled=1 AND revoked_at IS NULL")}
     out = []
     for r in rows:
         uses = counts.get((r["target_type"], r["target_id"]), 0)
+        reports = r["target_type"] == "Bot" or r["target_id"] in reporting
+        if uses:
+            state = "used"
+        elif r["staged_sha256"] and reports and r["created_at"] <= since:
+            state = "unused"
+        else:
+            state = "unknown"
         view = SK._install_view(r)
-        out.append({"id": view["id"], "target": view["target"], "uses_30d": uses,
-                    "coverage": _state(r, uses, reporting, since)})
+        out.append({"id": view["id"], "target": view["target"], "uses_30d": uses, "coverage": state})
     return out
 
 
+class _Everyone:
+    """The maintenance run reading every install (no caller): coverage()'s visibility check passes for all of them."""
+    role, via, actor = "owner", None, "system"
+
+    def company_role(self, who):
+        return "owner"
+
+    def bot_access(self, c, who, bot_id):
+        return {"see": True}
+
+
+_EVERYONE = _Everyone()
+
+
 def unused_installs(c, at):
-    """Every install that coverage calls unused (never one it calls unknown), as install rows (SK._installs)."""
-    since = _stamp(at - timedelta(days=UNUSED_DAYS))
-    # Only installs that could be unused: staged, and 30 days old. Their uses are then counted in one pass.
-    rows = SK._installs(c, "r.sha256 IS NOT NULL AND i.created_at <= ? AND s.deleted_at IS NULL", (since,))
-    if not rows:
-        return []
-    sub, args = _uses_sql(c, UNUSED_DAYS, at)
-    counts = {(r["skill_id"], r["actor_type"], r["actor_id"]): r["uses"] for r in c.execute(
-        f"SELECT skill_id, actor_type, actor_id, SUM(n) AS uses FROM ({sub}) GROUP BY skill_id, actor_type, actor_id", args)}
-    reporting = _reporting(c)
-    return [r for r in rows
-            if _state(r, counts.get((r["skill_id"], r["target_type"], r["target_id"]), 0), reporting, since) == "unused"]
+    """Every install that coverage() calls unused, never one it calls unknown: [{id, skill_name, target_type,
+    target_id}]. It reads coverage()'s answer rather than a copy of its rule, so a change to the rule holds here too."""
+    out = []
+    for skill in c.execute("SELECT s.id, s.name FROM skills s WHERE s.deleted_at IS NULL AND EXISTS "
+                           "(SELECT 1 FROM skill_installs i WHERE i.skill_id=s.id) ORDER BY s.name").fetchall():
+        for r in coverage(c, _EVERYONE, _EVERYONE, skill, at):
+            if r["coverage"] == "unused":
+                out.append({"id": r["id"], "skill_name": skill["name"], "target_type": r["target"]["type"],
+                            "target_id": r["target"]["id"]})
+    return out
 
 
 def detail(c, auth, who, name, days, at=None):

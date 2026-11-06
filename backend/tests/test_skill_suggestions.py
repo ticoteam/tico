@@ -68,6 +68,21 @@ def test_remove_is_suggested_only_for_installs_coverage_calls_unused_never_unkno
     assert used not in {s for _, s in rows(api)}
 
 
+def test_remove_follows_coverage_not_a_copy_of_its_rule(api, monkeypatch):
+    """When coverage() calls a bot "unknown" (say a harness that does not report), no remove is suggested for it."""
+    publish(api)
+    ops, finance = bot_id(api, "ops"), bot_id(api, "finance")
+    installed(api, "Bot", ops)
+    kept = installed(api, "Bot", finance)
+    real = U.coverage
+
+    def stub(c, auth, who, skill, at):
+        return [{**r, "coverage": "unknown"} if r["target"]["id"] == ops else r for r in real(c, auth, who, skill, at)]
+    monkeypatch.setattr(U, "coverage", stub)
+    refresh(api)
+    assert set(rows(api)) == {("remove", kept)}
+
+
 def test_promote_needs_two_bots_or_ten_uses_in_thirty_days_and_a_name_outside_the_directory(api):
     publish(api)
     ops, finance = bot_id(api, "ops"), bot_id(api, "finance")
