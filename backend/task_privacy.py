@@ -70,7 +70,8 @@ def _task_rows(c, ids):
     for start in range(0, len(missing), 500):
         chunk = missing[start:start + 500]
         found = {row[0]: row for row in c.execute(
-            "SELECT id,private,owner_id,requester_id,readers FROM tasks WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk)}
+            "SELECT id,private,owner_id,requester_id,readers,questions IS NOT NULL AS asked FROM tasks WHERE id IN (%s)"
+            % ",".join("?" * len(chunk)), chunk)}
         for tid in chunk:
             known[tid] = found.get(tid)
     return {tid: known[tid] for tid in ids}
@@ -373,13 +374,19 @@ def record_moved_input(c, from_attempt, to_attempt, message):
              "live_meetings": sorted(meeting_sources(c).message(message, include_run=False))})
 
 
-def readable(c, actor, ids):
+def readable(c, actor, ids, who=None):
     principals = actor if isinstance(actor, tuple) else (actor,)
     # Every permission is current in this snapshot. Tags and wide task bodies
     # contribute nothing to the decision, and shared provenance needs one lookup.
     rows = _task_rows(c, set(ids))
-    return all(row is not None and all(H.task_private_readable(c, a, row) for a in principals)
-               for row in rows.values())
+
+    def reads(row):
+        # A person's own question task on their Assistant's turn is read with the person's rights (task_readable).
+        if who is not None and H.own_question_for_assistant(who, {"owner_id": row["owner_id"],
+                                                                 "questions": row["asked"]}):
+            return H.task_private_readable(c, who.actor, row)
+        return all(H.task_private_readable(c, a, row) for a in principals)
+    return all(row is not None and reads(row) for row in rows.values())
 
 
 def make_page_actor(c, actor, message):
@@ -625,7 +632,7 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
         if not worktree_link_readable(c, who, payload):
             raise Problem("privacy", "This response contains a task you can no longer read", 403)
         return payload
-    if principal != checked_for and not readable(c, principal, references(c, payload)):
+    if principal != checked_for and not readable(c, principal, references(c, payload), who=who):
         raise Problem("privacy", "This response contains a task you can no longer read", 403)
     if principal != checked_for and not meeting_sources(c).readable(principal, meeting_sources(c).references(payload)):
         raise Problem("privacy", "This response contains a meeting you can no longer read", 403)
