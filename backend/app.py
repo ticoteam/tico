@@ -5382,6 +5382,9 @@ def create_app(settings=None):
             way = "steer" if who.role == "bot" or H.task_participant(c, who.actor, row) or moves else "defer"
         else:
             way, defer_for = comment_way_for(c, who, row)
+        # A Defer never the reader did not choose (none named, or a defer with no deadline) binds the bots only:
+        # people following are notified as their level says (threads.plan).
+        people = way == "defer" and not ask and not directs and body.defer_for is None
         if way == "defer" and bot and not ask and not directs:
             # A deadline wakes the bot as a steer would, so it takes the same right. Someone off the task defers
             # with none: their comment waits for the bots' next turn here.
@@ -5402,7 +5405,8 @@ def create_app(settings=None):
             ingest, H.task_ask_recipient(c, who.actor, row, ask)) else None
         msg = H.task_comment(c, who.actor, task_id, text, wake=way != "defer", ask=ask, public=body.public,
                              approval_id=body.approval_id, extra_refs=extra or None,
-                             way=None if ask else way, defer_for=defer_for)
+                             way=None if ask else way, defer_for=defer_for, people_notified=people,
+                             delegate=directs and way != "defer", reach=who.role == "bot")
         due = None
         # The bot the comment went to first: the follower it was for, or the bot its @mention reached.
         reached = msg.get("recipient_id") if H.is_bot(msg.get("recipient_id")) else None

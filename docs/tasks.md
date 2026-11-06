@@ -933,7 +933,9 @@ follower is notified, and a follower at `mentions` or `muted` gets only a commen
 them. **Defer never** reaches no follower, but still reaches whom it @mentions, queued.
 
 A comment with no way named is a **Steer** (the API, CLI and MCP alike), or a Defer with no deadline from someone not on
-the task (not its owner, requester or a mover), so a reader never spends a bot's turns on a task that is not theirs. A
+the task (not its owner, requester or a mover), so a reader never spends a bot's turns on a task that is not theirs;
+the people following it are still notified as their level says. Only someone on the task hands the bots it wakes
+party rights on it. An ask or an answer reaches only whom it is for. A
 person or bot @mentioned in a comment (by id or slug, the part of their email before the @, full name, or first name
 when no one else shares it) is reached and follows the task from then on; on a private task they are also added to
 **Who can see**, as a task event anyone on the task can undo. A bot's @mention adds only a teammate in its reach, and

@@ -210,3 +210,88 @@ def test_the_reach_preview_answers_who_a_message_would_reach(api):
     r = api.get(f"/api/v2/threads/{thread}/reach", params={"delivery": "steer", "defer_for": "4h"}, headers=headers())
     assert r.status_code == 422, r.text
     assert rows(api, "SELECT 1 FROM messages WHERE conversation_id=? AND body LIKE '%see this%'", thread) == []
+
+
+def test_a_readers_comment_reaches_the_person_owner_and_waits_for_the_bots(api):
+    """A reader who may not direct the task defers to its bots by default (Defer never), but the people following it
+    are notified as their level says: the person who owns it hears about it."""
+    row = post(api, "tasks", {"owner": "human:cara", "title": "Call the venue", "body": "Ask about Friday."})
+    follow(api, row["id"], "bot:coo")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+    assert follows(api, row["id"], "human:cara")[:2] == (1, "live")
+    sent = comment(api, row["id"], "The venue called back: Friday works.", token="ben-test")
+    assert delivery(api, sent["comment"]["id"], "human:cara")["reason"] == "follower"
+    assert sent["delivered"] is True
+    coo = delivery(api, sent["comment"]["id"], "bot:coo")
+    assert coo["mode"] == "defer" and not coo["carrier_id"] and bot_jobs(api, "coo") == []
+    # Defer never the reader chose binds people too.
+    chosen = comment(api, row["id"], "No need to reply.", token="ben-test", delivery="defer", defer_for="never")
+    assert delivery(api, chosen["comment"]["id"], "human:cara") is None
+
+
+def test_a_readers_mention_reaches_the_bot_but_delegates_nothing(api):
+    row = post(api, "tasks", {"owner": "ops", "title": "Close the month", "body": "Reconcile and close May."})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+        c.execute("DELETE FROM task_delegations")
+    sent = comment(api, row["id"], "@coo can you check the May totals?", token="ben-test")["comment"]
+    assert sent["recipient_id"] == "bot:coo" and len(bot_jobs(api, "coo")) == 1, "the @mention is reached, queued"
+    assert rows(api, "SELECT delegate FROM task_delegations WHERE task_id=?", row["id"]) == [], \
+        "only someone who may direct the task hands its bots party rights"
+    comment(api, row["id"], "@finance please check them too.")
+    assert "bot:finance" in {r["delegate"] for r in rows(api, "SELECT delegate FROM task_delegations WHERE task_id=?",
+                                                          row["id"])}
+
+
+def test_a_defer_on_a_task_filed_into_a_shared_chat_keeps_its_deadline(api):
+    from backend.tests.threads_e2e import create_thread
+    room = create_thread(api, title="Billing", members=["bot:ops"])["id"]
+    with api.app.state.store.transaction() as c:      # filed into the chat, with no task room of its own
+        legacy = H.task_create(c, "human:ana", "Plan the billing notes", "For the team.", "bot:ops",
+                               conversation_id=room, own_room=False)
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+    assert legacy["conversation_id"] == room
+    sent = comment(api, legacy["id"], "Whenever you get to it today.", delivery="defer", defer_for="4h")
+    assert sent["comment"]["recipient_id"] == "bot:ops" and bot_jobs(api, "ops") == []
+    due = rows(api, "SELECT due_at FROM deferrals WHERE item=?", sent["comment"]["id"])
+    assert due and due[0]["due_at"], "the owner takes the deferral, with its deadline"
+    assert sent["sent_as"] == {"delivery": "defer", "until": due[0]["due_at"]}
+
+
+def test_a_reply_reaches_its_author_only_while_they_read_the_thread_and_asks_need_them(api):
+    from backend.thread_attention import _addressed
+    from backend.tests.threads_e2e import call, create_thread, ok, remove_member, say
+    t = create_thread(api, title="Venue", members=["human:ben", "human:cara"])
+    said = say(api, "cara-test", t["id"], "Friday or Saturday?")
+    said = said.get("message", said)
+    reply = ok(call(api, "POST", f"threads/{t['id']}/messages", "ana-test",
+                    {"text": "Friday.", "in_reply_to": said["id"]}))
+    reply = reply.get("message", reply)
+    assert delivery(api, reply["id"], "human:cara")["reason"] == "reply"
+    with api.app.state.store.read() as c:
+        assert reply["id"] in [m["id"] for m in _addressed(c, "human:cara")], "a reply to a person is in Needs you"
+    ok(remove_member(api, "ana-test", t["id"], "human:cara"))
+    again = ok(call(api, "POST", f"threads/{t['id']}/messages", "ana-test",
+                    {"text": "Actually, Saturday.", "in_reply_to": said["id"]}))
+    again = again.get("message", again)
+    assert delivery(api, again["id"], "human:cara") is None, "a past reader is reached no more"
+
+
+def test_an_ask_on_a_task_reaches_only_whom_it_asks(api):
+    row = post(api, "tasks", {"owner": "ops", "title": "Close the month", "body": "Reconcile and close May."})
+    follow(api, row["id"], "bot:finance")
+    follow(api, row["id"], "cara")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+        asked = H.task_comment(c, "bot:ops", row["id"], "Which bank feed should I trust?", ask={"who": "human:ana"})
+    assert asked["recipient_id"] == "human:ana"
+    assert delivery(api, asked["id"], "bot:finance") is None and bot_jobs(api, "finance") == []
+    assert delivery(api, asked["id"], "human:cara") is None
+
+
+def test_joining_a_tasks_thread_follows_nobody(api):
+    row = post(api, "tasks", {"owner": "ops", "title": "Close the month", "body": "Reconcile and close May."})
+    with api.app.state.store.transaction() as c:
+        threads._joined(c, row["conversation_id"], "human:cara")
+    assert follows(api, row["id"], "human:cara")[0] == 0

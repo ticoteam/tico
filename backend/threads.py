@@ -1285,7 +1285,7 @@ def message_way(refs):
 
 
 def plan(c, thread, author, *, found=(), in_reply_to=None, way=None, defer_for=None, kind="say", primary=None,
-         system=False, root=None, exclude=None):
+         system=False, root=None, exclude=None, people_notified=False):
     """Who a message `author` writes in `thread` reaches, and how (docs/dev/threads-contract.md §4.3): a list of
     {actor, reason, mode, defer_for}, the addressed first, then the followers in the order they followed, never the
     author. The same list makes the deliveries (`deliver`) and the "Who it reaches" preview (`reaches`).
@@ -1298,7 +1298,10 @@ def plan(c, thread, author, *, found=(), in_reply_to=None, way=None, defer_for=N
 
     Modes by way (None is Steer): a bot gets `steer`, `queue` or `defer` (until `defer_for`; a task's thread defaults
     to 24h, a chat to never), a person `queue` (notified). Defer never notifies no follower and defers every follower
-    bot, but still reaches the addressed, queued."""
+    bot, but still reaches the addressed, queued. `people_notified` (refs.send_people): the Defer never was the
+    default for a reader who may not wake the task's bots, so it binds the bots only and people are notified as their
+    level says. Asks and answers on a task reach no follower (they keep their own routing until question tasks).
+    Every recipient but the @mentioned (already checked) must still read the thread, and a private task."""
     root = root or root_of(c, thread)
     audience = audience_of(root)
     on_task = audience == "task"
@@ -1321,7 +1324,7 @@ def plan(c, thread, author, *, found=(), in_reply_to=None, way=None, defer_for=N
     replied = _replied_author(c, root, in_reply_to)
     if replied:
         wanted.setdefault(replied, "reply")
-    if not system:
+    if not system and not (on_task and kind in ("ask", "answer")):
         for actor, notify, reason in _follower_rows(c, thread["id"]):
             if not on_task and actor.startswith("human:") and reason in ("joined", "read"):
                 continue
@@ -1330,17 +1333,18 @@ def plan(c, thread, author, *, found=(), in_reply_to=None, way=None, defer_for=N
             elif notify == "digest" and actor.startswith("bot:"):
                 wanted.setdefault(actor, "digest")
     wanted.pop(author, None)
-    task_row = H.task(c, root.get("task_id") or "") if on_task and any(
-        r in ("follower", "digest") for r in wanted.values()) else None
+    named = {a for a, _ in found}
+    task_row = H.task(c, root.get("task_id") or "") if on_task and any(a not in named for a in wanted) else None
     private = bool(task_row) and H.task_private(c, task_row)
     out = []
     for actor, reason in wanted.items():
-        if reason in ("follower", "digest") and private and not H.task_private_readable(c, actor, task_row):
-            continue                    # a past reader keeps a row, but reads the task no more
+        if actor not in named and reason not in ("dm", "home") and (
+                not audience_has(c, thread, actor) or private and not H.task_private_readable(c, actor, task_row)):
+            continue                    # a past reader keeps a row (a follow, a post), but reads it no more
         if reason == "digest":
             mode = "digest"
         elif not actor.startswith("bot:"):
-            mode = None if never and reason == "follower" else "queue"
+            mode = None if never and reason == "follower" and not people_notified else "queue"
         elif never and reason != "follower":
             mode = "queue"
         else:
@@ -1371,10 +1375,16 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
     way, defer_for = message_way(refs)
     reached = plan(c, thread, author, found=in_audience, in_reply_to=message.get("in_reply_to"), way=way,
                    defer_for=defer_for, kind=message.get("kind"), primary=primary,
-                   system=_is_backfill(refs) or system_line(message, posting), root=root, exclude=message["id"])
+                   system=_is_backfill(refs) or system_line(message, posting), root=root, exclude=message["id"],
+                   people_notified=bool(refs.get("send_people")))
     seq = (message.get("seq") or 1) - 1
     out = []
     entry = next((r for r in reached if r["actor"] == primary), None) if primary else None
+    if entry is None and way == "defer" and primary and primary.startswith("bot:"):
+        # Written to a bot that `plan` does not list (a task's owner bot, on a task filed into a shared chat): it still
+        # takes the way, and a Defer keeps its deadline (a task's comment defaults to 24h, as on its own thread).
+        entry = {"actor": primary, "reason": "addressed", "mode": "defer",
+                 "defer_for": defer_for or ("24h" if refs.get("task") else "never")}
     if entry:
         reason = entry["reason"]
         c.execute("UPDATE message_deliveries SET reason=? WHERE message_id=? AND recipient=?",
@@ -1474,7 +1484,7 @@ def _deliver_person(c, thread, root, message, person, reason, replay, warnings):
 
 # The marks the thread routes and task_comment write for a post's named way (backend/thread_api.py): route-only,
 # refused from a client, so a client's own refs.delivery goes as it always did.
-WAY_KEYS = ("send_way", "send_defer_for")
+WAY_KEYS = ("send_way", "send_defer_for", "send_people")
 # What the primary recipient's own delivery left on the message (its way, a hold): another recipient is judged
 # without them.
 PRIMARY_MARKS = ("quiet", "delivery", "can_wait", "held_by", *WAY_KEYS)
@@ -2894,12 +2904,14 @@ def _newly_reading(c, root, target):
 
 
 def _joined(c, root_id, actor):
-    """A join reads up to now across the whole tree: the root (followed) and each sub-thread (a read mark, not a follow),
-    so nothing written before it counts as unread. One statement, however many sub-threads there are."""
+    """A join reads up to now across the whole tree: the root (followed, unless it is a task's thread: joining a task
+    follows nobody) and each sub-thread (a read mark, not a follow), so nothing written before it counts as unread. One
+    statement, however many sub-threads there are."""
     now = _now()
     c.execute("INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,created_at,"
-              "updated_at) SELECT lower(hex(randomblob(16))), id, ?, CASE WHEN id=? THEN 1 ELSE 0 END, ?, 'joined', "
-              "last_seq, ?, ? FROM conversations WHERE root_id=? ON CONFLICT(thread_id,actor) DO UPDATE SET "
+              "updated_at) SELECT lower(hex(randomblob(16))), id, ?, "
+              "CASE WHEN id=? AND COALESCE(audience,'')<>'task' THEN 1 ELSE 0 END, ?, 'joined', last_seq, ?, ? "
+              "FROM conversations WHERE root_id=? ON CONFLICT(thread_id,actor) DO UPDATE SET "
               "last_read_seq=MAX(last_read_seq,excluded.last_read_seq), following=MAX(following,excluded.following), "
               "updated_at=excluded.updated_at",
               # A bot follows a chat at `mentions` (D14): it is reached by what addresses it.

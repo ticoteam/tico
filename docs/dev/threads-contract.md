@@ -371,14 +371,18 @@ post's transaction, plus outside destinations linked to the thread (`slack:<chan
   of the message it replies to (`in_reply_to`, people too); the other members of a `personal`/`participants` thread
   (DMs); a Home's bot; a sub-thread's posters.
 - Followers (reason `follower`): the thread's `following=1` rows at `live` (a bot at `digest` gets its digest, §4.3).
-  `mentions` and `muted` get only what addresses them. On a chat a person's `joined`/`read` row is not a follow. A
-  private task's past reader keeps a row but is not reached.
+  `mentions` and `muted` get only what addresses them. On a chat a person's `joined`/`read` row is not a follow, and
+  joining a task's thread follows nobody. An ask or an answer on a task reaches only whom it is for, no follower.
+- Every recipient but an in-audience mention must still read the thread (and a private task): a past reader keeps its
+  rows (a follow, a post, a message replied to) but is not reached.
 - A **system line** (D10: the keeper's task news and notices, roundups (`refs.no_mentions`), follow-up nudges and cards)
   reaches only whom it addresses, never the followers (`threads.system_line`).
 - The mode comes from the message's way (`refs.send_way`, `refs.send_defer_for`; none named is Steer, D13): a bot gets
   `steer`, `queue` or `defer` (until the deadline: 24h by default on a task's thread, never on a chat), a person
   `queue` (notified). Defer never notifies no person follower and defers every bot follower, but reaches the addressed
-  queued. On a task's own thread the first bot given a turn is the message's `to_actor` (its job, ride-along and
+  queued; when it is only the default for a reader off the task (`refs.send_people`), it binds the bots alone and people
+  are notified as their level says. A deferred `to_actor` the list leaves out (a task's owner bot, on a task filed into
+  a shared chat) is deferred all the same, with its deadline. On a task's own thread the first bot given a turn is the message's `to_actor` (its job, ride-along and
   `task_delegations` key off it); every other woken bot gets a carrier (§4.4).
 - `GET /api/v2/threads/{thread_id}/reach` (`threads.reaches`) answers the same list for a message not yet sent, given
   `text`, `delivery`, `defer_for` and `in_reply_to`, writing nothing.
