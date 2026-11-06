@@ -12,6 +12,10 @@ import pytest
 
 from setup.tests.test_install_runner import box, install  # noqa: F401  (box is a fixture)
 
+# on_a_terminal forks with pty.fork() while pytest-xdist's threads run. The child only execs sh, so the stdlib's
+# forkpty warning about locks held by other threads does not apply to these tests.
+pytestmark = pytest.mark.filterwarnings("ignore:This process .* is multi-threaded, use of forkpty:DeprecationWarning")
+
 TOKEN = "owner-token-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 CODE = "enroll_code-1234567890"
 INVITE = "inv_SECRET-0123456789"
