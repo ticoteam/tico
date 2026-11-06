@@ -85,6 +85,7 @@ class State:
     pace_end: int | None = None  # the period's spend at today's daily rate (month and quarter budgets)
     spent_from: str = "books"  # a live read: books | platform (ad platforms' daily spend) | mixed
     as_of: str | None = None  # a live read: the platforms' last import, when their spend counts
+    reported: int | None = None  # a live read: an ad budget's platform spend shown beside actual, never in it
 
 
 @dataclass(frozen=True)
