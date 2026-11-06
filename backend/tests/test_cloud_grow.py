@@ -167,7 +167,7 @@ def test_at_the_largest_size_it_is_a_problem_on_health_not_a_resize(grow):
     assert len(events(grow, "cloud_machine.grow_blocked")) == 1
     assert "stop" not in grow.hq.actions() and claim_on(grow, computer, "ops").get("paused") is None
     with grow.store.read() as c:
-        found = CM.health(c, grow.api.app.state.settings)
+        found = CM.health(c, grow.store.settings)
         assert found and found["status"] == "warn" and row["grow_note"] in found["summary"]
     grow.full(100, 251)                                         # space freed: the problem clears
     grow.tick(1)
@@ -195,7 +195,7 @@ def test_a_size_hq_refuses_at_the_restart_goes_back_and_is_not_grown_to_again(gr
     assert grow.row()["size"] == "large"
     grow.tick(1)
     assert grow.row()["state"] == "stopped"
-    grow.hq.fail["start"] = CM.Refused("cpu_cap", 409)
+    grow.hq.fail["start"] = [CM.Refused("cpu_cap", 409)]    # once
     work(grow, text="Another thing")
     grow.tick(1)
     row = grow.row()
