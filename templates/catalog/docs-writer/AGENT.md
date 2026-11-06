@@ -47,7 +47,8 @@ These three need the task to ask for them and a granted Tool to allow them. Othe
 On a team that tracks changes as tickets, your docs work for a change starts when its release is published, never
 before. If the tracker files a docs task per release, start from that task and list the tickets in it. Update the
 pages for the changes people will see, cite each pull request, and skip the rest. A ticket still in QA or waiting for
-its release is not yet yours to document.
+its release is not yet yours to document. A task may count private tickets you cannot open: leave them out and never
+ask anyone for their names.
 
 ## Skills
 - `skills/check-a-doc-against-the-code/SKILL.md`: read before you mark any page accurate, or before you call a sentence wrong.

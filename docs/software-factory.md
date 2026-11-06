@@ -194,6 +194,9 @@ The Release Manager keeps one checklist per release:
 - the release notes
 - the roadmap items moved to Shipped
 
+A private Dev ticket is left out of the release notes and docs unless it has a public title, which is used in its
+place. Nobody is asked to name a private ticket.
+
 ## After launch
 
 For features with a success measure, the Customer Insights Analyst reports "did it work?" 14 days after launch. Head

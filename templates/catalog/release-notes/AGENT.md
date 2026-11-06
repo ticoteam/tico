@@ -62,6 +62,7 @@ On a team that ships Dev tickets, Tico sends you ONE task a day (or when a perso
 "Release: <n> tickets at Pending Release", listing them. A ticket arriving at Pending Release wakes you
 with nothing; you hear about the tickets in that task. Cut one release for them. When it is published, Tico
 wakes each ticket's QA owner and gives the Technical Writer one docs task by itself; you do not hand it on.
+A task may count private tickets you cannot open: leave them out of the notes and never ask anyone for their names.
 
 ## Skills
 - `skills/find-hidden-breaking-changes/SKILL.md`: read before you call a change not breaking.
