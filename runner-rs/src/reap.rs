@@ -186,6 +186,7 @@ pub mod tests {
     pub const ARGS: &str = "TICO_REAP_TEST_ARGS";
 
     /// This test binary run as the parent of `script`: it runs only `as_parent`, which runs `main`.
+    #[cfg(target_os = "linux")]
     fn parent(
         status: &std::path::Path,
         dir: &std::path::Path,

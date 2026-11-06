@@ -118,8 +118,6 @@ struct Inner {
     stopper: Option<super::Stopper>,
     interrupted: HashSet<String>,
     done_turns: HashSet<String>,
-    compacted: HashSet<String>,
-    context: HashMap<String, i64>,
     reader: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -195,16 +193,6 @@ impl<W: Wire> OneShot<W> {
 
     pub fn alive(&self) -> bool {
         self.inner().up
-    }
-
-    /// Whether the harness compacted `thread_id`'s session in a turn since this was last asked.
-    pub fn compacted(&self, thread_id: &str) -> bool {
-        self.inner().compacted.remove(thread_id)
-    }
-
-    /// The session's size after `thread_id`'s last turn, once (Host::context_tokens).
-    pub fn context_tokens(&self, thread_id: &str) -> Option<i64> {
-        self.inner().context.remove(thread_id)
     }
 
     pub fn record(&self, thread_id: &str, settings: &Settings, started: bool) -> String {
@@ -464,12 +452,6 @@ impl<W: Wire> OneShot<W> {
             }
             if !inner.done_turns.insert(turn.into()) {
                 return;
-            }
-            if state.compacted {
-                inner.compacted.insert(tid.into());
-            }
-            if let Some(context) = state.context.filter(|c| *c > 0) {
-                inner.context.insert(tid.into(), context);
             }
             inner.interrupted.contains(turn)
         };

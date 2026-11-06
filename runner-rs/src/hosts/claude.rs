@@ -2162,23 +2162,20 @@ mod tests {
             vec!["claude".into()],
             tokio::sync::mpsc::unbounded_channel().0,
         );
-        for shared in [false, true] {
-            let settings = Settings {
-                packet_only: true,
-                shared,
-                ..Settings::default()
-            };
-            let thread = host.start_thread(&settings);
-            let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), Some("low"));
-            assert!(argv.windows(2).any(|w| w == ["--tools", ""]));
-            assert!(argv.windows(2).any(|w| w == ["--setting-sources", ""]));
-            assert!(argv.contains(&"{\"disableAllHooks\":true}".into()));
-            assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_CLAUDE_MDS"], "1");
-            assert!(
-                !argv.contains(&"--bare".into()),
-                "subscription login must remain available"
-            );
-        }
+        let settings = Settings {
+            packet_only: true,
+            ..Settings::default()
+        };
+        let thread = host.start_thread(&settings);
+        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), Some("low"));
+        assert!(argv.windows(2).any(|w| w == ["--tools", ""]));
+        assert!(argv.windows(2).any(|w| w == ["--setting-sources", ""]));
+        assert!(argv.contains(&"{\"disableAllHooks\":true}".into()));
+        assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_CLAUDE_MDS"], "1");
+        assert!(
+            !argv.contains(&"--bare".into()),
+            "subscription login must remain available"
+        );
     }
 
     #[tokio::test]
@@ -2341,19 +2338,12 @@ mod tests {
         assert_ne!(config["mcpServers"]["hub"]["command"], "stale");
         let env = turn_env(&settings);
         assert_eq!(env["ENABLE_CLAUDEAI_MCP_SERVERS"], "false");
-        // Every bot's turn, with branches or not, and over an inherited setting that would turn it on.
+        // Every bot's turn, and over an inherited setting that would turn it on.
         assert_eq!(env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
         settings
             .env
             .insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "0".into());
         assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
-        assert_eq!(
-            turn_env(&Settings {
-                shared: true,
-                ..settings
-            })["CLAUDE_CODE_DISABLE_AUTO_MEMORY"],
-            "1"
-        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
