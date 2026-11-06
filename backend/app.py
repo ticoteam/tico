@@ -1293,6 +1293,9 @@ def create_app(settings=None):
             value["deferred"] = value["quiet"] = deferred
         # The stored condition is in `deferred.resume`; a board of 500 tasks does not carry the column besides.
         value.pop("resume", None)
+        if not question_tasks.is_question(row):
+            for column in question_tasks.COLUMNS:       # a question task's fields; null on any other task, not sent
+                value.pop(column, None)
         # A snooze and a move to Blocked read as one list of holds (task_holds.public); the fields a task row carries
         # for its open task_holds rows (hubdb.TASKS) stay the server's.
         if c is not None and hold_marks is None:
@@ -4914,9 +4917,18 @@ def create_app(settings=None):
                 new_owner = auth.target(c, who, body.owner, need="write")
                 if new_owner != row["owner_id"]:
                     task_caps.check(c, who.actor, new_owner)
-            after = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots,
-                                  receipt_owner=Access.load_owner(c, settings)["email"], public_allowance=allowance,
-                                  owner_event_data=owner_event_data)
+            picked = fields.get("status") == "done" and question_tasks.close_by_label(c, auth, who, row,
+                                                                                      fields.get("note"))
+            if picked:
+                # A Done naming one of a question task's options is that pick (backend/question_tasks.py), its
+                # spend approved and files judged as an answer is; the rest of the change goes on as sent.
+                fields.update(status=None, note=None)
+            if picked and not any(v not in (None, False, "", [], {}) for v in fields.values()):
+                after = H.task(c, task_id)
+            else:
+                after = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None,
+                                      review_prs=snapshots, receipt_owner=Access.load_owner(c, settings)["email"],
+                                      public_allowance=allowance, owner_event_data=owner_event_data)
             if fields.get("owner") and body.owner and new_owner != row["owner_id"]:
                 task_caps.record(c, task_id, who.actor, new_owner)
             warnings = after.get("warnings")
@@ -5544,11 +5556,14 @@ def create_app(settings=None):
     def task_answers(request: Request, tid: str):
         with store.read() as c:
             task_id = auth.resolve_task(c, request.state.identity, tid)
-            row = auth.task(c, request.state.identity, task_id)
-            answers = [m["answer"] for m in H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)) if m.get("answer")]
-            # A question task's own answer (backend/question_tasks.py) is on the task, not in a comment.
-            own = question_tasks.fields(row)["answer"]
-            return {"answers": answers + ([own] if own else [])}
+            who = request.state.identity
+            row = auth.task(c, who, task_id)
+            answers = [m["answer"] for m in H.task_comments(c, task_id, actor=privacy.actor(who)) if m.get("answer")]
+            # A question task's own answer (backend/question_tasks.py) is on the task, not in a comment. Words it copies
+            # from a page this reader may not open are redacted, as /api/v2/answers does.
+            own = question_tasks.view_fields(row).get("answer")
+            from .files import readable_page_refs
+            return readable_page_refs(c, auth, who, {"answers": answers + ([own] if own else [])}, task_id=task_id)
 
     def task_answer_write(c, who, tid, body, warn=""):
         from .task_review import answer_task

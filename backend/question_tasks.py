@@ -18,7 +18,12 @@ from . import hubdb as H
 from . import task_relations as TR
 
 JSON_FIELDS = ("questions", "if_no_answer", "review", "spend", "answer")
+COLUMNS = ("questions", "question_topic", "if_no_answer", "review", "spend", "answer", "asked_at")
 FIRST_ID = "decision"
+# An open question task, as the partial index tasks_open_questions reads it (its migration spells the same predicate,
+# literal statuses included, so SQLite can use it).
+OPEN_SQL = ("questions IS NOT NULL AND answer IS NULL AND status IN ("
+            + ",".join(f"'{s}'" for s in H.ACTIVE_STATUSES) + ")")
 
 
 def _load(value):
@@ -45,7 +50,10 @@ def view_fields(row):
     """fields() as a task view carries them: the review's files without their attachments, which only the card's ask
     carries, decorated for each reader (visuals.decorate: a file the reader may not open says nothing of itself). An
     answer that copies a page's words brings their sources (body_sources), so a reader who may not open that page
-    reads none of the task's text (files.readable_page_refs)."""
+    reads none of the task's text (files.readable_page_refs). Any other task carries none of them: a board of 500
+    tasks sends no empty question fields."""
+    if not is_question(row):
+        return {}
     f = fields(row)
     if isinstance(f["review"], dict):
         f["review"] = {k: v for k, v in f["review"].items() if k != "attachments"}
@@ -127,7 +135,9 @@ def file(conn, bot, card, parent):
         return
     H.event(conn, bot, H.ASK_CARD, card["id"], {"for": parent["id"], "to": card["owner_id"]})
     if H.task_private(conn, card) and not H.task_private(conn, parent):
-        return                  # a public task never waits on a private one; the answer still wakes it (_subtask_wake)
+        # A public task never waits on a private one, and the private answer never reaches it (_subtask_result_parent):
+        # the bot hears it as this task's requester (task_update's requester notice).
+        return
     if parent["owner_id"] == bot and card["id"] not in TR.blocker_ids(conn, parent["id"]):
         TR.add_blocker(conn, bot, parent["id"], card["id"], note="asked in a question task")
 
@@ -139,10 +149,8 @@ def open_for(conn, bot, person, *, parent=None, topic=None, private=False):
     topic = H.question_topic(topic)
     if not topic and not parent:
         return None
-    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
-    for found in conn.execute(f"SELECT id FROM tasks WHERE owner_id=? AND requester_id=? AND questions IS NOT NULL "
-                              f"AND answer IS NULL AND status IN ({marks}) ORDER BY created_at, rowid",
-                              (person, bot, *H.ACTIVE_STATUSES)).fetchall():
+    for found in conn.execute(f"SELECT id FROM tasks WHERE owner_id=? AND requester_id=? AND {OPEN_SQL} "
+                              "ORDER BY created_at, rowid", (person, bot)).fetchall():
         card = H.task(conn, found[0])
         if bool(H.task_private(conn, card)) != bool(private):
             continue
@@ -152,6 +160,21 @@ def open_for(conn, bot, person, *, parent=None, topic=None, private=False):
         if H.question_topic(card.get("question_topic")) == topic and (topic or same_parent):
             return card
     return None
+
+
+def supersede_legacy(conn, bot, person, task_id, *, parent=None, topic=None, private=False):
+    """An old ask message (`hub task question` before step 6a: the bot's own task waiting on the person, the question
+    in an ask) on the same topic as question task `task_id`: superseded, and its task closed pointing to the new one,
+    so the person's Needs you counts the question once. Returns the old task's id, or None."""
+    found = H.open_question(conn, bot, person, parent=parent, topic=topic, private=private)
+    if not found:
+        return None
+    old = found["task"]["id"]
+    why = f"Asked again as a question task: {task_id}"
+    ids = H.supersede_asks(conn, old, from_actor=bot, to_actor=person, why=why)
+    H.drop_asked_waits(conn, old, ids, why)
+    H.task_close(conn, H.KEEPER, old, f"Superseded by task {task_id}.", quiet=True, strict=False)
+    return old
 
 
 def earlier(conn, card):
@@ -192,6 +215,36 @@ def record(conn, task_id, value):
     conn.execute("UPDATE tasks SET answer=? WHERE id=?", (json.dumps(value), task_id))
 
 
+def reopened(conn, row, at):
+    """An answered question task moved back to an open status: a live question again, its answer cleared and its
+    clock restarted, so its card, Needs you and the date sweeps (open_rows) see it once more."""
+    if is_question(row) and row.get("answer"):
+        conn.execute("UPDATE tasks SET answer=NULL, asked_at=? WHERE id=?", (at, row["id"]))
+
+
+def may_answer(c, auth, who, row):
+    """The person a question task asks (its owner), or a person acting for them: an admin, or their manager on the
+    org chart (auth.manages). Never the bot that asked, nor any other bot."""
+    if who.actor == row["owner_id"]:
+        return True
+    if who.role == "owner":
+        return True
+    return who.role == "human" and H.is_human(row["owner_id"]) and auth.manages(c, who, "person",
+                                                                                 H.actor_id(row["owner_id"]))
+
+
+def _picked(questions, status, text):
+    """The pick a close names, ({question id: [label]}, what it says besides): declined picks nothing; a note naming an
+    option picks it (_label_said); done with nothing said on a Yes / No is a yes."""
+    if status == "declined":
+        return {}, text or None
+    answers, other = _label_said(questions, text)
+    if status == "done" and not text and len(questions) == 1:
+        yes = next((o["label"] for o in questions[0].get("options") or [] if o["label"].casefold() == "yes"), None)
+        answers = {questions[0]["id"]: [yes]} if yes else {}
+    return answers, other
+
+
 def _label_said(questions, text):
     """The option a note names, as {question id: [label]} and what it says besides: "Yes." or "Yes. Ship it Friday"
     (Decide's Yes / No) picks Yes; anything else is a note."""
@@ -218,13 +271,25 @@ def closed(conn, actor, row, status, note):
         return                  # answered first (answer, settle): that answer stands
     questions = fields(row)["questions"] or []
     text = str(note or "").strip()
-    answers, other = ({}, text or None) if status == "declined" else _label_said(questions, text)
-    if status == "done" and not text and len(questions) == 1:
-        yes = next((o["label"] for o in questions[0].get("options") or [] if o["label"].casefold() == "yes"), None)
-        answers = {questions[0]["id"]: [yes]} if yes else {}
+    answers, other = _picked(questions, status, text)
     record(conn, row["id"], {"target": {"task": row["id"]}, "answers": answers, "other": other,
                              "dismiss": status == "declined", "by": actor, "at": H.now(),
                              "text": text or ("Declined." if status == "declined" else "Done.")})
+
+
+def close_by_label(c, auth, who, row, note):
+    """Done on an open question task that names one of its options (Decide's Yes, Catch up, a note "Tuesday. After
+    the newsletter", a bare Done on a Yes / No), by someone who may answer it: answered as that pick (answer), so a
+    picked spend gets its approval and files under review their verdicts. Returns answer's result, or None when the
+    close names no option; the plain close then records its note (closed)."""
+    if not is_open(row) or not may_answer(c, auth, who, row):
+        return None
+    from . import models as M
+    questions = fields(row)["questions"] or []
+    answers, other = _picked(questions, "done", str(note or "").strip())
+    if not answers:
+        return None
+    return answer(c, auth, who, row["id"], M.TaskAnswer(target={"task": row["id"]}, answers=answers, other=other))
 
 
 def answer(c, auth, who, task_id, body, warn=""):
@@ -241,6 +306,8 @@ def answer(c, auth, who, task_id, body, warn=""):
         raise Problem("validation", "The target has no structured question", 422)
     if row["requester_id"] == who.actor:
         raise Problem("forbidden", "The asker cannot answer their own question", 403)
+    if not may_answer(c, auth, who, row):
+        raise Problem("forbidden", "Only the person it asks, or someone acting for them, answers this question", 403)
     asked = as_ask(row)
     questions = {q["id"]: q for q in asked["refs"]["questions"]}
     body, passed = checked_answers(questions, asked["refs"], body)
@@ -314,11 +381,9 @@ def take_recommendation(c, auth, who, row, version=None):
 
 def open_rows(conn):
     """Open question tasks a bot put to a person, oldest question first."""
-    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     rows = H._rows(conn.execute(
-        f"SELECT * FROM {H.TASKS} t WHERE questions IS NOT NULL AND answer IS NULL AND status IN ({marks}) "
-        "AND owner_id LIKE 'human:%' AND requester_id LIKE 'bot:%' ORDER BY coalesce(asked_at, created_at)",
-        tuple(H.ACTIVE_STATUSES)))
+        f"SELECT * FROM {H.TASKS} t WHERE {OPEN_SQL} "
+        "AND owner_id LIKE 'human:%' AND requester_id LIKE 'bot:%' ORDER BY coalesce(asked_at, created_at)"))
     return [r for r in rows if not H.TS.snoozed(r)]
 
 

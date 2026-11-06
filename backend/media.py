@@ -603,7 +603,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         """The person reads the task a question makes, by every rule a read checks: a company-visible one by the bot's
         activity access; a private one as its other party, given they read the run's private work. A question under a
         private task with no person on it, from the bot that owns it, makes the person that task's reader
-        (task_privacy.reach_for); returned for the write to make."""
+        (task_privacy.reach_for): the question task's create makes it (task_privacy.require_create), as for any
+        subtask the bot files for them, so their answer comes back to that task (hubdb.subtask_flows_up)."""
         reach = privacy.reach_for(c, who, person, parent) if private else None
         if private and not privacy.question_party(c, who, person, parent, reach):
             raise question_unreadable(c, person)
@@ -810,6 +811,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         else:
             QT.store(c, tid, ask, topic)
             QT.file(c, who.actor, H.task(c, tid), parent)
+        # An old ask to them on the same topic (before question tasks) gives way to this one: Needs you counts it once.
+        QT.supersede_legacy(c, who.actor, person, tid, parent=parent["id"] if parent else None, topic=topic,
+                            private=private)
         card = H.task(c, tid)
         return {"task": {**card, **QT.fields(card)}, "folded": bool(found), "question": QT.as_ask(card),
                 **({"ingest": made["ingest"]} if made and made.get("ingest") else {}), **org_rule_check.answer(rule)}

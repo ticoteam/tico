@@ -486,7 +486,7 @@ class TaskQuestion(Contract):
     private: StrictBool | None = None
     if_no_answer: IfNoAnswer | None = None
     # One open question per topic: a second question to the same person on this topic, while the first is open, is
-    # folded into it (hubdb.open_question). Without one, an earlier question under the same parent task with no topic.
+    # folded into it (question_tasks.open_for). Without one, an earlier question under the same parent task with no topic.
     topic: Annotated[StrictStr, Field(min_length=1, max_length=80)] | None = None
     # File versions under review: shown on the card, judged by the answer (backend/file_reviews.py). With no options
     # the options are Approve and Request changes; `pick` makes each file its own option, plus Request changes.

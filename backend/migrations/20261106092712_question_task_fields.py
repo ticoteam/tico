@@ -13,6 +13,8 @@ def up(conn):
     for column in COLUMNS:
         if column not in have:
             conn.execute(f"ALTER TABLE tasks ADD COLUMN {column} TEXT")
-    # Open question tasks are few: the fold lookup and the deadline sweeps read only them.
+    # Open question tasks are few: the fold lookup and the deadline sweeps read only them. The predicate is
+    # question_tasks.OPEN_SQL, word for word (hubdb.ACTIVE_STATUSES as literals), so SQLite uses the index there.
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_open_questions ON tasks(owner_id, requester_id) "
-                 "WHERE questions IS NOT NULL AND answer IS NULL")
+                 "WHERE questions IS NOT NULL AND answer IS NULL "
+                 "AND status IN ('open','doing','waiting','review','ready')")

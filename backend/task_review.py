@@ -276,7 +276,7 @@ def checked_answers(questions, refs, body):
             raise Problem("validation", "Dismiss does not include answers or other text", 422)
     else:
         if refs.get("asked_again_at") and set(questions) - set(body.answers):
-            # A question the bot reworded in place (hubdb.fold_question) is answered only by naming its current
+            # A question the bot reworded in place (question_tasks.fold) is answered only by naming its current
             # question id, so a pick or an Other made on the earlier wording never settles the new one.
             raise Problem("changed", "The question was reworded after you opened it: read the new wording and answer "
                           "again", 409)

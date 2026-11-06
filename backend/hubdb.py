@@ -4743,6 +4743,9 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
                manual=effective == 'waiting' and declared_hold(conn, actor, row, step, step_id), stepped=step is not None)
     conn.execute("UPDATE tasks SET status=?,type_id=?,step_id=?,updated_at=? WHERE id=?",
                  (effective, type_id, step_id, ts, row["id"]))
+    if effective in ACTIVE_STATUSES and row.get("status") not in ACTIVE_STATUSES and row.get("questions"):
+        from . import question_tasks
+        question_tasks.reopened(conn, row, ts)      # an answered question task reopened asks again
     if row.get("type_id") != type_id:
         _task_event(conn, row["id"], actor, "type", row.get("type_id"), type_id, note)
         _next_number(conn, actor, row["id"], type_id, note)
@@ -4811,7 +4814,8 @@ ACCEPTANCE_ASK_SQL = ("t.status='done' AND json_type(m.refs,'$.questions')='arra
 
 def ask_clock(message):
     """When this ask was last put to the person: when it was written, or when the bot last asked it again and it was
-    folded in (fold_question). Its age, its "older" move and its default's days run from here."""
+    folded in (before step 6a; a question task folds with question_tasks.fold). Its age, its "older" move and its
+    default's days run from here."""
     refs = (message or {}).get("refs")
     if not isinstance(refs, dict):
         refs = _json((message or {}).get("refs"), {}) or {}
@@ -5236,7 +5240,11 @@ def _answered(conn, actor, task_id, card, told=None):
     row = task(conn, task_id)
     if not person or not row or not is_bot(row["owner_id"]) or row["status"] not in ACTIVE_STATUSES:
         return False
-    if task_private(conn, card) and not task_private(conn, row):
+    if task_private(conn, card) and not subtask_flows_up(conn, card, row) and (
+            not task_private(conn, row) or not all(
+                task_private_readable(conn, party, card) for party in (row["owner_id"], row["requester_id"]) if party)):
+        # The card's words may not reach the task's readers (as _unblock: a private card under a public task, or a
+        # private parent with readers the card does not have): its bot hears it on the card, as its requester.
         return False
     name = person_name(conn, person)
     said = str(card.get("note") or "").strip() or {"done": "Done.", "declined": "Declined."}.get(card["status"], "")
@@ -7000,6 +7008,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         owner = None
     if owner is not None:
         _botops_only(conn, actor, resolve_actor(conn, owner))
+        if row.get("questions") and is_bot(resolve_actor(conn, owner) or ""):
+            refuse(conn, actor, "question-owner", "A question task is for a person; a bot never owns one. Ask a bot in "
+                   "a DM: hub message send <bot> \"<question>\" --needs-action")
     mine = (_task_party(conn, actor, row) or type_bot_works(conn, actor, row)
             or task_manager_acts(conn, actor, row))
     if actor == TASK_MANAGER and actor not in (row["owner_id"], row["requester_id"]):
@@ -7571,7 +7582,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     after = {**after, **{k: task(conn, task_id).get(k) for k in ("check_back_at", "check_back_note", "version")}}
     recount(conn, [after["owner_id"], after["requester_id"], row["owner_id"]])   # the old owner too, on a handoff
     if not closing_step:
-        _parent_finished(conn, after, row["status"], actor, told=subtask_told, wake=wake_others)
+        # A question task's bot heard its answer as the requester (its words may not reach the parent): that notice
+        # is the one wake, with no second "All subtasks done" on the parent.
+        heard = subtask_told or (after["requester_id"] if notify_requester and after.get("questions") else None)
+        _parent_finished(conn, after, row["status"], actor, told=heard, wake=wake_others)
     if asked_in:
         after = {**after, "asked_in": {k: asked_in[k] for k in ("id", "title", "owner_id")}}
     return {**after, "warnings": plain} if plain else after
@@ -7683,35 +7697,6 @@ def open_question(conn, actor, person, *, parent=None, topic=None, private=False
         if (question_topic(row["topic"]) == topic) and (topic or same_parent):
             return {"task": card, "ask": message(conn, row["message_id"])}
     return None
-
-
-def fold_question(conn, actor, found, question, ask, *, title=None, body=None):
-    """Put a new question on a topic into `found`, the open one (open_question): the person keeps one card, with the
-    latest wording and options, and the earlier asks listed under it. The ask is rewritten in place, so nothing new is
-    sent: no second Needs-you item, no Slack or mail line, no run. Its clock restarts (ask_clock), so the person gets
-    the team's days from the latest wording before a default goes ahead. Returns the ask as it now reads."""
-    card, asked = found["task"], found["ask"]
-    old = asked.get("refs") or {}
-    was = ((old.get("questions") or [{}])[0].get("question") or asked.get("body") or "").strip()
-    earlier = [*(old.get("earlier") or []), {"question": was, "at": ask_clock(asked)}][-EARLIER_ASKS_KEPT:]
-    at = now()
-    # A review's files and spend are the latest wording's: an ask without them drops the earlier ones.
-    refs = {k: v for k, v in old.items() if k not in ("questions", "if_no_answer", "who", "review", "attachments", "spend")}
-    # Each wording is its own question id ("decision-2"...): an answer the person picked on the wording before is
-    # keyed by the old id and refused (task_review.answer_task), never taken as an answer to this one.
-    questions = [{**q, "id": f"decision-{len(earlier) + 1}"} if not i else q for i, q in enumerate(ask["questions"])]
-    refs.update({**ask, "questions": questions, "earlier": earlier, "asked_again_at": at})
-    if not ask.get("if_no_answer"):
-        refs.pop("if_no_answer", None)
-    conn.execute("UPDATE messages SET body=?, refs=?, edited_at=? WHERE id=?",
-                 (question, json.dumps(refs), at, asked["id"]))
-    before = "\n".join(f"- {e['question']} ({str(e.get('at') or '')[:10]})" for e in reversed(earlier) if e.get("question"))
-    text = (body or question).strip() + (f"\n\nAsked before:\n{before}" if before else "")
-    task_update(conn, actor, card["id"], title=title or question, body=text, note=question,
-                waiting_on=card["waiting_on"], quiet=True)
-    event(conn, actor, QUESTION_FOLDED, card["id"],
-          {"message": asked["id"], "to": card["waiting_on"], "topic": refs.get("topic"), "asks": len(earlier) + 1})
-    return message(conn, asked["id"])
 
 
 def _ask_in_subtask(conn, actor, row, person, ask):

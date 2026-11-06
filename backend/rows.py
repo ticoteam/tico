@@ -173,6 +173,14 @@ class TaskRow(TypedDict):
     request_id: str | None
     version: int
     acceptance: str
+    # A question task's (backend/question_tasks.py): JSON text, null on any other task.
+    questions: str | None
+    question_topic: str | None
+    if_no_answer: str | None
+    review: str | None
+    spend: str | None
+    answer: str | None
+    asked_at: str | None
 
 
 class PresenceRow(TypedDict):

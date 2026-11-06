@@ -611,10 +611,14 @@ Answering closes the question task, and the answer stays on it:
 - Declining closes it **Declined**.
 - Done or Declined from the task itself, Decide's buttons, or the Assistant counts as an answer too. A note that names
   an option ("Yes." or "Yes. Ship it Friday") picks that option.
+- Only the person asked answers, or someone acting for them: an admin or their manager. The bot that asked never
+  does, and a question task never moves to a bot.
+- Reopening an answered question task clears its answer, so it asks again.
 
 The bot hears the answer once, on its own task, or as the question task's requester when there is no parent.
 The question card draws a question task the same way it draws a question message. The same topic rule applies too:
-one open question task per topic per person. A question task closes on its date the way a question message does (see
+one open question task per topic per person, and an older question message on that topic gives way to the new
+question task. A question task closes on its date the way a question message does (see
 [When nobody answers a bot's ask](#when-nobody-answers-a-bots-ask)): the default goes ahead as the answer, or the
 task closes and the bot hears why. With no date, it goes back to the bot after two business days.
 The header names the real asker, or **Tico** for a system check. It shows the question's age, such as

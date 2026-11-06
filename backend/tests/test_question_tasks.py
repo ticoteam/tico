@@ -227,3 +227,158 @@ def test_a_private_parents_question_task_is_only_for_its_readers(api):
     assert r.status_code in (403, 404), r.text
     assert not [i for i in get(api, "needs-you", token="ben-test")["items"] if i["id"] == card["id"]]
     assert [i for i in _cards(api) if i["id"] == card["id"]]
+
+
+# ---- review fixes ------------------------------------------------------------------------------------------------
+
+def _bot_only_private_parent(api):
+    """A private task with no person on it, another bot's request of ops, and an ops run on it."""
+    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.test_task_readers import run_on, task
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+    parent = task(api, "bot:cpo", "bot:ops", "Zip triage")
+    return parent, run_on(api)
+
+
+def _to(api, who, since):
+    return [r[0] for r in _read(api, "SELECT body FROM messages WHERE recipient_id=? AND rowid>? ORDER BY rowid",
+                                (who, since))]
+
+
+def test_a_private_bot_parents_question_makes_the_person_its_reader_and_wakes_its_bot_once(api):
+    parent, attempt = _bot_only_private_parent(api)
+    card = post(api, "task-questions", {"question": "Ship the zip fix in the next release?", "on": "ben",
+                                        "parent": parent["id"]}, attempt["token"])["task"]
+    assert card["private"] and card["owner_id"] == "human:ben"
+    # Ben reads the task it was asked for, so his answer may come back to it (hubdb.subtask_flows_up).
+    assert api.get(f"/api/v2/tasks/{parent['id']}", headers=headers("ben-test")).status_code == 200
+    since = _mark(api)
+    _answer(api, card["id"], {"answers": {"decision": ["Yes"]}, "other": "after the audit"}, token="ben-test")
+    said = _to(api, "bot:ops", since)
+    assert len(said) == 1 and "audit" in said[0], said
+    assert _to(api, "bot:cpo", since) == []
+
+
+def test_an_answer_that_may_not_flow_up_stays_off_the_private_parent(api):
+    """Ben no longer reads the parent: his answer wakes the bot once, on the question task, and the parent's note and
+    thread, which its other readers see, never copy it."""
+    parent, attempt = _bot_only_private_parent(api)
+    card = post(api, "task-questions", {"question": "Ship the zip fix in the next release?", "on": "ben",
+                                        "parent": parent["id"]}, attempt["token"])["task"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET readers=NULL WHERE id=?", (parent["id"],))
+        note = H.task(c, parent["id"])["note"]
+    since = _mark(api)
+    _answer(api, card["id"], {"answers": {"decision": ["Yes"]}, "other": "after the audit"}, token="ben-test")
+    said = _to(api, "bot:ops", since)
+    assert len(said) == 1 and "audit" in said[0], said
+    with api.app.state.store.read() as c:
+        row = H.task(c, parent["id"])
+        assert row["note"] == note
+        copied = c.execute("SELECT body FROM messages WHERE conversation_id=? AND rowid>? AND body LIKE '%audit%'",
+                           (row["conversation_id"], since)).fetchall()
+    assert not copied and _to(api, "bot:cpo", since) == []
+
+
+def test_only_the_person_asked_or_someone_acting_for_them_answers(api):
+    _, _, attempt = setup_attempt(api)
+    card = _ask(api, attempt["token"], "Archive the September drafts?", on="ben")["task"]
+    _, _, coo = setup_attempt(api, "coo")
+    r = api.post(f"/api/v2/tasks/{card['id']}/answers", json={"target": {"task": card["id"]},
+                                                             "answers": {"decision": ["Yes"]}},
+                 headers=headers(coo["token"]))
+    assert r.status_code == 403, r.text
+    _answer(api, card["id"], {"answers": {"decision": ["Yes"]}}, token="cara-test", expected=403)
+    # An admin acts for anyone.
+    _answer(api, card["id"], {"answers": {"decision": ["No"]}}, token="ana-test")
+    assert get(api, f"tasks/{card['id']}")["task"]["answer"]["by"] == "human:ana"
+
+
+def test_a_question_task_never_moves_to_a_bot(api):
+    _, _, attempt = setup_attempt(api)
+    card = _ask(api, attempt["token"], "Archive the September drafts?")["task"]
+    r = api.post(f"/api/v2/tasks/{card['id']}", json={"owner": "coo", "version": card["version"]}, headers=headers())
+    assert r.status_code in (403, 422) and "DM" in r.text, r.text
+    assert get(api, f"tasks/{card['id']}")["task"]["owner_id"] == "human:ana"
+    # It stays on the deadline sweeps.
+    with api.app.state.store.read() as c:
+        from backend import question_tasks
+        assert card["id"] in [r["id"] for r in question_tasks.open_rows(c)]
+
+
+def test_a_done_naming_an_option_is_the_pick_with_its_spend_and_file_verdicts(api):
+    from backend.tests.test_file_reviews import approved, ask as review_ask, publish
+    _, _, attempt = setup_attempt(api)
+    bot = attempt["token"]
+    a, b = publish(api, bot, "# A", "teaser-a.md"), publish(api, bot, "# B", "teaser-b.md")
+    made = review_ask(api, bot, [{"file": a["id"]}, {"file": b["id"]}], pick=True,
+                      spend={"label": "teaser a", "amount": "12.50", "what": "Render the final cut"})
+    card = made["task"]
+    post(api, f"tasks/{card['id']}", {"status": "done", "note": "teaser a. Ship it", "version": card["version"]})
+    done = get(api, f"tasks/{card['id']}")["task"]
+    assert done["status"] == "done" and done["answer"]["answers"] == {"decision": ["teaser a"]}
+    assert done["answer"]["spend_approval"] and done["answer"]["other"] == "Ship it"
+    assert [r["verdict"] for r in done["answer"]["reviewed"]] == ["approve", "passed"]
+    assert approved(api, bot, file=a["id"])["approved"] and not approved(api, bot, file=b["id"])["approved"]
+
+
+def test_decides_yes_on_a_question_task_approves_its_spend(api):
+    _, _, attempt = setup_attempt(api)
+    card = _ask(api, attempt["token"], "Boost the Acme post?",
+                spend={"label": "Yes", "amount": "20", "what": "Boost the Acme post"})["task"]
+    bid = post(api, "batch", {})["id"]
+    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "answer", "text": "Yes."})
+    assert post(api, f"batch/{bid}/commit", {})["errors"] == []
+    done = get(api, f"tasks/{card['id']}")["task"]
+    assert done["status"] == "done" and done["answer"]["answers"] == {"decision": ["Yes"]}
+    assert done["answer"]["spend_approval"]
+
+
+def test_a_reopened_question_task_asks_again(api):
+    _, _, attempt = setup_attempt(api)
+    card = _ask(api, attempt["token"], "Archive the September drafts?")["task"]
+    _answer(api, card["id"], {"answers": {"decision": ["Yes"]}})
+    done = get(api, f"tasks/{card['id']}")["task"]
+    assert not [c for c in _cards(api) if c["id"] == card["id"]]
+    post(api, f"tasks/{card['id']}", {"status": "open", "version": done["version"]})
+    again = get(api, f"tasks/{card['id']}")["task"]
+    assert again["status"] == "open" and again["answer"] is None
+    assert [c for c in _cards(api) if c["id"] == card["id"]]
+    with api.app.state.store.read() as c:
+        from backend import question_tasks
+        assert card["id"] in [r["id"] for r in question_tasks.open_rows(c)]
+    _answer(api, card["id"], {"answers": {"decision": ["No"]}})
+    assert get(api, f"tasks/{card['id']}")["task"]["answer"]["answers"] == {"decision": ["No"]}
+
+
+def test_an_old_ask_on_the_same_topic_gives_way_to_the_question_task(api):
+    _, _, attempt = setup_attempt(api)
+    asked = {"questions": [{"id": "decision", "header": "", "question": "Give Builder a backup model?", "why": "",
+                            "options": [{"label": "Yes"}, {"label": "No"}], "multi": False}],
+             "topic": "backup-model", "task_question": True}
+    with api.app.state.store.transaction() as c:
+        old = H.task_create(c, "human:ana", "Give Builder a backup model?", "Builder has none.", "bot:ops",
+                            lint=False)
+        said = H.task_comment(c, "bot:ops", old["id"], "Give Builder a backup model?", ask=asked)
+        H.task_update(c, "bot:ops", old["id"], status="waiting", waiting_on="human:ana", note="Asked Ana")
+    assert [i for i in get(api, "needs-you")["items"] if i["id"] == old["id"]]
+    card = _ask(api, attempt["token"], "Give Builder and Analyst a backup model?", topic="Backup model")["task"]
+    with api.app.state.store.read() as c:
+        gone = H.task(c, old["id"])
+        assert gone["status"] == "closed" and card["id"] in gone["note"]
+        assert c.execute("SELECT superseded_at FROM messages WHERE id=?", (said["id"],)).fetchone()[0]
+    items = [i for i in get(api, "needs-you")["items"] if i["id"] in (old["id"], card["id"])]
+    assert [i["id"] for i in items] == [card["id"]]
+
+
+def test_the_open_questions_index_reads_the_open_predicate(api):
+    from backend import question_tasks
+    sql = _read(api, "SELECT sql FROM sqlite_master WHERE name='tasks_open_questions'")[0][0]
+    assert sql.endswith("WHERE " + question_tasks.OPEN_SQL)
+
+
+def test_a_board_row_carries_no_empty_question_fields(api):
+    plain = post(api, "tasks", {"owner": "human:ana", "title": "Sign the lease", "body": "Ready"})
+    row = get(api, f"tasks/{plain['id']}")["task"]
+    assert not {"questions", "answer", "if_no_answer", "review", "spend", "asked_at", "question_topic"} & set(row)

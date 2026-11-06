@@ -63,7 +63,8 @@ def test_real_pick_labels_and_generated_answer_bodies_retain_sources(api):
         if deleted:
             assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
         for token in ("cara-test", "finance-test"):
-            for path in ("tasks", "tasks/" + made["task"]["id"], "tasks/" + made["task"]["id"] + "/comments"):
+            for path in ("tasks", "tasks/" + made["task"]["id"], "tasks/" + made["task"]["id"] + "/comments",
+                         "tasks/" + made["task"]["id"] + "/answers"):
                 shown = json.dumps(get(api, path, token=token))
                 assert fid not in shown and option["label"] not in shown, (path, shown)
 
