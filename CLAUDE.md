@@ -52,8 +52,10 @@ against a dev install with a real model, on demand only; `backend/tests/test_bot
 `evals/replay/run.py` replays signed real tasks on a candidate at release preparation (docs/releasing.md); its cases
 hold customer text and never enter this repository.
 
-Tests stay at zero failures. An intermittent test is fixed quickly or deleted; never rerun it until it passes, and
-never ship around a known failure. If a test may fail, it shouldn't exist.
+Tests stay at zero failures. An intermittent test is fixed quickly or deleted. The one allowed rerun is a test listed in
+`scripts/flaky-tests.json` (owner, reason, exit date within 14 days; `scripts/flaky_ledger.py` checks it): it runs once more
+after a failure, and a pass there is printed in the job summary. Never rerun any other test until it passes, and never
+ship around a known failure. If a test may fail, it shouldn't exist.
 
 ## Before you push
 Run scripts/check.sh before pushing; `git config core.hooksPath .githooks` runs it on every push.

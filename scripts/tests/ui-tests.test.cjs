@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const {spawnSync} = require('node:child_process');
 const os = require('node:os');
 const {EventEmitter} = require('node:events');
-const {resources, runScript, runScripts, sampleCpu, stopTree, stoppedReport} = require('../ui-tests.cjs');
+const {resources, runScript, runScripts, sampleCpu, stopTree, stoppedReport, flakyScripts} = require('../ui-tests.cjs');
 
 test('frame timing scripts run alone after the parallel pool, within the selected files', async () => {
   const active = new Set(), started = [], finished = [];
@@ -296,4 +296,15 @@ test('--group e2e lists the end-to-end journeys, and an unknown group is refused
   const bad = spawnSync(process.execPath, [script, '--group', 'nope', '--list'], {encoding: 'utf8'});
   assert.equal(bad.status, 1);
   assert.match(bad.stderr, /--group must be one of: e2e/);
+});
+
+test('only listed browser scripts whose exit date has not passed get the one retry', () => {
+  const ledger = [
+    {id: 'ui/tests/google-tab.cjs', expires: '2026-11-20'},
+    {id: 'ui/tests/old.cjs', expires: '2026-11-05'},
+    {id: 'backend/tests/test_x.py::test_y', expires: '2026-11-20'},
+  ];
+  assert.deepEqual([...flakyScripts(ledger, '2026-11-06')], ['ui/tests/google-tab.cjs']);
+  assert.deepEqual([...flakyScripts(ledger, '2026-11-21')], []);
+  assert.deepEqual([...flakyScripts([], '2026-11-06')], []);
 });
