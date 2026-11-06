@@ -2,7 +2,8 @@
 // Covers: the three tabs (Directory, Proposals, Installed); a proposal rated high risk needs "I've read this" before
 // Approve (and the server's 422 is mirrored when the tick is missing); Decline with a reason; Re-run for an
 // unscreened proposal; one skill's usage, coverage, files and Install for a team; Remove; the Claude Code command;
-// a member sees no Approve; the Skills nav row; 390px with no sideways scroll.
+// an admin's Suggestions (Remove, Ask to submit as her own message to the bot, Dismiss) and Not in directory, which a
+// member never reads; a member sees no Approve; the Skills nav row; 390px with no sideways scroll.
 // TICO_UI_SHOTS=<dir> saves a dark screenshot of each page at 1440 and 390.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -16,7 +17,7 @@ const SHA = n => String(n).repeat(64).slice(0, 64);
 const who = (type, id, name) => ({type, id, name});
 
 function skillsFake({admin = true} = {}) {
-  const fake = {writes: []};
+  const fake = {writes: [], asked: []};
   const skills = [
     {id: 's1', name: 'refund-check', description: 'Checks a refund request against the 30-day policy and the unit\'s warranty, step by step, with every exception named',
       latest: {number: 2, sha256: SHA(2), approved_at: at(30)}, installs_count: 5},
@@ -27,7 +28,14 @@ function skillsFake({admin = true} = {}) {
     {name: 'refund-check', uses: 74, by_trigger: {model: 74, person: 0, nested: 0}, people: 1, bots: 3, last_used_at: at(2),
       top: [{...who('Bot', 'b-support', 'Support'), uses: 46}]},
     {name: 'calibration-redo', uses: 29, by_trigger: {model: 21, person: 8, nested: 0}, people: 0, bots: 2, last_used_at: at(20), top: []},
-  ]};
+  ], popular_elsewhere: admin ? [
+    {name: 'warranty-lookup', uses: 41, bots_count: 3, bots: [{...who('Bot', 'b-support', 'Support'), uses: 30}, {...who('Bot', 'b-qa', 'Support QA'), uses: 11}]},
+    {name: 'lens-order', uses: 4, bots_count: 1, bots: [{...who('Bot', 'b-paid', 'Paid media'), uses: 4}]},
+  ] : null};
+  const suggestions = [
+    {id: 'sks-1', kind: 'remove', name: 'weekly-spend', target: who('Bot', 'b-paid', 'Paid media'), install_id: 'i2', uses_30d: 0, bots: 0, created_at: at(5)},
+    {id: 'sks-2', kind: 'promote', name: 'warranty-lookup', target: who('Bot', 'b-support', 'Support'), install_id: null, uses_30d: 41, bots: 3, created_at: at(5)},
+  ];
   const proposal = (id, name, base, by, screen, extra = {}) => ({id, name, status: 'pending', screen_status: screen, sha256: SHA(5), description: '',
     note: null, source: {}, base_version: base, version: null, proposed_by: by, task_id: null, decided_by_id: null, decided_at: null,
     decline_reason: null, created_at: at(3), updated_at: at(3), ...extra});
@@ -71,12 +79,18 @@ function skillsFake({admin = true} = {}) {
     teams: [{id: 'g-support', name: 'Support team', targets: [{target_type: 'Bot', target_id: 'b-support'}, {target_type: 'Human', target_id: 'ben'}]}]};
   const refuse = (status, code, detail) => ({status, body: {error: {code, detail, retryable: false}}});
   fake.answer = (p, method, body, url) => {
+    if (p === '/api/v2/messages' && method === 'POST') { fake.writes.push({method, path: p, body}); return {id: 'm1', conversation_id: 'c1'}; }
     if (!p.startsWith('/api/v2/skills')) return undefined;
     if (method !== 'GET') fake.writes.push({method, path: p, body});
+    else fake.asked.push(p);
     if (p === '/api/v2/skills') return {skills};
     if (p === '/api/v2/skills/usage') return usage;
     if (p === '/api/v2/skills/installed') return {installs: installs.filter(i => !fake.writes.some(w => w.method === 'DELETE' && w.path.endsWith('/' + i.id)))};
     if (p === '/api/v2/skills/install-targets') return targets;
+    if (p === '/api/v2/skills/suggestions') return admin ? {suggestions: suggestions.filter(x => !fake.writes.some(w => w.path.includes('/' + x.id + '/')))}
+      : refuse(403, 'forbidden', 'Skill suggestions are for admins');
+    let n = p.match(/^\/api\/v2\/skills\/suggestions\/([^/]+)\/(remove|asked|dismiss)$/);
+    if (n) return {id: n[1], status: n[2] === 'dismiss' ? 'dismissed' : 'acted'};
     if (p === '/api/v2/skills/proposals') return {proposals: admin ? proposals : proposals.filter(x => x.proposed_by.id === 'cara')};
     let m = p.match(/^\/api\/v2\/skills\/proposals\/([^/]+)(?:\/(\w+))?$/);
     if (m) {
@@ -154,6 +168,28 @@ async function start(browser, hash, {width = 1440, ready, admin = true} = {}) {
         await page.waitForFunction(() => location.hash === '#/library/skills/refund-check');
         await page.locator('#skill-usage [data-sk-total]').waitFor();
         assert.deepEqual(seen.errors, [], `${tag}: Directory errors`);
+        await page.close();
+      }
+      // An admin's Suggestions: Remove an unused install, Ask a bot to submit (her own message), Dismiss; Not in directory.
+      {
+        const {page, seen, api} = await start(browser, '#/library/skills', {width, ready: '[data-sk-idea]'});
+        assert.equal(await page.locator('[data-sk-idea]').count(), 2, `${tag}: both suggestions`);
+        assert.match(await page.locator('[data-sk-idea="sks-2"]').innerText(), /warranty-lookup[\s\S]*Support[\s\S]*41 uses · 3 bots/, `${tag}: promote says uses and bots`);
+        assert.match(await page.locator('[data-sk-elsewhere]').innerText(), /warranty-lookup[\s\S]*41 uses[\s\S]*Support, Support QA \+1/, `${tag}: Not in directory`);
+        assert.equal(await sideways(page), false, `${tag}: Suggestions have no sideways scroll`);
+        await shot(page, `suggestions-${tag}`);
+        await page.locator('[data-sk-idea="sks-2"] [data-sk-idea-go]').click();
+        await page.waitForFunction(() => !document.querySelector('[data-sk-idea="sks-2"]'));
+        const [ask, asked] = api.writes.slice(-2);
+        assert.equal(ask.path, '/api/v2/messages', `${tag}: the ask is a message`);
+        assert.equal(ask.body.to, 'bot:b-support', `${tag}: to the bot that used it most`);
+        assert.match(ask.body.text, /tico skill submit warranty-lookup/, `${tag}: it asks for the submit`);
+        assert.deepEqual([asked.method, asked.path], ['POST', '/api/v2/skills/suggestions/sks-2/asked'], `${tag}: then closes it`);
+        await page.locator('[data-sk-idea="sks-1"] [data-sk-idea-go]').click();
+        await page.locator('dialog [data-confirm-ok]').click();
+        await page.waitForFunction(() => !document.querySelector('[data-sk-ideas]'));
+        assert.deepEqual([api.writes.at(-1).method, api.writes.at(-1).path], ['POST', '/api/v2/skills/suggestions/sks-1/remove'], `${tag}: Remove`);
+        assert.deepEqual(seen.errors, [], `${tag}: Suggestions errors`);
         await page.close();
       }
       // Proposals: new or update, who, the screen (risk, or Not screened with Re-run).
@@ -252,6 +288,20 @@ async function start(browser, hash, {width = 1440, ready, admin = true} = {}) {
         await page.close();
       }
     }
+    // A member: no Suggestions and no Not in directory, and the page never asks for them; Dismiss on an admin's.
+    {
+      const {page, seen, api} = await start(browser, '#/library/skills', {admin: false, ready: 'tr[data-sk-row]'});
+      assert.equal(await page.locator('[data-sk-ideas], [data-sk-elsewhere]').count(), 0, 'member: no suggestions');
+      assert.equal(api.asked.some(x => x.includes('/suggestions')), false, 'member: suggestions never read');
+      assert.deepEqual(seen.errors, [], 'member Directory errors');
+      await page.close();
+      const admin = await start(browser, '#/library/skills', {ready: '[data-sk-idea]'});
+      await admin.page.locator('[data-sk-idea="sks-1"] [data-sk-idea-dismiss]').click();
+      await admin.page.waitForFunction(() => !document.querySelector('[data-sk-idea="sks-1"]'));
+      assert.deepEqual(admin.api.writes.at(-1), {method: 'POST', path: '/api/v2/skills/suggestions/sks-1/dismiss', body: {}}, 'Dismiss');
+      assert.deepEqual(admin.seen.errors, [], 'dismiss errors');
+      await admin.page.close();
+    }
     // A member: her own proposals, no Approve or Decline, Withdraw on her own.
     {
       const {page, seen} = await start(browser, '#/library/skills/proposals/p-invoice', {admin: false, ready: '[data-sk-summary]'});
@@ -262,6 +312,6 @@ async function start(browser, hash, {width = 1440, ready, admin = true} = {}) {
       assert.deepEqual(seen.errors, [], 'member errors');
       await page.close();
     }
-    console.log('Skills: Directory, Proposals, Installed, approve needs the tick (and the 422), Decline, Re-run, usage, coverage, files, Install for a team, Remove, Claude Code command, member view, phone');
+    console.log('Skills: Directory, Suggestions (Remove, Ask to submit, Dismiss), Not in directory, Proposals, Installed, approve needs the tick (and the 422), Decline, Re-run, usage, coverage, files, Install for a team, Remove, Claude Code command, member view, phone');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -1,6 +1,7 @@
 /* ui/app/skills.js — Library › Skills (#/library/skills): the company's approved skills, the proposals waiting on an
    admin, and what is installed for me and the bots I can write. Backend: backend/skills.py (directory, versions,
-   proposals, installs) and backend/skill_usage.py (usage, install targets, my installs); docs/skills.md.
+   proposals, installs), backend/skill_usage.py (usage, install targets, my installs) and backend/skill_suggestions.py
+   (admins' Remove / Ask to submit suggestions); docs/skills.md.
    Addresses:
      #/library/skills[?tab=proposals|installed]    the three tabs (Directory is the default)
      #/library/skills/<name>                       one skill: versions, files, Install, usage
@@ -92,18 +93,67 @@ async function pageSkills(tab) {
 
 async function skillsDirectory(body, run) {
   const [list, usage] = await Promise.all([get('/v2/skills', {fresh: true}), get('/v2/skills/usage?days=30', {fresh: true})]);
+  // Suggestions are for admins: the usage read says who is one, so a member never asks.
+  const ideas = usage.admin ? await get('/v2/skills/suggestions', {fresh: true}).catch(() => ({})) : {};
   if (!skillsLive(run)) return;
   const used = Object.fromEntries((usage.skills || []).map(u => [u.name, u]));
   const rows = list.skills || [];
-  if (!rows.length) { body.innerHTML = '<div class="empty" data-sk-empty>No skills yet.</div>'; return; }
-  body.innerHTML = `<table class="tt-list sk-list"><thead><tr><th>Skill</th><th>Version</th><th>Installs</th><th>Uses 30d</th><th>Last used</th></tr></thead>
+  const table = rows.length ? `<table class="tt-list sk-list"><thead><tr><th>Skill</th><th>Version</th><th>Installs</th><th>Uses 30d</th><th>Last used</th></tr></thead>
     <tbody>${rows.map(s => { const u = used[s.name] || {}; return `<tr data-sk-row="${esc(s.name)}">
       <td class="sk-name"><a href="${skillsHref(s.name)}"><strong>${esc(s.name)}</strong><span class="muted sk-desc">${esc(s.description || '')}</span></a></td>
       <td class="sk-ver tnum">${s.latest ? 'v' + s.latest.number : ''}</td>
       <td class="sk-num tnum" data-label="Installs">${skillsN(s.installs_count)}</td>
       <td class="sk-num tnum" data-label="Uses 30d" data-sk-uses>${skillsN(u.uses)}</td>
-      <td class="sk-when">${u.last_used_at ? agoSpan(u.last_used_at) : '<span class="muted">Never</span>'}</td></tr>`; }).join('')}</tbody></table>`;
+      <td class="sk-when">${u.last_used_at ? agoSpan(u.last_used_at) : '<span class="muted">Never</span>'}</td></tr>`; }).join('')}</tbody></table>`
+    : '<div class="empty" data-sk-empty>No skills yet.</div>';
+  body.innerHTML = skillsIdeasHTML(ideas.suggestions || []) + table + skillsElsewhereHTML(usage.popular_elsewhere || []);
   skillsRowLinks(body);
+  skillsBindIdeas(body, ideas.suggestions || []);
+}
+// Remove / Ask to submit suggestions from the maintenance run (backend/skill_suggestions.py). Admins only.
+function skillsIdeasHTML(ideas) {
+  if (!ideas.length) return '';
+  return `<section class="card sk-ideas" data-sk-ideas><header><h2>Suggestions</h2></header>
+    <table class="tt-who-table">${ideas.map(i => `<tr data-sk-idea="${esc(i.id)}" data-sk-kind="${esc(i.kind)}">
+      <td class="tt-who-name"><strong>${esc(i.name)}</strong> <span class="muted">${esc(skillsWho(i.target))}</span></td>
+      <td class="tt-used muted">${i.kind === 'remove' ? 'Unused 30d' : `${skillsUses(i.uses_30d)} · ${skillsN(i.bots)} ${i.bots === 1 ? 'bot' : 'bots'}`}</td>
+      <td class="sk-act"><button type="button" class="ghost small" data-sk-idea-go>${i.kind === 'remove' ? 'Remove' : 'Ask to submit'}</button>
+        <button type="button" class="ghost small" data-sk-idea-dismiss>Dismiss</button></td></tr>`).join('')}</table></section>`;
+}
+function skillsBindIdeas(box, ideas) {
+  box.querySelectorAll('[data-sk-idea]').forEach(tr => {
+    const idea = ideas.find(i => i.id === tr.dataset.skIdea); if (!idea) return;
+    const base = '/v2/skills/suggestions/' + encodeURIComponent(idea.id);
+    tr.querySelector('[data-sk-idea-go]').onclick = async () => {
+      try {
+        if (idea.kind === 'remove') {
+          const ok = await settingsConfirm({title: 'Remove ' + idea.name, text: 'It leaves on the next session.', ok: 'Remove'});
+          if (!ok) return;
+          await post(base + '/remove', {});
+          toast('Removed');
+        } else {
+          // The admin's own message to the bot: it runs the submit itself, and an admin still approves.
+          await post('/v2/messages', {to: 'bot:' + idea.target.id,
+            text: `Please run \`tico skill submit ${idea.name}\` to propose ${idea.name} for the company skills directory.`});
+          await post(base + '/asked', {});
+          toast('Asked');
+        }
+        skillsRedraw();
+      } catch (e) { toast(e.message, true); }
+    };
+    tr.querySelector('[data-sk-idea-dismiss]').onclick = async () => {
+      try { await post(base + '/dismiss', {}); skillsRedraw(); } catch (e) { toast(e.message, true); }
+    };
+  });
+}
+// Skills bots ran that the directory does not have (admins; null for anyone else).
+function skillsElsewhereHTML(rows) {
+  if (!rows.length) return '';
+  return `<section class="card sk-elsewhere" data-sk-elsewhere><header><h2>Not in directory</h2></header>
+    <table class="tt-who-table">${rows.map(r => `<tr data-sk-unlisted="${esc(r.name)}">
+      <td class="tt-who-name"><strong>${esc(r.name)}</strong></td>
+      <td class="tnum tt-used">${skillsUses(r.uses)}</td>
+      <td class="tt-used muted sk-bots">${esc((r.bots || []).map(skillsWho).join(', '))}${r.bots_count > (r.bots || []).length ? ` +${r.bots_count - r.bots.length}` : ''}</td></tr>`).join('')}</table></section>`;
 }
 // A table's whole row opens its first link.
 function skillsRowLinks(box) {

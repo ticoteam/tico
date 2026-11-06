@@ -137,7 +137,8 @@ AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhoo
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
 HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_at", "events": "created_at", "deltas": "created_at",
            "bot_status_history": "started_at", "audit_log": "created_at", "browser_exit_usage": "day",
-           "skill_usages": "used_at", "skill_usage_dailies": "used_on",
+           "skill_usages": "used_at", "skill_usage_dailies": "used_on", "unlisted_skill_usage_dailies": "used_on",
+           "skill_suggestions": "created_at",
            # Run steps before their runs: a step row points at its run.
            "maintenance_run_steps": "started_at", "maintenance_runs": "started_at"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.

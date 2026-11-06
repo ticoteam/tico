@@ -69,7 +69,7 @@ def test_the_rollup_is_idempotent_takes_late_rows_and_keeps_the_rollup_of_pruned
     once = dailies(api)
     assert (day(95), "Human", "cara", "model", 1) in once, "a pruned day keeps its counts"
     assert (day(3), "Human", "cara", "model", 1) in once and (day(3), "Human", "cara", "person", 1) in once
-    assert U.run(store, NOW + timedelta(minutes=5)) == {"days": 0, "pruned": 0}
+    assert U.run(store, NOW + timedelta(minutes=5)) == {"days": 0, "pruned": 0, "unlisted_pruned": 0}
     assert dailies(api) == once, "running it again changes nothing"
 
     # A use the helper reports late, for a day already rolled up, is counted on the next run without doubling the rest.

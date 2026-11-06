@@ -49,6 +49,8 @@ BOT_INSTALLS = {"refund-check": ["support", "support-qa", "escalations", "return
                 "release-notes": ["release-notes", "product-manager"],
                 "weekly-spend": ["paid-media", "spend-watcher", "marketing-lead"]}
 PEOPLE_INSTALLS = {"refund-check": ["ben"], "weekly-spend": ["cara", "ana"], "release-notes": ["eli"]}
+# (skill outside the directory, bot, uses every third day): warranty-lookup is busy enough to suggest submitting it.
+UNLISTED = [("warranty-lookup", "support", 3), ("warranty-lookup", "technical-support", 1), ("lens-order", "returns", 1)]
 
 # (skill, actor, uses over the month, trigger): spread over 30 days, newest first.
 USES = [
@@ -81,7 +83,7 @@ def _screen(b, pid, verdict, risk, summary, findings=(), patterns=()):
 
 
 def seed(b):
-    from .. import skill_usage
+    from .. import skill_suggestions, skill_usage
     b.at(days=31)
     for name, description, body, extra in SKILLS:
         pid = _propose(b, name, CARA if name == "weekly-spend" else BEN, description, body, extra)
@@ -124,6 +126,13 @@ def seed(b):
             c.execute("INSERT OR REPLACE INTO skill_receipts (target_type, target_id, skill_id, sha256, source, staged_at) VALUES (?,?,?,?,?,?)",
                       ("Bot", bots[slug], skills[name]["id"], skills[name]["sha256"], "runner", staged))
         c.execute("UPDATE skill_installs SET created_at=?", (staged,))
+        # Skills bots ran from their own repositories, outside the directory: a daily count by name and bot only.
+        for name, slug, per_day in UNLISTED:
+            for day in range(0, 28, 3):
+                c.execute("INSERT INTO unlisted_skill_usage_dailies (used_on, name, bot_id, uses_count) VALUES (?,?,?,?) "
+                          "ON CONFLICT(used_on, name, bot_id) DO UPDATE SET uses_count=uses_count+excluded.uses_count",
+                          (b.ago(days=day).date().isoformat(), name, bots[slug], per_day))
     b.write(history)
     skill_usage.run(b.store, b.now)
+    skill_suggestions.run(b.store, b.now)     # the Suggest step's skills part: Remove for the unused two, Ask to submit
     b.at(hours=2)

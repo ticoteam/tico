@@ -5,7 +5,9 @@
   (`GET skills/bundles/{sha256}`), stages them and reports what it staged (`POST attempts/{aid}/skills/receipt`).
 - Usage keeps the skill, who, where and when only, never prompt text or tool arguments: a `Skill` tool call the runner
   reports in the attempt's events (`record_runner_usage`), and a person's `/name` to a bot in a thread
-  (`record_thread_usage`). One row per (session, tool id); a repeat is ignored.
+  (`record_thread_usage`). One row per (session, tool id); a repeat is ignored. A bot's call to a skill the directory
+  does not have is only a daily count by name and bot (`unlisted_skill_usage_dailies`), which the Skills page lists as
+  "Not in directory" and the Suggest step reads (backend/skill_suggestions.py).
 
 Spec: emp-tico-open-source reports/2026-11-05-company-skills/spec.md §4 Bots and §5. Tables:
 backend/migrations/20261106061559_company_skills.sql.
@@ -110,7 +112,7 @@ def _staged_sha(c, bot, skill_id):
 
 
 def skill_calls(events):
-    """(name, tool id) of each `Skill` call starting in a batch, where the runner named a valid skill."""
+    """(name, tool id, seq) of each `Skill` call starting in a batch, where the runner named a valid skill."""
     calls = []
     for event in events:
         payload = event.payload if event.kind == "tool" else None
@@ -119,14 +121,26 @@ def skill_calls(events):
         name, tool_id = payload.get("skill"), payload.get("item_id")
         if (isinstance(name, str) and NAME_RE.fullmatch(name) and isinstance(tool_id, str)
                 and 0 < len(tool_id) <= TOOL_ID_MAX):
-            calls.append((name, tool_id))
+            calls.append((name, tool_id, getattr(event, "seq", None)))
     return calls
 
 
-def record_runner_usage(c, aid, events):
+def last_seq(c, aid):
+    """The attempt's last kept event, before a batch is taken: the batch's events after it are new."""
+    row = c.execute("SELECT last_seq FROM attempts WHERE id=?", (aid,)).fetchone()
+    return row[0] if row else None
+
+
+def record_runner_usage(c, aid, events, after_seq=None):
     """A usage row per `Skill` call in an attempt's events whose name is a directory skill: the bot, trigger model,
-    session = the attempt, the task the attempt works on, and the sha its runner staged. Others (a repository's own
-    skill, a plugin's) are not counted. Returns the rows written."""
+    session = the attempt, the task the attempt works on, and the sha its runner staged. Duplicates are ignored (one row
+    per session and tool id).
+
+    A call to a skill the directory does not have (a repository's own, one in the bot's home) adds one to that day's count
+    for its name and bot in `unlisted_skill_usage_dailies`, and keeps nothing else: no task, no session, no sha. A count
+    has no row to dedupe against, so only the batch's new events count (those after `after_seq`, the attempt's last
+    kept event before this batch: a resent batch adds nothing), once per tool id; the runner sends one started event per
+    tool id. Returns the directory rows written."""
     calls = skill_calls(events)
     if not calls:
         return 0
@@ -139,10 +153,16 @@ def record_runner_usage(c, aid, events):
     if msg:
         from .execution import work_task_id
         task_id = work_task_id(msg, H.conversation(c, msg["conversation_id"]))
-    written, now = 0, H.now()
-    for name, tool_id in calls:
+    written, now, counted = 0, H.now(), set()
+    for name, tool_id, seq in calls:
         skill_id = _skill_id(c, name)
         if not skill_id:
+            fresh = after_seq is None or (isinstance(seq, int) and seq > after_seq)
+            if fresh and tool_id not in counted:
+                counted.add(tool_id)
+                c.execute("INSERT INTO unlisted_skill_usage_dailies(used_on,name,bot_id,uses_count) VALUES(?,?,?,1) "
+                          "ON CONFLICT(used_on,name,bot_id) DO UPDATE SET uses_count=uses_count+1",
+                          (now[:10], name, bot))
             continue
         written += c.execute(
             "INSERT OR IGNORE INTO skill_usages(skill_id,sha256,actor_type,actor_id,trigger,source,session_key,"

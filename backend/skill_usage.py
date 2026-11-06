@@ -12,6 +12,10 @@ the caller may read that task or thread. Coverage says "unknown" where Tico has 
 is unused only when its target reports staging (a receipt), has had the install for 30 days, reports usage (a
 person's skills helper with reporting on), and shows no use in those 30 days.
 
+Skills a bot used that the directory does not have are a daily count by name and bot only
+(`unlisted_skill_usage_dailies`, written by backend/skill_runtime.py). Admins see them as `popular_elsewhere`; the rollup
+deletes their days past 90; backend/skill_suggestions.py reads them, and the unused installs, for its suggestions.
+
 Rows hold a skill, who, where and when. Nothing here reads or writes prompt text, arguments or file contents.
 """
 from datetime import datetime, timedelta, timezone
@@ -32,6 +36,7 @@ TOP = 5
 RECENT = 20
 UNUSED_DAYS = 30
 TRIGGERS = ("model", "person", "nested")
+POPULAR = 10                             # skills listed as popular outside the directory
 
 
 def _stamp(at):
@@ -88,12 +93,19 @@ def prune(store, at):
     return gone
 
 
+def prune_unlisted(c, at):
+    """Delete the daily counts of skills outside the directory past 90 days. Returns how many days' rows went."""
+    return c.execute("DELETE FROM unlisted_skill_usage_dailies WHERE used_on <= ?",
+                     (_day(at - timedelta(days=KEEP_DAYS)),)).rowcount
+
+
 def run(store, at=None):
-    """One rollup: recompute the touched days, then prune. {days, pruned}."""
+    """One rollup: recompute the touched days, then prune. {days, pruned, unlisted_pruned}."""
     at = at or datetime.now(timezone.utc)
     with store.transaction() as c:
         days = roll_up_days(c, at)
-    return {"days": len(days), "pruned": prune(store, at)}
+        unlisted = prune_unlisted(c, at)
+    return {"days": len(days), "pruned": prune(store, at), "unlisted_pruned": unlisted}
 
 
 # ----------------------------------------------------------------------------- reads
@@ -187,7 +199,31 @@ def overview(c, auth, who, days, at=None):
         e["last_used_at"] = e["last_used_at"] or r["at"]
     skills = c.execute("SELECT id, name FROM skills WHERE deleted_at IS NULL ORDER BY name LIMIT ?", (SK.LIST_CAP,)).fetchall()
     return {"days": days, "admin": admin,
-            "skills": [{"name": s["name"], **entry(s["id"])} for s in skills]}
+            "skills": [{"name": s["name"], **entry(s["id"])} for s in skills],
+            "popular_elsewhere": popular_elsewhere(c, at) if admin else None}
+
+
+def unlisted_usage(c, at, days=UNUSED_DAYS):
+    """[{name, uses, bots: [(bot id, uses)]}] of the skills bots used in the last `days` that the directory does not
+    have (a deleted skill counts as not there), the most used first, each bot the most using first."""
+    first = _bounds(at, days)[0]
+    out = {}
+    for r in c.execute("SELECT u.name, u.bot_id, SUM(u.uses_count) AS uses FROM unlisted_skill_usage_dailies u "
+                       "WHERE u.used_on >= ? AND NOT EXISTS (SELECT 1 FROM skills s WHERE s.name=u.name AND s.deleted_at IS NULL) "
+                       "GROUP BY u.name, u.bot_id", (first,)):
+        out.setdefault(r["name"], []).append((r["bot_id"], r["uses"]))
+    rows = [{"name": name, "uses": sum(n for _, n in bots), "bots": sorted(bots, key=lambda b: (-b[1], b[0]))}
+            for name, bots in out.items()]
+    return sorted(rows, key=lambda r: (-r["uses"], r["name"]))
+
+
+def popular_elsewhere(c, at):
+    """The skills bots used most in the last 30 days that are not in the directory: name, uses and the bots (the most
+    using first). For admins: it names bots and what they ran."""
+    rows = unlisted_usage(c, at)[:POPULAR]
+    names = _names(c, {("Bot", b) for r in rows for b, _ in r["bots"][:TOP]})
+    return [{"name": r["name"], "uses": r["uses"], "bots_count": len(r["bots"]),
+             "bots": [{**_actor_view(names, "Bot", b), "uses": n} for b, n in r["bots"][:TOP]]} for r in rows]
 
 
 def _link(c, auth, who, viewer, row):
@@ -209,6 +245,23 @@ def _link(c, auth, who, viewer, row):
     return task_id, thread_id
 
 
+def _reporting(c):
+    """The people with a skills helper that reports usage."""
+    return {r["person_id"] for r in c.execute(
+        "SELECT DISTINCT person_id FROM skill_devices WHERE reporting_enabled=1 AND revoked_at IS NULL")}
+
+
+def _state(row, uses, reporting, since):
+    """used | unused | unknown for one install row: unused only with a receipt, a target that reports usage (a bot, or
+    a person whose helper reports), the install 30 days old, and no use."""
+    if uses:
+        return "used"
+    reports = row["target_type"] == "Bot" or row["target_id"] in reporting
+    if row["staged_sha256"] and reports and row["created_at"] <= since:
+        return "unused"
+    return "unknown"
+
+
 def coverage(c, auth, who, skill, at):
     """The installs the caller may see, each with its uses in the last 30 days and whether Tico can tell it is used:
     used | unused | unknown."""
@@ -218,21 +271,29 @@ def coverage(c, auth, who, skill, at):
     sub, args = _uses_sql(c, UNUSED_DAYS, at, skill["id"])
     counts = {(r["actor_type"], r["actor_id"]): r["uses"] for r in c.execute(
         f"SELECT actor_type, actor_id, SUM(n) AS uses FROM ({sub}) GROUP BY actor_type, actor_id", args)}
-    reporting = {r["person_id"] for r in c.execute(
-        "SELECT DISTINCT person_id FROM skill_devices WHERE reporting_enabled=1 AND revoked_at IS NULL")}
+    reporting = _reporting(c)
     out = []
     for r in rows:
         uses = counts.get((r["target_type"], r["target_id"]), 0)
-        reports = r["target_type"] == "Bot" or r["target_id"] in reporting
-        if uses:
-            state = "used"
-        elif r["staged_sha256"] and reports and r["created_at"] <= since:
-            state = "unused"
-        else:
-            state = "unknown"
         view = SK._install_view(r)
-        out.append({"id": view["id"], "target": view["target"], "uses_30d": uses, "coverage": state})
+        out.append({"id": view["id"], "target": view["target"], "uses_30d": uses,
+                    "coverage": _state(r, uses, reporting, since)})
     return out
+
+
+def unused_installs(c, at):
+    """Every install that coverage calls unused (never one it calls unknown), as install rows (SK._installs)."""
+    since = _stamp(at - timedelta(days=UNUSED_DAYS))
+    # Only installs that could be unused: staged, and 30 days old. Their uses are then counted in one pass.
+    rows = SK._installs(c, "r.sha256 IS NOT NULL AND i.created_at <= ? AND s.deleted_at IS NULL", (since,))
+    if not rows:
+        return []
+    sub, args = _uses_sql(c, UNUSED_DAYS, at)
+    counts = {(r["skill_id"], r["actor_type"], r["actor_id"]): r["uses"] for r in c.execute(
+        f"SELECT skill_id, actor_type, actor_id, SUM(n) AS uses FROM ({sub}) GROUP BY skill_id, actor_type, actor_id", args)}
+    reporting = _reporting(c)
+    return [r for r in rows
+            if _state(r, counts.get((r["skill_id"], r["target_type"], r["target_id"]), 0), reporting, since) == "unused"]
 
 
 def detail(c, auth, who, name, days, at=None):
@@ -279,10 +340,7 @@ def detail(c, auth, who, name, days, at=None):
     ordered = sorted(shown.items(), key=lambda kv: (-kv[1]["uses"], kv[0][1]))
     return {"skill": skill["name"], "days": days, "admin": admin, "totals": totals,
             "actors": [{**_actor_view(names, t, i), **v} for (t, i), v in ordered],
-            "recent": uses, "installs": coverage(c, auth, who, skill, at),
-            # Skills used on computers that the directory does not have: not collected yet (the helper forwards
-            # directory skills only), so the page has nothing to flag.
-            "popular_elsewhere": None}
+            "recent": uses, "installs": coverage(c, auth, who, skill, at)}
 
 
 def _writable_bots(c, auth, who):
@@ -399,12 +457,15 @@ def install(app, store, auth):
 
 def words(found):
     """The run's result in words for Settings > Routines."""
-    if not found["days"] and not found["pruned"]:
+    unlisted = found.get("unlisted_pruned", 0)
+    if not found["days"] and not found["pruned"] and not unlisted:
         return None
     parts = []
     if found["days"]:
         parts.append(f"{found['days']} day{'s' if found['days'] != 1 else ''} rolled up")
     if found["pruned"]:
         parts.append(f"{found['pruned']} old use{'s' if found['pruned'] != 1 else ''} deleted")
+    if unlisted:
+        parts.append(f"{unlisted} old count{'s' if unlisted != 1 else ''} outside the directory deleted")
     return ", ".join(parts)
 

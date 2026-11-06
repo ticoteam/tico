@@ -76,6 +76,8 @@ TABLES = {
     rows.SkillReceiptRow: "skill_receipts",
     rows.SkillUsageRow: "skill_usages",
     rows.SkillUsageDailyRow: "skill_usage_dailies",
+    rows.UnlistedSkillUsageDailyRow: "unlisted_skill_usage_dailies",
+    rows.SkillSuggestionRow: "skill_suggestions",
     rows.SkillDeviceRow: "skill_devices",
     rows.SkillDeviceCodeRow: "skill_device_codes",
 }
