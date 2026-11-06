@@ -3,9 +3,15 @@
     python -m backend.devcopy --from <database | s3://bucket/backups/<name>.sqlite> --to <path> [--days 30]
         [--keep-automations]
 
-The source is only read. Every table is classified: EMPTY (it queues work, schedules it, lets a machine or a person
-in, or reaches an outside service: emptied), HISTORY (cut to the last `--days`) or KEEP. A table in none of them, one
-added after this list, is emptied and named in the output: a new table is safe until someone decides about it.
+The source is only read. Every table declares its class in its own CREATE TABLE, as a comment just inside the opening
+parenthesis, and the declaration is stored with the table so any copy reads it:
+
+    CREATE TABLE IF NOT EXISTS widgets(/* devcopy: keep */ id TEXT PRIMARY KEY, ...)
+
+`keep` (kept whole), `empty` (it queues work, schedules it, lets a machine or a person in, or reaches an outside service:
+emptied), `automations` (emptied unless `--keep-automations`) or `history <column>` (cut to the last `--days` by that
+column). A table with no declaration is emptied and named in the output: a new table is safe until someone decides about
+it. Tables created before declarations existed keep the frozen LEGACY_* classes below; nothing is added to those.
 
 Runs stay for realism: finished attempts in the window keep their events, conversations and inputs (inputs are
 message links, no text, and decide who may see a run). Unfinished jobs and attempts go. The tokens on kept rows are
@@ -14,15 +20,16 @@ The key files that sit beside a database (backup.KEY_FILES) are never copied, so
 opens nothing. Beside the copy go a `server.env` with TICO_REHEARSAL=1 (nothing runs on a timer, nothing leaves the
 server, and runners are refused), a fresh local sign-in token, and empty registry and attachment folders.
 
-`--keep-automations` keeps what the team set up to run (AUTOMATIONS: routines, task rules, incoming triggers,
-outgoing webhooks and automations; wake rules are always kept) so the one-time move to automations can be rehearsed on it.
-Their queues, deliveries and runs are still emptied, and their secrets replaced: no trigger URL, webhook signature or
-header of the live install works on the copy. Rehearsal mode still holds every timer.
+`--keep-automations` keeps the `automations` tables (routines, task rules, incoming triggers, outgoing webhooks and
+automations; wake rules are always kept) so the one-time move to automations can be rehearsed on it. Their queues,
+deliveries and runs are still emptied, and their secrets replaced: no trigger URL, webhook signature or header of the
+live install works on the copy. Rehearsal mode still holds every timer.
 """
 
 import argparse
 import json
 import os
+import re
 import secrets
 import shlex
 import sqlite3
@@ -36,8 +43,11 @@ from . import backup
 from .finance import actions as finance
 from .hubdb import now, shift
 
+# Frozen legacy classes: the tables that existed before each table declared its own class (see DECLARATION). Nothing is
+# added here, so a change that adds a table never edits this file. A table here keeps its class even if its CREATE
+# TABLE declares another.
 # Emptied, never pruned: one surviving row is one thing the copy could do.
-EMPTY = (
+LEGACY_EMPTY = (
     # Provider jobs and send grants never become actionable in a rehearsal copy.
     "letter_sources",
     "letter_proofs",
@@ -284,8 +294,8 @@ EMPTY = (
 )
 # Finance's own tables are classified in finance/actions.py (DEV_COPY_KEPT, and DEV_COPY_EMPTIED which Finance empties
 # in its scrub), so no Finance table name is written here.
-# Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
-AUTOMATIONS = (
+# Definitions `--keep-automations` keeps: never their queues, deliveries or secrets.
+LEGACY_AUTOMATIONS = (
     "schedules",
     "schedule_config",
     "task_rules",
@@ -295,7 +305,7 @@ AUTOMATIONS = (
     "automation_versions",
 )
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
-HISTORY = {
+LEGACY_HISTORY = {
     "attempts": "created_at",
     "jobs": "created_at",
     "messages": "created_at",
@@ -313,7 +323,7 @@ HISTORY = {
     "maintenance_runs": "started_at",
 }
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
-KEEP = (
+LEGACY_KEEP = (
     frozenset(
         (
             "skills",
@@ -585,6 +595,8 @@ KEEP = (
     )
     | frozenset(finance.DEV_COPY_KEPT)
 )
+# The class a table declares in its CREATE TABLE: one comment, `keep`, `empty`, `automations` or `history <column>`.
+DECLARATION = re.compile(r"/\*\s*devcopy:\s*(keep|empty|automations|history\s+([a-z_]\w*))\s*\*/")
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
 OWNED = frozenset(("attempt_events", "attempt_conversations", "attempt_inputs", "attempt_load_snapshots"))
@@ -609,13 +621,51 @@ def data_tables(c):
     }
 
 
-def unclassified(c, keep_automations=False):
-    kept = AUTOMATIONS if keep_automations else ()
-    return sorted(
-        t
-        for t in data_tables(c)
-        if t not in KEEP and t not in HISTORY and t not in EMPTY and t not in kept and t not in finance.DEV_COPY_EMPTIED
+def declaration(sql):
+    """The class a CREATE TABLE statement declares: "keep", "empty", "automations" or "history:<column>". None when it
+    declares none, or more than one (a mistake: the table is then unclassified, so it is emptied and named)."""
+    found = [f"history:{m.group(2)}" if m.group(2) else m.group(1) for m in DECLARATION.finditer(sql or "")]
+    return found[0] if len(found) == 1 else None
+
+
+def legacy_class(table):
+    if table in LEGACY_KEEP:
+        return "keep"
+    if table in LEGACY_HISTORY:
+        return f"history:{LEGACY_HISTORY[table]}"
+    if table in LEGACY_EMPTY:
+        return "empty"
+    if table in LEGACY_AUTOMATIONS:
+        return "automations"
+    if table in finance.DEV_COPY_EMPTIED:
+        return "finance"  # Finance empties these itself, in its scrub (below)
+    return None
+
+
+def classes(c):
+    """{table: class} for each table of `c` that has one: its frozen legacy class, else its own declaration."""
+    sql = dict(c.execute("SELECT name, sql FROM sqlite_master WHERE type='table'").fetchall())
+    found = {}
+    for table, text in sql.items():
+        cls = legacy_class(table) or declaration(text)
+        if cls:
+            found[table] = cls
+    return found
+
+
+def history_tables(c):
+    """(table, time column) for each table cut to `--days`: the frozen legacy ones in their order, then the declared."""
+    present = tables(c)
+    declared = sorted(
+        (t, k.split(":", 1)[1]) for t, k in classes(c).items() if k.startswith("history:") and t not in LEGACY_HISTORY
     )
+    return [(t, column) for t, column in LEGACY_HISTORY.items() if t in present] + declared
+
+
+def unclassified(c):
+    """The data tables with no class: emptied, and named in the output."""
+    found = classes(c)
+    return sorted(t for t in data_tables(c) if t not in found)
 
 
 def quote(name):
@@ -623,10 +673,15 @@ def quote(name):
 
 
 def emptied(c, keep_automations=False):
-    """The tables this module empties that exist in `c`: EMPTY and every unclassified one (Litestream's included);
-    with `keep_automations`, not the definitions in AUTOMATIONS."""
-    present, kept = tables(c), AUTOMATIONS if keep_automations else ()
-    return [t for t in EMPTY if t in present and t not in kept] + unclassified(c, keep_automations)
+    """The tables this module empties that exist in `c`: every `empty` one and every unclassified one (Litestream's
+    included), and the `automations` ones unless `keep_automations`. A frozen legacy table that is both `empty` and
+    `automations` (its definitions are kept with `keep_automations`) is kept with them."""
+    present, found = tables(c), classes(c)
+    kept = LEGACY_AUTOMATIONS if keep_automations else ()
+    named = [t for t in LEGACY_EMPTY if t in present and t not in kept]
+    named += [t for t, k in found.items() if k == "empty" and t not in LEGACY_EMPTY]
+    named += [t for t, k in found.items() if k == "automations" and not keep_automations]
+    return sorted(set(named) | set(unclassified(c)))
 
 
 def children(c, parent):
@@ -790,7 +845,7 @@ def prune(c, days, keep_automations=False):
     if days:
         cutoff = shift(stamp, days=-days)
         cleared = set(emptied(c, keep_automations)) | OWNED
-        for table, column in HISTORY.items():
+        for table, column in history_tables(c):
             if table not in present:
                 continue
             refs = [(child, col, key) for child, col, key in children(c, table) if child not in cleared]
@@ -799,8 +854,8 @@ def prune(c, days, keep_automations=False):
                 for child, col, key in refs
             )
             delete(table, where, (cutoff,))
-    # A copy from before migration 0072 keeps its turns whole (KEEP). A run the cut removed must not come back through
-    # its turns row as a lease-less run, so the record goes with its attempts row.
+    # A copy from before migration 0072 keeps its turns whole (LEGACY_KEEP). A run the cut removed must not come back
+    # through its turns row as a lease-less run, so the record goes with its attempts row.
     if "attempts" in present and "turns" in present:
         delete("turns", "id NOT IN (SELECT id FROM attempts)")
     # Kept rows keep no way in: a value no token hashes to (the columns are NOT NULL UNIQUE where not nullable).
@@ -874,7 +929,7 @@ def build(source, dest, days=30, force=False, keep_automations=False):
             c.execute("BEGIN IMMEDIATE")
             for name, _ in triggers:
                 c.execute(f"DROP TRIGGER {quote(name)}")
-            loose = unclassified(c, keep_automations)
+            loose = unclassified(c)
             removed = prune(c, days, keep_automations)
             for _, sql in triggers:
                 c.execute(sql)
@@ -1014,7 +1069,7 @@ def main(argv=None):
     for table, count in sorted(removed.items()):
         print(f"  {table}: {count} removed")
     for table in loose:
-        print(f"Emptied {table}: not classified in backend/devcopy.py (KEEP, HISTORY or EMPTY); decide and add it.")
+        print(f"Emptied {table}: no devcopy declaration in its CREATE TABLE; decide and declare it.")
     print(f"Copy: {dest} ({dest.stat().st_size // 1024} KB, rehearsal mode, no key files)")
     print(
         f"Start it from this checkout:\n"

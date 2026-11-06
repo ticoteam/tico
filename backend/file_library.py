@@ -37,7 +37,8 @@ LOG = logging.getLogger("tico.files")
 
 SCHEMA = [
     # Which version of each file the index holds; `doc` is the file's row id in file_text.
-    "CREATE TABLE IF NOT EXISTS file_text_state(doc INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL UNIQUE, "
+    "CREATE TABLE IF NOT EXISTS file_text_state(/* devcopy: empty */ doc INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "file_id TEXT NOT NULL UNIQUE, "
     "version INTEGER NOT NULL, indexed_at TEXT NOT NULL)",
     # One row per hard-deleted file: who and when, never what it held.
     "CREATE TABLE IF NOT EXISTS file_deletions(file_id TEXT PRIMARY KEY, actor TEXT NOT NULL, versions INTEGER NOT NULL, "

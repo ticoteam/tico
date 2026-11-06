@@ -358,9 +358,10 @@ Litestream backup, `litestream restore -o <file>` first and pass that file. The 
 
 - has every table that could act emptied: queued work, routines, watchers, enrolments and computer assignments,
   bot sessions, human tokens, sign-in sessions, OAuth and service keys, credentials, mail, Slack, GitHub App,
-  Granola and meeting-bot connections, calendar actions, usage alerts, stored request replies (`EMPTY` in
-  `backend/devcopy.py`). Every table is listed as `KEEP`, `HISTORY` or `EMPTY`; one in none of them (added later)
-  is emptied and named in the output;
+  Granola and meeting-bot connections, calendar actions, usage alerts, stored request replies. Each table declares
+  its class in its own `CREATE TABLE` (`/* devcopy: keep */`, `/* devcopy: empty */`, `/* devcopy: automations */` or
+  `/* devcopy: history <column> */`; see `backend/devcopy.py`); a table with no declaration is emptied and named in the
+  output;
 - empties `cloud_machine_deletions` and `cloud_machine_enrollment_failures`: these belong to live HQ machines,
   so a copy never carries deletion retries or enrollment failure counts for real machines;
 - keeps tasks, docs, people and bots, the last `--days` of messages and events (0 keeps all), and the finished runs

@@ -720,4 +720,4 @@ def test_a_devcopy_clears_the_workspace_tables_and_the_connection_client():
         "google_oauth_clients",
         "connector_reports",
         "google_connects",
-    } <= set(devcopy.EMPTY)
+    } <= set(devcopy.LEGACY_EMPTY)

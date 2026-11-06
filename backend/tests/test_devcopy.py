@@ -1,6 +1,7 @@
 """`python -m backend.devcopy`: a dev server's copy of real data keeps the team's history but nothing that acts,
 and the rehearsal it starts in refuses every runner. Synthetic databases only; a real one is never a fixture."""
 
+import json
 import re
 import sqlite3
 import stat
@@ -10,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from backend import devcopy
+from backend import hubdb
 from backend.auth import Identity
 from backend.config import Settings
 from backend.execution import Execution
@@ -181,23 +183,100 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
         assert refused.value.code == "rehearsal"
 
 
-def test_every_table_is_classified(tmp_path):
-    """A new table fails here until someone decides whether a dev copy keeps it, cuts it to --days or empties it."""
+def test_every_table_declares_its_class_or_has_a_legacy_one(tmp_path):
+    """A new table fails here until its CREATE TABLE declares what a dev copy does with it (or it is one of the frozen
+    legacy tables). A table a module creates when it starts is read from its own statement the same way."""
     store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
     store.initialize(seed_market=False)
     with closing(sqlite3.connect(store.settings.db_path)) as c:
         names = devcopy.data_tables(c)
-        virtual = {t for t in devcopy.tables(c) if t not in names}
+        live = {t: devcopy.declaration(sql) for t, sql in devcopy_sql(c).items() if t in names}
+    declared = {}
     dropped = set()
-    for source in Path(devcopy.__file__).parent.glob("*.py"):  # tables a module creates when it starts
+    for source in Path(devcopy.__file__).parent.glob("*.py"):
         text = source.read_text()
-        names |= set(re.findall(r"CREATE TABLE (?:IF NOT EXISTS )?([a-z_]+) ?\(", text)) - virtual
-        dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", text))  # and a migration script drops again
-    for source in (Path(devcopy.__file__).parent / "migrations").glob("*.py"):  # and a migration file drops for good
+        for match in re.finditer(r"CREATE TABLE (?:IF NOT EXISTS )?([a-z_]+) ?\(", text):
+            ends = [i for i in (text.find(";", match.end()), text.find('"""', match.end())) if i != -1]
+            statement = text[match.start() : min(ends) if ends else len(text)]
+            declared.setdefault(match.group(1), []).append(devcopy.declaration(statement))
+        dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", text))
+    for source in (Path(devcopy.__file__).parent / "migrations").glob("*.py"):
         dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", source.read_text()))
-    names -= dropped
-    groups = (devcopy.KEEP, set(devcopy.HISTORY), set(devcopy.EMPTY), set(finance.DEV_COPY_EMPTIED))
-    assert {t: n for t in names if (n := sum(t in g for g in groups)) != 1} == {}
+    problems = []
+    for name in sorted((set(live) | set(declared)) - dropped):
+        found = [live[name]] if name in live else [d for d in declared.get(name, []) if d]
+        count = len([f for f in found if f]) + (devcopy.legacy_class(name) is not None)
+        if count != 1:
+            problems.append(
+                f"{name}: {count} classes (declare one in its CREATE TABLE, or it is a frozen legacy table)"
+            )
+    assert problems == []
+
+
+def devcopy_sql(c):
+    return dict(c.execute("SELECT name, sql FROM sqlite_master WHERE type='table'").fetchall())
+
+
+def test_a_table_declares_its_class_in_its_create_statement(tmp_path):
+    """A declared table is classed by its own statement; an undeclared or doubly declared one is emptied and named."""
+    source = tmp_path / "hub.sqlite"
+    with closing(sqlite3.connect(source)) as c:
+        c.executescript(
+            """
+            CREATE TABLE widgets(/* devcopy: keep */ id TEXT PRIMARY KEY, note TEXT);
+            CREATE TABLE gadgets(/* devcopy: history made_at */ id TEXT PRIMARY KEY, made_at TEXT);
+            CREATE TABLE sprockets(/* devcopy: empty */ id TEXT PRIMARY KEY);
+            CREATE TABLE gears(/* devcopy: automations */ id TEXT PRIMARY KEY);
+            CREATE TABLE undeclared(id TEXT PRIMARY KEY);
+            CREATE TABLE twice(/* devcopy: keep */ /* devcopy: empty */ id TEXT PRIMARY KEY);
+            """
+        )
+        c.execute("INSERT INTO widgets VALUES('w','kept')")
+        # Relative to the clock: the cut must not depend on the instant the suite runs at.
+        c.execute("INSERT INTO gadgets VALUES('g',?)", (hubdb.shift(hubdb.now(), days=-400),))
+        c.execute("INSERT INTO gadgets VALUES('h',?)", (hubdb.shift(hubdb.now(), days=400),))
+        c.execute("INSERT INTO sprockets VALUES('s')")
+        c.execute("INSERT INTO undeclared VALUES('u')")
+        c.execute("INSERT INTO twice VALUES('t')")
+    with closing(sqlite3.connect(source)) as c:
+        assert devcopy.classes(c) == {
+            "widgets": "keep",
+            "gadgets": "history:made_at",
+            "sprockets": "empty",
+            "gears": "automations",
+        }
+        assert devcopy.unclassified(c) == ["twice", "undeclared"]
+        assert devcopy.emptied(c) == ["gears", "sprockets", "twice", "undeclared"]
+        assert devcopy.emptied(c, keep_automations=True) == ["sprockets", "twice", "undeclared"]
+        assert devcopy.history_tables(c) == [("gadgets", "made_at")]
+    removed, loose = devcopy.build(source, tmp_path / "copy" / "hub.sqlite", days=30)
+    assert loose == ["twice", "undeclared"]
+    assert removed["gadgets"] == 1
+    with closing(sqlite3.connect(tmp_path / "copy" / "hub.sqlite")) as c:
+        assert c.execute("SELECT count(*) FROM widgets").fetchone() == (1,)
+        assert c.execute("SELECT count(*) FROM sprockets").fetchone() == (0,)
+        assert c.execute("SELECT count(*) FROM undeclared").fetchone() == (0,)
+
+
+LEGACY_SNAPSHOT = Path(__file__).parent / "fixtures" / "devcopy_legacy_classes.json"
+
+
+def test_the_tables_that_existed_are_pruned_as_before(tmp_path):
+    """The classes, emptied and unclassified lists, and history cuts this module produced before tables declared their own
+    (fixtures/devcopy_legacy_classes.json, recorded from the code before this change): a copy prunes them as it did."""
+    before = json.loads(LEGACY_SNAPSHOT.read_text())
+    store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
+    store.initialize(seed_market=False)
+    frozen = set(before["classes"])
+    with closing(sqlite3.connect(store.settings.db_path)) as c:
+        found = devcopy.classes(c)
+        assert {t: found.get(t) for t in before["classes"]} == before["classes"]
+        # Only the frozen tables are compared: a table added later, declared in its own CREATE TABLE, is in no list.
+        assert sorted(t for t in devcopy.emptied(c) if t in frozen) == before["emptied"]
+        kept = devcopy.emptied(c, keep_automations=True)
+        assert sorted(t for t in kept if t in frozen) == before["emptied_keep_automations"]
+        assert [t for t in devcopy.unclassified(c) if t in frozen] == before["unclassified"]
+        assert [list(pair) for pair in devcopy.history_tables(c) if pair[0] in frozen] == before["history"]
 
 
 def test_devcopy_names_no_finance_table_as_one_it_empties(tmp_path):
