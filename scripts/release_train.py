@@ -5,6 +5,7 @@
     python3 scripts/release_train.py window [--open]    act: (--open: promote first) ship a green candidate or validate main
     python3 scripts/release_train.py promote            canary -> stable, when the bake gate passes
     python3 scripts/release_train.py hotfix --reason "..." [--sha SHA] [--promote-stable true|false]
+                                                [--override-hold true|false]
     python3 scripts/release_train.py status             the window, what canary and stable run, the next step
 
 The workflows (.github/workflows/train.yml, hotfix.yml) call it. Environment:
@@ -17,9 +18,13 @@ The workflows (.github/workflows/train.yml, hotfix.yml) call it. Environment:
     CANARY_URL, CANARY_UPDATE_KEY          the canary install (Tico Team) and its update key (docs/service-keys.md)
     STABLE_URL, STABLE_UPDATE_KEY          the stable install and its update key
     BAKE_HOURS                             how long the canary runs a release before stable gets it (default 4)
-    RELEASE_HOLD                           any value holds promotion to stable
+    RELEASE_HOLD                           any value holds promotion to stable (a hotfix too, unless override_hold)
     RELEASE_TRAINS                         `on` lets schedules, pushes and finished runs act; a manual run always acts
-    RELEASE_TAG_TOKEN                      optional: a token whose tag push starts release.yml itself
+    GITHUB_ACTOR                           hotfix only: who overrode a hold
+
+A release is published as not latest and marked latest (the GitHub release and the images' `latest` tags) only once the
+canary runs it healthy, so new installs, update checks and desktop apps never get a release the canary has not run. The
+image tags move with `docker buildx imagetools` (the workflow logs in to ghcr.io first).
 
 A window opens at 14:30 and 22:00 UTC (07:30 and 15:00 in Los Angeles during daylight time, an hour earlier in winter)
 and stays open until a vX.Y.Z release is published after it. Nothing is stored: every run works the state out from
@@ -30,11 +35,13 @@ only.
 """
 import argparse
 from datetime import datetime, timedelta, timezone
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -48,13 +55,14 @@ ROLLOUT_PATH = ROOT / "templates/catalog/release-notes/software/rollout.py"
 WINDOWS = ((14, 30), (22, 0))
 CRONS = ["30 14 * * *", "0 22 * * *"]
 # A backstop for a missed event (a workflow_run that does not fire, say): it takes a step in an open window like a push
-# does, and never opens one, so it never promotes.
-BACKSTOP_CRON = "*/20 * * * *"
+# does, and never opens one, so it never promotes. Minutes 5, 25 and 45: never a window's minute (00 or 30).
+BACKSTOP_CRON = "5-59/20 * * * *"
 STABLE_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 TITLE = re.compile(r"^Validate ([0-9a-f]{40}) as (v\S+) from (v\S+)$")
 UNFINISHED = {"queued", "pending", "waiting", "requested", "in_progress"}
+# A candidate that did not pass: refused, or cancelled. Main's head is not validated again until the next push (or a
+# manual run), and the run is reported once.
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
-RED = {"failure", "timed_out", "startup_failure"}     # a candidate the gate refused; canceled is not a verdict
 ISSUE_LABEL = "release-train"
 BLOCKER_LABEL = "release-blocker"
 RELEASE_WAIT = 90 * 60
@@ -63,6 +71,10 @@ DISPATCH_WAIT = 120
 UPDATE_WAIT = 30 * 60      # the updater pulls, snapshots, restarts and checks health, or rolls back
 UPDATE_PATH = "/api/v2/system/update"
 POLL = 20
+REPUBLISH_AFTER = timedelta(minutes=30)   # a tag still unpublished this long after its Release run started
+RELEASE_RUNS = 2                          # the first Release run on a tag, and one more
+IMAGES = ("tico", "tico-runner", "tico-updater")
+REGISTRY = "ghcr.io/ticoteam"
 SKEW = timedelta(seconds=60)   # GitHub's timestamps and this clock can differ a little
 
 
@@ -240,16 +252,29 @@ class GitHub:
         if code not in (200, 204):
             raise Fail("dispatching %s on %s: %s %s" % (workflow, ref, code, data.get("message", "")))
 
-    def create_tag(self, name, sha, token=None):
+    def tag_commit(self, name):
+        """The commit refs/tags/<name> points at (through an annotated tag), or None when there is no such tag."""
+        code, data, _ = self.call("GET", "git/ref/tags/" + urllib.parse.quote(name, safe=""))
+        if code == 404:
+            return None
+        if code != 200:
+            raise Fail("GitHub GET git/ref/tags/%s: %s %s" % (name, code, data.get("message", "")))
+        target = data.get("object") or {}
+        if target.get("type") == "tag":
+            target = self.get("git/tags/" + target.get("sha", "")).get("object") or {}
+        return target.get("sha")
+
+    def create_tag(self, name, sha):
         """refs/tags/<name> at sha. An existing tag at that commit is fine; at another commit it fails."""
-        code, data, _ = self.call("POST", "git/refs", {"ref": "refs/tags/" + name, "sha": sha}, token=token)
+        code, data, _ = self.call("POST", "git/refs", {"ref": "refs/tags/" + name, "sha": sha})
         if code == 201:
             return True
         if code == 422:
-            existing = self.compare(name, sha)
-            if existing == "identical":
+            existing = self.tag_commit(name)
+            if existing == sha:
                 return False
-            raise Fail("%s already exists at another commit (%s)" % (name, existing))
+            if existing:
+                raise Fail("%s already exists at another commit (%s)" % (name, existing[:12]))
         raise Fail("creating tag %s: %s %s" % (name, code, data.get("message", "")))
 
     def release(self, tag):
@@ -259,6 +284,11 @@ class GitHub:
         if code != 200:
             raise Fail("GitHub GET releases/tags/%s: %s %s" % (tag, code, data.get("message", "")))
         return data
+
+    def make_latest(self, release):
+        code, data, _ = self.call("PATCH", "releases/%s" % release["id"], {"make_latest": "true"})
+        if code != 200:
+            raise Fail("marking %s latest: %s %s" % (release.get("tag_name"), code, data.get("message", "")))
 
     def issues(self, label, state="open"):
         query = urllib.parse.urlencode({"labels": label, "state": state, "per_page": 20})
@@ -272,6 +302,14 @@ class GitHub:
         if code != 201:
             raise Fail("opening the %s issue: %s %s" % (labels[0], code, data.get("message", "")))
         return data
+
+    def last_text(self, issue):
+        """The issue's last comment, or its body when it has none."""
+        count = int(issue.get("comments") or 0)
+        if not count:
+            return issue.get("body") or ""
+        last = self.get("issues/%d/comments?per_page=1&page=%d" % (issue["number"], count))
+        return (last[-1].get("body") or "") if last else ""
 
     def comment(self, number, body):
         code, data, _ = self.call("POST", "issues/%d/comments" % number, {"body": body})
@@ -342,11 +380,18 @@ def running(target):
     return rollout.plain(status.get("running")) if status else ""
 
 
+BUSY = ("pulling", "restarting", "uncertain")
+
+
 def update_install(target, version, timeout=UPDATE_WAIT):
     """Update to the version through the install's updater and wait until it reports healthy on it (30 minutes); a
-    rollback or failure fails the step. Only the update key's routes are used, never /healthz."""
+    rollback or failure fails the step. Only the update key's routes are used, never /healthz.
+
+    A rollback or failure counts only once this update is seen under way (the updater answers the request with
+    `pulling`, then restarts the server): an earlier update's outcome, even one to the same version, is never judged."""
     want, name = rollout.plain(version), target["name"]
-    before = running(target)
+    snapshot = update_status(target)
+    before = rollout.plain((snapshot or {}).get("running"))
     if not before:
         raise Fail("%s: its update status cannot be read (GET %s with the update key)" % (name, UPDATE_PATH))
     if before == want:
@@ -360,20 +405,52 @@ def update_install(target, version, timeout=UPDATE_WAIT):
     if code != 200:
         raise Fail("%s refused the update to v%s (%s): %s" % (name, want, code, json.dumps(started)[:300]))
     note("%s updating v%s -> v%s" % (name, before, want))
+    started = isinstance(started, dict) and started.get("state") in BUSY and rollout.plain(started.get("to")) == want
     deadline, state = time.monotonic() + timeout, ""
     while time.monotonic() < deadline:
         sleep(POLL)
         status = update_status(target)
         if status is None:
-            continue                                                # the server is restarting
+            started = True                                          # the server is restarting
+            continue
         state = status.get("state") or ""
-        if rollout.plain(status.get("to")) == want and state in ("rolled_back", "failed"):
+        if rollout.plain(status.get("to")) == want and state in BUSY:
+            started = True
+        if started and rollout.plain(status.get("to")) == want and state in ("rolled_back", "failed"):
             raise Fail("%s: update to v%s %s (%s)" % (name, want, state, status.get("message") or ""))
         if state == "healthy" and rollout.plain(status.get("to")) == want and rollout.plain(status.get("running")) == want:
             note("%s updated v%s -> v%s, healthy" % (name, before, want))
             return
     raise Fail("%s did not report v%s healthy within %d minutes (last state %s)" % (name, want, timeout // 60,
                                                                                   state or "unknown"))
+
+
+def run_command(argv, timeout=180):
+    """(exit code, output) of a command (tests replace it)."""
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 1, str(exc)
+    return done.returncode, (done.stderr or done.stdout or "").strip()
+
+
+def mark_latest(gh, version):
+    """Once the canary runs `version` healthy: point the images' `latest` tags at it and make it the latest GitHub
+    release, which is what new installs, update checks and desktop apps follow."""
+    for image in IMAGES:
+        source, latest = "%s/%s:%s" % (REGISTRY, image, version), "%s/%s:latest" % (REGISTRY, image)
+        for attempt in range(4):
+            code, out = run_command(["docker", "buildx", "imagetools", "create", "-t", latest, source])
+            if code == 0:
+                break
+            sleep(5 * (attempt + 1))
+        else:
+            raise Fail("pointing %s at %s: %s" % (latest, version, out[-300:]))
+    found = gh.release(version)
+    if not found or found.get("draft"):
+        raise Fail("marking %s latest: no published release" % version)
+    gh.make_latest(found)
+    note("Marked %s latest (the GitHub release and the images' latest tags)" % version)
 
 
 # ---- the window: what to do now ----
@@ -385,19 +462,47 @@ def event_run(env):
     return {"conclusion": env.get("RUN_CONCLUSION", ""), "title": env.get("RUN_TITLE", ""), "url": env.get("RUN_URL", "")}
 
 
-def plan_step(gh, now, finished=None):
+def unpublished(gh, now, tag, plan):
+    """The newest tag has no published release: its Release workflow is running, or it failed. One that failed is run
+    again once, 30 minutes after the first started (the window job ships it as if it were new: Release workflow, canary,
+    latest); after two runs it is reported for a person (docs/releasing.md#a-release-that-did-not-publish)."""
+    runs = gh.workflow_runs("release.yml", tag)
+    busy = next((run for run in runs if run.get("status") != "completed"), None)
+    if busy:
+        plan["why"] = "%s is tagged and its Release workflow is running: %s" % (tag, busy.get("html_url"))
+        return plan
+    links = ", ".join(run.get("html_url") or "" for run in runs) or "no Release run"
+    if len(runs) >= RELEASE_RUNS:
+        plan["stuck"] = ("%s is tagged but its release did not publish after %d Release runs (%s); publish it by hand: "
+                         "docs/releasing.md#a-release-that-did-not-publish" % (tag, len(runs), links))
+        plan["why"] = plan["stuck"]
+        return plan
+    started = [when for when in (parse_time(run.get("created_at")) for run in runs) if when]
+    if started and now - min(started) < REPUBLISH_AFTER:
+        plan["why"] = "%s is tagged but not published (%s); its Release workflow runs again at %s" % (
+            tag, links, hhmm(min(started) + REPUBLISH_AFTER))
+        return plan
+    sha = gh.tag_commit(tag)
+    if not sha:
+        raise Fail("%s: the tag is gone" % tag)
+    plan.update(action="ship", version=tag, sha=sha, republish=True, why=(
+        "%s is tagged at %s but not published (%s): starting its Release workflow again" % (tag, sha[:12], links)))
+    return plan
+
+
+def plan_step(gh, now, finished=None, manual=False):
     """What the open window does next, worked out from GitHub alone. Returns {"action": "none" | "wait" | "ship" |
-    "dispatch", "why", ...}; "red" is the finished run to report when it is a refused candidate of this window."""
+    "dispatch", "why", ...}: "red" is a candidate of this window that did not pass, and "stuck" a tag whose release did
+    not publish, both to report. A manual run validates main's head again even after a red or cancelled run."""
     tags = gh.tags()
     newest = newest_stable(tags)
     if not newest:
         raise Fail("no vX.Y.Z tag to release after")
     start = window_start(now)
-    plan = {"action": "none", "newest": newest, "start": start, "red": None}
+    plan = {"action": "none", "newest": newest, "start": start, "red": None, "stuck": None}
     published = gh.release(newest)
     if not published or published.get("draft"):
-        plan["why"] = "%s is tagged but not published yet; a window acts after it is" % newest
-        return plan
+        return unpublished(gh, now, newest, plan)
     published_at = parse_time(published.get("published_at"))
     if published_at is None:
         plan["why"] = "%s has no publication time; holding" % newest
@@ -408,16 +513,16 @@ def plan_step(gh, now, finished=None):
         return plan
     version = next_patch(newest)
     plan["version"] = version
-    if finished and finished["conclusion"] in RED:
+    if finished and finished["conclusion"] in FAILED:
         parsed = parse_title(finished["title"])
         if parsed and parsed[1:] == (version, newest):
-            plan["red"] = dict(finished, sha=parsed[0])
+            plan["red"] = {"sha": parsed[0], "conclusion": finished["conclusion"], "url": finished["url"]}
     head = gh.head("main")
     plan["sha"] = head
     if gh.compare(newest, head) != "ahead":
         plan["why"] = "window open since %s; main is at %s, nothing new" % (hhmm(start), newest)
         return plan
-    head_red = None
+    head_failed = None
     for run in gh.validation_runs():
         parsed = parse_title(run.get("display_title"))
         if not parsed or parsed[1:] != (version, newest) or run.get("status") != "completed":
@@ -431,18 +536,32 @@ def plan_step(gh, now, finished=None):
                 plan.update(action="ship", sha=sha, run=run, why="%s at %s is green: %s" % (
                     version, sha[:12], run.get("html_url")))
                 return plan
-        elif sha == head and head_red is None and run.get("conclusion") in RED:
-            head_red = run
+        elif sha == head and head_failed is None and run.get("conclusion") in FAILED:
+            head_failed = run
+    if head_failed and not manual and not plan["red"]:
+        plan["red"] = {"sha": head, "conclusion": head_failed.get("conclusion"), "url": head_failed.get("html_url")}
     busy = next((run for run in gh.recent_runs("ci.yml") if run.get("status") in UNFINISHED), None)
     if busy:
         plan.update(action="wait", why="window open since %s; waiting for %s" % (hhmm(start), busy.get("html_url")))
         return plan
-    if head_red:
-        plan.update(action="wait", why="window open since %s; main's head %s is red (%s), the next push to main is "
-                    "validated" % (hhmm(start), head[:12], head_red.get("html_url")))
+    if head_failed and not manual:
+        plan.update(action="wait", why="window open since %s; main's head %s ended %s (%s): the next push to main, or "
+                    "a manual run, validates it again" % (hhmm(start), head[:12], head_failed.get("conclusion"),
+                                                         head_failed.get("html_url")))
         return plan
     plan.update(action="dispatch", why="validate %s as %s from %s" % (head[:12], version, newest))
     return plan
+
+
+def problems(plan):
+    """The lines a plan reports on the release-train issue: the same text for the same problem, so it is posted once."""
+    lines = []
+    red = plan.get("red")
+    if red:
+        lines.append("Candidate %s at %s ended %s: %s" % (plan["version"], red["sha"][:12], red["conclusion"], red["url"]))
+    if plan.get("stuck"):
+        lines.append(plan["stuck"])
+    return lines
 
 
 def hotfix_busy(gh):
@@ -468,7 +587,8 @@ def cmd_guard(gh, env, now):
             note("Window step: %s" % ("window opens (%s)" % env.get("SCHEDULE") if event == "schedule" else "manual run"))
         else:
             plan = plan_step(gh, now, event_run(env))
-            go = plan["action"] in ("ship", "dispatch") or bool(plan["red"])
+            lines = problems(plan)
+            go = plan["action"] in ("ship", "dispatch") or bool(lines and not reported(gh, lines))
             note("Window step: %s" % plan["why"])
     output(go=str(go).lower(), open=str(go and opening).lower())
     return 0
@@ -476,16 +596,18 @@ def cmd_guard(gh, env, now):
 
 # ---- publishing ----
 
-def publish(gh, sha, version, tag_token=""):
-    """Tag the validated commit, start release.yml on the tag and wait for the GitHub release."""
+def publish(gh, sha, version):
+    """Tag the validated commit, start release.yml on the tag and wait for the GitHub release (not marked latest: that
+    waits for the canary, mark_latest)."""
     since = datetime.now(timezone.utc)
-    created = gh.create_tag(version, sha, token=tag_token or None)
+    created = gh.create_tag(version, sha)
     note("Tagged %s at %s" % (version, sha[:12]) if created else "%s was already tagged at %s" % (version, sha[:12]))
     running = any(run.get("status") != "completed" for run in gh.workflow_runs("release.yml", version))
-    if gh.release(version) is None and not running and not (created and tag_token):
+    if gh.release(version) is None and not running:
         # A tag made with the Actions token starts no workflow, so release.yml runs from the tag by dispatch: the same
-        # ref, commit and validation lookup as a tag push. desktop=false keeps its build-only-if-changed rule.
-        gh.dispatch("release.yml", version, {"desktop": "false"})
+        # ref, commit and validation lookup as a tag push. desktop=false keeps its build-only-if-changed rule, and
+        # latest=false leaves the latest release and image tags where they are until the canary is healthy.
+        gh.dispatch("release.yml", version, {"desktop": "false", "latest": "false"})
         note("Started the Release workflow on %s" % version)
     return wait_release(gh, version, since - SKEW)
 
@@ -556,11 +678,13 @@ def bake_gate(*, version, canary_status, now, bake_hours, hold, blockers):
             baked = (now - since).total_seconds() / 3600
             if baked < bake_hours:
                 waits.append("the canary has run v%s %.1f h of %g h" % (plain, baked, bake_hours))
-    if (hold or "").strip():
-        waits.append("RELEASE_HOLD is set: %s" % hold.strip())
-    for issue in blockers:
-        waits.append("release-blocker #%s is open: %s" % (issue.get("number"), issue.get("title")))
-    return waits, faults
+    return waits + holds(hold, blockers), faults
+
+
+def holds(hold, blockers):
+    """What holds stable where it is: the RELEASE_HOLD variable and open release-blocker issues."""
+    found = ["RELEASE_HOLD is set: %s" % hold.strip()] if (hold or "").strip() else []
+    return found + ["release-blocker #%s is open: %s" % (issue.get("number"), issue.get("title")) for issue in blockers]
 
 
 def promote(gh, env, now=None):
@@ -597,15 +721,31 @@ def promote(gh, env, now=None):
 
 # ---- the release-train issue ----
 
-def report(gh, ok, lines, *, title_="Release window failing", close_title=None):
-    """Failure: comment on the open release-train issue, or open one. Success: close the open one. With close_title
-    and nothing open, a success files a closed record (hotfixes)."""
+def marker(key):
+    """A hidden line naming the problem, so the same failure is not posted twice in a row."""
+    return "<!-- release-train %s -->" % hashlib.sha256("\n".join(key).encode()).hexdigest()[:16]
+
+
+def reported(gh, key):
+    """Whether the open release-train issue's last word is already this problem."""
+    found = gh.issues(ISSUE_LABEL)
+    return bool(found) and marker(key) in gh.last_text(found[0])
+
+
+def report(gh, ok, lines, *, key=None, title_="Release window failing", close_title=None):
+    """Failure: comment on the open release-train issue, or open one; not again when its last comment is the same
+    problem (`key`, the failure lines; default `lines`). Success: close the open one. With close_title and nothing open,
+    a success files a closed record (hotfixes, a republished release)."""
     gh.ensure_label(ISSUE_LABEL, "d93f0b", "Release windows and hotfixes: open means a release step failed")
     gh.ensure_label(BLOCKER_LABEL, "b60205", "Holds promotion of the canary release to stable")
     body = "\n".join(["Run: " + run_url(), ""] + ["- " + line for line in lines])
     found = gh.issues(ISSUE_LABEL)
     if not ok:
-        if found:
+        mark = marker(lines if key is None else key)
+        body += "\n\n" + mark
+        if found and mark in gh.last_text(found[0]):
+            print("#%d already reports this; not posted again" % found[0]["number"], file=sys.stderr)
+        elif found:
             gh.comment(found[0]["number"], body)
         else:
             gh.create_issue(title_, body, [ISSUE_LABEL])
@@ -638,16 +778,13 @@ def cmd_window(gh, env, opening, now=None):
         step("promote", lambda: promote(gh, env, now))
         promoted = True
     plan = {}
-    step("plan", lambda: plan.update(plan_step(gh, now, event_run(env))))
+    manual = env.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    step("plan", lambda: plan.update(plan_step(gh, now, event_run(env), manual=manual)))
     if plan:
         note("Window: " + plan["why"])
-        red = plan.get("red")
-        if red:
-            failures.append("Candidate %s at %s failed (%s): %s. The window stays open: %s" % (
-                plan["version"], red["sha"][:12], red["conclusion"], red["url"],
-                "main has moved, so its head is validated now" if plan["action"] == "dispatch"
-                else "the next push to main is validated"))
-            note("RED " + failures[-1])
+        for line in problems(plan):
+            failures.append(line)
+            note("REPORTED " + line)
         if plan["action"] == "ship":
             if not promoted:
                 # Stable takes the canary's baked release before the canary moves on.
@@ -658,16 +795,18 @@ def cmd_window(gh, env, opening, now=None):
                 canary = install("CANARY", env)
                 if not canary:
                     raise Fail("ship: %s; nothing tagged" % missing("CANARY"))
-                publish(gh, plan["sha"], plan["version"], env.get("RELEASE_TAG_TOKEN", ""))
+                publish(gh, plan["sha"], plan["version"])
                 shipped = True
                 update_install(canary, plan["version"])
+                mark_latest(gh, plan["version"])
             step("ship", ship)
         elif plan["action"] == "dispatch":
             step("validate", lambda: dispatch_candidate(gh, plan["sha"], plan["version"], plan["newest"]))
     if failures:
-        report(gh, False, list(LOG))
+        report(gh, False, list(LOG), key=failures)
     elif shipped:
-        report(gh, True, list(LOG))
+        report(gh, True, list(LOG), close_title=(
+            "Release %s republished" % plan["version"]) if plan.get("republish") else None)
     output(reported="true")
     return 1 if failures else 0
 
@@ -692,7 +831,7 @@ def wait_validation(gh, want, since, timeout=VALIDATION_WAIT):
         sleep(POLL)
 
 
-def hotfix(gh, env, sha, reason, promote_stable):
+def hotfix(gh, env, sha, reason, promote_stable, override_hold=False):
     if not reason_ok(reason):
         raise Fail("a hotfix needs a reason of at least a short sentence (15 characters, 3 words)")
     note("Hotfix reason: " + " ".join(reason.split()))
@@ -720,12 +859,14 @@ def hotfix(gh, env, sha, reason, promote_stable):
             gh.dispatch("ci.yml", "main", {"candidate_sha": sha, "previous_release": newest, "version": version})
             note("Dispatched Release validation: " + want)
         wait_validation(gh, want, since - SKEW)
-    publish(gh, sha, version, env.get("RELEASE_TAG_TOKEN", ""))
+    publish(gh, sha, version)
     canary = install("CANARY", env)
     if not canary:
         note("Canary: skipped, %s; stable not touched" % missing("CANARY"))
+        mark_latest(gh, version)
         return version
     update_install(canary, version)
+    mark_latest(gh, version)
     if not promote_stable:
         note("Stable: not promoted (promote_stable is off); the next window's bake gate decides")
         return version
@@ -733,14 +874,21 @@ def hotfix(gh, env, sha, reason, promote_stable):
     if not stable:
         note("Stable: skipped, " + missing("STABLE"))
         return version
+    held = holds(env.get("RELEASE_HOLD", ""), gh.issues(BLOCKER_LABEL))
+    if held and not override_hold:
+        note("Stable: held, %s. The next window's bake gate decides, or run the hotfix again with override_hold"
+             % "; ".join(held))
+        return version
+    if held:
+        note("Stable: HOLD OVERRIDDEN by %s (override_hold): %s" % (env.get("GITHUB_ACTOR") or "unknown", "; ".join(held)))
     update_install(stable, version)
     return version
 
 
-def cmd_hotfix(gh, env, sha, reason, promote_stable):
+def cmd_hotfix(gh, env, sha, reason, promote_stable, override_hold=False):
     version, failure = "", None
     try:
-        version = hotfix(gh, env, sha, reason, promote_stable)
+        version = hotfix(gh, env, sha, reason, promote_stable, override_hold)
     except Fail as exc:
         failure = str(exc)
         note("FAILED hotfix: %s" % exc)
@@ -748,7 +896,7 @@ def cmd_hotfix(gh, env, sha, reason, promote_stable):
         failure = "%s: %s" % (type(exc).__name__, exc)
         note("FAILED hotfix: %s" % failure)
     short = " ".join(str(reason or "").split())[:80]
-    report(gh, failure is None, list(LOG), title_="Hotfix failing: " + short,
+    report(gh, failure is None, list(LOG), key=[short, failure or ""], title_="Hotfix failing: " + short,
            close_title="Hotfix %s: %s" % (version, short))
     output(reported="true")
     return 1 if failure else 0
@@ -779,6 +927,7 @@ def main(argv=None, env=None, now=None):
     parser.add_argument("--sha", default="")
     parser.add_argument("--reason", default="")
     parser.add_argument("--promote-stable", default="true")
+    parser.add_argument("--override-hold", default="false")
     args = parser.parse_args(argv)
     gh = GitHub(env.get("GITHUB_REPOSITORY") or "ticoteam/tico", env.get("GITHUB_TOKEN") or env.get("GH_TOKEN") or "")
     try:
@@ -787,7 +936,8 @@ def main(argv=None, env=None, now=None):
         if args.command == "window":
             return cmd_window(gh, env, args.open, now)
         if args.command == "hotfix":
-            return cmd_hotfix(gh, env, args.sha, args.reason, args.promote_stable.strip().lower() == "true")
+            return cmd_hotfix(gh, env, args.sha, args.reason, args.promote_stable.strip().lower() == "true",
+                              args.override_hold.strip().lower() == "true")
         if args.command == "status":
             return cmd_status(gh, env, now)
         promote(gh, env, now)

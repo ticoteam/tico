@@ -1,9 +1,10 @@
 # The hotfix lane, for major production issues only (docs/releasing.md#hotfixes): everything else waits for the next
 # release window. Anyone with write access, bots included, may run it from main. It validates the commit as the next
-# patch (a full Release validation run), tags and publishes it, updates the canary and waits until it is healthy, then
-# (promote_stable, the default) updates stable at once with no bake. Its job shares the `release-train` concurrency
-# group with the release window job (train.yml), so the two never overlap. The reason goes in the job summary and on the
-# release-train issue: a success files a closed record, a failure leaves the issue open.
+# patch (a full Release validation run), tags and publishes it, updates the canary and waits until it is healthy, marks
+# it latest, then (promote_stable, the default) updates stable at once with no bake, unless RELEASE_HOLD is set or a
+# release-blocker issue is open (override_hold updates stable anyway, and the log says who did). Its job shares the
+# `release-train` concurrency group with the release window job (train.yml), so the two never overlap. The reason goes
+# in the job summary and on the release-train issue: a success files a closed record, a failure leaves the issue open.
 name: Hotfix release
 run-name: "${{ format('Hotfix {0} ({1}): {2}', inputs.sha || 'main', github.actor, inputs.reason) }}"
 
@@ -23,6 +24,10 @@ on:
         description: Update stable right after the canary is healthy (no bake)
         type: boolean
         default: true
+      override_hold:
+        description: Update stable even if RELEASE_HOLD is set or a release-blocker issue is open (logged)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,15 +43,16 @@ jobs:
       cancel-in-progress: false
     permissions:
       actions: write    # dispatches Release validation and release.yml
-      contents: write   # creates the version tag
+      contents: write   # creates the version tag, marks the release latest
       issues: write     # the release-train issue
+      packages: write   # points the images' latest tags at the release once the canary is healthy
     env:
       GITHUB_TOKEN: ${{ github.token }}
       CANARY_URL: ${{ vars.CANARY_URL }}
       STABLE_URL: ${{ vars.STABLE_URL }}
       CANARY_UPDATE_KEY: ${{ secrets.CANARY_UPDATE_KEY }}
       STABLE_UPDATE_KEY: ${{ secrets.STABLE_UPDATE_KEY }}
-      RELEASE_TAG_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
+      RELEASE_HOLD: ${{ vars.RELEASE_HOLD }}
     steps:
       - id: checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -56,13 +62,22 @@ jobs:
             scripts/release_train.py
             templates/catalog/release-notes/software/rollout.py
           sparse-checkout-cone-mode: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - id: hotfix
         name: Validate, publish, canary, stable
         env:
           SHA: ${{ inputs.sha }}
           REASON: ${{ inputs.reason }}
           PROMOTE_STABLE: ${{ inputs.promote_stable }}
-        run: python3 scripts/release_train.py hotfix --sha "$SHA" --reason "$REASON" --promote-stable "$PROMOTE_STABLE"
+          OVERRIDE_HOLD: ${{ inputs.override_hold }}
+        run: >-
+          python3 scripts/release_train.py hotfix --sha "$SHA" --reason "$REASON" --promote-stable "$PROMOTE_STABLE"
+          --override-hold "$OVERRIDE_HOLD"
       - name: Report a hotfix that did not finish
         if: always() && steps.checkout.outcome == 'success' && steps.hotfix.outputs.reported != 'true'
         env:

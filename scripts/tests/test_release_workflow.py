@@ -217,6 +217,9 @@ def test_window_triggers_match_the_script_and_every_acting_job_shares_one_lane()
     from scripts import release_train
     train, on = _workflow("train.yml")
     assert [entry["cron"] for entry in on["schedule"]] == [*release_train.CRONS, release_train.BACKSTOP_CRON]
+    assert release_train.BACKSTOP_CRON in train["run-name"]
+    # The backstop never fires on a window's minute, where it would queue against the window's own job.
+    assert not {int(cron.split()[0]) for cron in release_train.CRONS} & set(range(5, 60, 20))
     assert train["jobs"]["guard"]["steps"][-1]["env"]["SCHEDULE"] == "${{ github.event.schedule }}"
     assert on["push"] == {"branches": ["main"]}
     assert on["workflow_run"] == {"workflows": ["Release validation"], "types": ["completed"], "branches": ["main"]}
@@ -230,13 +233,18 @@ def test_window_triggers_match_the_script_and_every_acting_job_shares_one_lane()
         assert job["concurrency"] == {"group": "release-train", "cancel-in-progress": False}
         assert job["environment"] == "release"
         assert "github.ref == 'refs/heads/main'" in job["if"]
-        assert job["permissions"] == {"actions": "write", "contents": "write", "issues": "write"}
-        for name in ("CANARY_URL", "STABLE_URL", "CANARY_UPDATE_KEY", "STABLE_UPDATE_KEY"):
+        assert job["permissions"] == {"actions": "write", "contents": "write", "issues": "write", "packages": "write"}
+        for name in ("CANARY_URL", "STABLE_URL", "CANARY_UPDATE_KEY", "STABLE_UPDATE_KEY", "RELEASE_HOLD"):
             assert name in job["env"]
+        assert "RELEASE_TAG_TOKEN" not in job["env"]
+        # Logged in to ghcr.io before the script moves the images' latest tags.
+        assert any("docker/login-action" in step.get("uses", "") for step in job["steps"])
     assert train["jobs"]["window"]["needs"] == "guard"
     inputs = hotfix_on["workflow_dispatch"]["inputs"]
     assert inputs["reason"]["required"] is True
     assert inputs["promote_stable"] == {**inputs["promote_stable"], "type": "boolean", "default": True}
+    assert inputs["override_hold"] == {**inputs["override_hold"], "type": "boolean", "default": False}
+    assert "--override-hold \"$OVERRIDE_HOLD\"" in hotfix["jobs"]["hotfix"]["steps"][-2]["run"]
     # Free text reaches the shell only through the environment, never pasted into a script.
     for name in ("train.yml", "hotfix.yml"):
         data, _ = _workflow(name)
@@ -252,6 +260,15 @@ def test_a_window_starts_release_yml_on_the_tag_with_inputs_it_declares():
     declared = set(on["workflow_dispatch"]["inputs"])
     sent = re.findall(r'dispatch\("release\.yml", version, (\{[^}]*\})\)', inspect.getsource(release_train))
     assert sent and all(set(eval(literal)) <= declared for literal in sent)
+    assert all(eval(literal)["latest"] == "false" for literal in sent)
+    # latest=false: published, but neither the latest release nor the images' latest tags until the canary is healthy.
+    release = JOBS["release"]
+    assert release["env"]["LATEST"] == "${{ github.event_name != 'workflow_dispatch' || inputs.latest }}"
+    assert on["workflow_dispatch"]["inputs"]["latest"]["default"] is True
+    steps = {step.get("name"): step.get("run", "") for step in release["steps"]}
+    assert '[ "$LATEST" = false ] || tags+=(-t "ghcr.io/ticoteam/$image:latest")' in steps[
+        "Point the version tags at the validated images"]
+    assert '[ "$LATEST" = false ] && flags+=(--latest=false)' in steps["Publish the release"]
     # On a tag ref, a dispatched run takes its commit and version from the tag, as a push does.
     validated = JOBS["validated"]["steps"][0]["run"]
     assert 'echo "sha=$GITHUB_SHA"; echo "version=$GITHUB_REF_NAME"' in validated
