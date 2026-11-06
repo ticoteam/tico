@@ -558,7 +558,7 @@ dialog.access-editor .access-body{flex:1;min-height:0;overflow:auto}
 .theme-seg button{border:0;background:none;border-radius:999px;padding:4px 12px;font-size:var(--t-sm);font-weight:600;color:var(--muted);cursor:pointer}
 .theme-seg button:hover{color:var(--ink)}
 .theme-seg button[aria-checked=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.18)}
-/* Settings > Repositories (ui/app/settings-repositories.js): In use, one 30px line per repository that opens in place;
+/* Settings > General › Repositories (ui/app/settings-repositories.js): In use, one 30px line per repository that opens in place;
    Not in use, one line with a search until searched or opened */
 .repos-card>header{align-items:center;gap:var(--s2);margin-bottom:var(--s2)}
 .repos-card .spacer{flex:1}
@@ -682,7 +682,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .storage-form{display:grid;gap:8px;max-width:520px;margin:12px 0}.storage-form label{display:grid;gap:4px}
 .storage-earlier{margin:6px 0 0;padding-left:18px}
 .storage-tico{margin:12px 0;padding:12px;border:1px solid var(--line);border-radius:8px;max-width:640px}.storage-tico h4{margin:0 0 6px}.storage-tico .row{align-items:center;gap:12px}
-/* Settings > Webhooks (ui/app/settings-webhooks.js) */
+/* Webhooks: Automations › Incoming webhooks, Tools › Webhooks, the Gateway card's fold (ui/app/settings-webhooks.js) */
 #settings-webhooks>.card>header{flex-wrap:wrap;gap:8px}
 #settings-webhooks .sb-narrow{display:none}
 .trigger-secret{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px}
@@ -747,7 +747,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .listen-form label{display:grid;gap:4px;min-width:0}.listen-form input,.listen-form select{min-width:0;width:100%}
 .listen-wide{grid-column:1/-1}
 @media (max-width:640px){.listen-list li{grid-template-columns:1fr}.listen-actions{justify-content:flex-start}}
-/* Settings > System > Strategy Bot (ui/app/settings-strategy-bot.js): three levels, one sentence each, a Confirm before a
+/* The Strategy Bot's card on its bot page's Settings (ui/app/settings-strategy-bot.js): three levels, one sentence each, a Confirm before a
    change. */
 .strategy-levels{display:grid;gap:8px;margin:10px 0}
 .strategy-level{display:grid;gap:4px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:none;color:inherit;font:inherit;cursor:pointer}
@@ -760,7 +760,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .strategy-log-entry:last-child{border-bottom:0}
 .strategy-log-entry .row{gap:8px;flex-wrap:wrap;align-items:baseline}
 .strategy-log-entry ul{margin:6px 0 0;padding-left:18px}
-/* Settings > System, the flat list of Tico's own jobs (ui/app/settings-recurring.js) */
+/* Automations > System jobs, the flat list of Tico's own jobs (ui/app/settings-recurring.js) */
 .sysr-list{display:grid}
 .settings-bots-filters .settings-filter-search.sysr-search{width:min(100%,420px);flex:0 1 420px;max-width:100%}
 .sysr-row{display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,1fr) minmax(0,1.3fr) minmax(0,.7fr) minmax(0,1fr);gap:12px;padding:10px 0;border-top:1px solid var(--line);align-items:start}
@@ -774,6 +774,8 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .sysr-schedule{display:flex;flex-wrap:wrap;gap:4px;align-items:center;min-width:0}
 .sysr-schedule .sysr-label{flex-basis:100%}
 .sysr-schedule select,.sysr-schedule input[type=time]{max-width:100%}
+/* Automations' pane is wide: the time box keeps its own width, so a click lands on its hour. */
+.sysr-schedule input[type=time]{width:auto}
 .sysr-ctl{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
 .sysr-ctl .settings-cell-note{flex-basis:100%;margin:0}
 .sysr-switch{display:inline-flex;gap:6px;align-items:center}

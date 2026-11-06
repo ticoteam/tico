@@ -7,7 +7,7 @@ post to. This page connects them in both directions. The background is on [Webho
 
 ### In Tico
 
-Add an incoming webhook (Settings → Webhooks → Incoming), or:
+Add an incoming webhook (Automations → Incoming webhooks), or:
 
 ```
 hub trigger create "Zapier orders" --id zapier-orders
@@ -76,7 +76,7 @@ Make the trigger that waits for a call and copy its address.
 
 ### In Tico
 
-Add an outgoing endpoint (Settings → Webhooks → Outgoing), or:
+Add an outgoing endpoint (Tools → Add tool → Outgoing webhook), or:
 
 ```
 hub webhook create --name "Zapier tasks" --url https://hooks.zapier.com/hooks/catch/000000/example/ --events task.done task.blocked
