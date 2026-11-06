@@ -269,6 +269,20 @@ def waiting_credits(c: sqlite3.Connection, money_account_id: str) -> list[Any]:
                      "reconciliation_id IS NULL ORDER BY txn_date, id", (money_account_id,)).fetchall()
 
 
+def unposted_rows(c: sqlite3.Connection, money_account_id: str) -> list[Any]:
+    """A money account's settled rows that no entry holds, whatever their status (new, covered, ignored), in date order."""
+    return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND entry_id IS NULL AND pending=0 "
+                     "ORDER BY txn_date, id", (money_account_id,)).fetchall()
+
+
+def unmatched_transfers(c: sqlite3.Connection, connection_id: str, kinds: Sequence[str]) -> int:
+    """How many of a connection's transfer-kind rows (`kinds`) are still new and unposted: each waits for its other side."""
+    marks = ",".join("?" for _ in kinds)
+    return int(c.execute(f"SELECT COUNT(*) FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id "
+                         f"WHERE m.connection_id=? AND f.kind IN ({marks}) AND f.status='new' AND f.entry_id IS NULL "
+                         "AND f.pending=0", [connection_id, *kinds]).fetchone()[0])
+
+
 def rows_of_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
     return c.execute("SELECT * FROM fin_feed_txns WHERE entry_id=? ORDER BY id", (entry_id,)).fetchall()
 

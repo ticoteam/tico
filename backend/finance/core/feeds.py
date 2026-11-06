@@ -31,11 +31,15 @@ def reclass_of(source: str, source_id: str) -> str:
 CREDIT_SIGN_FLIP = "2026-06-15"
 TRANSFER_KINDS = ("internalTransfer", "treasuryTransfer", "BOOK_TRANSFER", "INTRA_CUSTOMER_ACCOUNT_BOOK_TRANSFER")
 # Brex card transactions (brex_card_txn). A charge and a credit back are card rows, as Mercury's card kinds are. Brex's
-# COLLECTION (a payment toward the card) is not a card row: like Mercury's autopay it is a plain row on each side, paired
-# by banking._card_payment with the bank's CARD_COLLECTION debit.
+# COLLECTION (a payment toward the card) is not a card row and carries no card: it is one side of a card payment whose
+# other side is the bank's CARD_COLLECTION debit (a cash row). banking._brex_payment pairs them, or posts the bank side
+# alone as a transfer to the card liability, so a payment never becomes an expense.
 BREX_CHARGES = ("PURCHASE", "BNPL_FEE")                         # money the card owes: negative on the card
 BREX_CREDITS = ("REFUND", "CHARGEBACK", "REWARDS_CREDIT")       # money back to the card: positive
 BREX_COLLECTION = "COLLECTION"                                  # a payment toward the card: positive on the card
+BREX_CASH_CARD_PAYMENT = "CARD_COLLECTION"                      # the bank's debit for that payment (a cash transaction)
+BREX_CARD_PAYMENTS = (BREX_COLLECTION, BREX_CASH_CARD_PAYMENT)  # the two sides of a card payment
+BREX_BOOK_TRANSFERS = ("BOOK_TRANSFER", "INTRA_CUSTOMER_ACCOUNT_BOOK_TRANSFER")  # money between the company's accounts
 BREX_KNOWN = (*BREX_CHARGES, *BREX_CREDITS, BREX_COLLECTION)    # the Brex card types Finance maps
 BREX_OTHER = "brexCardOther"       # a Brex card type not in BREX_KNOWN: a card row with Brex's sign, never a payment
 CARD_KINDS = ("creditCardTransaction", "debitCardTransaction", "creditCardCredit", "debitCardCredit",
@@ -298,11 +302,11 @@ def brex_card_txn(raw: dict[str, Any], account: str) -> FeedTxn:
     else:
         signed, stored = amount, BREX_OTHER
     merchant = _dict(raw.get("merchant"))
+    card = "" if kind == BREX_COLLECTION else str(raw.get("card_id") or "")   # a payment toward the card is no card's row
     return FeedTxn(provider_id=tid, account_id=account, amount=signed,
                    txn_date=day_of(raw.get("posted_at_date")), status=POSTED, kind=stored,
                    counterparty=str(merchant.get("raw_descriptor") or raw.get("description") or "")[:200],
-                   description=str(raw.get("description") or "")[:500], card_id=str(raw.get("card_id") or ""),
-                   raw=raw)
+                   description=str(raw.get("description") or "")[:500], card_id=card, raw=raw)
 
 
 def brex_cash_txn(raw: dict[str, Any], account: str) -> FeedTxn:

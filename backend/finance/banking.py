@@ -457,6 +457,34 @@ def shift_openings(ctx: Ctx, before: Mapping[str, int]) -> None:
         set_opening(ctx, account, opening_amount(ctx, account, "9999-12-31") + step, str(entry["entry_date"]))
 
 
+def flip_unposted(ctx: Ctx, money_ids: Sequence[str]) -> None:
+    """Brex's cash sign found inverted (brex_sync._sign_check): every unposted row on these money accounts takes the opposite
+    sign, and each account's opening is made again from its balance (open_at), since the books carried the wrong sign until
+    now. The balance is the one this pass read (money.balance)."""
+    for mid in money_ids:
+        for row in SK.unposted_rows(ctx.c, mid):
+            SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"amount": -int(row["amount"]), "updated_at": ctx.at})
+        money = SK.get(ctx.c, "fin_money_accounts", mid)
+        if money is not None and money["balance"] is not None and money["account_id"]:
+            open_at(ctx, money, int(money["balance"]))
+
+
+def settle_waiting(ctx: Ctx, money_ids: Sequence[str]) -> None:
+    """Once Brex's sign is checked (brex_sync): the rows that waited unposted post now, the cash rows and the card payments'
+    sides (F.BREX_CARD_PAYMENTS). Each is read again before it settles: an earlier one may have posted it as its other side."""
+    for mid in money_ids:
+        money = SK.get(ctx.c, "fin_money_accounts", mid)
+        if money is None:
+            continue
+        for row in SK.unposted_rows(ctx.c, mid):
+            if str(money["kind"]) == "card_program" and str(row["kind"]) not in F.BREX_CARD_PAYMENTS:
+                continue
+            fresh = SK.get(ctx.c, "fin_feed_txns", str(row["id"]))
+            if fresh is None or fresh["entry_id"] or str(fresh["status"]) != "new":
+                continue
+            _settle(ctx, fresh, money, None, _txn_of(fresh))
+
+
 def refresh_connection_openings(ctx: Ctx, connection_id: str) -> None:
     """At the end of a sync pass: each of the connection's money accounts' openings, against the balance the pass read
     and the rows it took in (read together, so the opening and the feed agree)."""
@@ -578,6 +606,8 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         if program and card is not None and t.amount < 0:
             _card_hold(ctx, row, card, -t.amount)
         return
+    if _awaiting_sign(ctx, money):
+        return          # a Brex cash row waits, stored and unposted, until its connection's sign is checked (brex_sync)
     if covered_day(ctx, t.txn_date):    # covered history (§4.1): no route posts it, Stripe, card or Gateway alike
         if row["entry_id"]:
             unpost_row(ctx, row, "its month holds raw totals")
@@ -620,6 +650,9 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         if other is not None:
             transfer(ctx, row, money, other)
         return                      # one side of a move between our accounts: it posts when the other side arrives
+    if str(money["provider"] or "") == "brex" and t.kind in F.BREX_CARD_PAYMENTS:
+        _brex_payment(ctx, row, money, t)   # a Brex card payment: one transfer to the card liability, never an expense
+        return
     if program and card is not None:
         # A charge or refund on a card Tico issued posts against the card liability: to the line a posting rule picks,
         # else the card's budget line, tagged with its holder either way.
@@ -697,6 +730,78 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
             entry = post_row(ctx, fid, t, [feed_line(spend.id, -t.amount, {}, t.counterparty)], gl.id, [])
             mark_posted(ctx, [fid], entry)
     event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
+
+
+def _sign_unchecked(ctx: Ctx, money: Any) -> bool:
+    """Whether the money account's connection has not checked its cash amounts' sign yet (brex_sync._sign_check)."""
+    return str(_conn_settings(ctx, money).get("sign") or "") == "unverified"
+
+
+def _awaiting_sign(ctx: Ctx, money: Any) -> bool:
+    """A Brex cash row waits, stored and unposted, until its connection's sign is checked: Brex's amounts are not trusted
+    before a balance has agreed with them. Card rows never wait: their direction comes from their type."""
+    return str(money["provider"] or "") == "brex" and str(money["kind"]) == "bank" and _sign_unchecked(ctx, money)
+
+
+def _brex_payment(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> None:
+    """A Brex card payment (F.BREX_CARD_PAYMENTS): the bank's CARD_COLLECTION debit and the card's COLLECTION credit are one
+    transfer from the bank to the card liability, whichever arrives first, and never an expense. The bank side pairs with its
+    card side when that is in; else it posts alone (_card_payment_alone), so a card side Brex does not show never holds it
+    back, and the card side joins that entry when it arrives. A card side waits while the sign is unchecked (its bank side is
+    not posted yet). Several candidates: a person picks."""
+    fid = str(row["id"])
+    bank_side = str(money["kind"]) == "bank" and t.amount < 0
+    card_side = str(money["kind"]) == "card_program" and t.amount > 0
+    if not (bank_side or card_side):
+        event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid, "why": "not the side of a card payment"}, "shape")
+        return
+    if card_side and _sign_unchecked(ctx, money):
+        return
+    conn = str(money["connection_id"] or "")
+    accounts = [m for m in SK.money_accounts(ctx.c, ctx.book.id) if conn and str(m["connection_id"] or "") == conn]
+    want = "card_program" if bank_side else "bank"
+    others = [str(m["id"]) for m in accounts if str(m["kind"]) == want and (not bank_side or str(m["subtype"]) == "credit")]
+    partner = F.BREX_COLLECTION if bank_side else F.BREX_CASH_CARD_PAYMENT
+    day = dates.day(str(row["txn_date"]))
+    start, end = (day - timedelta(days=MATCH_DAYS)).isoformat(), (day + timedelta(days=MATCH_DAYS)).isoformat()
+    found = [r for r in SK.transfer_candidates(ctx.c, others, -int(row["amount"]), start, end)
+             if str(r["kind"]) == partner and not r["card_id"] and not r["request_id"]]
+    if len(found) > 1:
+        event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid, "why": "several possible card payments"}, "ambiguous")
+        return
+    if found and found[0]["entry_id"] is None:
+        transfer(ctx, row, money, found[0])
+        return
+    if found and card_side and len(SK.rows_of_entry(ctx.c, str(found[0]["entry_id"]))) == 1:
+        mark_posted(ctx, [fid], str(found[0]["entry_id"]))      # the bank side posted alone: this side joins its entry
+        return
+    if found:
+        event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid, "why": "its other side is posted with other rows"}, "shared")
+        return
+    if bank_side:
+        _card_payment_alone(ctx, row, money, conn)
+        return
+    event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid, "why": "waiting for its bank side"}, "waiting")
+
+
+def _card_payment_alone(ctx: Ctx, row: Any, money: Any, conn: str) -> None:
+    """A bank side with no card side in sight: one entry, Dr the card liability, Cr the bank. The card side, when Brex shows
+    it, joins this entry (_brex_payment), so the payment is never counted twice."""
+    fid = str(row["id"])
+    card = next((m for m in SK.money_accounts(ctx.c, ctx.book.id) if conn and str(m["connection_id"] or "") == conn
+                 and str(m["kind"]) == "card_program" and str(m["subtype"]) == "credit"), None)
+    if card is None:
+        event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid, "why": "no card program to pay"}, "no_card")
+        return
+    amount = int(row["amount"])
+    done = posting.post_entry(ctx.c, {
+        "date": open_day(ctx, str(row["txn_date"])), "source": "bank",
+        "source_id": fresh_source(ctx, "bank", f"transfer:{fid}"),
+        "memo": f"Card payment: {money['name']}"[:200],
+        "lines": [feed_line(gl_account(ctx, money).id, amount), feed_line(gl_account(ctx, card).id, -amount)]}, at=ctx.at)
+    if not done.get("posted"):
+        raise FinanceError(CONFLICT, f"feed row {fid} did not post")
+    mark_posted(ctx, [fid], str(done["entry_id"]))
 
 
 def _canceled(ctx: Ctx, money: Any, t: F.FeedTxn) -> Any:
@@ -814,7 +919,7 @@ def _reclass(ctx: Ctx, row: Any, pay: Any) -> None:
 def card_line(ctx: Ctx, card: Any) -> tuple[str, dict[str, str]]:
     """Where a card's spend posts: its budget's expense line, else Other expenses; tagged with its holder."""
     holder = str(card["holder"])
-    tags = posting.with_team(ctx, {"teammate": holder})
+    tags = posting.with_team(ctx, {"teammate": holder} if holder else {})     # a Brex card names no holder
     b = ctx.budgets().get(str(card["budget_id"] or ""))
     account = ctx.accounts.get(b.account_id) if b is not None and b.account_id else None
     if account is None or account.type != "expense":

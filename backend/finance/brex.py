@@ -39,6 +39,7 @@ class Provider(Protocol):
     def cash_accounts(self, cursor: str | None = None) -> Answer: ...
     def card_transactions(self, posted_at_start: str, cursor: str | None = None) -> Answer: ...
     def cash_transactions(self, account_id: str, posted_at_start: str, cursor: str | None = None) -> Answer: ...
+    def me(self) -> Answer: ...
 
 
 def base_url() -> str:
@@ -69,24 +70,38 @@ _OPENER = urllib.request.build_opener(_NoRedirect())
 
 class Brex:
     def __init__(self, token: str, base: str = BASE, opener: Opener | None = None,
-                 sleep: Callable[[float], None] = time.sleep) -> None:
+                 sleep: Callable[[float], None] = time.sleep, budget: float | None = None) -> None:
+        """`budget`, when given, bounds every call made through this client together (the connect probe passes
+        PROBE_SECONDS): a call's timeout is what is left of it, and a 429 or 5xx is not waited out past it."""
         self._token, self._base, self._opener, self._sleep = token, base.rstrip("/"), opener, sleep
+        self._until = None if budget is None else time.monotonic() + budget
+
+    def _fits(self, wait: float) -> bool:
+        return self._until is None or time.monotonic() + wait < self._until
 
     def _get(self, path: str, params: Sequence[tuple[str, str]]) -> Answer:
         query = urllib.parse.urlencode(list(params))
         url = self._base + path + (f"?{query}" if query else "")
         headers = {"Authorization": "Bearer " + self._token, "Accept": "application/json"}
         for attempt in range(TRIES + 1):
+            timeout = float(TIMEOUT)
+            if self._until is not None:
+                left = self._until - time.monotonic()
+                if left <= 0:
+                    return Answer(None, {})
+                timeout = min(timeout, left)
             request = urllib.request.Request(url, method="GET", headers=headers)
             send = self._opener or cast(Opener, _OPENER.open)
             try:
-                with send(request, timeout=TIMEOUT) as response:
+                with send(request, timeout=timeout) as response:
                     return Answer(int(getattr(response, "status", 200) or 200), _parse(cast(bytes, response.read())))
             except urllib.error.HTTPError as exc:
                 if (exc.code == 429 or exc.code >= 500) and attempt < TRIES:
                     retry = exc.headers.get("Retry-After") if exc.headers and exc.code == 429 else None
-                    self._sleep(_retry_after(retry, attempt))
-                    continue
+                    wait = _retry_after(retry, attempt)
+                    if self._fits(wait):
+                        self._sleep(wait)
+                        continue
                 try:
                     raw = exc.read()
                 except (OSError, http.client.HTTPException):
@@ -114,6 +129,11 @@ class Brex:
         (GET /v2/transactions/cash/{id})."""
         return self._get(f"/v2/transactions/cash/{urllib.parse.quote(account_id, safe='')}",
                          _page(cursor, posted_at_start=posted_at_start))
+
+    def me(self) -> Answer:
+        """The user the token belongs to, with its role (GET /v2/users/me): an account or card admin's token can see card
+        payments, and the connect probe checks it."""
+        return self._get("/v2/users/me", [])
 
 
 def _page(cursor: str | None, posted_at_start: str | None = None) -> list[tuple[str, str]]:

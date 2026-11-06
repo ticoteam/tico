@@ -1,11 +1,14 @@
 """Brex in the books (spec §9): the card and cash accounts, a card charge, refund, chargeback and reward as card rows, a
-card payment paired with the bank's debit whichever arrives first, a cash row's sign, a book transfer between two of the
-company's accounts as one transfer, a repeated read that changes nothing, a changed row restated, the backfill across
-passes with its bracketed opening balance (a row posted mid-backfill, a bracket read again, a bracket that gives up),
-history_from, an unknown card type posted with Brex's sign and noted, a mapped card that stops being live skipped and
-noted, the refusals (a token Brex refuses, a second live card account, a row in another currency), a 429 waited out, a
-redirect never followed, and the connections route. Runs on an in-memory fake of Brex's account and transaction reads;
-nothing is sent anywhere."""
+card purchase on its card's line and expense line, a card payment paired with the bank's debit whichever arrives first
+(or the bank side alone), a cash row's sign checked against the balance (agrees, inverted, fits neither way), a book
+transfer between two of the company's accounts as one transfer (or noted while it waits for its other side), a repeated
+read that changes nothing, a changed row restated, the backfill across passes with its bracketed opening balance (a row
+posted mid-backfill, a bracket read again, a bracket that gives up), the same books whatever order Brex lists rows in,
+history_from (the catch-up never reads before it), an unknown card type posted with Brex's sign and noted, a mapped card
+that stops being live skipped and noted, a row with no amount skipped and noted, the refusals (a token Brex refuses, a
+token that is not an admin, a second live card account, a row in another currency), a Brex card read-only in Finance, the
+probe's budget, a 429 waited out, a redirect never followed, and the connections route. Runs on an in-memory fake of
+Brex's account and transaction reads; nothing is sent anywhere."""
 import io
 import json
 import urllib.error
@@ -15,8 +18,9 @@ from typing import Any
 import pytest
 
 from backend.finance import actions as FA
-from backend.finance import brex, brex_sync, sync
+from backend.finance import brex, brex_sync, cards, sync, tab
 from backend.finance.core import feeds as F
+from backend.finance.core.errors import FinanceError
 from backend.finance.context import load
 from backend.finance.mercury import Answer
 from backend.finance.store import banking as store_banking
@@ -87,6 +91,8 @@ class FakeBrex:
         self.cash_txns: dict[str, list[dict[str, Any]]] = {CASH: []}
         self.page = page
         self.status: int | None = None
+        self.role = "ACCOUNT_ADMIN"                       # the role /v2/users/me reports
+        self.order = "newest_first"                       # the order Brex lists rows in (ORDERS)
         self.calls = 0                                    # cash account-list reads so far
         self.hook_at: dict[int, Callable[[], None]] = {}  # run before the nth cash account-list read (a row posted then)
 
@@ -100,10 +106,15 @@ class FakeBrex:
         return self._answer(self.cash, cursor)
 
     def card_transactions(self, posted_at_start: str, cursor: str | None = None) -> Answer:
-        return self._answer(_since(self.card_txns, posted_at_start), cursor)
+        return self._answer(_since(self.card_txns, posted_at_start, self.order), cursor)
 
     def cash_transactions(self, account_id: str, posted_at_start: str, cursor: str | None = None) -> Answer:
-        return self._answer(_since(self.cash_txns.get(account_id, []), posted_at_start), cursor)
+        return self._answer(_since(self.cash_txns.get(account_id, []), posted_at_start, self.order), cursor)
+
+    def me(self) -> Answer:
+        if self.status is not None:
+            return Answer(self.status, {"message": "nope"})
+        return Answer(200, {"id": "user_1", "role": self.role})
 
     def _answer(self, rows: list[dict[str, Any]], cursor: str | None) -> Answer:
         if self.status is not None:
@@ -114,12 +125,22 @@ class FakeBrex:
         return Answer(200, {"items": page, "next_cursor": str(at + len(page)) if more else None})
 
 
-def _since(rows: list[dict[str, Any]], start: str) -> list[dict[str, Any]]:
-    """The rows posted on or after the day `start` names, newest first."""
-    return [r for r in reversed(rows) if str(r["posted_at_date"]) >= start[:10]]
+ORDERS: dict[str, Callable[[list[dict[str, Any]]], list[dict[str, Any]]]] = {
+    "newest_first": lambda rows: list(reversed(rows)),                 # Brex's usual listing
+    "oldest_first": lambda rows: list(rows),
+    "rotated": lambda rows: rows[len(rows) // 2:] + rows[:len(rows) // 2],   # neither end first
+}
 
 
-def connect_brex(store: Any, fake: FakeBrex, credential: str = "cred-brex", history_from: str | None = None) -> str:
+def _since(rows: list[dict[str, Any]], start: str, order: str = "newest_first") -> list[dict[str, Any]]:
+    """The rows posted on or after the day `start` names, listed in the order `order` names."""
+    return [r for r in ORDERS[order](rows) if str(r["posted_at_date"]) >= start[:10]]
+
+
+def connect_brex(store: Any, fake: FakeBrex, credential: str = "cred-brex", history_from: str | None = None,
+                 verified: bool = True) -> str:
+    """Connect the fake's company. `verified` (the default) marks its cash sign as checked, so the cash rows post as the
+    tests read them; the sign tests pass False and let the balance check the sign."""
     found, why = brex_sync.probe(fake)  # type: ignore[arg-type]
     assert not why, why
     payload: dict[str, object] = {"provider": "brex", "credential_id": credential, "probe": found}
@@ -128,7 +149,13 @@ def connect_brex(store: Any, fake: FakeBrex, credential: str = "cred-brex", hist
     with store.transaction() as c:
         done = act(c, OWNER, "connection_create", payload)
     assert done.status == "committed", done
-    return str(done.result["connection_id"])
+    cid = str(done.result["connection_id"])
+    if verified:
+        with store.transaction() as c:
+            settings = json.loads(c.execute("SELECT settings FROM fin_connections WHERE id=?", (cid,)).fetchone()[0])
+            c.execute("UPDATE fin_connections SET settings=? WHERE id=?",
+                      (json.dumps({**settings, "sign": "verified"}), cid))
+    return cid
 
 
 def brex_pass(store: Any, fake: FakeBrex, at: str = AT) -> str:
@@ -174,6 +201,15 @@ def _card_line_is_its_posted_rows(c: Any) -> bool:
     posted = int(c.execute("SELECT COALESCE(SUM(amount),0) FROM fin_feed_txns WHERE money_account_id=? AND "
                            "entry_id IS NOT NULL", (str(money[0]),)).fetchone()[0])
     return _sum(c, _code(c, "card_program")) == posted
+
+
+def _bank_ties(c: Any) -> bool:
+    """The Brex bank line is the balance Brex reports less the rows not yet posted: the opening carries the rest."""
+    money = c.execute("SELECT id, balance FROM fin_money_accounts WHERE provider='brex' AND kind='bank' "
+                      "ORDER BY created_at LIMIT 1").fetchone()
+    unposted = int(c.execute("SELECT COALESCE(SUM(amount),0) FROM fin_feed_txns WHERE money_account_id=? AND "
+                             "entry_id IS NULL", (str(money[0]),)).fetchone()[0])
+    return _sum(c, _code(c, "bank")) == int(money[1]) - unposted
 
 
 def _settings(c: Any) -> dict[str, Any]:
@@ -459,6 +495,9 @@ def test_history_from_is_the_first_day_read(books):
     with books.read() as c:
         assert _feed(c, "ctx_old") is None and _feed(c, "ctx_new") is not None
         assert _settings(c)["history_from"] == "2026-10-05"
+    assert brex_pass(books, fake, LATER[0]) == "ok"       # the catch-up's 30 days reach back past this day: not read
+    with books.read() as c:
+        assert _feed(c, "ctx_old") is None
 
 
 def test_history_starts_on_the_first_of_this_year_when_none_is_given(books):
@@ -477,6 +516,8 @@ def test_a_row_in_another_currency_is_not_posted_and_its_balance_is_not_kept(boo
         assert _feed(c, "cash_eur") is None
         balance = c.execute("SELECT balance FROM fin_money_accounts WHERE provider='brex' AND kind='bank'").fetchone()[0]
         assert balance is None
+        status, error = _last_error(c)
+    assert status == "active" and "EUR" in error
 
 
 def test_a_card_account_that_is_not_the_mapped_one_stops_the_sync(books):
@@ -565,3 +606,189 @@ def test_the_connections_route_takes_a_brex_token_through_the_brex_probe(api, mo
     with store.read() as c:
         assert json.loads(c.execute("SELECT settings FROM fin_connections WHERE provider='brex'").fetchone()[0]
                           )["history_from"] == "2026-03-01"
+
+
+def test_a_token_that_is_not_an_admin_is_refused_at_the_probe_with_a_plain_message():
+    fake = FakeBrex()
+    fake.role = "EMPLOYEE"
+    found, why = brex_sync.probe(fake)  # type: ignore[arg-type]
+    assert not found and "admin token" in why and "card payments" in why
+
+
+def test_the_connect_probe_has_a_budget_and_does_not_wait_out_a_long_retry_after():
+    waits: list[float] = []
+
+    def throttled(request: Any, timeout: float) -> _Reply:
+        raise urllib.error.HTTPError(request.full_url, 429, "slow down", {"Retry-After": "25"}, io.BytesIO(b""))
+
+    client = brex.Brex("tok", base="https://api.brex.com", opener=throttled,  # type: ignore[arg-type]
+                       sleep=waits.append, budget=brex_sync.PROBE_SECONDS)
+    found, why = brex_sync.probe(client)
+    assert not found and "Brex said 429" in why
+    assert waits == []
+
+
+def test_a_card_purchase_posts_to_the_card_liability_and_its_expense_line(books):
+    fake = FakeBrex()
+    connect_brex(books, fake)
+    fake.card_txns.append(card_txn("ctx_buy", "PURCHASE", -1_200))
+    assert brex_pass(books, fake) == "ok"
+    with books.read() as c:
+        assert tuple(c.execute("SELECT provider, holder, provider_card_id, status FROM fin_cards").fetchone()) == (
+            "brex", "", "card_1", "active")
+        assert _feed(c, "ctx_buy")["entry_id"] is not None
+        assert _sum(c, _code(c, "card_program")) == -1_200
+        assert _sum(c, "6900") == 1_200
+        assert _every_entry_balances(c)
+
+
+def test_a_brex_card_is_read_only_in_finance(books):
+    fake = FakeBrex()
+    connect_brex(books, fake)
+    fake.card_txns.append(card_txn("ctx_buy", "PURCHASE", -1_200))
+    assert brex_pass(books, fake) == "ok"
+    with books.read() as c:
+        card_id = str(c.execute("SELECT id FROM fin_cards WHERE provider='brex'").fetchone()[0])
+        with pytest.raises(FinanceError, match="read-only"):
+            cards._card(load(c, AT), OWNER, card_id)
+
+
+def test_a_card_payment_seen_only_on_the_bank_side_goes_to_the_card_and_the_card_side_joins_it(books):
+    fake = FakeBrex()
+    connect_brex(books, fake)
+    assert brex_pass(books, fake, AT) == "ok"
+    fake.cash_txns[CASH].append(cash_txn("cash_pay", "CARD_COLLECTION", -50_000))
+    fake.cash[0]["current_balance"] = money(-50_000)      # the balance Brex now reports
+    fake.cash[0]["available_balance"] = money(-50_000)
+    assert brex_pass(books, fake, LATER[0]) == "ok"
+    with books.read() as c:
+        bank_entry = _feed(c, "cash_pay")["entry_id"]
+        assert bank_entry is not None
+        assert _sum(c, _code(c, "card_program")) == 50_000
+        assert _sum(c, _code(c, "bank")) == -50_000
+        assert _sum(c, "6900") == 0                       # a payment is never an expense, even with its card side unseen
+    fake.card_txns.append(card_txn("ctx_pay", "COLLECTION", 50_000))
+    assert brex_pass(books, fake, LATER[1]) == "ok"
+    with books.read() as c:
+        assert _feed(c, "ctx_pay")["entry_id"] == bank_entry      # the card side joins that entry: no second transfer
+        assert _sum(c, _code(c, "card_program")) == 50_000
+        assert _sum(c, "6900") == 0
+        assert _every_entry_balances(c)
+
+
+@pytest.mark.parametrize("order", sorted(ORDERS))
+def test_the_books_are_the_same_whatever_order_brex_lists_the_rows_in(books, monkeypatch, order):
+    monkeypatch.setattr(brex_sync, "BACKFILL_PAGES", 1)
+    fake = FakeBrex(page=2)
+    fake.order = order
+    amounts = [-1_000, 2_000, -3_000, 4_000, -5_000]
+    fake.cash_txns[CASH] = [cash_txn(f"cash_{i}", "PAYMENT", amt) for i, amt in enumerate(amounts)]
+    fake.cash[0]["current_balance"] = money(100_000 + sum(amounts))
+    fake.cash[0]["available_balance"] = money(100_000 + sum(amounts))
+    connect_brex(books, fake)
+    assert brex_pass(books, fake) == "ok"
+    for at in LATER:
+        brex_pass(books, fake, at)
+        with books.read() as c:
+            if _settings(c)["backfilled"]:
+                break
+    waiting = sum(a for a in amounts if a > 0)           # the credits wait for a category, as in the backfill test
+    with books.read() as c:
+        assert _settings(c)["backfilled"] is True
+        assert _count(c, "SELECT COUNT(*) FROM fin_feed_txns") == len(amounts)
+        assert _sum(c, _code(c, "bank")) == 100_000 + sum(amounts) - waiting
+        assert _every_entry_balances(c)
+
+
+def test_a_row_with_no_amount_is_skipped_and_noted_while_the_page_and_the_other_account_go_on(books):
+    fake = FakeBrex()
+    fake.cash = [cash_account(CASH), cash_account(CASH_TWO, number="210987654321", name="Savings")]
+    fake.cash_txns[CASH] = [cash_txn("cash_a", "PAYMENT", -300),
+                            {"id": "cash_null", "type": "PAYMENT", "amount": None, "description": "PAYMENT",
+                             "posted_at_date": "2026-10-10"},
+                            cash_txn("cash_b", "PAYMENT", -200, day="2026-10-11")]
+    fake.cash_txns[CASH_TWO] = [cash_txn("two_1", "PAYMENT", -400)]
+    connect_brex(books, fake)
+    assert brex_pass(books, fake) == "ok"
+    with books.read() as c:
+        assert _feed(c, "cash_null") is None
+        assert all(_feed(c, p)["entry_id"] is not None for p in ("cash_a", "cash_b", "two_1"))
+        status, error = _last_error(c)
+        assert _every_entry_balances(c)
+    assert status == "active" and "no amount" in error and "cash_null" in error
+
+
+def test_a_cash_sign_that_agrees_with_the_balance_is_verified_and_the_rows_post(books):
+    fake = FakeBrex()
+    connect_brex(books, fake, verified=False)
+    assert brex_pass(books, fake, AT) == "ok"           # the backfill: no rows, a balance of 0
+    assert brex_pass(books, fake, LATER[0]) == "ok"     # a stable read: the balance is the anchor
+    fake.cash_txns[CASH] += [cash_txn("c_out", "PAYMENT", -2_500), cash_txn("c_in", "PAYMENT", 7_000)]
+    fake.cash[0]["current_balance"] = money(4_500)      # the rows as Brex signs them: 0 - 2,500 + 7,000
+    fake.cash[0]["available_balance"] = money(4_500)
+    assert brex_pass(books, fake, LATER[1]) == "ok"
+    with books.read() as c:
+        settings = _settings(c)
+        assert (settings["sign"], settings["flipped"]) == ("verified", False)
+        assert "sign_anchor" not in settings and "sign_pending" not in settings
+        assert int(_feed(c, "c_out")["amount"]) == -2_500 and _feed(c, "c_out")["entry_id"] is not None
+        assert int(_feed(c, "c_in")["amount"]) == 7_000     # a credit waits for its category, as any credit does
+        assert _bank_ties(c)
+        assert _every_entry_balances(c)
+
+
+def test_a_cash_sign_that_comes_in_inverted_is_flipped_and_noted_and_the_next_row_follows(books):
+    fake = FakeBrex()
+    connect_brex(books, fake, verified=False)
+    assert brex_pass(books, fake, AT) == "ok"
+    assert brex_pass(books, fake, LATER[0]) == "ok"
+    fake.cash_txns[CASH] += [cash_txn("c_out", "PAYMENT", -2_500), cash_txn("c_in", "PAYMENT", 7_000)]
+    fake.cash[0]["current_balance"] = money(-4_500)     # the balance fell by 4,500: the opposite of the rows' signs
+    fake.cash[0]["available_balance"] = money(-4_500)
+    assert brex_pass(books, fake, LATER[1]) == "ok"
+    with books.read() as c:
+        settings = _settings(c)
+        assert (settings["sign"], settings["flipped"]) == ("verified", True)
+        assert int(_feed(c, "c_out")["amount"]) == 2_500 and int(_feed(c, "c_in")["amount"]) == -7_000
+        assert _feed(c, "c_in")["entry_id"] is not None and _feed(c, "c_out")["entry_id"] is None
+        assert _bank_ties(c)
+        status, error = _last_error(c)
+    assert status == "active" and "opposite sign" in error
+    fake.cash_txns[CASH].append(cash_txn("c_next", "PAYMENT", -1_000))   # read with the same flip: money in
+    fake.cash[0]["current_balance"] = money(-3_500)
+    fake.cash[0]["available_balance"] = money(-3_500)
+    assert brex_pass(books, fake, LATER[2]) == "ok"
+    with books.read() as c:
+        assert int(_feed(c, "c_next")["amount"]) == 1_000
+        assert _bank_ties(c)
+        assert _every_entry_balances(c)
+
+
+def test_a_cash_sign_that_fits_neither_way_stays_unchecked_and_its_rows_wait(books):
+    fake = FakeBrex()
+    connect_brex(books, fake, verified=False)
+    assert brex_pass(books, fake, AT) == "ok"
+    assert brex_pass(books, fake, LATER[0]) == "ok"
+    fake.cash_txns[CASH].append(cash_txn("c_out", "PAYMENT", -2_500))
+    fake.cash[0]["current_balance"] = money(-1_000)     # moved by neither the row (-2,500) nor its opposite (+2,500)
+    fake.cash[0]["available_balance"] = money(-1_000)
+    assert brex_pass(books, fake, LATER[1]) == "ok"
+    with books.read() as c:
+        settings = _settings(c)
+        assert settings["sign"] == "unverified" and settings["sign_anchor"] == -1_000
+        assert settings["sign_pending"] == 0
+        assert _feed(c, "c_out")["entry_id"] is None     # stored, not posted
+        assert tab._history("brex", settings) == "checking"
+
+
+def test_a_book_transfer_with_no_other_side_yet_is_noted_and_waits(books):
+    fake = FakeBrex()
+    connect_brex(books, fake)
+    assert brex_pass(books, fake) == "ok"
+    fake.cash_txns[CASH].append(cash_txn("bt_1", "BOOK_TRANSFER", -5_000, day="2026-10-14"))
+    assert brex_pass(books, fake, LATER[0]) == "ok"
+    with books.read() as c:
+        assert _feed(c, "bt_1")["entry_id"] is None
+        assert _sum(c, "6900") == 0
+        status, error = _last_error(c)
+    assert status == "active" and "book transfer" in error

@@ -645,9 +645,19 @@ def _sync(conn: Any | None) -> Row | None:
     return {"connection_id": str(conn["id"]), "provider": str(conn["provider"]), "status": str(conn["status"]),
             "last_ok_at": conn["last_ok_at"], "last_sync_at": conn["last_sync_at"], "last_error": conn["last_error"],
             "egress_ip": settings.get("egress_ip"),
-            # A bank, Stripe or Brex connection's first history import: "importing" until it ends (no opening balance yet).
-            "history": ("done" if settings.get("backfilled") else "importing")
-            if str(conn["provider"]) in ("mercury", "stripe", "brex") else None}
+            "history": _history(str(conn["provider"]), settings)}
+
+
+def _history(provider: str, settings: Mapping[str, Any]) -> str | None:
+    """A bank, Stripe or Brex connection's first history import: "importing" until it ends (no opening balance yet). A Brex
+    connection whose cash amounts' sign is not checked yet is "checking": its cash rows wait, unposted, for a balance to agree."""
+    if provider not in ("mercury", "stripe", "brex"):
+        return None
+    if not settings.get("backfilled"):
+        return "importing"
+    if provider == "brex" and settings.get("sign") == "unverified":
+        return "checking"
+    return "done"
 
 
 def _books_mirror(c: sqlite3.Connection, book: Book, cid: str, status: str) -> str:
