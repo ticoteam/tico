@@ -838,7 +838,7 @@ function goalTreeLines(tree) {
 // all its goals and everyone above it; a matching department with everyone in it. The rest is taken out.
 function goalSearchText(actor, goals, loose) {
   const kpis = list => (list || []).filter(k => !k.archived_at).map(k => k.name);
-  const person = actor.startsWith('human:') && (S.people || []).find(p => p.id === actor.slice(6));
+  const person = actor.startsWith('human:') && /** @type {any[]} */ (S.people || []).find(p => p.id === actor.slice(6));
   return [goalOwnerInfo(actor).name, person?.goals, ...kpis(loose), ...goals.flatMap(g => [g.title, g.body, g.why, ...kpis(g.kpis)])]
     .filter(Boolean).join(' ').toLowerCase();
 }
