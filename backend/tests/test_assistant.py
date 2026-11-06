@@ -294,6 +294,31 @@ def test_real_assistant_lease_keeps_actual_bot_private_boundaries_and_revocation
     assert revoked.value.status == 409
 
 
+def test_the_assistant_answers_the_persons_own_question_tasks_and_no_one_elses(api):
+    from backend import question_tasks as QT
+    with api.app.state.store.transaction() as c:
+        mine = QT.ask_alone(c, "bot:ops", "human:ben", "Ship the zip fix in the next release?")
+        hers = QT.ask_alone(c, "bot:ops", "human:ana", "Approve the budget?")
+        secret = H.task_create(c, "human:ben", "Review the confidential packet", "Confidential packet.", "human:ben",
+                               private=True)
+    r, attempt = assistant_turn(api, "ben-test", "Yes, ship the zip fix")
+    token = attempt["token"]
+    # Ben's own question task is readable on his Assistant's turn; Ana's question and his non-question task are not.
+    assert get(api, "tasks/" + mine["id"], token)["task"]["id"] == mine["id"]
+    for task in (hers, secret):
+        hidden = api.get("/api/v2/tasks/" + task["id"], headers=headers(token))
+        assert hidden.status_code in (403, 404), hidden.text
+        assert "Approve the budget" not in hidden.text and "Confidential" not in hidden.text
+    answered = asked(api, "tasks/" + mine["id"], {"version": mine["version"], "status": "done",
+                                                  "note": "Yes, ship the zip fix"}, token, "turn")["task"]
+    assert answered["status"] == "done" and answered["note"] == "Yes, ship the zip fix"
+    denied = api.post("/api/v2/tasks/" + hers["id"], json={"version": hers["version"], "status": "done", "note": "Yes"},
+                      headers={**headers(token), "X-Tico-On-Behalf-Of": "turn"})
+    assert denied.status_code in (403, 404), denied.text
+    with api.app.state.store.read() as c:
+        assert H.task(c, hers["id"])["status"] != "done"
+
+
 def asked(api, path, body, token, ref, expected=200):
     """A write of the assistant's turn that cites the person's message asking for it."""
     r = api.post("/api/v2/" + path, json=body, headers={**headers(token), "X-Tico-On-Behalf-Of": ref})

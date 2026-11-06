@@ -787,7 +787,8 @@ def replay_items(c, person, start, end, assistant_bot=None):
                               (person, start, end, skip, person, person, start, end, skip,
                                person, skip, start, end, person))]
     for m in H._rows(c.execute("SELECT * FROM messages WHERE recipient_id=? AND kind='ask' AND created_at>=? AND created_at<? "
-                               "AND sender_id LIKE 'bot:%' AND sender_id<>?", (person, start, end, skip))):
+                               "AND superseded_at IS NULL AND sender_id LIKE 'bot:%' AND sender_id<>?",
+                               (person, start, end, skip))):
         msg = H.message(c, m["id"]) or m
         tid = H.message_task_id(msg)
         task = H.task(c, tid) if tid else None

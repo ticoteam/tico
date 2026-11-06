@@ -130,6 +130,89 @@ def test_an_ask_that_cannot_move_keeps_its_words_on_its_task(api, monkeypatch):
         assert any("Launch Tuesday or Thursday?" in m["body"] for m in H.task_comments(c, row["id"]))
 
 
+def test_an_ask_that_joins_a_card_adds_what_the_card_lacks(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        domain = _task(c, "Renew the domain")
+        card = QT.ask_plain(c, "bot:ops", "human:ana", "Renew for one year?", parent=domain)
+        joined = _on(c, domain, "bot:ops", "human:ana", "Which launch day?", questions=QUESTIONS,
+                     if_no_answer={"do": "Launch Tuesday", "after": "2099-01-01T00:00:00Z"})
+        UP(c)
+    store.initialize(seed_market=False)
+    with store.read() as c:
+        assert H.message(c, joined["id"])["refs"]["moved"]["how"] == "joined"
+        fields = QT.fields(H.task(c, card["id"]))
+        [q] = fields["questions"]
+        assert q["question"] == "Renew for one year?"           # the card's own question stays
+        assert [o["label"] for o in q["options"]] == ["Tuesday", "Thursday"]
+        assert [o["label"] for o in q["options"] if o.get("recommended")] == ["Tuesday"]
+        assert fields["if_no_answer"]["do"] == "Launch Tuesday"
+        assert "Which launch day?" in " ".join(m["body"] for m in H.task_comments(c, card["id"]))
+
+
+def test_an_ask_on_a_task_that_ended_ends_with_it(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        row = _task(c, "Old question")
+        asked = _on(c, row, "bot:ops", "human:ana", "Accept the change?", questions=QUESTIONS)
+        c.execute("UPDATE tasks SET status='done', done_at=? WHERE id=?", ("2020-01-01T00:00:00Z", row["id"]))
+        UP(c)
+    store.initialize(seed_market=False)
+    with store.read() as c:
+        assert H.message(c, asked["id"])["refs"]["moved"]["how"] == "task ended"
+        assert TR.child_ids(c, row["id"]) == []
+        assert not [t for t in _cards(c, "human:ana") if t["requester_id"] == "bot:ops"]
+
+
+def test_an_ask_that_cannot_be_kept_is_still_retired_with_its_reason(api, monkeypatch):
+    store = api.app.state.store
+    with store.transaction() as c:
+        row = _task(c, "Plan the launch")
+        asked = _on(c, row, "bot:ops", "human:ana", "Launch Tuesday or Thursday?")
+        UP(c)
+
+    def broken(*a, **k):
+        raise RuntimeError("no room")
+    monkeypatch.setattr(QT, "_ask_task", broken)
+    monkeypatch.setattr(QT, "_kept", broken)
+    with store.transaction() as c:
+        QT.move_asks(c)
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='asks_moved'").fetchone()
+        assert H.message(c, asked["id"])["superseded_at"]
+        [(detail,)] = c.execute("SELECT detail FROM events WHERE action='ask.not_moved' AND target=?",
+                                (asked["id"],)).fetchall()
+        assert "no room" in detail
+
+
+def test_asks_on_one_topic_fold_into_the_open_question_task(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        first, second = _task(c, "Renew the domain"), _task(c, "Renew the hosting")
+        _on(c, first, "bot:ops", "human:ana", "Renew the domain for one year?", topic="Renewal")
+        again = _on(c, second, "bot:ops", "human:ana", "Renew the hosting too?", topic="renewal")
+        UP(c)
+    store.initialize(seed_market=False)
+    with store.read() as c:
+        assert H.message(c, again["id"])["refs"]["moved"]["how"] == "folded"
+        [card] = TR.child_ids(c, first["id"])                   # one open question on the topic, under the first task
+        assert QT.fields(H.task(c, card))["questions"][0]["question"] == "Renew the hosting too?"
+        assert "Renew the domain for one year?" in H.task(c, card)["body"]
+        assert TR.child_ids(c, second["id"]) == [] and QT.is_open(H.task(c, card))
+
+
+def test_a_moved_ask_is_not_replayed_as_still_open(api):
+    from backend import ask_ingest
+    store = api.app.state.store
+    with store.transaction() as c:
+        loose = old_ask(c, "bot:cpo", "human:ana", "Can I book the venue?")
+        UP(c)
+    store.initialize(seed_market=False)
+    with store.read() as c:
+        assert H.message(c, loose["id"])["superseded_at"]
+        items = ask_ingest.replay_items(c, "human:ana", "2000-01-01T00:00:00Z", "2099-01-01T00:00:00Z")
+    assert loose["id"] not in [item["ref"] for item in items]
+
+
 def test_a_file_with_no_open_asks_gets_no_staging_table(api):
     with api.app.state.store.transaction() as c:
         row = _task(c, "Old question")

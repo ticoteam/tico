@@ -31,6 +31,8 @@ def actor(who):
 def task_readable(c, who, row):
     if snapshot(c) and row:
         row = _task(c, row["id"])
+    if H.own_question_for_assistant(who, row):
+        return H.task_private_readable(c, who.actor, row)     # the person's own question, on their Assistant's turn
     principals = actor(who)
     return all(H.task_private_readable(c, a, row) for a in
                (principals if isinstance(principals, tuple) else (principals,)))

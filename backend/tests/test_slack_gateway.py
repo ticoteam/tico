@@ -335,6 +335,45 @@ def test_a_follow_up_answers_the_bots_open_question_task_asked_since_the_person_
         assert QT.is_open(H.task(c, old["id"]))
 
 
+def test_a_reply_closes_no_question_while_two_are_open_and_the_bot_still_hears_it(gateway, hub):
+    """Two open questions from the bot since Ana last wrote: her reply to its last line closes neither, and the bot
+    still gets the reply."""
+    from backend import question_tasks as QT
+    send(gateway, "<@U0BUS6WA4SY> Legal?", answers(legal=0.9))
+    thread = rows(hub, "SELECT * FROM slack_threads")[0]
+    event = {"channel": thread["channel"], "thread_ts": thread["thread_ts"]}
+    with hub.transaction() as c:
+        first = QT.ask_alone(c, "bot:legal", "human:ana", "Is the contract signed?")
+        second = QT.ask_alone(c, "bot:legal", "human:ana", "Which state's law applies?")
+        H.say(c, "bot:legal", "human:ana", "Which state's law applies?", conversation_id=thread["conversation_id"])
+        mark = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
+        G.say_to_bot(c, "human:ana", "legal", event, "Delaware.", {}, H.now())
+    with hub.read() as c:
+        assert QT.is_open(H.task(c, first["id"])) and QT.is_open(H.task(c, second["id"]))
+        assert [r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:legal' AND rowid>?",
+                                        (mark,))] == ["Delaware."]
+
+
+def test_one_slack_answer_to_a_subtask_question_wakes_its_bot_once(gateway, hub):
+    """A question task under the bot's own task: Ana's reply closes it, and the bot is woken once, by the reply, not
+    again on its task for the same answer."""
+    from backend import question_tasks as QT
+    send(gateway, "<@U0BUS6WA4SY> Legal?", answers(legal=0.9))
+    thread = rows(hub, "SELECT * FROM slack_threads")[0]
+    event = {"channel": thread["channel"], "thread_ts": thread["thread_ts"]}
+    with hub.transaction() as c:
+        review = H.task_create(c, "human:ana", "Review the contract", "", "bot:legal", lint=False)
+        card = QT.ask_plain(c, "bot:legal", "human:ana", "Which state's law applies?", parent=review)
+        H.say(c, "bot:legal", "human:ana", "Which state's law applies?", conversation_id=thread["conversation_id"])
+        mark = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
+        G.say_to_bot(c, "human:ana", "legal", event, "Delaware.", {}, H.now())
+    with hub.read() as c:
+        assert H.task(c, card["id"])["status"] == "done"
+        woke = c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
+                         "WHERE m.recipient_id='bot:legal' AND m.rowid>?", (mark,)).fetchone()[0]
+        assert woke == 1, woke
+
+
 class BothJudges:
     """The org rule check's judge for its own `rule-check` calls, and the decision engine for the rest."""
 

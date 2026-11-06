@@ -3811,6 +3811,18 @@ def task_private_readable(conn, actor, row):
     return task_reader(conn, actor, row)
 
 
+def assistant_turn_person(who):
+    """Whether `who` is a person's own Assistant turn: the person acts, and the Assistant's bot is its task actor."""
+    return getattr(who, "via", "") == "assistant" and who.role in ("owner", "human")
+
+
+def own_question_for_assistant(who, row):
+    """A question task the person owns, read on their own Assistant's turn. The turn's bot is no party to a private
+    task, so its private boundary keeps every other private task from the turn (test_assistant). The person's own
+    question is theirs to read and answer, and the Assistant speaks for them: this is the only carve-out."""
+    return bool(row and assistant_turn_person(who) and row.get("owner_id") == who.actor and row.get("questions"))
+
+
 # ----------------------------------------------------------------------------- a private task's readers
 # Who can see a private task: its requester and owner, and its reader list (`tasks.readers`, a JSON list of people,
 # bots and `group:<id>`s). A group reader names everyone in it and in the groups under it, decided at each check, so
@@ -5680,13 +5692,14 @@ def _deliver_subtask_result(conn, row, parent, text, key=None, *, source=None, q
                           quiet_bots=silent, quiet=silent)
 
 
-def _subtask_wake(conn, actor, row, previous, note=None, quiet=False):
+def _subtask_wake(conn, actor, row, previous, note=None, quiet=False, heard=()):
     """A person finished, declined or closed a subtask under a bot's open task: wake that bot on the parent,
     where a bot files what it is blocked on (docs/tasks.md), so its turn continues the parent's session
     (session_root). Returns the bot woken, else None; callers leave it out of their own notices on the subtask.
     A wake still queued for this subtask is not repeated. A quiet update leaves its note out, as on the subtask.
     A bot or its manager finishing a delegated subtask returns the result the same way;
-    a check still records its verdict only through its own owner."""
+    a check still records its verdict only through its own owner. A bot in `heard` already has the news (a person's chat
+    reply that closed the question): its result is recorded on the parent quietly, and it still counts as told."""
     terminal = ("done", "closed", "declined")
     check = is_bot(row["owner_id"]) and check_model(conn, row["id"], row["owner_id"][len("bot:"):])
     # Done or Declined carries a verdict; the bot closing its own check is a cancellation the parent need not hear.
@@ -5732,7 +5745,8 @@ def _subtask_wake(conn, actor, row, previous, note=None, quiet=False):
               "AND json_extract(refs,'$.subtask')=? "
               "AND json_extract(refs,'$.subtask_result') LIKE ? LIMIT 1",
         (parent["conversation_id"], bot, row["id"], _subtask_result_cycle(conn, row) + "%"))
-    _deliver_subtask_result(conn, row, parent, text, key, quiet=bool(delivered_verdict), resume_hint=by_worker)
+    _deliver_subtask_result(conn, row, parent, text, key, quiet=bool(delivered_verdict) or bot in heard,
+                            resume_hint=by_worker)
     return bot
 
 
@@ -7005,7 +7019,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         from . import check_pools, step_flow, verdict_moves
         if step_flow.check_step(conn, after):
             check_pools.safely(conn, verdict_moves.after_verdict, after)
-    subtask_told = None if closing_step else _subtask_wake(conn, actor, after, row["status"], note, quiet)
+    subtask_told = None if closing_step else _subtask_wake(conn, actor, after, row["status"], note, quiet, heard=heard)
     if subtask_told == after["requester_id"]:
         notify_requester = False
     # A person answering a bot's ask (_ask_in_subtask), yes or no: each task blocked on it opens again.

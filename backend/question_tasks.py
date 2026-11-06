@@ -598,7 +598,8 @@ def move_asks(conn):
     question card they already have there; a loose ask to a person becomes a question task of its own; an ask to a bot
     becomes a DM between the two, flagged needs-action. The old message stays in its thread, superseded, so it is
     history and in no list. Each row in its own savepoint: one that cannot move keeps its words on record (`_kept`)
-    instead, and a row is never tried again at every start. The table goes when it is empty."""
+    instead, and one that cannot be kept is superseded with its reason (`_lost`). A row is never tried again at every
+    start. The table goes when it is empty."""
     import logging
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='asks_moved'").fetchone():
         return
@@ -610,11 +611,13 @@ def move_asks(conn):
         except Exception as exc:  # noqa: BLE001 - one old ask never stops a start
             conn.execute("ROLLBACK TO move_ask")
             log.exception("ask %s not moved", mid)
+            why = str(getattr(exc, "detail", "") or exc)
             try:
-                _kept(conn, mid, str(getattr(exc, "detail", "") or exc))
+                _kept(conn, mid, why)
             except Exception:  # noqa: BLE001
                 conn.execute("ROLLBACK TO move_ask")
                 log.exception("ask %s not kept either", mid)
+                _lost(conn, mid, why)
         conn.execute("RELEASE move_ask")
         conn.execute("DELETE FROM asks_moved WHERE message_id=?", (mid,))
     conn.execute("DROP TABLE IF EXISTS asks_moved")
@@ -654,12 +657,17 @@ def _questions(m):
              "multi": False}]
 
 
+def _shape(m):
+    """The ask as a question task takes it (store's shape), its topic too."""
+    refs = m.get("refs") or {}
+    return {"questions": _questions(m), "if_no_answer": refs.get("if_no_answer"), "review": refs.get("review"),
+            "spend": refs.get("spend"), "attachments": refs.get("attachments"), "topic": refs.get("topic")}
+
+
 def _store_ask(conn, card_id, m):
     """The ask's question, default, files under review and spend on question task `card_id`, its clock the ask's."""
-    refs = m.get("refs") or {}
-    store(conn, card_id, {"questions": _questions(m), "if_no_answer": refs.get("if_no_answer"),
-                          "review": refs.get("review"), "spend": refs.get("spend"),
-                          "attachments": refs.get("attachments")}, topic=H.question_topic(refs.get("topic")))
+    ask = _shape(m)
+    store(conn, card_id, ask, topic=H.question_topic(ask["topic"]))
     conn.execute("UPDATE tasks SET asked_at=? WHERE id=?", (H.ask_clock(m), card_id))
 
 
@@ -680,18 +688,17 @@ def _move_ask(conn, mid):
     if task_id and not row:
         return _retire(conn, m, task_id, "task gone")
     if row and row["status"] not in H.ACTIVE_STATUSES:
-        accept = (row["status"] == "done" and to == row["requester_id"] and (m.get("refs") or {}).get("questions")
-                  and m["created_at"] >= (row.get("done_at") or "") and not (m.get("refs") or {}).get("stuck"))
-        if not accept:
-            return _retire(conn, m, task_id, "task ended")
+        return _retire(conn, m, task_id, "task ended")           # an ask on an ended task ends with it
     if row:
         card = _open_card(conn, row, to)
         if card:
-            # One card per person per task: the ask joins it as a comment from the one who asked.
+            # One card per person per task: the ask joins it as a comment from the one who asked, and adds what the card
+            # lacks.
+            _join(conn, card, m)
             H.task_comment(conn, sender, card["id"], str(m.get("body") or "").strip() or card["title"], wake=False)
             return _retire(conn, m, task_id, "joined", {"task_id": card["id"]})
-    card = _ask_task(conn, m, row)
-    _retire(conn, m, task_id, "question_task", {"task_id": card["id"]})
+    card, how = _ask_task(conn, m, row)
+    _retire(conn, m, task_id, how, {"task_id": card["id"]})
     if row:
         from . import task_holds
         task_holds.refresh(conn, row["id"])
@@ -707,15 +714,43 @@ def _open_card(conn, row, person):
     return H.task(conn, found[0]) if found else None
 
 
+def _join(conn, card, m):
+    """An ask that joins an open card adds what the card lacks: its options (the recommended one too), its default and
+    its files under review. The card's own question stays as it is; the ask's words come in as its comment."""
+    have, ask = fields(card), _shape(m)
+    questions = [dict(q) for q in (have["questions"] or [])]
+    if questions and ask["questions"]:
+        first, asked = questions[0], ask["questions"][0]
+        if not first.get("options") and asked.get("options"):
+            first["options"] = [dict(o) for o in asked["options"]]
+        picks = {o.get("label") for o in asked.get("options") or [] if o.get("recommended")}
+        if picks and not any(o.get("recommended") for o in first.get("options") or []):
+            for o in first.get("options") or []:
+                if o.get("label") in picks:
+                    o["recommended"] = True
+    files = {**ask["review"], "attachments": ask.get("attachments") or []} if ask["review"] else None
+    review = have["review"] or files
+    conn.execute("UPDATE tasks SET questions=?, if_no_answer=?, review=? WHERE id=?",
+                 (json.dumps(questions), _dump(have["if_no_answer"] or ask["if_no_answer"]), _dump(review), card["id"]))
+
+
 def _ask_task(conn, m, row):
-    """A question task for the person the ask was put to: under its task when it has a live one (a private task's
-    makes a private one, which only its readers see), else on its own and private to the two of them, as the ask was."""
+    """A question task for the person the ask was put to: the open one on its topic that the person already has
+    (open_for, as the live path folds it), else under its task when it has a live one (a private task's makes a private
+    one, which only its readers see), else on its own and private to the two of them, as the ask was. Returns (task, how)."""
     sender, person = m["sender_id"], m["recipient_id"]
     questions = _questions(m)
     question = str(questions[0].get("question") or m.get("body") or "").strip()
     title = H._ask_title(question)[:200] or "A question for you"
     body = str(m.get("body") or "").strip() or question
     live = bool(row and row["status"] in H.ACTIVE_STATUSES)
+    topic = H.question_topic((m.get("refs") or {}).get("topic"))
+    found = open_for(conn, sender, person, parent=row["id"] if row else None, topic=topic,
+                     private=not row or H.task_private(conn, row))
+    if found:
+        # The new wording folds into the open question task on this topic (question_tasks.fold): nothing new is sent.
+        fold(conn, sender, found, question, _shape(m), title=title, body=body)
+        return found, "folded"
     if row:
         conn.execute("SAVEPOINT ask_task")
         try:
@@ -737,14 +772,14 @@ def _ask_task(conn, m, row):
                     # dependency needs the same audience): the bot hears the answer on the card, as its requester.
                     conn.execute("ROLLBACK TO ask_file")
                 conn.execute("RELEASE ask_file")
-            return card
+            return card, "question_task"
         # Its task's title only where the person reads that task: a private one's stays off.
         readable = not H.task_private(conn, row) or H.task_private_readable(conn, person, row)
         body = f"{body}\n\nAbout task {row['id']}: {row['title']}" if readable else body
     card = H.task_create(conn, sender, title, body, person, lint=False, deduplicate=False, quiet_notice=True,
                          private=True if not row or H.task_private(conn, row) else None)
     _store_ask(conn, card["id"], m)
-    return card
+    return card, "question_task"
 
 
 def _to_dm(conn, m, row):
@@ -772,6 +807,13 @@ def _kept(conn, mid, why):
         H.task_comment(conn, H.KEEPER, task_id, line, wake=False)
     H.event(conn, H.KEEPER, "ask.not_moved", mid, {"why": why[:500], "task": task_id})
     _retire(conn, m, task_id, "kept", {"note": why})
+
+
+def _lost(conn, mid, why):
+    """An open ask that neither moved nor could be kept: superseded all the same, with the reason in the log. It writes
+    only the message and its event, not a task, so the failure above is not needed again."""
+    conn.execute("UPDATE messages SET superseded_at=? WHERE id=? AND superseded_at IS NULL", (H.now(), mid))
+    H.event(conn, H.KEEPER, "ask.not_moved", mid, {"why": why[:500], "task": None})
 
 
 def _note_line(conn, row, on, said):
