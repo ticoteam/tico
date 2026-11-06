@@ -66,7 +66,7 @@ running on the Gateway. They never fail for it. The missing sign-in is the only 
 whose checkout is missing, whose settings differ from the server's, or whose computer doesn't have pi waits as before,
 and Health says which.
 
-When a used-up login has its bots on the Gateway, **Settings → Health** says so in one line, for example "Team box's
+When a used-up login has its bots on the Gateway, **Settings → General → Health → Details** says so in one line, for example "Team box's
 Claude login is used up. Bots are on Tico Gateway until it resets." When the bot's computer can't run Gateway work,
 Health says the bot stopped and what to do: sign in another login, or add a Docker runner. When the gateway key reaches
 its monthly cap, the Gateway work stops and Health says **Gateway cap reached** ([What the card says](#what-the-card-says)).
@@ -126,7 +126,7 @@ Gateway use spends that company's credit.
 The owner sees **Tico AI Gateway: connected automatically** on the card in **Settings → Models** once it has the key.
 
 If linking fails, check the error beside the form. Tico must be able to reach your server's
-[connection proof](install.md#cloudflare-tunnel). If the Gateway remains disconnected, check **Settings → Health**;
+[connection proof](install.md#cloudflare-tunnel). If the Gateway remains disconnected, check **Settings → General → Health → Details**;
 the company Gateway endpoint also needs to be available at Tico HQ.
 
 An existing key stays in use when you link the server. A pasted or environment key takes precedence over automatic enrollment.
@@ -214,7 +214,7 @@ status and **Needs you** say so.
 ## What the card says
 
 Tico asks the Gateway about the key when you save it, when you press **Check now**, when the owner opens the page
-(at most once a minute) and every hour. The card shows the Gateway's last answer, and **Settings → Health** shows the
+(at most once a minute) and every hour. The card shows the Gateway's last answer, and **Settings → General → Health → Details** shows the
 same warnings to the owner, with **Open Models**.
 
 | The card says | What it means | What to do |

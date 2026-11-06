@@ -334,7 +334,7 @@ GitHub, store and grant `GITHUB_TOKEN` (read access; required for Discussions) a
 Legacy files can be imported for migration; a new watcher does not load `secrets/support.env`.
 
 Without `HQ_STAFF_KEY` the watcher does nothing. To watch GitHub, list the repositories in `config/github.yaml` or
-`GH_SUPPORT_REPOS`. Check Settings > Health for a "Watchers" line: it appears only when a watcher fails or has stopped.
+`GH_SUPPORT_REPOS`. Check Settings > General > Health > Details for a "Watchers" line: it appears only when a watcher fails or has stopped.
 
 ### By hand
 

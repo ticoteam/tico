@@ -4,13 +4,13 @@ Check health keeps an install healthy without anyone having to look. It is a mai
 model and no bot. It runs on each [Maintenance](maintenance.md) run, hourly by default in company time. Its switch and
 Run now are part of Maintenance; the separate Health scan system routine is removed.
 
-Settings > Health lists what it found.
+Settings > General > Health > Details lists what it found.
 
 For a runner update blocked by changed files, Health and BotOps say when only flattened Tico links remain.
 The runner checks their bytes and targets: these links are repaired on the next update, with no decision about
 local work. Other changes still need a commit or stash. See [Updates](updates.md#a-mac-or-linux-checkout).
 
-Settings > Health also lists checks that belong to one feature, documented on that feature's page: public roadmap
+Settings > General > Health > Details also lists checks that belong to one feature, documented on that feature's page: public roadmap
 suggestions with no receiving bot are in [Public roadmaps](roadmaps.md), and the Tico AI Gateway key (near or at its
 monthly cap, not recognised, or not ready) is in [Tico AI Gateway](ai-gateway.md#what-the-card-says).
 
@@ -27,7 +27,7 @@ that can start, jobs behind an interrupted run awaiting review, jobs held after 
 jobs held on purpose), the oldest age, why it cannot
 start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list,
 Company › Campus and the silent-computer line split the queue the same way. **Tasks not progressing** names visible bot tasks
-that nothing is set to move, the tasks Task Manager lists as stalled. Settings > Health shows the same summaries.
+that nothing is set to move, the tasks Task Manager lists as stalled. Settings > General > Health > Details shows the same summaries.
 **Questions nobody can read** names held tasks waiting on a system, missing or inactive recipient, or someone who
 can no longer read the task or any source, including bot activity. A synced bot without desktop delivery cannot
 take asks and is flagged too. It checks saved asks and explicit waits.
@@ -103,7 +103,7 @@ task text, message text and people's words are never sent. A busy process is nam
 anything else is "a process" or "a Tico container". When the problem comes back, a "Seen again" message goes on the
 same ticket. The ticket is the owner's: replies show on their Support page.
 
-The team rule `health_monitor_reports` (on by default; in Settings > Health and `PUT /api/v2/access/rules`) files
+The team rule `health_monitor_reports` (on by default; in Settings > General > Health > Details and `PUT /api/v2/access/rules`) files
 tickets without a Needs you card. When it is off, each report is an **Ask before reporting** approval that a person
 reads first, sent with `hub support send --approval <id>` once approved. A declined or withdrawn approval clears the
 report, so the next report of that problem asks again. `TICO_SUPPORT=off` turns reporting off with the rest of support.
@@ -121,7 +121,7 @@ open ticket with that signature and closes each (`POST /v1/staff/tickets/by-sign
 
 - The account menu and the status dot show only two states: "Can't reach Tico", and "Tico stopped / bots aren't
   running" (which includes no computer online). Health check lines are not in the menu or on the dot; they are listed
-  only on Settings > Health, where each finding shows as "seen N times, last ...".
+  only on Settings > General > Health > Details, where each finding shows as "seen N times, last ...".
 - The "Review" action for uncertain work is on the bot's page.
 
 ## Commands
