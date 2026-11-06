@@ -173,7 +173,7 @@ def test_intentional_waits_and_any_attempt_are_not_listed(api, clock, hold):
                 blocker = H.task_create(c, 'human:ana', 'Prerequisite', 'Finish first.', 'human:ana', lint=False)
                 H.TR.add_blocker(c, H.KEEPER, task['id'], blocker['id'])
             else:
-                H.task_ask(c, 'bot:ops', task['id'], 'Which date should I use?')
+                QT.ask_plain(c, 'bot:ops', 'human:ana', 'Which date should I use?', parent=H.task(c, task['id']))
     cancel(api)
     advance(api, clock, 4)
     assert sweep(api) == []

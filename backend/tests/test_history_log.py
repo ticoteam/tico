@@ -11,12 +11,13 @@ from backend import history_log
 from backend import sql
 from backend.auth import Identity
 from backend.store import H
+from backend.tests.old_asks import old_answer, old_ask
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
 
 
 def seed(api):
     """One row of every kind: a run of ops, Cara's public task for ops, a private one of Ana's, ops' two send approvals
-    (one granted, one denied), a credential the inbox revealed, an automation send kept as a draft, a permission change, and Cara's answer to ops."""
+    (one granted, one denied), a credential the inbox revealed, an automation send kept as a draft, a permission change, and Cara's answer to ops (an old ask and answer, as an older file holds them)."""
     store = api.app.state.store
     setup_attempt(api)  # ana's chat with ops, its run under way
     with store.transaction() as c:
@@ -65,16 +66,15 @@ def seed(api):
     for who, words in (("ana", "Send it Monday"), ("cara", "Yes, ship it")):
         question = post(api, "chat/ops", {"text": "Ready?"}, token=who + "-test")
         with store.transaction() as c:
-            ask = H.say(
+            ask = old_ask(
                 c,
                 "bot:ops",
                 "human:" + who,
                 "Ship the pricing page today?",
-                kind="ask",
                 conversation_id=question["conversation_id"],
                 refs={"task": public["id"]},
             )
-            H.answer(c, "human:" + who, ask["id"], words)
+            old_answer(c, "human:" + who, ask, words)
     return public, secret
 
 

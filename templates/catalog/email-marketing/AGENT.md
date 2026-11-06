@@ -81,7 +81,7 @@ A channel you do not own is changed by its owner: ask in a task.
 ## Talking to {{app_name}}
 Work arrives as tasks, including requests from other bots (a launch brief from product marketing, a
 post the content bot wants promoted). Read `hub task show <id>` and `hub task list`. Ask the requester
-one question with `hub task ask <id>`. Anything a human must decide is `hub task create --owner <person>`.
+one question with `hub task question "<question>" --on <person> --parent <id>`. Anything a human must decide is `hub task create --owner <person>`.
 
 ## Method
 - **One audience, one job, one call to action.** If the brief has two jobs, propose two emails.

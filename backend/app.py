@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 
 import anyio
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.datastructures import DefaultPlaceholder
 from fastapi.routing import APIRoute
 from fastapi.exceptions import RequestValidationError
@@ -21,7 +21,7 @@ from starlette.requests import ClientDisconnect
 
 
 from . import built_on
-from . import agents, app_delivery, lifecycle, mcp_oauth, oidc, views
+from . import agents, app_delivery, mcp_oauth, oidc, views
 from . import outcome_stats
 from . import recorder_installs
 from . import assistant_changes, why_here
@@ -29,7 +29,7 @@ from . import teammate_access
 from . import task_followers
 from . import sources as SRC
 from . import start_places
-from . import ask_ingest, ask_routing, delivery, strategy_bot, invites, owner_link
+from . import ask_ingest, delivery, strategy_bot, invites, owner_link
 from . import org_rule_check
 from . import bot_home_merge
 from .roadmaps import exact_approval
@@ -39,6 +39,7 @@ from . import thread_api
 from . import step_age
 from . import task_holds
 from . import question_tasks
+from . import recipients as recipient_gate
 from . import runs
 from . import bot_stops, turn_budgets, task_caps, reach
 from . import (
@@ -93,7 +94,7 @@ from .credential_cards import install_credential_cards, scrub_attempt
 from .github import PATH as GITHUB_WEBHOOK_PATH
 from .triggers import PATH as TRIGGER_HOOK_PATH
 from .tool_proxy import PREFIX as TOOL_PROXY_PATH
-from .store import H, P, Problem, Store, bot_readiness, encode, message_page, task_message_page
+from .store import H, P, Problem, Store, encode
 from . import bot_settings as BS
 from . import bot_status_routes, computers_routes
 from .approvals_routes import SEND_WAY_DEFERS  # noqa: F401
@@ -1662,11 +1663,11 @@ def create_app(settings=None):
             routine = c.execute('SELECT schedule_id FROM schedule_occurrences WHERE task_id=?', (row['id'],)).fetchone()
             if routine:
                 value.update(routine_id=routine['schedule_id'])
-            asks = H.open_task_asks(c, row, actor=privacy.actor(who))
+            asks = []
             if question_tasks.is_open(row):
                 # A question task is its own ask; its files under review as this reader may see them.
                 mine = question_tasks.as_ask(row)
-                asks = [visual_view(c, who, [mine])[0] if who is not None else mine, *asks]
+                asks = [visual_view(c, who, [mine])[0] if who is not None else mine]
             value.update({"origin_actor": H.task_origin(c, row), "ask": next(iter(asks), None), "open_asks": len(asks)})
             if who is not None and visible_sql != "1":
                 value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
@@ -1776,34 +1777,13 @@ def create_app(settings=None):
         ):
             attachments[asset["task_id"]].append(brief(asset))
 
-        from .privacy_index import ReadIndex
-
-        provenance = ReadIndex(c, who)
-        asks, open_counts = {}, {}
-        # Readability is checked here, not by a SQL function: installing one marks the pooled connection
-        # as changed, so it was closed after every task list and the next read paid for a new one.
-        open_asks = c.execute(
-            "SELECT m.*,t.id AS ask_task_id FROM tasks t JOIN conversations cv ON cv.id=t.conversation_id "
-            f"JOIN messages m ON m.conversation_id=t.conversation_id AND {H.MESSAGE_TASK_SQL}=t.id "
-            f"WHERE t.id IN ({marks}) AND m.kind='ask' AND m.deleted_at IS NULL "
-            f"AND {H.OPEN_ASK_SQL} ORDER BY m.rowid DESC",
-            ids,
-        ).fetchall()
-        # Each ask's room is checked below; the rooms are read together first, not one room per task.
-        provenance.meetings.prime_conversations({message["conversation_id"] for message in open_asks})
-        for message in open_asks:
-            if not provenance.message(
-                message["id"], message["conversation_id"], message["refs"], message["in_reply_to"]
-            ):
-                continue
-            message = dict(message)
-            tid = message.pop("ask_task_id")
-            open_counts[tid] = open_counts.get(tid, 0) + 1
-            if tid in asks:
-                continue  # the newest readable open ask is the one shown
-            message["refs"] = H._json(message.get("refs"), {}) or {}
-            message["stale"] = H.ask_older(message)  # it stays until the weekday batch sends it back (still_needed)
-            asks[tid] = message
+        # A question task is its own ask (backend/question_tasks.py), read off its row: no query per task. Its files
+        # under review as this reader may see them, all in one pass.
+        mine = [question_tasks.as_ask(row) for row in rows if question_tasks.is_open(row)]
+        if mine and who is not None:
+            mine = visual_view(c, who, mine)
+        asks = {ask["id"]: ask for ask in mine}
+        open_counts = {tid: 1 for tid in asks}
 
         origins = {}
         for event in c.execute(
@@ -1972,16 +1952,16 @@ def create_app(settings=None):
                 # the asker typed or picked, never another person's data.
                 if not isinstance(values, dict) or len(json.dumps(values)) > 2000:
                     raise Problem("reference", "automations_filter is a small object", 422)
-            elif kind not in ("depth", "turn_id", "rerouted_from"):
+            elif kind != "turn_id":
                 raise Problem("reference", f"Unsupported reference kind: {kind}", 422)
 
     def named_destination(c, who, body, create=True):
-        return ask_routing.named_destination(c, who, body, auth, create=create)
+        return recipient_gate.named_destination(c, who, body, auth, create=create)
 
     def send(c, who, body):
         body = routed_message(c, who, body)
         check_refs(c, who, body.refs)
-        body = ask_routing.require_recipient(c, who, body.to, body=body, auth=auth)
+        body = recipient_gate.require_recipient(c, who, body.to, body=body, auth=auth)
         to, refs, conversation_id, way = body.to, body.refs, body.conversation_id, body.delivery
         # Ride-along: a defer while the bot has a turn going in this chat goes in right after that turn.
         if (
@@ -2007,7 +1987,7 @@ def create_app(settings=None):
             in_reply_to=body.in_reply_to,
             wait_s=body.wait_s,
         )
-        ask_routing.require_recipient(c, who, to, body=body, auth=auth, delivered=message)
+        recipient_gate.require_recipient(c, who, to, body=body, auth=auth, delivered=message)
         due = None
         if to.startswith("bot:") and way == "defer":
             if who.role == "bot":
@@ -2483,9 +2463,8 @@ def create_app(settings=None):
         people = T.mentioned_people(c, text, author) if text else []
         return [a for a in dict.fromkeys((row["owner_id"], row["requester_id"], *people, *extra)) if a]
 
-    def rule_comment_audience(c, who, row, text, ask=None):
-        target = [H.task_ask_route(c, who.actor, row, ask)[0]] if ask else []
-        return rule_task_audience(c, row, who.actor, text, *target)
+    def rule_comment_audience(c, who, row, text):
+        return rule_task_audience(c, row, who.actor, text)
 
     def rule_message_to(c, who, body):
         """The actor a message goes to, as `send` writes it: `to: assistant` is the person's Assistant bot."""
@@ -2703,42 +2682,12 @@ def create_app(settings=None):
         )
 
     def message_ingest(who, body):
-        """Ask ingest (backend/ask_ingest.py): a bot's question to a person is judged before it is written, whatever
-        task or message it refers to; a refusal creates no message. Outside
-        the write, as the rule check is."""
-        if body.kind != "ask":
-            return None
-        with store.read() as c:
-            body = routed_message(c, who, body)
-        title = body.text.strip().split("\n")[0][:300]
-        tref = H._task_ref((body.refs or {}).get("task"))
-        if tref and ask_ingest.gated(who, settings.assistant_bot):
-            # The task's title is judged only when the bot may read the task; the send refuses it otherwise.
-            with store.read() as c:
-                try:
-                    title = auth.task(c, who, tref).get("title") or title
-                except Problem:
-                    pass
-        return ask_ingest.preflight(
-            store,
-            app.state.judge,
-            who,
-            body.to,
-            title,
-            body.text,
-            kind="question" if tref else "loose",
-            asked=(body.refs or {}).get("questions"),
-        )
+        """Ask ingest judges a task for a person (backend/ask_ingest.py), never a message: a message no longer asks
+        anything (step 6c), so there is nothing to judge here."""
+        return None
 
     def routed_message(c, who, body):
-        body = body.model_copy(deep=True)
-        if body.kind == "ask":
-            from . import ask_routing
-
-            body.to, body.refs = ask_routing.resolve(
-                c, who.actor, body.to, body.refs, body.conversation_id, body.in_reply_to, body=body, who=who, auth=auth
-            )
-        return body
+        return body.model_copy(deep=True)
 
     def message_write(c, who, body, rc=None, ingest=None, files=None):
         """One message, as every route that sends one writes it (`/messages`, a conversation's `/messages`) and Send
@@ -2759,21 +2708,8 @@ def create_app(settings=None):
                 ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.held_answer(c, who, rule, auth=auth)
         sent = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
-        # Judged against the plate before the question is on it.
-        gate = (
-            ask_ingest.apply(c, ingest) if ingest and ask_ingest.matches(ingest, H.resolve_actor(c, body.to)) else None
-        )
         message = send(c, who, sent)
-        if not gate or not ask_ingest.matches(ingest, message.get("recipient_id")) or message.get("kind") != "ask":
-            if ingest:
-                ask_ingest.skipped(c, ingest, "target")
-            return {**message, **org_rule_check.answer(rule)}
-        tid = H.message_task_id(H.message(c, message["id"]), H.conversation(c, message["conversation_id"]))
-        verdict = {**ingest, "kind": "question" if tid else "loose"}
-        ask_ingest.record(c, verdict, gate, tid or message["id"], message["id"])
-        if gate["acts"]:
-            ask_ingest.withdraw_loose(c, who.actor, message["id"], ingest["person"])
-        return {**message, **ask_ingest.reply(gate), **org_rule_check.answer(rule)}
+        return {**message, **org_rule_check.answer(rule)}
 
     def message_checks(who, body, retry=False, place=None, operation="message"):
         """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
@@ -2847,7 +2783,6 @@ def create_app(settings=None):
             body.text,
             lambda c: rule_message_audience(c, who, body),
             place=place or rule_message_place(who, body),
-            track_route=body.kind == "ask",
         )
         return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
 
@@ -3040,40 +2975,7 @@ def create_app(settings=None):
         task_view,
     )
 
-    def answer_write(c, who, mid, text, unknown=False, warn="", destination=False):
-        """One answer, as `/messages/{mid}/answer` writes it and Send anyway replays it. The pick is resolved on the
-        answer's own words; `warn` (an org rule's Warn) goes on the message its reader gets. `destination`: Send
-        anyway's check, as the run the answer came from, that the question's readers may read what it carries."""
-        msg = H.message(c, mid)
-        if not msg:
-            raise Problem("not_found", "Message not found", 404)
-        conversation = auth.conversation(c, who, msg["conversation_id"], write=True)
-        lifecycle.refuse_send(c, who, msg["sender_id"], conversation, what="an answer")
-        # A private run's answer is read by its question's readers, ordinary or replayed: the same check either way.
-        if destination or privacy.private_execution(c, who):
-            privacy.require_destination(c, who, msg["sender_id"], msg["conversation_id"], {}, msg)
-        if H.has_pick_options(msg):
-            from .task_review import answer_text
-
-            return answer_text(c, auth, who, msg, text, unknown=unknown, warn=warn)
-        return H.answer(
-            c,
-            who.actor,
-            mid,
-            warn + "\n\n" + text if warn else text,
-            unknown=unknown,
-            classify_text=text,
-            turn_id=who.attempt_id,
-        )
-
-    def answer_audience(c, who, mid):
-        msg = H.message(c, mid)
-        if not msg:
-            raise Problem("not_found", "Message not found", 404)
-        conv = H.conversation(c, msg["conversation_id"]) or {}
-        return sorted({msg["sender_id"], *(conv.get("participants") or [])} - {None, ""})
-
-    answers_routes.register(app, answer_audience, answer_write, auth, checked_write, mutate)
+    answers_routes.register(app, auth, mutate)
 
     def task_filters(
         c,
@@ -4063,7 +3965,10 @@ def create_app(settings=None):
                 # BotOps' own report on its own task: they read as BotOps, like its other progress notes.
                 H.task_comment(c, "bot:" + BOTOPS, task_id, note, wake=False)
                 note = ""
-            H.task_close(c, who.actor, task_id, note=note, quiet=body.quiet, mover=mover(c, who) or None)
+            # A question task closed with one of its options named in the note is answered as that pick (its answer, so a
+            # picked spend gets its approval); any other close is the plain close.
+            if question_tasks.close_by_label(c, auth, who, row, note) is None:
+                H.task_close(c, who.actor, task_id, note=note, quiet=body.quiet, mover=mover(c, who) or None)
             warnings, gates = None, []
         else:
             fields = body.model_dump(exclude={"version", "close", "on_behalf_of"})
@@ -4302,24 +4207,6 @@ def create_app(settings=None):
 
     task_actions_routes.register(app, auth, mover, mutate, settings_admin, task_view)
 
-    @app.post("/api/v2/tasks/{tid}/ask")
-    def task_ask(request: Request, tid: str, body: M.Answer):
-        """The owner's one question to the task's requester (hubdb.task_ask). A bot's question to a person passes
-        ask ingest first (backend/ask_ingest.py): a refusal rolls the write back, so the task does
-        not wait on them."""
-        who = request.state.identity
-
-        def recipients(c):
-            row = auth.task(c, who, auth.resolve_task(c, who, tid))
-            target, _ = H.task_ask_route(c, who.actor, row)
-            return [target]
-
-        rc = rule_check(who, "task_ask", body.text, recipients, track_route=True)
-        ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else task_ask_ingest(who, tid, body)
-        return ask_ingest.judged(
-            store, ingest, lambda: mutate(request, body, lambda c: task_ask_write(c, who, tid, body, ingest, rc))
-        )
-
     def readable_task(who, tid):
         """The task `who` may read, or None: what an ingest preflight outside the write judges."""
         with store.read() as c:
@@ -4327,59 +4214,6 @@ def create_app(settings=None):
                 return auth.task(c, who, auth.resolve_task(c, who, tid))
             except Problem:
                 return None
-
-    def task_ask_ingest(who, tid, body):
-        if not ask_ingest.gated(who, settings.assistant_bot) or not (row := readable_task(who, tid)):
-            return None
-        from . import dream
-
-        with store.read() as c:
-            if dream.exempt(c, row):
-                return None  # the person started the dream to be asked (backend/dream.py)
-            target, _ = H.task_ask_route(c, who.actor, row)
-        return ask_ingest.preflight(store, app.state.judge, who, target, row["title"], body.text, kind="task_ask")
-
-    def rule_prepare_task_ask(store_, bot, replay):
-        return task_ask_ingest(bot, replay["task"], M.Answer.model_validate(replay["body"]))
-
-    @org_rule_check.replayer("task_ask", prepare=rule_prepare_task_ask)
-    def rule_replay_task_ask(c, bot, hold, replay, ingest, gate=None):
-        return task_ask_write(
-            c, bot, replay["task"], M.Answer.model_validate(replay["body"]), ingest, org_rule_check.decided(gate)
-        )
-
-    def task_ask_write(c, who, tid, body, ingest=None, rc=None):
-        task_id = auth.resolve_task(c, who, tid)
-        row = auth.task(c, who, task_id)
-        lifecycle.refuse_send(c, who, None, what="task questions")
-        route = H.task_ask_route(c, who.actor, row)
-        target, _ = route
-        rule = org_rule_check.apply(
-            c,
-            rc,
-            body.text,
-            {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)},
-            audience_now=[target],
-        )
-        if rule and rule.get("moved"):
-            raise Problem("moved", "Who this goes to changed while it was checked; send it again", 409, retryable=True)
-        if rule and rule.get("held"):
-            if ingest:
-                ask_ingest.skipped(c, ingest, "held")
-            return org_rule_check.answer(rule)
-        body = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
-        gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, target) else None
-        if ingest and not gate:
-            ask_ingest.skipped(c, ingest, "target")
-        # Not parked on a question that is not sent: the task keeps its status and the bot's own note.
-        msg = H.task_ask(c, who.actor, task_id, body.text, park=not (gate and gate["acts"]), route=route)
-        if gate:
-            ask_ingest.record(c, ingest, gate, task_id, msg["id"])
-            if gate["acts"]:
-                H.task_ask_resolve(c, who.actor, task_id, msg["id"])
-                # Why, on the task's record, like the other merge notes.
-                H.task_comment(c, H.KEEPER, task_id, gate["text"], wake=False)
-        return {**msg, **ask_ingest.reply(gate), **org_rule_check.answer(rule)}
 
     task_comments_routes.register(
         app,
@@ -5682,28 +5516,16 @@ def create_app(settings=None):
         privacy.require_destination(
             c, Identity(bot.actor, "bot", attempt_id=replay["attempt"]), target, conv["id"], refs, msg
         )
-        if msg["kind"] == "ask":
-            from .task_review import reply_answer
-
-            sent = reply_answer(
-                c,
-                auth,
-                Identity(bot.actor, "bot", attempt_id=replay["attempt"]),
-                msg,
-                replay["text"],
-                org_rule_check.warn_line(gate),
-            )
-        else:
-            text, _ = split_runner_notices(replay["text"])
-            sent = H.say(
-                c,
-                bot.actor,
-                target,
-                org_rule_check.warned_text(gate, text),
-                conversation_id=conv["id"],
-                in_reply_to=msg["id"],
-                refs=refs,
-            )
+        text, _ = split_runner_notices(replay["text"])
+        sent = H.say(
+            c,
+            bot.actor,
+            target,
+            org_rule_check.warned_text(gate, text),
+            conversation_id=conv["id"],
+            in_reply_to=msg["id"],
+            refs=refs,
+        )
         return {"message": sent}
 
     def reply_audience(c, bot, replay):
@@ -5738,9 +5560,7 @@ def create_app(settings=None):
 
         def comment(c, bot, replay):
             body = M.TaskComment.model_validate(replay["body"])
-            return rule_comment_audience(
-                c, bot, task_row(c, bot, replay), body.text, body.ask.model_dump() if body.ask else None
-            )
+            return rule_comment_audience(c, bot, task_row(c, bot, replay), body.text)
 
         def comment_edit(c, bot, replay):
             body = M.TaskComment.model_validate(replay["body"])
@@ -5755,8 +5575,6 @@ def create_app(settings=None):
             "bulk": task_update,
             "comment": comment,
             "comment_edit": comment_edit,
-            "answer": lambda c, bot, replay: answer_audience(c, bot, replay["message"]),
-            "task_ask": lambda c, bot, replay: [H.task_ask_route(c, bot.actor, task_row(c, bot, replay))[0]],
             "task_answer": lambda c, bot, replay: rule_task_audience(c, task_row(c, bot, replay), bot.actor),
             "reply": reply_audience,
         }

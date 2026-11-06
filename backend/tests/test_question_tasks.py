@@ -435,36 +435,6 @@ def test_a_reopened_question_task_asks_again(api):
     assert get(api, f"tasks/{card['id']}")["task"]["answer"]["answers"] == {"decision": ["No"]}
 
 
-def test_an_old_ask_on_the_same_topic_gives_way_to_the_question_task(api):
-    _, _, attempt = setup_attempt(api)
-    asked = {
-        "questions": [
-            {
-                "id": "decision",
-                "header": "",
-                "question": "Give Builder a backup model?",
-                "why": "",
-                "options": [{"label": "Yes"}, {"label": "No"}],
-                "multi": False,
-            }
-        ],
-        "topic": "backup-model",
-        "task_question": True,
-    }
-    with api.app.state.store.transaction() as c:
-        old = H.task_create(c, "human:ana", "Give Builder a backup model?", "Builder has none.", "bot:ops", lint=False)
-        said = H.task_comment(c, "bot:ops", old["id"], "Give Builder a backup model?", ask=asked)
-        H.task_update(c, "bot:ops", old["id"], status="waiting", waiting_on="human:ana", note="Asked Ana")
-    assert [i for i in get(api, "needs-you")["items"] if i["id"] == old["id"]]
-    card = _ask(api, attempt["token"], "Give Builder and Analyst a backup model?", topic="Backup model")["task"]
-    with api.app.state.store.read() as c:
-        gone = H.task(c, old["id"])
-        assert gone["status"] == "closed" and card["id"] in gone["note"]
-        assert c.execute("SELECT superseded_at FROM messages WHERE id=?", (said["id"],)).fetchone()[0]
-    items = [i for i in get(api, "needs-you")["items"] if i["id"] in (old["id"], card["id"])]
-    assert [i["id"] for i in items] == [card["id"]]
-
-
 def test_the_open_questions_index_reads_the_open_predicate(api):
     from backend import question_tasks
 
@@ -522,3 +492,46 @@ def test_a_default_on_a_restricted_page_title_leaves_no_event_naming_it_to_outsi
     sql = api.post("/api/v2/sql", json={"sql": "SELECT * FROM events"}, headers=headers("cara-test"))
     assert sql.status_code == 200, sql.text
     assert title not in json.dumps(sql.json()["rows"]), "an event naming the restricted page reached an outsider"
+
+
+def test_answer_and_file_reviews_filter_each_source_page_for_a_reader_who_cannot_open_it(api):
+    """The question-task form of the nested case: a question with review files, one of them a page the person asked
+    may open and an outsider may not. The answer copies that page's title (the pick's label), so the answer, the file
+    verdicts and the receipts (comments, events) show the outsider none of it, and the person still sees all of it."""
+    from backend.tests.test_file_reviews import answer as review_answer, ask as review_ask
+    from backend.tests.test_page_audience import edit
+    from backend.tests.test_pages import HTML, page
+    from backend.tests.test_files import turn
+
+    secret = "Quarterly forecast draft"
+    tid = post(api, "tasks", {"owner": "ops", "title": "Review folios", "body": "Review", "private": False})["id"]
+    _, attempt = turn(api)
+    fid = page(api, attempt, task=tid, name="forecast.html", title=secret).json()["page"]["file_id"]
+    ordinary = page(api, attempt, task=tid, name="ordinary.html", title="Ordinary folio", data=HTML).json()["page"][
+        "file_id"
+    ]
+    made = review_ask(
+        api,
+        attempt["token"],
+        [{"file": fid}, {"file": ordinary}],
+        on="ana",
+        private=False,
+        pick=True,
+        question="Which folio should ship?",
+    )
+    card = made["task"]
+    review_answer(api, made, [secret], other="Restricted review")
+    shown = get(api, f"tasks/{card['id']}", "ana-test")["task"]
+    assert shown["answer"]["answers"] == {"decision": [secret]} and shown["answer"]["reviewed"]
+    assert secret in json.dumps(shown["answer"]) and "Restricted review" in json.dumps(shown["answer"])
+    # The page turns private to the person it asks after the answer: the words it copied are its readers' only.
+    edit(api, fid, {"people": ["ana"]})
+    outsider = get(api, f"tasks/{card['id']}", "cara-test")["task"]
+    assert secret not in json.dumps(outsider.get("answer")), "the answer copies the restricted page's title"
+    assert secret not in json.dumps(outsider.get("answer", {}).get("reviewed")), "a file verdict names the page"
+    for path in (f"tasks/{card['id']}/comments", f"tasks/{card['id']}/answers"):
+        assert secret not in json.dumps(get(api, path, "cara-test")), path
+    assert secret in json.dumps(get(api, f"tasks/{card['id']}", "ana-test")), "the person asked still reads it"
+    sql = api.post("/api/v2/sql", json={"sql": "SELECT * FROM events"}, headers=headers("cara-test"))
+    assert sql.status_code == 200, sql.text
+    assert secret not in json.dumps(sql.json()["rows"]), "an event naming the restricted page reached an outsider"

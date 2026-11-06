@@ -75,7 +75,7 @@ Always:
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read with `hub task show <id>` and `hub task list`. A question for the requester
-is `hub task ask <id>`, one open question per task. A fix for a human is `hub task create --owner <human>` with the
+is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A fix for a human is `hub task create --owner <human>` with the
 record ids, within the requested work. Keep `hub bot status set` to one factual line.
 
 ## Quality standards

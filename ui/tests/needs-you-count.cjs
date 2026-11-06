@@ -24,8 +24,9 @@ const wholeTask = task('t-whole', {person_ask: '', body: 'Review the attachments
 const extras = [
   {id: 'a-send', kind: 'approval', what: 'send', title: 'Send the launch email', requester_id: 'bot:writer',
     created_at: now, payload: {to: ['team@acme.example'], subject: 'Launch'}},
-  {id: 'q-loose', kind: 'ask', title: 'Which vendor?', requester_id: 'bot:writer', created_at: now,
-    ask: {id: 'q-loose', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Which vendor?'}},
+  {id: 'q-loose', kind: 'question', title: 'Which vendor?', requester_id: 'bot:writer', owner_id: 'human:ana', created_at: now,
+    ask: {id: 'q-loose', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Which vendor?', question_task: true,
+      refs: {questions: [{id: 'vendor', question: 'Which vendor?', options: [{label: 'Acme'}, {label: 'Globex'}]}]}}},
   {id: 'stale', kind: 'stale', title: 'Stale tickets', created_at: now, rows: []},
 ];
 const threadKinds = ['thread_ask', 'thread_mention', 'thread_dm', 'thread_held', 'thread_capped'];
@@ -231,8 +232,8 @@ async function withNeedsReads(page, run) {
       await page.keyboard.press('Escape');
       const asks = page.locator('#task-body [data-group="asks"]');
       assert.equal(await asks.locator('.tl-gname').textContent(), 'Approvals and questions');
-      assert.equal(await asks.locator('.tl-gcount').innerText(), '2', 'only the loose question and stale check');
-      assert.equal(await asks.locator('.tl-row').count(), 2);
+      assert.equal(await asks.locator('.tl-gcount').innerText(), '1', 'only the stale check: a question to Ana is a task row');
+      assert.equal(await asks.locator('.tl-row').count(), 1);
       assert.equal(await page.locator('#task-body .tl-row').count(), 13, 'one row per plate item');
       assert.equal(await page.locator('#task-body [data-task-key="tt-0"]').count(), 1, 'duplicate task only once');
       const declined = page.locator('#task-body [data-task-key="tt-declined"]');
@@ -265,7 +266,7 @@ async function withNeedsReads(page, run) {
       // Non-card items use the same immediate answer/Undo count adjustment.
       await evaluate(page, () => { DEC_HANDLED.add('task:t-whole'); needsListsRedraw(); });
       assert.equal(await count(page), '12');
-      assert.equal(await asks.locator('.tl-gcount').innerText(), '2', 'a full-task change leaves the extras count alone');
+      assert.equal(await asks.locator('.tl-gcount').innerText(), '1', 'a full-task change leaves the extras count alone');
       assert.equal(await page.locator('#task-body .tl-row').count(), 12);
       assert.deepEqual(await badges(page), [{text: '12', hidden: false}, {text: '12', hidden: false}]);
       await evaluate(page, () => { DEC_HANDLED.delete('task:t-whole'); needsListsRedraw(); });

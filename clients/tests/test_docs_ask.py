@@ -1,4 +1,4 @@
-"""`hub doc ask` (clients/docs_ask.py): a bot asks the Librarian as a message of kind ask; a person asks
+"""`hub doc ask` (clients/docs_ask.py): a bot asks the Librarian in a DM flagged needs-action; a person asks
 through their own docs conversation. Both come back as {answer, citations, covered}."""
 
 from clients import docs_ask as D, hubcli, hubtools
@@ -24,7 +24,7 @@ class Api:
         return {"id": "m1", "conversation_id": "c1", "message_id": "m1"}
 
 
-def test_a_bot_asks_with_an_ask_message_and_gets_the_answer():
+def test_a_bot_asks_in_a_needs_action_dm_and_gets_the_answer():
     api = Api(
         "bot",
         [
@@ -38,7 +38,7 @@ def test_a_bot_asks_with_an_ask_message_and_gets_the_answer():
     out = D.ask(api, "How long do refunds take?", 30, sleep=lambda s: None)
     assert out["covered"] and len(out["citations"]) == 2 and out["answer"].startswith("Refunds")
     sent = next(c for c in api.calls if c[:2] == ("POST", "messages"))
-    assert sent[2] == {"to": "librarian", "text": "How long do refunds take?", "kind": "ask", "wait_s": 30}
+    assert sent[2] == {"to": "librarian", "text": "How long do refunds take?", "needs_action": True, "wait_s": 30}
     assert ("POST", "messages/a1/ack", {}) in api.calls
 
 

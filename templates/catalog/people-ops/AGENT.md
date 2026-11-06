@@ -74,7 +74,7 @@ Always:
 Exports and requests arrive as files on tasks. Letter templates and the leaving policy come from the
 Librarian (`hub doc ask`, `hub doc read`). Where a people mailbox is connected, `mail.sh draft
 --reply-to` keeps a verification in its thread for review; never `send`. A question for the requester
-is `hub task ask <id>`, one open question per task.
+is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The check opens with any leaver whose access is not confirmed removed.

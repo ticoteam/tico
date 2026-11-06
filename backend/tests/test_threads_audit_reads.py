@@ -10,6 +10,7 @@ from backend import events as E
 from backend import task_privacy, thread_attention, threads, updates, views
 from backend.auth import Identity
 from backend.store import H
+from backend.tests.old_asks import old_ask
 from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
 from backend.tests.test_teammate_access import NOBODY, acme, set_access, sql_column, who  # noqa: F401
 from backend.tests.threads_e2e import add_member, call, create_thread, ok, remove_member, say, timeline
@@ -327,28 +328,23 @@ def test_a_special_room_stays_its_owners_and_reaches_its_bot(acme):
 
 
 # ----------------------------------------------------------------------------- Needs you (finding 17)
-def test_an_ask_leaves_needs_you_with_the_thread_and_comes_back_with_it(acme):
+def test_an_old_ask_in_a_thread_is_history_not_a_needs_you_item(acme):
     api, tokens = acme
     store, auth = api.app.state.store, api.app.state.auth
     thread = create_thread(api, "ana-test", members=["bot:counsel", "human:cara"])
-    agent = SimpleNamespace(actor="bot:counsel", role="bot", agent="agent-1", attempt_id="")
     with store.transaction() as c:
-        asked = threads.post(
-            c, threads.Viewer(auth, agent), thread["id"], "Which clause?", kind="ask", to_actor="human:cara"
-        )
+        asked = old_ask(c, "bot:counsel", "human:cara", "Which clause?", conversation_id=thread["id"])
 
     def listed():
         with store.read() as c:
-            assert (asked["id"] in {m["id"] for m in H.loose_asks_to(c, "human:cara")}) == (
-                asked["id"] in {i["id"] for i in views.needs_items(c, auth, who(api, "cara"), lambda *a, **k: None)}
-            )
-            return asked["id"] in {m["id"] for m in H.loose_asks_to(c, "human:cara")}
+            return asked["id"] in {i["id"] for i in views.needs_items(c, auth, who(api, "cara"), lambda *a, **k: None)}
 
-    assert listed()
-    remove_member(api, "ana-test", thread["id"], "human:cara")
+    # Since step 6c Needs you lists question tasks; an ask message left from before is history (its question moved
+    # at start, question_tasks.move_asks), whether or not she is in the thread.
     assert not listed()
+    remove_member(api, "ana-test", thread["id"], "human:cara")
     add_member(api, "ana-test", thread["id"], "human:cara")
-    assert listed()
+    assert not listed()
 
 
 # ----------------------------------------------------------------------------- search (finding 30)

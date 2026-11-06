@@ -101,7 +101,7 @@ function needRowHTML(it, ctx = {}) {
 // Tasks page's: each thing that waits on someone is in one place. A bot's question outside any task stays here: its
 // card is where it is answered.
 const NEEDS_TASK_KINDS = ['task', 'question', 'waiting', 'declined'];
-const NEEDS_EXTRA_KINDS = ['approval', 'stale', 'ask'];
+const NEEDS_EXTRA_KINDS = ['approval', 'stale'];
 const needsExtras = () => needsQueueItems().filter(it => NEEDS_EXTRA_KINDS.includes(it.kind));
 // How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
 // decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`

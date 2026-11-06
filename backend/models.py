@@ -74,7 +74,7 @@ class TurnLevels(Contract):
 
 class ConversationCreate(Contract):
     participants: list[ID] = Field(min_length=1, max_length=20)
-    kind: Literal["chat", "ask", "notice"] = "chat"
+    kind: Literal["chat", "notice"] = "chat"
     subject: str = Field(default="", max_length=300)
 
 
@@ -97,7 +97,7 @@ class MessageCreate(Contract):
     to: ID
     text: Text
     conversation_id: ID | None = None
-    kind: Literal["say", "ask", "notice", "steer"] = "say"
+    kind: Literal["say", "notice", "steer"] = "say"
     refs: dict = Field(default_factory=dict)
     in_reply_to: ID | None = None
     wait_s: int | None = Field(default=None, ge=0, le=300)
@@ -157,11 +157,6 @@ class PageChat(Contract):
     task_id: str | None = None
 
 
-class Answer(Contract):
-    text: Text
-    unknown: bool = False
-
-
 class TakeRecommendation(Contract):
     ask: Annotated[StrictStr, Field(min_length=1, max_length=100)]  # the bot's ask the person says yes to
     version: Annotated[int, Field(strict=True, ge=1)] | None = (
@@ -193,10 +188,6 @@ class StaleAcceptAll(Contract):
     since is not in the list and stays; a row whose task changed is refused on its own."""
 
     rows: list[StaleShown] = Field(min_length=1, max_length=500)
-
-
-class ClarifyAsk(Contract):
-    ask: Annotated[StrictStr, Field(min_length=1, max_length=100)]  # the stale bot ask to send the clarify prompt to
 
 
 Lane = Literal["company", "product"]
@@ -605,7 +596,6 @@ class TaskAnswer(Contract):
 
 class FileVersionEdit(Contract):
     note: Annotated[StrictStr, Field(max_length=500)] | None = None
-    ask: ReviewAsk | None = None
 
 
 class TaskComment(Contract):
@@ -614,7 +604,6 @@ class TaskComment(Contract):
     needs_action: bool = False
     approval_id: ID | None = None
     text: Text
-    ask: ReviewAsk | None = None
     attachments: list[Attachment] = Field(default_factory=list, max_length=10)
     # How the comment reaches the task's followers and whom it @mentions (docs/tasks.md): steer into each bot's
     # running turn, queue right after it, defer to its next turn on the task (at the latest `defer_for`, 24h), or goal:
@@ -622,11 +611,6 @@ class TaskComment(Contract):
     # may not direct the task's bots.
     delivery: Literal["steer", "queue", "defer", "goal"] | None = None
     defer_for: DeferFor | None = None
-
-
-class TaskAskResolve(Contract):
-    # The person's words from where they answered; without them the asker withdraws the question.
-    quote: Annotated[StrictStr, Field(min_length=1, max_length=4000)] | None = None
 
 
 class TaskReaders(Contract):
