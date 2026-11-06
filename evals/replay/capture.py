@@ -21,7 +21,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import replay  # noqa: E402
+import replay
 
 _spec = importlib.util.spec_from_file_location("botops_run", HERE.parent / "botops" / "run.py")
 botops_run = importlib.util.module_from_spec(_spec)

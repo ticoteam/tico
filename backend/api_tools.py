@@ -1534,7 +1534,7 @@ def index_page(c, who, auth, settings, admins, limit=INDEX_LIMIT_MAX, cursor="")
 
 def install(app, store, auth, settings):
     """The routes. The vault is read from app.state at each call (a test swaps its cipher after start)."""
-    vault = lambda: app.state.vault  # noqa: E731
+    vault = lambda: app.state.vault
 
     def change(request, body, authorize, fn):
         v = vault()

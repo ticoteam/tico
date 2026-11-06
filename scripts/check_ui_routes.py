@@ -36,7 +36,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-import ui_baseline  # noqa: E402  (the baseline file format, shared with the tsc and Biome ratchets)
+import ui_baseline  # the baseline file format, shared with the tsc and Biome ratchets
 
 BASELINE_REL = "ui/routes-baseline.json"
 EXCLUDED = ("ui/vendor/", "ui/assets/")  # third-party code, and the bundle built from it

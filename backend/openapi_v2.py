@@ -2228,7 +2228,7 @@ def items(schema):
     return {"type": "array", "items": schema}
 
 
-ref = lambda name: {"$ref": "#/components/schemas/" + name}  # noqa: E731
+ref = lambda name: {"$ref": "#/components/schemas/" + name}
 ACTORS = {
     "type": "object",
     "additionalProperties": {"type": "string"},

@@ -27,7 +27,7 @@ from pathlib import Path
 HUB = Path(__file__).resolve().parents[2]
 if str(HUB) not in sys.path:  # `python -m connectors.mail` already has it
     sys.path.insert(0, str(HUB))
-from clients import judge as J  # noqa: E402
+from clients import judge as J
 from . import db
 
 ENV_VAR = "MAIL_DECISIONS"

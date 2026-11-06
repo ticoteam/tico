@@ -171,7 +171,7 @@ def sweep(conn, at=None):
     rules = team_rules.load(conn)
     expiry = H.shift(at, days=-EXPIRE_DAYS)
     done = {"went_ahead": [], "expired": [], "closed": []}
-    settled = lambda: sum(len(v) for v in done.values())  # noqa: E731
+    settled = lambda: sum(len(v) for v in done.values())
     for asked, task in open_asks(conn, at):
         if settled() >= BATCH:
             return done

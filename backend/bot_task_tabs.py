@@ -378,7 +378,7 @@ def tab_sql(tab, bot, viewer, visible_sql="1"):
     )
     for row in tab["conditions"]:
         field, value = row["field"], row["value"]
-        many = lambda column: (f"{column} IN (SELECT value FROM json_each(?))", [json.dumps(value)])  # noqa: E731
+        many = lambda column: (f"{column} IN (SELECT value FROM json_each(?))", [json.dumps(value)])
         if field == "status":
             part = many("status")
         elif field == "step":

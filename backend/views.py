@@ -1946,7 +1946,7 @@ def _whole_card(c, task, asked, me):
         return False
     if any(a["id"] != asked["id"] and a["recipient_id"] == me for a in H.open_task_asks(c, task)):
         return False
-    said = lambda text: " ".join(str(text or "").split()).casefold()  # noqa: E731
+    said = lambda text: " ".join(str(text or "").split()).casefold()
     return H.ask_card(c, task) == me or said(asked.get("body")) in {
         said(task.get("title")),
         said(task.get("body")),
@@ -2018,7 +2018,7 @@ def approval_title(kind, payload, task_title=""):
     """What an approval card says it approves, from its payload (title, subject, what or action) or its task's title:
     "Send: 'Rental owner referrals' to Jennie Ooten". "Approve this <kind>" only when neither names anything."""
     p = payload if isinstance(payload, dict) else {}
-    text = lambda key: str(p.get(key) or "").strip() if isinstance(p.get(key), (str, int, float)) else ""  # noqa: E731
+    text = lambda key: str(p.get(key) or "").strip() if isinstance(p.get(key), (str, int, float)) else ""
     named = (
         next((text(k) for k in ("title", "subject", "what", "action") if text(k)), "") or str(task_title or "").strip()
     )
@@ -2069,7 +2069,7 @@ def fold_related(items, c, me):
     card (its parent, grandparent, ...), one the card blocks, and a waiting subtask of such a folded parent. A card is
     the person's own task or one with an ask to them. A wait with no card above or beside it this way, or one that
     would fold into two cards, keeps its own card: siblings under one project are not one blocker."""
-    mine = lambda it: it.get("owner_id") == me or (it.get("ask") or {}).get("recipient_id") == me  # noqa: E731
+    mine = lambda it: it.get("owner_id") == me or (it.get("ask") or {}).get("recipient_id") == me
     waits = {str(it["id"]): it for it in items if it["kind"] == "waiting" and not mine(it)}
     anchors = [it for it in items if it["kind"] in ("task", "question", "waiting") and mine(it)]
     if not waits or not anchors:

@@ -41,7 +41,7 @@ def seed(b):
             )
         )
     # Settings > People shows each person's Tico Recorder (backend/recorder_installs.py); Ana and Cara use one.
-    stamp = lambda at: at.strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'  # noqa: E731
+    stamp = lambda at: at.strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
     b.write(
         lambda c: c.executemany(
             "INSERT OR REPLACE INTO recorder_installs(person_id,install_id,version,last_seen_at,created_at,updated_at) "

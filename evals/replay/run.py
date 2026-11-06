@@ -27,7 +27,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import replay  # noqa: E402
+import replay
 
 # The BotOps runner's HTTP client; loaded by path because that file is also named run.py.
 _spec = importlib.util.spec_from_file_location("botops_run", HERE.parent / "botops" / "run.py")

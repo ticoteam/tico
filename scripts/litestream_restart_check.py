@@ -34,7 +34,7 @@ with TestClient(create_app(Settings.from_env())):
 THRESHOLD = 0.05
 
 sys.path.insert(0, str(ROOT / "scripts"))
-import page_churn  # noqa: E402
+import page_churn
 
 
 def environment(work, litestream):

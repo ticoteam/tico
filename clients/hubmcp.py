@@ -16,8 +16,8 @@ from pathlib import Path
 
 if __package__ in (None, ""):  # run as a script: python clients/hubmcp.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from clients import hubtools  # noqa: E402
-from clients.tico import APIError, Client  # noqa: E402
+from clients import hubtools
+from clients.tico import APIError, Client
 
 
 def main(stdin=None, stdout=None):

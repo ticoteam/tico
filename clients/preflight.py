@@ -23,11 +23,11 @@ import yaml
 
 if __package__ in (None, ""):  # run as a script: python clients/preflight.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from clients import registry as REG  # noqa: E402
-from clients import harness_manifests  # noqa: E402
-from clients.manifest import manifest_path, repo_dir, routines_of, tools_of  # noqa: E402
-from clients.routines import MAX_CONTENT, validate_schedules  # noqa: E402
-from runner_support.op import OP_REF, resolve_op_refs  # noqa: E402
+from clients import registry as REG
+from clients import harness_manifests
+from clients.manifest import manifest_path, repo_dir, routines_of, tools_of
+from clients.routines import MAX_CONTENT, validate_schedules
+from runner_support.op import OP_REF, resolve_op_refs
 
 TEMPLATE = REG.HUB_DIR / "templates/employee-repo"
 SECRETS = REG.ROOT / "secrets"

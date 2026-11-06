@@ -1,16 +1,24 @@
-"""Ratchet for the Python lint: existing findings are listed by (file, rule) in ruff-baseline.toml, and the list only shrinks.
+"""Ratchet for the Python lint: the findings of each (file, rule) pair are counted, and the counts only go down.
 
-ruff.toml extends ruff-baseline.toml, whose `[lint.per-file-ignores]` holds every (file, rule) pair that fires today.
-A new finding therefore fails the check, and so does an entry whose rule no longer fires in that file.
+ruff.toml extends ruff-baseline.toml, whose `[lint.per-file-ignores]` lists every pair that has a finding today, so ruff
+passes on it. ruff-baseline-counts.json says how many findings each pair may have. Counts are per (file, rule), never
+per line, so reformatting or moving code leaves them alone.
 
-    python3 scripts/lint_baseline.py --write          regenerate ruff-baseline.toml from the current findings
-    python3 scripts/lint_baseline.py --check          fail on new findings, stale entries, invalid `# noqa`
+    python3 scripts/lint_baseline.py --write          record the current counts in both baseline files
+    python3 scripts/lint_baseline.py --check          fail on a finding past its count, on a count that fell without
+                                                      --write, and on invalid `# noqa`
     python3 scripts/lint_baseline.py --check --base origin/main
-                                                      also fail when the baseline or the ruff.toml rule set grew
-                                                      against that git ref (new or broader suppressions)
+                                                      also fail when a count grew, a suppression was added for a rule
+                                                      that the ref already selects, or a rule was dropped from select
 
-Findings are read with the baseline switched off (`--config "lint.per-file-ignores = {}"`), so the comparison sees
-every real finding. Test files keep their own minimal rule set in ruff.toml and are not part of the baseline.
+A rule that the --base ref does not select yet may bring its own baseline: that is how a rule is introduced, and its
+findings become its starting counts. Only rules the ref already selects are held to "no growth". --write does not refuse
+a higher count; the --base check does.
+
+Findings are read with the baseline switched off (`--config "lint.per-file-ignores = {}"`), so the comparison sees every
+real finding, and a `# noqa` that suppresses one counts as used. With the baseline on, ruff reads a `# noqa` for a
+baselined rule as unused, so the baseline-on run ignores RUF100; the raw run still checks it. Test files keep their own
+minimal rule set in ruff.toml and are not part of the baseline.
 """
 
 import argparse
@@ -26,9 +34,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 RUFF = ["uvx", "ruff@0.15.9"]
 CONFIG = ROOT / "ruff.toml"
-BASELINE = ROOT / "ruff-baseline.toml"
 BASELINE_NAME = "ruff-baseline.toml"
+BASELINE = ROOT / BASELINE_NAME
+COUNTS_NAME = "ruff-baseline-counts.json"
+COUNTS = ROOT / COUNTS_NAME
 RAW = ["--config", "lint.per-file-ignores = {}"]
+GATED_EXTRA = ["--extend-ignore", "RUF100"]
 OWNER = "engineering"
 # Never baselined: a blanket noqa comment (PGH004) must be fixed in the code.
 NEVER_BASELINED = {"PGH004"}
@@ -44,17 +55,33 @@ def relpath(filename):
 
 
 def raw_findings():
-    """(file, rule) pairs for every finding with the baseline off, plus any invalid-noqa warnings."""
+    """({(file, rule): [(line, message), ...]} for every finding with the baseline off, plus invalid-noqa warnings)."""
     done = ruff(["--output-format", "json"], raw=True)
     if done.returncode not in (0, 1):
         sys.exit(f"ruff failed ({done.returncode}):\n{done.stderr.strip()}")
-    pairs = collections.Counter()
+    found = collections.defaultdict(list)
     for item in json.loads(done.stdout or "[]"):
-        pairs[(relpath(item["filename"]), item["code"] or "syntax")] += 1
+        found[(relpath(item["filename"]), item["code"] or "syntax")].append((item["location"]["row"], item["message"]))
     invalid = sorted(
         {line.strip() for line in done.stderr.splitlines() if line.startswith("warning: Invalid") and "noqa" in line}
     )
-    return pairs, invalid
+    return found, invalid
+
+
+def counts_of(found):
+    return {pair: len(items) for pair, items in found.items()}
+
+
+def load_counts(text):
+    """{(file, rule): count} from ruff-baseline-counts.json."""
+    return {(path, code): n for path, codes in json.loads(text).items() for code, n in codes.items()}
+
+
+def render_counts(counts):
+    nested = collections.defaultdict(dict)
+    for (path, code), n in counts.items():
+        nested[path][code] = n
+    return json.dumps(nested, indent=2, sort_keys=True) + "\n"
 
 
 def baseline_pairs(text):
@@ -63,25 +90,26 @@ def baseline_pairs(text):
     return {(path, code) for path, codes in per_file.items() for code in codes}
 
 
-def render(pairs):
-    counts = collections.Counter(code for _, code in pairs)
+def render_toml(counts):
     per_file = collections.defaultdict(list)
-    for path, code in sorted(pairs):
+    per_rule = collections.Counter()
+    for (path, code), n in sorted(counts.items()):
         per_file[path].append(code)
+        per_rule[code] += n
     lines = [
         "# Ruff baseline: findings that already exist, by file and rule. Generated by",
-        "# `python3 scripts/lint_baseline.py --write`; do not add entries by hand.",
-        f"# Owner of every rule listed here: {OWNER}. Fix a finding, then re-run --write to drop its entry.",
-        "# `--check` fails when an entry no longer fires, so this list only shrinks.",
+        f"# `python3 scripts/lint_baseline.py --write` from {COUNTS_NAME}; do not add entries by hand.",
+        f"# Owner of every rule listed here: {OWNER}. Fix findings, then re-run --write to lower their counts.",
+        "# A count may only go down: `--check` fails on a finding past its count, and on a count that fell without --write.",
         "#",
-        "# Pairs per rule at generation:",
+        "# Findings per rule at generation:",
     ]
-    lines += [f"#   {code:<8} {counts[code]:>5}   owner: {OWNER}" for code in sorted(counts)]
+    lines += [f"#   {code:<8} {per_rule[code]:>5}   owner: {OWNER}" for code in sorted(per_rule)]
     lines += ["", "[lint.per-file-ignores]"]
     for path in sorted(per_file):
         codes = ", ".join(json.dumps(code) for code in per_file[path])
         lines.append(f"{json.dumps(path)} = [{codes}]")
-    return "\n".join(lines) + "\n", counts
+    return "\n".join(lines) + "\n"
 
 
 def git_show(ref, path):
@@ -98,6 +126,11 @@ def suppression_set(ruff_text, baseline_text):
             ignores |= {(path, code) for code in codes}
     ignores |= baseline_pairs(baseline_text or "")
     return ignores, set(config.get("select", []))
+
+
+def selects(code, select):
+    """True when one of ruff's `select` prefixes covers `code` (`B` covers `B007`, `T10` covers `T100`)."""
+    return any(code.startswith(prefix) for prefix in select)
 
 
 def forwards_to(source, dest):
@@ -250,15 +283,25 @@ def moved_since(ref, suppressed=frozenset()):
     return moves
 
 
+def renamed(pairs, moves):
+    """`pairs` (a set of (file, rule), or a Counter of counts keyed by it) with each moved file's entries moved to its
+    new path."""
+    if isinstance(pairs, collections.Counter):
+        out = collections.Counter()
+        for (path, code), n in pairs.items():
+            out[(moves.get(path, path), code)] += n
+        return out
+    return {(moves.get(path, path), code) for path, code in pairs}
+
+
 def carry_moves(old_ignores, new_ignores, ref):
     """`old_ignores` with each moved file's suppressions transferred (not copied) to its new path."""
-    moves = moved_since(ref, {path for path, _ in new_ignores})
-    moved = {(path, code) for path, code in old_ignores if path in moves}
-    return (old_ignores - moved) | {(moves[path], code) for path, code in moved}
+    return renamed(old_ignores, moved_since(ref, {path for path, _ in new_ignores}))
 
 
 def check_growth(ref):
-    """Fail when the baseline or the rule set changed in the direction of more suppression."""
+    """Fail when the baseline grew against `ref`. A rule that `ref` does not select yet may bring its own baseline;
+    every other suppression, and every count, may only stay the same or go down."""
     old_baseline = git_show(ref, BASELINE_NAME)
     if old_baseline is None:
         print(f"lint: {ref} has no {BASELINE_NAME} yet; growth check skipped", flush=True)
@@ -266,47 +309,106 @@ def check_growth(ref):
     old_config = git_show(ref, "ruff.toml") or ""
     new_ignores, new_select = suppression_set(CONFIG.read_text(encoding="utf-8"), BASELINE.read_text(encoding="utf-8"))
     old_ignores, old_select = suppression_set(old_config, old_baseline)
-    old_ignores = carry_moves(old_ignores, new_ignores, ref)
+    new_counts = load_counts(COUNTS.read_text(encoding="utf-8")) if COUNTS.exists() else {}
+    old_counts_text = git_show(ref, COUNTS_NAME)
+    old_counts = load_counts(old_counts_text) if old_counts_text is not None else None
+    moves = moved_since(ref, {path for path, _ in new_ignores})
+    old_ignores = renamed(old_ignores, moves)
+
+    def introduced(code):
+        return selects(code, new_select) and not selects(code, old_select)
+
     problems = []
-    for path, code in sorted(new_ignores - old_ignores):
-        problems.append(f"new suppression: {code} in {path} (fix it, or get it reviewed as a baseline change)")
     for code in sorted(old_select - new_select):
         problems.append(f"rule removed from ruff.toml select: {code}")
+    for path, code in sorted(new_ignores - old_ignores):
+        if not introduced(code):
+            problems.append(f"new suppression: {code} in {path} (fix it, or get it reviewed as a baseline change)")
+    if old_counts is None:
+        print(f"lint: {ref} has no {COUNTS_NAME} yet; count growth check skipped", flush=True)
+    else:
+        old_counts = renamed(collections.Counter(old_counts), moves)
+        for path, code in sorted(new_counts):
+            if not introduced(code) and new_counts[(path, code)] > old_counts[(path, code)]:
+                problems.append(
+                    f"count grew: {path} {code} {old_counts[(path, code)]} -> {new_counts[(path, code)]} "
+                    "(fix the findings; a baseline may only shrink)"
+                )
+    added = sorted(rule for rule in new_select if not selects(rule, old_select))
+    if added:
+        starting = sum(n for (_, code), n in new_counts.items() if any(code.startswith(r) for r in added))
+        print(
+            f"lint: {ref} does not select {', '.join(added)} yet; their {starting} baselined findings are the start",
+            flush=True,
+        )
     return problems
 
 
 def write():
-    pairs, _ = raw_findings()
-    blocked = sorted(pair for pair in pairs if pair[1] in NEVER_BASELINED)
+    found, _ = raw_findings()
+    counts = counts_of(found)
+    blocked = sorted(pair for pair in counts if pair[1] in NEVER_BASELINED)
     if blocked:
         for path, code in blocked:
             print(f"{path}: {code} must be fixed, not baselined", file=sys.stderr)
         return 1
-    text, counts = render(pairs)
-    BASELINE.write_text(text, encoding="utf-8")
-    total = sum(counts.values())
-    print(f"wrote {BASELINE_NAME}: {total} (file, rule) pairs in {len({p for p, _ in pairs})} files")
-    for code in sorted(counts, key=lambda c: (-counts[c], c)):
-        print(f"  {code:<8} {counts[code]:>5}")
+    if COUNTS.exists():
+        previous = load_counts(COUNTS.read_text(encoding="utf-8"))
+        for path, code in sorted(counts):
+            if counts[(path, code)] > previous.get((path, code), 0):
+                print(
+                    f"warning: {path} {code} rose {previous.get((path, code), 0)} -> {counts[(path, code)]}; "
+                    "`--check --base origin/main` refuses a count that grew"
+                )
+    COUNTS.write_text(render_counts(counts), encoding="utf-8")
+    BASELINE.write_text(render_toml(counts), encoding="utf-8")
+    per_rule = collections.Counter()
+    for (_, code), n in counts.items():
+        per_rule[code] += n
+    print(
+        f"wrote {BASELINE_NAME} and {COUNTS_NAME}: {sum(counts.values())} findings in {len(counts)} (file, rule) "
+        f"pairs across {len({p for p, _ in counts})} files"
+    )
+    for code in sorted(per_rule, key=lambda c: (-per_rule[c], c)):
+        print(f"  {code:<8} {per_rule[code]:>5}")
     return 0
 
 
 def check(base_ref):
     problems = []
-    pairs, invalid = raw_findings()
-    baseline = baseline_pairs(BASELINE.read_text(encoding="utf-8"))
-    for path, code in sorted(pairs.keys() - baseline):
-        problems.append(f"new finding: {path} {code} x{pairs[(path, code)]}")
-    for path, code in sorted(baseline - pairs.keys()):
-        problems.append(
-            f"stale baseline entry (no longer fires; drop it with `python3 scripts/lint_baseline.py --write`): {path} {code}"
-        )
-    for path, code in sorted(baseline):
+    found, invalid = raw_findings()
+    actual = counts_of(found)
+    if COUNTS.exists():
+        declared = load_counts(COUNTS.read_text(encoding="utf-8"))
+    else:
+        declared = {}
+        problems.append(f"{COUNTS_NAME} is missing; run python3 scripts/lint_baseline.py --write")
+    if baseline_pairs(BASELINE.read_text(encoding="utf-8")) != set(declared):
+        problems.append(f"{BASELINE_NAME} and {COUNTS_NAME} disagree; run python3 scripts/lint_baseline.py --write")
+    for pair in sorted(set(actual) | set(declared)):
+        path, code = pair
+        now, allowed = actual.get(pair, 0), declared.get(pair, 0)
+        if now > allowed:
+            details = [f"    {path}:{line}: {code} {message}" for line, message in sorted(found[pair])]
+            problems.append(
+                "\n".join(
+                    [
+                        f"new finding: {path} {code}: {now} found, the baseline allows {allowed} "
+                        "(the new ones are among these)",
+                        *details,
+                    ]
+                )
+            )
+        elif now < allowed:
+            problems.append(
+                f"count fell: {path} {code} {allowed} -> {now}; lower the baseline with "
+                "`python3 scripts/lint_baseline.py --write`"
+            )
+    for path, code in sorted(declared):
         if code in NEVER_BASELINED:
             problems.append(f"{code} may not be baselined: {path}")
-    for line in invalid:
-        problems.append(line)
-    gated = ruff(["--output-format", "concise"])
+    problems += invalid
+    gated = ruff(["--output-format", "concise", *GATED_EXTRA])
     if gated.returncode != 0 and not problems:
         problems.append("ruff with the baseline reports findings the raw comparison did not:\n" + gated.stdout)
     if base_ref:
@@ -316,16 +418,19 @@ def check(base_ref):
     if problems:
         print(f"lint: {len(problems)} problem(s); see scripts/lint_baseline.py for the rules")
         return 1
-    print(f"lint: ok ({sum(pairs.values())} findings, all in the baseline; {len(baseline)} baseline entries)")
+    print(
+        f"lint: ok ({sum(actual.values())} findings, all within their counts; {sum(declared.values())} baselined "
+        f"in {len(declared)} (file, rule) pairs)"
+    )
     return 0
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--write", action="store_true", help="regenerate ruff-baseline.toml")
-    mode.add_argument("--check", action="store_true", help="fail on new or stale findings")
-    parser.add_argument("--base", metavar="REF", help="git ref to compare suppressions against (e.g. origin/main)")
+    mode.add_argument("--write", action="store_true", help="record the current counts in both baseline files")
+    mode.add_argument("--check", action="store_true", help="fail on new findings, lowered counts and stale entries")
+    parser.add_argument("--base", metavar="REF", help="git ref to compare the baseline against (e.g. origin/main)")
     args = parser.parse_args(argv)
     if args.write:
         return write()
