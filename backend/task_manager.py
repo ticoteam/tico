@@ -12,7 +12,8 @@ and no model call. Each department's report is built here from queries Tico alre
 - tasks blocked only by their own quiet subtasks (`H.stalled_tasks` `own_blockers`);
 - bots held by back-off or a turn budget;
 - runs that wait for their owner's review for more than an hour (`jobs` in `uncertain`);
-- duplicate titles between the same requester and owner.
+- duplicate titles between the same requester and owner, only when their bodies name the same HQ ticket (or, when neither
+  names one, the same inbound message id).
 
 A task belongs to its owner's department: the org chart's fixed department list (templates/groups.yaml), a group inside one
 counting as it; a task whose owner is in none goes to "Company". Only company tasks the bot may read are listed: a private
@@ -24,6 +25,7 @@ A non-empty report is one task per department, owned by the bot, titled "Task ch
 one absorbs the next report (its body is replaced and the bot is woken only when the body changed), so reports never pile
 up. The wake is the routine's: `trigger="schedule"`, `refs.wake="task_manager_report"` (backend/run_triggers.py)."""
 
+import re
 import sqlite3
 from datetime import datetime, timezone
 
@@ -52,6 +54,9 @@ REPEAT_HOURS = 24  # an item already reported is left out for this long, unless 
 KEEP_DAYS = 7  # the ledger forgets an item this long after it was last seen
 OWNER_REVIEW_MINUTES = 60  # a run waiting for its owner's review this long is listed
 LIVE = ("open", "doing", "waiting", "review", "ready")
+# What a body names: an HQ support ticket (TK-...), or an inbound message id a body labels as such.
+TICKET = re.compile(r"\bTK-[A-Z0-9]+\b")
+INBOUND_ID = re.compile(r"\binbound message id[:\s`]+([A-Za-z0-9_:\-]{4,})", re.IGNORECASE)
 
 
 # What to do first when a department has more than PER_DEPARTMENT items: the ones a person is waiting on, then the rest.
@@ -394,8 +399,25 @@ def _owner_review(c, at):
     ]
 
 
+def _names(body):
+    """What a task body names: its HQ tickets and its inbound message ids, each as a set."""
+    text = str(body or "")
+    return frozenset(TICKET.findall(text)), frozenset(INBOUND_ID.findall(text))
+
+
+def _same_work(a, b):
+    """Two same-title tasks are one piece of work only when their bodies name the same HQ ticket set. When neither
+    names a ticket, the same inbound message id set does. A pair where either body names a ticket and the sets differ is
+    never one, and a pair naming no ticket or message id is not shown to be one: it is not closed."""
+    (tickets_a, messages_a), (tickets_b, messages_b) = a, b
+    if tickets_a or tickets_b:
+        return bool(tickets_a) and tickets_a == tickets_b
+    return bool(messages_a) and messages_a == messages_b
+
+
 def _duplicates(c):
     # Titles match by H.title_key, the create refusal's rule, so only pairs of the same requester and owner are read.
+    # The same title is not enough: _same_work also reads the bodies, so tasks that name different tickets stay open.
     rows = H._rows(
         c.execute(
             f"SELECT * FROM {H.TASKS} tasks WHERE coalesce(private,1)=0 AND status IN ('open','doing','waiting','review','ready') AND id IN ("
@@ -407,19 +429,19 @@ def _duplicates(c):
     seen, out = {}, []
     for row in rows:
         key = (row["requester_id"], row["owner_id"], H.title_key(row["title"]))
-        if key in seen:
-            if _readable(c, row) and _readable(c, seen[key]):
-                out.append(
-                    _item(
-                        "duplicate",
-                        row,
-                        f"same title, requester and owner as {seen[key]['id']}",
-                        f"hub task relate {row['id']} {seen[key]['id']} --kind duplicate_of; then "
-                        f"hub task close {row['id']} --note \"Duplicate of {seen[key]['id']}\"",
-                    )
+        names = _names(row["body"])
+        twin = next((first for first, first_names in seen.get(key, ()) if _same_work(first_names, names)), None)
+        if twin is not None and _readable(c, row) and _readable(c, twin):
+            out.append(
+                _item(
+                    "duplicate",
+                    row,
+                    f"same title, requester and owner as {twin['id']}",
+                    f"hub task relate {row['id']} {twin['id']} --kind duplicate_of; then "
+                    f"hub task close {row['id']} --note \"Duplicate of {twin['id']}\"",
                 )
-        else:
-            seen[key] = row
+            )
+        seen.setdefault(key, []).append((row, names))
     return out
 
 

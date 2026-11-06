@@ -22,7 +22,7 @@ Once an hour on weekdays, 08:00 to 18:00 in the team's time zone, the server loo
 | Blocked by its own subtasks | A task waits only on its own stalled subtasks. |
 | Held bot | A bot is held by back-off or a turn budget. Skipped on an install without the hold columns. |
 | Owner review waiting | A bot's interrupted runs have waited more than an hour for its owner. |
-| Duplicate titles | Two open tasks share a title, requester and owner. |
+| Duplicate titles | Two open tasks share a title, requester and owner, and their bodies name the same HQ ticket (`TK-...`), or, when neither names one, the same inbound message id. Tasks naming different tickets are never reported. |
 
 A task belongs to its owner's department, one of the nine on the org chart (a group inside it counts as it). A task
 whose owner is in none, such as BotOps or the Assistant, is listed under **Company**. Each department lists at most 30
