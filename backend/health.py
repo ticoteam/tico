@@ -2795,7 +2795,8 @@ def _dev_board_check(c, who, auth):
     waits = question_tasks.waiting_on_many(c, [dict(row) for row in rows])
     items = []
     for row in rows:
-        hours = int((H.parse_ts(now) - H.parse_ts(row["updated_at"])).total_seconds() // 3600)
+        since, until = H.parse_ts(row["updated_at"]), H.parse_ts(now)
+        hours = int((until - since).total_seconds() // 3600) if since and until else 0
         bot = H.actor_name(c, row["owner_id"])
         step = row["step_name"] or "no step"
         waiting = waits.get(row["id"])
