@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from backend import read_cache, sql as SQL, task_privacy, views
+from backend import question_tasks as QT, read_cache, sql as SQL, task_privacy, views
 from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
@@ -712,16 +712,6 @@ def test_needs_you_reads_a_fixed_number_of_statements_and_hides_private_items(ap
                     (step["id"], hidden["id"]),
                 )
                 H.event(c, H.KEEPER, "task.origin", step["id"], {"bot": "bot:ops"})
-                if n == 0:
-                    H.say(
-                        c,
-                        "bot:ops",
-                        "human:ben",
-                        "Which region?",
-                        kind="ask",
-                        conversation_id=step["conversation_id"],
-                        refs={"task": step["id"]},
-                    )
                 # Its own tree, so each wait files Ben a question task of its own (one card per tree otherwise).
                 wait = H.task_create(c, "human:ana", f"Wait {size}-{n}", "x", "bot:ops", lint=False)
                 H.task_update(
@@ -767,15 +757,7 @@ def test_task_list_reads_a_fixed_number_of_statements_and_hides_private_tasks(ap
                     (row["id"], (hidden if n % 2 else shared)["id"]),
                 )
                 if n % 5 == 0:
-                    H.say(
-                        c,
-                        "bot:ops",
-                        "human:ben",
-                        "Which region?",
-                        kind="ask",
-                        conversation_id=row["conversation_id"],
-                        refs={"task": row["id"]},
-                    )
+                    QT.ask_plain(c, "bot:ops", "human:ben", "Which region?", parent=row)
 
     path, counts = "tasks?status=open,doing,waiting,declined", {}
     for size in (30, 300):

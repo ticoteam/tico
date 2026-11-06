@@ -590,28 +590,11 @@ def test_person_wait_does_not_replace_owner_manual_hold(api):
     _team_blocked(api, task)
     with api.app.state.store.transaction() as c:
         H.task_update(c, task['owner_id'], task['id'], step='Blocked', note='Waiting for a machine')
-        H.task_comment(
-            c,
-            task['owner_id'],
-            task['id'],
-            'Which machine?',
-            ask={
-                'questions': [
-                    {
-                        'id': 'machine',
-                        'header': '',
-                        'question': 'Which machine?',
-                        'options': [{'label': 'A'}, {'label': 'B'}],
-                        'multi': False,
-                        'other': True,
-                    }
-                ],
-                'who': 'human:ana',
-            },
-        )
-        H.task_update(c, task['owner_id'], task['id'], status='waiting', waiting_on='human:ana')
+        H.task_update(c, task['owner_id'], task['id'], status='waiting', waiting_on='human:ana', note='Which machine?')
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
-        H.supersede_asks(c, task['id'])  # the ask ends: nothing waits on Ana any more
+        for child in H.TR.child_ids(c, task['id']):  # the question ends: nothing waits on Ana any more
+            if H.task(c, child)['owner_id'] == 'human:ana':
+                H.task_update(c, 'human:ana', child, status='done', note='Machine A.')
         task_blocked.reconcile(c, task['id'])
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
         assert H.task(c, task['id'])['blocked_reason'] == 'Waiting for a machine'

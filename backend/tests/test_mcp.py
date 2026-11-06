@@ -148,7 +148,7 @@ def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
         assert schema["additionalProperties"] is False, name
         assert set(schema.get("required", [])) <= set(schema["properties"]), name
         assert ("operation_id" in schema["properties"]) == (name in THREAD_WRITES), name
-    assert tools["hub_thread_post"]["inputSchema"]["properties"]["kind"]["enum"] == ["say", "ask"]
+    assert "kind" not in tools["hub_thread_post"]["inputSchema"]["properties"]  # asks are gone: a post is a say
     assert tools["hub_thread_update"]["inputSchema"]["properties"]["audience"]["enum"] == ["members", "team", "company"]
     assert "with" in tools["hub_thread_list"]["inputSchema"]["properties"]
 

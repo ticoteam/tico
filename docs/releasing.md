@@ -311,8 +311,8 @@ Python jobs install no npm packages, browsers or apt packages. The browser job c
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
 one retry. Pip and npm download caches remain enabled. Checks run on 4-vCPU RunsOn Spot VMs in Tico's own AWS
-account (fork PRs on GitHub-hosted runners). `scripts/pr_checks.py` sizes the Python and browser groups so each VM
-finishes in about `TICO_CI_JOB_SECONDS` (180) including setup, using JUnit per-file and browser per-script timings
+account (fork PRs on GitHub-hosted runners; x64 labels take the m and r families of generations 6–8, arm64 labels are unchanged). `scripts/pr_checks.py` sizes the Python and browser groups so each VM
+finishes in about `TICO_CI_JOB_SECONDS` (300, five minutes) including setup, using JUnit per-file and browser per-script timings
 from the latest successful Release validation run (its `test-timings` artifact: the same pytest flags, slow tests
 included), with collected test counts until timings exist. New files use the observed
 seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check links each job and its elapsed seconds in its summary. It also
@@ -372,7 +372,7 @@ frozen can check that candidate without changing it. The candidate's `scripts/re
 It can also run one slice of the gate (`--part product|browser|python|desktop`, with `--shard K/N` splitting the Python test
 files, or the browser scripts, into N groups balanced by the times in `scripts/test-timings.json`; refresh the browser
 times with `--record-browser-timings` from a validation's browser logs). The hosted workflow selects product, four browser
-shards, 28 Python shards and desktop. Every part starts with the candidate and runs its setup while the Linux
+shards, 28 Python shards, desktop and seven factory-sim groups (the sim's own VMs). Every part starts with the candidate and runs its setup while the Linux
 binaries build. Product, desktop and Python shards 1–2 wait for those binaries; the other shards start their tests
 immediately. Only product needs the images and waits for the image builds;
 without `--part`, the command runs the whole gate, with desktop only where the Linux app builds. The desktop
@@ -393,7 +393,7 @@ two-minute binary wait rather than adding collection to the critical Python shar
 default collection in `scripts/pr_checks.py`, before affected-file filtering, so the guard adds no collection or job.
 Both guards fail if a collected file is missing from the filesystem plan; extra empty or deselected candidates are
 allowed. The existing no-test-passed check still rejects a release shard that proves nothing.
-Beside the gate, eight `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into eight
+Beside the gate, seven `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into seven
 groups by `evals/factory/timings.json`. A failed check fails the release; NOTE lines
 (tickets over 24 h, a step over 12 h) go in the job summary for the Release Manager to read.
 Native runner/relay prerequisites are the run's own builds, and their fingerprints are checked before tests. Python and

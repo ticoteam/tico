@@ -35,7 +35,7 @@ Log it in `knowledge/requests.md`.
 
 ## 4. Hand over
 
-Put the outcome on the task. Ask once with `hub task ask <id>` if the scope or lawyer is missing. Route requested work: `hub task create --owner <slug> --title "<what>" --body "<request and source>" --parent <id>`.
+Put the outcome on the task. Ask once with `hub task question "<question>" --on <person> --parent <id>` if the scope or lawyer is missing. Route requested work: `hub task create --owner <slug> --title "<what>" --body "<request and source>" --parent <id>`.
 End with the not-legal-advice line, update `knowledge/requests.md`, and `hub task update <id> --status done --note`.
 
 ## Done when

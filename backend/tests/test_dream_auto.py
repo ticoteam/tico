@@ -258,11 +258,15 @@ def test_an_auto_dreams_question_reaches_its_manager_without_ask_ingest(gate):
     plate(api, 15)  # a plate full enough that ingest would send a question back
     assert len(run(api)) == 1
     [row] = dream_rows(api, "ops")
-    r = api.post(f"/api/v2/tasks/{row['id']}/ask", json={"text": QUESTIONS}, headers=headers(token))
+    r = api.post(
+        "/api/v2/task-questions",
+        json={"on": "human:ben", "question": QUESTIONS, "parent": row["id"]},
+        headers=headers(token),
+    )
     assert r.status_code == 200, r.text
     assert "ingest" not in r.json() and model.calls == []
     with api.app.state.store.read() as c:
-        assert [a["recipient_id"] for a in H.open_task_asks(c, H.task(c, row["id"]))] == ["human:ben"]
+        assert H.unanswered_ask(c, H.task(c, row["id"]))["recipient_id"] == "human:ben"
 
 
 def test_the_schedule_runs_the_dream_step_once_per_bucket(api, monkeypatch):

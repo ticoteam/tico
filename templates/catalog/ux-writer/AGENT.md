@@ -69,7 +69,7 @@ meaning unless the task changes it.
 ## Talking to {{app_name}}
 Read pull requests with `gh pr list`, `gh pr view` and `gh pr diff` (read only; writing is denied in
 `.claude/settings.json`). Specs arrive as tasks and in the Product Manager's published files. Ask the
-Librarian what the help centre calls a feature with `hub doc ask`. One question per task: `hub task ask <id>`.
+Librarian what the help centre calls a feature with `hub doc ask`. One question per task: `hub task question "<question>" --on <person> --parent <id>`.
 
 ## Quality standards
 - **Say what happened and what to do.** Every error names the problem in plain words and the next step;

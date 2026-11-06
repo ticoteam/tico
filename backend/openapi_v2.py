@@ -855,15 +855,6 @@ STABLE = [
         "CommentResult",
     ),
     (
-        "/api/v2/tasks/{tid}/comments/{mid}/resolve",
-        "post",
-        "Tasks",
-        "resolveTaskQuestion",
-        "Settle an open question answered elsewhere ({quote}: its asker or the task's owner bot), or withdraw it ({}: its "
-        "asker); it leaves every Needs you list and wakes nobody",
-        "CommentResult",
-    ),
-    (
         "/api/v2/tasks/{tid}/relations",
         "post",
         "Tasks",
@@ -995,7 +986,6 @@ STABLE = [
         "starts again from the top, with `restart`); without limit or cursor, the whole list",
         "NeedsYou",
     ),
-    ("/api/v2/messages/{mid}/answer", "post", "Needs you", "answerMessage", "Answer a question a bot asked", None),
     (
         "/api/v2/needs-you/recommended",
         "post",
@@ -1018,14 +1008,6 @@ STABLE = [
         "Needs you",
         "taskSeen",
         "The caller opened the task: its open questions to them are read",
-        None,
-    ),
-    (
-        "/api/v2/needs-you/clarify",
-        "post",
-        "Needs you",
-        "clarifyAsk",
-        "Ask the bot behind a stale question whether it still matters, in clearer words",
         None,
     ),
     (

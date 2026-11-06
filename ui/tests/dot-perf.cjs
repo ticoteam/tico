@@ -199,8 +199,9 @@ const round = v => Math.round(v * 10) / 10;
     // class. And the page it sees: a page with no heading, then one with a heading, so its label goes and comes back.
     const peekShows = id => page.evaluate(id => {
       document.activeElement?.blur();
-      (S.v2 ||= {}).needs = [{kind: 'ask', id, created_at: new Date().toISOString(),
-        ask: {id, sender_id: 'bot:coo', recipient_id: 'human:ben', body: 'Ship it?', created_at: new Date().toISOString(), refs: {}}}];
+      (S.v2 ||= {}).needs = [{kind: 'question', id, created_at: new Date().toISOString(),
+        ask: {id, sender_id: 'bot:coo', recipient_id: 'human:ben', body: 'Ship it?', created_at: new Date().toISOString(),
+          refs: {questions: [{id: 'ship', question: 'Ship it?', options: []}]}}}];
       askPeek();
     }, id).then(() => page.locator('#ask-peek .ask-peek-go').waitFor());
     const heading = text => page.evaluate(text => { const h = document.querySelector('#main h1, #main h2'); h.dataset.was ??= h.textContent; h.textContent = text ?? h.dataset.was; }, text);

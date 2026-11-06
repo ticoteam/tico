@@ -791,7 +791,6 @@ def settings_for(c, bot, ctx=None):
             "edit": None,
         }
     )
-    out.append({"text": f"Asks go {HD.MAX_ASK_DEPTH} deep at most", "source": "hubdb", "edit": None})
     out.append({"text": f"{HD.CAP_PER_HOUR} bot-to-bot messages an hour in one chat", "source": "hubdb", "edit": None})
     return out
 

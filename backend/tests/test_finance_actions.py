@@ -10,7 +10,7 @@ from backend.config import Settings
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.store import Store
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.test_finance_fixtures import open_views, AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 
 def _software(c):
@@ -193,6 +193,7 @@ def test_default_gates_send_close_and_large_bot_entries_to_one_person(books):
         asked = act(c, "bot:coder", "journal", big)
         assert (asked.status, asked.approver) == ("needs_approval", OWNER)
         FA.setup(c, OWNER, AT, finance_approver="human:dan")
+        open_views(c)
         assert act(c, "bot:coder", "journal", big).approver == "human:dan"
         assert (
             act(c, "bot:coder", "account_create", {"code": "6400", "name": "Ads", "type": "expense"}).status

@@ -13,6 +13,8 @@ ANA, BEN, CMO, SEO = "human:ana", "human:ben", "bot:cmo", "bot:seo"
 
 def hub(path):
     c = H.connect(path)
+    # Store.initialize adds tasks.version (cloud step 1); a bare connect has no store, and a blocked task's bump needs it.
+    H.add_column(c, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
     H.sync_registry(
         c,
         {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cmo", "seo")},
@@ -361,12 +363,14 @@ def test_idle_cascade_withdraws_questions_and_approvals_without_notifying_the_ch
     c = hub(tmp_path / "hub.db")
     parent = make(c, ANA, "Plan the launch", CMO)
     child = make(c, CMO, "Draft the launch copy", SEO, parent)
-    asked = H.task_comment(c, SEO, child["id"], "Which launch date?", wake=False, ask={"who": ANA})
+    from backend import question_tasks
+
+    asked = question_tasks.ask_plain(c, SEO, ANA, "Which launch date?", parent=H.task(c, child["id"]))
     approval = H.approval_request(c, SEO, "merge", {"repo": "acme/docs", "pr": 12}, task_id=child["id"])
     H.task_update(c, SEO, child["id"], status="review", note="Ready to review")
     before = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
     H.task_close(c, ANA, parent["id"])
-    assert H.message(c, asked["id"])["superseded_at"]
+    assert H.task(c, asked["id"])["status"] == "closed"
     assert H.approval(c, approval["id"])["decision"] == "withdrawn"
     assert not c.execute("SELECT 1 FROM messages WHERE rowid>? AND recipient_id=?", (before, SEO)).fetchone()
     c.close()

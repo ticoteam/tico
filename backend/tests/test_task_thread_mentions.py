@@ -4,7 +4,7 @@ Other threads, people's own posts and bot recipients are unchanged. Fictional pe
 following), ben (the owner, who follows).
 """
 
-from backend import threads
+from backend import question_tasks as QT, threads
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.test_api import api  # noqa: F401  (the fixture)
@@ -21,11 +21,11 @@ def task_thread(api):
     return made["conversation_id"]
 
 
-def bot_say(api, thread_id, body, to="human:ben", kind="say"):
+def bot_say(api, thread_id, body, to="human:ben"):
     """The bot posts in the task thread the way its turn does (threads.post), so a mention in the body is delivered; a
     legacy write (H.say) in a task thread takes no mentions."""
     with api.app.state.store.transaction() as c:
-        return threads.post(c, "bot:ops", thread_id, body, kind=kind, to_actor=to)
+        return threads.post(c, "bot:ops", thread_id, body, to_actor=to)
 
 
 def test_a_bot_say_in_a_task_thread_without_a_mention_reaches_only_its_live_followers(api):
@@ -77,21 +77,24 @@ def test_an_old_bot_delivery_in_a_task_thread_no_longer_counts_as_unread(api):
     assert unread_for(api, "human:ana", thread_id) == 0
 
 
-def test_a_bot_question_to_a_person_in_a_task_thread_is_not_a_delivery_but_still_needs_them(api):
-    thread_id = task_thread(api)
-    with api.app.state.store.transaction() as c:  # Ben stops following: the ask reaches him only through Needs you
-        c.execute("UPDATE thread_followers SET following=0 WHERE thread_id=? AND actor='human:ben'", (thread_id,))
-    asked = bot_say(api, thread_id, "Is the total final? If yes, I'll send it to the board.", kind="ask")
-    assert delivery(api, asked["id"], "human:ben") is None
-    # Needs you reads the ask message, not a delivery, so the question still lists the task for Ben.
-    with api.app.state.store.read() as c:
-        task_ids = [t["id"] for t in H.tasks_asked_of(c, "human:ben") if t["conversation_id"] == thread_id]
-    assert len(task_ids) == 1
+def test_a_bot_question_task_for_a_person_who_stopped_following_still_needs_them(api):
+    with api.app.state.store.transaction() as c:  # Ben's task for ops; he stops following its thread
+        parent = H.task_create(c, "human:ben", "Budget review", "Details.", "bot:ops", lint=False)
+        c.execute(
+            "UPDATE thread_followers SET following=0 WHERE thread_id=? AND actor='human:ben'",
+            (parent["conversation_id"],),
+        )
+        asked = QT.ask_plain(
+            c, "bot:ops", "human:ben", "Is the total final? If yes, I'll send it to the board.", parent=parent
+        )
+        assert QT.is_open(asked) and H.unanswered_ask(c, parent)["id"] == asked["id"]
+        # The question is his own task, so it reaches him through Needs you, not the thread.
+        assert asked["id"] in {t["id"] for t in H.needs_you(c, "human:ben")["tasks"]}
 
 
-def test_a_bot_question_that_mentions_the_person_in_a_task_thread_reaches_them(api):
+def test_a_bot_message_that_mentions_the_person_in_a_task_thread_reaches_them(api):
     thread_id = task_thread(api)
-    asked = bot_say(api, thread_id, "@ben is the total final? If yes, I'll send it to the board.", kind="ask")
+    asked = bot_say(api, thread_id, "@ben is the total final? If yes, I'll send it to the board.")
     row = delivery(api, asked["id"], "human:ben")
     assert row is not None and row["reason"] == "mention" and row["state"] == "pending"
     assert unread_for(api, "human:ben", thread_id) == 1

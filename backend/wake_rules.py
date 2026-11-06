@@ -308,7 +308,8 @@ def state_of(conn, task_row):
                     (tid, tid),
                 )
             ],
-            "asks": [a["id"] for a in H.open_task_asks(conn, row)],
+            # Ask messages are gone (step 6c): a question task is in "relations". Kept empty, so a hash reads as before.
+            "asks": [],
             "comments": [
                 list(r)
                 for r in conn.execute(

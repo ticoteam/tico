@@ -62,9 +62,9 @@ def test_the_periodic_reads_name_the_partial_index_that_keeps_them_to_live_rows(
     text = plan(api, start_places.LIVE_TOTALS_SQL, (NOW,))
     assert "USING INDEX attempts_live_lease" in text, text
     assert "attempts_runner_finished" not in text, text
-    # On messages_to_delivered the needs-you count walked every message to the person (31k on Tico Team).
+    # The needs-you "went away" count reads only the person's own tasks.
     text = plan(api, views.WITHDRAWN_ASKS_SQL, ("chris", NOW))
-    assert "SEARCH s USING INDEX messages_superseded_asks_to" in text, text
+    assert "SCAN tasks" not in text, text
 
 
 def register_worktree_computer(c, computer):

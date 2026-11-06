@@ -981,7 +981,8 @@ def _default_of(org_led: bool, defaults: VW.Defaults, owner: bool) -> str:
         return "everything"
     if org_led and defaults.manager == "team_expenses":
         return "team_expenses"
-    return "own_expenses" if org_led or defaults.member == "own_expenses" else "none"
+    manages = org_led and defaults.manager != "none"  # "none": a manager sees what everyone else does
+    return "own_expenses" if manages or defaults.member == "own_expenses" else "none"
 
 
 def default_team(org: Org, manager: str) -> str | None:

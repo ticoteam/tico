@@ -6144,7 +6144,8 @@ class Execution:
             "SELECT active_message.conversation_id FROM attempts active_attempt "
             "JOIN jobs active_job ON active_job.id=active_attempt.job_id "
             "JOIN messages active_message ON active_message.id=active_job.message_id "
-            "WHERE active_attempt.id=?) OR m.conversation_id=? OR (m.kind='ask' AND m.wait_s>0 "
+            "WHERE active_attempt.id=?) OR m.conversation_id=? OR ((m.kind='ask' "
+            "OR json_extract(m.refs,'$.needs_action')=1) AND m.wait_s>0 "
             "AND m.sender_id LIKE 'bot:%')) ORDER BY m.rowid",
             (attempt["bot_id"], claim_holds.REASON, H.now(), aid, task_room),
         ).fetchall()
@@ -6663,9 +6664,15 @@ class Execution:
             posting = not already and not same
             if source["kind"] in ("say", "ask", "steer") or task:
                 target = source["sender_id"]
-                # A bot is answered only when it asked, except where the thread's wake rule chose to start this run
-                # for its message (a carrier): the loop guard, not this rule, bounds bots answering bots there.
-                replyable = not str(target).startswith("bot:") or source["kind"] == "ask" or carried
+                # A bot is answered only when it asked (a message flagged needs_action; an ask before step 6c), except
+                # where the thread's wake rule chose to start this run for its message (a carrier): the loop guard,
+                # not this rule, bounds bots answering bots there. The reply itself asks nothing back.
+                replyable = (
+                    not str(target).startswith("bot:")
+                    or source["kind"] == "ask"
+                    or carried
+                    or bool(H._json(source.get("refs"), {}).get("needs_action"))
+                )
                 if target == H.KEEPER and task:
                     target = reply_target(source, conv, task)
                     # A task in the bot's chat room always delivers, and so does one filed from a chat into
@@ -6728,7 +6735,7 @@ class Execution:
                             )
                     # The org rule check's verdict (backend/org_rule_check.py), whether the reply is posted now or
                     # waits on the run until Done: held, the run keeps only the note, never the reply.
-                    rule_gate, asked_text = None, body.text
+                    rule_gate = None
                     if rule_check and not refused:
                         from . import org_rule_check
 
@@ -6767,24 +6774,9 @@ class Execution:
                     if replyable and not refused:
 
                         def post_reply():
-                            if msg["kind"] == "ask":
-                                # The pick is resolved on the reply's own words; a warning goes on what the asker
-                                # reads (task_review.reply_answer).
-                                from .task_review import reply_answer
-                                from . import org_rule_check
-
-                                sent = reply_answer(
-                                    c,
-                                    self.auth,
-                                    Identity(actor, "bot", attempt_id=aid),
-                                    msg,
-                                    asked_text,
-                                    org_rule_check.warn_line(rule_gate),
-                                )
-                            else:
-                                sent = self._say_reply(
-                                    c, actor, target, text, conv, source, refs, body.parent_message_id, aid, carried
-                                )
+                            sent = self._say_reply(
+                                c, actor, target, text, conv, source, refs, body.parent_message_id, aid, carried
+                            )
                             if sent:
                                 self.stamp_reply(c, sent, row, aid, source)
                             return sent
@@ -7123,7 +7115,6 @@ class Execution:
                     ("completed" if body.outcome == "completed" else "canceled", incoming["message_id"]),
                 )
                 continue
-            answered = incoming["kind"] != "ask" or bool(H.answers_to(c, [incoming["message_id"]]))
             task_id = work_task_id(message, H.conversation(c, message["conversation_id"]))
             deferred = False
             if task_id and task_id != turn_task:
@@ -7138,7 +7129,7 @@ class Execution:
                 "queued"
                 if deferred
                 else "completed"
-                if body.outcome == "completed" and answered
+                if body.outcome == "completed"
                 else "uncertain"
                 if held_back
                 else "queued"

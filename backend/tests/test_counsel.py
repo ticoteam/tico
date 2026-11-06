@@ -478,7 +478,6 @@ def test_counsel_reaches_no_route_outside_its_own_and_others_keep_theirs(api):
     new_version(api, file_id, CONTRACT + "\nClause 12: the Globex merger is secret.")
     run = read_run(api)
     asked = [
-        ("GET", f"answers?ids={read['task_id']}"),
         ("GET", f"pages/{file_id}"),
         ("GET", "replay"),
         ("GET", f"file-approvals?file={file_id}&version=2"),

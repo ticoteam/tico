@@ -121,9 +121,10 @@ def test_activity_and_all_holds_protect_done_tasks(api, monkeypatch):
                 elif label == 'pin':
                     c.execute("UPDATE tasks SET labels='[\"pinned\"]' WHERE id=?", (t['id'],))
                 elif label == 'question':
-                    H.task_comment(
-                        c, 'human:ana', t['id'], 'Should this stay open?', wake=False, ask={'to': 'human:ana'}
-                    )
+                    from backend import question_tasks, task_relations as TR
+
+                    q = question_tasks.ask_plain(c, 'bot:ops', 'human:ana', 'Should this stay open?')
+                    TR.relate(c, 'human:ana', q['id'], t['id'], 'parent')
                 else:
                     c.execute("UPDATE tasks SET status='open' WHERE id=?", (t['id'],))
                     H.approval_request(

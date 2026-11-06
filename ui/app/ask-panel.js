@@ -143,7 +143,7 @@ function askClick(ev) {
 // question with a line of words; several picks at once, or several questions, open the task.
 function askQuestions() {
   const me = myActor();
-  return (S.v2?.needs || []).filter(it => ['question', 'ask'].includes(it.kind) && it.ask?.recipient_id === me
+  return (S.v2?.needs || []).filter(it => it.kind === 'question' && it.ask?.recipient_id === me
     && it.ask.sender_id !== me).slice(0, ASK_CARDS_MAX);
 }
 // Who asks: the panel's own bot by the panel's name, anyone else as the question card names them.
@@ -176,7 +176,6 @@ async function askAnswer(card, {pick, text}) {
   if (!it || card.dataset.busy) return;
   const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.sender_id);
   const writes = pick !== undefined && q ? qcardWrites(it, q, [q.options[pick].label])
-    : it.kind === 'ask' ? [{path: `/v2/messages/${encodeURIComponent(it.id)}/answer`, body: {text}}]
     : [{path: `/v2/tasks/${encodeURIComponent(it.id)}/comments`, body: {text}}];
   card.dataset.busy = '1';
   card.querySelectorAll('button, input, select').forEach(el => { el.disabled = true; });

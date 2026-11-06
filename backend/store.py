@@ -2253,12 +2253,12 @@ class Store:
                     ("jobs_live_created", "jobs(created_at) WHERE state IN ('queued','leased','running','input')"),
                     ("jobs_attempt", "jobs(attempt_id) WHERE attempt_id IS NOT NULL"),
                     ("jobs_uncertain", "jobs(created_at) WHERE state='uncertain'"),
-                    # Open asks to someone, deleted or not (hubdb.tasks_asked_of), with conversation_id.
+                    # Open asks to someone, deleted or not: old rows only since step 6c; 6d drops it.
                     (
                         "messages_open_ask_to",
                         "messages(recipient_id, conversation_id) WHERE kind='ask' AND answered_by_id IS NULL",
                     ),
-                    # Replaced asks to someone (views.went_away, on every Needs you read).
+                    # Replaced asks to someone: old rows only since step 6c; 6d drops it.
                     (
                         "messages_superseded_asks_to",
                         "messages(recipient_id, superseded_at) WHERE kind='ask' AND superseded_at IS NOT NULL",
@@ -2376,8 +2376,11 @@ class Store:
                     logging.getLogger(__name__).exception("inbox prompt repair failed; it is tried at the next start")
                 # The waits 20261106112609_derived_waiting staged become question tasks, blockers or note lines, once:
                 # a no-op when nothing is staged (backend/question_tasks.py move_waits).
+                # The open asks 20261106131713_asks_to_question_tasks staged become question tasks or DMs first, so a
+                # moved wait finds the question task its ask became (backend/question_tasks.py move_asks).
                 from . import question_tasks as QuestionTasks
 
+                QuestionTasks.move_asks(c)
                 QuestionTasks.move_waits(c)
                 from . import releases as Releases
 
