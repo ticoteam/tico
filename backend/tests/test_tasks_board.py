@@ -219,37 +219,43 @@ def test_a_comment_on_a_task_a_bot_filed_wakes_it_only_when_addressed_to_it(api)
         assert update["woke"] is False and jobs_for(api, "ops") == queued
     assert any(m["body"] == "Testing it on staging for a day." for m in get(api, "tasks/" + task["id"])["comments"])
     assert post(api, path, {"text": "@ops which app is still open?"})["woke"] is True
-    queued = jobs_for(api, "ops")
-    # The owner's reply with no @mention is deferred a day: it reaches the bot that asked on its next turn there.
+    # The @mention made ops a follower: the owner's plain reply now reaches it like any post, Steer by default.
     reply = post(api, path, {"text": "I don't know why this task is assigned to me."}, token="ben-test")
-    assert reply["woke"] is False and reply["comment"]["recipient_id"] == "bot:ops"
-    assert reply["sent_as"]["delivery"] == "defer" and reply["sent_as"]["until"]
-    assert jobs_for(api, "ops") == queued
+    assert reply["woke"] is True and reply["comment"]["recipient_id"] == "bot:ops"
+    queued = jobs_for(api, "ops")
     mine = f"{path}/{reply['comment']['id']}"
     assert post(api, mine, {"text": "Why is this mine?"}, token="ben-test")["woke"] is False
     assert post(api, mine + "/delete", {}, token="ben-test")["woke"] is False
     assert jobs_for(api, "ops") == queued, "an edit or delete wakes nobody"
 
 
-def test_a_person_mentioned_in_a_comment_gets_it_as_a_question_in_needs_you(api):
+def test_a_person_mentioned_in_a_comment_is_reached_and_follows_the_task(api):
     token = bot_token(api, "ops")
     task = post(api, "tasks", {"owner": "ana", "title": "Fix the sign-in check", "body": "x"}, token=token)
     queued = jobs_for(api, "ops")
     said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you test it on staging?"}, token="priya-test")
-    assert said["comment"]["kind"] == "ask" and said["comment"]["recipient_id"] == "human:ben"
+    assert said["comment"]["kind"] == "say" and mention_reason(api, said["comment"]["id"], "human:ben") == "mention"
     assert jobs_for(api, "ops") == queued, "the bot that filed it is not woken"
+    assert mention_reason(api, said["comment"]["id"], "human:priya") is None, "posting reaches not the author"
     with api.app.state.store.read() as c:
-        assert task["id"] in {t["id"] for t in H.needs_you(c, "human:ben")["tasks"]}
-        assert task["id"] not in {t["id"] for t in H.needs_you(c, "human:priya")["tasks"]}
+        assert c.execute("SELECT following FROM thread_followers WHERE thread_id=? AND actor='human:ben'",
+                         (H.task(c, task["id"])["conversation_id"],)).fetchone()[0] == 1
+
+
+def mention_reason(api, message_id, actor):
+    """Why a message reached `actor` (its delivery's reason), or None when it did not."""
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT reason FROM message_deliveries WHERE message_id=? AND recipient=?",
+                        (message_id, actor)).fetchone()
+    return row[0] if row else None
 
 
 def test_a_mention_on_a_task_with_no_bot_on_it_is_one_comment(api):
     task = post(api, "tasks", {"owner": "ben", "title": "Book the venue", "body": "x"})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you book it by Friday?"})
-    assert said["comment"]["kind"] == "ask" and said["comment"]["recipient_id"] == "human:ben"
+    # A mention is a comment that reaches whom it names, not a question (question tasks are their own thing).
+    assert said["comment"]["kind"] == "say" and mention_reason(api, said["comment"]["id"], "human:ben") == "mention"
     assert [m["body"] for m in get(api, "tasks/" + task["id"])["comments"]] == ["@ben can you book it by Friday?"]
-    with api.app.state.store.read() as c:
-        assert task["id"] in {t["id"] for t in H.needs_you(c, "human:ben")["tasks"]}
 
 
 def test_mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot(api):
@@ -258,8 +264,7 @@ def test_mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot(api):
     said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you send ops the numbers?"})
     assert said["woke"] is True and said["comment"]["kind"] != "ask"
     assert jobs_for(api, "ops") == queued + 1
-    with api.app.state.store.read() as c:
-        assert task["id"] in {t["id"] for t in H.needs_you(c, "human:ben")["tasks"]}
+    assert mention_reason(api, said["comment"]["id"], "human:ben") == "mention"
 
 
 def test_a_comment_on_a_task_with_no_bot_on_it_is_not_quiet(api):
@@ -844,44 +849,33 @@ def test_an_owner_bot_cannot_close_a_marketing_idea_onto_another_board_that_has_
         assert H.task(c, tid)["status"] == "open"
 
 
-def test_the_verdict_alias_on_a_live_server_pauses_an_idea_with_its_result_as_the_note(api, live, monkeypatch):
-    with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c)
+def _idea(c, title):
+    return H.task_create(c, "human:ana", title, "Spend $200 for two weeks.", "bot:cmo", type="idea")["id"]
+
+
+def test_cli_aliases_file_list_and_give_verdicts_on_a_live_server(api, live, monkeypatch, capsys):
     monkeypatch.setenv("HUB_API_URL", live)
     monkeypatch.setenv("HUB_TOKEN", bot_token(api, "cmo"))
+    with api.app.state.store.transaction() as c:
+        tid = _idea(c, 'Try referral ads')
     assert hubcli.main(["growth", "idea", "verdict", tid, "--status", "paused", "--result", "CPA 31 so far"]) == 0
     with api.app.state.store.transaction() as c:
         task = H.task(c, tid)
     assert (task["status"], task["step_id"], task["note"]) == ("waiting", "idea-paused", "Result: CPA 31 so far")
-
-
-def test_the_verdict_alias_on_a_live_server_pauses_an_idea_with_no_result_and_a_note_says_so(api, live, monkeypatch):
     with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c)
-    monkeypatch.setenv("HUB_API_URL", live)
-    monkeypatch.setenv("HUB_TOKEN", bot_token(api, "cmo"))
+        tid = _idea(c, 'Try paid video')
     assert hubcli.main(["growth", "idea", "verdict", tid, "--status", "paused"]) == 0
     with api.app.state.store.transaction() as c:
         task = H.task(c, tid)
     assert (task["status"], task["step_id"], task["note"]) == ("waiting", "idea-paused", "Test paused")
-
-
-def test_the_verdict_alias_on_a_live_server_finishes_an_idea_the_owner_bot_won(api, live, monkeypatch):
     with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c)
-    monkeypatch.setenv("HUB_API_URL", live)
-    monkeypatch.setenv("HUB_TOKEN", bot_token(api, "cmo"))
+        tid = _idea(c, 'Try partner swaps')
     assert hubcli.main(["growth", "idea", "verdict", tid, "--status", "won", "--result", "CPA 31",
                         "--learning", "Video works"]) == 0
     with api.app.state.store.transaction() as c:
         task = H.task(c, tid)
     assert (task["status"], task["closed_by_id"], task["note"]) == (
         "closed", "bot:cmo", "Result: CPA 31\nLearning: Video works")
-
-
-def test_the_alias_files_and_lists_ideas_under_the_marketing_type_id_on_a_live_server(api, live, monkeypatch, capsys):
-    monkeypatch.setenv("HUB_API_URL", live)
-    monkeypatch.setenv("HUB_TOKEN", bot_token(api, "cmo"))
     assert hubcli.main(["growth", "idea", "create", "--title", "Referral card", "--channel", "referral"]) == 0
     with api.app.state.store.transaction() as c:
         row = c.execute("SELECT type_id FROM tasks WHERE title='Referral card'").fetchone()

@@ -44,6 +44,52 @@ def test_a_snapshot_is_taken_before_the_switch_and_left_alone_when_the_update_wo
     assert "/data/snapshots" in exec_call and "hub.sqlite" in updater.SNAPSHOT_SCRIPT and "backup(" in updater.SNAPSHOT_SCRIPT
     assert 'target.execute("PRAGMA quick_check")' in updater.SNAPSHOT_SCRIPT
 
+    assert any("/data/snapshots" in a for a, _ in docker.calls)
+    assert "hub.sqlite" in updater.SNAPSHOT_SCRIPT and "backup(" in updater.SNAPSHOT_SCRIPT
+
+
+def test_the_snapshot_allowance_scales_with_the_database_and_the_env_override_wins(monkeypatch, tmp_path):
+    gigabyte = 1024 ** 3
+    updater = load(monkeypatch, "", tmp_path)
+    assert updater.snapshot_seconds(None) == updater.SNAPSHOT_FLOOR_SECONDS
+    assert updater.snapshot_seconds(int(3.6 * gigabyte)) == updater.SNAPSHOT_FLOOR_SECONDS
+    assert updater.snapshot_seconds(10 * gigabyte) == 3000
+    monkeypatch.setenv("TICO_UPDATER_SNAPSHOT_SECONDS", "1800")
+    fixed = load(monkeypatch, "", tmp_path)
+    assert fixed.snapshot_seconds(10 * gigabyte) == fixed.snapshot_seconds(None) == 1800
+    monkeypatch.setenv("TICO_UPDATER_SNAPSHOT_SECONDS", "")
+    assert load(monkeypatch, "", tmp_path).snapshot_seconds(10 * gigabyte) == 10 * updater.SNAPSHOT_SECONDS_PER_GB
+
+
+def test_the_status_names_the_database_size_while_the_snapshot_runs(monkeypatch, tmp_path):
+    updater = load(monkeypatch, "", tmp_path)
+    Fake(updater, monkeypatch, [True])
+    monkeypatch.setattr(updater, "database_bytes", lambda: int(3.6 * 1024 ** 3))
+    seen, taken = [], updater.take_snapshot
+
+    def watched(previous, seconds):
+        seen.append((updater.status["state"], updater.status["message"], seconds))
+        return taken(previous, seconds)
+
+    monkeypatch.setattr(updater, "take_snapshot", watched)
+    updater.update("v0.2.0")
+    assert seen == [("snapshotting", "snapshotting, 3.6 GB", updater.SNAPSHOT_FLOOR_SECONDS)]
+    assert updater.status["state"] == "healthy"
+
+
+def test_the_quick_check_on_the_snapshot_is_always_on_and_has_no_switch(monkeypatch, tmp_path):
+    sent = []
+    updater = load(monkeypatch, "", tmp_path)
+    monkeypatch.setattr(updater, "compose", lambda *a, tag=None, **k: sent.append(a) or "")
+    updater.take_snapshot("v0.1.0", 1200)
+    assert sent[-1][-1] == str(max(1200 - 60, 1200 * 4 // 5))   # the limit is the last argument: no check flag after it
+    assert "quick_check" in updater.SNAPSHOT_SCRIPT and "page_count" not in updater.SNAPSHOT_SCRIPT
+    assert not hasattr(updater, "FULL_CHECK")
+    monkeypatch.setenv("TICO_UPDATER_FULL_CHECK", "0")   # an old setting does nothing now
+    assert "quick_check" in load(monkeypatch, "", tmp_path).SNAPSHOT_SCRIPT
+
+
+
 
 
 def test_the_snapshot_script_removes_parts_left_by_an_attempt_that_ran_out_of_time(monkeypatch, tmp_path):
@@ -442,6 +488,24 @@ def test_a_subnet_clash_names_the_settings_that_move_the_edge_network(monkeypatc
     assert ("docker compose down, then docker compose up -d, then update again" in message) is hinted
 
 
+def test_compose_passes_the_snapshot_settings_from_env_to_the_updater():
+    import yaml
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    environment = yaml.safe_load((root / "compose.yaml").read_text())["services"]["updater"]["environment"]
+    # Empty when .env does not set it, so the updater scales its allowance; the full check has no setting.
+    assert environment["TICO_UPDATER_SNAPSHOT_SECONDS"] == "${TICO_UPDATER_SNAPSHOT_SECONDS:-}"
+    assert "TICO_UPDATER_FULL_CHECK" not in environment
+
+
+@pytest.mark.parametrize("override", ["soon", "0", "-30"])
+def test_a_bad_snapshot_override_falls_back_to_the_scaled_allowance(monkeypatch, tmp_path, capsys, override):
+    monkeypatch.setenv("TICO_UPDATER_SNAPSHOT_SECONDS", override)
+    updater = load(monkeypatch, "", tmp_path)
+    assert updater.SNAPSHOT_SECONDS is None and updater.snapshot_seconds(10 * 1024 ** 3) == 3000
+    assert "TICO_UPDATER_SNAPSHOT_SECONDS" in capsys.readouterr().err
+
+
 def test_a_snapshot_check_that_runs_over_names_its_limit_and_the_database_size(monkeypatch, tmp_path):
     """The snapshot script ends itself at its own limit and says so with the size; the update says it went back."""
     updater = load(monkeypatch, "", tmp_path)
@@ -457,7 +521,7 @@ def test_a_snapshot_check_that_runs_over_names_its_limit_and_the_database_size(m
     updater.update("v0.2.0")
     assert updater.status["state"] == "rolled_back"
     assert updater.status["message"] == ("could not snapshot the database first (the database snapshot check exceeded "
-                                         "900 seconds on a 12.3 GB database). Went back to v0.1.0.")
+                                         "%d seconds on a 12.3 GB database). Went back to v0.1.0." % updater.SNAPSHOT_FLOOR_SECONDS)
     assert "exec" not in docker.verbs() and updater.status["restored"] is False and "stop" not in docker.verbs()
 
 

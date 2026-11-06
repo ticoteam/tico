@@ -466,7 +466,7 @@ def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_
         head = detail["head_sha"]
         checks = detail.get("checks") or {}
         # Current all-green CI is stronger evidence than prose, but only from a fresh read: the webhook-built cache
-        # records skipped and neutral checks as passing, so it cannot tell a real pass from a skip.
+        # records neutral checks as passing and keeps only a re-run's latest result, so it cannot tell a real pass.
         if snapshots is not None and checks and "passing" in checks.values() and all(v in ("passing", "skipped") for v in checks.values()):
             continue
         state, receipts = test_receipts.at_head(facts, head)

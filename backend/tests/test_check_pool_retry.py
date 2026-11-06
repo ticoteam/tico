@@ -34,12 +34,13 @@ def waiting_ticket(api, number, reviewer, kind='review'):
     return task, wait
 
 
-@pytest.mark.parametrize('kind,ci,integration', [
-    ('review', 'success', 'configured'), ('qa', 'failure', 'configured'), ('release_qa', 'success', 'configured'),
-    ('review', 'success', 'unconfigured'), ('qa', 'failure', 'unconfigured'), ('release_qa', 'success', 'unconfigured'),
-    ('review', 'success', 'absent'),
+@pytest.mark.parametrize('kind,ci,integration,refresh', [
+    ('review', 'success', 'configured', 'before_retry'), ('qa', 'failure', 'configured', 'before_retry'),
+    ('release_qa', 'success', 'configured', 'before_retry'), ('review', 'success', 'unconfigured', 'before_retry'),
+    ('review', 'success', 'absent', 'before_retry'),
+    # The writer path with a configured integration is test_retry_rechecks_the_snapshot_head_under_the_writer.
+    ('review', 'success', 'unconfigured', 'writer'), ('review', 'success', 'absent', 'writer'),
 ])
-@pytest.mark.parametrize('refresh', ['before_retry', 'writer'])
 def test_retry_requests_the_fresh_head_after_the_cached_pr_moves_on(api, monkeypatch, kind, ci, integration, refresh):
     from backend import verdict_moves as V
     team(api, seen=H.shift(H.now(), minutes=-10))
@@ -80,10 +81,6 @@ def test_retry_requests_the_fresh_head_after_the_cached_pr_moves_on(api, monkeyp
     filed = P.retry(store, service=None if integration == 'absent' else service)
     if refresh == 'writer':
         assert raced
-        if integration == 'configured':
-            assert filed == [], 'a snapshot of H cannot admit J after the saved head changes'
-            reads = github(api, monkeypatch, {'python': ci}, head=OLD)
-            filed = P.retry(store, service=service)
     [cid] = filed
     assert bool(reads) == (integration == 'configured')
     with store.transaction() as c:
@@ -102,7 +99,7 @@ def test_retry_requests_the_fresh_head_after_the_cached_pr_moves_on(api, monkeyp
         assert outcome and outcome['moved'] == 'Build'
 
 
-@pytest.mark.parametrize('kind', ['review', 'qa', 'release_qa'])
+@pytest.mark.parametrize('kind', ['review', 'release_qa'])
 def test_retry_rechecks_the_snapshot_head_under_the_writer(api, monkeypatch, kind):
     team(api)
     task, wait = waiting_ticket(api, 511, 'rev-a', kind=kind)

@@ -43,7 +43,7 @@ API key. One signed-in model is enough for the first result; Health lists the ot
    reports to the nearest hired manager above it until that manager is hired, then moves under it. On Content Marketer's
    page, press **Start onboarding**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
    to give it readers, publishing plans, topics, voice examples and privacy rules; review its first draft in chat.
-6. On **Tasks > New task**, assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
+6. On **Tasks**, press **+** (New task) and assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
    it Done with the draft file on the task. Read the draft, then close the task yourself: the requester closes it, not the bot.
 
 Success is a draft file on the task, read by a person, and a task you closed. The steps, and what to try next (meeting notes
@@ -310,7 +310,7 @@ private GitHub repositories.
 
 ## Developer notes
 
-Run the suite locally; GitHub Actions also runs the default suite on every pull request to main and every push to main (PR checks). There is no budget on how many tests it has: write as many as a change needs, as long as each
+Run the suite locally; GitHub Actions also runs the default suite on every pull request to main that is not a draft (PR checks). There is no budget on how many tests it has: write as many as a change needs, as long as each
 guards a real failure: security and privacy boundaries, data safety (migrations, backup, restore),
 the updater and release path, core contracts (job claim and lease, task writes, chat, the API
 schema), regressions and edge cases that would lose or duplicate work. No tests of wording or docs. The default Python suite runs in about a minute on a laptop;

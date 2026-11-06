@@ -274,7 +274,7 @@ def _text(data):
 def unified(rel, before, after, cut=4000):
     lines = difflib.unified_diff(_text(before), _text(after), "a/" + rel if before is not None else "/dev/null",
                                  "b/" + rel if after is not None else "/dev/null")
-    return "".join(lines)[:cut]
+    return "".join(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n" for line in lines)[:cut]
 
 
 def merge3(mine, base, theirs):

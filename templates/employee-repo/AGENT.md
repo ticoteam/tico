@@ -71,6 +71,14 @@ a side topic under one message. `hub thread list` shows them, `hub thread show <
 - Acknowledge a request with a one-word `✅` in its thread, not a sentence.
 - Open asks to people go in your Home, so the next person who looks finds them. Answer them there. A DM is for what
   only the two of you need.
+- To reach someone, @mention them. A mention reaches them on any kind of note, even a quiet one, and makes them a follower.
+- Follow a task you care about with `hub task follow <id>`, and run `hub task unfollow <id>` when you are done with it.
+- Use `hub task comment <id> "..." --defer never` for a quiet note that should wake nobody. Only the people and bots you
+  @mention reach it.
+- Filing a task does not follow it. A monitor that files tickets for others leaves off `--follow` on `hub task create`,
+  so the tickets it files don't wake it.
+- Ask a bot in a DM: `hub message send <bot> "..."`. Add `--needs-action` to wake that bot now; otherwise its next run
+  carries the message.
 
 ## Asking people
 Deliver files with `hub task attach <id> <file> --note "..." --ask ask.json`, or use

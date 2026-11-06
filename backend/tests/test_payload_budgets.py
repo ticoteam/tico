@@ -223,7 +223,7 @@ def test_a_thread_timeline_stays_within_its_bytes_and_a_branch_too_big_for_a_pag
     assert [r.get("body") for r in rest["messages"]] == ["Older", BODY] and rest["next_cursor"] is None
 
 
-def test_a_settings_history_page_is_byte_capped(api):
+def _a_settings_history_page_is_byte_capped(api):
     # 200 changes each carrying a 38 KB description: the page stops at its byte budget and names the next page.
     text = {"display_name": "Ops", "description": "A long description. " * 2000}
     with api.app.state.store.transaction() as c:
@@ -237,7 +237,7 @@ def test_a_settings_history_page_is_byte_capped(api):
     assert len(opened.content) <= 300 * KB
 
 
-def test_a_settings_history_page_counts_utf8_bytes_not_characters(api):
+def _a_settings_history_page_counts_utf8_bytes_not_characters(api):
     # 200 changes whose descriptions are the 2,000 characters a description may hold, all emoji (four bytes each):
     # a page counted in characters would send four times its budget.
     text = {"display_name": "Ops", "description": "🙂" * 2000}
@@ -252,7 +252,7 @@ def test_a_settings_history_page_counts_utf8_bytes_not_characters(api):
     assert size(page["changes"]) <= 256 * KB and len(opened.content) <= 257 * KB
 
 
-def test_a_settings_change_bigger_than_a_page_comes_without_its_values_and_paging_passes_it(api):
+def _a_settings_change_bigger_than_a_page_comes_without_its_values_and_paging_passes_it(api):
     # The owner's list of 40,000 people (about 900 KB of JSON) between two small changes.
     ids = [H.new_id() for _ in range(3)]
     people = [f"human:person-{i:05d}" for i in range(40000)]
@@ -301,10 +301,9 @@ def prepared_transitions(api, cid, count, text):
                                "next_recommended_action": "Ask Ana", "open_decisions": []})))
 
 
-def test_a_settings_history_first_page_with_transitions_stays_within_its_bytes(api):
+def _a_settings_history_first_page_with_transitions_stays_within_its_bytes(api, msg):
     # Three prepared changes with a checkpoint of about 20 KB each, and a page of changes that fills what they leave.
     # The 120 people who made the changes have long names: the page sends each name beside its id.
-    _, msg, _ = setup_attempt(api)
     prepared_transitions(api, msg["conversation_id"], 3, "A checkpoint of the chat's objective. " * 550)
     text = {"display_name": "Ops", "description": "A long description. " * 80}
     with api.app.state.store.transaction() as c:
@@ -322,10 +321,9 @@ def test_a_settings_history_first_page_with_transitions_stays_within_its_bytes(a
     assert len(page["changes"]) >= 40 and page["next_before"]
 
 
-def test_a_settings_history_first_page_leaves_out_the_oldest_transitions_its_bytes_cannot_hold(api):
+def _a_settings_history_first_page_leaves_out_the_oldest_transitions_its_bytes_cannot_hold(api, msg):
     # Twelve prepared changes of about 45 KB each are more than a page. The newest that fit are sent and flagged, and
     # the page still takes its changes.
-    _, msg, _ = setup_attempt(api)
     prepared_transitions(api, msg["conversation_id"], 12, "A checkpoint of the chat's objective. " * 1200)
     text = {"display_name": "Ops", "description": "A long description. " * 80}
     with api.app.state.store.transaction() as c:
@@ -343,9 +341,8 @@ def test_a_settings_history_first_page_leaves_out_the_oldest_transitions_its_byt
     assert len(page["changes"]) >= 1
 
 
-def test_a_settings_history_first_page_flags_the_transitions_past_its_limit(api):
+def _a_settings_history_first_page_flags_the_transitions_past_its_limit(api, msg):
     # Four small prepared changes on a page of three: the bytes hold them all, but the oldest is left out and flagged.
-    _, msg, _ = setup_attempt(api)
     prepared_transitions(api, msg["conversation_id"], 4, "A short objective.")
     page = api.get("/api/v2/settings/history?limit=3", headers=headers()).json()
     with api.app.state.store.read() as c:
@@ -353,6 +350,24 @@ def test_a_settings_history_first_page_flags_the_transitions_past_its_limit(api)
     assert [row["id"] for row in page["transitions"]] == newest[:3] and page["transitions_truncated"] is True
     page = api.get("/api/v2/settings/history?limit=4", headers=headers()).json()
     assert len(page["transitions"]) == 4 and page["transitions_truncated"] is False
+
+
+def test_settings_history_pages_stay_within_their_bytes_and_flag_what_they_leave_out(api):
+    _, msg, _ = setup_attempt(api)
+
+    def clear():
+        with api.app.state.store.transaction() as c:
+            for table in ("bot_transition_checkpoints", "bot_transitions", "settings_changes"):
+                c.execute(f"DELETE FROM {table}")
+    for story in (_a_settings_history_page_is_byte_capped, _a_settings_history_page_counts_utf8_bytes_not_characters,
+                  _a_settings_change_bigger_than_a_page_comes_without_its_values_and_paging_passes_it):
+        clear()
+        story(api)
+    for story in (_a_settings_history_first_page_with_transitions_stays_within_its_bytes,
+                  _a_settings_history_first_page_leaves_out_the_oldest_transitions_its_bytes_cannot_hold,
+                  _a_settings_history_first_page_flags_the_transitions_past_its_limit):
+        clear()
+        story(api, msg["conversation_id"] and msg)
 
 
 def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):

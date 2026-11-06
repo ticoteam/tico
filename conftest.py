@@ -24,6 +24,10 @@ os.environ.update({"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "tes
                    "AWS_CONFIG_FILE": os.devnull, "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
                    "AWS_EC2_METADATA_DISABLED": "true"})
 
+# A test process builds an app per test: every one after the first reuses the route analysis and field validators the
+# first built (backend/route_memo.py). Tests only: a server builds one app, and production never patches FastAPI.
+from backend import route_memo  # noqa: E402
+route_memo.install()
 
 import re  # noqa: E402
 import pytest  # noqa: E402

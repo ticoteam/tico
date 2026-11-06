@@ -8,7 +8,7 @@ How the pieces fit is in [How Tico works](how-it-works.md). Words are defined in
 The screenshots use demo mode or synthetic examples. You can run [demo mode](demo.md) yourself.
 
 **How do I give work to a bot or a human?**
-On **Tasks**, press **New task** and pick who it is for — any human or bot. On a human's profile,
+On **Tasks**, press **+** (New task, or the C key) and pick who it is for — any human or bot. On a human's profile,
 **Give a task**. On a bot, ask it in Chat. Or ask your own external agent (Grok, Muse, Claude and others) to file
 it through Tico's MCP. Each task shows who added it: you, another human, or a bot.
 
@@ -253,10 +253,20 @@ hosted server asleep when idle wakes for it. Each deadline fires once, across re
 deferred to it ("Deferred since your last turn: 2 comments, 1 task") and lists the deferred comments and messages
 themselves, up to 20 a turn; the rest wait for the next turn.
 
-Defaults, for a send that names no way (the API, CLI, MCP and Slack): Steer for a message and a comment on a task a
-bot owns, as before (when the bot is idle that is the same as Queue). A comment on a task a bot filed for a
-person is a Defer with a 24-hour deadline unless it @mentions a bot on the task (then a Queue). A deferred comment or
-task has a 24-hour deadline unless you pick one; a deferred thread message or deferred message has none. Steer does not
+Defaults, for a send that names no way (the API, CLI, MCP and Slack): Steer (when the bot is idle that is the same as
+Queue), for a message and a task comment alike. Someone off a task (not its owner, requester or a mover) defers with no
+deadline instead. A deferred comment or task has a 24-hour deadline unless you pick one; a deferred thread message or
+deferred message has none.
+
+A message or comment goes this way to everyone it reaches: whoever it @mentions or replies to, and the thread's or
+task's followers. A bot following at All gets it by the way; a person following at All is notified; a follower at
+Mentions or Off gets only what @mentions or replies to them. **Defer never** notifies no follower and wakes none, but
+still reaches whom it @mentions, queued. Before you send, `GET /api/v2/threads/{thread_id}/reach` says who it would
+reach and how; in the web app **Reaches N** under the box (outside a DM) opens that list by name: **Now** (steered),
+**After its turn** (queued), **Next turn** (deferred), **Notified** (a person), **Not reached** (an @mention who
+can't see the thread). Posting never follows a thread: tick **Follow** under the box (shown until you follow) to
+follow it once your message is in. The choice is kept for you, one for chats and one for tasks
+(`compose.follow.chat`, `compose.follow.task`). Steer does not
 apply to a new task (it has no turn yet). **Set as goal** is a separate action, apart in the send menu.
 
 In the web app a bot's chat (its Home and your DM with it) and a task's thread name a way every time. Send's icon shows it: an arrow for Steer, an arrow over

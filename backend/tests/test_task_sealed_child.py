@@ -203,19 +203,6 @@ def test_the_sealed_subtask_is_private_and_a_company_visible_one_is_refused(api)
     ("Confidential: Zip triage. The Gateway key for the vendor is stored in the shared vault under vendor ops "
      "and must be rotated", "copies 12 or more words"),
     ("Use token ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8 to push the fix", "secret-shaped"),
-    ("Use the vendor key 9f2c4e" + "6a8b0d1f3e5c7a9b2d4f6e8a0c1b3d5f7e9a to push the fix", "secret-shaped"),
-    ("Review at head " + HEAD + " with token ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8", "secret-shaped"),
-    ("The vendor key is at 9f2c4e6a8b0d" + "1f3e5c7a9b2d4f6e8a0c1b3d5f7e, rotate it", "secret-shaped"),
-    ("Review at head " + HEAD + "9f2c4e6a8b0d1f3e5c7a9b2d", "secret-shaped"),
-    ("Push with keys/a1B2c3D4e5F6g7H8i9J0" + "k1L2m3N4o5P6q7R8s9/main", "secret-shaped"),
-    ("Key wJalrXUtnFEMIxKqZ-" + "2938475610293847561 rotate", "secret-shaped"),
-    ("token wJalrXUtnFEMIxKqZkWvBn/" + "7392018465827361", "secret-shaped"),
-    ("See https://github.com/acme/" + "9f2c4e6a8b0d1f3e5c7a9b2d4f6e8a0c1b3d5f7e", "secret-shaped"),
-    # A long opaque value split by one separator into pieces shorter than 32 is not a workflow reference.
-    *[(f"Use the vendor key Aa0Bb1Cc2Dd3Ee4Ff5Gg6Hh7{sep}Ii8Jj9Kk0" + "Ll1Mm2Nn3Oo4Pp5 to investigate the upload refusal.",
-       "secret-shaped") for sep in "/_-"],
-    ("Push with vendor/9f2c4e6a8b0d-1f3e5c7a" + "9b2d-4f6e8a0c1b3d", "secret-shaped"),
-    ("The vendor PIN is 9f2c4e6a8b0d-1234-5678" + "-9012-3456-7890", "secret-shaped"),
 ])
 def test_the_sealed_subtasks_words_may_not_carry_the_private_work(api, words, check):
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
@@ -232,6 +219,28 @@ def test_the_sealed_subtasks_words_may_not_carry_the_private_work(api, words, ch
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM refusals WHERE actor='bot:ops'").fetchone()
         assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:finance'").fetchone()
+
+
+SECRET_SHAPES = [    ("Use the vendor key 9f2c4e" + "6a8b0d1f3e5c7a9b2d4f6e8a0c1b3d5f7e9a to push the fix", "secret-shaped"),
+    ("Review at head " + HEAD + " with token ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8", "secret-shaped"),
+    ("The vendor key is at 9f2c4e6a8b0d" + "1f3e5c7a9b2d4f6e8a0c1b3d5f7e, rotate it", "secret-shaped"),
+    ("Review at head " + HEAD + "9f2c4e6a8b0d1f3e5c7a9b2d", "secret-shaped"),
+    ("Push with keys/a1B2c3D4e5F6g7H8i9J0" + "k1L2m3N4o5P6q7R8s9/main", "secret-shaped"),
+    ("Key wJalrXUtnFEMIxKqZ-" + "2938475610293847561 rotate", "secret-shaped"),
+    ("token wJalrXUtnFEMIxKqZkWvBn/" + "7392018465827361", "secret-shaped"),
+    ("See https://github.com/acme/" + "9f2c4e6a8b0d1f3e5c7a9b2d4f6e8a0c1b3d5f7e", "secret-shaped"),
+    # A long opaque value split by one separator into pieces shorter than 32 is not a workflow reference.
+    *[(f"Use the vendor key Aa0Bb1Cc2Dd3Ee4Ff5Gg6Hh7{sep}Ii8Jj9Kk0" + "Ll1Mm2Nn3Oo4Pp5 to investigate the upload refusal.",
+       "secret-shaped") for sep in "/_-"],
+    ("Push with vendor/9f2c4e6a8b0d-1f3e5c7a" + "9b2d-4f6e8a0c1b3d", "secret-shaped"),
+    ("The vendor PIN is 9f2c4e6a8b0d-1234-5678" + "-9012-3456-7890", "secret-shaped")]
+
+
+def test_the_secret_shape_check_catches_every_shape_a_sealed_subtask_must_not_carry():
+    """The route runs this one check, so each shape goes through it directly; two shapes go through the route above."""
+    from backend import task_privacy
+    for words, _ in SECRET_SHAPES:
+        assert task_privacy.secret_shaped(words), words
 
 
 def test_a_bot_that_reads_the_parent_gets_a_subtask_kept_from_the_runs_other_person_free_work(api):

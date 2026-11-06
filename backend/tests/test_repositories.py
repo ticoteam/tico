@@ -54,7 +54,8 @@ def test_sync_bot_repos_setup_overrides_and_unreachable(api, gh):
     assert api.put('/api/v2/repositories/Acme/product', json={'enabled': False}, headers=auth('person-test')).status_code == 403
 
 
-@pytest.mark.parametrize('cleared', ['', '   ', None])
+# '', None and whitespace take the same strip/None branch: one whitespace case stands for them.
+@pytest.mark.parametrize('cleared', ['   '])
 def test_cleared_setup_command_returns_to_the_repository_file(api, gh, cleared):
     gh.setup_files['/repos/Acme/product/contents/tico.json'] = {'setup': 'npm ci'}
     catalog(api, gh)
@@ -353,7 +354,7 @@ def test_run_workflows_gets_its_own_actions_token_only_once_the_installation_acc
     assert off['workflows_stopped'] == ['Acme/product']
 
 
-def test_a_workflow_mint_refused_twice_falls_back_to_the_ordinary_write_token(api, gh):
+def test_a_workflow_mint_refused_twice_falls_back_to_the_ordinary_write_token_and_keeps_a_webhook_reset(api, gh):
     catalog(api, gh)
     runner_token(api, 'cpo')
     put(api, 'repositories/Acme/product', {'enabled': True})
@@ -400,14 +401,7 @@ def test_a_workflow_mint_refused_twice_falls_back_to_the_ordinary_write_token(ap
     token = turn_token(api).json()
     assert 'workflows_withheld' not in token and token['tokens'][-1]['actions'] == 'write'
     assert 'github_workflows' not in {x['id'] for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
-
-
-def test_a_refused_workflow_mint_keeps_a_webhook_reset_of_the_turn_reads(api, gh):
-    catalog(api, gh)
-    runner_token(api, 'cpo')
-    put(api, 'repositories/Acme/product', {'enabled': True})
-    put(api, 'bots/cpo/repositories', {'mode': 'chosen', 'chosen': [
-        {'full_name': 'Acme/product', 'access': 'write', 'run_workflows': True}]})
+    # A webhook reset of the turn reads during a refused workflow mint is kept (the same grants as above).
     gh.permissions = {'actions': 'write', 'checks': 'read', 'statuses': 'read', 'deployments': 'read'}
     gh.refuse_actions_write = True
     service = api.app_state.github_app

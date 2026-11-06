@@ -8,7 +8,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 
 | To | Open |
 |---|---|
-| Give work or review a result | Tasks → New task, List, Board or Done |
+| Give work or review a result | Tasks → + (New task), You, Open, Board, or More → Done |
 | Talk to a bot about one task | Bot's Home → tap the task's row ([Sessions](sessions.md)) |
 | See or link a task's sessions | Task → Sessions +; ⋯ → Copy session ID |
 | Add or edit a Routine | Automations → New automation ([Routines](routines.md)) |

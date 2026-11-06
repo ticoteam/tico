@@ -79,11 +79,14 @@ def old_paths(path):
     return found
 
 
+# The options a route is built with, besides its path and endpoint: what _copy carries to the other spelling.
+COPIED_OPTIONS = tuple(name for name in inspect.signature(APIRoute.__init__).parameters
+                       if name not in ("self", "path", "endpoint"))
+
+
 def _copy(route, path, route_class):
     """A route like `route` on another path: the same endpoint, methods, response model and options."""
-    accepted = inspect.signature(APIRoute.__init__).parameters
-    options = {name: getattr(route, name) for name in accepted
-               if name not in ("self", "path", "endpoint") and hasattr(route, name)}
+    options = {name: getattr(route, name) for name in COPIED_OPTIONS if hasattr(route, name)}
     return route_class(path, route.endpoint, **options)
 
 
@@ -92,22 +95,23 @@ def _find(routes, path, method):
 
 
 def _put_before(routes, anchor, route):
-    routes.insert(routes.index(anchor), route)
+    # By identity: Route equality compares path, endpoint and methods, one by one down the whole table.
+    routes.insert(next(i for i, r in enumerate(routes) if r is anchor), route)
 
 
 def install(app):
     routes = app.router.routes
     # Direct construction must keep the app's response handling on every spelling.
     route_class = app.router.route_class
-    # The renames: new path first (canonical), old path kept right behind it, deprecated.
-    for route in list(routes):
-        if not isinstance(route, APIRoute):
-            continue
-        path = new_path(route.path)
-        if path is None:
-            continue
-        _put_before(routes, route, _copy(route, path, route_class))
-        route.deprecated = True
+    # The renames: new path first (canonical), old path kept right behind it, deprecated. One pass over the table.
+    renamed = []
+    for route in routes:
+        path = new_path(route.path) if isinstance(route, APIRoute) else None
+        if path is not None:
+            renamed.append(_copy(route, path, route_class))
+            route.deprecated = True
+        renamed.append(route)
+    routes[:] = renamed
 
     # /health/issues: the Assistant's live snapshot, or what /fleet/check says for everyone else.
     check, snapshot = _find(routes, V2 + "/fleet/check", "GET"), _find(routes, V2 + "/tico/fleet", "GET")

@@ -29,9 +29,21 @@ def reclass_of(source: str, source_id: str) -> str:
 # Mercury IO statements dated after this day carry charges positive (its changelog); earlier ones carry what is owed
 # negative (its endpoint page). Normalized once, in `credit_owed`.
 CREDIT_SIGN_FLIP = "2026-06-15"
-TRANSFER_KINDS = ("internalTransfer", "treasuryTransfer")
+TRANSFER_KINDS = ("internalTransfer", "treasuryTransfer", "BOOK_TRANSFER", "INTRA_CUSTOMER_ACCOUNT_BOOK_TRANSFER")
+# Brex card transactions (brex_card_txn). A charge and a credit back are card rows, as Mercury's card kinds are. Brex's
+# COLLECTION (a payment toward the card) is not a card row and carries no card: it is one side of a card payment whose
+# other side is the bank's CARD_COLLECTION debit (a cash row). banking._brex_payment pairs them, or posts the bank side
+# alone as a transfer to the card liability, so a payment never becomes an expense.
+BREX_CHARGES = ("PURCHASE", "BNPL_FEE")                         # money the card owes: negative on the card
+BREX_CREDITS = ("REFUND", "CHARGEBACK", "REWARDS_CREDIT")       # money back to the card: positive
+BREX_COLLECTION = "COLLECTION"                                  # a payment toward the card: positive on the card
+BREX_CASH_CARD_PAYMENT = "CARD_COLLECTION"                      # the bank's debit for that payment (a cash transaction)
+BREX_CARD_PAYMENTS = (BREX_COLLECTION, BREX_CASH_CARD_PAYMENT)  # the two sides of a card payment
+BREX_BOOK_TRANSFERS = ("BOOK_TRANSFER", "INTRA_CUSTOMER_ACCOUNT_BOOK_TRANSFER")  # money between the company's accounts
+BREX_KNOWN = (*BREX_CHARGES, *BREX_CREDITS, BREX_COLLECTION)    # the Brex card types Finance maps
+BREX_OTHER = "brexCardOther"       # a Brex card type not in BREX_KNOWN: a card row with Brex's sign, never a payment
 CARD_KINDS = ("creditCardTransaction", "debitCardTransaction", "creditCardCredit", "debitCardCredit",
-              "cardInternationalTransactionFee")
+              "cardInternationalTransactionFee", *BREX_CHARGES, *BREX_CREDITS, BREX_OTHER)
 
 
 def cents(value: object) -> int:
@@ -257,3 +269,53 @@ def stripe_txn(raw: dict[str, Any], account: str) -> FeedTxn:
 def stripe_parts(raw: Mapping[str, Any]) -> tuple[int, int]:
     """A stored Stripe balance transaction's (gross, fee) in cents."""
     return _int(raw.get("amount")), _int(raw.get("fee"))
+
+
+# ------------------------------------------------------------------------------------------------ Brex
+def _money_cents(value: object, what: str) -> int:
+    """A Brex Money object's amount: whole minor units, signed as sent. Refused when missing or not a whole number, never
+    rounded."""
+    if not isinstance(value, dict):
+        raise invalid(f"{what} has an amount")
+    amount = cast(dict[str, Any], value).get("amount")
+    if isinstance(amount, bool) or not isinstance(amount, int):
+        raise invalid(f"{what} has a whole-cent amount")
+    return amount
+
+
+def brex_card_txn(raw: dict[str, Any], account: str) -> FeedTxn:
+    """A Brex card transaction on its card account (the one card account Finance maps). Brex documents amounts as signed
+    but not which sign a purchase carries, so the direction comes from the type: a charge (PURCHASE, BNPL_FEE) is negative
+    on the card; a credit back (REFUND, CHARGEBACK, REWARDS_CREDIT) and a payment toward the card (COLLECTION) are positive.
+    The size is the amount's magnitude, so either sign Brex sends gives the same entry. A type not listed is not guessed: it
+    is posted with Brex's sign under BREX_OTHER (its Brex type stays in raw), so it is never paired as a payment, and the
+    sync notes it. The day is the posting day (posted_at_date). Brex lists settled transactions only: there is no pending row."""
+    tid = str(raw.get("id") or "")
+    if not tid or not account:
+        raise invalid("a transaction has an id and an account")
+    kind = str(raw.get("type") or "")
+    amount = _money_cents(raw.get("amount"), "a card transaction")
+    if kind in BREX_CHARGES:
+        signed, stored = -abs(amount), kind
+    elif kind in (*BREX_CREDITS, BREX_COLLECTION):
+        signed, stored = abs(amount), kind
+    else:
+        signed, stored = amount, BREX_OTHER
+    merchant = _dict(raw.get("merchant"))
+    card = "" if kind == BREX_COLLECTION else str(raw.get("card_id") or "")   # a payment toward the card is no card's row
+    return FeedTxn(provider_id=tid, account_id=account, amount=signed,
+                   txn_date=day_of(raw.get("posted_at_date")), status=POSTED, kind=stored,
+                   counterparty=str(merchant.get("raw_descriptor") or raw.get("description") or "")[:200],
+                   description=str(raw.get("description") or "")[:500], card_id=card, raw=raw)
+
+
+def brex_cash_txn(raw: dict[str, Any], account: str) -> FeedTxn:
+    """A Brex cash transaction on its cash account. Its amount is taken with the sign Brex sends: negative is money out of
+    the account, positive money in. Brex documents the sign only as "signed", so this is the one assumption to confirm
+    against a live account. The day is the posting day (posted_at_date)."""
+    tid = str(raw.get("id") or "")
+    if not tid or not account:
+        raise invalid("a transaction has an id and an account")
+    return FeedTxn(provider_id=tid, account_id=account, amount=_money_cents(raw.get("amount"), "a cash transaction"),
+                   txn_date=day_of(raw.get("posted_at_date")), status=POSTED, kind=str(raw.get("type") or ""),
+                   description=str(raw.get("description") or "")[:500], raw=raw)

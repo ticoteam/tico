@@ -34,20 +34,26 @@ def test_invite_goes_out_from_the_tico_issuer_with_the_installs_client_credentia
     assert invites_sent(signin)["cara"]["by"] == "human:ana"
 
 
-@pytest.mark.parametrize("answer, code, words", [
+REFUSALS = [
     ((502, {"error": "not_sent"}), "invite_failed", "couldn't deliver the invite to cara@acme.example"),
     ((429, {"error": "too_many", "retry_after": 3600}), "invite_limited", "Too many invites"),
     ((503, {"error": "mail_unavailable"}), "invite_failed", "isn't available right now"),
     ((401, {"error": "invalid_client"}), "invite_failed", "refused the invite"),
-], ids=["not-sent", "too-many", "no-mail", "bad-client"])
-def test_an_invite_that_does_not_go_out_is_a_visible_error_and_is_not_recorded(signin, answer, code, words):  # noqa: F811
-    signin.fake.invites = [answer]
-    refused = signin.api.post("/api/v2/access/people/cara/invite", json={}, headers=owner(signin))
-    # 422, never 429 or 502: the browser retries those as unconfirmed, asking the issuer again and hiding the reason.
-    assert refused.status_code == 422, refused.text
-    assert refused.json()["error"]["code"] == code and words in refused.json()["error"]["detail"], refused.text
-    assert "cara" not in invites_sent(signin)
-    assert len(signin.fake.invite_calls) == 1
+]
+
+
+def test_an_invite_that_does_not_go_out_is_a_visible_error_and_is_not_recorded(signin):  # noqa: F811
+    signin.fake.invites = []        # an issuer that sends invites, so discovery names the endpoint
+    headers = owner(signin)
+    for number, (answer, code, words) in enumerate(REFUSALS, 1):
+        signin.fake.invites = [answer]
+        refused = signin.api.post("/api/v2/access/people/cara/invite", json={},
+                                  headers={**headers, "idempotency-key": "invite-" + uuid.uuid4().hex})
+        # 422, never 429 or 502: the browser retries those as unconfirmed, asking the issuer again and hiding the reason.
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["error"]["code"] == code and words in refused.json()["error"]["detail"], refused.text
+        assert "cara" not in invites_sent(signin)
+        assert len(signin.fake.invite_calls) == number
 
 
 def test_an_issuer_that_sends_no_invites_is_never_sent_the_secret_and_the_owner_is_told_what_to_do(signin):  # noqa: F811

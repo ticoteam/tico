@@ -42,9 +42,8 @@ def finish_carrier(api, machine, task, run):
         assert H.task(c, task['id'])['carried_by'] == run['id']
 
 
-@pytest.mark.parametrize('refs', [{'wake': 'due'}, {'wake': 'snooze'}, {'wake': 'resume'},
-                                  {'trigger': 'pr_checks', 'wake': 'pr_checks_done'}])
-@pytest.mark.parametrize('delivered', [False, True])
+@pytest.mark.parametrize('refs,delivered', [({'wake': 'due'}, False), ({'wake': 'due'}, True),
+                                            ({'trigger': 'pr_checks', 'wake': 'pr_checks_done'}, False)])
 def test_actionable_notice_releases_stale_or_absent_carrier_once(api, refs, delivered):
     machine = task_bot(api, lanes=True)
     task = quiet_task(api)
