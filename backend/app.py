@@ -408,6 +408,10 @@ def create_app(settings=None):
             # Finance's books worker (backend/finance/books_sync.py): QuickBooks writes out, backfill and change feed.
             from .finance import books_sync
             books_sync.start(store, app.state.vault, settings, rehearsal=settings.rehearsal)
+            # Finance's ad spend import (backend/finance/ad_import.py): Google Ads and Meta daily spend every 4 hours;
+            # a rehearsal copy starts none.
+            from .finance import ad_import
+            ad_import.start(store, app.state.vault, rehearsal=settings.rehearsal)
         # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
         # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
@@ -513,6 +517,8 @@ def create_app(settings=None):
                 await asyncio.to_thread(finance.banking_stop)
                 from .finance import books_sync as books_worker
                 await asyncio.to_thread(books_worker.stop)
+                from .finance import ad_import as ad_worker
+                await asyncio.to_thread(ad_worker.stop)
             telemetry.close()
 
     app = FastAPI(title=settings.app_name + " API", version="2.0.0", lifespan=lifespan,
@@ -8775,6 +8781,8 @@ def create_app(settings=None):
     screening.install(app, store, auth, mutate)    # prompt-injection screening at webhooks, mail, ideas and watchers
     from . import finance_routes
     finance_routes.install(app, store, auth, mutate)    # Finance: budgets, P&L, expenses, actions (backend/finance)
+    from . import finance_ads_routes
+    finance_ads_routes.install(app, store, auth, mutate)    # Finance: ad spend import settings on ad tools' pages
     from .company_page import api_readers
     api_readers.register(app, store, auth, mutate)      # Company page readers, invites and messages, for owners and admins
     from .company_page import api_editions

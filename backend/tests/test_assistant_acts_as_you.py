@@ -392,6 +392,7 @@ def test_a_message_edited_after_it_was_posted_lends_no_words(api):
 # name fails the test. A route that does touch a credential, a sign-in, an invite, a subscription or a signing key is on
 # NEVER instead (backend/assistant.py), and a route here must never be one of those.
 REVIEWED = {
+    "POST /api/v2/finance/ad-imports": "turns Finance's ad spend import on or off and picks, by id, which saved keys it reads with; reads or writes no secret",
     "POST /api/v2/humans/{pid}": "a profile edit; 'login' is a last-login field",
     "POST /api/v2/people/{pid}": "a profile edit; 'login' is a last-login field",
     "POST /api/v2/runners/heartbeat": "the runner's own heartbeat; 'provider' is a field name",

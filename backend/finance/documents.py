@@ -1192,7 +1192,8 @@ def _bill_pasts(ctx: Ctx, bill: Any) -> list[str]:
                 continue
             st = budgeting.state(ctx, bid, at, target, chain)
             # A bill's payment is a new request, so the room that refuses it is `remaining`, reserves included (§4.4).
-            if st.remaining is not None and st.remaining < 0 and ctx.budgets()[bid].at_limit != "warn":
+            if st.remaining is not None and st.remaining < 0 and \
+                    budgeting.warn_only(ctx, ctx.budgets()[bid]).at_limit != "warn":     # an ad budget only warns
                 out.append(bid)
     return out
 

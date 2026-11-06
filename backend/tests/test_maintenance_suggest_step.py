@@ -350,11 +350,11 @@ def test_post_feedback_is_bound_to_receiving_bot_and_request(install, http, monk
     with install.transaction() as c:
         row = queue(c)
         updates.send_request(c, row)
-        updates.post(c, "ops", "- Finished the work", suggestions_seen=[item()["id"]], delivery_batch_id="other")
+        updates.post(c, "ops", "- Finished the work", kind="daily", suggestions_seen=[item()["id"]], delivery_batch_id="other")
         assert c.execute("SELECT count(*) FROM suggestions WHERE outcome IS NOT NULL").fetchone()[0] == 0
         suggestions.feedback(c, "finance", row["id"], [item()["id"]], settled=True)
         assert c.execute("SELECT count(*) FROM suggestions WHERE outcome IS NOT NULL").fetchone()[0] == 0
-        updates.post(c, "ops", "- Finished the work", suggestions_seen=[item()["id"]], delivery_batch_id=row["id"])
+        updates.post(c, "ops", "- Finished the work", kind="daily", suggestions_seen=[item()["id"]], delivery_batch_id=row["id"])
         assert c.execute("SELECT outcome FROM suggestions WHERE id=?", (item()["id"],)).fetchone()[0] == "acted"
         assert c.execute("SELECT outcome FROM suggestions WHERE id=?", (item(2)["id"],)).fetchone()[0] == "delivered"
 
@@ -439,7 +439,7 @@ def test_redo_completion_cannot_settle_the_original_delivery(install, http, api,
     assert receipt(install)["message_id"] == original["id"]
     assert receipt(install)["outcome"] is None
     with install.transaction() as c:
-        updates.post(c, "ops", "- Finished the redo")
+        updates.post(c, "ops", "- Finished the redo", kind="daily")
         assert updates.settle_sent(c, sent) is False
     assert receipt(install)["outcome"] is None
     with install.transaction() as c:
@@ -460,7 +460,7 @@ def test_update_delivers_at_most_ten_suggestions_and_preserves_the_original_mess
         retry = updates.send_request(c, batch)
         assert retry["id"] != original["id"]
         assert c.execute("SELECT count(*) FROM suggestions WHERE message_id=?", (original["id"],)).fetchone()[0] == 10
-        updates.post(c, "ops", "- Finished the work", suggestions_seen=[item(n)["id"] for n in range(1, 11)],
+        updates.post(c, "ops", "- Finished the work", kind="daily", suggestions_seen=[item(n)["id"] for n in range(1, 11)],
                      delivery_batch_id=batch["id"])
         assert c.execute("SELECT count(*) FROM suggestions WHERE outcome='acted'").fetchone()[0] == 10
 
