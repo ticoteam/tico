@@ -4985,17 +4985,10 @@ def pages_publish(api, args):
     return api.post("pages", body, key=_key(args))
 
 
-@tool(
-    "hub_page_list",
-    "Readable pages, newest first. Follow next_cursor.",
-    {
-        "bot": {"type": "string"},
-        "task": {"type": "string"},
-        "archived": {"type": "boolean"},
-        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
-        "cursor": {"type": "string"},
-    },
-)
+@tool("hub_page_list", "Readable pages, newest first. Follow next_cursor.",
+      {"bot": {"type": "string"}, "task": {"type": "string"},
+       "archived": {"type": "boolean"},
+       "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": {"type": "string"}})  # fmt: skip
 def pages_list(api, args):
     return api.get(
         "pages",
