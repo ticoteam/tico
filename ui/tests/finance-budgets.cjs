@@ -164,7 +164,7 @@ async function shot(page, name) {
     // The owner: the tree with the ad platform fields, an edit in place, + Budget, another month.
     {
       const tag = 'budgets';
-      const {page, errors, writes, reads} = await open(browser);
+      const {page, errors, writes, reads, hub} = await open(browser);
       await row(page, 'b-rental-g').waitFor();
       assert.deepEqual((await tabs(page)).slice(0, 3), ['P&L', 'Budgets', 'Balance sheet'], tag + ': Budgets right after P&L');
       assert.deepEqual(await page.locator('tr[data-fin-bud] td:first-child').allInnerTexts(), ['Marketing', 'Consumer Marketing Manager', 'Consumer Google Ad Owner',
