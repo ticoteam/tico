@@ -1973,7 +1973,7 @@ LINT_NOT_VERBS = {
 
 def _is_verb_opener(head):
     """True when a title's first word can start an imperative. Only what is clearly not a verb is refused."""
-    first = re.split(r"[\s,;]+", head.strip(), 1)[0]
+    first = re.split(r"[\s,;]+", head.strip(), maxsplit=1)[0]
     word = first.strip("\"'`*_-()[]").lower()
     if not word:
         return False
@@ -2187,7 +2187,7 @@ def _asks_for_something(sentence):
 
     def first_word(clause):
         clause = re.sub(r"^(?:(?:and|please|also|then)\s+)+", "", clause.strip(), flags=re.I)
-        return re.split(r"[\s,;:]+", clause, 1)[0].strip("\"'*_()").lower()
+        return re.split(r"[\s,;:]+", clause, maxsplit=1)[0].strip("\"'*_()").lower()
 
     if not LINT_OUTCOME.match(sentence):
         return any(first_word(clause) in LINT_VERBS for clause in re.split(r"[,;]\s*", sentence))
@@ -2222,7 +2222,7 @@ def person_ask_rewrite(text):
     i = asks[0]
     after = [s for s in sentences[i + 1:] if LINT_OUTCOME.match(s)]
     outcome = next((s for s in after if LINT_IF_YES.match(s)
-                    and not LINT_NEGATIVE_CONDITION.search(re.split(r"[,;:]", s, 1)[0])),
+                    and not LINT_NEGATIVE_CONDITION.search(re.split(r"[,;:]", s, maxsplit=1)[0])),
                    after[0] if after else None)
     kept = [sentences[i], *([outcome] if outcome else [])]
     rewrite = " ".join(kept)
@@ -2280,7 +2280,7 @@ def person_ask_of_body(body, title=""):
     lines = str(body or "").strip().splitlines()
     if lines and str(title or "").strip() and lines[0].strip() == str(title).strip():
         lines = lines[1:]
-    return re.split(r"\n\s*\n", "\n".join(lines).strip(), 1)[0].strip()
+    return re.split(r"\n\s*\n", "\n".join(lines).strip(), maxsplit=1)[0].strip()
 
 
 def person_ask_refusal(person, text, where):
