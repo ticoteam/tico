@@ -326,7 +326,7 @@ Every run is the same shape, and `AGENT.md` should say so plainly:
 5. **Report in the task thread.** The result goes in the task's completion note, first line
    first. A chart or a mockup can go with the comment as a titled [visual](visuals.md); every bot's instructions already say when to add one ([When a bot adds a visual](visuals.md#when-a-bot-adds-a-visual)), so `AGENT.md` needn't. Put the ask first and stay under 120 words. The lint checks that the first line is not empty; it does not judge its meaning.
 6. **When blocked, ask through the task**, having read the record first, since most questions a bot
-   wants to ask are already answered there. One open clarifying question per task, phrased so the
+   wants to ask are already answered there. One open question per topic (`--topic`), phrased so the
    question is the only thing the human has to read. Internal routing, reminders, task closure,
    branches and draft pull requests are the bot's work, not questions for a human. An optional approval
    request can clarify an uncertain action; granted Tools and the outbound send switch govern access.
@@ -743,7 +743,7 @@ Drawn from real bot reviews, stated generically.
   credential that was in the environment for another reason. Declare it or stop.
 - **The completion note buries the result.** Lead with the result, under 120 words, link the rest.
 - **Near-duplicate knowledge files** instead of an edit to the file that already covers the topic.
-- **Asking a human what the record already answers.** Read first; one open clarifying question per task.
+- **Asking a human what the record already answers.** Read first; one open question per topic.
 - **Asking a human to coordinate bots.** Route the child task, reminder, completion or draft pull
   request yourself. Escalate the choice, not the task plumbing.
 - **Too much effort, too many routines, too early.** Output nobody reads, billed daily, out of a

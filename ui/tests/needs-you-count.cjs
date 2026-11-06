@@ -231,7 +231,7 @@ async function withNeedsReads(page, run) {
       assert.equal(await page.locator('#task-filter-pop [data-pick-group][aria-checked=true]').innerText(), 'Asked by');
       await page.keyboard.press('Escape');
       const asks = page.locator('#task-body [data-group="asks"]');
-      assert.equal(await asks.locator('.tl-gname').textContent(), 'Approvals and questions');
+      assert.equal(await asks.locator('.tl-gname').textContent(), 'Approvals and stale checks');
       assert.equal(await asks.locator('.tl-gcount').innerText(), '1', 'only the stale check: a question to Ana is a task row');
       assert.equal(await asks.locator('.tl-row').count(), 1);
       assert.equal(await page.locator('#task-body .tl-row').count(), 13, 'one row per plate item');

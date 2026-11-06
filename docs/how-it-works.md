@@ -55,14 +55,14 @@ Words are defined in the [Glossary](glossary.md).
   `waiting`, `review`, `ready`, `done`, `closed`, `declined` (`review` and `ready` belong to the
   product lane). The owner marks it `done`; only the requester or a person who can edit it closes it. Every
   task has a comment thread, on the record with the author.
-- **Message** — one line in a thread. Kinds: `say`, `ask`, `answer`, `notice`, `steer`. How it reaches a bot
+- **Message** — one line in a thread. Kinds: `say`, `notice`, `steer`. How it reaches a bot
   is one of three ways ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)): **Steer** goes into the bot's
   turn running in that thread now (when the harness can steer, `steer` in its manifest; otherwise right after
   it; a person's default), **Queue** goes right after that turn or now when the bot is idle, and **Defer** wakes
   nobody until the bot's next turn there or a deadline. Chat says which, and Stop and redirect ends the turn so the next
   one starts with that message. A requesting bot steers its delegated task's running turn with
   `hub message send --steer --ref task:<id>`.
-  A bot's `ask` to a human is what lands in **Needs you**.
+  A bot's question to a person is a question task, and it lands in **Needs you**.
 - **Approval** — a human's yes or no to one exact action. Kinds: `send`, `spend`, `publish`,
   `merge`. A bot may request one when uncertain about a specific action; authorized work needs no separate
   approval. Only a human decides; an approval is spent once and does not turn outbound sending on. Rules: `policies/approvals.md`.
@@ -85,7 +85,7 @@ Words are defined in the [Glossary](glossary.md).
 The rules for all six live in the backend's write layer, not in prompts: a bot acts only as
 itself; it may message only active bots and humans; at most 20 bot-to-bot messages per
 thread per hour and 10 unsolicited messages per human per bot per day
-(`TICO_UNSOLICITED_PER_DAY`); one open clarifying question per task; the requester closes; an approval
+(`TICO_UNSOLICITED_PER_DAY`); one open question per topic to each person (`--topic`); the requester closes; an approval
 is optional, decided by a human and consumed once. Bot requests to a human are linted:
 a verb at the front of the title, a nonempty first line and under 120 words outside quoted drafts. A
 problem is a warning: the task or message is written, and the response's `warnings` (also the task's
@@ -574,7 +574,7 @@ thread and that command, because a compacted session, or one on a new model, no 
 all of it. The runner fast-forwards the checkout from origin before the run, and
 pulls or clones any `reads:` sibling repos beside it.
 
-**A bot needs you.** It asks with `hub task ask` (the task goes `waiting`), requests an approval,
+**A bot needs you.** It asks with `hub task question` (the task goes `waiting`), requests an approval,
 files a task for you, or sets its own task waiting on you (`hub task update --status waiting --on
 <you> --note "<what you need to do>"`). A bot's waiting note, or the first paragraph of a task it gives
 you, must say in one or two plain sentences what it needs and what happens after, with no ids, file
@@ -694,28 +694,16 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 
 To reopen a finished task, open it and choose **Reopen**. After **Done**, the toast offers **Undo**.
 Reopening clears its completion dates and closer, so Goals and KPIs count it as active again;
-the earlier completion stays in task history. Questions may be asked in sequence, with one open
-clarifying question on a task at a time.
+the earlier completion stays in task history. Questions may be asked in sequence; a new question to the same
+person on the same `--topic` updates the open one.
 
 An ordinary bot-to-bot `hub message send` starts work but does not return the receiving bot's
-final answer. Use `hub question ask` (`hub_question_ask` over MCP) when you need an answer.
-A bot receiving an ordinary message that asks for a reply sends that reply explicitly with
-`hub message send`. Humans' replies and ask-message answers are delivered automatically.
+final answer. To get an answer back, send it flagged `--needs-action`
+(`hub message send <bot> "<question>" --needs-action`). A bot receiving an ordinary message that asks for a reply
+sends that reply explicitly with `hub message send`. Humans' replies are delivered automatically.
 
-A bot answers an ask with `hub question answer <message-id>` (`hub_question_answer`) only from a run
-that can see the ask's thread: the discussion of a task it can read (one it owns, requested
-or is delegated), or a thread its current turn was handed. The exception is an ask between
-the bot and a single person that is not on a task, whichever side asked: it is reachable from any
-of the bot's runs. From any other run the answer is refused with "This conversation
-is outside the current execution context", and the ask stays open. There are two ways on:
-
-1. Pass the information without resolving the ask: `hub message send <asking-bot> "<answer>"
-   --conversation <conversation-id>`, naming a thread this run can see and the asking bot is
-   in, such as the current task's. The same visibility rule applies to `--conversation`, so the
-   ask's own thread is refused here too. The original ask stays unanswered.
-2. Resolve the structured ask from a run whose context contains it (the turn it was delivered to,
-   or the task whose discussion holds it), or have the asker ask again where the answering bot can
-   answer, for example on a task that bot owns.
+A bot never answers a question for a person. A person answers a question task in **Needs you**, in Decide, in
+the Assistant, or by replying in their chat with the bot, and the bot hears the answer once.
 
 Computer readiness covers only bots assigned to that Computer. Eligible bots are placement
 options, and their missing repositories do not count as readiness or Health failures there.

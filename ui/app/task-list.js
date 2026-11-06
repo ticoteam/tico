@@ -581,17 +581,17 @@ function tasksEmptyHTML(state, what) {
 }
 function tasksListHTML(items, state) {
   const by = tasksGroupBy(state), done = tasksFinishedView(state.view);
-  // Approvals and questions outside tasks lead the personal queue, regardless of remembered task filters.
+  // Approvals and stale checks lead the personal queue, regardless of remembered task filters.
   const queue = tasksNeedsQueue(state);
   // A card just answered leaves Needs you at once (decide.js), and comes back on Undo.
   if (queue) items = items.filter(it => !decideGone('task:' + it.id));
   const cards = queue;
-  // Grouped by kind, approvals and questions go in their groups, in the server's order with the tasks.
+  // Grouped by kind, approvals and stale checks go in their groups, in the server's order with the tasks.
   const byNeed = by === 'need' && queue;
   const lead = cards ? needsExtras() : [];
   const asks = lead.length && !byNeed ? `<section class="tl-group" data-group="asks">
-    <header class="tl-ghead"><span class="tl-gname">Approvals and questions</span><span class="tl-gcount tnum">${lead.length}</span></header>
-    <div class="tl-rows" role="list" aria-label="Approvals and questions">${lead.map(it => needRowHTML(it, {by, select: tasksCanSelect()})).join('')}</div></section>` : '';
+    <header class="tl-ghead"><span class="tl-gname">Approvals and stale checks</span><span class="tl-gcount tnum">${lead.length}</span></header>
+    <div class="tl-rows" role="list" aria-label="Approvals and stale checks">${lead.map(it => needRowHTML(it, {by, select: tasksCanSelect()})).join('')}</div></section>` : '';
   const extra = new Map();
   if (byNeed) for (const it of lead) {
     const k = 'need:' + (it.need || 'do');

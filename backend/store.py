@@ -2253,16 +2253,6 @@ class Store:
                     ("jobs_live_created", "jobs(created_at) WHERE state IN ('queued','leased','running','input')"),
                     ("jobs_attempt", "jobs(attempt_id) WHERE attempt_id IS NOT NULL"),
                     ("jobs_uncertain", "jobs(created_at) WHERE state='uncertain'"),
-                    # Open asks to someone, deleted or not: old rows only since step 6c; 6d drops it.
-                    (
-                        "messages_open_ask_to",
-                        "messages(recipient_id, conversation_id) WHERE kind='ask' AND answered_by_id IS NULL",
-                    ),
-                    # Replaced asks to someone: old rows only since step 6c; 6d drops it.
-                    (
-                        "messages_superseded_asks_to",
-                        "messages(recipient_id, superseded_at) WHERE kind='ask' AND superseded_at IS NOT NULL",
-                    ),
                     # PRs at a commit (github.pr_signal, on every check and status webhook): the
                     # query's expression word for word.
                     ("task_links_pr_head", "task_links(json_extract(detail,'$.head_sha')) WHERE kind='pr'"),

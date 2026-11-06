@@ -180,7 +180,6 @@ class Schema(HubCase):
                 "messages_reply_kind",
                 "messages_from_kind",
                 "tasks_carried_by",
-                "messages_pending_conversation",
                 "bot_file_versions_blob_media",
                 "tasks_owner_status_cover",
                 "tasks_requester_status_cover",
@@ -195,7 +194,6 @@ class Schema(HubCase):
         self.conn.execute("DROP INDEX messages_reply_kind")
         self.conn.execute("DROP INDEX tasks_carried_by")
         self.conn.execute("DROP INDEX messages_from_kind")
-        self.conn.execute("DROP INDEX messages_pending_conversation")
         self.conn.commit()
         self.conn.close()
         migrated = H.connect(Path(self.dir.name) / "hub.db")
@@ -207,14 +205,20 @@ class Schema(HubCase):
             ("SELECT id FROM tasks WHERE carried_by='existing-run'", "tasks_carried_by"),
             ("SELECT 1 FROM messages WHERE in_reply_to='question' AND kind='answer'", "messages_reply_kind"),
             ("SELECT id FROM messages WHERE sender_id='bot:cmo' AND kind='ask'", "messages_from_kind"),
-            (
-                "SELECT id FROM messages WHERE conversation_id='task-thread' AND kind='ask' "
-                "AND answered_by_id IS NULL AND deleted_at IS NULL",
-                "messages_pending_conversation",
-            ),
         ):
             plan = " ".join(r[3] for r in migrated.execute("EXPLAIN QUERY PLAN " + query))
             self.assertIn(index, plan)
+        # The ask indexes went with asks (migration 20261106200453).
+        for name in ("messages_pending_conversation", "messages_open_asks_to"):
+            self.assertIsNone(
+                migrated.execute("SELECT name FROM sqlite_master WHERE type='index' AND name=?", (name,)).fetchone()
+            )
+        # The sender and recipient index stays: its leading columns serve the lookups named in hubdb.REPLY_ANSWERS_ASKS.
+        self.assertIsNotNone(
+            migrated.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name=?", ("messages_open_asks",)
+            ).fetchone()
+        )
 
     def test_existing_database_gains_the_media_version_lookup_index(self):
         self.conn.execute("DROP INDEX bot_file_versions_blob_media")

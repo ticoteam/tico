@@ -481,7 +481,7 @@ def test_plate_count_covers_all_boards_folding_and_unread_pages_without_thread_a
 def test_plate_count_deduplicates_task_kinds_and_skips_merged_and_folded_tasks():
     items = [
         {"kind": kind, "id": kind}
-        for kind in ("task", "question", "waiting", "declined", "approval", "ask", "stale", "thread_ask", "update")
+        for kind in ("task", "question", "waiting", "declined", "approval", "stale", "thread_ask", "update")
     ]
     items += [
         {"kind": "question", "id": "task"},
@@ -492,4 +492,4 @@ def test_plate_count_deduplicates_task_kinds_and_skips_merged_and_folded_tasks()
         {"kind": "task", "id": "merged"},
     ]
     items[0].update(folded=[{"id": "folded"}], merged=["merged"])
-    assert views.needs_plate_count(items) == 7
+    assert views.needs_plate_count(items) == 6

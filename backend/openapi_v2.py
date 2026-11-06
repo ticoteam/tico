@@ -8685,7 +8685,7 @@ SCHEMAS['BotDreamView'] = obj(
                                         'text': 's',
                                         'mine': {
                                             'type': 'boolean',
-                                            'description': 'The question is put to the caller, who answers it at POST /api/v2/messages/{mid}/answer',
+                                            'description': 'The question is put to the caller, who answers it at POST /api/v2/tasks/{tid}/answers with target {task}',
                                         },
                                     }
                                 ),

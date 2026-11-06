@@ -17,12 +17,12 @@ const items = [
   // an open question with "or" is not a yes or a no: it opens the task
   wait('t-ask', 'Coordinate the external agent scenario in the example', {created_at: at(500),
     ask: {id: 'q-1', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Should the public example show the agent demo, or stay static?', created_at: at(300)}}),
-  // a question task a bot put to Ana, unanswered past three days: the card carries one-click Clarify
+  // a question task a bot put to Ana, unanswered past three days
   {id: 't-stale', kind: 'question', title: 'Sync the external agent scenario', body: '', owner_id: 'human:ana', requester_id: 'bot:writer',
     status: 'open', version: 2, created_at: at(5000), updated_at: at(5000), note: '', ask_missing: false, open_asks: 0,
     lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0},
     ask: {id: 't-stale', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Should the public example show the agent demo?',
-      created_at: at(5000), stale: true, question_task: true, refs: {}}},
+      created_at: at(5000), question_task: true, refs: {}}},
   wait('t-plain', 'Run the video tool trial', {created_at: at(490), note: PLAIN, person_ask: PLAIN,
     body: 'Run the video tool trial\n\nThe test plan is in the shared folder.'}),
   // set waiting before the rule, with no plain ask: its task, not a card
@@ -54,8 +54,7 @@ const items = [
           title: second?.className === 'dc-title' ? second.textContent : null,
           sizes: [first, second].map(x => parseFloat(getComputedStyle(x).fontSize)),
           details: details ? {open: details.open, text: details.textContent, last: body.lastElementChild === details} : null,
-          buttons: [...document.querySelectorAll('#need-card .dc-actions button')].map(b => b.dataset.dc),
-          clarify: body.querySelector('[data-dc="clarify"]')?.textContent.trim() || null};
+          buttons: [...document.querySelectorAll('#need-card .dc-actions button')].map(b => b.dataset.dc)};
       });
     };
     // DECIDE_SHOTS=<dir> saves each card for the owner.
@@ -127,17 +126,9 @@ const items = [
     await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
     assert.deepEqual(sent, [{id: 't-plain', text: 'Yes.'}]);
 
-    // A stale question carries one-click Clarify: one tap comments on its task and @mentions the bot that asked, which
-    // wakes it to say whether it still matters, in clearer words.
     assert.equal(c.lead, 'Should the public example show the agent demo?');
-    assert.equal(c.clarify, 'Ask Writer to clarify');
+    assert.equal(await page.locator('#need-card [data-dc="clarify"]').count(), 0, 'a stale check has no Clarify');
     assert.deepEqual(c.buttons, ['no', 'yes']);
-    await page.locator('#need-card .dc-body [data-dc="clarify"]').click();
-    assert.equal(await page.locator('#need-card .dc-toast span').textContent(), 'Asked Writer to clarify');
-    await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
-    const clarify = sent.at(-1);
-    assert.equal(clarify.id, 't-stale');
-    assert.match(clarify.text, /^@writer Please clarify this( for [^:]+)?: "Should the public example show the agent demo\?" Is this request still relevant\?/);
     // the note is only ever text
     assert.equal(await page.locator('#need-card .dc-body img').count(), 0);
     assert.equal(await page.evaluate(() => window.pwned), undefined);
@@ -160,11 +151,10 @@ const items = [
     await page.evaluate(() => { location.hash = '#/tasks?view=foryou'; });
 
     // Catch up, in the phone's header, opens the first card without repeating the count.
+    // The stale question is still open, so it waits on its card: Catch up is there and opens it.
     const go = page.locator('#tasks-pane [data-go-through]:visible');
-    assert.equal(await go.count(), 0, 'nothing waits on a card: no Catch up');
-    assert.equal(await page.locator('#task-body .tl-row').count(), 3, 'full-task rows still need the person');
-    assert.equal(await page.locator('#task-scope .cnt').innerText(), '3');
-    await page.evaluate(() => { DEC_HANDLED.delete('task:t-stale'); needsListsRedraw(); });
+    assert.equal(await page.locator('#task-body .tl-row').count(), 4, 'the open question and the full-task rows need the person');
+    assert.equal(await page.locator('#task-scope .cnt').innerText(), '4');
     assert.equal((await go.textContent()).trim(), 'Catch up');
     assert.equal(await go.evaluate(el => !!el.closest('.tl-head')), true, 'Catch up sits in the header row');
     await go.click();

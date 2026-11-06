@@ -1899,7 +1899,7 @@ def need_of(item):
         return "pay"
     if _NEED_CONNECT.search(words):
         return "connect"
-    if kind in ("question", "ask") or item.get("recommend"):
+    if kind == "question" or item.get("recommend"):
         return "decide"
     if _NEED_REVIEW.search(words):
         return "review"
@@ -2571,7 +2571,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             item["holds_up"] = holds_up(c, row, readable)
             if row.get("id") and row.get("status") not in ("closed", "declined", "done"):
                 own = roadmap_entry(c, row)
-        if item["kind"] in ("question", "ask"):
+        if item["kind"] == "question":
             item["why"] = card_why(item)
         item["tier"] = decide_tier(item, at, own)
     from .files import readable_page_refs
@@ -2676,7 +2676,7 @@ def needs_folded_ids(items):
 def needs_plate_count(items):
     """Everything on the person's plate across boards, counted once; folded tasks count through their card."""
     task_kinds = {"task", "question", "waiting", "declined"}
-    plate_kinds = task_kinds | {"approval", "ask", "stale"}
+    plate_kinds = task_kinds | {"approval", "stale"}
     folded = set(needs_folded_ids(items))
     return len(
         {
@@ -2692,8 +2692,6 @@ def needs_actor(it, me):
     actor = None
     if it.get("kind") == "approval":
         actor = it.get("requested_by_id") or it.get("requester_id")
-    elif it.get("kind") == "ask":
-        actor = it.get("requester_id")
     elif it.get("kind") in ("task", "question", "waiting"):
         ask = it.get("ask") or {}
         on = it.get("waiting_on") if it.get("status") == "waiting" and H.is_human(it.get("waiting_on")) else None
