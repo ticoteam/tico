@@ -136,6 +136,9 @@ const items = [
     await page.goBack();
     await page.waitForFunction(() => !document.querySelector('#need-card')?.open && !DEC);
     assert.match(await page.evaluate(() => location.hash), /^#\/tasks\?(.*&)?view=foryou/);
+    // The stale question is handled from its card; with no Clarify tap left, mark it handled the way an answer's tap
+    // does (until its undo window closes) so Catch up reads nothing waiting.
+    await page.evaluate(() => { DEC_HANDLED.add('task:t-stale'); needsListsRedraw(); });
 
     // A Needs you row with no card opens its task.
     await page.locator('#task-body [data-task-key="tt-blank"] .tl-title').click();
