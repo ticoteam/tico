@@ -1261,6 +1261,11 @@ async function phoneViews(browser) {
   // You rows on a phone: the face, the title (with its ask), the age; no chips squeeze the title.
   assert.ok(await page.locator('#task-body .tl-queue .tl-row').count() > 0);
   assert.equal(await page.locator('#task-body .tl-queue .tl-chips:visible, #task-body .tl-queue .task-status').count(), 0);
+  // ...on one line: nothing in a row (an ask's row too) wraps below the title.
+  assert.deepEqual(await page.locator('#task-body .tl-queue .tl-row').evaluateAll(rows => rows.filter(r => {
+    const open = r.querySelector('.tl-open').getBoundingClientRect();
+    return [...r.children].some(c => { const b = c.getBoundingClientRect(); return !c.matches('.tl-note') && b.height && b.top >= open.bottom - 1; });
+  }).map(r => r.querySelector('.tl-title').textContent)), []);
   await shot(page, 'phone-you-dark');
   // Done is in More; picking it opens Done, and More names it.
   await page.locator('#task-view-more').click();

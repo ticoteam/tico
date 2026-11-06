@@ -146,7 +146,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-open:focus{outline:0}
 .tl-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* You: what the bot asks, as a muted second line under the title */
-.tl-row.tl-two .tl-open{flex:1 1 auto;height:auto;min-height:30px;padding:4px 0}
+.tl-row.tl-two .tl-open{flex:1 1 0;height:auto;min-height:30px;padding:4px 0}
 .tl-lines{display:flex;flex-direction:column;gap:1px;min-width:0}
 .tl-ask{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm);font-weight:400}
 .tl-row[style*="--depth:1"] .tl-open,.tl-row[style*="--depth:2"] .tl-open,.tl-row[style*="--depth:3"] .tl-open{font-weight:400}
