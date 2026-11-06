@@ -39,7 +39,7 @@ write, which Tico never puts in an ordinary run token. To allow it for one repos
    **Read and write** and save. GitHub asks the organization to accept the change: open the installation
    (**Organization settings → GitHub Apps → Configure**) and accept the updated permissions.
 2. An Owner or admin ticks **Run workflows** on that bot's chosen write grant, or on the repository's row under
-   **All ticked repos** with write (Settings → bot → Repositories), or runs
+   **All repos in use** with write (Settings → bot → Repositories), or runs
    `hub bot repos <bot> --chosen owner/repo:write+actions`. See [Repositories](repositories.md).
 
 The bot then gets a separate token for those repositories, with its write permissions plus Actions: write. Its other
@@ -60,7 +60,7 @@ write, which Tico never puts in an ordinary run token. To allow it for one repos
 1. On the App's GitHub settings page (**Permissions & events → Repository permissions**), set **Workflows** to
    **Read and write** and save, then accept the updated permissions on the installation, as above.
 2. An Owner or admin ticks **Edit workflow files** on that bot's chosen write grant, or on the repository's row under
-   **All ticked repos** with write (Settings → bot → Repositories), or runs
+   **All repos in use** with write (Settings → bot → Repositories), or runs
    `hub bot repos <bot> --chosen owner/repo:write+edit` (`:write+actions+edit` to also run workflows). See
    [Repositories](repositories.md).
 
@@ -325,12 +325,12 @@ agent gets `403` on both, even for the Owner. The rules are in [Permissions](per
 - **Names.** The same single-name rule as the Owner's, and a bot is also refused a `bot-` or `emp-` name, or a
   name a bot's repository already uses (`403`).
 - **After it is created**, in the same step that saves the receipt (so a retry with the same key replays it and
-  does nothing twice): the repository is ticked for the team, the bot gets write to it (a bot on **Own repo
-  only** moves to **Chosen repos** with just this one; a bot on **Chosen repos** keeps its other grants; a bot on
-  **All ticked repos** with read access moves to **Chosen repos**, read on every repository it reached and write on
+  does nothing twice): the repository is ticked for the team, the bot gets write to it (a bot on **Their own
+  repo** moves to **Chosen repos** with just this one; a bot on **Chosen repos** keeps its other grants; a bot on
+  **All repos in use** with read access moves to **Chosen repos**, read on every repository it reached and write on
   this one, so a repository ticked later reaches it only once chosen), and the Owner gets a notice: *Head of Engineering created private repo tico-services (acme/tico-services). Head of
-  Engineering has write access to it.* The notice also names any bot set to **All ticked repos**, which reaches
-  it too, and says when the bot moved from All ticked repos to Chosen repos. The reply's `bot_access` is `write`,
+  Engineering has write access to it.* The notice also names any bot set to **All repos in use**, which reaches
+  it too, and says when the bot moved from All repos in use to Chosen repos. The reply's `bot_access` is `write`,
   or `none` if the grant could not be made (the repository exists; an Owner or admin grants it in Settings). The
   event `github.product_repo_created` records the bot, `bot_access`, `moved_to_chosen` and whether the Owner was told.
 

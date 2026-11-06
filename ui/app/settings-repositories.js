@@ -285,15 +285,15 @@ document.addEventListener('click', async event => {
 });
 
 // ----------------------------------------------------------------- a bot's Repositories
-// In the bot editor: Own repo only, All ticked repos (read or write), or Chosen repos with read or write each; a
+// In the bot editor: Their own repo, All repos in use (read or write), or Chosen repos with read or write each; a
 // chosen write repo may also let the bot run workflows there (GitHub Actions: write) and edit workflow files
-// (GitHub Workflows: write). All ticked repos lists its repositories with the same two options each, kept apart from
+// (GitHub Workflows: write). All repos in use lists its repositories with the same two options each, kept apart from
 // the chosen repos' own; with Read they show greyed with the reason, never hidden.
 // Each change saves on its own, like the other rows there. Owners and admins change it; the bot's other
 // managers see it read only. Create product repositories is on for every bot until the Owner or an admin turns it
 // off; only the Owner turns it back on.
 // Hidden while GitHub is not connected.
-const BOT_REPO_MODES = [['own', 'Own repo only'], ['all', 'All ticked repos'], ['chosen', 'Chosen repos']];
+const BOT_REPO_MODES = [['own', 'Their own repo'], ['all', 'All repos in use'], ['chosen', 'Chosen repos']];
 const BOT_REPO_ACCESS = [['read', 'Read'], ['write', 'Write']];
 // A chosen write repo's options: [grant flag, data attribute, label, tooltip, what Effective adds].
 const BOT_REPO_FLAGS = [
@@ -325,12 +325,12 @@ async function botReposMount(host, slug) {
     for (const name of state.chosen.keys()) if (!names.some(n => n.toLowerCase() === name.toLowerCase())) names.push(name);
     return names.sort((a, b) => a.localeCompare(b));
   };
-  // What All ticked repos reaches: the ticked repositories, less bot repositories, a bot- name counting as one, as the
+  // What All repos in use reaches: the ticked repositories, less bot repositories, a bot- name counting as one, as the
   // server reads it (backend all_ticked).
   const ticked = () => (team.repositories || []).filter(r => r.enabled && !r.bot_repo && !/^bot-/i.test(r.full_name.split('/')[1] || ''))
     .map(r => r.full_name).sort((a, b) => a.localeCompare(b));
-  // Why All ticked repos' options cannot change, said beside them; '' when they can.
-  const allWhy = () => !admin ? 'Only an Owner or admin changes this' : state.all_access !== 'write' ? 'Needs Write for all ticked repos' : '';
+  // Why All repos in use's options cannot change, said beside them; '' when they can.
+  const allWhy = () => !admin ? 'Only an Owner or admin changes this' : state.all_access !== 'write' ? 'Needs Write for all repos in use' : '';
   const id = `brepo-${slug}`;
   const paint = () => {
     const pick = pickable();
@@ -340,17 +340,17 @@ async function botReposMount(host, slug) {
       <label class="repo-name"><input type="checkbox" data-brepo-product${state.create_product_repositories ? ' checked' : ''}${owner || admin && state.create_product_repositories ? '' : ' disabled'}>Create product repositories</label>
       <p class="muted">Private repositories with any other name in the connected organization; the bot gets write to each one it makes and you are told. On for every bot unless switched off; only the Owner switches it back on.</p>
       ${repoSegHTML(`${id}-mode`, 'Repository access', BOT_REPO_MODES, state.mode, !admin, ' brepo-mode')}
-      ${state.mode === 'all' ? `<div class="brepo-all">${repoSegHTML(`${id}-all`, 'Access to all ticked repos', BOT_REPO_ACCESS, state.all_access, !admin, ' repo-seg-sm')}</div>
+      ${state.mode === 'all' ? `<div class="brepo-all">${repoSegHTML(`${id}-all`, 'Access to all repos in use', BOT_REPO_ACCESS, state.all_access, !admin, ' repo-seg-sm')}</div>
       ${allWhy() && admin ? `<p class="muted brepo-why" data-brepo-why>Run workflows and Edit workflow files need Write. Choose Write to tick them for a repository.</p>` : ''}
-      <ul class="brepo-list" aria-label="All ticked repos">${ticked().length ? ticked().map(name =>
+      <ul class="brepo-list" aria-label="All repos in use">${ticked().length ? ticked().map(name =>
         `<li class="brepo-row" data-brepo-all="${esc(name)}"><span class="repo-name" title="${esc(name)}"><span>${repoNameHTML(name)}</span></span>
-          ${brepoFlagsHTML(name, state.all_flags, state.all_access === 'write', allWhy())}</li>`).join('') : '<li class="empty">No ticked repos.</li>'}</ul>` : ''}
+          ${brepoFlagsHTML(name, state.all_flags, state.all_access === 'write', allWhy())}</li>`).join('') : '<li class="empty">No repos in use.</li>'}</ul>` : ''}
       ${state.mode === 'chosen' ? `<ul class="brepo-list" aria-label="Chosen repos">${pick.length ? pick.map(name => {
         const on = state.chosen.has(name);
         return `<li class="brepo-row" data-brepo="${esc(name)}"><label class="repo-name" title="${esc(name)}"><input type="checkbox" data-brepo-pick${on ? ' checked' : ''}${admin ? '' : ' disabled'}><span>${repoNameHTML(name)}</span></label>
           ${repoSegHTML(`${id}-r-${name}`, `Access to ${name}`, BOT_REPO_ACCESS, state.chosen.get(name) || 'write', !admin || !on, ' repo-seg-sm')}
           ${brepoFlagsHTML(name, state.flags, on && state.chosen.get(name) === 'write', !admin ? 'Only an Owner or admin changes this' : !on ? 'Tick the repo first' : state.chosen.get(name) !== 'write' ? 'Needs Write' : '')}</li>`;
-      }).join('') : '<li class="empty">No ticked repos.</li>'}</ul>` : ''}
+      }).join('') : '<li class="empty">No repos in use.</li>'}</ul>` : ''}
       ${state.effective.length ? `<div class="brepo-eff"><span class="brepo-k">Effective</span><span>${state.effective.map(r =>
         `<span class="brepo-eff-item">${esc(r.full_name)} <span class="brepo-acc">${esc(r.access || 'write')}${BOT_REPO_FLAGS.map(([flag, , , , more]) => r[flag] ? more : '').join('')}</span></span>`).join('')}</span></div>` : ''}`;
     host.hidden = false;
@@ -366,7 +366,7 @@ async function botReposMount(host, slug) {
     state.all_served = brepoFlagSets(view.all_repos);
     state.effective = view.effective || [];
   };
-  // All ticked repos' own ticks for a save, on the same terms as a chosen repo's: only those on or being turned off.
+  // All repos in use's own ticks for a save, on the same terms as a chosen repo's: only those on or being turned off.
   // One since unticked in Settings is left as the server holds it.
   const allTicks = () => {
     const names = [...new Set(BOT_REPO_FLAGS.flatMap(([flag]) => [...state.all_flags[flag], ...state.all_served[flag]]))]
