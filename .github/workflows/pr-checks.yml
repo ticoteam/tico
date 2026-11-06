@@ -329,11 +329,13 @@ jobs:
         with:
           workspaces: recorder
           shared-key: pr-recorder
+      - name: Rust 1.92.0 for the format and lint step (the version scripts/rust_checks.sh pins)
+        run: rustup toolchain install 1.92.0 --profile minimal --component clippy,rustfmt
       - name: Format and lint, with the desktop and cli features
         working-directory: recorder
         run: |
-          cargo fmt --check
-          cargo clippy --locked --all-targets --features desktop,cli -- -D warnings
+          cargo +1.92.0 fmt --check
+          cargo +1.92.0 clippy --locked --all-targets --features desktop,cli -- -D warnings
       - name: Tests with the desktop feature
         working-directory: recorder
         run: cargo test --locked --features desktop,cli

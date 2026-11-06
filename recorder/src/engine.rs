@@ -35,7 +35,12 @@ fn chunk_boundary(pending: &[f32]) -> Option<usize> {
     }
     let window = &pending[MIN_CHUNK_SAMPLES..pending.len().min(MAX_CHUNK_SAMPLES)];
     let energy = |frame: &[f32]| frame.iter().map(|x| x * x).sum::<f32>() / frame.len() as f32;
-    let frames: Vec<f32> = window.chunks_exact(FRAME).map(energy).collect();
+    let frames: Vec<f32> = window
+        .as_chunks::<FRAME>()
+        .0
+        .iter()
+        .map(|frame| energy(frame))
+        .collect();
     let quietest = frames.iter().copied().fold(f32::INFINITY, f32::min);
     let mean = energy(&pending[..pending.len().min(MAX_CHUNK_SAMPLES)]);
     if quietest > (0.003_f32 * 0.003).max(mean * 0.06) && pending.len() < MAX_CHUNK_SAMPLES {
