@@ -211,9 +211,11 @@ file runs the tests that read it (by path, folder or listing) and the tests of t
 that imports that code. A change to how the checks run (the PR checks workflow, `scripts/ci_install.sh`, the browser
 system packages) runs the tests that read it and one short core browser script, and a workflow change also builds the
 Caddy image. Conftest, `pytest.ini`, dependency pins and deleted or unparsable files fall back to the full default
-Python suite and core browser scripts. A draft pull request runs no checks; marking it ready for review does. Main
-has no PR-check run of its own: its pull requests tested each change and Release validation runs the whole gate on
-each candidate. A pull request's superseded run is canceled. Runner/harness changes also run
+Python suite and core browser scripts. A draft pull request runs no checks (every job is skipped); marking it ready
+for review does. Main requires no check, so a skipped run is not a pass: wait until the ready-for-review run's checks
+show passing, not skipped, before merging. Main has no PR-check run of its own: its pull requests tested each change
+and Release validation runs the whole gate on each candidate; a daily PR caches run (`pr-cache.yml`) keeps the
+main-branch caches pull requests restore from fresh. A pull request's superseded run is canceled. Runner/harness changes also run
 slow conformance on the Rust runner and all its fake harnesses; UI changes select their browser scripts, including
 imported-history for chat changes, or every browser script when the UI mapping is uncertain.
 

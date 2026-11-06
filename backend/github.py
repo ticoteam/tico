@@ -447,14 +447,18 @@ def _suite_key(suite, run):
 
 
 def _check_state(result):
-    """One check's result as the link keeps it: passing, pending or failing."""
-    return "passing" if result in ("success", "neutral", "skipped") else (
+    """One check's result as the link keeps it: passing, skipped, pending or failing."""
+    return "passing" if result in ("success", "neutral") else "skipped" if result == "skipped" else (
            "pending" if result in ("pending", "queued", "in_progress", "requested", "waiting") else "failing")
 
 
 def _overall(checks):
-    """A head's checks as one state: failing if any failed, else pending if any is still going, else passing."""
-    return "failing" if "failing" in checks.values() else "pending" if "pending" in checks.values() else "passing"
+    """A head's checks as one state: failing if any failed, else pending if any is still going, else passing. A head
+    whose every check was skipped has not been checked (a draft pull request's run skips every job, and nothing on
+    main requires a check), so it reads pending: an all-skipped head never reads green."""
+    states = set(checks.values())
+    return ("failing" if "failing" in states else "pending" if "pending" in states or states <= {"skipped"}
+            else "passing")
 
 
 CHECKS_KEPT = 100
@@ -484,7 +488,7 @@ def _dropped(checks, kept):
     """The worst state of a non-passing check that the stored copy `kept` leaves out, or None. The copy cannot show it,
     so the link keeps this marker (`checks_dropped`) until a fresh read from GitHub (`apply_checks`) stores the head's
     whole list again: the head reads no better than this while the copy's own checks turn green."""
-    gone = [state for key, state in checks.items() if key not in kept and state != "passing"]
+    gone = [state for key, state in checks.items() if key not in kept and state not in ("passing", "skipped")]
     return "failing" if "failing" in gone else "pending" if gone else None
 
 
@@ -712,7 +716,7 @@ def pr_signal(c, event, payload):
             if ((event == "check_suite" and signal.get("status") == "completed" and state != "pending"
                     or event != "check_suite" and left_pending and (
                         suite_done or not any(k.startswith("suite:") for k in checks)))
-                    and "pending" not in checks.values()
+                    and _overall(checks) != "pending"
                     # A copy that dropped a check cannot finish the head green: only its own failure finishes it.
                     and (not dropped or "failing" in checks.values())):
                 # GitHub sends a suite's `requested` only to its own App, so a single run or status still pending

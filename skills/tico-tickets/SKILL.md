@@ -59,7 +59,8 @@ Loop until nothing is left that you can move:
    failure against main before calling it yours.
 4. **PR**: title in plain words; body **What / Why / Surfaces / How it was checked**, and `Closes #<n>`.
    **Surfaces** lists which entries of CLAUDE.md's "Hit every surface" applied and what was done for each.
-5. **Merge** when CI is green and a maintainer has approved. Contributors open the pull request and
+5. **Merge** when CI is green and a maintainer has approved. Green means the checks of the run after the pull request
+   was marked ready for review show passing, not skipped: a draft's run skips every job and proves nothing. Contributors open the pull request and
    stop there; maintainers merge with `gh pr merge --merge`. How a merged change reaches a
    running Tico is the owner's business.
 6. **Record**: one comment on the ticket (PR, what changed, what you decided); close it if the PR

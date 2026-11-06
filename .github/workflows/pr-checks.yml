@@ -2,15 +2,18 @@
 # Pull requests only: main is tested by its pull requests and by Release validation (ci.yml), which runs the whole
 # release gate on each candidate and records the per-file timings these checks size their groups from.
 # Jobs run on RunsOn spot VMs in Tico's own AWS account. Fork PRs stay on GitHub-hosted runners so outside code
-# never runs on our machines. A draft pull request runs nothing: every job is skipped (GitHub counts a skipped required
-# check as passed, and a draft cannot merge), marking it ready for review runs the checks, and converting it back to a
-# draft cancels a run in progress.
+# never runs on our machines. A draft pull request runs nothing: every job is skipped, and marking it ready for review
+# runs the checks. main requires no check, so a skipped run proves nothing: only the ready-for-review run's passing
+# checks count, and Tico reads a head whose every check was skipped as pending (backend/github.py _overall).
+# Converting a pull request back to a draft starts no run: such a run would cancel the one in progress on the same head,
+# and a cancelled check keeps the review gate blocking that head (backend/review_gate.py).
+# Without main pushes, pr-cache.yml keeps the main-branch caches these jobs restore from fresh.
 name: PR checks
 
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -42,7 +45,7 @@ jobs:
       - name: Install (five minutes per attempt, one retry)
         timeout-minutes: 11
         run: bash scripts/ci_install.sh python
-      - name: Restore measured timings from the latest successful Release validation run
+      - name: Restore measured timings from a recent successful Release validation run
         # Optional: missing/expired artifacts stop immediately; transient errors get only 90s of retry backoff.
         # Release validation runs the same pytest flags these jobs pass (pr_checks.PYTEST_FLAGS), slow tests included.
         timeout-minutes: 2
@@ -51,10 +54,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p previous-timings
-          run=$(gh run list --workflow ci.yml --branch main --event workflow_dispatch --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty') || run=''
-          if [ -n "$run" ]; then
-            bash scripts/ci/retry.sh --max-attempts 3 --clear previous-timings --permanent 'HTTP (404|410)|no (valid )?artifacts? (match|found)' -- gh run download "$run" --name test-timings --dir previous-timings || echo "No measured timings yet; use collected counts this run"
-          fi
+          # The newest of the last five successful runs that has the artifact: one without it (older than the timings
+          # job, or expired) is skipped at once; a transient error spends the short retry budget once and ends the walk.
+          runs=$(gh run list --workflow ci.yml --branch main --event workflow_dispatch --status success --limit 5 --json databaseId --jq '.[].databaseId') || runs=''
+          for run in $runs; do
+            if log=$(bash scripts/ci/retry.sh --max-attempts 3 --clear previous-timings --permanent 'HTTP (404|410)|no (valid )?artifacts? (match|found)' -- gh run download "$run" --name test-timings --dir previous-timings); then
+              printf '%s\n' "$log"; echo "Timings from Release validation run $run"; break
+            fi
+            printf '%s\n' "$log"
+            case $log in *'failed permanently'*) ;; *) break ;; esac
+          done
+          [ -f previous-timings/durations.json ] || echo "No measured timings yet; use collected counts this run"
       - name: Select affected tests and size measured Python and browser groups
         id: plan
         env:

@@ -627,6 +627,40 @@ def test_a_receipt_that_cannot_read_its_pages_exits_zero_and_says_so(stdin):
     assert out.startswith("| Job | Result | Seconds |") and out.rstrip().endswith(checks.RECEIPT_INCOMPLETE)
 
 
+def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
+    """Without main pushes, pr-cache.yml keeps main's caches fresh. Each cache it warms is a PR-check cache with the
+    same action, key, path or shared key, on the same Spot runner (a key holds the runner image and arch), and every
+    cache it fills itself is looked up first, so a warm day downloads nothing."""
+    import yaml
+    pr = yaml.safe_load((ROOT / ".github" / "workflows" / "pr-checks.yml").read_text())
+    warm = yaml.safe_load((ROOT / ".github" / "workflows" / "pr-cache.yml").read_text())
+    def caches(doc):
+        for job in doc["jobs"].values():
+            for step in job.get("steps", []):
+                uses, args = step.get("uses", ""), dict(step.get("with") or {})
+                if "actions/cache@" in uses or "rust-cache@" in uses or args.get("cache"):
+                    lookup = args.pop("lookup-only", None)
+                    yield args.get("key") or args.get("shared-key") or args["cache"], uses, args, job["runs-on"], lookup
+    restored = list(caches(pr))
+    warmed = list(caches(warm))
+    assert {w[0] for w in warmed} == {r[0] for r in restored} == {
+        "pip", "npm", "pr-rust-lint", "pr-conformance", "pr-recorder",
+        "playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}",
+        "playwright-system-ubuntu24-x64-${{ steps.image.outputs.version }}-${{ hashFiles('package-lock.json', "
+        "'scripts/ci_install.sh', 'scripts/playwright-system-packages.json') }}"}
+    for ident, uses, args, runner, lookup in warmed:
+        if runner == "macos-latest":
+            machine = runner
+        else:
+            assert runner.startswith("runs-on=${{ github.run_id }}/") and "spot=false" not in runner, ident
+            machine = runner.split("}}", 1)[1]
+            assert "gp3:125mbs" in machine, ident
+        assert any((uses, args) == (r[1], r[2]) and machine in r[3] for r in restored), ident
+        assert lookup is True or ident in ("pip", "npm"), ident   # setup-python/node have no lookup-only
+    assert "schedule" in warm[True] and warm[True]["push"]["branches"] == ["main"]
+    assert set(pr[True]) == {"pull_request"} and "converted_to_draft" not in pr[True]["pull_request"]["types"]
+
+
 def test_the_receipt_step_cannot_fail_or_cancel_the_timings_gate():
     import yaml
     job = yaml.safe_load((ROOT / ".github" / "workflows" / "pr-checks.yml").read_text())["jobs"]["timings"]
