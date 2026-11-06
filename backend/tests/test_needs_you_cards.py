@@ -160,7 +160,7 @@ def test_a_question_closed_unanswered_went_away_and_an_answered_one_did_not(api)
         H.task_update(c, "human:ana", answered["id"], status="done", note="Clay")
     assert get(api, "needs-you")["went_away"]["withdrawn"] == 0
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:finance", dropped["id"], status="closed", note="No longer needed")
+        H.task_close(c, "bot:finance", dropped["id"], note="No longer needed")
     assert get(api, "needs-you")["went_away"]["withdrawn"] == 1
 
 

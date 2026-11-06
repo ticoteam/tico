@@ -104,7 +104,7 @@ def test_a_bot_asks_the_librarian_with_a_needs_action_message_and_the_final_text
     post(desk, "chat/ops", {"text": "Please look at the refund docs"})
     turn = claim(desk, ops)
     question = post(desk, "messages", {"to": "librarian", "text": "How long do refunds take?",
-                                       "refs": {"needs_action": True}, "wait_s": 60}, token=turn["token"])
+                                       "needs_action": True, "wait_s": 60}, token=turn["token"])
     attempt = claim(desk, desk.runner)
     assert attempt["bot"] == "librarian"
     post(desk, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, token=desk.runner["token"])

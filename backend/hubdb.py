@@ -2332,17 +2332,18 @@ LINT_LISTED_PICKS = re.compile(r"(?:^|\s)(?:\(?[1-9][.)]|\([a-f]\)|[a-f]\))\s+\S
                                re.S)
 
 
-def lint_question(question):
+def lint_question(question, *, written=False):
     """The problems with one question a bot puts to a person, as a card shows it (ui/app/question-card.js), empty
     when it passes. Its picks are options, each saying what happens when it is chosen (`then`); several picks
     (`multi`) mark the ones the bot recommends; and the question, its "why it matters" line and each `then` line
     carry nothing that belongs under Details (lint_plain), nor does any pick's label or description. A question with no options is a yes/no or a written
-    answer, unless it lists picks in its words or is several picks. Deterministic, so a bot fixes it in one retry."""
+    answer, unless it lists picks in its words or is several picks; a `written` one (a dream's numbered questions,
+    backend/dream.py) is answered in words, so it may list them. Deterministic, so a bot fixes it in one retry."""
     q = question if isinstance(question, dict) else question.model_dump()
     text, options, problems = str(q.get("question") or ""), q.get("options") or [], []
     for where, value in (("the question", text), ('the "why it matters" line (why)', q.get("why"))):
         problems += [f"{where} {p}" for p in lint_plain(value)]
-    if not options and (q.get("multi") or LINT_LISTED_PICKS.search(text)):
+    if not options and (q.get("multi") or not written and LINT_LISTED_PICKS.search(text)):
         problems.append("lists picks but has no options: give each pick as an option")
     missing = [o.get("label") for o in options if not str(o.get("then") or "").strip()]
     if missing:
@@ -2363,12 +2364,12 @@ QUESTION_EXAMPLE = ('{"question": "Website sales chat: go with these picks?", "w
                     'for the day at $10", "recommended": true}, ...]}')
 
 
-def question_refusal(person, questions):
+def question_refusal(person, questions, *, written=False):
     """What a refusal of these questions to `person` says, or "" when they pass: what failed, the rule and an example."""
     problems = []
     for q in questions:
         label = (q if isinstance(q, dict) else q.model_dump()).get("question") or ""
-        problems += [f'"{str(label)[:60]}": {p}' for p in lint_question(q)]
+        problems += [f'"{str(label)[:60]}": {p}' for p in lint_question(q, written=written)]
     if not problems:
         return ""
     return (f"Your question to {actor_id(person)} can't be shown as a clear card: {'; '.join(problems)}. The rule: a "
@@ -2378,12 +2379,12 @@ def question_refusal(person, questions):
             f"those in the task body or a comment, which the card keeps under Details. Example: {QUESTION_EXAMPLE}")
 
 
-def require_plain_question(conn, actor, person, questions):
+def require_plain_question(conn, actor, person, questions, *, written=False):
     """Refuse a bot's question to a person that breaks the asking rules (question_refusal). Like require_person_ask,
     a `lint` refusal is fixed by rewriting and never counts toward a quarantine."""
     if not is_bot(actor) or not is_human(person):
         return
-    detail = question_refusal(person, questions)
+    detail = question_refusal(person, questions, written=written)
     if detail:
         refuse(conn, actor, "lint", detail)
 

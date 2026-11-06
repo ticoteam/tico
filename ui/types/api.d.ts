@@ -6992,29 +6992,6 @@ export type AttachTaskFileParams = {
   tid: string;
 };
 export type AttachTaskFileBody = {
-  ask?: {
-  if_no_answer?: {
-  by?: string | null;
-  do: string;
-  kind: "reversible" | "send" | "spend" | "delete";
-} | null;
-  questions: Array<{
-  header: string;
-  id: string;
-  multi?: boolean;
-  options?: Array<{
-  description?: string;
-  file?: string | null;
-  label: string;
-  recommended?: boolean;
-  then?: string;
-}>;
-  other?: boolean;
-  question: string;
-  why?: string;
-}>;
-  who?: string | null;
-} | null;
   content_base64?: string | null;
   name: string;
   note?: string | null;
