@@ -67,7 +67,11 @@ tasks they own. The owned tasks are one kind of many.
 6. Recount once, at the end: `hub needs-you show --by kind`. Reply in plain lines, no headings or bold (AGENT.md,
    Replies): the Needs you count before and after, with its split by kind; what was closed, answered and declined, with counts and links; the
    kept items with links and reasons; what is left. Undo covers the closed tasks only ("say undo to reopen them").
-   Declines and answers cannot be undone: say so, and give no undo line for them.
+   Declines and answers cannot be undone: say so, and give no undo line for them. Shape, with placeholders:
+   Needs you went from <before> to <after> (tasks <a> to <b>, questions <c> to <d>, approvals <e> to <f>).
+   Closed <n> done or duplicate tasks. Say undo to reopen them.
+   Declined <n> stale approvals and answered <n> bot questions with "No, drop this." Those cannot be undone.
+   Kept for you: [<task title>](#/task/<id>), <why>; [<approval title>](#/tasks?view=foryou), <why>.
 
 ## Bots and work
 
