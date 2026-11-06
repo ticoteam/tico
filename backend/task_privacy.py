@@ -580,6 +580,11 @@ def _payload_messages(value, out):
     return out
 
 
+def _own_question_turn(c, who, payload):
+    """Whether `payload` is the person's own question task on their Assistant's turn (task_readable's carve-out)."""
+    return H.assistant_turn_person(who) and bool(H.own_question_for_assistant(who, H.task(c, payload["id"]) or {}))
+
+
 def _prime_payload_messages(c, payload):
     """A reply that carries many messages (a claim's history, a poll's inputs) checks each one with its parents and
     room: those are read together first, in this snapshot, rather than a few reads per message."""
@@ -654,7 +659,8 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
         if payload.get("attempt_id") and not attempt_readable(c, principal, payload["attempt_id"]):
             raise Problem("privacy", "This execution is no longer available", 403)
         if payload.get("conversation_id") and payload.get("id"):
-            if not message_readable(c, principal, payload) and not deleted_comment_ack(c, principal, payload):
+            reader = who.actor if _own_question_turn(c, who, payload) else principal
+            if not message_readable(c, reader, payload) and not deleted_comment_ack(c, principal, payload):
                 raise Problem("privacy", "This message is no longer available", 403)
         if payload.get("kind") == "ask" and payload.get("id") and isinstance(payload.get("answers"), list):
             # Answer projections have no message id; recheck their source before replaying a receipt.
