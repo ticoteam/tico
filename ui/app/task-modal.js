@@ -57,8 +57,7 @@ window.addEventListener('popstate', () => {
 // `d` is the full modal unless a caller passes the peek.
 async function taskModalOpen(key, d) {
   const state = TASKS_ST, from = S.route, load = ++TASK_MODAL_LOAD;
-  let it = (state?.tasks || []).map(taskItem).find(x => x.key === key)
-    || [...S.issues.map(issueItem)].find(x => x.key === key);
+  let it = (state?.tasks || []).map(taskItem).find(x => x.key === key);
   if (!it && /^t/.test(key)) {
     const detail = await v2Get(`/v2/tasks/${encodeURIComponent(key.slice(1))}`);
     if (S.route !== from || load !== TASK_MODAL_LOAD) return;
@@ -69,17 +68,6 @@ async function taskModalOpen(key, d) {
     const d = taskModal(); taskLiveStop(d);
     d.innerHTML = `<h2>${esc(it.title)}</h2><p>Scheduled for ${esc(fmt(it.schedule.next))}</p><button data-modal-close>Close</button>`;
     $('[data-modal-close]', d).onclick = () => d.close();
-    if (!d.open) d.showModal();
-    return;
-  }
-  if (it.kind === 'issue') {
-    taskChatStop();
-    const d = taskModal(); taskLiveStop(d);
-    d.innerHTML = issueModalHTML(it.issue);
-    $('[data-modal-close]', d).onclick = () => d.close();
-    d.querySelectorAll('[data-modal-issue]').forEach(b => {
-      b.onclick = () => issueComposer($('.issue-compose', d), it.issue.number, b.dataset.modalIssue);
-    });
     if (!d.open) d.showModal();
     return;
   }
@@ -1030,23 +1018,6 @@ async function taskCommentSend(state) {
   }
 }
 async function taskChatSend(state) { return taskCommentSend(state); }
-function issueModalHTML(i) {
-  const running = new Set((S.status?.active || []).map(a => a.issue));
-  const tag = boardTag(i, running);
-  return `<div class="tmodal-head">${avatar(i.owner_id, 22, stateOf(i.owner_id))}<span class="who">${empName(i.owner_id)}</span>
-      <span class="mono muted">#${esc(i.number)}</span>${statusPill(i)}${i.priority && i.priority !== 'p2' ? prioPill(i) : ''}
-      ${tag ? `<span class="tag">${esc(tag)}</span>` : ''}${isRecurringIssue(i) ? '<span class="gl" title="Scheduled">⟳</span>' : ''}
-      <span class="spacer"></span><span class="muted tnum">${esc(ago(i.state === 'CLOSED' ? i.closedAt : i.updatedAt))}</span>
-      <button class="ghost tmodal-x" type="button" data-modal-close aria-label="Close">✕</button></div>
-    <h2 class="tmodal-title">${esc(i.title)}</h2>
-    <div class="tmodal-body">${i.needs_human ? needsYouBlock([i])
-      : i.body ? `<div class="q">${esc(i.body)}</div>` : i.last_comment ? `<div class="q">${esc(i.last_comment)}</div>` : '<div class="muted">No details yet.</div>'}
-      <div class="issue-actions">
-        ${i.state === 'OPEN' ? `<button class="linkish" type="button" data-modal-issue="comment">Comment</button>
-          <button class="linkish danger" type="button" data-modal-issue="close">Close</button>` : '<span class="muted">Closed</span>'}
-        <a class="github" href="${esc(i.url)}" target="_blank" rel="noopener">GitHub ↗</a></div>
-      <div class="issue-compose" hidden></div></div>`;
-}
 // Where the peek's task sits in the list ("3 / 16"); j/k and ↑/↓ move.
 function taskPeekPos(id) {
   if (!TASKS_ST || typeof tasksVisibleKeys !== 'function') return '';
