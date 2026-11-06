@@ -143,6 +143,13 @@ def _oldest_first(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda r: (str(r.get("posted_at_date") or ""), str(r.get("id") or "")))
 
 
+def _texts(stored: Any) -> list[str]:
+    """The ids in a stored list as text; a missing list is none."""
+    if not stored:
+        return []
+    return [str(item) for item in stored]
+
+
 def _cash_row(a: Mapping[str, Any]) -> dict[str, object]:
     """A cash account for the probe: its name, the last four digits of its account number (the full number is never
     kept), and its balances."""
@@ -335,7 +342,7 @@ def _notes(conf: Mapping[str, Any], notes: list[str], waiting: int = 0) -> str |
         if named:
             out.append(f"{len(named)} Brex transactions in {cur} are not posted: the books keep one currency "
                        f"(first: {named[0]})")
-    unamounted = [str(i) for i in (conf.get("unamounted") or [])]
+    unamounted = _texts(conf.get("unamounted"))
     if unamounted:
         out.append(f"{len(unamounted)} Brex transactions have no amount and are skipped (first: {unamounted[0]})")
     if waiting:
@@ -707,7 +714,7 @@ def _note_rows(c: Any, cid: str, now: str, foreign: Mapping[str, Sequence[str]],
             seen[cur] = sorted({*seen.get(cur, []), *ids})[:NOTE_IDS]
         changes["foreign"] = seen
     if unamounted:
-        changes["unamounted"] = sorted({*[str(i) for i in fresh.get("unamounted") or []], *unamounted})[:NOTE_IDS]
+        changes["unamounted"] = sorted({*_texts(fresh.get("unamounted")), *unamounted})[:NOTE_IDS]
     if moved:
         changes["sign_pending"] = int(fresh.get("sign_pending") or 0) + moved
     if changes:
