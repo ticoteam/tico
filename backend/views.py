@@ -425,6 +425,8 @@ def prime_machines(c, slugs):
         return
     for part in H.chunks(sorted(set(slugs))):
         marks = ",".join("?" * len(part))
+        declared = {row["bot_id"]: row for row in c.execute(f"SELECT * FROM bot_settings WHERE bot_id IN ({marks})", part)}
+        read_cache.prime(c, BS.ROW_SQL_ONE, {(s,): declared.get(s) for s in part})
         for statement, query in ((CONFIG_SQL, f"SELECT {BS.CONFIG} AS config,bot FROM bot_config bc {BS.JOIN} WHERE bot IN ({marks})"),
                                  (OPERATOR_SQL, f"SELECT bot,owner_id FROM bot_config WHERE bot IN ({marks})"),
                                  (ROW_SQL, f"SELECT * FROM agents WHERE bot IN ({marks})"),
@@ -470,8 +472,9 @@ def _lapsed_plan(c, bot, runner_id, document, detail):
     if detail.get("ready") is not True or not signed_in_by_lapsed_plan(document, detail, {}):
         return detail
     from . import model_subscriptions, providers
-    runner = c.execute("SELECT id, capabilities FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
-    filled = providers.fill(providers.load(c), BS.read(c, bot))
+    # Read once per snapshot: every bot on one computer asks for the same row (read_cache.one).
+    runner = read_cache.one(c, "SELECT id, capabilities FROM runners_with_state WHERE id=?", (runner_id,))
+    filled = providers.fill(providers.load(c), BS.read_in_snapshot(c, bot))
     if not runner or not signed_in_by_lapsed_plan(document, detail,
                                                   model_subscriptions.covered_runtimes(c, dict(runner), filled)):
         return detail
