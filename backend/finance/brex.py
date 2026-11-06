@@ -131,8 +131,8 @@ class Brex:
                          _page(cursor, posted_at_start=posted_at_start))
 
     def me(self) -> Answer:
-        """The user the token belongs to, with its role (GET /v2/users/me): an account or card admin's token can see card
-        payments, and the connect probe checks it."""
+        """The user the token belongs to (GET /v2/users/me). The connect probe reads it as the token check; the response has
+        no role, so nothing else is read from it."""
         return self._get("/v2/users/me", [])
 
 

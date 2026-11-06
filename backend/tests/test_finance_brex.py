@@ -91,7 +91,6 @@ class FakeBrex:
         self.cash_txns: dict[str, list[dict[str, Any]]] = {CASH: []}
         self.page = page
         self.status: int | None = None
-        self.role = "ACCOUNT_ADMIN"                       # the role /v2/users/me reports
         self.order = "newest_first"                       # the order Brex lists rows in (ORDERS)
         self.calls = 0                                    # cash account-list reads so far
         self.hook_at: dict[int, Callable[[], None]] = {}  # run before the nth cash account-list read (a row posted then)
@@ -114,7 +113,7 @@ class FakeBrex:
     def me(self) -> Answer:
         if self.status is not None:
             return Answer(self.status, {"message": "nope"})
-        return Answer(200, {"id": "user_1", "role": self.role})
+        return Answer(200, {"id": "user_1"})
 
     def _answer(self, rows: list[dict[str, Any]], cursor: str | None) -> Answer:
         if self.status is not None:
@@ -608,13 +607,6 @@ def test_the_connections_route_takes_a_brex_token_through_the_brex_probe(api, mo
                           )["history_from"] == "2026-03-01"
 
 
-def test_a_token_that_is_not_an_admin_is_refused_at_the_probe_with_a_plain_message():
-    fake = FakeBrex()
-    fake.role = "EMPLOYEE"
-    found, why = brex_sync.probe(fake)  # type: ignore[arg-type]
-    assert not found and "admin token" in why and "card payments" in why
-
-
 def test_the_connect_probe_has_a_budget_and_does_not_wait_out_a_long_retry_after():
     waits: list[float] = []
 
@@ -672,6 +664,31 @@ def test_a_card_payment_seen_only_on_the_bank_side_goes_to_the_card_and_the_card
     with books.read() as c:
         assert _feed(c, "ctx_pay")["entry_id"] == bank_entry      # the card side joins that entry: no second transfer
         assert _sum(c, _code(c, "card_program")) == 50_000
+        assert _sum(c, "6900") == 0
+        assert _every_entry_balances(c)
+
+
+def test_a_token_that_cannot_see_card_payments_posts_them_alone_and_is_noted_not_refused(books):
+    fake = FakeBrex()
+    connect_brex(books, fake)                              # the probe checks the token only: nothing refuses it here
+    assert brex_pass(books, fake, AT) == "ok"
+    fake.cash_txns[CASH].append(cash_txn("cash_pay", "CARD_COLLECTION", -50_000))
+    fake.cash[0]["current_balance"] = money(-50_000)
+    fake.cash[0]["available_balance"] = money(-50_000)
+    assert brex_pass(books, fake, LATER[0]) == "ok"        # the card side lists no COLLECTION: still a pass that ran
+    with books.read() as c:
+        assert _feed(c, "cash_pay")["entry_id"] is not None
+        assert _sum(c, _code(c, "card_program")) == 50_000
+        assert _sum(c, "6900") == 0
+        status, error = _last_error(c)
+        assert status == "active" and "Card payments aren't visible to this token" in error
+        assert _settings(c)["card_payments_hidden"] is True
+    fake.card_txns.append(card_txn("ctx_pay", "COLLECTION", 50_000))   # the card side shows it after all
+    assert brex_pass(books, fake, LATER[1]) == "ok"
+    with books.read() as c:
+        assert _feed(c, "ctx_pay")["entry_id"] == _feed(c, "cash_pay")["entry_id"]
+        assert "Card payments aren't visible" not in _last_error(c)[1]
+        assert _settings(c)["card_payments_hidden"] is False
         assert _sum(c, "6900") == 0
         assert _every_entry_balances(c)
 

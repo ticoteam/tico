@@ -283,6 +283,14 @@ def unmatched_transfers(c: sqlite3.Connection, connection_id: str, kinds: Sequen
                          "AND f.pending=0", [connection_id, *kinds]).fetchone()[0])
 
 
+def kinds_seen(c: sqlite3.Connection, connection_id: str, kinds: Sequence[str]) -> set[str]:
+    """Which of `kinds` a connection's feed rows show, whatever their status: what the provider's listings have carried."""
+    marks = ",".join("?" for _ in kinds)
+    rows = c.execute(f"SELECT DISTINCT f.kind FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id "
+                     f"WHERE m.connection_id=? AND f.kind IN ({marks})", [connection_id, *kinds]).fetchall()
+    return {str(r[0]) for r in rows}
+
+
 def rows_of_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
     return c.execute("SELECT * FROM fin_feed_txns WHERE entry_id=? ORDER BY id", (entry_id,)).fetchall()
 

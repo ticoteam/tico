@@ -21,6 +21,8 @@ What comes in, and how it maps (read-only; Brex is never written to):
   REWARDS_CREDIT) positive. A COLLECTION (a payment toward the card) carries no card and is one side of a card payment:
   banking._brex_payment pairs it with the bank's CARD_COLLECTION debit, or posts the bank side alone to the card liability,
   so a payment is never an expense. The direction comes from the type, not from Brex's sign (see core/feeds.brex_card_txn).
+  A token that cannot see the card side (CARD_COLLECTION on the cash side, no COLLECTION on the card side) gets the same
+  posted-alone path and a health note (_card_payments_hidden); it is never refused.
   A card type not listed there is posted with Brex's sign under BREX_OTHER (never paired as a payment) and noted in the
   connection's last_error. Card transactions carry no pending state: Brex lists settled ones only.
 - Cash rows of BOOK_TRANSFER and INTRA_CUSTOMER_ACCOUNT_BOOK_TRANSFER (money between the company's own Brex accounts) are
@@ -70,8 +72,8 @@ CATCH_UP_DAYS = 30                # the window every poll re-reads: delayed tran
 ACCOUNT_PAGES = 20                # account-list pages read per call
 BRACKET_TRIES = 3                 # reads of a cash account's first page and balance before a backfill step waits
 PROBE_SECONDS = 20                # the connect probe's whole budget: its calls and any wait Brex asks for, together
-ADMIN_ROLES = ("ACCOUNT_ADMIN", "CARD_ADMIN")   # the Brex roles that can see card payments
 NOTE_IDS = 50                     # ids kept per note (the first one is named)
+CARD_PAYMENTS_HIDDEN = "Card payments aren't visible to this token. Use an account admin's token to see every card."
 Make = Callable[[str], Any]       # a factory from the token to a provider (tests pass a fake)
 
 
@@ -169,13 +171,12 @@ def _card_row(a: Mapping[str, Any]) -> dict[str, object]:
 # ------------------------------------------------------------------------------------------------ connect probe
 def probe(provider: Provider) -> tuple[dict[str, object], str]:
     """What connection_create needs, read with the token before the action: the live card accounts and the live cash
-    accounts with their balances (last four only, never a full number). ({}, why) when the token does not work, is not an
-    account or card admin (card payments need one), or the company has more than one live card account (Finance reads one)."""
+    accounts with their balances (last four only, never a full number). ({}, why) when the token does not work or the company
+    has more than one live card account (Finance reads one). The token's role is not checked: a token that cannot see card
+    payments is noted by the sync (_card_payments_hidden), never refused."""
     me = provider.me()
     if not me.ok:
         return {}, error_text(me)
-    if str(me.body.get("role") or "").upper() not in ADMIN_ROLES:
-        return {}, "Brex needs an account or card admin token to see card payments; this token is not one"
     cards, why = _all(provider.card_accounts, ACCOUNT_PAGES)
     if why:
         return {}, why
@@ -306,13 +307,17 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
         going = not problems and not conf.get("backfilled")
         fields: dict[str, object] = {"last_sync_at": now, "updated_at": now,
                                      "next_sync_at": now if going else _after(now, POLL_MINUTES * 60)}
+        trusted = conf.get("sign") != "unverified"
+        if trusted:     # pairing runs whenever it can; while the sign is unchecked, _brex_payment holds the rows back
+            banking.pair_card_payments(load(c, now), cid)
         if problems:
             fields.update({"status": "error", "last_error": problems[0][:300]})
             banking.sync_failed(load(c, now), cid, str(row["status"]), problems[0])
         else:
-            trusted = conf.get("sign") != "unverified"
-            if trusted:     # a card payment pairs only once its bank side is trusted: a waiting one is paired by _brex_payment
-                banking.pair_card_payments(load(c, now), cid)
+            hidden = trusted and _card_payments_hidden(c, cid)
+            if hidden != bool(conf.get("card_payments_hidden")):
+                conf = {**conf, "card_payments_hidden": hidden}
+                fields["settings"] = SK.dump(conf)
             waiting = SK.unmatched_transfers(c, cid, F.BREX_BOOK_TRANSFERS) if trusted else 0
             fields.update({"status": "active", "last_error": _notes(conf, notes, waiting), "last_ok_at": now})
             banking.refresh_connection_openings(load(c, now), cid)
@@ -327,14 +332,24 @@ def _failed(store: Any, cid: str, why: str, now: str, prior: str) -> None:
         banking.sync_failed(load(c, now), cid, prior, why)
 
 
+def _card_payments_hidden(c: Any, cid: str) -> bool:
+    """A token that cannot see card payments: the cash side shows CARD_COLLECTION payoffs and the card side shows no
+    COLLECTION at all. Such a payoff posts alone to the card liability (banking._card_payment_alone); this is a note, never
+    a refusal, and it clears once the card side shows a COLLECTION."""
+    seen = SK.kinds_seen(c, cid, F.BREX_CARD_PAYMENTS)
+    return F.BREX_CASH_CARD_PAYMENT in seen and F.BREX_COLLECTION not in seen
+
+
 def _notes(conf: Mapping[str, Any], notes: list[str], waiting: int = 0) -> str | None:
-    """What a pass that read is noted as in last_error (the status stays active): this pass's notes; a flipped sign; each Brex
-    card type Finance does not map (`unknown`, from the first row of that type read); the rows in another currency
-    (`foreign`) and the rows with no amount (`unamounted`), kept as seen; and the book transfers still waiting for their
-    other side (`waiting`)."""
+    """What a pass that read is noted as in last_error (the status stays active): this pass's notes; a flipped sign; a token
+    that cannot see card payments (`card_payments_hidden`); each Brex card type Finance does not map (`unknown`, from the
+    first row of that type read); the rows in another currency (`foreign`) and the rows with no amount (`unamounted`), kept
+    as seen; and the book transfers still waiting for their other side (`waiting`)."""
     out = list(notes)
     if conf.get("flipped"):
         out.append("Brex's cash amounts had the opposite sign to its balances: Finance reads them with the sign flipped")
+    if conf.get("card_payments_hidden"):
+        out.append(CARD_PAYMENTS_HIDDEN)
     for kind, first in dict(conf.get("unknown") or {}).items():
         out.append(f"Brex card transactions of type {kind} are not mapped: Finance posts them with Brex's sign (first: {first})")
     for cur, ids in dict(conf.get("foreign") or {}).items():
