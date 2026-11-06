@@ -6,12 +6,15 @@
 It runs the pushed commit (HEAD by default), never this checkout's uncommitted files, waits for the result, prints the
 command's last lines and keeps the whole log under .remote-runs/. The exit code is the command's own. `gh` must be
 signed in with permission to dispatch workflows on the repository. scripts/heavy.sh calls it when TICO_HEAVY_REMOTE=1.
+At most TICO_REMOTE_MAX (4 by default; 0 means no cap) of the repository's remote runs go at once: a run past that waits
+up to 20 minutes for a slot, then exits without dispatching.
 """
 
 import argparse
 import json
 import os
 from pathlib import Path
+import random
 import shlex
 import subprocess
 import sys
@@ -22,6 +25,10 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = 'remote-run.yml'
 TAIL = 200
+CAP = 4  # remote runs of this repository at once; TICO_REMOTE_MAX overrides it
+WAIT_LIMIT = 20 * 60  # seconds a dispatch waits for a free slot
+CHECK_LIMIT = 2 * 60  # seconds the count may keep failing before a dispatch goes ahead without it
+BUSY = ('queued', 'in_progress', 'waiting', 'pending')
 
 
 def rate_limit_wait():
@@ -130,10 +137,83 @@ def wait(run):
         time.sleep(30)
 
 
+def remote_cap():
+    """TICO_REMOTE_MAX, or CAP when it is unset; 0 means no cap."""
+    value = os.environ.get('TICO_REMOTE_MAX', '').strip()
+    if not value:
+        return CAP
+    if not value.isdigit():
+        raise SystemExit(f'remote: TICO_REMOTE_MAX must be a whole number (0 means no cap), not {value!r}')
+    return int(value)
+
+
+def busy_remote_runs():
+    """How many of the newest 100 runs of the workflow are queued, running, waiting or pending. One API call: GitHub
+    filters a run list by a single status, so the four states are counted from one list."""
+    result = subprocess.run(
+        ['gh', 'api', f'repos/{{owner}}/{{repo}}/actions/workflows/{WORKFLOW}/runs?per_page=100'],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError(' '.join((result.stderr or 'gh api failed').split()))
+    try:
+        return sum(run['status'] in BUSY for run in json.loads(result.stdout)['workflow_runs'])
+    except (ValueError, KeyError, TypeError) as error:
+        raise RuntimeError(f'unreadable run list ({error})') from None
+
+
+def wait_for_capacity(cap):
+    """Return True once fewer than `cap` remote runs are busy. While the count fails, retry with backoff; after two
+    minutes of failures, warn and return False, so the caller dispatches anyway and CI still works. A wait past 20
+    minutes exits without dispatching."""
+    if not cap:
+        return True
+    started = time.monotonic()
+    failing_since, retry = None, 5
+    while True:
+        try:
+            busy = busy_remote_runs()
+        except RuntimeError as error:
+            now = time.monotonic()
+            failing_since = now if failing_since is None else failing_since
+            left = CHECK_LIMIT - (now - failing_since)
+            if left <= 0:
+                print(
+                    f'remote: warning: could not count busy remote runs for 2 min ({error}); dispatching without the cap',
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return False
+            print(
+                f'remote: could not count busy remote runs ({error}); retrying in {min(retry, left):g} s',
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(min(retry, left))
+            retry = min(retry * 2, 60)
+            continue
+        failing_since, retry = None, 5
+        if busy < cap:
+            return True
+        waited = time.monotonic() - started
+        if waited >= WAIT_LIMIT:
+            raise SystemExit(
+                f'remote: {busy} remote runs still busy (cap {cap}) after 20 min; not dispatching. '
+                'Wait for them to finish, or raise TICO_REMOTE_MAX.'
+            )
+        print(f'waiting: {busy} remote run{"" if busy == 1 else "s"} busy (cap {cap})', file=sys.stderr, flush=True)
+        # Jittered, so agents that started together don't all poll and dispatch together.
+        time.sleep(min(random.uniform(30, 60), WAIT_LIMIT - waited))
+
+
 def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
     """Run `command` on a fresh VM against the pushed `ref` (HEAD) and wait for it: (exit code, the run's log folder).
     The code is None when the VM never ran the command to the end (setup failed, canceled, timed out, or the Spot
     VM was reclaimed). `echo` prints the command's last lines here, as `remote.py` itself does."""
+    cap = remote_cap()
     ref = git('rev-parse', ref or 'HEAD')
     if not git('branch', '-r', '--contains', ref):
         raise SystemExit(f'remote: {ref[:7]} is not pushed; push it first (the VM runs the pushed commit)')
@@ -145,6 +225,7 @@ def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
         file=sys.stderr,
         flush=True,
     )
+    wait_for_capacity(cap)
     # The workflow comes from main, so a branch can't change what a remote run is allowed to do.
     gh(
         'workflow',

@@ -1,5 +1,6 @@
 """scripts/remote.py sends a command to a RunsOn VM, which runs it from its own checkout of the repository."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -149,3 +150,83 @@ def test_other_failures_still_exit(monkeypatch, poll, error):
     with pytest.raises(SystemExit, match='gh run view failed'):
         remote.gh('run', 'view', '7', poll=poll)
     assert sleeps == []
+
+
+def runs(*statuses):
+    """The reply to the workflow's run list: one run per status."""
+    return json.dumps({'workflow_runs': [{'status': status} for status in statuses]})
+
+
+def fake_timeline(monkeypatch):
+    """A clock that moves only when sleep() is called: sleep records how long it was asked to wait and advances time."""
+    now = [0.0]
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(remote.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(remote.time, 'sleep', sleep)
+    return sleeps
+
+
+def test_a_dispatch_under_the_cap_goes_at_once(monkeypatch, capsys):
+    sleeps = fake_timeline(monkeypatch)
+    calls = fake_gh(monkeypatch, [(0, runs('in_progress', 'queued', 'completed', 'success'), '')])
+    assert remote.wait_for_capacity(4)
+    assert sleeps == []
+    assert capsys.readouterr().err == ''
+    assert len(calls) == 1 and '/actions/workflows/remote-run.yml/runs' in calls[0][2]
+
+
+def test_a_dispatch_at_the_cap_waits_for_a_slot_then_goes(monkeypatch, capsys):
+    sleeps = fake_timeline(monkeypatch)
+    fake_gh(
+        monkeypatch,
+        [
+            (0, runs('in_progress', 'queued', 'waiting', 'pending', 'completed'), ''),  # four busy: the cap
+            (0, runs('in_progress', 'queued', 'waiting', 'completed'), ''),  # one has finished
+        ],
+    )
+    assert remote.wait_for_capacity(4)
+    assert len(sleeps) == 1 and 30 <= sleeps[0] <= 60
+    assert capsys.readouterr().err == 'waiting: 4 remote runs busy (cap 4)\n'
+
+
+def test_a_wait_past_twenty_minutes_exits_without_dispatching(monkeypatch):
+    sleeps = fake_timeline(monkeypatch)
+    fake_gh(
+        monkeypatch, [(0, runs('in_progress', 'in_progress', 'queued', 'queued'), '')] * 50
+    )  # 20 min at 30 s a poll
+    with pytest.raises(SystemExit, match='after 20 min; not dispatching') as exit:
+        remote.wait_for_capacity(4)
+    assert exit.value.code  # a message, so the exit status is not 0
+    assert sum(sleeps) == pytest.approx(20 * 60)  # the last wait is clamped to the limit, in floats
+
+
+def test_a_count_that_keeps_failing_for_two_minutes_warns_and_lets_the_dispatch_go(monkeypatch, capsys):
+    sleeps = fake_timeline(monkeypatch)
+    fake_gh(monkeypatch, [(1, '', 'HTTP 502: Bad Gateway')] * 20)
+    assert remote.wait_for_capacity(4) is False
+    assert sum(sleeps) == pytest.approx(2 * 60)
+    assert 'dispatching without the cap' in capsys.readouterr().err
+
+
+def test_a_cap_of_zero_means_no_cap_and_no_count(monkeypatch):
+    fake_gh(monkeypatch, [])  # any count would pop an empty list and fail
+    assert remote.wait_for_capacity(0)
+
+
+@pytest.mark.parametrize('value, cap', [(None, 4), ('0', 0), ('12', 12)])
+def test_remote_max_sets_the_cap(monkeypatch, value, cap):
+    monkeypatch.delenv('TICO_REMOTE_MAX', raising=False)
+    if value is not None:
+        monkeypatch.setenv('TICO_REMOTE_MAX', value)
+    assert remote.remote_cap() == cap
+
+
+def test_remote_max_must_be_a_whole_number(monkeypatch):
+    monkeypatch.setenv('TICO_REMOTE_MAX', 'many')
+    with pytest.raises(SystemExit, match='TICO_REMOTE_MAX must be a whole number'):
+        remote.remote_cap()
