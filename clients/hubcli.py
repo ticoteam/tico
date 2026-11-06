@@ -3343,7 +3343,12 @@ def parser():
     s = watch.add_parser("add", help="watch one page of an entity")
     s.add_argument("entity_id")
     s.add_argument("url")
-    s.add_argument("--kind", default="other", choices=["pricing", "careers", "changelog", "docs", "home", "other"])
+    s.add_argument(
+        "--kind",
+        default="other",
+        choices=["pricing", "careers", "changelog", "docs", "home", "other", "release"],
+        help="release: the URL is github:owner/repo or a release feed, read through the Gateway",
+    )
     s.set_defaults(fn="market watch add")
     s = watch.add_parser("list", help="the watched pages and when each was last read")
     s.add_argument("--entity", dest="entity_id")
@@ -4383,6 +4388,16 @@ def parser():
         "--max-tokens", dest="max_tokens", type=int, help="how much to return, 1,000 to 50,000 (10,000 by default)"
     )
     s.set_defaults(fn="gateway fetch")
+    s = gateway.add_parser("digest", help="group many items into one digest through the Gateway (Low prices)")
+    s.add_argument(
+        "--items-file",
+        dest="items_file",
+        required=True,
+        help='a JSON list of items, each {"title", and optionally "id", "text", "url", "source", "at"}, 1 to 300',
+    )
+    s.add_argument("--focus", help="what the reader cares about; it orders the groups")
+    s.add_argument("--style", choices=("brief", "full"), help="brief (the default) or full")
+    s.set_defaults(fn="gateway digest")
     s = gateway.add_parser("image", help="make an image through the Gateway and save it to a file")
     s.add_argument("prompt")
     s.add_argument(

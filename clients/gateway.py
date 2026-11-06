@@ -20,6 +20,7 @@ minute per key, so the server asks it gently (backend/gateway_connection.py `che
 import datetime
 import hashlib
 import hmac
+import http.client
 import json
 import os
 import re
@@ -308,7 +309,7 @@ def check(key, url="", timeout=TIMEOUT, opener=None):
         with exc:
             try:
                 code = _code(exc.read())
-            except Exception:
+            except (OSError, http.client.HTTPException, ValueError):
                 code = ""
             state, used = state_of_error(exc.code, code), None
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
@@ -413,7 +414,7 @@ def _post(url, body, headers, timeout, opener):
         with exc:
             try:
                 code = _code(exc.read())
-            except Exception:
+            except (OSError, http.client.HTTPException, ValueError):
                 code = ""
             return exc.code, {}, code or str(exc.code)
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
@@ -529,6 +530,123 @@ def fetch(url, key, page, max_tokens=10000, headers=None, timeout=35, opener=Non
             "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None},
         },
         "",
+    )
+
+
+def digest(url, key, items, focus=None, style="brief", headers=None, timeout=130, opener=None):
+    """Tico HQ's digest (`POST <base>/digest`, the gateway key): (status, {summary, groups: [{title, why, item_ids}],
+    dropped, usage: {cost_usd}} or {}, error code). The items are the caller's text, read by the Gateway; the answer keeps
+    only the fields the Gateway documents, each cut to a sensible length."""
+    body = {"items": list(items)[:300], "style": style if style in ("brief", "full") else "brief"}
+    if focus:
+        body["focus"] = str(focus)[:500]
+    status, payload, code = _post(
+        safe_base(url) + "/digest", body, {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener
+    )
+    if status != 200:
+        return status, {}, code
+    groups = [
+        {
+            "title": str(g.get("title") or "")[:200],
+            "why": str(g.get("why") or "")[:600],
+            "item_ids": [str(i) for i in g.get("item_ids") or []][:300],
+        }
+        for g in payload.get("groups") or []
+        if isinstance(g, dict)
+    ][:100]
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    cost = usage.get("cost_usd")
+    return (
+        200,
+        {
+            "summary": str(payload.get("summary") or "")[:12000],
+            "groups": groups,
+            "dropped": [str(i) for i in payload.get("dropped") or []][:300],
+            "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None},
+        },
+        "",
+    )
+
+
+def _call(method, url, body=None, headers=None, timeout=TIMEOUT, opener=None):
+    """(status, payload, error code) for a call to the Gateway that is not a POST: a GET, or a DELETE that answers no
+    body (its payload is {}). An unreachable Gateway is status 0, and an answer too large to keep is `too_large`."""
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode() if body is not None else None,
+        method=method,
+        headers={
+            **(headers or {}),
+            "Accept": "application/json",
+            **({"Content-Type": "application/json"} if body is not None else {}),
+        },
+    )
+    cap = 4 * 1024 * 1024
+    try:
+        with (opener or _send)(request, timeout=timeout) as response:
+            raw = response.read(cap + 1)
+            if len(raw) > cap:
+                return 0, {}, "too_large"
+            payload = json.loads(raw) if raw else {}
+        return getattr(response, "status", 200), payload if isinstance(payload, dict) else {}, ""
+    except urllib.error.HTTPError as exc:
+        with exc:
+            try:
+                code = _code(exc.read(4096))
+            except (OSError, http.client.HTTPException, ValueError):
+                code = ""
+            return exc.code, {}, code or str(exc.code)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return 0, {}, "unreachable"
+
+
+def signals_watches(base, key, timeout=TIMEOUT, opener=None):
+    """This install's Signals watches at Tico HQ (`GET <base>/signals/watches`): (status, {watches: [...]}, code)."""
+    return _call(
+        "GET",
+        safe_base(base) + "/signals/watches",
+        headers={"Authorization": "Bearer " + key},
+        timeout=timeout,
+        opener=opener,
+    )
+
+
+def signals_watch(base, key, kind, target, timeout=TIMEOUT, opener=None):
+    """Watch `target` (a page's https address, or a release's `github:owner/repo` or feed) at Tico HQ, `kind` page or
+    release (`POST <base>/signals/watches`): (status, {id, kind, target, ...}, code). HQ answers the same watch again
+    for the same target, so a retry is safe."""
+    return _call(
+        "POST",
+        safe_base(base) + "/signals/watches",
+        {"kind": kind, "target": target},
+        {"Authorization": "Bearer " + key},
+        timeout,
+        opener,
+    )
+
+
+def signals_end(base, key, watch_id, timeout=TIMEOUT, opener=None):
+    """End one of this install's watches at Tico HQ (`DELETE <base>/signals/watches/<id>`): (status, {}, code); 204 when
+    ended, 404 when HQ does not hold it."""
+    return _call(
+        "DELETE",
+        safe_base(base) + "/signals/watches/" + urllib.parse.quote(str(watch_id), safe=""),
+        headers={"Authorization": "Bearer " + key},
+        timeout=timeout,
+        opener=opener,
+    )
+
+
+def signals_changes(base, key, since="", limit=200, timeout=TIMEOUT, opener=None):
+    """What Signals found on this install's watches after the cursor `since` (`GET <base>/signals/changes`):
+    (status, {changes: [...], next: cursor}, code). Pass `next` back as `since`."""
+    query = urllib.parse.urlencode({"since": since, "limit": int(limit)} if since else {"limit": int(limit)})
+    return _call(
+        "GET",
+        safe_base(base) + "/signals/changes?" + query,
+        headers={"Authorization": "Bearer " + key},
+        timeout=timeout,
+        opener=opener,
     )
 
 

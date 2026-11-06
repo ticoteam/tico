@@ -21,6 +21,9 @@ and the market entity it is about in square brackets:
 
     - Example Co moved its Pro plan from 29 to 39 a seat (pricing page, Oct 24). [company/example-co]
 
+When the items you gathered number more than about 20, `hub gateway digest --items-file <file>` (the `hub_gateway_digest` tool)
+groups them: order the bullets by its groups and leave out its `dropped` ids; each bullet still names its entity.
+
 Group the bullets by what they touch (pricing, product, people, customers). When a bullet's entity is one an active bet
 cites, name the bet in the bullet ("touches the bet on <bet id>").
 
