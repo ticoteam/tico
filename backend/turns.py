@@ -102,6 +102,9 @@ def build_steps(rows):
 # A shell call's events name the program it runs (the runner's summary: `npm`, or `hub task close`), never its
 # arguments. These tool names are shells.
 SHELL_TOOLS = {"bash", "shell"}
+# The words a shell line may start with before its work (`cd web && npm test`, `export X=1 && npm test`). The runner
+# names the work past them; a summary stored by an older runner may still start with one.
+SETUP_WORDS = {"cd", "source", ".", "export", "env"}
 # The programs a shell call may be labelled with on its own. The runner sends a shell line's first program (or `hub` and
 # its command path); a summary of any other shape, from a current or an older runner, is never shown.
 SHELL_PROGRAMS = {"awk", "cargo", "cat", "cd", "curl", "docker", "find", "gh", "git", "go", "grep", "jq", "ls", "make",
@@ -199,13 +202,31 @@ def tool_words(name):
     return words[:TOOL_LABEL_CHARS].strip() or "a tool"
 
 
+def strip_setup(words):
+    """The words after a shell line's setup prefix (`cd web`, `export X=1`, `env X=1`, `source f`, `. f`), so the work
+    it sets up is what is named. Assignments are dropped unread. A prefix with nothing after it is kept whole, so a
+    bare `cd` still reads `Ran cd`, the last resort."""
+    while len(words) > 1 and words[0] in SETUP_WORDS:
+        rest = words[1:]
+        if words[0] in ("cd", "source", "."):
+            rest = rest[1:]
+        else:
+            while rest and "=" in rest[0]:
+                rest = rest[1:]
+        if not rest:
+            break
+        words = rest
+    return words
+
+
 def shell_label(summary):
     """A shell call's label from its summary, or None when the summary is neither a hub command nor one program from
-    SHELL_PROGRAMS. A hub command's summary is `hub` and its command path (the runner checks the path against the CLI's
-    command list): its phrase when it has one, else just `Ran hub`, since an old stored summary can hold argument words."""
-    words = summary.split()
+    SHELL_PROGRAMS. A setup prefix (`cd web &&`) is skipped first, so `cd web && hub task list` reads as the hub command.
+    A hub command's summary is `hub` and its command path (the runner checks the path against the CLI's command list):
+    its phrase when it has one, else just `Ran hub`, since an old stored summary can hold argument words."""
+    words = strip_setup(summary.split())
     if words[:1] == ["hub"]:
-        phrase = hub_phrase(hub_words(summary) or [])
+        phrase = hub_phrase(hub_words(" ".join(words)) or [])
         if phrase:
             return phrase
         return "Ran hub"
