@@ -19,7 +19,18 @@ from backend.finance.core import budgets as B
 from backend.finance.core.errors import FinanceError
 from backend.finance.store import budgets as SB
 from backend.finance.store import ledger as SL
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, budget, finance_template, spend, store  # noqa: F401
+from backend.tests.test_finance_fixtures import (
+    open_views,
+    AT,
+    OWNER,
+    account,
+    act,
+    books,
+    budget,
+    finance_template,
+    spend,
+    store,
+)  # noqa: F401
 
 
 def _tree(c, parent_amount=10_000, kids=(("web", 6_000), ("sales", 4_000)), under=None):
@@ -754,6 +765,7 @@ def test_a_rule_that_names_the_finance_approver_never_lets_them_approve_their_ow
         _sees_parent(c, "human:cara")
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:cara"}).status == "committed"
         FA.setup(c, OWNER, AT, finance_approver="human:cara")
+        open_views(c)
         rule = act(
             c,
             OWNER,

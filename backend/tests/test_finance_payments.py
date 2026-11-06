@@ -21,6 +21,7 @@ from backend.finance.store import tico as FT
 from backend.finance.actions import FinanceError
 from backend.finance.mercury import Answer
 from backend.tests.test_finance_fixtures import (  # noqa: F401
+    open_views,
     ACME_ADDRESS,
     AT,
     MERCURY,
@@ -1565,6 +1566,7 @@ def test_bank_numbers_live_only_in_the_vault_through_create_approve_send(api):
     fake = FakeMercury()
     with store.transaction() as c:
         FA.setup(c, OWNER, AT)
+        open_views(c)
     connect(store, fake)
     with store.transaction() as c:
         act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
@@ -1615,6 +1617,7 @@ def test_a_denied_or_declined_payee_leaves_no_bank_numbers_and_no_vault_row(api)
     fake = FakeMercury()
     with store.transaction() as c:
         FA.setup(c, OWNER, AT)
+        open_views(c)
     connect(store, fake)
     denied = post(api, "finance/actions", {"kind": "recipient_add", "payload": PAYEE}, token="cara-test")
     assert denied["status"] == "denied"
@@ -2329,6 +2332,7 @@ def test_payee_and_payment_actions_work_on_an_app_with_timers_off(stale_vault, a
     fake = FakeMercury()
     with store.transaction() as c:
         FA.setup(c, OWNER, AT)
+        open_views(c)
     connect(store, fake)
     added = post(api, "finance/actions", {"kind": "recipient_add", "payload": PAYEE})
     assert added["status"] == "committed", added
@@ -2723,6 +2727,7 @@ def test_approving_a_finance_action_commits_synced(api, monkeypatch):
     FA.use_vault(api.app.state.vault)
     with store.transaction() as c:
         FA.setup(c, OWNER, AT)
+        open_views(c)
     connect(store, FakeMercury())
     with store.transaction() as c:
         act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
@@ -2755,6 +2760,7 @@ def test_a_finance_action_in_a_plain_transaction_syncs_the_wal_once_after_commit
     store = api.app.state.store
     with store.transaction() as c:
         FA.setup(c, OWNER, AT)
+        open_views(c)
     monkeypatch.setenv("TICO_SQLITE_SYNC", "normal")
     synced = []
     monkeypatch.setattr(H.os, "fsync", lambda fd: synced.append(fd))
@@ -2774,6 +2780,7 @@ def test_a_finance_action_whose_wal_sync_fails_is_not_answered_as_done(api, monk
     store = api.app.state.store
     with store.transaction() as c:
         FA.setup(c, OWNER, AT)
+        open_views(c)
     monkeypatch.setenv("TICO_SQLITE_SYNC", "normal")
 
     def broken(fd):
