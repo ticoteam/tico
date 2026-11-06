@@ -325,6 +325,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     // a bot filed, is for senders that name no way).
     assert.deepEqual(await looks(), {shows: 'steer:', label: 'Send', badge: ''});
     assert.equal(await caret.isVisible(), true, 'the caret shows where a bot gets the comment');
+    assert.equal(await modal.locator('[data-task-chat-to]').innerText(), '', 'the way has no line of its own: Reaches N says it');
     assert.deepEqual(await send('Which is first?'), {text: 'Which is first?', public: false, delivery: 'steer'});
 
     // The menu: Steer, Queue, Defer and its durations, then Set as goal apart, each with Send's icon; upward, inside

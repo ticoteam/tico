@@ -736,16 +736,6 @@ function taskDeliveryMode(state) {
   if (way === 'steer' && ways.includes('queue')) return 'queue';
   return 'defer:' + taskDeferDefault(state);
 }
-// What the chosen way does, said before sending.
-function taskDeliveryHint(state) {
-  const who = botDisplayName(state.data.comment_to.bot), mode = taskDeliveryMode(state), way = deliveryWay(mode);
-  const cd = state.data.comment_delivery;
-  if (way === 'queue') return `Queue: ${who} gets it after its current turn, or now.`;
-  if (way === 'goal') return `Set as goal: ${who} works toward this text in the task's session.`;
-  if (way === 'steer') return `Steer: into ${who}'s running turn now${cd.steers ? '' : ", or after it if it can't steer"}.`;
-  const f = deliveryFor(mode);
-  return `Defer: ${who} gets it with its next turn on this task${f === 'never' ? '' : `, at the latest in ${f}`}.`;
-}
 // Send's icon says the way the comment is sent; without a bot it is the plain arrow, with no caret.
 function taskDeliveryPaint(state) {
   const main = $('[data-task-main]', state.host), caret = $('[data-task-caret]', state.host);
@@ -771,8 +761,8 @@ function taskDeliveryMenu(state, open) {
 }
 function taskComposerToPaint(state) {
   const hint = $('[data-task-chat-to]', state.host), box = $('textarea', state.host);
-  if (hint) hint.textContent = taskDeliverySplit(state) ? taskDeliveryHint(state)
-    : taskComposerTo(state.data?.comment_to, box?.value);
+  // No line for the way Send shows: Reaches N says it. This line only holds the no-bot notice.
+  if (hint) hint.textContent = taskDeliverySplit(state) ? '' : taskComposerTo(state.data?.comment_to, box?.value);
   taskDeliveryPaint(state);
   taskFootPaint(state);
 }
