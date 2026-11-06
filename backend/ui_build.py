@@ -1,3 +1,4 @@
+# pyright: strict
 """The UI's TypeScript files, compiled to JavaScript before anything serves them.
 
 A file under ui/ may be TypeScript (`ui/app/a.ts`); index.html then lists it by that name. `npm run build:ui`
@@ -21,6 +22,13 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    # A checkout path as a string or a path object (callers pass both).
+    type PathArg = str | os.PathLike[str]
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = "manifest.json"
@@ -37,16 +45,16 @@ class StaleBuild(Exception):
     pass
 
 
-def out_dir(ui_dir):
+def out_dir(ui_dir: "PathArg") -> Path:
     """Where the compiled files of `ui_dir` live: build/ui beside it."""
     ui_dir = Path(ui_dir)
     return ui_dir.parent / "build" / ui_dir.name
 
 
-def sources(ui_dir):
+def sources(ui_dir: "PathArg") -> list[str]:
     """Every .ts file under ui_dir (declaration files hold types only), relative to it, sorted."""
     ui_dir = Path(ui_dir)
-    found = []
+    found: list[str] = []
     for base, dirs, files in os.walk(ui_dir):
         dirs[:] = [d for d in dirs if d not in SKIP]
         for name in files:
@@ -55,26 +63,26 @@ def sources(ui_dir):
     return sorted(found)
 
 
-def _sha(path):
+def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def manifest_path(ui_dir):
+def manifest_path(ui_dir: "PathArg") -> Path:
     return out_dir(ui_dir) / MANIFEST
 
 
-def _manifest(ui_dir):
+def _manifest(ui_dir: "PathArg") -> dict[str, dict[str, Any]]:
     try:
         return json.loads(manifest_path(ui_dir).read_text()).get("files", {})
     except (OSError, ValueError, AttributeError):
         return {}
 
 
-def compiled(ui_dir, name, manifest=None):
+def compiled(ui_dir: "PathArg", name: str, manifest: dict[str, Any] | None = None) -> Path:
     """The compiled JavaScript of ui/<name> (a .ts path relative to ui_dir), or StaleBuild when it is missing or was
     built from other source."""
     ui_dir = Path(ui_dir)
-    entry = (_manifest(ui_dir) if manifest is None else manifest).get(name) or {}
+    entry: dict[str, Any] = (_manifest(ui_dir) if manifest is None else manifest).get(name) or {}
     output = out_dir(ui_dir) / (name[:-3] + ".js")
     try:
         fresh = entry.get("source") == _sha(ui_dir / name) and output.is_file() and entry.get("output") == _sha(output)
@@ -88,7 +96,7 @@ def compiled(ui_dir, name, manifest=None):
     return output
 
 
-def source_map(ui_dir, name):
+def source_map(ui_dir: "PathArg", name: str) -> Path:
     """The source map of ui/<name>'s compiled JavaScript, while that output is current and the map is the one built
     with it; StaleBuild otherwise."""
     ui_dir = Path(ui_dir)
@@ -104,15 +112,15 @@ def source_map(ui_dir, name):
     return path
 
 
-def without_map_line(data):
+def without_map_line(data: bytes) -> bytes:
     """Compiled JavaScript without the line naming its source map."""
     return MAP_LINE.sub(b"\n", data)
 
 
-def stale(ui_dir):
+def stale(ui_dir: "PathArg") -> list[str]:
     """The .ts files under ui_dir whose compiled output is missing or stale."""
     manifest = _manifest(ui_dir)
-    bad = []
+    bad: list[str] = []
     for name in sources(ui_dir):
         try:
             compiled(ui_dir, name, manifest)
@@ -121,7 +129,7 @@ def stale(ui_dir):
     return bad
 
 
-def check(ui_dir):
+def check(ui_dir: "PathArg") -> None:
     bad = stale(ui_dir)
     if bad:
         raise StaleBuild(
@@ -130,10 +138,11 @@ def check(ui_dir):
         )
 
 
-def _nvm_default(home):
+def _nvm_default(home: Path) -> list[Path]:
     """nvm's default Node without its `current` link: the newest installed version its default alias names (a
     version prefix such as `22`), or the newest installed at all."""
     versions = home / ".nvm" / "versions" / "node"
+    installed: list[Path]
     try:
         alias = (home / ".nvm" / "alias" / "default").read_text().strip().lstrip("v")
         installed = [p for p in versions.iterdir() if (p / "bin" / "node").is_file()]
@@ -142,7 +151,7 @@ def _nvm_default(home):
     if not installed:
         return []
 
-    def number(p):
+    def number(p: Path) -> tuple[int, ...]:
         return tuple(int(n) if n.isdigit() else 0 for n in p.name.lstrip("v").split("."))
 
     named = [
@@ -151,10 +160,16 @@ def _nvm_default(home):
     return [max(named or installed, key=number) / "bin"]
 
 
-def nodes(which=shutil.which, dirs=NODE_DIRS, home=None):
+def nodes(
+    which: "Callable[[str], str | None]" = shutil.which,
+    dirs: tuple[str, ...] = NODE_DIRS,
+    home: "PathArg | None" = None,
+) -> list[str]:
     """Every Node this computer has, PATH's first, then the usual install folders (NODE_DIRS, NVM_BIN, VOLTA_HOME,
     nvm's default version): a service started by launchd or systemd has only the system folders on PATH."""
     home = Path(home or Path.home())
+    found: list[str]
+    seen: set[str]
     found, seen = [], set()
     places = [Path(d.replace("~", str(home), 1)) for d in dirs]
     places += [Path(os.environ[k]) for k in ("NVM_BIN",) if os.environ.get(k)]
@@ -170,7 +185,13 @@ def nodes(which=shutil.which, dirs=NODE_DIRS, home=None):
     return found
 
 
-def prepare(ui_dir=ROOT / "ui", run=subprocess.run, which=shutil.which, dirs=NODE_DIRS, home=None):
+def prepare(
+    ui_dir: "PathArg" = ROOT / "ui",
+    run: "Callable[..., Any]" = subprocess.run,
+    which: "Callable[[str], str | None]" = shutil.which,
+    dirs: tuple[str, ...] = NODE_DIRS,
+    home: "PathArg | None" = None,
+) -> None:
     """Before a server starts: the compiled UI, built here first when it is stale and this checkout can build it
     (Node and `npm ci`'s esbuild), as screen_binary.prepare builds the relay. Each Node found (`nodes`) is tried in turn
     until one builds it. StaleBuild, saying what was missing, when it still is not."""
