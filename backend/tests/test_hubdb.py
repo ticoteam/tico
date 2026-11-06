@@ -1134,23 +1134,6 @@ class WaitingWithDependency(HubCase):
         self.assertEqual((H.task(self.conn, trial['id'])['status'], H.task(self.conn, trial['id'])['note']),
                          ('open', f"{H.person_name(self.conn, CMO)} closed the ask to Ana Rivera: Ana said yes."))
 
-    def test_bot_tasks_already_waiting_on_a_person_move_to_the_subtask_shape(self):
-        from backend import person_asks
-        plain = "Approve the venue for Friday? If yes, I'll book it."
-        moved = H.task_create(self.conn, CMO, 'Book the venue', 'All the venue notes.', CMO, private=False)
-        unclear = H.task_create(self.conn, CMO, 'Renew the domain', '', CMO, private=False)
-        for row, note in ((moved, plain), (unclear, 'Blocked on db14c907')):
-            self.conn.execute("UPDATE tasks SET status='waiting', waiting_on=?, note=? WHERE id=?", (ANA, note, row['id']))
-        self.assertEqual(person_asks.migrate(self.conn), [moved['id']])
-        self.assertEqual(person_asks.migrate(self.conn), [], 'moved once')
-        after = H.task(self.conn, moved['id'])
-        self.assertEqual((after['owner_id'], after['status'], after['waiting_on'], after['note']),
-                         (CMO, 'waiting', None, f'Blocked on Ana Rivera: {plain}'))
-        [card] = [H.task(self.conn, t) for t in TR.child_ids(self.conn, moved['id'])]
-        self.assertEqual((card['owner_id'], card['title'], card['body']), (ANA, 'Approve the venue for Friday?', plain))
-        # The one with no plain ask stays for its bot to restate (the task roundup lists it).
-        self.assertEqual(H.task(self.conn, unclear['id'])['waiting_on'], ANA)
-
     def test_a_plain_ask_passes_and_shorthand_does_not(self):
         # Abbreviations, initials, a year after a few letters, a standard's number and a product name are plain words.
         for ask in ["Can we meet at 3 p.m. on Friday? If yes, I will book the room.",

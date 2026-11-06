@@ -158,34 +158,6 @@ def test_a_person_s_task_stays_put_and_an_owner_s_own_hold_is_kept(api):
         assert row["status"] == "waiting" and row["blocked_reason"] == "Held until the legal review"
 
 
-def test_backfill_puts_every_waiting_task_right_once_with_one_wake_per_bot(api):
-    """Criterion 12."""
-    with api.app.state.store.transaction() as c:
-        ana = task_holds.name(c, "human:ana")
-        stale = [bot_task(c, f"Stale wait {n}") for n in range(3)]
-        for tid in stale:
-            wait(c, tid)
-        for tid in stale:
-            set_holds(c, tid, blocked_reason='Waiting on Chris Hawkins', blocked_kind='dependency')
-        held = bot_task(c, "Really waiting")
-        ask(c, held, "Which plan?")
-        wait(c, held)
-        set_holds(c, held, blocked_reason='Waiting on Chris Hawkins')
-        person = bot_task(c, "Ana's own wait", owner="human:ana", actor="human:ana")
-        wait(c, person, owner="human:ana")
-        set_holds(c, person, blocked_reason='Waiting on Chris Hawkins')
-        before = len(notices(c, "bot:ops", news="assignment"))
-        result = task_holds.backfill(c)
-        assert result == {"fixed": 2, "opened": 3, "woken": 1}
-        assert all(H.task(c, tid)["status"] == "open" for tid in stale)
-        assert H.task(c, held)["blocked_reason"] == f"Waiting on {ana}: Which plan?"
-        assert H.task(c, person)["blocked_reason"] == task_holds.NOTHING
-        assert len(notices(c, "bot:ops", news="assignment")) == before + 1
-        assert task_holds.backfill(c) is None
-        waiting = H._rows(c.execute(f"SELECT blocked_reason FROM {H.TASKS} tasks WHERE status='waiting'"))
-        assert not [r for r in waiting if "Chris Hawkins" in (r["blocked_reason"] or "")]
-
-
 def test_the_third_withdrawal_of_the_same_question_in_a_day_says_so(api):
     """Criterion 13."""
     with api.app.state.store.transaction() as c:

@@ -36,8 +36,6 @@ def test_every_built_in_job_is_listed_with_its_group_word_and_control_availabili
     # Housekeeping has no switch; Task roundup and Learn run in Maintenance.
     assert all(j["needed"] == (j["group"] == "housekeeping" and not j["controllable"]) for j in jobs.values())
     assert "task_roundup" not in jobs
-    assert jobs["thread_followups"]["name"] == "Earlier messages"
-    assert jobs["thread_followups"]["then"] == [SR.ACTIONS["tell_earlier_messages"][0]]
     assert jobs["stale_review"]["schedule"] == "Hourly"
     for key in ("due_reminders", "ask_deadlines", "approval_expiry"):
         assert jobs[key]["group"] == "reminders"

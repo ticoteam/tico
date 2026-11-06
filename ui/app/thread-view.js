@@ -448,7 +448,7 @@ function thvMsgHTML(view, m, cont = false) {
   // The Assistant's read-back of what it will approve is shown exactly as written, never formatted.
   else if (m.refs?.read_back) body = `<div class="th-body read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`;
   else body = `<div class="th-body md">${safeMd(m.body || '', {shortLinks: true})}</div>${
-    // The notice a bot's manager gets about its Home's closed history (backend/thread_followups.py).
+    // The notice a bot's manager got about its Home's closed history (no longer sent; old ones keep their button).
     m.refs?.earlier_messages?.thread_id ? `<button type="button" class="ghost small th-earlier-open" data-th-earlier="${esc(m.refs.earlier_messages.thread_id)}">Open earlier messages to Read</button>` : ''}`;
   // A bot's reply reads as Claude's does: one folded line of what its run did first (ui/app/chat.js), then the words,
   // the runner's warnings and the message's cards.
@@ -576,7 +576,7 @@ function thvLineGroups(view) {
   }
   return of;
 }
-// The notice about a Home's closed history keeps its Open button on the line (backend/thread_followups.py).
+// The old notice about a Home's closed history keeps its Open button on the line.
 const thvLineHTML = (view, m) => sourceLineHTML(m, {cls: 'th-line' + (view.flash === m.id ? ' th-flash' : ''),
   attrs: ` data-mid="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}"`,
   tail: m.refs?.earlier_messages?.thread_id ? `<button type="button" class="linkish th-earlier-open" data-th-earlier="${esc(m.refs.earlier_messages.thread_id)}">Open earlier messages to Read</button>` : ''});

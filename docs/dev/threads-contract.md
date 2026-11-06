@@ -621,9 +621,9 @@ live shared-room rule as before.
   unread).
 - Homes for bots without a shared room, people and groups are created lazily (`threads.home`).
 - Managers of a bot with legacy history: `threads.open_earlier_messages(c, principal, slug)` clears
-  `legacy_audience` on that Home's messages. The 15-minute follow-ups job (`thread_followups.earlier_sweep`) tells each
-  manager once, in their DM with the bot (`refs.earlier_messages.thread_id`, never a wake), since the Home's readers
-  must not see it; the Home's menu and its Earlier messages row carry the same control.
+  `legacy_audience` on that Home's messages, from the Home's menu or its Earlier messages row. A notice once told each
+  manager, in their DM with the bot (`refs.earlier_messages.thread_id`, never a wake); none is sent now, and an old one
+  still shows its Open button.
 - The reader-set equality fixture asserts, per message, the same readers before and after, and again after a
   roster change.
 - Later, once (`bot_home_merge.run_once`, registry_metadata `bot-chats-to-home`, Nov 3 decision): each person's open
