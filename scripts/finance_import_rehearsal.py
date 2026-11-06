@@ -115,15 +115,17 @@ class Demo:
             with (opener or self.opener).open(req, timeout=300) as resp:
                 return resp.status, _decode(resp.read())
         except urllib.error.HTTPError as e:
-            return e.code, _decode(e.read())
+            with e:
+                return e.code, _decode(e.read())
 
     def sign_in(self) -> None:
         url = f"{self.base}/api/v2/local-signin?token={urllib.parse.quote(self.token)}&next=/"
         try:
             self.opener.open(urllib.request.Request(url), timeout=30)
         except urllib.error.HTTPError as e:
-            if e.code not in (302, 303):
-                raise SystemExit(f"sign-in failed: HTTP {e.code}") from None
+            with e:
+                if e.code not in (302, 303):
+                    raise SystemExit(f"sign-in failed: HTTP {e.code}") from None
         status, _ = self.request("GET", "/api/v2/finance/chart")
         if status != 200:
             raise SystemExit(f"sign-in did not reach Finance: HTTP {status}")

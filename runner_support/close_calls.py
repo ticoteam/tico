@@ -170,7 +170,8 @@ class CloseCallImporter:
             with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
                 payload = response.read(MAX_RESPONSE + 1)
         except urllib.error.HTTPError as exc:
-            raise CloseError("Close returned HTTP " + str(exc.code), exc.code) from None
+            with exc:
+                raise CloseError("Close returned HTTP " + str(exc.code), exc.code) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise CloseError("Close could not be reached") from None
         if len(payload) > MAX_RESPONSE:

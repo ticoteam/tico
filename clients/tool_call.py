@@ -79,7 +79,8 @@ def call(tool, method, path, data=None, query=(), environ=None):
         with urllib.request.build_opener(_NoRedirect).open(request, timeout=TIMEOUT) as answer:
             status, kind, raw = answer.status, answer.headers.get("content-type", ""), answer.read(MAX_ANSWER + 1)
     except urllib.error.HTTPError as answer:
-        status, kind, raw = answer.code, answer.headers.get("content-type", ""), answer.read(MAX_ANSWER + 1)
+        with answer:
+            status, kind, raw = answer.code, answer.headers.get("content-type", ""), answer.read(MAX_ANSWER + 1)
     except (urllib.error.URLError, OSError) as exc:
         raise CallError(f"The Tico tool proxy did not answer: {exc}") from None
     cut = len(raw) > MAX_ANSWER

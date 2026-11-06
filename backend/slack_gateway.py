@@ -157,7 +157,8 @@ class SlackAPI:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 status, hdrs, raw = response.status, dict(response.headers), response.read()
         except urllib.error.HTTPError as exc:
-            status, hdrs, raw = exc.code, dict(exc.headers or {}), exc.read()
+            with exc:
+                status, hdrs, raw = exc.code, dict(exc.headers or {}), exc.read()
         except Exception as exc:                    # URLError, socket timeout, TLS
             raise SlackUnreachable(f"Slack {method}: {type(exc).__name__}") from exc
         lowered = {k.lower(): v for k, v in hdrs.items()}

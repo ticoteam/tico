@@ -284,11 +284,12 @@ def ask(key, base, opener=None):
             payload = json.load(response)
         return getattr(response, "status", 200), payload if isinstance(payload, dict) else {}, ""
     except urllib.error.HTTPError as exc:
-        try:
-            code = G._code(exc.read())
-        except Exception:
-            code = ""
-        return exc.code, {}, code or str(exc.code)
+        with exc:
+            try:
+                code = G._code(exc.read())
+            except Exception:
+                code = ""
+            return exc.code, {}, code or str(exc.code)
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return 0, {}, "unreachable"
 
@@ -460,8 +461,9 @@ def edge_read(found, path, span=None):
     try:
         return fetch(request, timeout=60)
     except urllib.error.HTTPError as exc:
-        exc.close()
-        raise EdgeRefused(exc.code) from None
+        with exc:
+            exc.close()
+            raise EdgeRefused(exc.code) from None
 
 
 def _held(blobs, location, digest, size, mime):

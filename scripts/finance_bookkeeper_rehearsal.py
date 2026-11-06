@@ -57,7 +57,8 @@ def _request(opener, method, path, body=None):
         with opener.open(req, timeout=30) as resp:
             return resp.status, resp.read().decode()
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.read().decode()
+        with exc:
+            return exc.code, exc.read().decode()
 
 
 def live():

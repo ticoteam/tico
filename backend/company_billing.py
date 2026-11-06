@@ -83,11 +83,12 @@ def _get(key, base, path, method="GET", root=PATH):
             kind = response.headers.get("Content-Type", "") if response.headers else ""
             status = response.status if hasattr(response, "status") else 200
     except urllib.error.HTTPError as error:
-        try:
-            body = error.read(MAX_BYTES + 1)
-        except Exception:
-            body = b""
-        return error.code, body, ""
+        with error:
+            try:
+                body = error.read(MAX_BYTES + 1)
+            except Exception:
+                body = b""
+            return error.code, body, ""
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return "unreachable", b"", ""
     if len(body) > MAX_BYTES:

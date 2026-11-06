@@ -120,12 +120,13 @@ def _post_json(url, token, payload):
         with urllib.request.urlopen(request, timeout=TWIRP_TIMEOUT) as response:
             return json.loads(response.read(1_000_000) or b"{}")
     except urllib.error.HTTPError as exc:
-        code = ""
-        try:
-            code = str(json.loads(exc.read(10_000) or b"{}").get("code") or "")
-        except (ValueError, AttributeError):
-            pass
-        raise MediaRefused(exc.code, code) from None
+        with exc:
+            code = ""
+            try:
+                code = str(json.loads(exc.read(10_000) or b"{}").get("code") or "")
+            except (ValueError, AttributeError):
+                pass
+            raise MediaRefused(exc.code, code) from None
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise MediaUnavailable("LiveKit did not answer") from exc
 

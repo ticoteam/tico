@@ -184,14 +184,15 @@ class GitHub:
                     raw = response.read()
                     return response.status, (json.loads(raw) if raw else {}), response.headers.get("Link", "")
             except urllib.error.HTTPError as exc:
-                raw = exc.read()
-                if exc.code >= 500 and attempt < 2:
-                    time.sleep(5 * (attempt + 1))
-                    continue
-                try:
-                    return exc.code, json.loads(raw or b"{}"), ""
-                except ValueError:
-                    return exc.code, {"message": raw[:300].decode("utf-8", "replace")}, ""
+                with exc:
+                    raw = exc.read()
+                    if exc.code >= 500 and attempt < 2:
+                        time.sleep(5 * (attempt + 1))
+                        continue
+                    try:
+                        return exc.code, json.loads(raw or b"{}"), ""
+                    except ValueError:
+                        return exc.code, {"message": raw[:300].decode("utf-8", "replace")}, ""
             except (urllib.error.URLError, OSError) as exc:
                 if attempt < 2:
                     time.sleep(5 * (attempt + 1))

@@ -46,7 +46,10 @@ def api_healthy(settings):
         data = json.loads(raw)
         return (data.get("ok") is True and data.get("service") == "tico"
                 and (not settings.release_id or data.get("release") == settings.release_id))
-    except (OSError, ValueError, urllib.error.HTTPError):
+    except urllib.error.HTTPError as error:
+        with error:
+            return False
+    except (OSError, ValueError):
         return False
 
 
@@ -55,7 +58,10 @@ def replication_healthy():
         with urllib.request.urlopen("http://127.0.0.1:9091/metrics", timeout=2) as response:
             raw = response.read(65537)
         return 0 < len(raw) <= 65536
-    except (OSError, urllib.error.HTTPError):
+    except urllib.error.HTTPError as error:
+        with error:
+            return False
+    except OSError:
         return False
 
 

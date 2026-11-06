@@ -44,8 +44,9 @@ def gmail_call(url, *, token, data=None):
         with urllib.request.urlopen(request, timeout=SECONDS) as answer:
             status, raw = answer.status, answer.read(HTTP_MAX_BYTES + 1)
     except urllib.error.HTTPError as refused:
-        refused.close()
-        return refused.code, {}
+        with refused:
+            refused.close()
+            return refused.code, {}
     except (OSError, ValueError):
         return 0, {}
     if len(raw) > HTTP_MAX_BYTES:
@@ -216,8 +217,9 @@ def send_call(url, *, token, body, content_type):
         with urllib.request.urlopen(request, timeout=SEND_SECONDS) as answer:
             status, raw = answer.status, answer.read(HTTP_MAX_BYTES)
     except urllib.error.HTTPError as refused:
-        refused.close()
-        return refused.code, {}
+        with refused:
+            refused.close()
+            return refused.code, {}
     except (OSError, ValueError):
         return 0, {}
     try:

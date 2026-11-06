@@ -339,10 +339,11 @@ def google_call(url, *, data=None, token=None):
         with urllib.request.urlopen(request, timeout=GOOGLE_SECONDS) as answer:
             status, raw = answer.status, answer.read()
     except urllib.error.HTTPError as refused:
-        try:
-            status, raw = refused.code, refused.read()
-        except OSError:
-            status, raw = refused.code, b""
+        with refused:
+            try:
+                status, raw = refused.code, refused.read()
+            except OSError:
+                status, raw = refused.code, b""
     except (OSError, ValueError):
         return 0, {}
     try:

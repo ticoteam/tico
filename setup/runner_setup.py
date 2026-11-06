@@ -89,7 +89,8 @@ def mint_code(url: str, token: str, opener=urllib.request.urlopen) -> str:
         with opener(req, timeout=15) as r:
             return json.loads(r.read())["code"]
     except urllib.error.HTTPError as e:
-        raise MissingInput(f"The server refused the token (HTTP {e.code}). It must be the owner's personal token.") from None
+        with e:
+            raise MissingInput(f"The server refused the token (HTTP {e.code}). It must be the owner's personal token.") from None
     except (OSError, ValueError, KeyError) as e:
         raise MissingInput(f"Could not get a join code from {url} ({type(e).__name__})") from None
 

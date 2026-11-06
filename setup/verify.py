@@ -62,7 +62,8 @@ def _get(url: str, follow: bool = True, opener=None):
         with op.open(urllib.request.Request(url, headers={"User-Agent": "tico-setup"}), timeout=10) as r:
             return r.status, dict(r.headers), r.read(2000).decode(errors="replace")
     except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers), ""
+        with e:
+            return e.code, dict(e.headers), ""
 
 
 def tunnel_route_hint(domain: str) -> str:

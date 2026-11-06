@@ -105,7 +105,8 @@ def _urllib(method: str, url: str, headers: Mapping[str, str], data: bytes | Non
         with opener.open(request, timeout=TIMEOUT) as response:
             return _reply(response.status, response.read(), response.headers.get("Retry-After"))
     except urllib.error.HTTPError as e:
-        return _reply(e.code, e.read(), e.headers.get("Retry-After") if e.headers else None)
+        with e:
+            return _reply(e.code, e.read(), e.headers.get("Retry-After") if e.headers else None)
     except (urllib.error.URLError, TimeoutError, OSError):
         return Reply(0)
 

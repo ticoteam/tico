@@ -129,10 +129,11 @@ def _post(url: str, body: dict, timeout: float = 20):
         with urllib.request.build_opener(NoRedirect).open(request, timeout=timeout) as r:
             return r.status, json.loads(r.read(65536).decode() or "{}")
     except urllib.error.HTTPError as e:
-        try:
-            return e.code, json.loads(e.read(65536).decode() or "{}")
-        except ValueError:
-            return e.code, {}
+        with e:
+            try:
+                return e.code, json.loads(e.read(65536).decode() or "{}")
+            except ValueError:
+                return e.code, {}
 
 
 def send(message: str, email: str, version: str, hq: str, post=None) -> tuple[str, str]:

@@ -25,10 +25,11 @@ def _urllib_transport(method: str, url: str, headers: dict, body: bytes | None) 
         with urllib.request.urlopen(req, timeout=30) as r:
             return r.status, json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
-        try:
-            return e.code, json.loads(e.read() or b"{}")
-        except ValueError:
-            return e.code, {}
+        with e:
+            try:
+                return e.code, json.loads(e.read() or b"{}")
+            except ValueError:
+                return e.code, {}
 
 
 def ingress_config(hostname: str, runner_host: str = "", *, aliases=(), visual_origin: str = "") -> dict:
