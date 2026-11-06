@@ -1163,6 +1163,7 @@ def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_
     (tmp_path / 'items.json').write_text(
         '[{"text": "Example Co raised prices.", "kind": "change", "entity_ids": ["company/example-co"]}]'
     )
+    (tmp_path / 'answers.json').write_text('{"changed": "Example Co raised prices."}')
     for argv in (
         ['market', 'watch', 'add', 'company/example-co', 'https://example.test/pricing', '--kind', 'pricing'],
         ['market', 'watch', 'stop', 'w1'],
@@ -1181,6 +1182,8 @@ def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_
             str(tmp_path / 'b.md'),
             '--items-file',
             str(tmp_path / 'items.json'),
+            '--answers-file',
+            str(tmp_path / 'answers.json'),
         ],
     ):
         remotecli.run(hubcli.parser().parse_args(argv))
@@ -1198,6 +1201,7 @@ def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_
         'title': 'Week 44',
         'body': '# Week 44\n',
         'items': [{'text': 'Example Co raised prices.', 'kind': 'change', 'entity_ids': ['company/example-co']}],
+        'answers': {'changed': 'Example Co raised prices.'},
     }
 
 

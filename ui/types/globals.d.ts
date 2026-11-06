@@ -50,8 +50,6 @@ declare var liveEvents: any;
 declare var machineLoginPending: any;
 declare var marketReload: any;
 declare var marketStop: any;
-declare var marketViewsMount: any;
-declare var marketViewsStop: any;
 declare var mountDirectorySync: any;
 declare var mountGithubConnect: any;
 declare var mountGoogleConnect: any;

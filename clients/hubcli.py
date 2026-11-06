@@ -3411,6 +3411,11 @@ def parser():
     s.add_argument(
         "--items-file", dest="items_file", help="JSON list of {text, kind: change|signal|theme|size, entity_ids}"
     )
+    s.add_argument(
+        "--answers-file",
+        dest="answers_file",
+        help="JSON object of one-line answers: {changed, money, players, reach, saying}",
+    )
     s.set_defaults(fn="market briefing post")
     s = briefing.add_parser("latest", help="the newest briefing, its items and the bets it touches")
     s.set_defaults(fn="market briefing latest")

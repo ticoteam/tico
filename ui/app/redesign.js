@@ -186,9 +186,6 @@ function redesignRoute(r) {
   if (rdUnder(r, RD_BUDGET)) { pageBudget(); return true; }
   if (rdUnder(r, FIN_ROUTE)) { pageFinance(); return true; }   // ui/app/finance.js
   if (rdUnder(r, CP_ROUTE)) { pageCompanyPage(); return true; }   // ui/app/company-page.js
-  if (rdUnder(r, RD_LISTENING)) { pageRdListening(); return true; }
-  // Market opens on the latest briefing.
-  if (r === MARKET_ROUTE || rdUnder(r, RD_BRIEFING)) { pageRdBriefing(); return true; }
   return false;
 }
 // After every route: leave Automations' and Tools' state when off their pages.
@@ -219,4 +216,4 @@ function redesignStrategyHead(tab) {
       <span class="spacer"></span>${sub}<div class="strat-actions" id="strat-actions"></div></div>`;
 }
 
-// Org (ui/app/redesign-org.js), Market's Briefing and Listening (ui/app/redesign-market.js) are their own files.
+// Org (ui/app/redesign-org.js) and the Market page (ui/app/redesign-market.js) are their own files.
