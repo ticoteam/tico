@@ -259,6 +259,9 @@ def text(data):
             if gate["outcomes"]:
                 lines.append("  outcomes: " + ", ".join(f"{k} {n}" for k, n in gate["outcomes"].items())
                              + f"; let through {gate['let_through']}")
+            if gate.get("failed_open_reasons"):
+                lines.append("  failed open, by reason: " + ", ".join(
+                    f"{k} {n}" for k, n in gate["failed_open_reasons"].items()))
         if row.get("reconcile"):
             rec = row["reconcile"]
             named = "".join(f", {k} {n}" for k, n in rec["reasons"].items())
