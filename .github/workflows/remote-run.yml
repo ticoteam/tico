@@ -40,7 +40,7 @@ permissions:
 jobs:
   run:
     # Spot: an interruption reruns the job automatically, and a test run can always be repeated.
-    runs-on: runs-on=${{ github.run_id }}/runner=${{ inputs.cpus }}cpu-linux-x64/volume=80gb/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/runner=${{ inputs.cpus }}cpu-linux-x64/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache
     timeout-minutes: 75
     env:
       ID: ${{ inputs.id }}
