@@ -716,7 +716,7 @@ def pr_signal(c, event, payload):
             if ((event == "check_suite" and signal.get("status") == "completed" and state != "pending"
                     or event != "check_suite" and left_pending and (
                         suite_done or not any(k.startswith("suite:") for k in checks)))
-                    and _overall(checks) != "pending"
+                    and "pending" not in checks.values() and not set(checks.values()) <= {"skipped"}
                     # A copy that dropped a check cannot finish the head green: only its own failure finishes it.
                     and (not dropped or "failing" in checks.values())):
                 # GitHub sends a suite's `requested` only to its own App, so a single run or status still pending
