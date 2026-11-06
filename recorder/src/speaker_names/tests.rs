@@ -678,9 +678,11 @@ fn the_store_keeps_a_settled_name_when_later_evidence_is_gone() {
             &[(0, 3000)],
         )
         .unwrap();
+    // The store numbers voices itself (#2681); the name sits on whatever label it chose.
+    let first = store.get(&id).unwrap();
     assert_eq!(
-        store.get(&id).unwrap().speaker_names["Speaker 2"],
-        "Ana Example"
+        first.speaker_names.values().collect::<Vec<_>>(),
+        ["Ana Example"]
     );
     store
         .db()
@@ -688,8 +690,11 @@ fn the_store_keeps_a_settled_name_when_later_evidence_is_gone() {
         .execute("DELETE FROM meeting_speaker_intervals", [])
         .unwrap();
     let record = store.get(&id).unwrap();
-    assert_eq!(name_of(&record, "Speaker 2"), "Ana Example");
-    assert_eq!(shown(&record), ["Ana Example"]);
+    assert_eq!(record.speaker_names, first.speaker_names);
+    assert_eq!(
+        crate::transcript::chunk_words(&record)["them"][0].speaker,
+        "Ana Example"
+    );
 }
 fn button() -> serde_json::Value {
     json!({"role":"AXGroup","children":[{"role":"AXButton","description":"Mute"}]})
