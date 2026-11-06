@@ -478,7 +478,7 @@ async function auMoreAct(what) {
   if (what === 'apply') { auApplyTemplate(); return; }
   if (what !== 'delete' || a.builtin || !confirm(`Delete ${a.name}?`)) return;
   try {
-    await writeRequest('DELETE', auApi(a.id));
+    await writeRequest('DELETE', auApi(a.id), {});
     if (AU !== state) return;
     state.list = state.list.filter(x => x.id !== a.id);
     toast('Deleted');

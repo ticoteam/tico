@@ -118,7 +118,7 @@ function askFilterSettingsPaint() {
   const msg = $('[data-ask-filter-msg]', el);
   const reset = $('[data-ask-filter-reset]', el);
   if (reset) reset.onclick = async () => {
-    try { await writeRequest('DELETE', '/v2/ask-ingest/settings'); toast('Using the team default'); await askFilterSettingsLoad(); }
+    try { await writeRequest('DELETE', '/v2/ask-ingest/settings', {}); toast('Using the team default'); await askFilterSettingsLoad(); }
     catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
   };
   const replayForm = $('.ask-filter-replay', el);
