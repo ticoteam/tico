@@ -131,7 +131,7 @@ const tasks = (() => {
 
 // ---- e2e-needs-you
 const needsYou = (() => {
-  // A yes-or-no question (its first words ask for a yes or no), so its card answers with Yes and No.
+  // A question with no options is filed with Yes and No (question_tasks), so its card is a pick card with those two.
   const QUESTION = 'Should we ship the beta on Nov 3?';
   return async ({hub, browser, phone}) => {
     const where = phone ? 'phone' : 'desktop';
@@ -153,7 +153,7 @@ const needsYou = (() => {
     // The question: answer it on its card.
     await page.locator(`[data-need-card="task:${questionId}"]`).first().click();
     await page.locator('#need-card', {hasText: QUESTION}).first().waitFor({timeout: t(20000)});
-    await page.locator('#need-card [data-dc="yes"]').first().click();
+    await page.locator('#need-card [data-dc="pick"]', {hasText: 'Yes'}).first().click();
     // The card sends the answer when its undo toast runs out, so the hub is read until the answer is there.
     const reply = await until(async () => {
       const got = await must(hub, 'dana', 'GET', `tasks/${questionId}/answers`, undefined, 'read the answers');
