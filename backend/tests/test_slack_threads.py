@@ -293,62 +293,57 @@ def test_a_link_is_requested_for_one_root_thread_at_a_time(world):
     assert link_row(world, link_id)["state"] == "requested"
 
 
-@pytest.mark.parametrize("ref, thread, why", [
-    ("#marketing", COMPANY, None),
-    ("#marketing", MEMBERS, "company thread"),       # a public channel needs a company thread
-    ("#secret", COMPANY, "members thread"),          # a private channel needs a members thread
-    ("#partners", COMPANY, "Slack Connect"),         # a shared channel is refused
-    ("#lounge", COMPANY, "don't map"),               # a member who is not admitted does not map to a roster person
-    ("#ghost", COMPANY, "No channel named"),
-])
-def test_a_channel_links_only_when_its_audience_and_every_member_allow_it(world, ref, thread, why):
-    link_id = request(world, ref, thread=thread)
-    state = gate(world, link_id)
-    if why is None:
-        assert state == "active"
-        assert link_row(world, link_id)["channel_id"] == MARKETING
-        assert outside_members(world) == [f"slack:{MARKETING}"]
-        assert [m["person_id"] for m in all_rows(world, "SELECT person_id FROM slack_link_members WHERE link_id=? "
-                                                        "ORDER BY person_id", link_id)] == ["ana", "ben"]
-    else:
-        assert state == "refused"
-        assert why in link_row(world, link_id)["reason"]
-        assert outside_members(world) == []
+def test_a_channel_links_only_when_its_audience_and_every_member_allow_it(world):
+    # The five refusals come first, so the active link's outside members are not there to mask a refused one.
+    for ref, thread, why in [
+        ("#marketing", MEMBERS, "company thread"),       # a public channel needs a company thread
+        ("#secret", COMPANY, "members thread"),          # a private channel needs a members thread
+        ("#partners", COMPANY, "Slack Connect"),         # a shared channel is refused
+        ("#lounge", COMPANY, "don't map"),               # a member who is not admitted does not map to a roster person
+        ("#ghost", COMPANY, "No channel named"),
+    ]:
+        link_id = request(world, ref, thread=thread)
+        assert gate(world, link_id) == "refused", ref
+        assert why in link_row(world, link_id)["reason"], ref
+        assert outside_members(world) == [], ref
+    link_id = request(world, "#marketing", thread=COMPANY)
+    assert gate(world, link_id) == "active"
+    assert link_row(world, link_id)["channel_id"] == MARKETING
+    assert outside_members(world) == [f"slack:{MARKETING}"]
+    assert [m["person_id"] for m in all_rows(world, "SELECT person_id FROM slack_link_members WHERE link_id=? "
+                                                    "ORDER BY person_id", link_id)] == ["ana", "ben"]
 
 
 # ----------------------------------------------------------------------------- suspension
-@pytest.mark.parametrize("change", ["slack connect", "unmapped member", "thread narrows"])
-def test_a_link_that_stops_fitting_is_suspended_with_one_needs_you_item(world, change):
+def test_a_link_that_stops_fitting_is_suspended_with_one_needs_you_item_and_a_second_break_reuses_it(world):
     link_id = activate_marketing(world, members=("U1",))
-    if change == "slack connect":
-        world.slack.channels[MARKETING]["is_ext_shared"] = True
-    elif change == "unmapped member":
-        world.slack.members[MARKETING].append("U3")
-    else:
-        with world.hub.transaction() as c:
-            c.execute("UPDATE conversations SET audience='members' WHERE id=?", (COMPANY,))
-    world.clock.advance(ST.CHECK_SECONDS + 1)
-    world.bridge.check_links()
-    row = link_row(world, link_id)
-    assert row["state"] == "suspended"
-    task = one(world, "SELECT id, title FROM tasks WHERE id=?", row["needs_task_id"])
-    assert "stopped" in task["title"]
-
-
-def test_a_second_break_reuses_the_open_needs_you_item(world):
-    link_id = activate_marketing(world, members=("U1",))
-    world.slack.channels[MARKETING]["is_ext_shared"] = True
-    world.clock.advance(ST.CHECK_SECONDS + 1)
-    world.bridge.check_links()
-    first = link_row(world, link_id)["needs_task_id"]
-    del world.slack.channels[MARKETING]["is_ext_shared"]
-    ST.resume_link(world.hub, WHO, link_id)
-    assert gate(world, link_id) == "active"
-    world.slack.channels[MARKETING]["is_ext_shared"] = True
-    world.clock.advance(ST.CHECK_SECONDS + 1)
-    world.bridge.check_links()
-    assert link_row(world, link_id)["needs_task_id"] == first
+    breaks = {
+        "slack connect": (lambda: world.slack.channels[MARKETING].__setitem__("is_ext_shared", True),
+                          lambda: world.slack.channels[MARKETING].pop("is_ext_shared")),
+        "unmapped member": (lambda: world.slack.members[MARKETING].append("U3"),
+                            lambda: world.slack.members[MARKETING].remove("U3")),
+        "thread narrows": (lambda: set_audience(world, "members"), lambda: set_audience(world, "company")),
+    }
+    first = None
+    for change, (apply, undo) in breaks.items():
+        apply()
+        world.clock.advance(ST.CHECK_SECONDS + 1)
+        world.bridge.check_links()
+        row = link_row(world, link_id)
+        assert row["state"] == "suspended", change
+        task = one(world, "SELECT id, title FROM tasks WHERE id=?", row["needs_task_id"])
+        assert "stopped" in task["title"], change
+        first = first or row["needs_task_id"]
+        assert row["needs_task_id"] == first, f"{change}: a second break reuses the open needs-you item"
+        undo()
+        ST.resume_link(world.hub, WHO, link_id)
+        assert gate(world, link_id) == "active", change
     assert len(all_rows(world, "SELECT id FROM tasks WHERE title LIKE 'Slack channel #marketing%'")) == 1
+
+
+def set_audience(world, audience):
+    with world.hub.transaction() as c:
+        c.execute("UPDATE conversations SET audience=? WHERE id=?", (audience, COMPANY))
 
 
 # ----------------------------------------------------------------------------- inbound

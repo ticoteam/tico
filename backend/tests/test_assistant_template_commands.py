@@ -12,8 +12,6 @@ import shlex
 from itertools import product
 from pathlib import Path
 
-import pytest
-
 from clients import hubcli
 
 ASSISTANT = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "assistant"
@@ -88,12 +86,13 @@ def argv_of(text):
     return argv or None
 
 
-def parse_error(argv):
+def parse_error(argv, parser=None):
     """None when `hub <argv>` parses, else the parser's message."""
+    parser = parser or hubcli.parser()
     stderr = io.StringIO()
     with contextlib.redirect_stderr(stderr):
         try:
-            hubcli.parse(hubcli.parser(), argv)
+            hubcli.parse(parser, argv)
         except SystemExit:
             return stderr.getvalue().strip().splitlines()[-1] if stderr.getvalue().strip() else "refused"
     return None
@@ -114,7 +113,7 @@ def cases():
             argv = argv_of(text)
             if argv is None:
                 continue
-            out.append(pytest.param(path, number, text, argv, id=f"{path.relative_to(ASSISTANT)}:{number}"))
+            out.append((path, number, text, argv))
     return out
 
 
@@ -123,21 +122,26 @@ def test_the_template_names_commands_to_check():
     assert len(cases()) > 80
 
 
-@pytest.mark.parametrize(("path", "number", "text", "argv"), cases())
-def test_every_hub_command_in_the_template_parses(path, number, text, argv):
-    if argv == ["\x00unbalanced quotes"]:
-        pytest.fail(f"{path.relative_to(ASSISTANT.parents[2])}:{number}: unbalanced quotes in `{text}`")
-    if expected_to_exist(argv):
-        pytest.skip("lands with chris/assistant-tools")
-    # A bare mention ("`hub task create`" in prose, two words) only has to name a real command: a missing argument is fine.
-    bare = len(argv) <= 2
-    for option in variants(argv):
-        error = parse_error(option)
-        if bare and error and "the following arguments are required" in error:
+def test_every_hub_command_in_the_template_parses():
+    """One parser, every command: the failures are all listed, each as file:line and the command."""
+    parser = hubcli.parser()
+    failures = []
+    for path, number, text, argv in cases():
+        where = f"{path.relative_to(ASSISTANT.parents[2])}:{number}"
+        if argv == ["\x00unbalanced quotes"]:
+            failures.append(f"{where}: unbalanced quotes in `{text}`")
             continue
-        assert error is None, (
-            f"{path.relative_to(ASSISTANT.parents[2])}:{number}: `{' '.join(option)}` does not parse: {error}"
-        )
+        if expected_to_exist(argv):
+            continue                      # lands with chris/assistant-tools
+        # A bare mention ("`hub task create`" in prose, two words) only has to name a real command: a missing argument is fine.
+        bare = len(argv) <= 2
+        for option in variants(argv):
+            error = parse_error(option, parser)
+            if bare and error and "the following arguments are required" in error:
+                continue
+            if error is not None:
+                failures.append(f"{where}: `{' '.join(option)}` does not parse: {error}")
+    assert not failures, "\n".join(failures)
 
 
 # Refresh copies only AGENT.md, playbooks/ and skills/ to a live Assistant (clients/catalog.py PRODUCT_OWNED). Anything the

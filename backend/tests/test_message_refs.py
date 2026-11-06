@@ -1,6 +1,4 @@
 """The typed refs keys a message is routed, queued and fenced by (`message_refs`, migration 0051)."""
-import pytest
-
 from backend.enqueue import _sql_zero
 from backend.store import H
 from backend.tests.test_api import api  # noqa: F401
@@ -17,7 +15,7 @@ def _typed(api, refs):
     return tuple(row)
 
 
-@pytest.mark.parametrize("refs, want", [
+TYPED_KEYS = [
     (None, (None, None, 0, 0, None)),
     ("{}", (None, None, 0, 0, None)),
     ('{"task":"t1","wake":"status_check"}', ("t1", "status_check", 0, 0, None)),
@@ -27,16 +25,16 @@ def _typed(api, refs):
     ('{"quiet":true}', (None, None, 1, 0, None)),
     ("[1,2]", (None, None, 0, 0, None)),
     ('{"task":"t5","depth":Infinity}', ("t5", None, 0, 0, None)),  # JSON5 json_extract reads (Python writes Infinity)
-])
-def test_message_refs_types_the_routing_keys(api, refs, want):
-    assert _typed(api, refs) == want
+]
+QUIET_SPELLINGS = ["true", "false", "0", "0.0", "1", '""', '"no"', "[]", "{}", "null", "NaN", "Infinity", "-Infinity"]
 
 
-@pytest.mark.parametrize("quiet", ["true", "false", "0", "0.0", "1", '""', '"no"', "[]", "{}", "null",
-                                   "NaN", "Infinity", "-Infinity"])
-def test_ref_quiet_is_the_queue_s_own_rule(api, quiet):
+def test_message_refs_types_the_routing_keys_and_ref_quiet_is_the_queue_s_own_rule(api):
     import json
-    assert _typed(api, '{"quiet":' + quiet + "}")[2] == (0 if _sql_zero(json.loads(quiet)) else 1)
+    for refs, want in TYPED_KEYS:
+        assert _typed(api, refs) == want, refs
+    for quiet in QUIET_SPELLINGS:
+        assert _typed(api, '{"quiet":' + quiet + "}")[2] == (0 if _sql_zero(json.loads(quiet)) else 1), quiet
 
 
 def test_a_messages_row_reads_as_it_always_did(api):

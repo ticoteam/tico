@@ -67,36 +67,82 @@ def ana_task(api, owner="bot:ops", title="Send the invoice"):
         return H.task_create(c, owner, title, "Monday.", "human:ana")["id"]
 
 
-def test_a_turn_closes_a_task_directly(api):
+def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card(api):
+    """Each write the person could make on their words goes through on a turn's token: a close, a bulk close, an owner
+    change, an approval declined, a question answered, settings, automations, a bot paused, resumed and set to a model,
+    a rule added and retired, a message and an ask. Every step builds what it acts on, so none leans on another."""
+    # A turn closes a task directly.
     task = ana_task(api)
     token = turn(api)
     current = call(api, token, "GET", f"tasks/{task}")["task"]
     closed = call(api, token, "POST", f"tasks/{task}", {"version": current["version"], "status": "done"})
-    assert (closed.get("task") or closed)["status"] == "done", closed
+    assert (closed.get("task") or closed)["status"] == "done", ("close", closed)
 
-
-def test_a_turn_closes_tasks_in_bulk(api):
+    # A turn closes tasks in bulk, and only the ones listed.
     ids = [ana_task(api, title=f"Follow up {n}") for n in range(2)]
     outside = ana_task(api, title="Not in the list")
-    token = turn(api)
-    done = call(api, token, "POST", "task-bulk", {"filter": {"ids": ids}, "action": "close"})
-    assert done["changed"] == 2, done
+    done = call(api, turn(api), "POST", "task-bulk", {"filter": {"ids": ids}, "action": "close"})
+    assert done["changed"] == 2, ("bulk close", done)
     with api.app.state.store.read() as c:
-        assert [H.task(c, t)["status"] for t in ids] == ["closed", "closed"]
-        assert H.task(c, outside)["status"] == "open"
+        assert [H.task(c, t)["status"] for t in ids] == ["closed", "closed"], "bulk close"
+        assert H.task(c, outside)["status"] == "open", "bulk close leaves a task outside the list"
 
-
-def test_a_turn_changes_a_task_owner(api):
+    # A turn changes a task owner.
     task = ana_task(api)
     token = turn(api)
     current = call(api, token, "GET", f"tasks/{task}")["task"]
     call(api, token, "POST", f"tasks/{task}", {"version": current["version"], "owner": "bot:ops"})
 
-
-def test_a_turn_declines_an_approval(api):
+    # A turn declines an approval.
     approval = approval_for_ana(api)["id"]
-    token = turn(api, "No, do not spend it")
-    call(api, token, "POST", f"approvals/{approval}", {"decision": "declined", "note": ""})
+    call(api, turn(api, "No, do not spend it"), "POST", f"approvals/{approval}", {"decision": "declined", "note": ""})
+
+    # A turn answers a question the bot asked.
+    finance = setup_attempt(api, "finance")[2]["token"]
+    asked = call(api, finance, "POST", "messages", {"to": "human:ana", "text": "Close or Apollo?", "kind": "ask"})
+    call(api, turn(api, "Apollo"), "POST", f"messages/{asked['id']}/answer", {"text": "Apollo"})
+
+    # A turn sets a direct setting and a confirm setting.
+    token = turn(api, "Turn off the stale review and the Apollo rule")
+    set_setting(api, token, "team.rules.stale_review", False)
+    set_setting(api, token, "team.rules.botops_direct", False)
+
+    # A turn updates an automation to disabled and to a schedule, then restores an earlier version of another.
+    aid = post(api, "automations", flow(owner="person:ana"))["id"]
+    token = turn(api, "Turn the digest off, then run it at nine")
+    call(api, token, "PATCH", f"automations/{aid}", {"enabled": False})
+    call(api, token, "PATCH", f"automations/{aid}", {"trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}})
+    aid = post(api, "automations", flow(owner="person:ana"))["id"]
+    call(api, "ana-test", "PATCH", f"automations/{aid}", {"name": "Renamed"})   # a second version to restore over
+    call(api, turn(api, "Put the first version back"), "POST", f"automations/{aid}/versions/1/restore", {})
+
+    # A turn pauses and resumes a bot, and sets its model.
+    repo_bot(api)
+    token = turn(api, "Pause Ops until I say")
+    rev = call(api, token, "GET", "bots/ops/access")["revision"]
+    call(api, token, "POST", "bots/ops/control", {"action": "pause", "expected_revision": rev})
+    assert call(api, token, "GET", "bots/ops")["state"] == "paused", "pause"
+    rev = call(api, token, "GET", "bots/ops/access")["revision"]
+    call(api, token, "POST", "bots/ops/control", {"action": "resume", "expected_revision": rev})
+    assert call(api, token, "GET", "bots/ops")["state"] == "active", "resume"
+    catalog = get(api, "models")
+    model = next(m["id"] for m in catalog["models"] if m.get("runtime") == "codex" and not m.get("deprecated"))
+    token = turn(api, "Use the cheaper model for Ops")
+    revision = call(api, token, "GET", "bots/ops")["revision"]
+    call(api, token, "POST", "bots/ops/model", {"model": model, "expected_revision": revision})
+
+    # A turn adds and retires a rule.
+    token = turn(api, "Add the consent rule")
+    added = no_card(api, token, "POST", "rules", {"kind": "external", "text": "Keep a consent record.",
+                                                    "who": {"bots": ["ops"]}})
+    if added.status_code == 200 and added.json().get("id"):
+        rule = added.json()
+        call(api, turn(api, "Retire it"), "POST", f"rules/{rule['id']}/retire", {"version": rule.get("version", 1)})
+
+    # A turn messages a bot and asks it without waiting.
+    token = turn(api, "Tell Ops the invoice is sent")
+    call(api, token, "POST", "messages", {"to": "ops", "text": "The invoice is sent.", "kind": "say"})
+    call(api, token, "POST", "messages", {"to": "ops", "text": "Is it paid?", "kind": "ask", "wait_s": 0})
 
 
 def test_a_turn_approves_after_a_read_back_and_a_plain_yes_with_the_setting_on(api):
@@ -112,77 +158,17 @@ def test_a_turn_approves_after_a_read_back_and_a_plain_yes_with_the_setting_on(a
     call(api, yes, "POST", f"approvals/{approval}", {"decision": "approved", "note": ""})
 
 
-def test_a_turn_answers_a_question_the_bot_asked(api):
-    finance = setup_attempt(api, "finance")[2]["token"]
-    asked = call(api, finance, "POST", "messages", {"to": "human:ana", "text": "Close or Apollo?", "kind": "ask"})
-    call(api, turn(api, "Apollo"), "POST", f"messages/{asked['id']}/answer", {"text": "Apollo"})
-
-
-def test_a_turn_sets_a_direct_setting_and_a_confirm_setting(api):
-    token = turn(api, "Turn off the stale review and the Apollo rule")
-    set_setting(api, token, "team.rules.stale_review", False)
-    set_setting(api, token, "team.rules.botops_direct", False)
-
-
-def test_a_turn_updates_an_automation_to_disabled_and_to_a_schedule(api):
-    aid = post(api, "automations", flow(owner="person:ana"))["id"]
-    token = turn(api, "Turn the digest off, then run it at nine")
-    call(api, token, "PATCH", f"automations/{aid}", {"enabled": False})
-    call(api, token, "PATCH", f"automations/{aid}", {"trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}})
-
-
-def test_a_turn_restores_an_earlier_automation_version(api):
-    aid = post(api, "automations", flow(owner="person:ana"))["id"]
-    call(api, "ana-test", "PATCH", f"automations/{aid}", {"name": "Renamed"})   # a second version to restore over
-    token = turn(api, "Put the first version back")
-    call(api, token, "POST", f"automations/{aid}/versions/1/restore", {})
-
-
-def test_a_turn_pauses_and_resumes_a_bot(api):
-    repo_bot(api)
-    token = turn(api, "Pause Ops until I say")
-    rev = call(api, token, "GET", "bots/ops/access")["revision"]
-    call(api, token, "POST", "bots/ops/control", {"action": "pause", "expected_revision": rev})
-    assert call(api, token, "GET", "bots/ops")["state"] == "paused"
-    rev = call(api, token, "GET", "bots/ops/access")["revision"]
-    call(api, token, "POST", "bots/ops/control", {"action": "resume", "expected_revision": rev})
-    assert call(api, token, "GET", "bots/ops")["state"] == "active"
-
-
-def test_a_turn_sets_a_bot_model(api):
-    repo_bot(api)
-    catalog = get(api, "models")
-    model = next(m["id"] for m in catalog["models"] if m.get("runtime") == "codex" and not m.get("deprecated"))
-    token = turn(api, "Use the cheaper model for Ops")
-    revision = call(api, token, "GET", "bots/ops")["revision"]
-    call(api, token, "POST", "bots/ops/model", {"model": model, "expected_revision": revision})
-
-
-def test_a_turn_adds_and_retires_a_rule(api):
-    token = turn(api, "Add the consent rule")
-    added = no_card(api, token, "POST", "rules", {"kind": "external", "text": "Keep a consent record.",
-                                                    "who": {"bots": ["ops"]}})
-    if added.status_code == 200 and added.json().get("id"):
-        rule = added.json()
-        call(api, turn(api, "Retire it"), "POST", f"rules/{rule['id']}/retire", {"version": rule.get("version", 1)})
-
-
-def test_a_turn_messages_a_bot_and_asks_it_without_waiting(api):
-    token = turn(api, "Tell Ops the invoice is sent")
-    call(api, token, "POST", "messages", {"to": "ops", "text": "The invoice is sent.", "kind": "say"})
-    call(api, token, "POST", "messages", {"to": "ops", "text": "Is it paid?", "kind": "ask", "wait_s": 0})
-
-
-@pytest.mark.parametrize("method,path,body", [
-    ("POST", "me/tokens", {"name": "new"}),
-    ("POST", "credentials/x1/grants", {"person": "human:ben"}),
-    ("PATCH", "messages/x1", {"body": "yes"}),
-    ("POST", "sql", {"query": "select 1"}),
-    ("PUT", "providers/openai", {"key": "x"}),
-    ("POST", "support/tickets", {"text": "help"}),
-])
-def test_the_person_alone_decides_these_on_the_turn(api, method, path, body):
-    refused_as_card(api, turn(api, "Do it"), method, path, body)
+def test_the_person_alone_decides_these_on_the_turn(api):
+    token = turn(api, "Do it")
+    for method, path, body in [
+        ("POST", "me/tokens", {"name": "new"}),
+        ("POST", "credentials/x1/grants", {"person": "human:ben"}),
+        ("PATCH", "messages/x1", {"body": "yes"}),
+        ("POST", "sql", {"query": "select 1"}),
+        ("PUT", "providers/openai", {"key": "x"}),
+        ("POST", "support/tickets", {"text": "help"}),
+    ]:
+        refused_as_card(api, token, method, path, body)
 
 
 def test_the_background_run_puts_a_card_in_the_persons_chat(api):

@@ -77,12 +77,21 @@ def test_python_sql_and_sse_renderings_agree_for_every_teammate(world):
         from backend.auth import Identity
         # Bots as external agents (identities) and as internal bots in a turn granted nothing.
         turns = {"turn:" + a: Identity(a, "bot", attempt_id="att-none") for a in who if a.startswith("bot:")}
+        checked = set()
         for actor, identity in {**who, **turns}.items():
             v = threads.viewer(auth, identity)
             python = {i for i in ids if threads.readable(c, v, i)}
-            marks = ",".join("?" * len(ids))
             # `tasks` is the viewer's readable tasks, as a caller passes it: a private task's thread is not SQL's call.
             tasks = [t for (t,) in c.execute("SELECT id FROM tasks") if threads._task_readable(c, v, t)]
+            if actor.startswith("bot:") or actor.startswith("turn:"):
+                # The renderings read a bot only through its standing (turn or agent, its group chain, the tasks it may
+                # read) and the threads it reads. Two bots with all of that alike give SQL and SSE the same input, so
+                # the first of each such class is checked in full; every person is.
+                kind = (actor.startswith("turn:"), tuple(v.chain(c)), tuple(tasks), frozenset(python))
+                if kind in checked:
+                    continue
+                checked.add(kind)
+            marks = ",".join("?" * len(ids))
             readable_tasks = "SELECT id FROM tasks WHERE id IN (" + (",".join(f"'{t}'" for t in tasks) or "NULL") + ")"
             sql = {r[0] for r in c.execute(f"SELECT id FROM conversations WHERE id IN ({marks}) AND "
                                            + threads.readable_sql(c, v, "conversations", tasks=readable_tasks), ids)}
@@ -92,6 +101,7 @@ def test_python_sql_and_sse_renderings_agree_for_every_teammate(world):
             # Every stored-audience thread agrees exactly (legacy rows keep main's own SQL/Python split).
             stored = set(made.values())
             assert sql & stored == python & stored, (actor, sorted((sql ^ python) & stored))
+        assert len(checked) > 1, "the demo's bots fall into several classes, each checked"
 
 
 def test_an_agent_reads_company_threads_only_in_a_turn_and_a_bot_writes_a_home_only_with_write(world, monkeypatch):
