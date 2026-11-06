@@ -121,7 +121,7 @@ canary update failed stays published but not latest; the next window ships the n
 ### Hotfixes
 
 A hotfix is for a major production issue only: data loss, a security hole, an outage, an install that cannot update.
-Everything else waits for the next window. Land the fix on main, then:
+Everything else waits for the next window. Land the fix on main through the merge queue (below), then:
 
 ```sh
 gh workflow run hotfix.yml --ref main -f reason="Tasks vanish from the board after an update" [-f sha=<commit>] [-f promote_stable=false] [-f override_hold=true]
@@ -290,44 +290,43 @@ new commit to borrow an old run. Roll back this tooling change by reverting it; 
 
 ## Tests on a PR
 
-Run tests on your computer while you work. On pull requests to main, the PR checks workflow runs the default tests
-that a measured static dependency map says use a changed file: what each tracked file imports (transitively), runs
-by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data files, folders it lists or globs). The
-Caddy image job runs only when a change reaches the image inputs or `backend/caddy_assets.py`; otherwise the plan
-compiles the changed files and runs the Dockerfile's import check itself. A `docs/` page, CHANGELOG.md or a GitHub
-file runs the tests that read it (by path, folder or listing) and the tests of the code that reads it, not everything
-that imports that code. A change to how the checks run (the PR checks workflow, `scripts/ci_install.sh`, the browser
-system packages) runs the tests that read it and one short core browser script, and a workflow change also builds the
-Caddy image. Conftest, `pytest.ini`, dependency pins and deleted or unparsable files fall back to the full default
-Python suite and core browser scripts. A draft pull request runs no checks (every job is skipped); marking it ready
-for review does. Main requires no check, so a skipped run is not a pass: wait until the ready-for-review run's checks
-show passing, not skipped, before merging. Main has no PR-check run of its own: its pull requests tested each change
-and Release validation runs the whole gate on each candidate; a daily PR caches run (`pr-cache.yml`) keeps the
-main-branch caches pull requests restore from fresh. A pull request's superseded run is canceled. Runner/harness changes also run
-slow conformance on the Rust runner and all its fake harnesses; UI changes select their browser scripts, including
-imported-history for chat changes, or every browser script when the UI mapping is uncertain.
+Run tests on your computer while you work, and run the test files your change touches with `scripts/remote.py` before
+you mark the PR ready for review. A push to a pull request runs only the cheap checks on free GitHub-hosted runners:
+lint, the generated UI types, the runner wire contract, the migration names, shell scripts and workflows, and whether
+the recorder changed. The required check `checks` aggregates them. The merge queue runs the tests: once per queue group,
+it selects them from the group's merged change (base to group head) with the measured static dependency map: what each
+tracked file imports (transitively), runs by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data
+files, folders it lists or globs). The Caddy image job runs only when a change reaches the image inputs or
+`backend/caddy_assets.py`; otherwise the plan compiles the changed files and runs the Dockerfile's import check itself.
+A `docs/` page, CHANGELOG.md or a GitHub file runs the tests that read it (by path, folder or listing) and the tests of
+the code that reads it, not everything that imports that code. A change to how the checks run (the PR checks workflow,
+`scripts/ci_install.sh`, the browser system packages) runs the tests that read it and one short core browser script, and
+a workflow change also builds the Caddy image. Conftest, `pytest.ini`, dependency pins and deleted or unparsable files
+fall back to the full default Python suite and core browser scripts. Runner/harness changes also run slow conformance on
+the Rust runner and all its fake harnesses; UI changes select their browser scripts, including imported-history for chat
+changes, or every browser script when the UI mapping is uncertain. The Rust and desktop checks run in the queue when a
+crate or `app/` changed, and the macOS recorder tests when `recorder/` changed. A draft pull request runs no checks
+(every job is skipped); marking it ready for review runs the lint checks. A skipped run is not a pass, so the
+ready-for-review run's `checks` must show passing, not skipped. Main has no check run of its own: the queue tests each
+change on the merged result, and Release validation runs the whole gate on each candidate. A daily cache run
+(`pr-cache.yml`) keeps the main-branch caches the queue restores from fresh; hosted PR runs cannot read RunsOn's cache,
+so they start cold. A pull request's superseded run is canceled; a queue group is never canceled.
 
 Python jobs install no npm packages, browsers or apt packages. The browser job caches both browser binaries and
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
-one retry. Pip and npm download caches remain enabled. Checks run on 4-vCPU RunsOn Spot VMs in Tico's own AWS
-account (fork PRs on GitHub-hosted runners; x64 labels take the m and r families of generations 6–8, arm64 labels are unchanged). `scripts/pr_checks.py` sizes the Python and browser groups so each VM
+one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU RunsOn Spot VMs in Tico's own AWS account (x64 labels take the m and r families of generations 6–8, arm64 labels are unchanged); PR pushes run on GitHub-hosted runners. `scripts/pr_checks.py` sizes the Python and browser groups so each VM
 finishes in about `TICO_CI_JOB_SECONDS` (300, five minutes) including setup, using JUnit per-file and browser per-script timings
 from the latest successful Release validation run (its `test-timings` artifact: the same pytest flags, slow tests
 included), with collected test counts until timings exist. New files use the observed
-seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check links each job and its elapsed seconds in its summary. It also
-fails if a required job failed or was canceled. The target is under ten minutes from start to completed checks;
-hosted run receipts, including cache state, establish whether that target is met.
+seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check on a queue run links each job and its elapsed seconds in its summary; it gates nothing. The `checks` gate fails when a job it needs failed or was canceled. The target is under ten minutes from the group's start to its completed checks; the queue run's receipt, including cache state, establishes whether that target is met.
 
 Nothing is mapped by hand or by filename: a test that uses a file in a way the map cannot see (a path built at run
 time from a parameter, a subprocess's own reads) must name that file or folder literally, or the change will not
 select it. A file that makes a computed import or lists the repository with `git ls-files` runs on every change.
 The Release validation workflow retains its full candidate gate and never cancels a running validation.
 
-Write unit
-tests while you build and run them as you go; keep every one that guards a real failure, as many as the change needs, and drop the trivial ones. Before merging,
-run the test files for what you touched and the checks the change obviously affects, not the full suite. For each release, run the full
-suite once on its frozen candidate.
+Write unit tests while you build and run them as you go; keep every one that guards a real failure, as many as the change needs, and drop the trivial ones. Before you mark the PR ready, run the test files for what you touched and the checks the change obviously affects with `scripts/remote.py`, not the full suite. For each release, run the full suite once on its frozen candidate.suite once on its frozen candidate.
 
 Use `pytest -ra` to see prerequisite skip reasons. Systemd lifecycle scenarios run on Linux;
 unit rendering still runs on every host. Installer scenarios need Docker and stage their mounts
@@ -344,8 +343,32 @@ That is the default suite: pytest in parallel without the tests marked `@pytest.
 core browser scripts (`CORE` in `scripts/ui-tests.cjs`) with the load-aware concurrency described below. The check records wall time and load; it
 takes about two minutes, and a run over 300 seconds still passes and says it is slow. There is no budget on the
 number of tests: keep every test that guards a real failure, and none of wording or copy. Release validation builds the three images and the Release workflow publishes them with the
-GitHub release. The PR checks workflow runs this full default suite on uncertain PR selections; known PR mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
+GitHub release. The merge queue runs this full default suite on uncertain selections; known mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
 slow tests and every browser script, and release candidate validation covers that full suite.
+
+## Merge queue
+
+Main takes changes only through its merge queue. Mark the pull request ready for review, then run `gh pr merge <N> --merge`
+(`--squash` and `--auto` also enqueue). The queue adds the pull request to a group, merges the group onto the current main, runs the selected
+checks on that merge commit, and moves main only when they pass.
+
+- **Each push to a pull request** (GitHub-hosted, free): plan, static checks, recorder change detection, and the `checks`
+  gate. Lint only; a draft runs nothing.
+- **A queue group** (RunsOn Spot, 2 and 4 vCPU): plan, static checks again on the merge commit, the selected Python and
+  browser tests, the Caddy image when the change reaches it, Rust lint and the desktop app when those changed, the macOS
+  recorder tests when `recorder/` changed, and the `checks` gate. The group selects from its own base and head.
+- **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
+
+Agents run the tests they touched with `scripts/remote.py` before they mark a PR ready; the queue runs the selected set
+once per group.
+
+**A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. Fix the
+failure on the branch, push, mark the PR ready again if it went back to draft, and merge again. The red run is the first
+place a test failure shows, because a push to a pull request runs only lint.
+
+**Hotfixes do not bypass the queue.** Land the fix through the queue like any change, then dispatch `hotfix.yml` once it
+has landed (see Hotfixes above). The queue itself is a repository ruleset (`merge_queue`, and `checks` as the required
+check), set by a maintainer.
 
 ## Hosted release validation
 
