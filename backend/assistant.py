@@ -258,6 +258,8 @@ NEVER = [(m, re.compile(p)) for m, p in (
     # tests/test_assistant_acts_as_you.py walks app.routes so a new one cannot slip past.
     ("POST", r"/api/v2/me/tokens(/[^/]+/revoke)?"),
     ("POST", r"/api/v2/service-keys(/[^/]+/revoke)?"),
+    # A person's skills helper token (backend/skill_devices.py): connecting, revoking and its reporting are the person's.
+    (None, r"/api/v2/skills/devices(/.*)?"),
     (None, r"/api/v2/credentials(/.*)?"), (None, r"/api/v2/credential-set"),
     # An API tool's keys and levels are credentials and grants; its address and auth scheme decide where a key is sent,
     # so changing, adding or deleting a tool is the person's tap too (backend/api_tools.py). Its check only reads.
@@ -872,9 +874,17 @@ def groups(c, steps):
     return lines
 
 
-def describe(c, method, path, body):
+def describe(c, method, path, body, viewer=None, admins=()):
     """A one-line, server-derived description of what confirming would do (never the bot's words), and
-    for a task update the exact field changes."""
+    for a task update the exact field changes. Given the `viewer`, a key of a tool they may not see is named as one that
+    does not exist is: by its id (backend/api_tools.py `visible`)."""
+    def credential_name(cid):
+        if viewer is not None:
+            from .api_tools import key_hidden
+            if key_hidden(c, viewer, cid, admins):
+                return cid
+        return (c.execute("SELECT name FROM credentials WHERE id=?", (cid,)).fetchone() or {"name": cid})["name"]
+
     def bot(slug):
         row = H.bot(c, slug) or {}
         return row.get("display_name") or row.get("slug") or slug
@@ -977,8 +987,7 @@ def describe(c, method, path, body):
                 body.get("new_bot_default"), "Change which repositories new bots get")),
         (r"/api/v2/repositories/refresh", lambda g: "Refresh the repository list from GitHub"),
         (r"/api/v2/repositories/([^/]+)/([^/]+)", lambda g: f"Change repository {g[1]}: " + fields(body)),
-        (r"/api/v2/credentials/([^/]+)", lambda g: "Delete the stored credential “" + ((c.execute(
-            "SELECT name FROM credentials WHERE id=?", (g[0],)).fetchone() or {"name": g[0]})["name"]) + "”"),
+        (r"/api/v2/credentials/([^/]+)", lambda g: "Delete the stored credential “" + credential_name(g[0]) + "”"),
         (r"/api/v2/(?:people|humans)/([^/]+)", lambda g: f"Delete {who('human:' + g[0])} from the team for good"
          if method == "DELETE" else f"Edit person {who(g[0])}: " + fields(body)),
         (r"/api/v2/access/(?:people|humans)", lambda g: f"Add {body.get('name') or body.get('email', '')} ({body.get('email', '')}) "
@@ -1215,7 +1224,8 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
     if same:
         # The same card again is the same card: a retried command never leaves two to click.
         return {"action": action_view(dict(same), c), "message_id": None, "repeated": True}
-    said, diff = describe(c, method, path, body)
+    admins = tuple(getattr(settings, "credential_admins", ()) or ())       # who may see a key's name on the card (backend/api_tools.py `visible`)
+    said, diff = describe(c, method, path, body, who, admins)
     if routine:
         said, diff = routine
     if not what and (m := re.fullmatch(r"/api/v2/bots/([^/]+)/repositories", path)) and method == "PUT":
@@ -1227,7 +1237,7 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
         # One line per step: what it does to which task, and the fields it changes.
         diff = groups(c, body["actions"])
         for i, s in enumerate(body["actions"]):
-            line, changes = routine_steps.get(i) or describe(c, s["method"], s["path"], s["body"])
+            line, changes = routine_steps.get(i) or describe(c, s["method"], s["path"], s["body"], who, admins)
             fields = changes or [{"field": k, "new": v} for k, v in s["body"].items()]
             diff.append({"field": line, "new": ", ".join(f"{d['field']}: {d['new']}" for d in fields
                                                           if d["field"] != "version"),

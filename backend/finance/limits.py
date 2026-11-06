@@ -87,8 +87,8 @@ def cutoffs(c: sqlite3.Connection, at: str | None = None, line: str = AI) -> Cut
     today = dates.day(ctx.today)
     cut: dict[str, B.State] = {}
     for bid in budgets:
-        if not versions.get(bid):
-            continue
+        if not versions.get(bid) or budgeting.budget_platform(ctx, budgets[bid]):
+            continue                                    # an ad budget only warns (budgeting.warn_only)
         st = budgeting.state(ctx, bid, today)
         if st.at_limit and st.amount is not None:
             cut[bid] = st

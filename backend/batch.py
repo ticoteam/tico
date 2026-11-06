@@ -126,9 +126,9 @@ def relevant(c, actor, items):
     covered = {it.get("task_id") for it in items if it["kind"] == "approval" and it.get("task_id")}
     out, seen = [], set()
     for it in items:
-        # Standalone questions, stale checks and memory proposals have their own decision protocols;
+        # Standalone questions and stale checks have their own decision protocols;
         # a batch applies task and approval responses only.
-        if it["kind"] in ("ask", "stale", "memory_tidy"):
+        if it["kind"] in ("ask", "stale"):
             continue
         # A person's own parked work belongs on their task board, not in a spoken decision pass.
         # It has no other requester waiting for an answer and "waiting" explicitly means there is

@@ -81,7 +81,7 @@ function needRowHTML(it, ctx = {}) {
   const from = stale ? '' : taskRequester(it) || it.requester_id || '';
   const name = stale ? KEEPER_LABEL : actorLabel(from) || KEEPER_LABEL;
   const title = stale ? it.title || 'Stale tickets' : approvalTitle(it) || it.first_line || it.title || v2Firstline(it.body) || V2_KIND[it.kind] || 'Item';
-  const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : it.kind === 'memory_tidy' ? 'Nightly memory tidy' : thread || 'Question';
+  const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : thread || 'Question';
   const face = stale ? personCircle(KEEPER_LABEL, 18) : actorFace(from, 18);
   const open = thread && it.conversation_id
     ? `<a class="tl-open" href="#/thread/${encodeURIComponent(it.conversation_id)}" tabindex="-1"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></a>`
@@ -103,7 +103,7 @@ function needRowHTML(it, ctx = {}) {
 // Tasks page's: each thing that waits on someone is in one place. A bot's question outside any task stays here: its
 // card is where it is answered.
 const NEEDS_TASK_KINDS = ['task', 'question', 'waiting', 'declined'];
-const NEEDS_EXTRA_KINDS = ['approval', 'stale', 'ask', 'memory_tidy'];
+const NEEDS_EXTRA_KINDS = ['approval', 'stale', 'ask'];
 const needsExtras = () => needsQueueItems().filter(it => NEEDS_EXTRA_KINDS.includes(it.kind));
 // How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
 // decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`

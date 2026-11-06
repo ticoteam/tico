@@ -408,6 +408,10 @@ def create_app(settings=None):
             # Finance's books worker (backend/finance/books_sync.py): QuickBooks writes out, backfill and change feed.
             from .finance import books_sync
             books_sync.start(store, app.state.vault, settings, rehearsal=settings.rehearsal)
+            # Finance's ad spend import (backend/finance/ad_import.py): Google Ads and Meta daily spend every 4 hours;
+            # a rehearsal copy starts none.
+            from .finance import ad_import
+            ad_import.start(store, app.state.vault, rehearsal=settings.rehearsal)
         # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
         # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
@@ -513,6 +517,8 @@ def create_app(settings=None):
                 await asyncio.to_thread(finance.banking_stop)
                 from .finance import books_sync as books_worker
                 await asyncio.to_thread(books_worker.stop)
+                from .finance import ad_import as ad_worker
+                await asyncio.to_thread(ad_worker.stop)
             telemetry.close()
 
     app = FastAPI(title=settings.app_name + " API", version="2.0.0", lifespan=lifespan,
@@ -756,6 +762,11 @@ def create_app(settings=None):
                     chunks.append(chunk)
                 request._body = b"".join(chunks)
                 return await call_next(request)
+            # A person's skills helper with no token yet (backend/skill_devices.py): it asks for a code and polls for its
+            # token with its own secret, and its source is served to anyone. The person's approval is the signed-in step.
+            from . import skill_devices
+            if skill_devices.public(request) or request.url.path == "/api/v2/skills/helper.mjs" and request.method == "GET":
+                return await call_next(request)
             agent_door = (request.url.path == "/api/v2/agents/pairings" and request.method == "POST"
                           or request.url.path.startswith("/api/v2/agents/pairings/") and request.method == "GET"
                           or request.url.path in ("/api/v2/agents/setup-script", "/api/v2/agents/sync-skill")
@@ -819,7 +830,7 @@ def create_app(settings=None):
                 # A run's raw provider stream: up to 5 MB of frames, escaped once more as a JSON string.
                 captured = (request.url.path.startswith("/api/v2/attempts/") and request.url.path.endswith("/capture")
                             and request.state.identity.role == "runner")
-                memory_report = (bool(re.fullmatch(r"/api/v2/(?:bots/[^/]+/memory/report|attempts/[^/]+/memory-tidy/prepare)", request.url.path))
+                memory_report = (bool(re.fullmatch(r"/api/v2/bots/[^/]+/memory/report", request.url.path))
                                  and request.state.identity.role == "runner")
                 # A bot's video or audio file streams to disk up to the server's upload limit (backend/files.py).
                 media_raw = published and raw_media(request, imported=request.url.path == "/api/v2/files/imports")
@@ -8420,7 +8431,13 @@ def create_app(settings=None):
             with store.read_transaction() as c:
                 if not store.saved(c, request.state.identity, request.url.path, request.headers.get("idempotency-key")):
                     execution.attempt(c, request.state.identity, aid, active=False)
-            return mutate(request, body, lambda c: execution.events(c, request.state.identity, aid, body))
+            from . import skill_runtime
+
+            def ingest(c):
+                acked = execution.events(c, request.state.identity, aid, body)
+                skill_runtime.record_runner_usage(c, aid, body.events)    # a Skill call's name, scrubbed above
+                return acked
+            return mutate(request, body, ingest)
 
     @app.post("/api/v2/attempts/{aid}/capture")
     def keep_capture(request: Request, aid: str, body: M.StreamCapture):
@@ -8473,10 +8490,7 @@ def create_app(settings=None):
 
         def finish(c):
             with automations.for_attempt(c, aid):
-                result = execution.complete(c, request.state.identity, aid, body, rule_check=rc)
-                from . import memory_tidy_transport
-                memory_tidy_transport.complete(c, aid, body, request.state.identity, app.state.files, app.state.blobs)
-                return result
+                return execution.complete(c, request.state.identity, aid, body, rule_check=rc)
         return mutate(request, body, finish)
 
     @org_rule_check.replayer("reply")
@@ -8617,6 +8631,10 @@ def create_app(settings=None):
     company_page_api.register(app, store, auth, mutate, settings)
     from .service_keys import install_service_keys
     install_service_keys(app, store, auth, mutate)
+    # People's own Claude Code (docs/skills.md, People's Claude Code): the helper's devices, then its marketplace.
+    from . import skill_devices, skill_marketplace
+    skill_devices.install(app, store, auth, mutate, settings)
+    skill_marketplace.install(app, store, auth, settings)
     install_views(app, store, auth, mutate, task_view)
     @app.get("/api/v2/attempts/{aid}/goal")
     def attempt_goal(request: Request, aid: str):
@@ -8626,16 +8644,23 @@ def create_app(settings=None):
             from .chat_goals import current
             return {"goal": current(c, msg["conversation_id"])}
 
+    from . import skill_runtime
+    skill_runtime.install(app, store, execution, mutate)    # company skills a runner stages, and their use
     from .chat_goals import install as install_chat_goals
     install_chat_goals(app, store, auth, mutate, send)
     from .bot_task_tabs import install as install_bot_task_tabs
     install_bot_task_tabs(app, store, auth, mutate, settings, task_views)
     from .cards import install as install_cards
     install_cards(app, store, auth, mutate, settings, task_view)
-    from . import memory_tidy_cards
-    memory_tidy_cards.install(app, store, auth, mutate)
-    from . import memory_tidy_transport
-    memory_tidy_transport.install(app, store, execution, mutate)
+
+    @app.get("/api/v2/runners/me/memory-tidy-keeps")
+    def retired_memory_tidy_keeps(request: Request):
+        """The retired Nightly memory tidy pilot's Keep queue: always empty. runner-rs (memory_tidy_keep.rs) still asks
+        every 15 seconds; remove this once no runner does."""
+        if request.state.identity.role != "runner":
+            raise Problem("identity", "A registered computer is required", 403)
+        return {"keeps": []}
+
     turn_work.install(app, store, auth)
     from . import run_view
     run_view.install(app, store, auth)
@@ -8758,6 +8783,8 @@ def create_app(settings=None):
     screening.install(app, store, auth, mutate)    # prompt-injection screening at webhooks, mail, ideas and watchers
     from . import finance_routes
     finance_routes.install(app, store, auth, mutate)    # Finance: budgets, P&L, expenses, actions (backend/finance)
+    from . import finance_ads_routes
+    finance_ads_routes.install(app, store, auth, mutate)    # Finance: ad spend import settings on ad tools' pages
     from .company_page import api_readers
     api_readers.register(app, store, auth, mutate)      # Company page readers, invites and messages, for owners and admins
     from .company_page import api_editions
@@ -8851,6 +8878,9 @@ def create_app(settings=None):
     install_branches(app, store, auth, mutate, settings_admin, execution)
     from .bot_copy import install as install_bot_copy
     install_bot_copy(app, store, auth, mutate, settings_admin, place_now)
+    # Usage reads first: `skills/usage`, `skills/installed` and `skills/install-targets` are not skill names.
+    from .skill_usage import install as install_skill_usage
+    install_skill_usage(app, store, auth)
     from .skills import install as install_skills
     install_skills(app, store, auth, mutate)
     from .subscriptions import install as install_subscriptions

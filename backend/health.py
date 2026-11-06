@@ -186,7 +186,10 @@ def _computers(c, runners_online, settings, limits=None):
         rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in since, "last_seen_at": r["last_seen_at"],
                      "resting": r["id"] in resting and r["id"] not in since,
                      "platform": r["platform"] or "", "update": runner_versions.view(fleet.get(r["id"])),
-                     "disk": document.get("disk"),
+                     # The last clean-up the computer ran by itself rides on its disk row (runner-rs/src/disk_clean.rs).
+                     "disk": ({**document["disk"], "cleanup": document["disk_cleanup"]}
+                              if isinstance(document.get("disk"), dict) and isinstance(document.get("disk_cleanup"), dict)
+                              else document.get("disk")),
                      "owner_id": r["owner_id"], "container_exec": document.get("container_exec"),
                      "github_auth": document.get("github_auth"), "browser_launch": document.get("browser_launch"),
                      "engine": document.get("engine"),
@@ -347,16 +350,21 @@ def _missing_tool_credentials(c, online_ids):
     return sorted(out)
 
 
-def reserved_credentials(c):
+def reserved_credentials(c, who=None, admins=(), auth=None):
     """(credential name, variable, bot) for each credential a bot holds under a name Tico reserves. The runner leaves
-    such a credential out of the bot's turns, so the bot runs without it until someone renames the variable."""
+    such a credential out of the bot's turns, so the bot runs without it until someone renames the variable. Given
+    `who`, never a key of a tool they may not see (backend/api_tools.py `visible`)."""
     from clients.access_entry import RESERVED_ENV, RESERVED_PREFIXES
     from .credentials import effective_grant
+    hidden = set()
+    if who is not None:
+        from .api_tools import hidden_keys
+        hidden = hidden_keys(c, who, admins, auth)
     out = []
     for row in c.execute("SELECT DISTINCT v.id,v.name,v.env,g.subject FROM credentials v JOIN credential_grants g "
                          "ON g.credential_id=v.id WHERE g.subject LIKE 'bot:%' AND g.revoked_at IS NULL "
                          "AND v.ciphertext IS NOT NULL AND v.env<>'' ORDER BY v.name"):
-        if (row["env"] in RESERVED_ENV or row["env"].startswith(RESERVED_PREFIXES)) \
+        if (row["env"] in RESERVED_ENV or row["env"].startswith(RESERVED_PREFIXES)) and row["id"] not in hidden \
                 and effective_grant(c, row["id"], row["subject"]):
             out.append((row["name"], row["env"], H.actor_id(row["subject"])))
     return out
@@ -2162,7 +2170,7 @@ def view(c, who, settings, auth, github, config):
                              "Missing Credential: " + "; ".join(f"{tool} on {label}" for tool, label in missing_tools[:5])
                              + ("." if len(missing_tools) <= 5 else f"; and {len(missing_tools) - 5} more."),
                              [_fix("Open Keys", "#/tools/keys?show=credentials"), _fix("Open Computers", "#/settings", "devices")]))
-    if full and (reserved := reserved_credentials(c)):
+    if full and (reserved := reserved_credentials(c, who, tuple(settings.credential_admins or ()), auth)):
         checks.append(_check("reserved_credentials", "Credential names", "warn",
                              "Bots run without these credentials, because Tico keeps their variable names for itself: " + "; ".join(f"{name} ({env}) for {_bot_name(c, bot)}" for name, env, bot in reserved[:5])
                              + ("." if len(reserved) <= 5 else f"; and {len(reserved) - 5} more.")
@@ -2240,9 +2248,13 @@ def view(c, who, settings, auth, github, config):
             disk = computer.get("disk") or {}
             total, free = disk.get("total_bytes"), disk.get("free_bytes")
             if isinstance(total, int) and total > 0 and isinstance(free, int) and 1 - free / total > .85:
+                cleanup = disk.get("cleanup") or {}
+                done = (f" Its own clean-up at {cleanup.get('at', '')[11:16]} UTC freed "
+                        f"{(cleanup.get('freed_bytes') or 0) / 1024**3:.1f} GB; what is left is not safe for it to remove."
+                        if cleanup.get("still_low") else "")
                 checks.append(_check("disk:" + computer["id"], "Disk space", "warn",
                                      f"{computer['label']}: disk is {100 * (1 - free / total):.0f}% full "
-                                     f"({free / 1024**3:.1f} GB free). Free space on this computer; for Docker, run "
+                                     f"({free / 1024**3:.1f} GB free).{done} Free space on this computer; for Docker, run "
                                      "`docker image prune -a` to remove unused images. The update retries when space frees.",
                                      [_fix("Open Computers", "#/settings", "devices")]))
             # Diagnostics only: an overload is shown here and on the computer's Performance page; nothing acts on it.

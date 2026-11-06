@@ -166,6 +166,8 @@ def forget_audience_member(c, actor, field, ident):
     if changed:
         counsel.revoke_page_copies(c, None)
         access_reset(c)
+    from . import api_tools
+    api_tools.forget_audience_member(c, actor, field, ident)        # tools' Who can see it, the same audience shape
 
 
 class Pages:

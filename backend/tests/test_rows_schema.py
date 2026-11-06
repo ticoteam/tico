@@ -92,7 +92,7 @@ UNTYPED = frozenset({
     "fin_bill_retained", "fin_estimate_lines", "fin_estimates", "fin_po_lines", "fin_purchase_orders", "items", "locations",
     # Finance's combined build (migration 0037): prepaid postings and invoice reminders.
     "fin_invoice_reminders", "fin_prepaid_postings",
-    "memory_tidy_keeps", "pending_subscription_fallbacks", "projects", "record_aliases", "subscription_connects",
+    "pending_subscription_fallbacks", "projects", "record_aliases", "subscription_connects",
     # Reach (backend/reach.py): settings and lines.
     "reach_lines", "reach_settings",
     # The Company page (backend/company_page).
@@ -117,7 +117,8 @@ UNTYPED = frozenset({
     "credential_uses", "credentials", "deferrals", "deltas", "doc_source_jobs", "doc_sources", "doc_versions", "docs",
     "enrollments", "events", "external_documents", "external_sections", "external_snapshot_docs", "external_snapshots",
     "external_versions", "feed_cursors", "feed_deliveries", "feed_sources", "feed_updates", "feed_walks",
-    "file_deletions", "fin_accounts", "fin_actions", "fin_allocations", "fin_attachments", "fin_bill_lines",
+    "file_deletions", "fin_accounts", "fin_actions", "fin_ad_accounts", "fin_ad_imports", "fin_ad_spends", "fin_ad_warnings",
+    "fin_allocations", "fin_attachments", "fin_bill_lines",
     "fin_bills", "fin_books", "fin_budget_versions", "fin_budgets", "fin_card_auths", "fin_card_saves", "fin_cards",
     "fin_cash_rollups", "fin_close_snapshots", "fin_connections", "fin_contacts", "fin_credit_refunds",
     "fin_dimensions", "fin_entries", "fin_events", "fin_external_refs", "fin_feed_txns", "fin_holds", "fin_inbox",
@@ -142,7 +143,6 @@ UNTYPED = frozenset({
     "mail_private_backfill", "mail_reads", "main_pushes", "market_briefings", "market_citations", "market_edges",
     "market_entities", "market_entity_keys", "market_evidence", "market_figures", "market_insights",
     "market_pages", "market_sizes", "market_sources", "market_turn_sources", "market_watches", "media_assets",
-    "memory_tidy_cards",
     "media_control", "meeting_brain", "meeting_comments", "meeting_deliveries", "meeting_importers", "meeting_items",
     "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty", "message_links_seen",
     "messages", "milestones", "model_login_cleared", "model_login_key_off", "model_logins", "model_subscriptions",
