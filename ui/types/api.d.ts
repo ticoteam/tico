@@ -1852,8 +1852,9 @@ export type FinanceCloseChecklist = {
 export type FinanceConnectionRequest = {
   approver_email?: string | null;
   credential_id: string;
+  history_from?: string | null;
   name?: string | null;
-  provider?: "mercury" | "stripe";
+  provider?: "mercury" | "stripe" | "brex";
   server_ip?: string | null;
   token_creator_email?: string | null;
 };
