@@ -1,5 +1,7 @@
-"""Clean up: pruning only (docs/maintenance.md, plan 2.2 and Amendment v2 G). These are the retention sweeps the hourly
-cleanup block of backend/scheduler.py ran, the VACUUM that gives their pages back, and the run history past 30 days.
+"""Clean up: pruning, and closing finished nightly packets (docs/maintenance.md, plan 2.2 and Amendment v2 G).
+These are the retention sweeps the hourly cleanup block of backend/scheduler.py ran, the VACUUM that gives their pages back, and the run history past 30 days.
+
+The packets part is learnings.close_finished_packets: the keeper's nightly packets that are finished stop holding Reviewers.
 
 Deadline work stays in the engine on its own cadence (scheduler.py): support triage, screening, webhook auto-disable,
 approval expiry and the finance sweep. No model, and no customer tokens.
@@ -20,7 +22,8 @@ def _prune_history(c, now):
 
 def run(c, ctx):
     store, now = ctx["store"], ctx["now"]
-    from .. import api_tools, automations, events, flight, performance, presence, rules, triggers, webhook_delivery
+    from .. import api_tools, automations, events, flight, learnings, performance, presence, rules, triggers
+    from .. import webhook_delivery
     from .. import system_routines as SR
     with store.transaction() as tx:
         # A duplicate is not a failure (batch_work.isolated); rows an older server wrote for one go.
@@ -33,6 +36,7 @@ def run(c, ctx):
         automations.prune(tx, now)                     # automation runs: step detail keeps 30 days
         _prune_history(tx, now)
         presence.sweep(tx, now)
+        packets = learnings.close_finished_packets(tx, now)   # finished nightly packets stop holding Reviewers
     sweep_idempotency(store, now)
     sweep_mail(store, now)
     sweep_deltas(store, now)                           # finished runs' streamed text pieces keep a day
@@ -46,4 +50,5 @@ def run(c, ctx):
     at = H.parse_ts(now).timestamp()
     flight.sweep(store, at)                            # the flight recorder's minutes become hours
     performance.sweep(store, at)                       # computers' minutes become ten-minute points
-    return {"status": "ran", "reason": "Done", "checked": 0, "found": 0, "woke": 0, "cost_usd": 0.0, "details": {}}
+    return {"status": "ran", "reason": "Done", "checked": 0, "found": 0, "woke": 0, "cost_usd": 0.0,
+            "details": {"packets": packets}}
