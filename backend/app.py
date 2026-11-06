@@ -8390,7 +8390,13 @@ def create_app(settings=None):
             with store.read_transaction() as c:
                 if not store.saved(c, request.state.identity, request.url.path, request.headers.get("idempotency-key")):
                     execution.attempt(c, request.state.identity, aid, active=False)
-            return mutate(request, body, lambda c: execution.events(c, request.state.identity, aid, body))
+            from . import skill_runtime
+
+            def ingest(c):
+                acked = execution.events(c, request.state.identity, aid, body)
+                skill_runtime.record_runner_usage(c, aid, body.events)    # a Skill call's name, scrubbed above
+                return acked
+            return mutate(request, body, ingest)
 
     @app.post("/api/v2/attempts/{aid}/capture")
     def keep_capture(request: Request, aid: str, body: M.StreamCapture):
@@ -8596,6 +8602,8 @@ def create_app(settings=None):
             from .chat_goals import current
             return {"goal": current(c, msg["conversation_id"])}
 
+    from . import skill_runtime
+    skill_runtime.install(app, store, execution, mutate)    # company skills a runner stages, and their use
     from .chat_goals import install as install_chat_goals
     install_chat_goals(app, store, auth, mutate, send)
     from .bot_task_tabs import install as install_bot_task_tabs

@@ -3657,6 +3657,9 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         "legacy_audience) VALUES (:id, :conversation_id, :sender_id, :recipient_id, :kind, :body, :refs, "
         ":in_reply_to, :created_at, :delivered_at, :read_at, :expires_at, :wait_s, :origin_id, :revision, "
         ":restricted, :legacy_audience)", row)
+    if is_human(actor) and is_bot(target) and row["body"].lstrip().startswith("/"):
+        from . import skill_runtime
+        skill_runtime.record_thread_usage(conn, row, conv, refs)   # a person's `/name` for a company skill
     from .enqueue import enqueue
     enqueue(conn, row)                      # the job it starts, in this transaction (backend/enqueue.py)
     conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created_at"], conv["id"]))
