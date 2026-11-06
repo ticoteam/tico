@@ -127,16 +127,6 @@ def run_bookkeeper_rules_digest(store, auth, at, failures=None):
         run.did(made["words"], quiet=not made["items"])
 
 
-def run_thread_followups(store, auth, at, failures=None):
-    # A bot's managers get one notice about its Home's closed history (backend/thread_followups.py). Nothing due is a quiet
-    # run: no post, no model.
-    with SR.recording(store, "thread_followups", failures, "helper") as run:
-        from . import thread_followups
-        with store.transaction() as c:
-            notices = thread_followups.earlier_sweep(c, auth, stamp(at))     # scoped "earlier-messages" there
-        run.did(SR.words_of(notices, "notice", "Nothing to tell"), quiet=not notices)
-
-
 def run_thread_digest(store, auth, at, failures=None):
     # One email an hour to each person with threads to list on digest (backend/thread_digest.py). Nothing unread is a
     # quiet run: no mail and no write.
@@ -172,7 +162,6 @@ QUICK = {"kpi_asks": run_kpi_asks,
 # a person switches). The Bookkeeper's pause is their off switch.
 FIXED = {"bookkeeper_watch": (run_bookkeeper_watch, timedelta(days=1)),
          "bookkeeper_rules_digest": (run_bookkeeper_rules_digest, timedelta(days=7)),
-         "thread_followups": (run_thread_followups, timedelta(minutes=15)),
          "thread_digest": (run_thread_digest, timedelta(hours=1)),
          "thread_bot_digest": (run_thread_bot_digest, timedelta(hours=1)),
          "thread_retention": (run_thread_retention, timedelta(minutes=15))}
@@ -626,12 +615,13 @@ class Scheduler:
                 if mark is None or at - mark >= every:
                     self.marks[key] = at
                     run(self.store, self.execution.auth, at, failures)
-        # Thread messages waiting to be routed: on their own thread, since a tick never waits on the decision model.
+        # Proposed skills and updates waiting for their screen (backend/skill_screening.py): on their own thread, since a
+        # screen's model call can take 90 seconds. The pass records its own run.
         try:
-            from . import thread_routing
-            thread_routing.kick(self.store)
+            from . import skill_screening
+            skill_screening.kick(self.store)
         except Exception as exc:
-            failures.append({"thread_routing": type(exc).__name__})
+            failures.append({"skill_screening": type(exc).__name__})
         # Bot wakes the loop guard held: they go by themselves as their root's rolling hour reopens. Plain SQL, no model.
         with SR.recording(self.store, "thread_loop_guard", failures) as run:
             from . import threads
@@ -798,22 +788,15 @@ class Scheduler:
                 except Exception as exc:
                     failures.append({"drop_unreadable": type(exc).__name__})
         if self.stranded is None or at - self.stranded >= timedelta(hours=1):
-            # Every hour: waiting tasks' holds, and plain asks to a person (backend/task_holds.py, person_asks.py).
+            # Every hour: a bot's task waiting on nothing tracked goes back to open after a grace (task_holds.unstrand).
             self.stranded = at
-            try:
-                # Once after this shipped: every waiting task's reason put right, one wake per bot (task_holds.py).
+            with SR.recording(self.store, "waiting_checks", failures, "stranded") as run:
                 from . import task_holds
                 with self.store.transaction() as c:
-                    task_holds.backfill(c, stamp(at))
-            except Exception as exc:
-                failures.append({"task_holds_backfill": type(exc).__name__})
-            # ...bot tasks waiting on a person with a plain ask become the bot's task blocked on one small subtask
-            # the person owns (the waiting checks' whole job now: nothing is sent back to work here)...
-            with SR.recording(self.store, "waiting_checks", failures, "person_asks") as run:
-                from . import person_asks
-                with self.store.transaction() as c:
-                    moved = person_asks.migrate(c)
-                run.did(SR.words_of(moved, "plain ask made a task", "No plain asks to a person", "plain asks made tasks"))
+                    unstranded = task_holds.unstrand(c, stamp(at))
+                run.did(SR.words_of({"tasks waiting on nothing reopened": unstranded["opened"],
+                                     "stuck tasks handed to a manager": unstranded["told"]},
+                                    none="Nothing stranded"))
 
         if self.asks_checked is None or at - self.asks_checked >= timedelta(hours=1):
             self.asks_checked = at

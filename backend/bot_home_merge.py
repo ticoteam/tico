@@ -58,7 +58,7 @@ EVENT = "conversation.moved_to_home"
 log = logging.getLogger(__name__)
 
 # Tables whose `column` names the room, moved to the Home with it. A table a release does not have is skipped.
-KEYED = (("thread_followups", "conversation_id"), ("thread_routings", "thread_id"), ("feedbacks", "conversation_id"),
+KEYED = (("thread_followups", "conversation_id"), ("feedbacks", "conversation_id"),
          ("bot_files", "conversation_id"), ("credential_requests", "conversation_id"),
          ("deferrals", "conversation_id"), ("calls", "thread_id"))
 OPEN_ATTEMPTS = ("queued", "leased", "running", "input")

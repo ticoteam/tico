@@ -88,6 +88,7 @@ FLOOR_EVENTS = {
     "answer": "the answer to an ask the bot made",
     "approval": "an approval decided, withdrawn or asked about, or a structured question",
     "needs_action": "a message its sender flagged needs-action",
+    "bot_mention": "another bot's message that @mentions the bot",
     "reply": "a reply to the bot's own ask, to a message it flagged needs-action, or to one it waits on",
     "verdict": "a factory gate verdict on the bot's ticket: Review 1, Review 2, QA or Security",
     "incident_news": "news about a task marked as an incident wakes the bot at once",
@@ -100,7 +101,8 @@ FLOOR_EVENTS = {
 # Structured task news that wakes at once when no row already wakes it or keeps it quiet.
 URGENT_EVENTS = ("incident_news", "task_action", "task_blocker", "direct_review_request")
 # wake_rules.always_wakes key -> (event, rule id)
-_FLOOR = {"check_back": "check_back", "person": "person_message", "approval": "approval", "needs_action": "needs_action", "reply": "reply",
+_FLOOR = {"check_back": "check_back", "person": "person_message", "approval": "approval", "needs_action": "needs_action",
+          "mention": "bot_mention", "reply": "reply",
           "gate": "verdict", "handoff": "builder_handoff"}
 # wake_rules.AWAITED key -> event
 AWAITED_EVENTS = {

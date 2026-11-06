@@ -52,14 +52,17 @@ export type Answer = {
 
 export type ApiTool = {
   access: Array<{
+  fixed?: boolean;
   initials: string;
-  kind: "bot" | "person";
+  kind: "bot" | "person" | "finance";
   last_used_at: string | null;
   level: "read" | "read_write";
   name: string;
   subject: string;
 }>;
+  audience?: AccessAudience | null;
   can_manage: boolean;
+  can_set_audience: boolean;
   checks: Array<{
   checked_at: string;
   detail: string;
@@ -74,20 +77,20 @@ export type ApiTool = {
   name: string;
   preview: string;
 }>;
+  private: boolean;
   recent: Array<Record<string, unknown>>;
+  seen_by?: Array<{
+  id: string;
+  kind: "person" | "group" | "bot" | "finance";
+  name: string;
+  subject: string;
+  why: "Owner" | "Listed" | "Can use it";
+}>;
   status: {
   text: string;
   tone: "ok" | "wait" | "fail" | "run" | "idle";
 };
-  tool: {
-  auth_scheme: string;
-  base_url: string;
-  check_path: string;
-  delivery: "proxy" | "computer";
-  id: string;
-  name: string;
-  service: string;
-};
+  tool: ApiToolSettings;
 };
 
 export type ApiToolActivity = {
@@ -99,6 +102,17 @@ export type ApiToolActivity = {
   kind: "call" | "use";
   result: "sent" | "refused" | "failed" | "use";
 }>;
+};
+
+export type ApiToolSettings = {
+  auth_scheme: string;
+  base_url: string;
+  check_path: string;
+  delivery: "proxy" | "computer";
+  id: string;
+  name: string;
+  private: boolean;
+  service: string;
 };
 
 export type ApprovalCreate = {
@@ -1693,6 +1707,81 @@ export type FinanceActionRequest = {
   dry_run?: boolean;
   kind: string;
   payload?: Record<string, unknown>;
+};
+
+export type FinanceAdAccount = {
+  active: boolean;
+  bot_slug: string | null;
+  currency: string;
+  external_id: string;
+  id: string;
+  name: string;
+  tool_id: string;
+};
+
+export type FinanceAdAccountPatch = {
+  bot_slug: string | null;
+};
+
+export type FinanceAdAccounts = {
+  accounts: Array<{
+  active: boolean;
+  bot_slug: string | null;
+  currency: string;
+  external_id: string;
+  id: string;
+  month_to_date: number;
+  name: string;
+}>;
+  books_lines: Array<{
+  code: string;
+  id: string;
+  name: string;
+}>;
+  elsewhere: {
+  tool_id?: string;
+  tool_name?: string;
+} | null;
+  import: {
+  account_id: string;
+  account_name: string;
+  enabled: boolean;
+  every_hours: number;
+  history_from: string;
+  last_error: string;
+  last_import_at: string | null;
+  run_requested: boolean;
+  saved: boolean;
+  status: "never" | "ok" | "reconnect" | "failed";
+};
+  month: string;
+  month_label: string;
+  platform: "google_ads" | "meta_ads";
+  platform_label: string;
+  slots: Array<{
+  credential_id: string;
+  label: string;
+  options: Array<{
+  id: string;
+  name: string;
+}>;
+  required: boolean;
+  slot: string;
+}>;
+  tool_id: string;
+  tool_name: string;
+};
+
+export type FinanceAdImportRequest = {
+  account_id?: string | null;
+  credentials?: Record<string, string | null> | null;
+  enabled: boolean;
+  history_from?: string | null;
+  tool_id: string;
+};
+
+export type FinanceAdRunRequest = {
+  tool_id: string;
 };
 
 export type FinanceBalanceSheet = {
@@ -3724,7 +3813,7 @@ export type Message = {
   id: string;
   in_reply_to: string | null;
   kind: string;
-  recipient_id: string;
+  recipient_id: string | null;
   recipient_name?: string;
   refs: Record<string, unknown>;
   run?: {
@@ -6079,6 +6168,19 @@ export type ThreadRail = {
   threads: Array<ThreadView>;
 };
 
+export type ThreadReach = {
+  outside: Array<string>;
+  reaches: Array<{
+  actor: string;
+  adds_reader?: boolean;
+  defer_for?: string | null;
+  mode: "steer" | "queue" | "defer" | "digest";
+  reason: string;
+}>;
+  thread_id: string;
+  way?: "steer" | "queue" | "defer";
+};
+
 export type ThreadReactions = Array<{
   actors: Array<unknown>;
   count: number;
@@ -6208,6 +6310,7 @@ export type ToolIndexRow = {
   kind: "api" | "mailbox" | "number" | "address" | "slack" | "github" | "meetings" | "listening" | "webhook" | "declared" | "website";
   name: string;
   needs_you: boolean;
+  private?: boolean;
   status: {
   text: string;
   tone: "ok" | "wait" | "fail" | "run" | "idle";
@@ -6632,6 +6735,16 @@ export type WebhookWakeUrl = {
 export type WebhookWakeUrlSet = {
   secret: string | null;
   url: string | null;
+};
+
+export type backend__api_tools__ToolUpdate = {
+  audience?: AccessAudience | null;
+  auth_scheme?: string | null;
+  base_url?: string | null;
+  check_path?: string | null;
+  delivery?: string | null;
+  name?: string | null;
+  service?: string | null;
 };
 
 export type backend__company_page__api_editions__Correction = {
@@ -8579,6 +8692,13 @@ export type GetSkillParams = {
 export type GetSkillBody = never;
 export type GetSkillResponse = unknown;
 
+/** GET /api/v2/skills/bundles/{sha256} */
+export type GetSkillBundleParams = {
+  sha256: string;
+};
+export type GetSkillBundleBody = never;
+export type GetSkillBundleResponse = unknown;
+
 /** GET /api/v2/skills/proposals/{pid} */
 export type GetSkillProposalParams = {
   pid: string;
@@ -8700,6 +8820,17 @@ export type GetThreadHomeParams = {
 };
 export type GetThreadHomeBody = never;
 export type GetThreadHomeResponse = ThreadView;
+
+/** GET /api/v2/threads/{thread_id}/reach */
+export type GetThreadReachParams = {
+  defer_for?: string | null;
+  delivery?: "steer" | "queue" | "defer" | null;
+  in_reply_to?: string | null;
+  text?: string;
+  thread_id: string;
+};
+export type GetThreadReachBody = never;
+export type GetThreadReachResponse = ThreadReach;
 
 /** GET /api/v2/threads/{thread_id}/timeline */
 export type GetThreadTimelineParams = {
@@ -9271,6 +9402,13 @@ export type ListFinanceActionKindsParams = {
 };
 export type ListFinanceActionKindsBody = never;
 export type ListFinanceActionKindsResponse = FinanceActionKinds;
+
+/** GET /api/v2/finance/ad-accounts */
+export type ListFinanceAdAccountsParams = {
+  tool_id: string;
+};
+export type ListFinanceAdAccountsBody = never;
+export type ListFinanceAdAccountsResponse = FinanceAdAccounts;
 
 /** GET /api/v2/finance/bills */
 export type ListFinanceBillsParams = {
@@ -11018,6 +11156,13 @@ export type RunAutomationParams = {
 export type RunAutomationBody = RunNow | null;
 export type RunAutomationResponse = AutomationRunNow;
 
+/** POST /api/v2/finance/ad-imports/run */
+export type RunFinanceAdImportParams = {
+  "Idempotency-Key": string;
+};
+export type RunFinanceAdImportBody = FinanceAdRunRequest;
+export type RunFinanceAdImportResponse = FinanceAdAccounts;
+
 /** POST /api/v2/maintenance/run */
 export type RunMaintenanceParams = {
   "Idempotency-Key": string;
@@ -11032,6 +11177,13 @@ export type RunSystemRoutineParams = {
 };
 export type RunSystemRoutineBody = Empty;
 export type RunSystemRoutineResponse = unknown;
+
+/** POST /api/v2/finance/ad-imports */
+export type SaveFinanceAdImportParams = {
+  "Idempotency-Key": string;
+};
+export type SaveFinanceAdImportBody = FinanceAdImportRequest;
+export type SaveFinanceAdImportResponse = FinanceAdAccounts;
 
 /** PATCH /api/v2/maintenance */
 export type SaveMaintenanceParams = {
@@ -11791,6 +11943,14 @@ export type UnsnoozeTaskParams = {
 export type UnsnoozeTaskBody = Empty;
 export type UnsnoozeTaskResponse = TaskResult;
 
+/** PATCH /api/v2/api-tools/{tool_id} */
+export type UpdateApiToolParams = {
+  "Idempotency-Key": string;
+  tool_id: string;
+};
+export type UpdateApiToolBody = backend__api_tools__ToolUpdate;
+export type UpdateApiToolResponse = ApiToolSettings;
+
 /** PATCH /api/v2/audiences/{audience_id} */
 export type UpdateAudienceParams = {
   "Idempotency-Key": string;
@@ -11853,6 +12013,14 @@ export type UpdateEditionParams = {
 };
 export type UpdateEditionBody = EditionBody;
 export type UpdateEditionResponse = unknown;
+
+/** PATCH /api/v2/finance/ad-accounts/{ad_account_id} */
+export type UpdateFinanceAdAccountParams = {
+  "Idempotency-Key": string;
+  ad_account_id: string;
+};
+export type UpdateFinanceAdAccountBody = FinanceAdAccountPatch;
+export type UpdateFinanceAdAccountResponse = FinanceAdAccount;
 
 /** POST /api/v2/goals/{gid} */
 export type UpdateGoalParams = {

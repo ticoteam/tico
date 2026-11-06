@@ -2,7 +2,9 @@
 // /api/v2/tool-index (rows, counts), one API tool (GET/PATCH /api/v2/api-tools/<id>, PUT …/access/<subject>, POST
 // …/check, GET …/activity) and the mailboxes fake (support/mailboxes-fake.cjs) for a mailbox's page and its Limits.
 // Covers: the list, its filters and Needs you; an API tool's level change, Check now and Move to proxy; the Activity
-// tab's filter; the mailbox Limits card; the old addresses' redirects; 390px with no sideways scroll; light and dark.
+// tab's filter; Who can see it (Private pills, Only listed's Who | Why, Remove, Add through the audience picker, back
+// to Everyone) and Finance's read-only row; a Google Ads tool's Finance card (bot pick, switching the import on); the
+// mailbox Limits card; the old addresses' redirects; 390px with no sideways scroll; light and dark.
 // TICO_UI_SHOTS=<dir> saves a screenshot of each page in each theme and width.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -19,7 +21,7 @@ const ROWS = [
     who: [who('person', 'ana', 'Ana'), who('bot', 'support-bot', 'Support bot'), who('bot', 'sales', 'Sales'), who('bot', 'ops', 'Ops'), who('bot', 'books', 'Books')],
     who_total: 7, needs_you: false, href: '#/tools/api/t-crm', service: 'acme-crm'},
   {id: 'api:t-billing', kind: 'api', name: 'Acme Billing', detail: 'billing.acme.example', way: 'On computers', status: {tone: 'fail', text: 'Key rejected'},
-    who: [who('bot', 'books', 'Books')], who_total: 1, needs_you: true, href: '#/tools/api/t-billing', service: 'acme-billing'},
+    who: [who('bot', 'books', 'Books')], who_total: 1, needs_you: true, href: '#/tools/api/t-billing', service: 'acme-billing', private: true},
   {id: 'mailbox:support@acme.example', kind: 'mailbox', name: 'support@acme.example', detail: '', way: 'Google', status: {tone: 'ok', text: 'Connected'},
     who: [who('person', 'cara', 'Cara'), who('bot', 'support-bot', 'Support bot')], who_total: 2, needs_you: false,
     href: '#/tools/mailbox/support@acme.example', mailbox_id: 'mb-support'},
@@ -51,18 +53,56 @@ function apiFake() {
         {subject: 'bot:support-bot', kind: 'bot', id: 'support-bot', name: 'Support bot', initials: 'SB', level: 'read', last_used_at: at(4)},
         {subject: 'bot:sales', kind: 'bot', id: 'sales', name: 'Sales', initials: 'S', level: 'read_write', last_used_at: at(90)}],
       checks: checks(24, 'k-read'), recent: [call(1, 'sent'), refused(2), call(3, 'sent')],
-      status: {tone: 'ok', text: 'Working'}, needs_you: false, can_manage: true},
+      status: {tone: 'ok', text: 'Working'}, needs_you: false, can_manage: true, private: false, can_set_audience: false},
     't-billing': {tool: {id: 't-billing', name: 'Acme Billing', service: 'acme-billing', base_url: 'https://billing.acme.example', auth_scheme: 'header:X-Api-Key', check_path: '/status', delivery: 'computer'},
       keys: [key('k-bill', 'Key', 'ak_…77e0', 'read_write', {env: 'ACME_BILLING_API_KEY', created_at: at(60 * 24 * 90)})],
-      access: [{subject: 'bot:books', kind: 'bot', id: 'books', name: 'Books', initials: 'B', level: 'read_write', last_used_at: null}],
+      access: [{subject: 'bot:books', kind: 'bot', id: 'books', name: 'Books', initials: 'B', level: 'read_write', last_used_at: null},
+        {subject: 'finance', kind: 'finance', id: 'finance', name: 'Finance', initials: 'F', level: 'read', last_used_at: at(30), fixed: true}],
       checks: checks(5, 'k-bill').map(c => ({...c, ok: false, status_code: 401, detail: 'Key rejected'})), recent: [],
-      status: {tone: 'fail', text: 'Key rejected'}, needs_you: true, can_manage: true},
+      status: {tone: 'fail', text: 'Key rejected'}, needs_you: true, can_manage: true,
+      private: true, can_set_audience: true, audience: {everyone: false, people: ['cara'], teams: [], bots: []}},
   };
+  tools['t-gads'] = {tool: {id: 't-gads', name: 'Google Ads', service: 'google-ads', base_url: '', auth_scheme: 'bearer', check_path: '', delivery: 'computer'},
+    keys: [key('k-gads', 'Google Ads · GOOGLE_ADS_DEVELOPER_TOKEN', 'dt_…01ab', 'read_write', {env: 'GOOGLE_ADS_DEVELOPER_TOKEN'})],
+    access: [], checks: [], recent: [], status: {tone: 'idle', text: 'Key on computers'}, needs_you: false, can_manage: true, private: false, can_set_audience: false};
+  // Who can see it as backend/api_tools.py seen_by lists it: the owner, the list, then whoever can use it.
+  const NAMES = {ana: 'Ana', cara: 'Cara', 'g-books': 'Bookkeeping'};
+  const seenBy = t => !t.audience ? [] : [{subject: 'human:ana', kind: 'person', id: 'ana', name: 'Ana', why: 'Owner'},
+    ...t.audience.people.filter(id => id !== 'ana').map(id => ({subject: 'human:' + id, kind: 'person', id, name: NAMES[id] || id, why: 'Listed'})),
+    ...t.audience.teams.map(id => ({subject: 'group:' + id, kind: 'group', id, name: NAMES[id] || id, why: 'Listed'})),
+    ...t.audience.bots.map(id => ({subject: 'bot:' + id, kind: 'bot', id, name: id, why: 'Listed'})),
+    ...t.access.map(a => ({subject: a.subject, kind: a.kind, id: a.id, name: a.name, why: 'Can use it'}))];
+  for (const t of Object.values(tools)) t.seen_by = seenBy(t);
+  // Finance's ad spend for the Google Ads tool, as backend/finance/ads.py view answers it (a finance admin).
+  const slot = (s, label, required, id, name) => ({slot: s, label, required, credential_id: id, options: id ? [{id, name}] : []});
+  const fin = {tool_id: 't-gads', tool_name: 'Google Ads', platform: 'google_ads', platform_label: 'Google Ads',
+    import: {saved: true, enabled: false, history_from: '2026-01-01', account_id: 'acct-ads', account_name: 'Advertising', status: 'ok',
+      last_import_at: at(95), last_error: '', run_requested: false, every_hours: 4},
+    slots: [slot('client_id', 'Client ID', true, 'g1', 'Google Ads · GOOGLE_ADS_CLIENT_ID'), slot('client_secret', 'Client secret', true, 'g2', 'Google Ads · GOOGLE_ADS_CLIENT_SECRET'),
+      slot('refresh_token', 'Refresh token', true, 'g3', 'Google Ads · GOOGLE_ADS_REFRESH_TOKEN'), slot('developer_token', 'Developer token', true, 'k-gads', 'Google Ads · GOOGLE_ADS_DEVELOPER_TOKEN'),
+      slot('login_customer_id', 'Login customer ID', false, 'g5', 'Google Ads · GOOGLE_ADS_LOGIN_CUSTOMER_ID'), slot('customer_ids', 'Customer IDs', false, '', '')],
+    books_lines: [{id: 'acct-sw', code: '6100', name: 'Software'}, {id: 'acct-ads', code: '6300', name: 'Advertising'}],
+    elsewhere: null, month: '2026-11', month_label: 'November',
+    accounts: [{id: 'ad-1', external_id: '5550001111', name: 'Consumer search', currency: 'USD', bot_slug: 'sales', active: true, month_to_date: 76000},
+      {id: 'ad-2', external_id: '5550002222', name: 'Paid rental', currency: 'USD', bot_slug: null, active: true, month_to_date: 120050}]};
   const calls = [call(1, 'sent'), refused(2), call(3, 'sent'), call(4, 'failed', {status_code: null, detail: 'ConnectTimeout: timed out'})];
-  const fake = {tools, writes: [], reads: []};
+  const fake = {tools, fin, writes: [], reads: []};
   fake.answer = (p, method, body, url) => {
+    if (p === '/api/v2/finance/ad-accounts' && method === 'GET') return url.searchParams.get('tool_id') === 't-gads' ? structuredClone(fin)
+      : {status: 403, body: {error: {code: 'denied', detail: 'Ad spend is for finance admins', retryable: false}}};
+    if (p.startsWith('/api/v2/finance/ad-')) {
+      fake.writes.push({method, path: p, body});
+      if (p === '/api/v2/finance/ad-imports') { Object.assign(fin.import, body, {run_requested: !!body.enabled}); return structuredClone(fin); }
+      if (p === '/api/v2/finance/ad-imports/run') { fin.import.run_requested = true; return structuredClone(fin); }
+      const row = fin.accounts.find(a => p.endsWith('/' + a.id));
+      if (row && method === 'PATCH') { row.bot_slug = body.bot_slug; return {...row}; }
+    }
+    // Bots for Finance's "Spend goes to" picker.
+    if (p === '/api/employees') return [{name: 'sales', display_name: 'Sales', status: 'active'},
+      {name: 'paid-rental-ads', display_name: 'Paid rental ads', status: 'active'}];
     if (p === '/api/v2/tool-index') return {rows: structuredClone(ROWS), counts: COUNTS, next: null};
     if (p === '/api/v2/tools') return {integrations: []};
+    if (p === '/api/v2/groups') return {groups: [{id: 'g-books', name: 'Bookkeeping'}]};
     if (p.startsWith('/api/v2/tools/')) return {service: decodeURIComponent(p.split('/').pop()), title: 'GitHub', access: '', writes: 'read', owner: 'tico', declared_as: '', body: '', queries: [], learnings: [], read_only: true};
     const m = p.match(/^\/api\/v2\/api-tools\/([^/]+)(\/.*)?$/);
     if (!m) return undefined;
@@ -70,7 +110,12 @@ function apiFake() {
     const t = tools[decodeURIComponent(m[1])], rest = m[2] || '';
     if (!t) return {status: 404, body: {error: {code: 'not_found', detail: 'No such tool', retryable: false}}};
     if (!rest && method === 'GET') return structuredClone(t);
-    if (!rest && method === 'PATCH') { Object.assign(t.tool, body); return structuredClone(t.tool); }
+    if (!rest && method === 'PATCH') {
+      const {audience, ...fields} = body;
+      Object.assign(t.tool, fields);
+      if ('audience' in body) { t.audience = audience; t.private = t.tool.private = !!audience; t.seen_by = seenBy(t); }
+      return structuredClone(t.tool);
+    }
     const acc = rest.match(/^\/access\/(.+)$/);
     if (acc && method === 'PUT') {
       const subject = decodeURIComponent(acc[1]), row = t.access.find(a => a.subject === subject);
@@ -127,6 +172,8 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         assert.equal(await crm.locator('.tt-face').first().getAttribute('title'), 'Ana', `${tag}: named on hover`);
         await page.locator('[data-tl-show="needs"]').click();
         assert.deepEqual(await rows.evaluateAll(r => r.map(x => x.dataset.tlRow)), ['api:t-billing', 'slack'], `${tag}: Needs you`);
+        assert.deepEqual(await page.locator('tr[data-tl-row] [data-private]').evaluateAll(p => p.map(x => [x.closest('tr').dataset.tlRow, x.textContent])),
+          [['api:t-billing', 'Private']], `${tag}: the Private pill on the private tool only`);
         assert.equal(await page.evaluate(() => location.hash), '#/tools?show=needs', `${tag}: the filter is in the address`);
         await page.locator('[data-tl-show="mail"]').click();
         assert.deepEqual(await rows.evaluateAll(r => r.map(x => x.dataset.tlKind)), ['mailbox', 'number'], `${tag}: Mail and numbers`);
@@ -153,6 +200,8 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         assert.equal(await page.locator('#tool-check .tt-sq').count(), 24, `${tag}: 24 squares`);
         assert.equal(await page.locator('#tool-check .tt-sq.fail').count(), 1, `${tag}: the failed check`);
         assert.match(await page.locator('#tool-limits').innerText(), /Not available yet/, `${tag}: Limits placeholder`);
+        assert.equal(await page.locator('#tool-see').count(), 0, `${tag}: Who can see it only for whoever may change it`);
+        assert.equal(await page.locator('#tool-api [data-private]').count(), 0, `${tag}: no Private pill on an Everyone tool`);
         assert.equal(await page.locator('#tool-limits input').isDisabled(), true, `${tag}: Limits switch off`);
         // Read → Read and write calls PUT access.
         await page.locator('[data-ta-subject="bot:support-bot"][data-ta-level="read_write"]').click();
@@ -179,6 +228,38 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         assert.deepEqual(seen.errors, [], `${tag}: API page errors`);
         await page.close();
       }
+      // A Google Ads tool: Finance's card (finance admins) with the import's settings and each ad account's bot.
+      {
+        const {page, seen, api} = await start(browser, '#/tools/api/t-gads', {width, ready: '#tool-finance tr[data-taf-account]'});
+        const card = page.locator('#tool-finance');
+        assert.deepEqual(await card.locator('thead th').allTextContents(), ['Ad account', 'Spend goes to', 'November to date'], `${tag}: Finance columns`);
+        assert.match(await card.innerText(), /Ad spend[\s\S]*every 4 h · from[\s\S]*Books as[\s\S]*Google Ads[\s\S]*Last import/, `${tag}: Finance rows`);
+        assert.equal(await card.locator('[data-taf-account="ad-2"] .pill').innerText(), 'Not assigned', `${tag}: unassigned account`);
+        assert.equal(await card.locator('[data-taf-account="ad-1"] .pill').count(), 0, `${tag}: assigned account`);
+        assert.match(await card.locator('[data-taf-account="ad-2"]').innerText(), /\$1,200\.50/, `${tag}: month to date`);
+        assert.equal(await card.locator('[data-taf-line]').inputValue(), 'acct-ads', `${tag}: books line`);
+        const pick = await card.locator('[data-taf-bot="ad-2"] option').nth(1).getAttribute('value');
+        await card.locator('[data-taf-bot="ad-2"]').selectOption(pick);
+        await page.waitForFunction(() => !document.querySelector('#tool-finance [data-taf-account="ad-2"] .pill'));
+        assert.deepEqual(api.writes.at(-1), {method: 'PATCH', path: '/api/v2/finance/ad-accounts/ad-2', body: {bot_slug: pick}}, `${tag}: bot write`);
+        await card.locator('[data-taf-on="true"]').click();
+        await page.locator('#tool-finance [data-taf-run]').waitFor();
+        const on = api.writes.at(-1);
+        assert.equal(on.path, '/api/v2/finance/ad-imports', `${tag}: import write`);
+        assert.deepEqual({...on.body, credentials: Object.keys(on.body.credentials).sort()}, {tool_id: 't-gads', enabled: true, history_from: '2026-01-01', account_id: 'acct-ads',
+          credentials: ['client_id', 'client_secret', 'developer_token', 'login_customer_id', 'refresh_token']}, `${tag}: switched on`);
+        assert.equal(await sideways(page), false, `${tag}: the ad tool page has no sideways scroll`);
+        await shot(page, `ads-${tag}`);
+        assert.deepEqual(seen.errors, [], `${tag}: ad tool errors`);
+        await page.close();
+      }
+      // An API tool that is not an ad platform has no Finance card.
+      {
+        const {page, api} = await start(browser, '#/tools/api/t-billing', {width, ready: '#tool-keys'});
+        assert.equal(await page.locator('#tool-finance').count(), 0, `${tag}: no Finance card`);
+        assert.equal(api.writes.length, 0, `${tag}: nothing written`);
+        await page.close();
+      }
       // A key on computers: Move to proxy patches delivery.
       {
         const {page, seen, api} = await start(browser, '#/tools/api/t-billing', {width, ready: '#tool-keys [data-ta-proxy]'});
@@ -189,6 +270,54 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
         await page.locator('#tool-keys [data-ta-delivery="proxy"]').waitFor();
         assert.deepEqual(api.writes.at(-1), {method: 'PATCH', path: '/api/v2/api-tools/t-billing', body: {delivery: 'proxy'}}, `${tag}: delivery write`);
         assert.deepEqual(seen.errors, [], `${tag}: billing errors`);
+        await page.close();
+      }
+      // Who can see it: Only listed with Who | Why, Remove on listed rows only, Add through the audience picker, back
+      // to Everyone after a confirm, then Only listed again; Finance reads a key and cannot be changed here.
+      {
+        const {page, seen, api} = await start(browser, '#/tools/api/t-billing', {width, ready: '#tool-see tbody tr'});
+        const card = page.locator('#tool-see');
+        assert.equal(await page.locator('#tool-api .tt-title h1 [data-private]').innerText(), 'Private', `${tag}: Private in the header`);
+        assert.equal(await page.evaluate(() => document.querySelector('#tool-see').nextElementSibling?.id), 'tool-keys', `${tag}: above Keys`);
+        assert.deepEqual(await card.locator('thead th').allTextContents(), ['Who', 'Why', ''], `${tag}: Who | Why`);
+        assert.deepEqual(await card.locator('tbody tr').evaluateAll(r => r.map(x => [x.dataset.taSeen, x.dataset.why])),
+          [['human:ana', 'Owner'], ['human:cara', 'Listed'], ['bot:books', 'Can use it'], ['finance', 'Can use it']], `${tag}: who sees it and why`);
+        assert.deepEqual(await card.locator('[data-ta-unlist]').evaluateAll(b => b.map(x => x.dataset.taUnlist)), ['human:cara'], `${tag}: Remove on listed rows only`);
+        assert.equal(await card.locator('[data-ta-see="only"]').getAttribute('class'), 'primary small', `${tag}: Only listed selected`);
+        assert.equal(await card.locator('[data-ta-see="everyone"]').getAttribute('class'), 'ghost small', `${tag}: Everyone not selected`);
+        const fin = page.locator('#tool-access tr[data-ta-subject-row="finance"]');
+        assert.match(await fin.innerText(), /Finance[\s\S]*Read/, `${tag}: Finance · Read`);
+        assert.equal(await fin.locator('button').count(), 0, `${tag}: Finance is read-only`);
+        assert.equal(await sideways(page), false, `${tag}: Only listed has no sideways scroll`);
+        await shot(page, `api-private-${tag}`);
+        // Remove Cara.
+        await card.locator('[data-ta-unlist="human:cara"]').click();
+        await page.locator('#tool-see tr[data-ta-seen="human:cara"]').waitFor({state: 'detached'});
+        assert.deepEqual(api.writes.at(-1), {method: 'PATCH', path: '/api/v2/api-tools/t-billing',
+          body: {audience: {everyone: false, people: [], teams: [], bots: []}}}, `${tag}: remove write`);
+        // Add a group through the picker the page audience uses.
+        await card.locator('[data-ta-see-add]').click();
+        const picker = page.locator('#access-editor');
+        await picker.locator('[data-access-pick="teams"][value="g-books"]').check();
+        await picker.locator('[type=submit]').click();
+        await page.locator('#tool-see tr[data-ta-seen="group:g-books"][data-why="Listed"]').waitFor();
+        assert.deepEqual(api.writes.at(-1).body, {audience: {everyone: false, people: [], teams: ['g-books'], bots: []}}, `${tag}: add write`);
+        // Everyone asks first, then clears the list and the pill.
+        await card.locator('[data-ta-see="everyone"]').click();
+        await page.locator('dialog [data-confirm-ok]').click();
+        await page.locator('#tool-see [data-ta-see="everyone"].primary').waitFor();
+        assert.deepEqual(api.writes.at(-1).body, {audience: null}, `${tag}: Everyone write`);
+        assert.equal(await card.locator('table').count(), 0, `${tag}: no list for Everyone`);
+        assert.equal(await card.locator('[data-ta-see-add]').count(), 0, `${tag}: no Add for Everyone`);
+        assert.equal(await page.locator('#tool-api .tt-title [data-private]').count(), 0, `${tag}: no Private pill`);
+        await shot(page, `api-everyone-${tag}`);
+        // Only listed again: one click hides it (the hub keeps the owner and a non-owner setter).
+        await card.locator('[data-ta-see="only"]').click();
+        await page.locator('#tool-see tr[data-why="Owner"]').waitFor();
+        assert.deepEqual(api.writes.at(-1).body, {audience: {everyone: false, people: [], teams: [], bots: []}}, `${tag}: Only listed write`);
+        assert.equal(await page.locator('#tool-api .tt-title [data-private]').count(), 1, `${tag}: Private again`);
+        assert.equal(await sideways(page), false, `${tag}: Who can see it has no sideways scroll`);
+        assert.deepEqual(seen.errors, [], `${tag}: Who can see it errors`);
         await page.close();
       }
       // A mailbox: Who can use it, Keys, and Limits (Bot | Sends | What | A day, then the summary).
@@ -236,6 +365,6 @@ async function start(browser, hash, {width = 1440, ready} = {}) {
       assert.deepEqual(seen.errors, [], 'redirect errors');
       await page.close();
     }
-    console.log('Tools: list, filters, Needs you, API levels, Check now, Move to proxy, Activity, mailbox Limits, redirects, phone, themes');
+    console.log('Tools: list, filters, Needs you, API levels, Check now, Move to proxy, Activity, Who can see it, Finance row, mailbox Limits, redirects, phone, themes');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

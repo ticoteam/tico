@@ -60,8 +60,8 @@ def test_botops_mutes_a_thread_for_the_person_who_asked_not_for_itself(api, boto
         rows = {r["actor"]: r["notify"] for r in
                 c.execute("SELECT actor, notify FROM thread_followers WHERE thread_id=?", (thread["id"],))}
     assert rows.get("human:ben") == "muted"
-    # Its own follow is the default a member gets when it is added, and the mute did not touch it.
-    assert rows["bot:botops"] == "live"
+    # Its own follow is the default a bot member of a chat gets when it is added (mentions), and the mute did not touch it.
+    assert rows["bot:botops"] == "mentions"
 
 
 def test_a_named_reaction_with_a_plus_is_delegable_and_encoded_or_traversal_paths_are_not():

@@ -100,9 +100,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            what you do if they don't answer: a reversible step goes ahead
                                            after the team's days (3); asks expire after 14 days
     hub task comment <id> "<text>" [--steer | --queue | --defer [30m|4h|2d|never] | --goal]   on the record
-                                           with your name. --steer goes into its bot's running turn, --queue right
+                                           with your name; reaches the task's followers and whoever you @mention.
+                                           --steer (the default) goes into each bot's running turn, --queue right
                                            after it, --defer with its next turn on the task (at the latest 24h, or
-                                           the time given), --goal sets its goal
+                                           the time given; never notifies no follower), --goal sets its goal
     hub task comment-edit <id> <comment-id> "<text>"   change a comment you wrote; wakes nobody
     hub task comment-delete <id> <comment-id>          take back a comment you wrote
     hub task ask-resolve <id> <question-id> [--quote "<their words>"]
@@ -496,6 +497,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub update show <id>                   one update with its thread
     hub update create "<- bullets>" [--kind daily|weekly] [--learnings-saved N] [--suggestion TEXT ...] [--delivery-batch ID]
                                            post your own update when Tico asks (three bullets)
+    hub update create --skip               nothing real to report: posts nothing, the request closes as skipped
     hub update create --slides-file week.json [--day D]   a week in review: {goal, kpis, done, focus, blockers}
     hub update redo --day D [--kind weekly|daily] [--bot B ...] [--with-managers]   ask the bots to redo a past day (owner)
     hub update mark-read [ids...] [--all] [--unread]
@@ -3447,6 +3449,7 @@ def parser():
     s.add_argument("--suggestion", action="append", dest="suggestions_seen",
                    help="a suggestion you acted on (repeatable)")
     s.add_argument("--delivery-batch", dest="delivery_batch_id", help="the delivery this post answers, when Tico named one")
+    s.add_argument("--skip", action="store_true", help="nothing real to report since your last update: post nothing")
     s.set_defaults(fn="update create")
     s = upd.add_parser("redo", help="ask the bots again for a past day's update in the current shape (owner)")
     s.add_argument("--day", required=True)

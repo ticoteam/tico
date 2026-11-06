@@ -32,6 +32,37 @@ step against the exact bundle that was screened and the version it was based on.
 refused until it is screened again (`not_screened`, `stale`). A high-risk or unsafe screen needs the admin to acknowledge it.
 Approval makes the next version of the skill. Declining takes a reason of up to 300 characters.
 
+## Screening
+
+The **Skill screening** job (`backend/skill_screening.py`) screens each pending proposal, a few each scheduler pass, oldest
+first. It claims a proposal with a conditional update, so two passes never screen the same one. Each screen writes a
+`skill_screenings` row and sets the proposal's `screen_status`. It is mandatory: there is no switch, and no other model
+answers in place of Decide High.
+
+- **Patterns.** Plain code checks every file and records each hit as `{file, line, pattern}`. It looks for hidden Unicode
+  (zero-width, bidi and tag characters), HTML comments, long base64 or hex blobs, and URLs (each one listed). It also
+  looks for `curl` or `wget` piped to a shell, reads of secrets, env or the keychain, and writes to `.claude/settings*`,
+  hooks, other skills' folders or `AGENT.md`/`CLAUDE.md`. It flags network calls in scripts and the injection phrases
+  that outside-text screening uses. A hit is a hint for the model and the admin, never a verdict on its own.
+- **The model.** Decide High answers the `skill-screen` question set (`questions/skill-screen.json`) with evidence. The
+  state is the skill's name, its description and every file, fenced. For an update it also holds the diff against its
+  base, plus the pattern hits. The model reads the skill as data and judges intent and hiding, not whether it contains
+  commands. It answers a verdict (`safe`, `review` or `unsafe`), a risk (`low`, `medium` or `high`) and five concerns.
+  Its summary and findings (file, line, issue) go on the row.
+- **The risk floor.** A hit for hidden Unicode, a secret read or pipe-to-shell raises a `low` risk to `medium`. So does
+  any concern at 50% or more.
+- **Not screened.** If the state is over 120,000 characters, the row is `not_screened` with the reason `oversize`. With
+  no Gateway, the reason is `unavailable`. At the monthly spend cap it is `cap`, a call that does not answer in time is
+  `timeout`, and any other failure is `error`. A proposal is never marked screened without the model's answer, so it
+  cannot be approved. **Re-run** (`POST skills/proposals/{id}/rescreen`) sends it back to the queue.
+- **Cache.** A bundle already screened with the same sha, base and question set version reuses that answer.
+- **A new question set version** sends every pending proposal screened under an older version back to the queue.
+- **Audit.** Each model call is one `judge.call` row labelled `skill-screen@1`. Each screen is one `skill.screened` event
+  with the name, sha, status, reason, verdict, risk and pattern count, never file contents.
+
+The eval is scenario 11 of `evals/screening` (`python -m evals.screening.run skills`). Its live run is
+`python -m evals.screening.run --skills-live`.
+
 ## Installs
 
 An install is a row: one skill, one bot or one person, and either the latest version or a pinned version. Installing for a
@@ -46,10 +77,91 @@ skills helper reports as staged (`staged`: the sha it actually has). A differenc
 Under `/api/v2/skills`: the directory (`GET skills`), a skill with its versions and installs (`GET skills/{name}`), a version with
 its files (`GET skills/{name}/versions/{number}`), proposals (`POST skills/proposals`, `GET skills/proposals`,
 `GET skills/proposals/{id}`, and `approve`, `decline`, `withdraw`, `rescreen` under it), and installs (`POST skills/{name}/installs`,
-`POST skills/{name}/installs/bulk`, `GET skills/installs?target_type=&target_id=`, `DELETE skills/installs/{id}`). The contract is
-in `docs/openapi/v2.json` under the Skills tag.
+`POST skills/{name}/installs/bulk`, `GET skills/installs?target_type=&target_id=`, `DELETE skills/installs/{id}`), and an approved
+version's files by sha (`GET skills/bundles/{sha256}`). The contract is in `docs/openapi/v2.json` under the Skills tag. How a
+runner stages installed skills on a Claude Code turn and reports them: [Harnesses](harnesses.md#company-skills-on-a-claude-code-turn).
 
 ## Privacy
 
 Events and logs name a skill, its version and sha, and who did what. They never hold a file's contents or a prompt. A proposal's
 files are readable by its proposer and by admins.
+
+## People's Claude Code
+
+The skills installed for you also reach the Claude Code on your own computer. A small helper
+connects it once; after that Claude Code keeps your skills up to date by itself, and, if you choose, tells Tico
+which skills you use.
+
+Needs Claude Code 2.1.238 or later, Node 18 or later, and Tico on an `https://` address (Claude Code sends the
+sign-in header only to an https marketplace).
+
+### Connect
+
+```sh
+mkdir -p ~/.tico && curl -fsSL https://tico.acme.example/api/v2/skills/helper.mjs -o ~/.tico/skills-helper.mjs \
+  && node ~/.tico/skills-helper.mjs setup
+```
+
+Setup prints an address and a code and opens your browser. Check the code, tick **Share which skills I use** if you
+want to, and press **Approve**. Setup then:
+
+- keeps the device token in `~/.tico/skills.json` (mode 0600);
+- adds a marketplace named `tico` to `~/.claude/settings.json` (`extraKnownMarketplaces.tico`, a `url` source with a
+  `headersHelper` that runs `skills-helper.mjs auth-header`, and `autoUpdate: true`), leaving your other settings as
+  they are;
+- installs `tico-skills@tico` and each of your skills (`claude plugin install <name>@tico --scope user`).
+
+A skill named `deploy` runs as `/deploy:deploy`, since Claude Code names a plugin's skills after the plugin.
+
+| Command | Does |
+|---|---|
+| `setup [--server URL]` | Connect this computer |
+| `sync` | Install, update and remove skills to match Tico, then tell Tico what is staged |
+| `status` | Server, device, reporting, Claude Code version, skills |
+| `remove` | Remove the marketplace and its plugins, the settings entry, and revoke the device |
+
+### What keeps it current
+
+The `tico-skills` plugin holds the helper and three hooks:
+
+| Hook | Runs |
+|---|---|
+| `SessionStart` (startup) | `sync --quiet`, in the background |
+| `PostToolUse` on `Skill` | `report --trigger model` |
+| `UserPromptExpansion` | `report --trigger person` (you typed `/name`) |
+
+Each skill is an `archive` plugin pinned to its zip's sha256 and declares no version, so an approved update or a new
+pin reaches you at the next marketplace refresh. The marketplace sets `forceRemoveDeletedPlugins`, so a removed
+install is uninstalled at the next session start even without the helper.
+
+### Usage reports
+
+Only when you ticked **Share which skills I use** (change it in Tico: `PATCH /api/v2/skills/devices/{id}`). A report
+holds the skill name, a sha256 of the Claude Code session id, the tool use or prompt id, and the time. Never the prompt,
+the skill's arguments, or any file. The helper reports only names from your last sync, waits at most 2 seconds, and
+never fails or changes a session. A typed `/name` also makes Claude Code call the Skill tool; that call is not reported
+when the same skill was typed in the same session in the last 30 seconds (the helper keeps the last typed name per
+session under `~/.tico/skills-typed/`). Tico drops names it does not know and ignores a repeat of one session and tool use.
+
+### Routes
+
+All under `/api/v2`. The device token (`tico_sd_`, stored as a sha256) is you, but reaches only the routes marked
+*device*; anything else answers 403, and a revoked token 401.
+
+| Route | Who |
+|---|---|
+| `POST skills/devices/codes` `{label}` → `{device_code, user_code, verification_url, expires_in: 600, interval: 5}` | No sign-in; 10 an hour per address, 50 waiting in all (429) |
+| `POST skills/devices/token` `{device_code}` → 428 waiting, 200 `{token, device_id, reporting_enabled}` once, 410 expired, denied or used, 404 unknown | No sign-in |
+| `GET skills/devices/codes/{user_code}` → `{user_code, label, expires_at}` | A signed-in person |
+| `POST skills/devices/codes/{user_code}/approve` `{reporting_enabled}`, `/deny` | A signed-in person, in the browser (not a token) |
+| `GET skills/devices`, `PATCH skills/devices/{id}` `{reporting_enabled}` | The person |
+| `DELETE skills/devices/{id}` | The person, an admin, or the device itself (*device*) |
+| `GET skills/marketplace.json` | The person or *device*; a device also gets `X-Tico-Reporting: on\|off` |
+| `GET skills/plugins/{name}/{bundle_sha}.zip` | Any signed-in caller or *device* |
+| `GET skills/bundles/{...}` | *device* (served by the skills runtime) |
+| `POST skills/devices/receipt` `{staged: [{name, sha256}], claude_version}` | *device* |
+| `POST skills/usage` `{events: [{name, trigger: model\|person, session_key, tool_use_id, used_at}]}` | *device*, reporting on (else 403 `reporting_off`); 100 events a call |
+| `GET skills/helper.mjs` | No sign-in |
+
+The Assistant and Tico support never connect, change or revoke a device, and Query Tico data shows neither
+`skill_devices` nor `skill_device_codes`.

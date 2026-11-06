@@ -760,7 +760,7 @@ SCHEMAS = {
                           "words": "s"}, required=["thread_id", "scope", "messages", "left_out"]),
     "ChatGoalResult": obj({"goal": {"anyOf": [ref("ChatGoal"), {"type": "null"}]}}, required=["goal"],
                           supported={"type": "boolean"}, commands=items({"type": "object"})),
-    "Message": obj({"id": "s", "conversation_id": "s", "sender_id": "s", "recipient_id": "s", "kind": "s", "body": "s",
+    "Message": obj({"id": "s", "conversation_id": "s", "sender_id": "s", "recipient_id": "n", "kind": "s", "body": "s",
                     "created_at": "s", "in_reply_to": "n", "refs": "o"}, required=["id", "conversation_id", "sender_id", "recipient_id", "kind", "body", "created_at", "in_reply_to", "refs"],
                    sender_name={"type": "string", "description": "Display name of sender_id, when it is a person or a bot"},
                    recipient_name={"type": "string", "description": "Display name of recipient_id"},
@@ -1684,6 +1684,17 @@ STABLE.extend([
     ("/api/v2/finance/connections", "post", "Finance", "createFinanceConnection",
      "Connect Mercury with a stored token credential (finance admins): the token is tested, its accounts listed and "
      "mapped into the books. The Idempotency-Key is the action's key", "FinanceConnectionResult"),
+    ("/api/v2/finance/ad-accounts", "get", "Finance", "listFinanceAdAccounts",
+     "A Google Ads or Meta Ads tool's ad spend (finance admins): whether Finance imports it every 4 hours and from which "
+     "day, the books line it books as, which stored keys hold each value (names only), the last import's result, and "
+     "each ad account with the bot it counts for and its spend this month in cents", "FinanceAdAccounts"),
+    ("/api/v2/finance/ad-imports", "post", "Finance", "saveFinanceAdImport",
+     "Save a tool's ad spend import (finance admins): on or off, history_from, the books line and {slot: credential "
+     "id}. One enabled import per platform (409 otherwise); switching on asks for a run at once", "FinanceAdAccounts"),
+    ("/api/v2/finance/ad-imports/run", "post", "Finance", "runFinanceAdImport",
+     "Import an enabled tool's ad spend now instead of at the next 4-hourly run (finance admins)", "FinanceAdAccounts"),
+    ("/api/v2/finance/ad-accounts/{ad_account_id}", "patch", "Finance", "updateFinanceAdAccount",
+     "Pick the bot an ad account's spend counts for, or null for none (finance admins)", "FinanceAdAccount"),
     ("/api/v2/finance/expenses", "get", "Finance", "getFinanceExpenses",
      "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line. The owner may pass "
      "view_as", "FinanceReport"),
@@ -1835,6 +1846,22 @@ SCHEMAS.update({
                                                     "updated_at": "s"}))}),
     "FinanceWebhookDeliveries": obj({"deliveries": items(obj({
         "trigger": "s", "delivery": "s", "received_at": "s", "type": "s", "via": "s", "outcome": "s", "body": "s"}))}),
+    "FinanceAdAccount": obj({"id": "s", "tool_id": "s", "external_id": "s", "name": "s", "currency": "s",
+                             "bot_slug": "n", "active": "b"}),
+    "FinanceAdAccounts": obj({
+        "tool_id": "s", "tool_name": "s", "platform": {"type": "string", "enum": ["google_ads", "meta_ads"]},
+        "platform_label": "s",
+        "import": obj({"saved": "b", "enabled": "b", "history_from": "s", "account_id": "s", "account_name": "s",
+                       "status": {"type": "string", "enum": ["never", "ok", "reconnect", "failed"]},
+                       "last_import_at": "n", "last_error": "s", "run_requested": "b", "every_hours": "i"}),
+        "slots": items(obj({"slot": "s", "label": "s", "required": "b", "credential_id": "s",
+                            "options": items(obj({"id": "s", "name": "s"}))})),
+        "books_lines": items(obj({"id": "s", "code": "s", "name": "s"})),
+        "elsewhere": {"type": ["object", "null"], "properties": {"tool_id": {"type": "string"},
+                                                                  "tool_name": {"type": "string"}}},
+        "month": "s", "month_label": "s",
+        "accounts": items(obj({"id": "s", "external_id": "s", "name": "s", "currency": "s", "bot_slug": "n",
+                               "active": "b", "month_to_date": "i"}))}),
     "FinanceConnectionResult": obj({"action_id": "n", "kind": "s", "status": "s", "code": "s", "reason": "s",
                                     "approver": "n", "result": "o"}, required=["status", "kind"]),
     "FinanceBillsAddress": obj({"bills_email": "n", "inbox_id": "n"}),
@@ -2237,7 +2264,11 @@ STABLE.extend([
      'Slack, GitHub, meeting importers, Listening, outgoing webhooks and declared tools the caller may see, with status '
      'and who can use each. Follow next with cursor','ToolIndex'),
     ('/api/v2/api-tools/{tool_id}','get','Tools','getApiTool','One API tool: its keys (never a value), who can use it at '
-     'which level, its last checks and calls','ApiTool'),
+     'which level, its last checks and calls; to whoever may change it, who can see it and why. A tool the caller may '
+     'not see is a 404','ApiTool'),
+    ('/api/v2/api-tools/{tool_id}','patch','Tools','updateApiTool','Change a tool\'s settings (credential administrators) '
+     'or who can see it: audience null for Everyone, or an audience for Only listed (the owner, or a credential '
+     'administrator who can see it, who then stays on the list)','ApiToolSettings'),
     ('/api/v2/api-tools/{tool_id}/activity','get','Tools','listApiToolActivity','Calls through the proxy and uses of its '
      'keys, newest first. Follow next with cursor','ApiToolActivity'),
 ])
@@ -2247,22 +2278,38 @@ SCHEMAS['ToolIndexRow'] = obj({'id': 's', 'kind': {'enum': ['api', 'mailbox', 'n
                                'name': 's', 'detail': 's', 'way': 's', 'status': TOOL_STATUS,
                                'who': items(obj({'kind': {'enum': ['bot', 'person']}, 'id': 's', 'name': 's',
                                                  'initials': 's'})),
-                               'who_total': 'i', 'needs_you': 'b', 'href': 's'})
+                               'who_total': 'i', 'needs_you': 'b', 'href': 's',
+                               'private': {'type': 'boolean', 'description': 'An API tool whose Who can see it is Only '
+                                           'listed'}},
+                              required=['id', 'kind', 'name', 'detail', 'way', 'status', 'who', 'who_total', 'needs_you',
+                                        'href'])
 SCHEMAS['ToolIndex'] = obj({'rows': items(ref('ToolIndexRow')),
                             'counts': obj({'all': 'i', 'needs_you': 'i', 'api': 'i', 'mail': 'i', 'websites': 'i'}),
                             'next': 'n'})
-SCHEMAS['ApiTool'] = obj({'tool': obj({'id': 's', 'name': 's', 'service': 's', 'base_url': 's', 'auth_scheme': 's',
-                                       'check_path': 's', 'delivery': {'enum': ['proxy', 'computer']}}),
+SCHEMAS['ApiToolSettings'] = obj({'id': 's', 'name': 's', 'service': 's', 'base_url': 's', 'auth_scheme': 's',
+                                  'check_path': 's', 'delivery': {'enum': ['proxy', 'computer']}, 'private': 'b'})
+SCHEMAS['ApiTool'] = obj({'tool': ref('ApiToolSettings'),
                           'keys': items(obj({'id': 's', 'name': 's', 'preview': 's',
                                              'access_level': {'enum': ['read', 'read_write']},
                                              'expires_on': 'n', 'last_used_at': 'n'},
                                             required=['id', 'name', 'preview', 'access_level'])),
-                          'access': items(obj({'subject': 's', 'kind': {'enum': ['bot', 'person']}, 'name': 's',
-                                               'initials': 's', 'level': {'enum': ['read', 'read_write']},
-                                               'last_used_at': 'n'})),
+                          'access': items(obj({'subject': 's', 'kind': {'enum': ['bot', 'person', 'finance']},
+                                               'name': 's', 'initials': 's', 'level': {'enum': ['read', 'read_write']},
+                                               'last_used_at': 'n',
+                                               'fixed': {'type': 'boolean', 'description': 'Finance reads this key; it '
+                                                         'goes when the source is disconnected, not here'}},
+                                              required=['subject', 'kind', 'name', 'initials', 'level', 'last_used_at'])),
                           'checks': items(obj({'ok': 'b', 'status_code': {'type': ['integer', 'null']}, 'detail': 's',
                                                'checked_at': 's'})),
-                          'recent': items({'type': 'object'}), 'status': TOOL_STATUS, 'can_manage': 'b'})
+                          'recent': items({'type': 'object'}), 'status': TOOL_STATUS, 'can_manage': 'b',
+                          'private': 'b', 'can_set_audience': 'b',
+                          'audience': {'anyOf': [ref('AccessAudience'), {'type': 'null'}],
+                                       'description': 'Only to whoever may change it; null is Everyone'},
+                          'seen_by': items(obj({'subject': 's', 'kind': {'enum': ['person', 'group', 'bot', 'finance']},
+                                                'id': 's', 'name': 's', 'why': {'enum': ['Owner', 'Listed', 'Can use it']}})) | {
+                              'description': 'Only to whoever may change it: who can see an Only listed tool, and why'}},
+                         required=['tool', 'keys', 'access', 'checks', 'recent', 'status', 'can_manage', 'private',
+                                   'can_set_audience'])
 SCHEMAS['ApiToolActivity'] = obj({'rows': items(obj({'id': 's', 'kind': {'enum': ['call', 'use']}, 'actor': 's',
                                                      'result': {'enum': ['sent', 'refused', 'failed', 'use']},
                                                      'at': 's'})), 'next': 'n'})
@@ -2722,6 +2769,14 @@ SCHEMAS.update({
                                        "description": "Where to fix what stops it (cant_reply only)"}},
                               required=["actor", "name", "state", "detail", "since", "run_id", "fix"]),
     "ThreadBotStatus": obj({"bots": items(ref("ThreadBotStatusRow"))}, required=["bots"]),
+    "ThreadReach": obj({"thread_id": "s", "way": {"type": "string", "enum": ["steer", "queue", "defer"]},
+                        "reaches": items(obj({"actor": "s",
+                                              "reason": {"type": "string", "description": "mention, ask, dm, home, "
+                                                         "sub_thread, reply, follower or digest"},
+                                              "mode": {"type": "string", "enum": ["steer", "queue", "defer", "digest"]},
+                                              "defer_for": "n", "adds_reader": "b"},
+                                             required=["actor", "reason", "mode"])),
+                        "outside": items({"type": "string"})}, required=["thread_id", "reaches", "outside"]),
     "ThreadCrumb": obj({"id": "s", "title": "s"}),
     "ThreadTimeline": obj({"thread": ref("ThreadView"), "breadcrumb": items(ref("ThreadCrumb")),
                            "messages": items({"type": "object"}), "next_cursor": "n",
@@ -2793,6 +2848,10 @@ STABLE.extend([
     ("/api/v2/threads/{thread_id}/bot-status", "get", "Threads", "getThreadBotStatus",
      "The bots the thread's root waits on, at most 5, oldest wait first: `working` (its current step), `up_next` "
      "(finishing other work first) or `cant_reply` (what stops it, and `fix`)", "ThreadBotStatus"),
+    ("/api/v2/threads/{thread_id}/reach", "get", "Threads", "getThreadReach",
+     "Who a message would reach, each with its mode, given `text` (its @mentions), `delivery` (steer when none), "
+     "`defer_for` and `in_reply_to`; `outside` lists @mentions it would not reach, `adds_reader` a private task's new "
+     "reader. Writes nothing", "ThreadReach"),
     ("/api/v2/threads/{thread_id}/members", "get", "Threads", "listThreadMembers",
      "Who a thread is for, a page at a time", "ThreadMembers"),
     ("/api/v2/threads/{thread_id}/members", "post", "Threads", "addThreadMember",
@@ -3483,6 +3542,7 @@ STABLE.extend([
     ("/api/v2/skills/installs/{iid}", "delete", "Skills", "uninstallSkill", "Take a skill off a bot or person, with the rights to install it", None),
     ("/api/v2/skills/{name}", "get", "Skills", "getSkill", "One skill: its versions and the installs the caller may see", None),
     ("/api/v2/skills/{name}/versions/{number}", "get", "Skills", "getSkillVersion", "One approved version of a skill, with its files", None),
+    ("/api/v2/skills/bundles/{sha256}", "get", "Skills", "getSkillBundle", "An approved version's files by its bundle sha, checked against the sha before it is served", None),
     ("/api/v2/skills/{name}/installs", "post", "Skills", "installSkill", "Install a skill for one bot or person, at the latest version or pinned to one", None),
     ("/api/v2/skills/{name}/installs/bulk", "post", "Skills", "installSkillForTargets", "Install a skill for several bots or people at once, all or nothing", None),
 ])

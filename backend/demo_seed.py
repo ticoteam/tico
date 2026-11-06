@@ -736,7 +736,6 @@ class Builder:
             c.execute("UPDATE messages SET delivered_at=created_at WHERE delivered_at IS NULL AND recipient_id LIKE 'bot:%'")
             c.execute("UPDATE jobs SET state='completed' WHERE state IN ('queued','leased','running','input')")
             c.execute("DELETE FROM update_queue")
-            c.execute("DELETE FROM thread_routings")
             when = stamp(self.now)
             for (table,) in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall():
                 columns = {row[1] for row in c.execute(f'PRAGMA table_info("{table}")')}

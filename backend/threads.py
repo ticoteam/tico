@@ -30,12 +30,14 @@ Writes (C2, C3, C5). Every message is written by hubdb._write_message, which cal
 `record` after it; `post` is the new door that REST, the CLI and MCP use, and it ends in hubdb.say (with an
 addressee) or the same insert (without one). The primary recipient's delivery row is kept by a trigger on
 `messages` (one row per message with a `recipient_id`, its state following `delivered_at`/`read_at`), so every legacy
-writer and reader agrees with the inbox. `record` adds the rest: mention rows (mentions never grant access), the
-deliveries for other mentioned teammates and DM members, woken bots (each through a carrier: a keeper notice whose
-job starts the run, since `jobs.message_id` is unique), followers, and the loop guard, which writes a bot-caused wake
-past LOOP_GUARD_PER_HOUR in a root as `capped` and lets it go later (`resume_capped`). What takes longer than a post
-runs after it: routing a message that names nobody (backend/thread_routing.py), a bot's digest run
-(backend/thread_bot_digest.py) and retention (backend/thread_retention.py).
+writer and reader agrees with the inbox. `record` adds the rest: mention rows, the deliveries for everyone the
+message is addressed to (its @mentions, the author of the message it replies to, DM members) and for its followers,
+each at a mode from the message's way and their level (`plan`), woken bots (each through a carrier: a keeper notice
+whose job starts the run, since `jobs.message_id` is unique), and the loop guard, which writes a bot-caused wake past
+LOOP_GUARD_PER_HOUR in a root as `capped` and lets it go later (`resume_capped`). An @mention on a private task adds
+the person or bot to Who can see (`widen`). Nothing is guessed: a message that addresses nobody reaches only the
+thread's followers. What takes longer than a post runs after it: a bot's digest run (backend/thread_bot_digest.py)
+and retention (backend/thread_retention.py).
 
 Order (C4). `messages.seq` comes from the `sequences` table, set by a trigger on insert (carriers get none);
 `last_seq` and `last_unread_seq` on the thread follow it. Read state is `thread_followers.last_read_seq`.
@@ -69,8 +71,10 @@ MODES = ("steer", "queue", "defer", "digest", "none")
 RETENTION_MAX_DAYS = 36500
 REOPEN_ROOTS = 200        # roots one pass of the loop guard's scheduler looks at
 ANSWER_WINDOW = 100       # messages one solicited check reads back (a person's message further back is not being answered)
-REASONS = ("dm", "mention", "ask", "assign", "addressed", "home", "sub_thread", "reply", "routing", "digest",
+REASONS = ("dm", "mention", "ask", "assign", "addressed", "home", "sub_thread", "reply", "follower", "digest",
            "member", "outside")
+# The reasons a message is addressed to someone: they are reached whatever their level, and on Defer never too.
+ADDRESSED = ("dm", "mention", "ask", "assign", "addressed", "home", "sub_thread", "reply")
 STATES = ("pending", "delivered", "read", "capped", "held", "failed", "moot")
 NOTIFY = ("live", "mentions", "digest", "muted")
 OUTSIDE_PREFIXES = ("slack:",)
@@ -1048,8 +1052,12 @@ def _refs_of(message):
 
 
 def record(c, message, conv):
-    """After the insert: revision history, mentions, the deliveries beyond the primary one, wakes, followers and
-    the loop guard. A carrier records nothing (it is how a delivery starts a run)."""
+    """After the insert: revision history, mentions, the deliveries beyond the primary one, wakes, follows and the loop
+    guard. A carrier records nothing (it is how a delivery starts a run)."""
+    return _atomic(c, "threads_record", lambda: _record(c, message, conv))
+
+
+def _record(c, message, conv):
     refs = _refs_of(message)
     if refs.get("carries"):
         return {}
@@ -1067,8 +1075,9 @@ def record(c, message, conv):
     found = mentions(c, thread, message.get("body") or "", author=author) if named else []
     warnings, in_audience = [], []
     now = _now()
+    root = root_of(c, thread) if found else None
     for actor, kind in found:
-        inside = audience_has(c, thread, actor)
+        inside = audience_has(c, thread, actor) or (not _is_backfill(refs) and widen(c, root, author, actor))
         c.execute("INSERT OR IGNORE INTO message_mentions(id,message_id,actor,kind,in_audience,created_at) "
                   "VALUES(?,?,?,?,?,?)", (_new_id(), message["id"], actor, kind, int(inside), now))
         if inside:
@@ -1078,16 +1087,8 @@ def record(c, message, conv):
     if in_audience and not message.get("recipient_id") and not _is_backfill(refs):
         c.execute("UPDATE conversations SET last_unread_seq=MAX(last_unread_seq,?) WHERE id=?",
                   (message.get("seq") or 0, thread["id"]))
-    on_task = audience_of(root_of(c, thread)) == "task"
-    if not on_task:
-        # Posting in a task's thread makes no follower: a task's followers are its owner and whoever chose to
-        # (backend/task_followers.py).
-        _follow(c, thread["id"], author, "posted", message.get("seq"))
-    # Every write fans out the same way (mentions, DM members, the Home's owner, sub-thread repliers, outside
-    # destinations) under the same loop guard, legacy writers (runner replies, old routes) included. A task comment's
-    # mentions are the task rules' (hubdb.mentioned_people, task bots), so a legacy write in a task thread leaves them.
-    if posting is None and on_task:
-        in_audience = []
+    # Every write fans out the same way (contract §4.3), legacy writers (runner replies, old routes) included: its
+    # addressed and its followers (`plan`), under the same loop guard. Posting follows nobody (D4).
     woken = deliver(c, thread, message, in_audience, posting, warnings)
     if woken and not message.get("recipient_id") and not _is_backfill(refs):
         # Addressed to someone (a group DM's members): the counter says so.
@@ -1097,18 +1098,86 @@ def record(c, message, conv):
     return {"warnings": warnings, "deliveries": woken}
 
 
-def _follow(c, thread_id, actor, reason, seq=None):
-    """The actor's follower row. Posting or being mentioned sets following, whatever a read or an earlier unfollow left,
-    and keeps the read mark and the notify level; joining or a DM only makes the row, so it never undoes an unfollow."""
+def widen(c, root, author, actor):
+    """D6, D6a: `author`'s @mention of `actor` on a private task's thread adds `actor` to the task's Who can see, as a
+    task event anyone on the task can undo (hubdb.set_task_readers). A bot widens it only to a teammate in its reach
+    (backend/reach.py), and never to a group; the keeper and outside writers never do. True when `actor` reads the
+    task now."""
+    row = _widens(c, root, author, actor)
+    if row:
+        H.task_reach(c, author, row, actor)
+    return bool(row)
+
+
+def _widens(c, root, author, actor):
+    """The private task `author`'s @mention of `actor` would add `actor` to (`widen`), or None. Writes nothing."""
+    if root is None or audience_of(root) != "task" or not str(author).startswith(("human:", "bot:")):
+        return None
+    if str(actor).startswith("group:"):
+        return None
+    row = H.task(c, root.get("task_id") or "")
+    if (not row or not H.task_private(c, row) or not H.task_private_readable(c, author, row)
+            or len(H.task_readers(row)) >= H.MAX_TASK_READERS):
+        return None
+    if str(author).startswith("bot:"):
+        from . import reach, teammate_access
+        try:
+            reach.check(c, teammate_access._viewer_for(c, author), actor, "task", task_id=row["id"])
+        except reach.Refused:
+            return None
+    return row
+
+
+def reaches(c, v, thread_id, text="", *, way=None, defer_for=None, in_reply_to=None):
+    """The "Who it reaches" preview: whom the viewer's message `text` in this thread would reach, each with its mode
+    (`plan`), and the @mentions it would not reach (`outside`) or would add to a private task's Who can see
+    (`adds_reader`). Writes nothing. Someone not in the thread is told only of the teammates they may see."""
+    thread = require(c, v, thread_id)
+    root = root_of(c, thread)
+    found, outside, adds = mentions(c, thread, text, author=v.actor), [], []
+    inside = []
+    for actor, kind in found:
+        if audience_has(c, thread, actor):
+            inside.append((actor, kind))
+        elif _widens(c, root, v.actor, actor):
+            inside.append((actor, kind))
+            adds.append(actor)
+        else:
+            outside.append(actor)
+    rows = plan(c, thread, v.actor, found=inside, in_reply_to=in_reply_to, way=way, defer_for=defer_for, root=root)
+    rows = [{**r, "adds_reader": r["actor"] in adds} for r in rows]
+    known = v.known(c)
+    if not known.member(thread["id"]):
+        unseen = known.unseen_of([r["actor"] for r in rows] + outside)
+        rows = [r for r in rows if r["actor"] not in unseen]
+        outside = [a for a in outside if a not in unseen]
+    return {"thread_id": thread["id"], "way": way or "steer", "reaches": rows, "outside": outside}
+
+
+# The reasons whose follow an @mention or a reply makes (D6, D4): kept when the owner changes (task_followers.KEPT).
+FOLLOWS = {"mention": "mentioned", "reply": "replied"}
+
+
+def _follow(c, thread_id, actor, reason, seq=None, root=None):
+    """The actor's follower row. An @mention or a reply follows (`FOLLOWS`): it sets following whatever a read, a join
+    or an earlier unfollow left, and keeps the read mark and a follower's level. Starting or joining a chat only makes
+    the row, so it never undoes an unfollow; on a task's thread neither does anything (backend/task_followers.py).
+    Posting follows nobody (D4). A bot follows a chat at `mentions` (D14), anyone else follows at `live`."""
     if not actor or not str(actor).startswith(("human:", "bot:")):
         return
+    root = root or root_of(c, thread_id)
+    on_task = root is not None and audience_of(root) == "task"
+    if on_task and reason in ("starter", "joined"):
+        return
+    notify = "mentions" if str(actor).startswith("bot:") and not on_task else "live"
     now = _now()
     on_conflict = ("ON CONFLICT(thread_id,actor) DO UPDATE SET following=1, reason=excluded.reason, "
-                   "updated_at=excluded.updated_at WHERE following=0" if reason in ("posted", "mentioned")
+                   "updated_at=excluded.updated_at WHERE following=0 OR reason IN ('joined','read')"
+                   if reason in FOLLOWS.values()
                    else "ON CONFLICT(thread_id,actor) DO NOTHING")
     c.execute("INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,"
-              f"created_at,updated_at) VALUES(?,?,?,1,'live',?,?,?,?) {on_conflict}",
-              (_new_id(), thread_id, actor, reason, max(int(seq or 0), 0), now, now))
+              f"created_at,updated_at) VALUES(?,?,?,1,?,?,?,?,?) {on_conflict}",
+              (_new_id(), thread_id, actor, notify, reason, max(int(seq or 0), 0), now, now))
 
 
 def mentions(c, thread, body, *, author=None):
@@ -1150,6 +1219,26 @@ def mentions(c, thread, body, *, author=None):
     return out
 
 
+def mentioned_people(c, body, author=None):
+    """The people `body` @mentions (`mentions`), as actors: whom a comment reaches beyond the followers, for the
+    org-rule audience."""
+    return [a for a, _ in mentions(c, None, body, author=author) if a.startswith("human:")]
+
+
+def names(c, actor, body):
+    """Whether `body` @mentions this one bot or person (as `mentions` reads names)."""
+    text = str(body or "")
+    if "@" not in text or not str(actor or "").startswith(("bot:", "human:")):
+        return False
+    return any(a == actor for a, _ in mentions(c, None, text)) if actor.startswith("human:") else any(
+        _spot(text, n) is not None for n in _bot_names(c, actor))
+
+
+def _bot_names(c, actor):
+    b = H.bot(c, H.actor_id(actor)) or {}
+    return [n for n in dict.fromkeys([b.get("slug") or H.actor_id(actor), b.get("name"), b.get("display_name")]) if n]
+
+
 def _spot(text, name):
     import re
     m = re.search(r"(?<![\w@])@" + re.escape(name) + r"(?![\w-])", text, re.IGNORECASE)
@@ -1182,21 +1271,50 @@ def never_wakes(refs, bot):
     return _is_backfill(refs) or (isinstance(origin, dict) and origin.get("actor") == bot)
 
 
-def deliver(c, thread, message, in_audience, posting, warnings=None):
-    """The deliveries for a message that came through `post`: mentions, DM members, the Home's owner, sub-thread
-    repliers and outside destinations, each woken (or not) by the thread wake rule (rules.thread_wake). A message that
-    names nobody in a thread with several bots waits for routing (backend/thread_routing.py), outside this write."""
-    root = root_of(c, thread)
+def system_line(message, posting=None):
+    """Whether a message is a system line (D10): the keeper's (task news, notices), a roundup (refs.no_mentions), a
+    follow-up nudge or card (quiet_notice), or a legacy writer's notice. It reaches whom it addresses, never the
+    followers."""
+    refs = _refs_of(message)
+    if _cause(message.get("sender_id")) == "keeper" or refs.get("no_mentions") or quiet_notice({"refs": refs}):
+        return True
+    return posting is None and message.get("kind") == "notice"
+
+
+def message_way(refs):
+    """(way, defer_for) a message goes by: the way it named (refs.send_way: 'queue', or 'defer' with
+    refs.send_defer_for), else (None, None), which is Steer (D13)."""
+    way = named_way(refs)
+    return way, ((refs or {}).get("send_defer_for") or None if way == "defer" else None)
+
+
+def plan(c, thread, author, *, found=(), in_reply_to=None, way=None, defer_for=None, kind="say", primary=None,
+         system=False, root=None, exclude=None, people_notified=False):
+    """Who a message `author` writes in `thread` reaches, and how (docs/dev/threads-contract.md §4.3): a list of
+    {actor, reason, mode, defer_for}, the addressed first, then the followers in the order they followed, never the
+    author. The same list makes the deliveries (`deliver`) and the "Who it reaches" preview (`reaches`).
+
+    Addressed (reached at any level, on any way): the @mentions in `found`, the author of the message it replies to,
+    a DM's members, a Home's bot, a sub-thread's posters. Followers (reason `follower`): `live` rows of the thread; on
+    a chat a person follows by a follow, a mention, a reply or starting it, not by joining (that row is a read mark and a
+    sidebar place). `mentions` and `muted` get only what addresses them; a bot on `digest` gets its digest. A system
+    line (D10) reaches only the addressed.
+
+    Modes by way (None is Steer): a bot gets `steer`, `queue` or `defer` (until `defer_for`; a task's thread defaults
+    to 24h, a chat to never), a person `queue` (notified). Defer never notifies no follower and defers every follower
+    bot, but still reaches the addressed, queued (the bot it is written to defers: `deliver`). `people_notified`
+    (refs.send_people): the Defer never was the default for a reader who may not wake the task's bots, so it binds the
+    bots only and people are notified as their level says. Asks and answers on a task reach no follower (they keep their own routing until question tasks).
+    Every recipient but the @mentioned (already checked) must still read the thread, and a private task."""
+    root = root or root_of(c, thread)
     audience = audience_of(root)
-    author = message.get("sender_id") or ""
-    primary = message.get("recipient_id") or None
-    refs = message.get("refs") or {}
-    # An import or replay wakes no bot; nor does a legacy writer's notice (the keeper telling a bot something already
-    # starts what it should, hubdb.notice).
-    replay = _is_backfill(refs) or (posting is None and (message.get("kind") == "notice" or author == H.KEEPER))
+    on_task = audience == "task"
+    if way == "defer" and not defer_for:
+        defer_for = "24h" if on_task else "never"
+    never = way == "defer" and defer_for == "never"
     wanted = {}                                          # actor -> reason, first reason wins
-    for actor, kind in in_audience:
-        wanted.setdefault(actor, "ask" if message.get("kind") == "ask" and actor == primary else kind)
+    for actor, reason in found:
+        wanted.setdefault(actor, "ask" if kind == "ask" and actor == primary else reason)
     if audience in ("personal", "participants") and not thread.get("parent_id"):
         for actor in _dm_members(c, root):
             wanted.setdefault(actor, "dm")
@@ -1205,52 +1323,127 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
         if owner and owner.startswith("bot:"):
             wanted.setdefault(owner, "home")
     if thread.get("parent_id"):
-        for actor in _sub_thread_posters(c, thread["id"], message["id"]):
+        for actor in _sub_thread_posters(c, thread["id"], exclude or ""):
             wanted.setdefault(actor, "sub_thread")
-    replied = _replied_bot(c, root, message)
+    replied = _replied_author(c, root, in_reply_to)
     if replied:
         wanted.setdefault(replied, "reply")
-    addressed_bot = any(a.startswith("bot:") and a != author for a in wanted)
-    for actor in _followers(c, thread["id"], "digest"):
-        wanted.setdefault(actor, "digest")
+    if not system and not (on_task and kind in ("ask", "answer")):
+        for actor, notify, reason in _follower_rows(c, thread["id"]):
+            if not on_task and actor.startswith("human:") and reason in ("joined", "read"):
+                continue
+            if notify == "live":
+                wanted.setdefault(actor, "follower")
+            elif notify == "digest" and actor.startswith("bot:"):
+                wanted.setdefault(actor, "digest")
     wanted.pop(author, None)
+    named = {a for a, _ in found}
+    task_row = H.task(c, root.get("task_id") or "") if on_task and any(a not in named for a in wanted) else None
+    private = bool(task_row) and H.task_private(c, task_row)
     out = []
-    if primary and primary in wanted:
-        reason = wanted.pop(primary)
+    for actor, reason in wanted.items():
+        if actor not in named and reason not in ("dm", "home") and (
+                not audience_has(c, thread, actor) or private and not H.task_private_readable(c, actor, task_row)):
+            continue                    # a past reader keeps a row (a follow, a post), but reads it no more
+        if reason == "digest":
+            mode = "digest"
+        elif not actor.startswith("bot:"):
+            mode = None if never and reason == "follower" and not people_notified else "queue"
+        elif never and reason not in ("follower", "dm", "home"):
+            mode = "queue"          # a DM's or a Home's own bot takes the Defer never as a Defer
+        else:
+            mode = way or "steer"
+        if mode:
+            out.append({"actor": actor, "reason": reason, "mode": mode,
+                        "defer_for": defer_for if mode == "defer" else None})
+    return out
+
+
+def plan_defer_for(root, defer_for):
+    """A Defer's deadline: the one it named, else a task's thread 24h and a chat never (`plan`)."""
+    return defer_for or ("24h" if audience_of(root) == "task" else "never")
+
+
+def _follower_rows(c, thread_id):
+    return [(r[0], r[1], r[2]) for r in c.execute(
+        "SELECT actor, notify, reason FROM thread_followers WHERE thread_id=? AND following=1 AND "
+        "(actor LIKE 'human:%' OR actor LIKE 'bot:%') ORDER BY created_at, actor", (thread_id,))]
+
+
+def deliver(c, thread, message, in_audience, posting, warnings=None):
+    """The deliveries for a written message beyond its primary one (`plan`): the addressed and the followers, each at
+    its mode, woken bots each through a carrier under the wake rule (rules.thread_wake) and the loop guard. A bot's
+    plain post reaches a following bot at its next turn (the bot_to_bot hold); an @mention or needs_action wakes it."""
+    root = root_of(c, thread)
+    author = message.get("sender_id") or ""
+    primary = message.get("recipient_id") or None
+    refs = _refs_of(message)
+    # An import or replay wakes no bot; nor does a legacy writer's notice (the keeper telling a bot something already
+    # starts what it should, hubdb.notice).
+    replay = _is_backfill(refs) or (posting is None and (message.get("kind") == "notice" or author == H.KEEPER))
+    way, defer_for = message_way(refs)
+    system = _is_backfill(refs) or system_line(message, posting)
+    reached = plan(c, thread, author, found=in_audience, in_reply_to=message.get("in_reply_to"), way=way,
+                   defer_for=defer_for, kind=message.get("kind"), primary=primary,
+                   system=system, root=root, exclude=message["id"],
+                   people_notified=bool(refs.get("send_people")))
+    seq = (message.get("seq") or 1) - 1
+    out = []
+    entry = next((r for r in reached if r["actor"] == primary), None) if primary else None
+    if entry is None and way == "defer" and primary and primary.startswith("bot:"):
+        # Written to a bot that `plan` does not list (a task's owner bot, on a task filed into a shared chat): it still
+        # takes the way, and a Defer keeps its deadline (a task's comment defaults to 24h, as on its own thread).
+        entry = {"actor": primary, "reason": "addressed", "mode": "defer",
+                 "defer_for": defer_for or ("24h" if refs.get("task") else "never")}
+    elif entry and way == "defer" and primary.startswith("bot:") and entry["mode"] == "queue":
+        # The bot it is written to (a DM's, a Home's) takes the Defer, Defer never too: only the others it addresses
+        # are queued past a Defer never.
+        entry = {**entry, "mode": "defer", "defer_for": entry["defer_for"] or plan_defer_for(root, defer_for)}
+    if entry:
+        reason = entry["reason"]
+        if primary.startswith("human:") and reason in ("follower", "digest"):
+            # Written to a person who also follows: it addresses them (Needs you lists it), unless only following
+            # lets it reach them (a bot's post in a task's thread, hubdb.delivery_counts_sql).
+            written = "ask" if message.get("kind") == "ask" else "addressed"
+            if H.counts_for_person(c, message, written, thread["id"]):
+                reason = written
         c.execute("UPDATE message_deliveries SET reason=? WHERE message_id=? AND recipient=?",
                   (reason if reason in REASONS else "addressed", message["id"], primary))
-        # The trigger wrote no row for a task thread's bot post to a person (hubdb.delivery_counts_sql): a mention of
-        # the primary makes it here. An ask's reason is 'ask' here, so the mention is read from in_audience, and the row
-        # is written as 'mention' (the only reason counts_for_person lets a task thread's bot post through).
-        mentioned = any(actor == primary and kind == "mention" for actor, kind in in_audience)
-        if (mentioned and primary.startswith("human:") and not c.execute(
-                "SELECT 1 FROM message_deliveries WHERE message_id=? AND recipient=?", (message["id"], primary)).fetchone()):
-            sent = _deliver_person(c, thread, root, message, primary, "mention", replay, warnings)
+        # The trigger wrote no row for a bot's post in a task's thread to a person (hubdb.delivery_counts_sql): one that
+        # reaches them for a reason that counts gets it here.
+        # An ask's reason is 'ask' here; one that @mentions the person it asks is written as the mention it is.
+        if reason == "ask" and any(a == primary and k == "mention" for a, k in in_audience):
+            reason = "mention"
+        if primary.startswith("human:") and not c.execute(
+                "SELECT 1 FROM message_deliveries WHERE message_id=? AND recipient=?", (message["id"], primary)).fetchone():
+            sent = _deliver_person(c, thread, root, message, primary, reason, replay, warnings)
             if sent:
                 out.append(sent)
-        if any(actor == primary for actor, _ in in_audience):
-            _follow(c, thread["id"], primary, "mentioned", (message.get("seq") or 1) - 1)
-    way = named_way(refs) if posting is not None and _cause(author) == "human" else None
+        elif primary.startswith("human:") and not system:
+            # A person written to keeps the thread (a bot's DM with them: its read mark and unread); a system line
+            # makes no row.
+            _follow(c, thread["id"], primary, FOLLOWS.get(reason, "joined"), seq, root)
+        elif reason in FOLLOWS:
+            _follow(c, thread["id"], primary, FOLLOWS[reason], seq, root)
     if primary and primary.startswith("bot:"):
         if never_wakes(refs, primary):
             c.execute("UPDATE message_deliveries SET mode='none', updated_at=? WHERE message_id=? AND recipient=?",
                       (_now(), message["id"], primary))
         else:
             _guard_primary(c, root, message, primary)
-            if way == "defer":
+            if entry and entry["mode"] == "defer":
                 # Quiet (no job): the session's next turn takes it, or its deadline starts one (backend/delivery.py).
-                from . import delivery
-                delivery.defer(c, primary, "message", message["id"], conversation_id=thread["id"],
-                               defer_for=refs.get("send_defer_for"))
+                _defer(c, root, primary, message["id"], thread["id"], entry["defer_for"])
                 c.execute("UPDATE message_deliveries SET mode='defer', updated_at=? WHERE message_id=? AND recipient=?",
                           (_now(), message["id"], primary))
-    for actor, reason in wanted.items():
+    for r in reached:
+        actor = r["actor"]
         if actor == primary:
             continue
         if actor.startswith("human:"):
-            sent = _deliver_person(c, thread, root, message, actor, reason, replay, warnings)
+            sent = _deliver_person(c, thread, root, message, actor, r["reason"], replay, warnings)
         elif actor.startswith("bot:"):
-            sent = _deliver_bot(c, thread, root, message, actor, reason, replay, way=way)
+            sent = _deliver_bot(c, thread, root, message, actor, r["reason"], replay, entry=r)
         else:
             sent = None
         if sent:
@@ -1259,17 +1452,21 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
         _insert_delivery(c, message, actor, thread, root, "none", "outside")
     if _cause(author) == "human":
         resume_capped(c, root["id"])
-        if not (replay or primary or in_audience or addressed_bot) and audience not in ("task", "meeting"):
-            from . import thread_routing
-            thread_routing.enqueue(c, message, thread)
     return out
 
 
-def _replied_bot(c, root, message):
-    """The bot whose message this one replies to (`in_reply_to`, a carrier read as what it carries), when that message
-    is in the same root: a reply reaches its author as an @mention does. The author's reply to itself is dropped with
-    the author's other deliveries."""
-    target = message.get("in_reply_to")
+def _defer(c, root, bot, item, thread_id, defer_for):
+    """A deferred delivery (backend/delivery.py): a comment on a task's thread, a message in a chat."""
+    from . import delivery
+    on_task = audience_of(root) == "task"
+    delivery.defer(c, bot, "comment" if on_task else "message", item, conversation_id=thread_id,
+                   task_id=root.get("task_id") if on_task else None, defer_for=defer_for)
+
+
+def _replied_author(c, root, target):
+    """The person or bot whose message `target` is (`in_reply_to`, a carrier read as what it carries), when that
+    message is in the same root: a reply reaches its author as an @mention does (D4). The author's reply to itself is
+    dropped with the author's other deliveries."""
     if not target:
         return None
     row = c.execute("SELECT m.sender_id, m.refs, COALESCE(t.root_id, t.id) FROM messages m JOIN conversations t "
@@ -1278,7 +1475,7 @@ def _replied_bot(c, root, message):
         carried = (H._json(row[1], {}) or {}).get("carries") if row[1] else None
         row = c.execute("SELECT m.sender_id, m.refs, COALESCE(t.root_id, t.id) FROM messages m JOIN conversations t "
                         "ON t.id=m.conversation_id WHERE m.id=?", (carried,)).fetchone() if carried else None
-    if not row or row[2] != root["id"] or not str(row[0] or "").startswith("bot:"):
+    if not row or row[2] != root["id"] or not str(row[0] or "").startswith(("bot:", "human:")):
         return None
     return row[0]
 
@@ -1286,7 +1483,7 @@ def _replied_bot(c, root, message):
 def _deliver_person(c, thread, root, message, person, reason, replay, warnings):
     """One person's delivery. Each is checked on its own: they must still be on the roster (rule 2), and a bot's say or
     notice that does not answer them counts against the unsolicited cap (contract §4.7). Past the cap the message stays
-    in the thread but does not reach them, and its author is told."""
+    in the thread but does not reach them, and its author is told. A mention or a reply makes them follow (D6)."""
     if _is_backfill(message.get("refs")) or not _reachable(c, person):
         return None
     author = message.get("sender_id") or ""
@@ -1302,38 +1499,60 @@ def _deliver_person(c, thread, root, message, person, reason, replay, warnings):
     did = _insert_delivery(c, message, person, thread, root, "queue", reason if reason in REASONS else "member")
     if unsolicited and did:
         c.execute("UPDATE message_deliveries SET unsolicited=1 WHERE id=?", (did,))
-    _follow(c, thread["id"], person, "mentioned" if reason == "mention" else "joined", (message.get("seq") or 1) - 1)
+    # A mention or a reply follows; anything else that reaches a person (their DM, a message written to them) gives
+    # them the thread's row, a sidebar place and a read mark, as a join does, which follows nothing on a chat.
+    _follow(c, thread["id"], person, FOLLOWS.get(reason, "joined"), (message.get("seq") or 1) - 1, root)
     if did is None:
         return None
     return {"recipient": person, "mode": "queue", "reason": reason}
 
 
-# The marks the thread routes write for a post's named `delivery` (backend/thread_api.py): route-only, refused from a
-# client, so a client's own refs.delivery goes as it always did.
-WAY_KEYS = ("send_way", "send_defer_for")
+# The marks the thread routes and task_comment write for a post's named way (backend/thread_api.py): route-only,
+# refused from a client, so a client's own refs.delivery goes as it always did.
+WAY_KEYS = ("send_way", "send_defer_for", "send_people")
+# What the primary recipient's own delivery left on the message (its way, a hold): another recipient is judged
+# without them.
+PRIMARY_MARKS = ("quiet", "delivery", "can_wait", "held_by", *WAY_KEYS)
 
 
 def named_way(refs):
-    """The way a person's post named for the bots it reaches (refs.send_way, which the thread routes write from
-    `delivery`): 'queue' or 'defer', else None, the thread's own rule (into a running turn, as always)."""
+    """The way a post named for whom it reaches (refs.send_way): 'queue' or 'defer', else None, Steer: into a running
+    turn, as always."""
     way = refs.get("send_way") if isinstance(refs, dict) else None
     return way if way in ("queue", "defer") else None
 
 
-def _deliver_bot(c, thread, root, message, bot, reason, replay=False, way=None):
-    """One bot's delivery and wake, under the wake rule and the loop guard. None when it gets no delivery. `way`: the
-    way the post named (named_way): a queue's run waits for the bot's running turn, a defer's starts at its deadline."""
-    if reason == "mention":
-        _follow(c, thread["id"], bot, "mentioned", (message.get("seq") or 1) - 1)
+def _judged(message):
+    """The message as a recipient other than its primary one is judged: without the marks the primary's way or hold
+    left (a bot_to_bot hold, a rule's hold, a named way's quiet). A message quiet by its writer stays quiet."""
+    refs = message.get("refs") or {}
+    if not any(refs.get(k) for k in ("send_way", "can_wait", "held_by")):
+        return message
+    return {**message, "refs": {k: v for k, v in refs.items() if k not in PRIMARY_MARKS}}
+
+
+def _deliver_bot(c, thread, root, message, bot, reason, replay=False, entry=None):
+    """One bot's delivery and wake, under the wake rule and the loop guard. None when it gets no delivery. `entry`: its
+    line of `plan` (mode `queue`: its run waits for its running turn; `defer`: it starts at the deadline)."""
+    entry = entry or {"mode": "steer", "defer_for": None}
+    if reason in FOLLOWS:
+        _follow(c, thread["id"], bot, FOLLOWS[reason], (message.get("seq") or 1) - 1, root)
     if replay or not _reachable(c, bot):
         return None
-    # The wake rule judges the message as written, without the marks its named way added (quiet, delivery, send_*).
-    judged = message if way is None else {**message, "refs": {k: v for k, v in (message.get("refs") or {}).items()
-                                                              if k not in ("quiet", "delivery", *WAY_KEYS)}}
+    judged = _judged(message)
+    author = message.get("sender_id") or ""
+    if reason == "follower" and _cause(author) == "bot":
+        # A bot's plain post reaches a following bot at its next turn (bot_to_bot): an @mention or needs_action wakes.
+        from . import rules
+        if rules.bot_to_bot_decision(c, author, bot, message.get("kind") or "say", dict(judged.get("refs") or {}),
+                                     message.get("body") or "", thread, message.get("in_reply_to")):
+            _insert_delivery(c, message, bot, thread, root, "defer", reason)
+            _defer_note(c, message, bot)
+            return {"recipient": bot, "mode": "defer", "reason": reason, "state": "pending"}
     mode, rule = wake_mode(c, thread, judged, bot, reason)
     if mode is None:
         return None
-    author = message.get("sender_id") or ""
+    way = entry["mode"] if entry["mode"] in ("queue", "defer") else None
     state = "pending"
     if mode in ("queue", "steer") and _cause(author) == "bot" and _over_guard(c, root["id"]):
         state = "capped"
@@ -1348,9 +1567,7 @@ def _deliver_bot(c, thread, root, message, bot, reason, replay=False, way=None):
         c.execute("UPDATE message_deliveries SET carrier_id=? WHERE id=?", (carrier, did))
         if way == "defer":
             # The carrier waits, quiet: the bot's next turn here takes it, or its deadline starts its run.
-            from . import delivery
-            delivery.defer(c, bot, "message", carrier, conversation_id=thread["id"],
-                           defer_for=(message.get("refs") or {}).get("send_defer_for"))
+            _defer(c, root, bot, carrier, thread["id"], entry.get("defer_for"))
             c.execute("UPDATE message_deliveries SET mode='defer', updated_at=? WHERE id=?", (_now(), did))
             mode = "defer"
     elif mode == "defer":
@@ -1453,11 +1670,6 @@ def _sub_thread_posters(c, thread_id, exclude):
                                     "AND sender_id LIKE 'bot:%' AND deleted_at IS NULL", (thread_id, exclude))]
 
 
-def _followers(c, thread_id, notify):
-    return [r[0] for r in c.execute("SELECT actor FROM thread_followers WHERE thread_id=? AND following=1 AND notify=? "
-                                    "AND actor LIKE 'bot:%'", (thread_id, notify))]
-
-
 def _outside(c, thread_id):
     try:
         return [r[0] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=? AND "
@@ -1486,14 +1698,13 @@ def _insert_delivery(c, message, recipient, thread, root, mode, reason, *, state
 
 
 def wake_mode(c, thread, message, bot, reason):
-    """The thread wake rule for one bot: (mode, rule id), or (None, None) for no delivery. Precedence (contract
-    §4.3): a DM, mention, ask or assign, then the bot's Home, then a sub-thread it posted in, then a reply to its
-    message queue a run; a digest
-    follower gets a digest. The existing wake engine still judges each queued delivery and may make it wait."""
+    """The thread wake rule for one bot: (mode, rule id), or (None, None) for no delivery. Whatever addresses it (a DM,
+    mention, ask or assign, its Home, a sub-thread it posted in, a reply to its message) and a live follow queue a run;
+    a digest follower gets a digest. The existing wake engine still judges each queued delivery and may make it wait."""
     from . import rules
     if quiet_notice(message) or never_wakes(message.get("refs"), bot):
         return None, None
-    if reason in ("dm", "mention", "ask", "assign", "home", "sub_thread", "reply", "routing", "addressed"):
+    if reason in (*ADDRESSED, "follower"):
         mode = "queue"
     elif reason == "digest":
         return "digest", rules.THREAD_WAKE
@@ -1970,9 +2181,27 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
     thread = thread_row(c, thread_id) if thread_id else start
     on_task = H.message_task_id({"refs": refs}, thread)
     with H.refusal_task(on_task):
-        return _post(c, principal, thread_id, body, kind=kind, refs=refs, parent_message_id=parent_message_id,
-                     to_actor=to_actor, via=via, origin=origin, checked=checked, attachments=attachments,
-                     start=start, in_reply_to=in_reply_to, reach=reach)
+        return _atomic(c, "threads_post", lambda: _post(
+            c, principal, thread_id, body, kind=kind, refs=refs, parent_message_id=parent_message_id, to_actor=to_actor,
+            via=via, origin=origin, checked=checked, attachments=attachments, start=start, in_reply_to=in_reply_to,
+            reach=reach))
+
+
+def _atomic(c, name, write):
+    """`write()` inside the caller's transaction, or, on a connection with none (a script, a legacy writer on a raw
+    connection), inside one of its own that it commits: a read snapshot taken on the way (live_privacy.sources begins
+    one when none is open) must never leave the connection in an open transaction that its later writes vanish into."""
+    if c.in_transaction:
+        return write()
+    c.execute(f"SAVEPOINT {name}")
+    try:
+        out = write()
+    except BaseException:
+        c.execute(f"ROLLBACK TO {name}")
+        c.execute(f"RELEASE {name}")
+        raise
+    c.execute(f"RELEASE {name}")
+    return out
 
 
 def _post(c, principal, thread_id, body, *, kind, refs, parent_message_id, to_actor, via, origin, checked,
@@ -2048,6 +2277,10 @@ def _post(c, principal, thread_id, body, *, kind, refs, parent_message_id, to_ac
         from . import reach as R
         R.check_post(c, v.who, thread, [a for a, _ in found], target if target and not str(target).startswith(
             OUTSIDE_PREFIXES) else None, in_reply_to=in_reply_to)
+    if target is None and kind in ("say", "steer"):
+        # A post on a task's own thread is written to the first bot it gives a turn (its job, ride-along and
+        # delegation key off it); the rest of whom it reaches get theirs from `deliver`.
+        target = _task_primary(c, thread, actor, found, in_reply_to, refs)
     if checked is not None:
         # The org-rule verdict its preflight returned, applied inside the write: a hold writes nothing (no message, no
         # delivery) and answers with the hold; a warning goes on the recipients' copy. The payload is the body the
@@ -2079,6 +2312,25 @@ def _post(c, principal, thread_id, body, *, kind, refs, parent_message_id, to_ac
         c.execute("INSERT OR IGNORE INTO message_assets VALUES(?,?)", (message["id"], item["id"]))
     _audit(c, actor, "message:" + message["id"], None, {"thread_id": thread["id"], "kind": kind}, via)
     return message
+
+
+def _task_primary(c, thread, author, found, in_reply_to, refs):
+    """The bot a post on a task's own thread (not a sub-thread) goes to: the first bot `plan` gives a turn, addressed
+    first, then followers. None when it gives none, or the thread is not a task's. A way that defers but reaches its
+    bot queued (Defer never and an @mention) loses its quiet in `refs`, so the bot's job is queued."""
+    root = root_of(c, thread)
+    if thread.get("parent_id") or audience_of(root) != "task":
+        return None
+    way, defer_for = message_way(refs)
+    system = system_line({"sender_id": author, "refs": refs, "kind": "say"}, posting={})
+    for r in plan(c, thread, author, found=[(a, k) for a, k in found if audience_has(c, thread, a)],
+                  in_reply_to=in_reply_to, way=way, defer_for=defer_for, system=system, root=root):
+        if r["actor"].startswith("bot:") and r["mode"] in ("steer", "queue", "defer") and _reachable(c, r["actor"]):
+            if r["mode"] == "queue" and way == "defer":
+                refs.pop("quiet", None)
+                refs["delivery"] = "queue"
+            return r["actor"]
+    return None
 
 
 def _duplicate(c, origin, thread):
@@ -2695,14 +2947,18 @@ def _newly_reading(c, root, target):
 
 
 def _joined(c, root_id, actor):
-    """A join reads up to now across the whole tree: the root (followed) and each sub-thread (a read mark, not a follow),
-    so nothing written before it counts as unread. One statement, however many sub-threads there are."""
+    """A join reads up to now across the whole tree: the root (followed, unless it is a task's thread: joining a task
+    follows nobody) and each sub-thread (a read mark, not a follow), so nothing written before it counts as unread. One
+    statement, however many sub-threads there are."""
     now = _now()
     c.execute("INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,created_at,"
-              "updated_at) SELECT lower(hex(randomblob(16))), id, ?, CASE WHEN id=? THEN 1 ELSE 0 END, 'live', 'joined', "
+              "updated_at) SELECT lower(hex(randomblob(16))), id, ?, "
+              "CASE WHEN id=? AND task_id IS NULL AND COALESCE(audience,'')<>'task' THEN 1 ELSE 0 END, ?, 'joined', "
               "last_seq, ?, ? FROM conversations WHERE root_id=? ON CONFLICT(thread_id,actor) DO UPDATE SET "
               "last_read_seq=MAX(last_read_seq,excluded.last_read_seq), following=MAX(following,excluded.following), "
-              "updated_at=excluded.updated_at", (actor, root_id, now, now, root_id))
+              "updated_at=excluded.updated_at",
+              # A bot follows a chat at `mentions` (D14): it is reached by what addresses it.
+              (actor, root_id, "mentions" if str(actor).startswith("bot:") else "live", now, now, root_id))
 
 
 def remove_member(c, principal, thread_id, actor):
@@ -2758,7 +3014,7 @@ def follow(c, v, thread_id, *, notify="live"):
     now = _now()
     c.execute("INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,created_at,"
               "updated_at) VALUES(?,?,?,1,?,'manual',?,?,?) ON CONFLICT(thread_id,actor) DO UPDATE SET following=1, "
-              "notify=excluded.notify, updated_at=excluded.updated_at",
+              "notify=excluded.notify, reason='manual', updated_at=excluded.updated_at",
               (_new_id(), row["id"], v.actor, notify, row.get("last_seq") or 0, now, now))
     _event(c, v.actor, "thread.followed", row["id"], {"notify": notify})
     _audit(c, v.actor, "thread:" + row["id"], None, {"following": True, "notify": notify})
@@ -3078,7 +3334,6 @@ def _revise(c, message, actor, *, body=None, deleted=False, revision=None, purge
                       "message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL)", (message["id"],))
         c.execute("DELETE FROM message_mentions WHERE message_id=?", (message["id"],))
         c.execute("DELETE FROM message_reactions WHERE message_id=?", (message["id"],))
-        c.execute("DELETE FROM thread_routings WHERE message_id=?", (message["id"],))
         c.execute("DELETE FROM message_routes WHERE message_id=?", (message["id"],))
         c.execute("UPDATE conversations SET subject='' WHERE parent_message_id=?", (message["id"],))
         H._withdraw_queued_comment_copies(c, message["id"])

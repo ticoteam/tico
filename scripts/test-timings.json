@@ -1121,7 +1121,6 @@
   "backend/tests/test_thread_catchup.py": 13.47,
   "backend/tests/test_thread_digest.py": 14.62,
   "backend/tests/test_thread_events.py": 13.54,
-  "backend/tests/test_thread_followups.py": 2.53,
   "backend/tests/test_thread_halfway.py": 37.88,
   "backend/tests/test_thread_rail.py": 83.66,
   "backend/tests/test_thread_rank.py": 19.12,

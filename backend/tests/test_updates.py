@@ -554,3 +554,55 @@ def test_the_feed_counts_replies_in_one_read_and_homes_card_shows_the_same_updat
     assert card["updates"] == [{"id": u["id"], "author": u["bot"], "kind": u["kind"], "day": u["day"],
                                 "headline": u["headline"], "created_at": u["created_at"], "read": u["read"]}
                                for u in feed["updates"][:shown]]
+
+
+def test_a_bot_with_nothing_new_skips_and_its_request_is_neither_asked_again_nor_missed(api, monkeypatch):
+    """`skip` posts nothing and finishes the day's request skipped with its reason; a run that then ends without a
+    post does not send the request again."""
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
+    _, _, attempt = setup_attempt(api, "ops")
+    bot = {"Authorization": "Bearer " + attempt["token"]}
+    store = api.app.state.store
+    with store.transaction() as c:
+        updates.build_queue(c, "2026-09-29", "daily")
+        ops = bot_id(c, "ops")
+        updates.send_request(c, c.execute("SELECT * FROM update_queue WHERE bot=?", (ops,)).fetchone())
+    skipped = api.post("/api/v2/updates", json={"skip": True}, headers={**bot, "Idempotency-Key": "skip-1"})
+    assert skipped.status_code == 200 and skipped.json()["reason"] == updates.NOTHING_NEW, skipped.text
+    with store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id=?", (ops,))     # its run ends without a post
+        updates.dispatch(c, MORNING, build=False)
+        assert tuple(c.execute("SELECT state, reason FROM update_queue WHERE bot=? AND day='2026-09-29'",
+                               (ops,)).fetchone()) == ("skipped", updates.NOTHING_NEW)
+        assert not c.execute("SELECT 1 FROM updates WHERE bot=?", (ops,)).fetchone(), "nothing was posted"
+
+
+def test_a_report_with_nothing_new_is_nothing_new_to_its_manager_not_missing(api, monkeypatch):
+    from backend.tests.test_bot_contact import bot
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
+    bot(api, "boss", "Manager", reports_to="human:ana")
+    bot(api, "analyst", "Analyst", reports_to="boss")
+    with api.app.state.store.transaction() as c:
+        boss, analyst = bot_id(c, "boss"), bot_id(c, "analyst")
+        updates.build_queue(c, "2026-09-29", "daily")
+        updates.skip(c, analyst, "daily", "2026-09-29")
+        text = updates.request_text(c, boss, "daily", "2026-09-29")
+    assert "Nothing new from: Analyst" in text and "No update from" not in text
+
+
+def test_a_persons_draft_with_nothing_real_to_say_posts_nothing(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("INSERT INTO update_queue(id,bot,kind,day,rank,state,sent_at) "
+                  "VALUES('draft-skip','human:ana','daily','2026-09-29',0,'sent',?)", (H.now(),))
+    assert updates.write_draft(store, "human:ana", lambda system, user: {"skip": True}, "coo") is None
+    with store.read() as c:
+        assert tuple(c.execute("SELECT state, reason FROM update_queue WHERE id='draft-skip'").fetchone()) == \
+            ("skipped", updates.NOTHING_NEW)
+        assert not c.execute("SELECT 1 FROM updates WHERE bot='human:ana'").fetchone(), "no draft was posted"
+
+
+def test_the_cli_says_skip_as_a_flag_with_no_body():
+    from clients import hubcli
+    args = hubcli.parse(hubcli.parser(), ["update", "create", "--skip"])
+    assert args.skip is True and args.body is None

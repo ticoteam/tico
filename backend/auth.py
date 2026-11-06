@@ -17,6 +17,7 @@ from . import identity_proxy
 from . import people as P
 from . import rooms
 from . import service_keys
+from . import skill_devices
 from . import team_rules
 from . import read_cache
 from . import report_managers
@@ -93,7 +94,8 @@ class Identity:
     confirmed: bool = False
     # Acting for a human does not grant a bot membership in that human's private tasks.
     task_actor: str = ""
-    # A service key's scope (backend/service_keys.py ROUTES): "tasks" or "update"; empty for everyone else.
+    # A service key's scope (backend/service_keys.py ROUTES): "tasks" or "update"; "skills-device" for a person's skills
+    # helper token (backend/skill_devices.py ROUTES), its device id in token_id; empty for everyone else.
     scope: str = ""
     # Tico support in a session a person opened (backend/support_access.py): "app" or "full". Its actor is
     # human:tico-support, its session id in token_id, and `support_access.gate` decides what it reaches.
@@ -168,6 +170,10 @@ def validate_identity(c, who):
         if not row or service_keys.token_ended(c, row["made_with_token"]):
             raise Problem("identity", "Invalid credential", 401)
         return
+    if who.scope == skill_devices.SCOPE and not c.execute(
+            "SELECT 1 FROM skill_devices WHERE id=? AND revoked_at IS NULL", (who.token_id,)).fetchone():
+        # Again under a write's lock: a device revoked since the request began writes nothing.
+        raise Problem("identity", "Invalid credential", 401)
     if who.role in ("owner", "human"):
         if not H.human(c, H.actor_id(who.actor)):
             raise Problem("identity", "Unknown person", 401)
@@ -439,6 +445,26 @@ class Auth:
             touch(c, "UPDATE service_keys SET last_used_at=? WHERE id=?", (now, row["id"]))
         return Identity("service:" + row["id"], "service", token_label=str(row["label"]), scope=row["scope"] or "tasks")
 
+    def identity_from_skills_device(self, c, token, path, method):
+        """A person's skills helper (backend/skill_devices.py): that person, on the skills routes it needs and nowhere
+        else. A revoked token is refused like an unknown one; so is a person who left or whose sign-in is off."""
+        row = c.execute("SELECT d.id,d.label,d.person_id,d.revoked_at,d.last_seen_at,h.email FROM skill_devices d "
+                        "JOIN humans h ON h.id=d.person_id WHERE d.token_hash=?", (digest(token),)).fetchone()
+        if not row or row["revoked_at"]:
+            raise Problem("identity", "Invalid credential", 401)
+        if not skill_devices.allowed(method, path):
+            raise Problem("forbidden", skill_devices.REFUSAL, 403)
+        email = str(row["email"] or "").lower()
+        role = "owner" if email and email == self.owner_email else "human"
+        barred = standing(c, row["person_id"])
+        if barred == "left" or (barred == "off" and role != "owner"):
+            raise Problem("identity", "Invalid credential", 401)
+        now = H.now()
+        if not row["last_seen_at"] or row["last_seen_at"] < H.shift(now, seconds=-60):
+            touch(c, "UPDATE skill_devices SET last_seen_at=? WHERE id=?", (now, row["id"]))
+        return Identity("human:" + row["person_id"], role, email=email, via_token=True,
+                        token_label=str(row["label"] or "Skills helper"), token_id=row["id"], scope=skill_devices.SCOPE)
+
     def runner_receipt_principal(self, c, who, aid):
         """Read a runner's saved receipt as its original principal, even after the lease ends."""
         from . import task_privacy as privacy
@@ -525,6 +551,8 @@ class Auth:
                 pass
             elif token.startswith(service_keys.PREFIX):
                 who = self.identity_from_service_key(c, token, path, method)
+            elif token.startswith(skill_devices.PREFIX):
+                who = self.identity_from_skills_device(c, token, path, method)
             elif token.startswith("tico_sa_"):
                 from . import support_access
                 who = support_access.identity(c, token, self.settings)

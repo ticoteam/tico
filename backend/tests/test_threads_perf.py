@@ -21,9 +21,20 @@ def test_one_thread_at_a_time_the_sse_rendering_agrees_with_c1_for_every_teammat
     with store.read_transaction() as c:
         ids = [r[0] for r in c.execute("SELECT id FROM conversations WHERE COALESCE(room_key,'') NOT LIKE 'live-meeting:%'")]
         assert set(made.values()) <= set(ids)
+        checked = set()
         for actor, identity in people.items():
             v = threads.viewer(auth, identity)
             python = {i for i in ids if threads.readable(c, v, i)}
+            if actor.startswith("bot:"):
+                # Every person is checked. Bots alike in group chain and in the threads they read give the one-by-one
+                # rendering the same input, so the first of each class stands for it.
+                names = sorted(v.member_names(c))
+                members = frozenset(r[0] for r in c.execute("SELECT thread_id FROM thread_members WHERE actor IN ({})".format(
+                    ",".join("?" * len(names))), names))
+                kind = (tuple(v.chain(c)), frozenset(python), members, tuple(sorted(v.hidden_read(c) or ())))
+                if kind in checked:
+                    continue
+                checked.add(kind)
             one_by_one = {i for i in ids if threads.readable_ids(c, threads.viewer(auth, identity), [i])}
             assert one_by_one == python, (actor, sorted(one_by_one ^ python)[:5])
 

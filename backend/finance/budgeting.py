@@ -1,10 +1,30 @@
 """Budget state and holds over the store (spec §4.4). Every function takes the caller's open connection: a hold is one
 small step inside the caller's transaction, so two holds racing for the last dollars serialize on the writer lock and
-the second sees the first."""
+the second sees the first.
+
+Live ad spend (the Google Ads and Meta Ads imports, ad_import.py). The platforms report spend daily; what they charge
+posts days or weeks later, by card, ACH, bill or order, and is the expense of record in the books and the P&L, which
+this never touches. A budget tracks a bot's usage, so it moves with the daily spend and never counts both. An ad budget
+is one whose vendor is an ad platform (budget_platform: the contact the import makes, "Google Ads" or "Meta", or a
+tight descriptor such as GOOGLE *ADS or FACEBK *; store/ads.py). A read (`live=True`: the budgets list, the budget
+metrics, budget vs actual) takes each calendar month of an ad budget's window on its own:
+- a month the platform's import covers (import_covers: on, its last run OK, reading from that month's start, its last
+  success after the month or, for one still running, within STALE) and whose scope it covers (an assigned ad account in
+  scope, all in the book's currency) reads the platform's daily spend for those accounts in place of every books line
+  of the budget's vendor in that month and every hold at that platform (card, payment, bill and order alike). Closed
+  or open, and whenever the charge posts: a December 2 charge for November's spend comes out of December, which the
+  platform's December figure stands for;
+- any other month reads the books, as before. Nothing comes out unless the platform's figure goes in, so a stale import,
+  one to reconnect or one turned off never makes a charge vanish.
+`spent_from` says which: books, platform or mixed. An ad account is in a budget's scope when its import's books line is
+under the budget's line, the budget's teammate is the account's bot (or the budget names none), and its team holds that
+bot (or it names none). An ad budget only warns (warn_only): decide, a card's cutoff, a payment's hold and a pause never
+stop anything because of it; ad_warnings.py tells the spending bot and no one else. `pace_end` projects the period's
+spend at its rate up to the platform's as_of (month and quarter budgets, once a whole day has passed)."""
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from .context import Ctx, is_set_up, load
@@ -16,6 +36,7 @@ from .core.errors import CONFLICT, FinanceError, NOT_FOUND, invalid
 from .core.ledger import descendants, vendor_text
 from .core.org import SYSTEM
 from .store import access as SA
+from .store import ads as SAD
 from .store import ap as SAP
 from .store import budgets as SB
 from .store import ledger as SL
@@ -70,14 +91,26 @@ class Netted:
     excluded: bool = False
 
 
-def actual(ctx: Ctx, b: B.Budget, start: str, end: str, teammate: str = "", read: Netted | None = None) -> int:
+def actual(ctx: Ctx, b: B.Budget, start: str, end: str, teammate: str = "", read: Netted | None = None,
+           live: bool = False) -> int:
     """Posted spend in the budget's scope in the window: its line and the lines under it, cut to its team (and the teams
     under it), teammate and vendor. A read passes its `Netted`, and the settled private payroll lines in that scope come
-    out of the sum, as they do from the P&L."""
+    out of the sum, as they do from the P&L. `live`: an ad budget's covered months take its platform's daily spend in
+    place of its posted charges (the module docstring)."""
+    vendors = SAP.vendor_keys(ctx.c, ctx.book.id, b.vendor)
+    total = _posted(ctx, b, start, end, teammate, read, vendors)
+    if not live:
+        return total
+    lv = live_ads(ctx, b, start, end, teammate, read)
+    return total - lv.books_cut + lv.platform_spend
+
+
+def _posted(ctx: Ctx, b: B.Budget, start: str, end: str, teammate: str, read: Netted | None,
+            vendors: Sequence[str]) -> int:
+    """`actual` over these vendor keys (none: any vendor)."""
     teams = sorted(ctx.org.below(b.team)) if b.team else None
     accounts = scope_accounts(ctx, b)
     teammate = teammate or b.teammate
-    vendors = SAP.vendor_keys(ctx.c, ctx.book.id, b.vendor)
     total = SL.rollup_sum(ctx.c, ctx.book.id, start, end, accounts, teams=teams, teammate=teammate, vendors=vendors)
     if read is None:
         return total
@@ -388,13 +421,15 @@ def reserve_growth(ctx: Ctx, budget_id: str, allocation_on: str, target_kind: st
 
 
 def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[str] = (),
-          read: Netted | None = None) -> B.State:
+          read: Netted | None = None, live: bool = False) -> B.State:
     """A budget now: amount, actual, held (active holds plus the reserves unused allocations keep in its whole subtree),
     remaining (which refuses new holds and allocations), spent (actuals and holds: what warn and cutoff read) and percent.
     With a `target` and the budget `path` a spend sits on, that target's own unused allocations on that path are not
     counted against it (it may spend what was set aside for it there); its allocations on other branches still are.
     A read passes its `Netted`: the actual, the holds and what depends on them (rollover, reserves) leave out the settled
-    private payroll the viewer can't see, and the State says so (`excluded`). Enforcement passes none."""
+    private payroll the viewer can't see, and the State says so (`excluded`). Enforcement passes none. A read passing
+    `live` counts an ad budget's platform spend in its covered months (the module docstring) and says where the spend
+    came from (`spent_from`) and how fresh the platforms' figures are (`as_of`)."""
     b = ctx.budgets().get(budget_id)
     if b is None:
         raise FinanceError(NOT_FOUND, "no such budget")
@@ -406,9 +441,179 @@ def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[s
     reserve = sum(v for bid, t, v in _reserve(ctx, tree, start, end, read)
                   if not (bid in mine and target and t == target))
     holds = _held(ctx, tree, start, end, read)
-    st = B.state(b, period, _amount(ctx, b, versions, period, at, read), actual(ctx, b, start, end, read=read), holds,
-                 reserve)
+    spent = actual(ctx, b, start, end, read=read)
+    lv = live_ads(ctx, b, start, end, "", read, tree) if live else NO_ADS
+    spent += lv.platform_spend - lv.books_cut
+    holds = max(holds - lv.holds_cut, 0)     # a cut hold the viewer's private netting already took out stays out once
+    st = B.state(b, period, _amount(ctx, b, versions, period, at, read), spent, holds, reserve)
+    st = replace(st, pace_end=pace_end(b, period, lv.as_of or ctx.at, st.spent))
+    if live:
+        st = replace(st, spent_from=lv.spent_from, as_of=lv.as_of)
     return st if read is None else replace(st, excluded=read.excluded)
+
+
+def pace_end(b: B.Budget, period: tuple[date, date], ref: str, spent: int) -> int | None:
+    """Where the period's spend ends at its rate so far: spent over the time from the period's start (00:00 UTC) to
+    `ref` (the platforms' as_of for an ad budget read live, else now), in fractional days, times the days in the
+    period, half up. None for a period other than a month or quarter, and before a whole day has passed."""
+    if b.period not in ("month", "quarter"):
+        return None
+    whole = ((period[1] - period[0]).days + 1) * DAY_SECONDS
+    begun = datetime.combine(period[0], datetime.min.time(), tzinfo=timezone.utc)
+    elapsed = min(int((_instant(ref) - begun).total_seconds()), whole)
+    if elapsed < DAY_SECONDS:
+        return None
+    return (2 * spent * whole + elapsed) // (2 * elapsed)
+
+
+def _instant(ts: str) -> datetime:
+    when = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    return when if when.tzinfo is not None else when.replace(tzinfo=timezone.utc)
+
+
+# ------------------------------------------------------------------------------------------------ live ad spend
+DAY_SECONDS = 86_400
+STALE = timedelta(hours=12)        # an import whose last success is older stands for no month still running
+
+
+@dataclass(frozen=True)
+class LiveAds:
+    """What a live read changes in an ad budget's window, over the months its platform's import covers: the books lines
+    taken out (`books_cut`), the holds at the platform taken out (`holds_cut`) and the platform's daily spend put in
+    (`platform_spend`). `live_months` / `books_months`: how many months of the window read the platform / the books;
+    `platform`: the budget's platform; `as_of`: the import's last success, when any month reads it."""
+    books_cut: int = 0
+    holds_cut: int = 0
+    platform_spend: int = 0
+    live_months: int = 0
+    books_months: int = 0
+    platform: str = ""
+    as_of: str | None = None
+
+    @property
+    def spent_from(self) -> str:
+        if not self.live_months:
+            return "books"
+        return "mixed" if self.books_months else "platform"
+
+
+NO_ADS = LiveAds()
+
+
+def _memo(ctx: Ctx, key: str, make: Any) -> Any:
+    if key not in ctx.memo:
+        ctx.memo[key] = make()
+    return ctx.memo[key]
+
+
+def ad_imports(ctx: Ctx) -> dict[str, SAD.AdImport]:
+    """{platform: its enabled import}, read once per call."""
+    found: dict[str, SAD.AdImport] = _memo(ctx, "ads:imports", lambda: SAD.enabled_platforms(ctx.c))
+    return found
+
+
+def ad_platform(ctx: Ctx, key: str) -> str:
+    """The ad platform a vendor key is ("" when none): store/ads.vendor_platform, once per key per call."""
+    known: dict[str, str] = _memo(ctx, "ads:vendors", dict[str, str])
+    if key not in known:
+        known[key] = SAD.vendor_platform(ctx.c, ctx.book.id, key)
+    return known[key]
+
+
+def budget_platform(ctx: Ctx, b: B.Budget) -> str:
+    """The ad platform a budget's vendor is ("" when it names no vendor or another one). Such a budget is an ad budget:
+    it only warns (warn_only), whatever an import does."""
+    if not b.vendor or b.catch_all:
+        return ""
+    keys = SAP.vendor_keys(ctx.c, ctx.book.id, b.vendor) or [b.vendor]
+    return next((p for k in keys if (p := ad_platform(ctx, k))), "")
+
+
+def warn_only(ctx: Ctx, b: B.Budget) -> B.Budget:
+    """The budget as enforcement reads it: an ad budget's at-limit is warn, so it never declines, holds a payment,
+    asks or freezes a card (handlers refuse any other; a data fix set the old ones)."""
+    return replace(b, at_limit="warn") if b.at_limit != "warn" and budget_platform(ctx, b) else b
+
+
+def import_covers(ctx: Ctx, imp: SAD.AdImport, lo: str, hi: str) -> bool:
+    """Whether an import's spend stands for the days [lo, hi]: it is on, its last run went through, it reads from lo or
+    earlier, and its last success came after hi (a month that is over) or within STALE (one still running)."""
+    if not imp.enabled or imp.status != "ok" or not imp.last_import_at or imp.history_from > lo:
+        return False
+    last = _instant(imp.last_import_at)
+    if last.date().isoformat() > hi:
+        return True
+    return hi >= ctx.today and _instant(ctx.at) - last <= STALE
+
+
+def _months(start: str, end: str) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    first, last = dates.day(start), dates.day(end)
+    while first <= last:
+        z = min(dates.month_end(first.replace(day=1)), last)
+        out.append((first.isoformat(), z.isoformat()))
+        first = date.fromordinal(z.toordinal() + 1)
+    return out
+
+
+def ad_covers(ctx: Ctx, b: B.Budget, s: SAD.LiveSpend, accounts: frozenset[str], teammate: str = "") -> bool:
+    """Whether an ad account's spend counts in a budget (scope `accounts`): its platform the budget's, its books line in
+    scope, its bot the budget's teammate and on its team (when the budget names them). An account with no bot counts
+    only in a budget that names neither."""
+    if s.platform != budget_platform(ctx, b) or s.books_account_id not in accounts:
+        return False
+    bot = "bot:" + s.bot_slug if s.bot_slug else ""
+    mate = teammate or b.teammate
+    if mate and mate != bot:
+        return False
+    return not b.team or (bool(bot) and ctx.org.team_of.get(bot, "") in ctx.org.below(b.team))
+
+
+def _replaced(ctx: Ctx, rows: Sequence[SAD.LiveSpend]) -> bool:
+    """Whether the platform's spend stands in for the books: an assigned account in scope, and none in another
+    currency than the book's (its spend could not be added, so its charges must stay)."""
+    return any(r.bot_slug for r in rows) and all(r.currency == ctx.book.base_currency for r in rows)
+
+
+def _month_spend(ctx: Ctx, lo: str, hi: str) -> list[SAD.LiveSpend]:
+    key = f"ads:spend:{lo}:{hi}"
+    if key not in ctx.memo:
+        ctx.memo[key] = SAD.live_spend(ctx.c, lo, hi)
+    found: list[SAD.LiveSpend] = ctx.memo[key]
+    return found
+
+
+def hold_platform(ctx: Ctx, h: SAD.HeldFor) -> str:
+    """The ad platform a hold is for ("" when none): its vendor contact, else its merchant or payee as posted."""
+    if h.contact_id and ad_platform(ctx, h.contact_id):
+        return ad_platform(ctx, h.contact_id)
+    return ad_platform(ctx, SAP.vendor_key(ctx.c, ctx.book.id, h.text)) if h.text else ""
+
+
+def live_ads(ctx: Ctx, b: B.Budget, start: str, end: str, teammate: str = "", read: Netted | None = None,
+             tree: Sequence[str] = ()) -> LiveAds:
+    """What a live read changes in an ad budget's window [start, end], month by month (the module docstring). `tree`:
+    the budgets whose holds count in it (state passes the subtree; none for `actual`)."""
+    platform = budget_platform(ctx, b)
+    if not platform:
+        return NO_ADS
+    imp = ad_imports(ctx).get(platform)
+    accounts = frozenset(scope_accounts(ctx, b))
+    keys = SAP.vendor_keys(ctx.c, ctx.book.id, b.vendor) or [b.vendor]
+    last = min(dates.day(end), horizon(ctx)).isoformat()
+    books_cut = holds_cut = spend = live = books = 0
+    for lo, hi in _months(start, last):
+        rows = [r for r in _month_spend(ctx, lo, hi) if ad_covers(ctx, b, r, accounts, teammate)]
+        if imp is None or not import_covers(ctx, imp, lo, hi) or not _replaced(ctx, rows):
+            books += 1          # never cut without the platform's figure to put in its place
+            continue
+        live += 1
+        spend += sum(r.amount for r in rows)
+        books_cut += _posted(ctx, b, lo, hi, teammate, read, keys)
+        if tree:
+            holds_cut += sum(h.amount for h in SAD.holds_for(ctx.c, tree, lo, hi) if hold_platform(ctx, h) == platform)
+    return LiveAds(books_cut=books_cut, holds_cut=holds_cut, platform_spend=spend, live_months=live,
+                   books_months=books, platform=platform, as_of=imp.last_import_at if live and imp else None)
 
 
 def leaf(ctx: Ctx, account_id: str, team: str = "", teammate: str = "", vendor: str = "") -> B.Budget | None:
@@ -473,7 +678,7 @@ def decide(ctx: Ctx, leaf_id: str, amount: int, target: str = "", past_reserves:
     of `leaf_id`). `past_reserves` checks against spend, not remaining (see core budgets decide)."""
     at = dates.day(ctx.today)
     spent_on = chain_of(ctx, leaf_id)
-    chain = [(b, state(ctx, b.id, at, target, spent_on)) for b in B.chain(ctx.budgets(), leaf_id)]
+    chain = [(warn_only(ctx, b), state(ctx, b.id, at, target, spent_on)) for b in B.chain(ctx.budgets(), leaf_id)]
     return B.decide(chain, amount, past_reserves)
 
 

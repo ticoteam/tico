@@ -39,7 +39,11 @@ def test_pre_start_retry_limit_fails_unstarted_jobs_and_preserves_running_work(a
             "expired" if acknowledge_start else "failed")
     messages = get(api, f"conversations/{message['conversation_id']}/messages")
     replies = [m["body"] for m in messages if m["sender_id"] == "bot:ops"]
-    assert replies == ([] if acknowledge_start else ["Your ops couldn't start on Test Mac; check that Computer"])
+    if acknowledge_start:
+        # Held for review: the person is told once that it stopped mid-reply.
+        assert len(replies) == 1 and "computer dropped mid-reply" in replies[0]
+    else:
+        assert replies == ["Your ops couldn't start on Test Mac; check that Computer"]
 
 
 def test_review_is_private_and_exposes_saved_output_without_credentials(api):
@@ -1246,8 +1250,9 @@ def settled(api, attempt):
 
 
 def bot_replies(api, message, bot='ops'):
+    """The bot's replies in the chat, not the notice a held run's person gets (Execution.tell_held)."""
     return [m['body'] for m in get(api, f"conversations/{message['conversation_id']}/messages")
-            if m['sender_id'] == 'bot:' + bot]
+            if m['sender_id'] == 'bot:' + bot and m['kind'] != 'notice']
 
 
 def test_a_finished_turn_dismissed_because_its_task_closed_still_ends_completed_and_answers_in_the_task(api):

@@ -146,12 +146,8 @@ ACTIONS = {
     "send_task_roundup": ("send each bot one list of its tasks: a follow-up that came due, an unanswered question, an assignment "
                           "not started, a restate, a late ticket, an exception, a backlog, a missed update or a quiet task",
                          ("tasks", "roundup", "wake", "missed", "quiet", "update", "late", "backlog", "exceptions", "assigned")),
-    "tell_earlier_messages": ("tell each manager of a bot once when its Home still holds closed history",
-                              ("thread", "earlier", "closed", "history", "managers", "notice")),
     "wake_digest_bots": ("start one run for each bot with new messages in the threads it follows on digest",
                          ("bot", "digest", "thread", "wake", "batch")),
-    "route_message": ("have Decide read a person's message that names nobody and wake the bots it is for, three at most",
-                      ("route", "routing", "thread", "bots", "wake", "message")),
     "resume_capped_wakes": ("let bot wakes the loop guard paused go when a thread's hour has room",
                             ("loop", "guard", "capped", "paused", "resume", "wake", "thread", "bots")),
     "purge_thread_messages": ("delete messages past the time their thread keeps them, with what was copied from them",
@@ -159,7 +155,8 @@ ACTIONS = {
     "email_digest": ("email a person once an hour the threads they follow on digest that have new messages: titles, "
                      "unread counts and links, never the messages", ("email", "digest", "unread", "thread", "notify")),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
-    "ask_to_task": ("turn a bot's plain ask to a person into a small task", ("ask", "tasks")),
+    "reopen_stranded": ("send a bot's task waiting on nothing tracked back to open after two hours",
+                        ("waiting", "stranded", "reopen", "tasks")),
     "end_snooze": ("bring snoozed tasks back when their date comes", ("snooze", "tasks")),
     "start_deferred": ("start deferred runs that are due", ("deferred", "runs")),
     "end_go_live": ("end a go-live waiting for a computer that never reports", ("go-live", "computer", "expire")),
@@ -194,6 +191,8 @@ ACTIONS = {
     "start_editions": ("start the Company page editions that came due and send waiting reader notices",
                        ("company", "page", "edition", "readers")),
     "screen_waiting": ("screen outside text a restart left waiting", ("screening", "outside", "text")),
+    "screen_skills": ("screen each proposed skill and update before an admin can approve it",
+                      ("skills", "screening", "proposals", "approve")),
     "finance_upkeep": ("post Finance's waiting events, usage and prepaids, end holds and finished approvals, open the next period",
                        ("finance", "events", "usage", "holds", "period", "approvals")),
     "deadline_sweeps": ("turn off failing webhooks, retire replaced computers, hand on support tickets and screened items",
@@ -289,6 +288,10 @@ def _company_page_open(c, settings):
     return schedule.transparency(c) != "closed"
 
 
+def _skills_proposed(c, settings):
+    return _row_exists(c, "SELECT 1 FROM skill_proposals LIMIT 1")
+
+
 def _cloud_company(c, settings):
     from . import cloud_machines
     return cloud_machines.cloud_company(c, settings)
@@ -356,10 +359,6 @@ JOBS = [
         REMINDERS, "Hourly", 3600, control=True, then=("go_ahead",)),
     Job("approval_expiry", "Approval expiry", "Takes approvals and asks nobody will act on out of Needs you.",
         REMINDERS, "Hourly", 3600, then=("expire_approvals",)),
-    Job("thread_followups", "Earlier messages",
-        "Tells each manager of a bot once, in a direct message, when the bot's Home still holds closed history. Plain code: "
-        "no model is called, and nothing new is a quiet run. Asks nobody answered are on the bot's task roundup.",
-        REMINDERS, "Every 15 minutes", 900, then=("tell_earlier_messages",)),
     Job("thread_digest", "Email digest",
         "Emails a person once an hour the threads they follow on digest that have new messages: each title, its unread "
         "count and a link, never the messages. Nothing unread is a quiet run.",
@@ -368,10 +367,6 @@ JOBS = [
         "Starts one run an hour for each bot that follows threads on digest and has new messages in them. Plain code: "
         "no model is called until a batch has something in it, and nothing new is a quiet run.",
         REMINDERS, "Hourly", 3600, then=("wake_digest_bots",)),
-    Job("thread_routing", "Thread routing",
-        "Reads a person's message that names nobody in a thread with several bots and wakes the ones it is for, three "
-        "at most. Below the confidence bar, or with Decide off, it wakes none.",
-        REMINDERS, "As messages arrive", ai=True, labels=("slack-route",), then=("route_message",)),
     Job("still_needed", "Unanswered questions",
         "On weekday mornings, questions unanswered for two business days go back to their bots as lines on the bots' "
         "task roundup, never as a wake.",
@@ -385,9 +380,9 @@ JOBS = [
         "Frees turns proven dead, keeps one Health finding per busy-turns incident and hands what it cannot fix to "
         "BotOps.", HOUSEKEEPING, "Every 10 seconds", 10, then=("free_dead_starts", "turns_finding")),
     Job("waiting_checks", "Waiting checks",
-        "Turns a bot's plain ask to a person into a small task. It no longer sends a waiting task back to work; a "
-        "waiting task that waits on nothing is listed on the task roundup after a day.",
-        HOUSEKEEPING, "Hourly", 3600, then=("ask_to_task",)),
+        "Sends a bot's task waiting on nothing tracked back to open after two hours (one that keeps coming back "
+        "goes to its manager bot or BotOps).",
+        HOUSEKEEPING, "Hourly", 3600, then=("reopen_stranded",)),
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred", "start_task")),
@@ -474,6 +469,11 @@ JOBS = [
         HOUSEKEEPING, "Every 10 seconds", 10, then=("start_editions",), applies=_company_page_open),
     Job("screening", "Outside text check", "Screens outside text a restart left waiting.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("screen_waiting",)),
+    Job("skill_screening", "Skill screening",
+        "Screens each proposed skill and update with plain-code patterns and Decide High before an admin can approve it. "
+        "Mandatory: no switch, and no other model answers in its place.",
+        CHECKS, "As skills are proposed", ai=True, labels=("skill-screen",), then=("screen_skills",),
+        applies=_skills_proposed),
     Job("finance_upkeep", "Finance upkeep",
         "Posts Finance's waiting events, Gateway usage and prepaid costs, ends expired holds and finished approvals, "
         "watches documents, and opens next month's period.",
@@ -572,7 +572,7 @@ CONTROLS = {
 # Last runs read by backend/scheduler.py (QUICK and FIXED).
 QUICK_KEYS = ("kpi_asks", "ask_deadlines", "task_manager_report",
               "bookkeeper_check", "bookkeeper_watch",
-              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention")
+              "bookkeeper_rules_digest", "thread_digest", "thread_bot_digest", "thread_retention")
 
 
 def zone():
