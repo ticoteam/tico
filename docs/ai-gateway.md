@@ -271,7 +271,7 @@ Each key has a name and a monthly cap in dollars billed ($1 to $100, $20 by defa
 credit like its bots' use. The company's owners and admins on app.tico.dev make and revoke keys once the company has
 prepaid credit. The key is shown once.
 
-An API key calls only the model and service endpoints: chat, models, decisions, search, fetch, images, audio, markets,
+An API key calls only the model and service endpoints: chat, models, decisions, search, fetch, images, videos, audio, markets,
 MCP and key. It can't reach billing, servers, computers, mail, webhooks, files or anything else of the company's.
 
 Bots don't need an API key: they use the install's Gateway key.
@@ -301,24 +301,44 @@ curl https://updates.tico.team/v1/gateway/search -H "Authorization: Bearer <key>
 
 ## Images
 
-`hub gateway image PROMPT --category C --out PATH` makes an image through the Gateway and saves it. The categories:
+`hub gateway image PROMPT --out PATH` makes an image through the Gateway and saves it. Pick the model with `--model`:
 
-- **storyboard**: a fast model that keeps people and places from `--ref` images, for frames (about 4 to 8 US cents an image).
-- **photo**: for photographic images.
-- **character**: keeps a person or character from the `--ref` files (up to 4, PNG, JPEG or WebP, 2 MiB each).
-- **graphic**: best for text and layout.
+- **low** (the default): fast, and keeps people and places from `--ref` images (up to 4, PNG, JPEG or WebP, 2 MiB each).
+  Good for frames and quick pictures.
+- **high**: `--category photo` (the default), `graphic` (best for text and layout) or `character` (keeps a person or
+  character from the `--ref` files).
+- **svg**: a vector image, scalable without loss, saved as `.svg`. `--quality standard` (the default) or `pro`. It takes no
+  `--ref` and no `--size`. HQ strips scripts and event handlers from the SVG before it
+  reaches the computer, and anything in the app that shows an SVG does it as a picture (`<img>`), never inline.
 
-`--size WxH` asks for the nearest aspect ratio, `--count N` makes up to 4 images. The first image is saved to `PATH`, the
-others beside it as `name-2.png`, `name-3.png`. Each image gets a sidecar `PATH.json` with its prompt, category, model,
-cost, the reference names and their sha256. An existing file is never overwritten.
+`--size WxH` asks for the nearest aspect ratio (not for svg), `--count N` makes up to 4 images. The first image is saved to
+`PATH`, the others beside it as `name-2.png`, `name-3.png`. Each image gets a sidecar `PATH.json` with its prompt, model,
+category or quality, cost, the reference names and their sha256. An existing file is never overwritten. A call with
+`--category` and no `--model` keeps the older door's choice (`storyboard`, `photo`, `character` or `graphic`).
 
 Each image is billed at what the image model costs plus 25%, from the same cap as the other Gateway services; the price
-varies with the model and size, so it is not one number. The catalog lists the service (`hub gateway catalog images`).
-Bots use the same thing with the `hub_gateway_image` tool, which runs on the computer and answers the saved paths, never
-the image bytes.
+varies with the model and size, so it is not one number. The catalog lists the services (`hub gateway catalog images`
+and `hub gateway catalog svg`). Bots use the same thing with the `hub_gateway_image` tool, which runs on the computer and
+answers the saved paths, never the image bytes.
+
+## Videos
+
+`hub gateway video PROMPT` starts a short video: 3 to 15 seconds (8 by default), 360p, 720p (the default), 1080p or 4k,
+16:9 or 9:16, with sound unless `--no-audio`. Optional `--first-frame` and `--last-frame` are PNG or JPEG files the video
+starts or ends on. It answers a job id at once. A video takes minutes, so the command does not wait: check it with
+`hub gateway video-status ID --out PATH.mp4`. While the job runs the answer says so and nothing is saved; once it is done
+the MP4 is saved to `PATH.mp4` (never overwritten) with a sidecar `PATH.mp4.json`, and the answer gives its seconds and cost.
+The Gateway keeps no video: save it when it is done, as the status command does. A video that fails costs nothing;
+one still open after 15 minutes is given up and charged its hold, since the provider may still finish it. Only the key
+that started a job can read it.
+
+Bots use the same two things with the `hub_gateway_video` and `hub_gateway_video_status` tools. The video is priced per
+second at what the video model costs plus 25% (`hub gateway catalog video`), held when the job starts and charged when it
+ends, from the same cap as the other Gateway services.
+
 When the Finance budget for Video production refuses at its limit and is used up for whoever asks (a bot or a person,
-by the team they are in), new images are refused with `video_budget_reached` until the budget is raised or its period
-ends.
+by the team they are in), new images and videos are refused with `video_budget_reached` until the budget is raised or its
+period ends.
 
 ## Webhooks through the Gateway
 
