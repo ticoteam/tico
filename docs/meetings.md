@@ -245,14 +245,16 @@ format is a `422` that names the problem.
   only while its live meeting is live or paused.
 - **Tasks.** The meeting page shows one list: proposed tasks (**Create** or **Dismiss**), tasks made from the
   meeting (created items, the task it was shared to a bot as, and that task's follow-ups) and tasks linked with
-  `POST /api/v2/meetings/{id}/tasks`, each once; dismissed proposals sit behind **Dismissed (n)**. The API still
-  accepts the older `doc` and `feature` sections. A human adds items (with the quote and time they came from if they like) and the
-  readers edit, Send or Dismiss them once the meeting is shared. Send creates ordinary Tico tasks, never a card in another tool: a
-  task item becomes a task for its named owner; a doc update becomes a task for the owner it names,
-  or for `doc-updater` when it names none and you can send work to that bot; a feature request
-  becomes a task for whoever is primary for the product group. If a doc update has no owner and
-  `doc-updater` is absent or the sender cannot write to it, or a chosen bot is not writable, Send
-  asks for an owner and leaves the item proposed so it can be edited and sent again. Product area,
+  `POST /api/v2/meetings/{id}/tasks`, each once; dismissed proposals sit behind **Dismissed (n)**. The page does not
+  show doc updates or feature requests, but the API still accepts them as the older `doc` and `feature` sections. A
+  human adds items (with the quote and time they came from if they like), and the readers edit, Create or Dismiss them
+  once the meeting is shared. Create makes ordinary Tico tasks, never a card in another tool: a task item becomes a
+  task for its named owner, so Create needs an owner first. A doc update pushed through the API
+  (`POST /api/v2/meetings/{id}/items/{iid}/push`) becomes a task for the owner it names, or for `doc-updater` when it
+  names none and you can send work to that bot. If it names no owner and `doc-updater` is absent or you cannot write
+  to it, or it names someone who cannot own it or a bot you cannot write to, the push is refused. A refused item stays
+  proposed, so it can be edited and pushed again. A feature request becomes a task for whoever is primary for the
+  product group. Product area,
   app and label
   are optional: use your team's names or leave them blank. Existing B/F and CA/PA codes still work.
   A near-identical open task returns a link only if the sender can read it.
@@ -260,12 +262,12 @@ format is a `422` that names the problem.
   private tasks only when every reader (including a bot owner's managers) is already in the meeting.
   The Recorder applies that check before Save too, using `live_meeting_id` on task creation.
   Title, owner, due and details autosave after 700 ms or on blur, one write at a time. **Not saved · Retry** keeps
-  a failed draft. Save and Send carry the item’s `version`; a stale write returns 409 with the current item,
+  a failed draft. Save and Create carry the item’s `version`; a stale write returns 409 with the current item,
   keeps changed fields and shows the current values for retry. Untouched fields adopt the server's values even
-  while a field is focused. Retry and Send submit only changed keys. Send applies the final fields atomically,
+  while a field is focused. Retry and Create submit only changed keys. Create applies the final fields atomically,
   advancing the version once.
   Incoming edits preserve open forms, focus and caret.
-  If another editor Sends or Dismisses an item with unsaved edits, both clients keep a closed card with
+  If another editor Creates or Dismisses an item with unsaved edits, both clients keep a closed card with
   their name, your draft and **Copy** and **Close** buttons until you copy or close it.
   The web and saved Recorder views refetch on authorized `meeting_items` events, and close on `gone`.
   `GET /api/v2/presence?place=meeting:<id>` lists current people; each window heartbeats its own `session_id`
