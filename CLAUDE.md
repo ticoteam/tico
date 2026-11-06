@@ -110,3 +110,5 @@ flight file, not the database.
   is written by `python3 -m backend.openapi_v2`; never edit it by hand. On a rebase conflict, resolve
   `backend/openapi_v2.py` and regenerate (CONTRIBUTING.md registers the merge driver that handles most).
 - Comments say why in the present tense; they do not name who asked or when.
+- New hub tools go in `clients/hubtools_<area>.py` (a new module when none fits), registered with `@tool` from
+  `clients/hubtools_core.py`; `scripts/check_module_size.py` stops `clients/hubtools.py` and `clients/hubcli.py` from growing.

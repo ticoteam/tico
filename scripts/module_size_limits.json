@@ -1,0 +1,8 @@
+{
+  "clients/hubtools.py": {
+    "max_lines": 12051
+  },
+  "clients/hubcli.py": {
+    "max_lines": 5598
+  }
+}
